@@ -12,6 +12,8 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
+use crate::backend::peep::{self, walk::Facts};
+use llrm_x86_code16::instructions;
 use crate::backend::{
     affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, spillforward, storecombine,
     target,
@@ -365,259 +367,18 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
     Ok(body.with_blocks(blocks))
 }
 
-/// Fold a load or transitive extension into one widening instruction.
-///
-/// This is deliberately post-allocation.  MIR says that both conversions
-/// happen; x86 says that `movzx edx,byte ptr [m]` can implement the same
-/// value as either `mov dx,[m]; movzx edx,dx` or
-/// `movzx dx,byte ptr [m]; movzx edx,dx`.  A transitive extension requires
-/// one physical register root for both results so it preserves every
-/// incidental register byte.  A plain load may use another register only
-/// when its SSA value has no other reader.
+/// Fold a load or transitive extension into one widening instruction (`peephole.peep`).
 pub fn extensions(body: &LirBody) -> LirBody {
-    let mut users = Counter::default();
-    for block in &body.blocks {
-        for one in &block.insns {
-            for value in &one.uses {
-                *users.entry(*value).or_insert(0) += 1;
-            }
-        }
-    }
-    for block in &body.blocks {
-        for phi in &block.phis {
-            for (_, value) in &phi.incoming {
-                *users.entry(*value).or_insert(0) += 1;
-            }
-        }
-    }
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = block.insns.clone();
-        // `enumerate(insns[:-1])` walks a copy taken before the loop.
-        let snapshot: Vec<Arc<Insn>> = insns[..insns.len().saturating_sub(1)].to_vec();
-        for (index, first) in snapshot.iter().enumerate() {
-            for following in index + 1..insns.len() {
-                let second = Arc::clone(&insns[following]);
-                let made = _extension(first, &second, &users);
-                if let Some(made) = made {
-                    if _extension_may_move_before(&made, first, &insns[index + 1..following]) {
-                        insns[index] = made;
-                        // The first instruction now defines the final value.  The
-                        // anchor keeps the second instruction's byte ownership
-                        // without leaving a second virtual definition behind.
-                        let mut anchored = (*lir::anchor(Arc::clone(&second))).clone();
-                        anchored.defines = Vec::new();
-                        anchored.uses = Vec::new();
-                        insns[following] = Arc::new(anchored);
-                        break;
-                    }
-                }
-                if !first.defines.is_empty()
-                    && first
-                        .defines
-                        .iter()
-                        .any(|value| second.uses.contains(value) || second.defines.contains(value))
-                {
-                    break;
-                }
-            }
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::extensions(body, &Facts::new(body, None))
 }
 
-/// Whether widening the load at its original position crosses no register use.
-///
-/// Combining a load with a later extension keeps the memory read in place,
-/// but writes the extension's wider destination earlier.  Independent
-/// parameter loads may sit between the two, as source frontends commonly
-/// batch their entry loads.  Refuse whenever those intervening instructions
-/// observe or replace any newly-written physical lane.
-fn _extension_may_move_before(made: &Insn, first: &Insn, crossed: &[Arc<Insn>]) -> bool {
-    if crossed.is_empty() {
-        // Nothing to cross. Asking anyway refused every unrolled clone, whose
-        // effects `_register_effects` will not read.
-        return true;
-    }
-    let original = _register_effects(first, false, true);
-    let combined = _register_effects(made, false, true);
-    let (Some(original), Some(combined)) = (original, combined) else {
-        return false;
-    };
-    let newly_written: Lanes = combined.1.minus(&original.1);
-    for one in crossed {
-        let effects = _register_effects(one, false, true);
-        match effects {
-            None => return false,
-            Some(effects) => {
-                if newly_written.iter().any(|lane| effects.0.contains(lane) || effects.1.contains(lane)) {
-                    return false;
-                }
-            }
-        }
-    }
-    true
-}
 
-fn _extension(first: &Insn, second: &Insn, users: &Counter) -> Option<Arc<Insn>> {
-    if [first, second].into_iter().any(|one| {
-        one.what.is_none()
-            || !one.clobbers.is_empty()
-            || !one.clobbers_high.is_empty()
-            || !one.requires.is_empty()
-            || !one.delivers.is_empty()
-            || !one.spread.is_empty()
-            || one.group.is_some()
-            || one.frame_adjust
-            || one.spill_reload
-            || one.spill_store
-    }) {
-        return None;
-    }
-    // The follower forms below have register operands only, so even an
-    // unroller's conservative `symbol=True` marker cannot belong to an
-    // encoded relocation there.  The first instruction retains the actual
-    // memory operand and its ownership; its replacement anchor clears the
-    // follower marker.
-    let (one, two) = (first.what.as_ref()?, second.what.as_ref()?);
-    // `getattr(source, "width", 0)`.
-    let width = |source: &Loc| match source {
-        Loc::Reg(one) => one.width,
-        Loc::Mem(one) => one.width,
-        Loc::Imm(one) => one.width,
-        Loc::Held(one) => one.width,
-        Loc::Address(_) | Loc::St(_) => 0,
-    };
-    let (extension, destination, source) = match (
-        (one.op, one.name.as_deref(), one.dests.as_slice(), one.sources.as_slice()),
-        (two.op, two.name.as_deref(), two.dests.as_slice(), two.sources.as_slice()),
-    ) {
-        (
-            (Operation::Move, Some("mov"), [Loc::Reg(middle)], [source @ Loc::Mem(cell)]),
-            (
-                Operation::Extend,
-                Some(second_name @ ("movsx" | "movzx")),
-                [Loc::Reg(destination)],
-                [Loc::Reg(repeated)],
-            ),
-        ) => {
-            if middle != repeated
-                || !(cell.width == middle.width && middle.width < destination.width)
-                || first.defines.len() != 1
-                || second.uses != first.defines
-                || count(users, first.defines[0]) != 1
-            {
-                return None;
-            }
-            (second_name, *destination, source.clone())
-        }
-        (
-            (Operation::Extend, Some(first_name @ ("movsx" | "movzx")), [Loc::Reg(middle)], [source]),
-            (
-                Operation::Extend,
-                Some(second_name @ ("movsx" | "movzx")),
-                [Loc::Reg(destination)],
-                [Loc::Reg(repeated)],
-            ),
-        ) => {
-            if first_name != second_name
-                || middle != repeated
-                || ir::root(middle.register) != ir::root(destination.register)
-                || !(width(source) < middle.width && middle.width < destination.width)
-                || first.defines.len() != 1
-                || second.uses != first.defines
-                || count(users, first.defines[0]) != 1
-            {
-                return None;
-            }
-            (first_name, *destination, source.clone())
-        }
-        _ => return None,
-    };
-    let what = semantics(Operation::Extend, extension, vec![Loc::Reg(destination)], vec![source]);
-    emit(&what)?;
-    let uses = deduped(
-        first
-            .uses
-            .iter()
-            .copied()
-            .chain(second.uses.iter().copied().filter(|value| !first.defines.contains(value))),
-    );
-    let mut widths: IndexMap<u32, u32> = IndexMap::default();
-    for (value, width) in first.widths.iter().chain(&second.widths) {
-        widths.insert(*value, *width);
-    }
-    Some(Arc::new(Insn {
-        what: Some(what),
-        defines: second.defines.clone(),
-        uses,
-        widths: widths.into_iter().collect(),
-        ..first.clone()
-    }))
-}
 
-/// Materialize a call's literal once when both stack and register need it.
+
+
+/// Materialize a call's literal once when both stack and register need it (`peephole.peep`).
 pub fn pushed_constants(body: &LirBody) -> LirBody {
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut out: Vec<Arc<Insn>> = Vec::new();
-        for one in &block.insns {
-            if let Some(push) = out.last().cloned() {
-                if let (Some(pushed), Some(moved)) = (&push.what, &one.what) {
-                    if let (
-                        (Operation::Push, Some("push"), [], [Loc::Imm(literal)]),
-                        (Operation::Move, Some("mov"), [Loc::Reg(dest)], [source]),
-                    ) = (
-                        (pushed.op, pushed.name.as_deref(), pushed.dests.as_slice(), pushed.sources.as_slice()),
-                        (moved.op, moved.name.as_deref(), moved.dests.as_slice(), moved.sources.as_slice()),
-                    ) {
-                        if Loc::Imm(literal.clone()) == *source
-                            && literal.address.is_none()
-                            && dest.width == literal.width
-                            && [2, 4].contains(&literal.width)
-                            && target::WIDTHS.get(&dest.register) == Some(&i64::from(dest.width))
-                            && ![Register::ESP, Register::EBP].contains(&full32(dest.register))
-                            && one.covers == Some((one.at, one.at))
-                            && push.covers.is_some()
-                            && push.covers.is_some_and(|covers| covers.1 == one.at)
-                            && push.defines.is_empty()
-                            && push.uses.is_empty()
-                            && one.uses.is_empty()
-                            && [&push, one].into_iter().all(|item| {
-                                !(!item.clobbers.is_empty()
-                                    || !item.requires.is_empty()
-                                    || !item.delivers.is_empty()
-                                    || !item.spread.is_empty()
-                                    || item.group.is_some()
-                                    || item.symbol == Some(true)
-                                    || item.frame_adjust
-                                    || item.spill_reload)
-                            })
-                        {
-                            let dest = *dest;
-                            let last = out.len() - 1;
-                            out[last] = Arc::new(Insn {
-                                at: push.at,
-                                covers: Some((push.at, push.at)),
-                                symbol: Some(false),
-                                ..(**one).clone()
-                            });
-                            out.push(Arc::new(Insn {
-                                what: Some(Semantics { sources: vec![Loc::Reg(dest)], ..pushed.clone() }),
-                                uses: one.defines.clone(),
-                                ..(*push).clone()
-                            }));
-                            continue;
-                        }
-                    }
-                }
-            }
-            out.push(Arc::clone(one));
-        }
-        blocks.push(block.with_insns(out));
-    }
-    body.with_blocks(blocks)
+    peep::pushed_constants(body, &Facts::new(body, None))
 }
 
 /// `insns` with `rewrite` offered each run of up to `width` instructions,
@@ -655,58 +416,9 @@ fn _code_windows<E>(
     Ok(out)
 }
 
-/// Two adjacent immediate word pushes have one dword's stack layout.
+/// Two adjacent immediate word pushes have one dword's stack layout (`peephole.peep`).
 pub fn pushes(body: &LirBody) -> LirBody {
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let out = _code_windows(&block.insns, 2, |pair| -> Result<_, std::convert::Infallible> {
-            if pair.len() == 2
-                && pair.iter().all(|one| {
-                    !(!one.clobbers.is_empty()
-                        || !one.requires.is_empty()
-                        || !one.delivers.is_empty()
-                        || !one.defines.is_empty()
-                        || !one.uses.is_empty()
-                        || one.symbol == Some(true)
-                        || !one.spread.is_empty())
-                })
-            {
-                if let (Some(first), Some(second)) = (&pair[0].what, &pair[1].what) {
-                    if let (
-                        (
-                            Operation::Push,
-                            Some("push"),
-                            [],
-                            [Loc::Imm(Imm { value: high, width: 2, address: None })],
-                        ),
-                        (Operation::Push, Some("push"), [], [Loc::Imm(Imm { value: low, width: 2, address: None })]),
-                    ) = (
-                        (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-                        (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice()),
-                    ) {
-                        let what = semantics(
-                            Operation::Push,
-                            "push",
-                            vec![],
-                            vec![Loc::Imm(imm(((high & 0xFFFF) << 16) | (low & 0xFFFF), 4))],
-                        );
-                        let combined = Arc::new(with_what(&pair[0], what));
-                        let removed = Arc::clone(&pair[1]);
-                        let folded = lir::without(
-                            &[combined, Arc::clone(&removed)],
-                            |one| Arc::ptr_eq(one, &removed),
-                            None::<fn(&Arc<Insn>) -> Arc<Insn>>,
-                        );
-                        return Ok(Some((2, folded)));
-                    }
-                }
-            }
-            Ok(None)
-        });
-        let Ok(out) = out;
-        blocks.push(block.with_insns(out));
-    }
-    body.with_blocks(blocks)
+    peep::pushes(body, &Facts::new(body, None))
 }
 
 pub fn _lanes(register: Register) -> Lanes {
@@ -732,196 +444,22 @@ pub fn _lanes(register: Register) -> Lanes {
     (start..start + register.size() as u32).map(|byte| (full, byte)).collect()
 }
 
-/// Write only the live low word of a register-only dword move.
-///
-/// Frontends may naturally keep a scalar as a dword until an ABI boundary
-/// that consumes only its low word.  Once allocation and physical liveness
-/// prove the upper lanes dead, retaining the operand-size prefix and wide
-/// immediate is not part of the program semantics.  Memory sources are
-/// excluded because narrowing an access can change volatility or faults.
+/// Write only the live low word of a register-only dword move (`peephole.peep`).
 pub fn narrowed_moves(body: &LirBody) -> LirBody {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let mut insns = Vec::new();
-        for one in &block.insns {
-            let mut changed = None;
-            if let Some(what) = &one.what {
-                if what.op == Operation::Move
-                    && what.name.as_deref() == Some("mov")
-                    && what.dests.len() == 1
-                    && what.sources.len() == 1
-                    && matches!(&what.dests[0], Loc::Reg(dest) if dest.width == 4)
-                    && matches!(&what.sources[0], Loc::Reg(Reg { width: 4, .. }) | Loc::Imm(Imm { width: 4, .. }))
-                    && !(!one.clobbers.is_empty()
-                        || !one.clobbers_high.is_empty()
-                        || !one.requires.is_empty()
-                        || !one.delivers.is_empty())
-                    && one.group.is_none()
-                    && one.symbol != Some(true)
-                    && !one.frame_adjust
-                {
-                    let Loc::Reg(destination) = &what.dests[0] else { unreachable!() };
-                    let upper: Lanes = _lanes(destination.register).into_iter().filter(|lane| lane.1 >= 2).collect();
-                    if !upper.is_empty() && upper.is_subset(&dead_after[&id(one)]) {
-                        let dest = reg(target::named(destination.register, 2), 2);
-                        let source = match &what.sources[0] {
-                            Loc::Reg(source) => Loc::Reg(reg(target::named(source.register, 2), 2)),
-                            Loc::Imm(source) => Loc::Imm(imm(source.value & 0xFFFF, 2)),
-                            _ => unreachable!(),
-                        };
-                        let candidate = Semantics { dests: vec![Loc::Reg(dest)], sources: vec![source], ..what.clone() };
-                        if emit(&candidate).is_some() {
-                            changed = Some(Arc::new(with_what(one, candidate)));
-                        }
-                    }
-                }
-            }
-            insns.push(changed.unwrap_or_else(|| Arc::clone(one)));
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::narrowed_moves(body, &Facts::new(body, None))
 }
 
-/// Use a saved accumulator in place for commutative two-address operations.
+/// Use a saved accumulator in place for commutative two-address operations (`peephole.peep`).
 pub fn commuted(body: &LirBody) -> LirBody {
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = block.insns.clone();
-        let mut removed: HashSet<usize> = HashSet::default();
-        for index in 2..insns.len() {
-            let (saved, copied, combined) =
-                (Arc::clone(&insns[index - 2]), Arc::clone(&insns[index - 1]), Arc::clone(&insns[index]));
-            if [&saved, &copied, &combined].into_iter().any(|one| {
-                removed.contains(&id(one))
-                    || !one.clobbers.is_empty()
-                    || !one.requires.is_empty()
-                    || !one.delivers.is_empty()
-                    || !one.spread.is_empty()
-                    || one.group.is_some()
-            }) {
-                continue;
-            }
-            if copied.symbol == Some(true) || combined.symbol == Some(true) {
-                continue;
-            }
-            let (Some(first), Some(second), Some(third)) = (&saved.what, &copied.what, &combined.what) else {
-                continue;
-            };
-            if let (
-                (Operation::Move, Some("mov"), [Loc::Reg(temporary)], [Loc::Reg(accumulator)]),
-                (Operation::Move, Some("mov"), [destination], [Loc::Reg(term)]),
-                (Operation::Binary, name, [result], [left, right]),
-            ) = (
-                (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-                (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice()),
-                (third.op, third.name.as_deref(), third.dests.as_slice(), third.sources.as_slice()),
-            ) {
-                let accumulated = Loc::Reg(*accumulator);
-                if !name.is_some_and(|name| ["add", "and", "or", "xor"].contains(&name))
-                    || !(accumulated == *destination && destination == result && result == left)
-                    || *right != Loc::Reg(*temporary)
-                    || !(accumulator.width == temporary.width && temporary.width == term.width)
-                    || ![2, 4].contains(&accumulator.width)
-                    || !_lanes(accumulator.register).is_disjoint(&_lanes(temporary.register))
-                {
-                    continue;
-                }
-                insns[index] = Arc::new(with_what(
-                    &combined,
-                    Semantics { sources: vec![accumulated, Loc::Reg(*term)], ..third.clone() },
-                ));
-                removed.insert(id(&copied));
-            }
-        }
-        let insns = lir::without(&insns, |one| removed.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>);
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::commuted(body, &Facts::new(body, None))
 }
 
-/// Write a commutative result directly into its copied destination.
-///
-/// Once registers are assigned, a tied `A = op(A, B); B = A` pair can be
-/// spelled `B = op(B, A)` when A dies at the copy.  This is the physical
-/// counterpart of two-address commutation: it asks about exact register-lane
-/// liveness, so doing it in MIR or before allocation would be unsound.  Keep
-/// the eliminated synthetic copy as a virtual anchor for later source-map and
-/// SSA consumers.
+/// Write a commutative result directly into its copied destination (`peephole.peep`).
 pub fn transferred(body: &LirBody) -> LirBody {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let Ok(insns) = _code_windows(&block.insns, 2, |pair| -> Result<_, std::convert::Infallible> {
-            Ok(if pair.len() == 2 { _transferred(pair, &dead_after).map(|changed| (2, changed)) } else { None })
-        });
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::transferred(body, &Facts::new(body, None))
 }
 
-fn _transferred(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<Insn>>> {
-    let (combined, copied) = (&parts[0], &parts[1]);
-    if parts.iter().any(|one| (one.what.is_none()
-                || !one.clobbers.is_empty()
-                || !one.clobbers_high.is_empty()
-                || !one.requires.is_empty()
-                || !one.delivers.is_empty()
-                || !one.spread.is_empty()
-                || one.group.is_some()
-                || one.symbol == Some(true)
-                || one.frame_adjust
-                || one.spill_reload
-                || one.spill_store)) {
-        return None;
-    }
-    // Only an allocator/two-address copy owns no source bytes.  Removing a
-    // source instruction is a different layout transformation and must retain
-    // its own observable ownership contract.
-    if copied.covers.is_none_or(|covers| covers.0 != covers.1) {
-        return None;
-    }
-    let (first, second) = (combined.what.as_ref()?, copied.what.as_ref()?);
-    let (left, right) = match (
-        (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-        (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice()),
-    ) {
-        (
-            (operation, name, [Loc::Reg(destination)], [Loc::Reg(left), Loc::Reg(right)]),
-            (Operation::Move, Some("mov"), [Loc::Reg(into)], [Loc::Reg(out_of)]),
-        ) => {
-            let commutative = operation == Operation::Binary
-                && name.is_some_and(|name| ["add", "and", "or", "xor"].contains(&name))
-                || operation == Operation::Multiply && name == Some("imul");
-            if !commutative
-                || destination != left
-                || out_of != left
-                || into != right
-                || !(destination.width == left.width && left.width == right.width && right.width == into.width)
-                || ir::root(left.register) == ir::root(right.register)
-                || !_lanes(left.register).is_subset(&dead_after[&id(copied)])
-            {
-                return None;
-            }
-            (*left, *right)
-        }
-        _ => return None,
-    };
 
-    let what = Semantics { dests: vec![Loc::Reg(right)], sources: vec![Loc::Reg(right), Loc::Reg(left)], ..first.clone() };
-    let before = emit(first);
-    let after = emit(&what);
-    let (Some(before), Some(after)) = (before, after) else {
-        return None;
-    };
-    if before.code.len() != after.code.len() {
-        return None;
-    }
-    Some(vec![Arc::new(with_what(combined, what)), lir::anchor(Arc::clone(copied))])
-}
 
 /// Select direct register or memory forms for a dword's high word.
 ///
@@ -1250,184 +788,21 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
     Some(vec![Arc::new(with_what(load, what)), lir::anchor(Arc::clone(shift))])
 }
 
-/// Do tied work in its source register when a copy restores the result.
-///
-/// After allocation, `T = S; T = op(T); S = T` leaves both registers
-/// holding the result. `S = op(S); T = S` leaves exactly the same physical
-/// state and flags, while removing one move. This is deliberately after
-/// allocation: globally joining the two virtual intervals can make a
-/// colourable graph spill, whereas this local rewrite changes no interval.
+/// Do tied work in its source register when a copy restores the result (`peephole.peep`).
 pub fn shuttles(body: &LirBody) -> LirBody {
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let Ok(out) = _code_windows(&block.insns, 3, |triple| -> Result<_, std::convert::Infallible> {
-            Ok(if triple.len() == 3 { _shuttle(triple).map(|changed| (3, changed)) } else { None })
-        });
-        blocks.push(block.with_insns(out));
-    }
-    body.with_blocks(blocks)
+    peep::shuttles(body, &Facts::new(body, None))
 }
 
-/// Remove a synthetic save/restore when the source survives between them.
-///
-/// Allocation may preserve a low word in a temporary around a portable
-/// high-word extraction.  Once the extraction has become a direct copy and
-/// shift of another register, the original source is visibly untouched.
-/// Retain both virtual operations as anchors, but emit neither physical move
-/// when no intervening instruction writes the source or observes/changes the
-/// temporary and the temporary is dead after the restore.
+/// Remove a synthetic save/restore when the source survives between them (`peephole.peep`).
 pub fn restored_copies(body: &LirBody) -> LirBody {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let mut insns = block.insns.clone();
-        let mut changed: HashSet<usize> = HashSet::default();
-        // `enumerate(insns)` walks the live list: later replacements are seen.
-        for index in 0..insns.len() {
-            let saved = Arc::clone(&insns[index]);
-            if changed.contains(&id(&saved)) || !_synthetic_register_copy(&saved) {
-                continue;
-            }
-            let what = saved.what.as_ref().expect("a synthetic copy has semantics");
-            let (temporary, source) = match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
-            {
-                (Operation::Move, Some("mov"), [Loc::Reg(temporary)], [Loc::Reg(source)]) => (*temporary, *source),
-                _ => continue,
-            };
-            if temporary.width != source.width || ![1, 2, 4].contains(&temporary.width) {
-                continue;
-            }
-            let (temporary_lanes, source_lanes) = (_lanes(temporary.register), _lanes(source.register));
-            if temporary_lanes.is_empty()
-                || source_lanes.is_empty()
-                || !temporary_lanes.is_disjoint(&source_lanes)
-            {
-                continue;
-            }
-            let tail: Vec<Arc<Insn>> = insns[index + 1..].to_vec();
-            for restored in &tail {
-                if _inverse_synthetic_copy(restored, &source, &temporary) {
-                    if temporary_lanes.is_subset(&dead_after[&id(restored)]) {
-                        insns[index] = lir::anchor(Arc::clone(&saved));
-                        // `list.index`: the first equal element after the save.
-                        let restore_at = index
-                            + 1
-                            + insns[index + 1..]
-                                .iter()
-                                .position(|one| one == restored)
-                                .expect("the restore is in the list");
-                        insns[restore_at] = lir::anchor(Arc::clone(restored));
-                        changed.insert(id(&saved));
-                        changed.insert(id(restored));
-                    }
-                    break;
-                }
-                let Some((reads, writes)) = _register_effects(restored, true, false) else {
-                    break;
-                };
-                if !reads.is_disjoint(&temporary_lanes)
-                    || !writes.is_disjoint(&temporary_lanes.or(&source_lanes))
-                {
-                    break;
-                }
-            }
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::restored_copies(body, &Facts::new(body, None))
 }
 
-fn _synthetic_register_copy(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.op == Operation::Move
-            && what.name.as_deref() == Some("mov")
-            && what.dests.len() == 1
-            && what.sources.len() == 1
-            && matches!(what.dests[0], Loc::Reg(_))
-            && matches!(what.sources[0], Loc::Reg(_))
-    }) && one.covers.is_some_and(|covers| covers.0 == covers.1)
-        && !(!one.clobbers.is_empty()
-            || !one.clobbers_high.is_empty()
-            || !one.requires.is_empty()
-            || !one.delivers.is_empty()
-            || !one.spread.is_empty())
-        && one.group.is_none()
-        && one.symbol != Some(true)
-        && !(one.frame_adjust || one.spill_reload || one.spill_store)
-}
 
-fn _inverse_synthetic_copy(one: &Insn, destination: &Reg, source: &Reg) -> bool {
-    if !_synthetic_register_copy(one) {
-        return false;
-    }
-    let what = one.what.as_ref().expect("a synthetic copy has semantics");
-    what.dests == [Loc::Reg(*destination)] && what.sources == [Loc::Reg(*source)]
-}
 
-fn _shuttle(parts: &[Arc<Insn>]) -> Option<Vec<Arc<Insn>>> {
-    let (saved, combined, restored) = (&parts[0], &parts[1], &parts[2]);
-    if parts.iter().any(|one| {
-        one.what.is_none()
-            || !one.clobbers.is_empty()
-            || !one.requires.is_empty()
-            || !one.delivers.is_empty()
-            || !one.spread.is_empty()
-            || one.group.is_some()
-            || one.symbol == Some(true)
-            || one.frame_adjust
-            || one.spill_reload
-    }) {
-        return None;
-    }
-    if [saved, restored].into_iter().any(|one| one.covers.is_none_or(|covers| covers.0 != covers.1)) {
-        return None;
-    }
-    let (first, second, third) = (saved.what.as_ref()?, combined.what.as_ref()?, restored.what.as_ref()?);
-    let (temporary, source, operation, name, target_) = match (
-        (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-        (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice(), second.target),
-        (third.op, third.name.as_deref(), third.dests.as_slice(), third.sources.as_slice()),
-    ) {
-        (
-            (Operation::Move, Some("mov"), [Loc::Reg(temporary)], [Loc::Reg(source)]),
-            (operation, name, [destination], operands, target_),
-            (Operation::Move, Some("mov"), [last_destination], [last_source]),
-        ) => {
-            if ![Operation::Binary, Operation::Unary, Operation::Multiply].contains(&operation)
-                || *destination != Loc::Reg(*temporary)
-                || operands.is_empty()
-                || operands[0] != Loc::Reg(*temporary)
-                || *last_destination != Loc::Reg(*source)
-                || *last_source != Loc::Reg(*temporary)
-                || temporary.width != source.width
-                || ![1, 2, 4].contains(&temporary.width)
-                || ir::root(temporary.register) == ir::root(source.register)
-            {
-                return None;
-            }
-            (*temporary, *source, operation, name, target_)
-        }
-        _ => return None,
-    };
 
-    let rewritten = Semantics {
-        op: operation,
-        name: name.map(str::to_owned),
-        dests: second.dests.iter().map(|one| _register_operand(one, temporary.register, source.register)).collect(),
-        sources: second
-            .sources
-            .iter()
-            .map(|one| _register_operand(one, temporary.register, source.register))
-            .collect(),
-        target: target_,
-        indirect: false,
-    };
 
-    emit(&rewritten)?;
-    let reverse = semantics(Operation::Move, "mov", vec![Loc::Reg(temporary)], vec![Loc::Reg(source)]);
-    Some(vec![Arc::new(with_what(combined, rewritten)), Arc::new(with_what(restored, reverse))])
-}
+
 
 /// One allocated operand with aliases of `before` renamed to `after`.
 pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
@@ -1736,396 +1111,26 @@ pub fn overwritten(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-const _FUSED_BINARY: [&str; 5] = ["add", "sub", "and", "or", "xor"];
-const _FUSED_UNARY: [&str; 4] = ["inc", "dec", "neg", "not"];
 
-/// `mov r,[m]; op r,x; mov [m],r` is `op [m],x`; `mov r,[m]; cmp r,x` is `cmp [m],x`.
-///
-/// The memory forms set the flags the register forms do and leave the cell
-/// as the store did. What they no longer write is r, so nothing may read r
-/// after, and r must be neither how the cell is reached nor the operand.
-/// Only instructions that stand for no object bytes are dropped.
+/// Fold a load, an operation and a store into one memory operation (`peephole.peep`).
 pub fn fused(body: &LirBody) -> LirBody {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = block.insns.clone();
-        // Use the one physical-liveness implementation.  Its declared-call
-        // and complete-return fallback knows that caller-clobbered registers
-        // die at a function exit; this local copy used to treat RETURN as a
-        // terminator before consulting that contract and kept C's last CX
-        // load alive for no semantic reason.
-        let dead_by_insn = regthrash::_dead_after(block, exits[&block.at].clone());
-        let dead_after: Vec<Lanes> = insns.iter().map(|one| dead_by_insn[&id(one)].clone()).collect();
-        // A NOTHING is no machine instruction even when it still carries an
-        // SSA edge.  Allocation leaves such anchors behind for identity
-        // copies; looking only through edge-free anchors made physically
-        // adjacent loads and compares invisible here.
-        let work: Vec<usize> = insns
-            .iter()
-            .enumerate()
-            .filter(|(_, one)| !_nothing(one))
-            .map(|(index, _)| index)
-            .collect();
-        let mut at = 0;
-        while at + 1 < work.len() {
-            let load_at = work[at];
-            let mut candidate = at + 1;
-            let mut changed = false;
-            while candidate < work.len() {
-                let work_at = work[candidate];
-                let store_at = if candidate + 1 < work.len() { Some(work[candidate + 1]) } else { None };
-                let made = _fused(
-                    &insns[load_at],
-                    &insns[work_at],
-                    store_at.map(|store_at| &insns[store_at]),
-                    &dead_after[work_at],
-                    &store_at.map_or_else(Lanes::new, |store_at| dead_after[store_at].clone()),
-                );
-                if let Some((replacement, used)) = made {
-                    insns[work_at] = replacement;
-                    // Keep the virtual definitions and byte ownership.  The
-                    // fused machine instruction replaces the physical
-                    // load/store only; deleting either instruction also
-                    // deletes SSA edges carried by identity-copy anchors.
-                    insns[load_at] = lir::anchor(Arc::clone(&insns[load_at]));
-                    if used == 3 {
-                        let store_at = store_at.expect("a three-part fusion has a store");
-                        insns[store_at] = lir::anchor(Arc::clone(&insns[store_at]));
-                    }
-                    at = candidate + used - 1;
-                    changed = true;
-                    break;
-                }
-                if !_delays_memory_read(&insns[load_at], &insns[work_at]) {
-                    break;
-                }
-                candidate += 1;
-            }
-            if !changed {
-                at += 1;
-            }
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::fused(body, &Facts::new(body, None))
 }
 
-/// Whether `load` may read its cell after this register materialization.
-///
-/// A load of the other arithmetic operand commonly separates a cell's own
-/// load from its operation.  Delaying the cell read is safe when the crossed
-/// instruction only materializes a register, does not consume or replace the
-/// loaded register, and does not change anything used to address the cell.
-/// Memory-writing instructions are deliberately outside this rule: proving
-/// their disjointness belongs in MIR, not in a machine peephole.
-fn _delays_memory_read(load: &Insn, crossed: &Insn) -> bool {
-    let Some(crossed_what) = &crossed.what else {
-        return false;
-    };
-    if !crossed.clobbers.is_empty()
-        || !crossed.requires.is_empty()
-        || !crossed.delivers.is_empty()
-        || !crossed.spread.is_empty()
-        || crossed.group.is_some()
-        || crossed.symbol == Some(true)
-        || crossed.frame_adjust
-    {
-        return false;
-    }
-    if !(matches!(crossed_what.op, Operation::Move | Operation::Extend | Operation::Address)
-        && matches!(crossed_what.dests.as_slice(), [Loc::Reg(_)]))
-    {
-        return false;
-    }
-    let loaded = _register_effects(load, false, true);
-    let materialized = _register_effects(crossed, false, true);
-    let (Some((load_reads, load_writes)), Some((crossed_reads, crossed_writes))) = (loaded, materialized) else {
-        return false;
-    };
-    let address_lanes: Lanes = match load.what.as_ref().map(|what| what.sources.as_slice()) {
-        Some([Loc::Mem(cell)]) => {
-            let mut address_registers = BTreeSet::from([cell.through, cell.index_through]);
-            if let Some(addr) = cell.addr {
-                address_registers.insert(addr.segment);
-                // Once MIR computed a base value, allocation's `through` is
-                // the encoded register and BC's original `addr.base` is only
-                // provenance.  A cell with no value still encodes that base.
-                if cell.base.is_none() {
-                    address_registers.insert(addr.base);
-                }
-            }
-            address_registers.into_iter().flat_map(_lanes).collect()
-        }
-        _ => return false,
-    };
-    let crossed_all: Lanes = crossed_reads.or(&crossed_writes);
-    let load_all: Lanes = load_reads.or(&address_lanes);
-    !(!load_writes.is_disjoint(&crossed_all)
-        || !load_all.is_disjoint(&crossed_writes)
-        || load.defines.iter().any(|value| crossed.uses.contains(value)))
-}
 
-fn _fused(
-    load: &Insn,
-    work: &Insn,
-    store: Option<&Arc<Insn>>,
-    dead_work: &Lanes,
-    dead_store: &Lanes,
-) -> Option<(Arc<Insn>, usize)> {
-    let plain = |one: &Insn, dropped: bool| {
-        !(one.what.is_none()
-            || !one.clobbers.is_empty()
-            || !one.requires.is_empty()
-            || !one.delivers.is_empty()
-            || !one.spread.is_empty()
-            || one.group.is_some()
-            || one.symbol == Some(true)
-            || one.frame_adjust
-            || dropped && one.covers.is_some_and(|covers| covers.0 != covers.1))
-    };
 
-    if !plain(load, true) || !plain(work, false) {
-        return None;
-    }
-    let loaded = load.what.as_ref()?;
-    let (extension, register, cell) =
-        match (loaded.op, loaded.name.as_deref(), loaded.dests.as_slice(), loaded.sources.as_slice()) {
-            (Operation::Move, Some("mov"), [Loc::Reg(register)], [Loc::Mem(cell)]) => {
-                if register.width != cell.width {
-                    return None;
-                }
-                (None, *register, cell.clone())
-            }
-            (Operation::Extend, Some(extension @ ("movsx" | "movzx")), [Loc::Reg(register)], [Loc::Mem(cell)]) => {
-                if register.width <= cell.width {
-                    return None;
-                }
-                (Some(extension), *register, cell.clone())
-            }
-            _ => return None,
-        };
-    let root = ir::root(register.register);
-    let addresses_itself = [ir::root(cell.through), ir::root(cell.index_through)].contains(&root);
-    let lanes = _lanes(register.register);
 
-    let operand = |one: &Loc| {
-        matches!(one, Loc::Imm(value) if value.address.is_none())
-            || matches!(one, Loc::Reg(value) if ir::root(value.register) != root)
-    };
 
-    let stored = || {
-        !addresses_itself
-            && store.is_some_and(|store| {
-                plain(store, true) && {
-                    let what = store.what.as_ref().expect("plain has semantics");
-                    what.op == Operation::Move
-                        && what.name.as_deref() == Some("mov")
-                        && matches!(what.dests.as_slice(), [Loc::Mem(into)] if _same_cell(into, &cell))
-                        && what.sources == [Loc::Reg(register)]
-                }
-            })
-            && lanes.is_subset(dead_store)
-    };
 
-    let worked = work.what.as_ref()?;
-    let (made, used) = match (worked.op, worked.name.as_deref(), worked.dests.as_slice(), worked.sources.as_slice()) {
-        (Operation::Compare, Some("cmp"), [], [Loc::Reg(tested), other]) => {
-            if *tested != register || !operand(other) || !lanes.is_subset(dead_work) {
-                return None;
-            }
-            let mut other = other.clone();
-            if let Some(extension) = extension {
-                // Zero tests the widened value as it does the cell, but for SF: movsx copies
-                // the cell's top bit as the narrow compare does, movzx leaves it clear.
-                if !matches!(other, Loc::Imm(Imm { value: 0, .. })) {
-                    return None;
-                }
-                if extension == "movzx" && !_flag_lanes(RflagsBits::SF).is_subset(dead_work) {
-                    return None;
-                }
-                other = Loc::Imm(imm(0, cell.width));
-            }
-            (semantics(Operation::Compare, "cmp", vec![], vec![Loc::Mem(cell.clone()), other]), 2)
-        }
-        (Operation::Binary, name, [Loc::Reg(dest)], [Loc::Reg(source), other]) => {
-            if extension.is_some() || !name.is_some_and(|name| _FUSED_BINARY.contains(&name)) {
-                return None;
-            }
-            let name = name.expect("checked above");
-            if dest == source && *source == register && operand(other) && stored() {
-                (
-                    semantics(Operation::Binary, name, vec![Loc::Mem(cell.clone())], vec![Loc::Mem(cell.clone()), other.clone()]),
-                    3,
-                )
-            // A frontend load is not a register-allocation decision.  When
-            // its only physical consumer accepts a memory source, retain the
-            // read at that consumer and let the temporary die.  This is the
-            // source-operand counterpart of the destination round trip above.
-            } else if dest == source
-                && matches!(other, Loc::Reg(other) if *other == register)
-                && ir::root(dest.register) != root
-                && lanes.is_subset(dead_work)
-            {
-                (
-                    semantics(Operation::Binary, name, vec![Loc::Reg(*dest)], vec![Loc::Reg(*source), Loc::Mem(cell.clone())]),
-                    2,
-                )
-            } else {
-                return None;
-            }
-        }
-        (Operation::Unary, name, [Loc::Reg(dest)], sources) => {
-            if extension.is_some()
-                || !name.is_some_and(|name| _FUSED_UNARY.contains(&name))
-                || *dest != register
-                || sources.iter().any(|one| *one != Loc::Reg(register))
-                || !stored()
-            {
-                return None;
-            }
-            let name = name.expect("checked above");
-            (
-                semantics(
-                    Operation::Unary,
-                    name,
-                    vec![Loc::Mem(cell.clone())],
-                    sources.iter().map(|_| Loc::Mem(cell.clone())).collect(),
-                ),
-                3,
-            )
-        }
-        _ => return None,
-    };
-    emit(&made)?;
-    Some((Arc::new(with_what(work, made)), used))
-}
 
-/// Whether two adjacent operands address the same bytes. The registers
-/// and displacement carry the address; the values they name may differ
-/// when allocation copied the same address into a register again as a new
-/// value. `Mem`'s equality compares those values and leaves the registers
-/// out, so it cannot say.
-fn _same_cell(one: &Mem, other: &Mem) -> bool {
-    let logical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
-    let physical = |cell: &Mem| (cell.through, cell.index_through, cell.offset);
-    let placed = |cell: &Mem| (cell.base.is_none() || cell.through != Register::None) && (cell.index.is_none() || cell.index_through != Register::None);
-    logical(one) == logical(other) && physical(one) == physical(other) && placed(one) && placed(other)
-}
-
-/// `mov r,[m]; mov es,[m+2]`, in either order, is `les r,[m]` (and FS, GS).
-///
-/// One instruction reads both words before it writes either register, so
-/// the register the pair writes first may not reach the word it reads
-/// second. Only instructions that stand for no object bytes are joined.
+/// Load a far pointer's two words with one les (lds, lfs, lgs) (`peephole.peep`).
 pub fn far_loads(body: &LirBody) -> LirBody {
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = block.insns.clone();
-        let work: Vec<usize> = insns
-            .iter()
-            .enumerate()
-            .filter(|(_, one)| !_skippable_nothing(one))
-            .map(|(index, _)| index)
-            .collect();
-        let mut removed: HashSet<usize> = HashSet::default();
-        let mut at = 0;
-        while at + 1 < work.len() {
-            let Some(made) = _far_load(&insns[work[at]], &insns[work[at + 1]]) else {
-                at += 1;
-                continue;
-            };
-            insns[work[at]] = made;
-            removed.insert(work[at + 1]);
-            at += 2;
-        }
-        let insns = insns
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| !removed.contains(index))
-            .map(|(_, one)| one)
-            .collect();
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::far_loads(body, &Facts::new(body, None))
 }
 
-fn _far_load(first: &Insn, second: &Insn) -> Option<Arc<Insn>> {
-    let mut words: Vec<(Reg, Mem)> = Vec::new();
-    for one in [first, second] {
-        let Some(what) = &one.what else {
-            return None;
-        };
-        if !one.clobbers.is_empty()
-            || !one.requires.is_empty()
-            || !one.delivers.is_empty()
-            || !one.spread.is_empty()
-            || one.group.is_some()
-            || one.symbol == Some(true)
-            || one.frame_adjust
-            || one.covers.is_some_and(|covers| covers.0 != covers.1)
-        {
-            return None;
-        }
-        match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
-            (Operation::Move, Some("mov"), [Loc::Reg(dest)], [Loc::Mem(cell)]) => {
-                if dest.width != 2 || cell.width != 2 {
-                    return None;
-                }
-                words.push((*dest, cell.clone()));
-            }
-            _ => return None,
-        }
-    }
-    let segments: Vec<&(Reg, Mem)> =
-        words.iter().filter(|word| select::FAR_LOADS.contains_key(&word.0.register)).collect();
-    let offsets: Vec<&(Reg, Mem)> =
-        words.iter().filter(|word| !target::SEGMENTS.contains(&word.0.register)).collect();
-    if segments.len() != 1 || offsets.len() != 1 {
-        return None;
-    }
-    let ((segment, high), (offset, low)) = (segments[0].clone(), offsets[0].clone());
-    if !_next_word(&low, &high) {
-        return None;
-    }
-    let (written, read) = (words[0].0, &words[1].1);
-    if target::SEGMENTS.contains(&written.register) {
-        if read.addr.is_some_and(|addr| addr.segment == written.register) {
-            return None;
-        }
-    } else if [ir::root(read.through), ir::root(read.index_through)].contains(&ir::root(written.register)) {
-        return None;
-    }
-    let made = semantics(
-        Operation::Move,
-        select::FAR_LOADS[&segment.register].0,
-        vec![Loc::Reg(offset), Loc::Reg(segment)],
-        vec![Loc::Mem(Mem { width: 4, ..low })],
-    );
-    emit(&made)?;
-    Some(Arc::new(Insn {
-        what: Some(made),
-        defines: deduped(first.defines.iter().chain(&second.defines).copied()),
-        uses: deduped(first.uses.iter().chain(&second.uses).copied()),
-        ..first.clone()
-    }))
-}
 
-/// Whether `high` is the word right after `low`, reached the same way.
-///
-/// The displacement may be carried by the address, by the operand's offset,
-/// or by both at once, so either may be the one two further on.
-fn _next_word(low: &Mem, high: &Mem) -> bool {
-    let same = |cell: &Mem| Mem { addr: cell.addr.map(|addr| ir::Addr { disp: 0, ..addr }), offset: 0, ..cell.clone() };
-    if same(low) != same(high) {
-        return false;
-    }
-    let (Some(low_addr), Some(high_addr)) = (low.addr, high.addr) else {
-        return low.addr.is_none() && high.addr.is_none() && high.offset == low.offset + 2;
-    };
-    let moved = high_addr.disp - low_addr.disp;
-    moved == 2 && [0, 2].contains(&(high.offset - low.offset)) || moved == 0 && high.offset == low.offset + 2
-}
+
+
 
 /// Replace a dead temporary's shift with a scaled 67h LEA.
 ///
@@ -2743,88 +1748,15 @@ fn _affine_address(
     Ok(Some((last + 1, made)))
 }
 
-/// Select compact INC/DEC for a unit add whose carry result is dead.
-///
-/// MIR deliberately treats a source `inc` and `add x,1` as the same
-/// arithmetic value.  Their allocated x86 forms differ only in CF: INC/DEC
-/// preserve it.  Once physical flag liveness proves CF unobserved, retaining
-/// the frontend's original spelling is neither semantic nor profitable.
+/// Select compact INC/DEC for a unit add whose carry result is dead (`peephole.peep`).
 pub fn increments(body: &LirBody) -> LirBody {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    let carry = _flag_lanes(RflagsBits::CF);
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let mut insns = Vec::new();
-        for one in &block.insns {
-            let mut one = Arc::clone(one);
-            let mut candidate = None;
-            if let Some(what) = &one.what {
-                if let (
-                    Operation::Binary,
-                    Some(name @ ("add" | "sub")),
-                    [Loc::Reg(destination)],
-                    [Loc::Reg(source), Loc::Imm(Imm { value: 1, address: None, .. })],
-                ) = (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
-                {
-                    if destination == source {
-                        candidate = Some(semantics(
-                            Operation::Unary,
-                            if name == "add" { "inc" } else { "dec" },
-                            vec![Loc::Reg(*destination)],
-                            vec![Loc::Reg(*source)],
-                        ));
-                    }
-                }
-            }
-            if let Some(candidate) = candidate {
-                if carry.is_subset(&dead_after[&id(&one)]) {
-                    let (before, after) = (emit(one.what.as_ref().expect("matched above")), emit(&candidate));
-                    if let (Some(before), Some(after)) = (before, after) {
-                        if after.code.len() <= before.code.len() {
-                            one = Arc::new(with_what(&one, candidate));
-                        }
-                    }
-                }
-            }
-            insns.push(one);
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::increments(body, &Facts::new(body, None))
 }
 
-/// `shl r,1` as `add r,r` where the target prices the add lower.  Every
-/// flag the shift defines, the add sets the same way.
+/// `shl r,1` as `add r,r` where the target prices the add lower (`peephole.peep`).
 pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
-    if cpu.doubling()? != "alu_rr" {
-        return Ok(body.clone());
-    }
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| {
-            block.with_insns(
-                block
-                    .insns
-                    .iter()
-                    .map(|one| match one.what.as_ref().map(|what| (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())) {
-                        Some((
-                            Operation::Binary,
-                            Some("shl" | "sal"),
-                            [Loc::Reg(destination)],
-                            [Loc::Reg(source), Loc::Imm(Imm { value: 1, address: None, .. })],
-                        )) if destination == source => Arc::new(with_what(
-                            one,
-                            semantics(Operation::Binary, "add", vec![Loc::Reg(*destination)], vec![Loc::Reg(*source), Loc::Reg(*source)]),
-                        )),
-                        _ => Arc::clone(one),
-                    })
-                    .collect(),
-            )
-        })
-        .collect();
-    Ok(body.with_blocks(blocks))
+    cpu.doubling()?;
+    Ok(peep::doubled(body, &Facts::new(body, Some(cpu))))
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
@@ -2860,34 +1792,18 @@ fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
     }
 }
 
-/// `_ZERO_BRANCHES`, in its insertion order.
-const _ZERO_BRANCHES: [(&str, u32); 4] =
-    [("je", RflagsBits::ZF), ("jne", RflagsBits::ZF), ("js", RflagsBits::SF), ("jns", RflagsBits::SF)];
+/// What each conditional jump in the instruction description reads.
+static _BRANCH_READS: LazyLock<HashMap<&'static str, u32>> = LazyLock::new(|| {
+    instructions::FORMS
+        .iter()
+        .filter(|form| form.operation == "branch")
+        .filter_map(|form| Some((form.name.as_str(), instructions::flags(form)?.0)))
+        .collect()
+});
 
-/// `_BRANCH_FLAGS`, in its insertion order.
-const _BRANCH_FLAGS: [(&str, u32); 12] = [
-    ("je", RflagsBits::ZF),
-    ("jne", RflagsBits::ZF),
-    ("js", RflagsBits::SF),
-    ("jns", RflagsBits::SF),
-    ("jl", RflagsBits::SF | RflagsBits::OF),
-    ("jge", RflagsBits::SF | RflagsBits::OF),
-    ("jle", RflagsBits::ZF | RflagsBits::SF | RflagsBits::OF),
-    ("jg", RflagsBits::ZF | RflagsBits::SF | RflagsBits::OF),
-    ("jb", RflagsBits::CF),
-    ("jae", RflagsBits::CF),
-    ("jbe", RflagsBits::CF | RflagsBits::ZF),
-    ("ja", RflagsBits::CF | RflagsBits::ZF),
-];
-
-fn _lookup(table: &[(&str, u32)], name: Option<&str>) -> Option<u32> {
-    let name = name?;
-    table.iter().find(|(key, _)| *key == name).map(|(_, mask)| *mask)
-}
-
-/// The flags a conditional jump reads: those its condition names, or all where this does not know it.
+/// The flags a conditional jump reads, or all where the description does not know it.
 pub fn _branch_reads(what: &Semantics) -> Lanes {
-    _flag_lanes(_lookup(&_BRANCH_FLAGS, Some(what.name.as_deref().unwrap_or(""))).unwrap_or(0xFFFF_FFFF))
+    _flag_lanes(_BRANCH_READS.get(what.name.as_deref().unwrap_or("")).copied().unwrap_or(0xFFFF_FFFF))
 }
 
 const _ARITHMETIC: u32 =
@@ -2934,7 +1850,7 @@ pub fn tested(body: &LirBody) -> LirBody {
         };
         let branch = &insns[*work.last().expect("a test has a branch")];
         if !branch.what.as_ref().is_some_and(|what| {
-            what.op == Operation::Branch && _lookup(&_ZERO_BRANCHES, what.name.as_deref()).is_some()
+            what.op == Operation::Branch && what.name.as_deref().is_some_and(|name| peep::SET_ZERO_JCC.contains(name))
         }) || !live[&block.at].is_disjoint(&_DIFFERING)
         {
             continue;
@@ -3009,63 +1925,26 @@ fn _flag_source(blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &R
 }
 
 static _ADJUST: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::AF));
-const _FLAG_READERS: [&str; 16] = [
-    "adc", "sbb", "rcl", "rcr", "lahf", "pushf", "pushfd", "daa", "das", "aaa", "aas", "into", "int", "iret", "cmc",
-    "salc",
-];
+/// Every mnemonic iced-x86 knows to read an arithmetic flag, and every
+/// interrupt: it hands the flags to the handler.
+static _FLAG_READERS: LazyLock<HashSet<String>> = LazyLock::new(|| {
+    iced_x86::Code::values()
+        .filter(|code| {
+            let mut one = iced_x86::Instruction::default();
+            one.set_code(*code);
+            one.rflags_read() & _ARITHMETIC != 0 || one.flow_control() == FlowControl::Interrupt
+        })
+        .map(|code| format!("{:?}", code.mnemonic()).to_lowercase())
+        .collect()
+});
 
 pub(crate) fn _reads_flags(name: &str) -> bool {
-    _FLAG_READERS.contains(&name) || ["j", "set", "cmov", "loop"].iter().any(|prefix| name.starts_with(prefix))
+    _FLAG_READERS.contains(name)
 }
 
-/// `cmp r,0; jcc` is `or r,r; jcc`, a byte shorter.
-///
-/// Both clear carry and overflow and set zero, sign and parity from r; only
-/// the adjust flag differs, so the branch must be the next work and nothing
-/// after the block may read AF. The branch reading straight after keeps OF
-/// clear of anything between -- DOSBox's dynamic core loses it across OR and
-/// SAHF.
+/// `cmp r,0; jcc` is `or r,r; jcc`, a byte shorter (`peephole.peep`).
 pub fn zero_compares(body: &LirBody) -> LirBody {
-    let live = _flags_live_out(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns = block.insns.clone();
-        let work: Vec<usize> = insns
-            .iter()
-            .enumerate()
-            .filter(|(_, one)| !_skippable_nothing(one))
-            .map(|(index, _)| index)
-            .collect();
-        let mut at = work.len() as isize - 2;
-        // Moves change no flag, so a phi's copies may stand between the two.
-        while at >= 0 && _moves(&insns[work[at as usize]], None) {
-            at -= 1;
-        }
-        if at >= 0 && live[&block.at].is_disjoint(&_ADJUST) {
-            let (test, branch) = (Arc::clone(&insns[work[at as usize]]), Arc::clone(&insns[work[work.len() - 1]]));
-            let register = _zero_tested(&test);
-            if let Some(register) = register {
-                if target::WIDTHS.contains_key(&register.register)
-                    && branch.what.as_ref().is_some_and(|what| {
-                        what.op == Operation::Branch && _lookup(&_BRANCH_FLAGS, what.name.as_deref()).is_some()
-                    })
-                    && test.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("cmp"))
-                {
-                    insns[work[at as usize]] = Arc::new(with_what(
-                        &test,
-                        semantics(
-                            Operation::Binary,
-                            "or",
-                            vec![Loc::Reg(register)],
-                            vec![Loc::Reg(register), Loc::Reg(register)],
-                        ),
-                    ));
-                }
-            }
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
+    peep::zero_compares(body, &Facts::new(body, None))
 }
 
 /// A plain move, writing nothing that shares a root with `register`.

@@ -37,3 +37,12 @@ a small driver (8,200 test lines).
 4. HIR codec, then OMF.
 
 Peephole rules and the Nib grammar wait until these land.
+
+## Done
+
+- 3, peephole rules: `backend/peephole.peep`, compiled by `llrm-peepgen` into
+  one decision automaton per group over `x86.instr`. `constants` (a
+  register-contents dataflow) and `tested` (moves an instruction across a
+  block edge) are not window rewrites and stay code, as do the passes the
+  task left out. `isel/combined.rs` is the old route's and waits for its
+  deletion.
