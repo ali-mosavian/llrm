@@ -105,6 +105,12 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
             inside.entry(*at).or_insert_with(|| found.body.clone());
         }
     }
+    let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
+    for block in &explicit {
+        for to in &block.succ {
+            predecessors.entry(*to).or_default().push(block.at);
+        }
+    }
     let mut order: Vec<LirBlock> = Vec::new();
     let mut done: HashSet<i64> = HashSet::default();
     let mut current: Option<i64> = Some(body.entry);
@@ -118,7 +124,16 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
         }
         if current.is_none_or(|at| done.contains(&at) || !by_at.contains_key(&at)) {
             let waiting: Vec<&LirBlock> = explicit.iter().filter(|block| !done.contains(&block.at)).collect();
-            current = Some(waiting.iter().find(|block| !block.cold).unwrap_or(&waiting[0]).at);
+            // Next to the block last placed that reaches it: a trace started
+            // in source order may land far past its branch.
+            let placed_at: IndexMap<i64, usize> = order.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+            let nearest = waiting
+                .iter()
+                .filter(|block| !block.cold)
+                .filter_map(|block| predecessors.get(&block.at)?.iter().filter_map(|from| placed_at.get(from)).max().map(|last| (*last, *block)))
+                .max_by_key(|(last, _)| *last)
+                .map(|(_, block)| block);
+            current = Some(nearest.or_else(|| waiting.iter().find(|block| !block.cold).copied()).unwrap_or(waiting[0]).at);
             source = None;
         }
         let at = current.expect("set above");
@@ -129,6 +144,16 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
                 (current, source) = (Some(*inner), None);
                 continue;
             }
+        }
+        // A join's other arm goes just before it, once everything reaching the
+        // arm is placed: the arm falls into the join and the placed side jumps
+        // over it. Left for later, it lands after the return, both of its jumps long.
+        let arm = explicit.iter().find(|one| {
+            one.at != at && !one.cold && !done.contains(&one.at) && one.succ == [at] && predecessors.get(&one.at).is_some_and(|from| from.iter().all(|from| done.contains(from)))
+        });
+        if let Some(arm) = arm {
+            (current, source) = (Some(arm.at), None);
+            continue;
         }
         let block = &by_at[&at];
         order.push(block.clone());

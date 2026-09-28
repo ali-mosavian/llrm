@@ -1438,6 +1438,20 @@ mod tests {
         assert_eq!(body.iter().filter(|one| one.starts_with("fldcw")).count(), 2, "{body:#?}");
     }
 
+    /// An if/else's other arm was placed after the return: in a large
+    /// function its branch and its jump back were both near, 4 and 3 bytes.
+    /// QCport had 1,829 near branches past a return.
+    #[test]
+    fn test_both_arms_of_an_if_else_come_before_the_return() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/diamond.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "diamond", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_diamond proc").expect("_diamond");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        assert!(body.last().is_some_and(|last| last.starts_with("ret")), "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
