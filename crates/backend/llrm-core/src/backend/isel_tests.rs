@@ -2679,3 +2679,19 @@ fn test_a_constant_selector_is_loaded_outside_the_loop_that_uses_it() {
         assert!(!innermost || !got[*top..*bottom].iter().any(video), "{:#?}", &got[*top..=*bottom]);
     }
 }
+
+/// keybind.c's `action_for` passes its far pointer parameter on in a loop.
+/// dword_pairs sliced one block with the other half's load index and
+/// panicked: "slice index starts at 2 but ends at 1".
+#[test]
+fn test_a_far_parameter_pushed_in_a_loop_is_selected() {
+    let text = "@_names = internal global [2 x i16] [i16 0, i16 0]\n\
+declare i16 @_text_eq(ptr addrspace(1), ptr) addrspace(1)\n\
+define i16 @_action_for(ptr addrspace(1) %0) addrspace(1) {\n\
+b1:\n  br label %b2\n\
+b2:\n  %1 = phi i16 [ 0, %b1 ], [ %8, %b5 ]\n  %2 = icmp slt i16 %1, 8\n  br i1 %2, label %b4, label %b7\n\
+b4:\n  %3 = mul nsw i16 %1, 2\n  %4 = getelementptr inbounds i8, ptr @_names, i16 %3\n  %5 = load ptr, ptr %4\n  %6 = call addrspace(1) i16 @_text_eq(ptr addrspace(1) %0, ptr %5)\n  %7 = icmp ne i16 %6, 0\n  br i1 %7, label %b7, label %b5\n\
+b5:\n  %8 = add nsw i16 %1, 1\n  br label %b2\n\
+b7:\n  %9 = phi i16 [ -1, %b2 ], [ %1, %b4 ]\n  ret i16 %9\n}\n";
+    assert!(selected(text, "_action_for").is_ok());
+}
