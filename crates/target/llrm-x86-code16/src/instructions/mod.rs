@@ -3,7 +3,7 @@
 
 use std::sync::LazyLock;
 
-use iced_x86::{Code, Instruction, RflagsBits};
+use iced_x86::{Code, Instruction};
 use llrm_support::hash::HashMap;
 
 pub mod parse;
@@ -38,6 +38,7 @@ pub fn flags(form: &Form) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced_x86::RflagsBits;
 
     #[test]
     fn every_form_names_an_iced_code_at_each_width() {

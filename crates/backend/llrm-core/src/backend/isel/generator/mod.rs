@@ -11,7 +11,7 @@ pub mod parse;
 use std::fmt::Write as _;
 
 use automaton::{Automaton, State};
-use parse::{Call, Expr, Pattern, Patterns, Step};
+use parse::{Call, Expr, OperandPattern, Pattern, Step};
 
 /// The instruction description's reader.
 #[path = "../../../../../../target/llrm-x86-code16/src/instructions/parse.rs"]
@@ -19,7 +19,8 @@ pub mod description;
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,
 /// and how many arguments it takes.
-pub const CONSTRUCTORS: [(&str, &str, usize); 12] = [
+pub const CONSTRUCTORS: [(&str, &str, usize); 13] = [
+    ("loaded", "m", 1),
     ("held", "r", 1),
     ("source", "ri", 1),
     ("byte", "r", 1),
@@ -51,9 +52,45 @@ fn refused<T>(pattern: &Pattern, what: impl std::fmt::Display) -> Result<T, Stri
     Err(format!("patterns.isel:{}: pattern `{}`: {what}", pattern.line, pattern.name))
 }
 
-/// Where each operand a pattern binds is, as Rust.
+/// Where each operand a pattern binds is, as Rust: a root operand, or an
+/// operand of the instruction defining one.
 fn bindings(pattern: &Pattern) -> Vec<(String, String)> {
-    pattern.operands.iter().enumerate().filter_map(|(index, one)| one.binding.clone().map(|name| (name, format!("m.ops[{index}]")))).collect()
+    fn walk(operands: &[OperandPattern], at: &dyn Fn(usize) -> String, out: &mut Vec<(String, String)>) {
+        for (index, one) in operands.iter().enumerate() {
+            let rust = at(index);
+            if let Some(name) = &one.binding {
+                out.push((name.clone(), rust.clone()));
+            }
+            if let Some(nested) = &one.nested {
+                walk(&nested.operands, &|inner| format!("self.inner({rust}, {inner})"), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&pattern.operands, &|index| format!("m.ops[{index}]"), &mut out);
+    out
+}
+
+fn names(list: &Option<Vec<String>>) -> String {
+    list.as_ref().map_or("None".into(), |list| format!("Some(&{list:?})"))
+}
+
+/// What the automaton does not test of a pattern's operands: those past
+/// its reach, literals, and nested instructions.
+fn structure(operands: &[OperandPattern], at: &dyn Fn(usize) -> String, root: bool, terms: &mut Vec<String>) {
+    for (index, one) in operands.iter().enumerate() {
+        let rust = at(index);
+        if !root || index >= parse::OPERANDS {
+            terms.push(format!("self.operand_is({rust}, {}, {})", names(&one.kinds), names(&one.types)));
+        }
+        if let Some(literal) = one.literal {
+            terms.push(format!("self.literal({rust}) == Some({literal})"));
+        }
+        if let Some(nested) = &one.nested {
+            terms.push(format!("self.defines({rust}, &{:?}, {}, {})", nested.opcodes, names(&nested.result), nested.operands.len()));
+            structure(&nested.operands, &|inner| format!("self.inner({rust}, {inner})"), false, terms);
+        }
+    }
 }
 
 struct Checker<'a> {
@@ -132,17 +169,21 @@ impl Checker<'_> {
     }
 }
 
-fn condition(checker: &Checker) -> Result<String, String> {
+/// Whether the pattern holds: its structure, then its predicates -- or,
+/// for a pattern that covers, that the cover phase chose it here.
+fn condition(checker: &Checker, covering: bool) -> Result<String, String> {
     let pattern = checker.pattern;
     let mut terms = Vec::new();
-    for (at, operand) in pattern.operands.iter().enumerate() {
-        if let Some(literal) = operand.literal {
-            terms.push(format!("self.literal(m.ops[{at}]) == Some({literal})"));
+    structure(&pattern.operands, &|index| format!("m.ops[{index}]"), true, &mut terms);
+    if pattern.covers.is_empty() || covering {
+        for call in &pattern.when {
+            let rust = checker.call("is", call)?;
+            terms.push(if call.negated { format!("!{rust}") } else { rust });
         }
-    }
-    for call in &pattern.when {
-        let rust = checker.call("is", call)?;
-        terms.push(if call.negated { format!("!{rust}") } else { rust });
+    } else {
+        for name in &pattern.covers {
+            terms.push(format!("self.covered_by({}, m.inst)", checker.argument(&Expr::Name(name.clone()))?));
+        }
     }
     Ok(if terms.is_empty() { "true".into() } else { terms.join(" && ") })
 }
@@ -183,26 +224,9 @@ fn body(checker: &mut Checker) -> Result<String, String> {
     Ok(code)
 }
 
-fn check(patterns: &Patterns) -> Result<(), String> {
-    for pattern in &patterns.patterns {
-        let bound = bindings(pattern);
-        for call in pattern.when.iter().chain(&pattern.cost) {
-            for arg in &call.args {
-                if let Expr::Name(name) = arg {
-                    if !bound.iter().any(|(one, _)| one == name) {
-                        return refused(pattern, format!("`{name}` is not an operand the match binds"));
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 pub fn generate(forms_text: &str, patterns_text: &str) -> Result<Generated, String> {
     let forms = description::parse(forms_text)?;
     let patterns = parse::parse(patterns_text)?;
-    check(&patterns)?;
     let automaton = automaton::build(&patterns.patterns);
     let mut code = String::new();
     writeln!(code, "// @generated by build.rs from patterns.isel and x86.instr.\n").unwrap();
@@ -222,8 +246,6 @@ pub fn generate(forms_text: &str, patterns_text: &str) -> Result<Generated, Stri
         }
     }
     writeln!(code, "];").unwrap();
-    let names: Vec<&str> = patterns.patterns.iter().map(|one| one.name.as_str()).collect();
-    writeln!(code, "pub(super) static NAMES: [&str; {}] = {names:?};", names.len()).unwrap();
     let groups: Vec<Option<usize>> = {
         let mut seen: Vec<&str> = Vec::new();
         patterns
@@ -240,10 +262,16 @@ pub fn generate(forms_text: &str, patterns_text: &str) -> Result<Generated, Stri
             .collect()
     };
     writeln!(code, "pub(super) static GROUPS: [Option<usize>; {}] = {groups:?};", groups.len()).unwrap();
-    let (mut holds, mut costs, mut emits) = (String::new(), String::new(), String::new());
+    let covering: Vec<bool> = patterns.patterns.iter().map(|one| !one.covers.is_empty()).collect();
+    writeln!(code, "pub(super) static COVERS: [bool; {}] = {covering:?};", covering.len()).unwrap();
+    let (mut holds, mut covers, mut costs, mut emits) = (String::new(), String::new(), String::new(), String::new());
     for (index, pattern) in patterns.patterns.iter().enumerate() {
         let mut checker = Checker { pattern, forms: &forms, bound: bindings(pattern), lets: Vec::new() };
-        writeln!(holds, "            {index} => {},", condition(&checker)?).unwrap();
+        writeln!(holds, "            {index} => {},", condition(&checker, false)?).unwrap();
+        if !pattern.covers.is_empty() {
+            let marks: Vec<String> = pattern.covers.iter().map(|name| checker.argument(&Expr::Name(name.clone())).map(|rust| format!("self.cover({rust}, m.inst);"))).collect::<Result<_, _>>()?;
+            writeln!(covers, "            {index} => {{\n                if !({}) {{\n                    return false;\n                }}\n                {}\n            }}", condition(&checker, true)?, marks.join(" ")).unwrap();
+        }
         let emit = body(&mut checker)?;
         if pattern.group.is_some() {
             let Some(call) = &pattern.cost else { return refused(pattern, "a group member has no cost") };
@@ -259,6 +287,15 @@ impl Selector<'_, '_, '_> {{
         match pattern {{
 {holds}            _ => unreachable!(\"no pattern {{pattern}}\"),
         }}
+    }}
+
+    /// The cover phase: whether a covering pattern holds here, and if so
+    /// the instructions it covers marked.
+    pub(super) fn pattern_covers(&mut self, pattern: usize, m: &Match) -> bool {{
+        match pattern {{
+{covers}            _ => unreachable!(\"pattern {{pattern}} covers nothing\"),
+        }}
+        true
     }}
 
     pub(super) fn pattern_cost(&mut self, pattern: usize, m: &Match) -> Result<i64, Unselected> {{
@@ -299,6 +336,8 @@ mod tests {
         let unbound = "pattern p\n  match add(a, b)\n  emit neg result <- held(c)\nend\n";
         assert_eq!(refused(unbound), "patterns.isel:1: pattern `p`: `c` is not an operand the match binds");
         assert_eq!(refused("pattern p\n  match plus(a, b)\n  nothing\nend\n"), "patterns.isel:2: no MIR opcode `plus`");
+        let cover = "pattern p\n  match add(a, b)\n  cover a\n  nothing\nend\n";
+        assert_eq!(refused(cover), "patterns.isel:1: pattern `p` covers `a`, which is no instruction its match nests");
         assert_eq!(refused("pattern p\n  match add(a, b)\nend\n"), "patterns.isel:1: pattern `p` selects nothing; say `nothing` if it means to");
     }
 
