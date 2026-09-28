@@ -13,7 +13,7 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::target;
-use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
+use crate::model::ir::{self, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;
@@ -140,17 +140,20 @@ fn _expanded(one: &Arc<Insn>) -> Result<Vec<Arc<Insn>>, Malformed> {
         return Ok(vec![Arc::clone(one)]);
     };
     if into.width != source.width
-        || !matches!(into.width, 2 | 4)
+        || !matches!(into.width, 1 | 2 | 4)
         || [into, source].iter().any(|cell| cell.through != Register::BP)
     {
         return Err(Malformed("memory parallel copy needs equal-width frame slots".to_owned()));
     }
+    // A copy moves held values, so its cells are spill slots, and a slot
+    // owns at least a word: a byte's is moved whole.
+    let [into, source] = [into, source].map(|cell| Mem { width: cell.width.max(2), ..cell.clone() });
     let mut push = (**one).clone();
-    push.what = Some(semantics(Operation::Push, "push", vec![], vec![Loc::Mem(source.clone())]));
+    push.what = Some(semantics(Operation::Push, "push", vec![], vec![Loc::Mem(source)]));
     push.defines = vec![];
     push.uses = vec![];
     let mut pop = (**one).clone();
-    pop.what = Some(semantics(Operation::Pop, "pop", vec![Loc::Mem(into.clone())], vec![]));
+    pop.what = Some(semantics(Operation::Pop, "pop", vec![Loc::Mem(into)], vec![]));
     pop.covers = Some((one.at, one.at));
     pop.op = None;
     pop.defines = vec![];
@@ -469,6 +472,21 @@ mod tests {
         assert_eq!(instructions[0].what.as_ref().unwrap().sources, vec![source]);
         assert_eq!(instructions[1].what.as_ref().unwrap().dests, vec![destination]);
         assert!(instructions.iter().all(|one| one.group.is_none()));
+    }
+
+    /// sc.c's `sc_alloc` spilled a byte phi: its slot copy was refused as
+    /// "memory parallel copy needs equal-width frame slots".
+    #[test]
+    fn test_a_byte_slot_copy_moves_its_word() {
+        let byte = |offset: i64| match _slot(offset) {
+            Loc::Mem(cell) => Loc::Mem(Mem { width: 1, ..cell }),
+            _ => unreachable!(),
+        };
+        let result = scheduled(&_body(vec![grouped(byte(0x1e), byte(0x1a), 1)])).unwrap();
+        let instructions = &result.blocks[0].insns;
+        assert_eq!(names(instructions), ["push", "pop"]);
+        assert_eq!(instructions[0].what.as_ref().unwrap().sources, vec![_slot(0x1a)]);
+        assert_eq!(instructions[1].what.as_ref().unwrap().dests, vec![_slot(0x1e)]);
     }
 
     #[test]
