@@ -1,0 +1,37 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/home/alim/scratch/qcfix/tests/fixtures/c/fabs.c"
+- DBSrcCue f1 4 1
+SYM y1 name="halfabs" base="halfabs" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_DOUBLE
+SYM y2 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_DOUBLE
+l2 CGLastParm
+t3 CGTemp TY_DOUBLE
+- DBSrcCue f1 6 1
+SYM y3 name="fabs" base="fabs" pattern="_*" attr=0xf seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+n4 CGFEName y3 TY_CODE_PTR
+c5 CGInitCall n4 TY_DOUBLE y3
+n6 CGFEName y2 TY_DOUBLE
+n7 CGUnary O_POINTS n6 TY_DOUBLE
+- CGAddParm c5 n7 TY_DOUBLE
+n8 CGCall c5
+n9 CGUnary O_POINTS n8 TY_DOUBLE
+n10 CGFloat "5.0000000000000000000e-01" TY_DOUBLE
+n11 CGBinary O_TIMES n9 n10 TY_DOUBLE
+n12 CGUnary O_CONVERT n11 TY_DOUBLE
+n13 CGTempName t3 TY_DOUBLE
+n14 CGAssign n13 n12 TY_DOUBLE
+- CGDone n14
+- DBSrcCue f1 7 1
+n15 CGTempName t3 TY_DOUBLE
+n16 CGUnary O_POINTS n15 TY_DOUBLE
+- CGReturn n16 TY_DOUBLE
+STOP
+FINI

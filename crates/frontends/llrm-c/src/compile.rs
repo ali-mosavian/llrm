@@ -1363,6 +1363,19 @@ mod tests {
         assert_eq!(cleanups(Level::O2), ["add sp, 2", "add sp, 4"]);
     }
 
+    /// bcc -O makes fabs the x87 instruction; llrm-c called the library's:
+    /// a double pushed, a far call, eight bytes cleaned, 29 times in QCport.
+    #[test]
+    fn test_fabs_is_the_instruction() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/fabs.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "fabs", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_halfabs proc").expect("_halfabs");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        assert!(body.contains(&"fabs") && !body.iter().any(|one| one.starts_with("call")), "{body:#?}");
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
