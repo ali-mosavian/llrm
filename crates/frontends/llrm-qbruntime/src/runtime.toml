@@ -28,6 +28,79 @@
 #                  that it writes, where the runtime source settles it
 # A table named `PREFIX*` gives its facts to every routine with that prefix.
 
+# How a typed source call to a routine is described: its `call` table.
+#   pushed   the stack bytes it matches: a number, "any", or "even >= N"
+#   family   only under this family
+#   label    only the label form (the frontend's `$QB$RESA:target`)
+#   control, enters_user_code, error_handling, inputs
+#            what the call does; by default it returns, runs no program
+#            code, keeps the row's error handling and reads no register
+#   results  the registers it answers in, beside the stack block
+#   evidence or audit
+#            why, or the name of a shared text below; {evidence} is the
+#            row's, {name} and {pushed} the call's
+# Such a call is established: it removes the bytes it matched.
+[audits]
+# Stack widths read from actual QB45 /A output, then checked against the
+# shipped runtime's RETF.
+statement = '''
+{evidence} Actual QB45 /A output supplies {pushed} stack bytes to {name}; the shipped runtime returns past that exact fixed block. All non-stack effects remain conservative.
+'''
+# Stack widths read from actual QB 4.5 /A listings for the graphics forms,
+# then checked against their runtime RETF cleanup. Coordinate state is latched
+# by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
+graphics = '''
+{evidence} QB45 /A listings show {name} consuming exactly {pushed} typed stack bytes; the shipped runtime returns past the same block. All graphics-state, memory, error, and clobber effects remain conservative.
+'''
+# Normal-return stack cleanup read directly from the matching entry in all
+# three shipped Microsoft runtimes. Only a stack ABI claim: memory, clobber,
+# allocation, error and alias effects remain those of the conservative
+# runtime contract. BCOM45/BCL71ENR/VBDCL10E hashes are 5b1c7a6f...,
+# 873fde67..., and 59ad49b0...; tools/libdump.py records the member, entry
+# offset and RETF for every row. SCAT is family-specific (the VBDOS far-string
+# entry consumes an extra word), so it has none.
+string = '''
+{evidence} Typed source supplies {pushed} stack bytes. BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB expose the same Pascal {name} normal-return cleanup; tools/libdump.py shows RETF {pushed} in each member. All non-stack effects remain conservative.
+'''
+print = '''
+{evidence} QB45 rt/prnval.asm and rt/prnvalfp.asm dispatch {name} to B$PRINT, whose typed epilogue removes the {pushed}-byte value.
+'''
+output = '''
+{evidence} QB45 rt/pr0a.asm/prnval.asm establishes the typed {name} entry with {pushed} stack bytes; output and error effects remain conservative.
+'''
+read = '''
+{evidence} QB45 rt/read.asm sends {name} through CommRead with one far destination pointer; its shared cEnd removes 4 bytes.
+'''
+bounds = '''
+{evidence} QB45 rt/dynamic.asm declares pAd and iDim as two word Pascal parameters for {name}; the shared cEnd removes exactly four bytes. Bounds errors and descriptor effects remain conservative.
+'''
+# B$ExitDim removes three header words and two words per dimension.
+dim = '''
+rt/dynamic.asm {name} reaches DIM_COMMON with stack parameters; B$ExitDim removes 6 + 4*rank bytes, represented exactly by this call site's typed operands. Other effects stay conservative.
+'''
+screen-parameters = '''
+QB45 runtime/rt/gwscr.asm documents a presence word and optional value for each positional argument, followed by their word count; this site supplies {pushed} bytes. B$ScCleanUpParms removes that complete count-led block; later runtimes retain it.
+'''
+# The shared object raiser keeps these conservative because it does not
+# model the mathpack's transitive stack paths. At a typed source site the
+# wrapper's own RETF and exact argument width establish normal cleanup
+# without any stronger effect claim.
+string-of-float = '''
+{evidence} VBDOS stringfp.asm wrapper ends RETF {pushed}; typed source supplies that exact stored floating argument. All memory, clobber and error effects remain conservative.
+'''
+record-3 = '''
+{evidence} QB45 rt/dvstmt.asm declares Channel word, RecPtr dword, and RecLen word; B$GET3 cEnd returns past all 8 bytes and B$PUT3 joins that epilogue. Other effects stay conservative.
+'''
+record-4 = '''
+{evidence} QB45 rt/dvstmt.asm declares Channel word, RecNum dword, RecPtr dword, and RecLen word; both entry points return past all 12 bytes.
+'''
+event-argument = '''
+{evidence} QB45 rt/osstmt.asm declares one word descriptor or integer parameter for {name}; the far Pascal entry returns past 2 bytes.
+'''
+error-value = '''
+{evidence} Typed ERR/ERL has no arguments; rt/error.asm returns directly after loading the saved value.
+'''
+
 ["B$HARY"]
 cleanup = -1
 control = "returns"
@@ -40,6 +113,18 @@ clobbers = ["bx", "es", "flags"]
 established = true
 inputs = ["bx"]
 evidence = "Shipped dynamic.asm 1:00dc (QB) / hugearr.asm 1:0004 (PDS/VBDOS): BX descriptor and stack indices/rank; returns ES:BX. Entry pushes BP,AX,CX,DX,SI,DI and the normal exit restores them. XOR SI,SI kills incoming flags. Bounds/rank/unallocated failures enter ERR_BS. CleanStack removes 2*(rank+1) bytes through runtime scratch; cleanup is deliberately unknown until the call site's rank is established. Descriptor reads and error handling are not pure."
+
+# The rank word plus exactly that many INTEGER subscripts are the complete
+# variable-sized stack block. The descriptor is a fixed BX input and the
+# element's address comes back in ES:BX: PDS71 PDHUGE.OBJ 0047..0055 sets BX
+# last and uses ES:BX at once.
+["B$HARY".call]
+pushed = "even >= 4"
+inputs = ["bx"]
+results = ["bx", "es"]
+evidence = '''
+{evidence} Typed /Ah access supplies the subscripts plus rank ({pushed} stack bytes) and a separate BX descriptor; PDS71 PDHUGE.OBJ 0047..0055 shows this exact shape and consumes the returned ES:BX immediately as the element address.
+'''
 
 ["B$LINA"]
 cleanup = 0
@@ -133,6 +218,10 @@ evidence = '''
 rt/dynamic.asm: `B$DDIM - DIM a dynamic array`, `void pascal B$DDIM(I2 lo1, I2 hi1, ..., I2 loN, I2 hiN, I2 cbelem, U2 ndims+typ<<8, ad *pAd)`. Cleanup is not a constant: the header says `Input parameters are removed from the stack` and the count is two words per dimension plus three, so None rather than a number. It falls into DIM_COMMON, which erases any present array and allocates -- writing the descriptor at pAd and moving the heap, so Memory.ANY on both sides. `Modifies: Per convention` names no preserved register, so every one is taken as clobbered.
 '''
 
+["B$DDIM".call]
+pushed = "any"
+audit = "dim"
+
 ["B$DSEG"]
 writes_cells = { qb45 = ["b$seg"] }
 cleanup = 2
@@ -170,6 +259,12 @@ rt/rtinit.asm, CODE:299, five bytes whole: `mov [b$seg],ds` / `retf`, the store'
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: rtinit.asm 00de consists only of MOV DS:[relocated global],DS / RETF; it consumes no GP register or arithmetic flags and has no dependencies. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$DSG0".call]
+pushed = 0
+evidence = '''
+{evidence} QB45, PDS71 and VBDOS rtinit.asm B$DSG0 store DS into the runtime DEF SEG word and immediately RETF; the typed bare DEF SEG form has no stack arguments.
 '''
 
 ["B$DVI4"]
@@ -365,6 +460,14 @@ evidence = '''
 rt/erproc.asm: `cProc B$SERR,<PUBLIC,FAR>` with one `parmW errnum`, the ERROR statement: an errnum of 0 or over 255 becomes Illegal function call, and it ends `JMP SHORT B$RUNERR`, the runtime error handler, which enters an ON ERROR handler or ends the program. It does not return.
 '''
 
+["B$SERR".call]
+pushed = 2
+control = "never"
+enters_user_code = true
+evidence = '''
+{evidence} QB45 rt/erproc.asm declares one word errnum, and measured VBDOS LOCERR.OBJ uses the identical one-word far call; B$SERR validates it and jumps to B$RUNERR. Its documented exit is either the installed handler or fatal termination, never the instruction after the call.
+'''
+
 ["B$SIN4"]
 cleanup = 0
 control = "returns"
@@ -486,6 +589,10 @@ evidence = '''
 error.asm, at 00b5 in BCOM45.LIB and 013b in BCL71ENR.LIB and VBDCL10E.LIB: `MOV AX,[b$errlin]` / `XOR DX,DX` / RETF -- ERL, a LONG whose high word is zero, and nothing more. Like B$FERR it reads only the runtime's own error state.
 '''
 
+["B$FERL".call]
+pushed = 0
+audit = "error-value"
+
 ["B$FERR"]
 cleanup = 0
 control = "returns"
@@ -500,6 +607,10 @@ inputs = []
 evidence = '''
 rt/error.asm: `cProc B$FERR,<FAR,PUBLIC>` with no parameters and the single instruction `MOV AX,[b$errnum]` -- the ERR function, and nothing more. It cannot itself reach a handler, contrary to the rest of its file; what it does prove is that the module has ON ERROR, which is what error_handling records and why barrier() still refuses a body containing it.
 '''
+
+["B$FERR".call]
+pushed = 0
+audit = "error-value"
 
 ["B$FIL2"]
 cleanup = 0
@@ -618,6 +729,10 @@ evidence = '''
 VBDCL10E.LIB strfcn.asm 0232..0254: PUSH DI, B$RefStringArgLast, REPE SCASB through ES:DI, helper 011d; RETF 2.
 '''
 
+["B$LTRM".call]
+pushed = 2
+audit = "string"
+
 ["B$MUI4"]
 by_value = true
 cleanup = 8
@@ -711,6 +826,10 @@ evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
 
+["B$PEI2".call]
+pushed = 2
+audit = "print"
+
 ["B$PEI4"]
 by_value = true
 cleanup = 4
@@ -726,6 +845,10 @@ inputs = []
 evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
+
+["B$PEI4".call]
+pushed = 4
+audit = "print"
 
 ["B$PER4"]
 by_value = true
@@ -743,6 +866,10 @@ evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
 
+["B$PER4".call]
+pushed = 4
+audit = "print"
+
 ["B$PER8"]
 cleanup = 8
 control = "returns"
@@ -758,6 +885,10 @@ evidence = '''
 rt/prnvalfp.asm: `MOV AX,EOL SHL 8 + VT_R8` then `JMP B$PRINT`, the same entry as B$PER4 with VT_R8=08h (inc/rtps.inc); BCOM45.LIB 0028, BCL71ENR.LIB and VBDCL10E.LIB 001e all read `mov ax,208h` / `jmp`. Everything else is B$PER4's B$PRINT: si and bp survive, the rest does not, and memory is the worst case. PRINTX pops one parameter word, a second because `TEST AL,VT_SD` is zero for 08h, and a third and fourth because `TEST AL,8` is not; BCOM45.LIB B$PRINT 00e2..00f3 matches and re-pushes the far return address before RETF, so the cleanup is 8. VBDCL10E.LIB's B$PRINT (prnval.asm 0039..009a) is the same: PUSH BP/SI, dispatch through the output vectors, POP SI/BP and RETF 8 for AL=08h.
 '''
 
+["B$PER8".call]
+pushed = 8
+audit = "print"
+
 ["B$PESD"]
 cleanup = 2
 control = "returns"
@@ -772,6 +903,10 @@ inputs = []
 evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
+
+["B$PESD".call]
+pushed = 2
+audit = "print"
 
 ["B$PSI4"]
 by_value = true
@@ -789,6 +924,10 @@ evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc), so this one pops both. Its own entry is `MOV AX,SEMI SHL 8 + VT_I4` -- `mov ax,114h` in the linked image under all three compilers, at 0x189 under VBDOS, 0x5db under PDS 7.1 and 0x1ef6 under QuickBASIC 4.5 -- and reads no register. Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
 
+["B$PSI4".call]
+pushed = 4
+audit = "print"
+
 ["B$PSI2"]
 by_value = true
 cleanup = 2
@@ -805,6 +944,10 @@ evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
 
+["B$PSI2".call]
+pushed = 2
+audit = "print"
+
 ["B$PSSD"]
 cleanup = 2
 control = "returns"
@@ -819,6 +962,10 @@ inputs = []
 evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
+
+["B$PSSD".call]
+pushed = 2
+audit = "print"
 
 ["B$RDI2"]
 cleanup = 4
@@ -835,6 +982,10 @@ evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
 '''
 
+["B$RDI2".call]
+pushed = 4
+audit = "read"
+
 ["B$RDI4"]
 cleanup = 4
 control = "returns"
@@ -850,6 +1001,10 @@ evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
 '''
 
+["B$RDI4".call]
+pushed = 4
+audit = "read"
+
 ["B$RDR4"]
 cleanup = 4
 control = "returns"
@@ -864,6 +1019,10 @@ inputs = []
 evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
 '''
+
+["B$RDR4".call]
+pushed = 4
+audit = "read"
 
 ["B$RESN"]
 calls_program = true
@@ -900,6 +1059,15 @@ evidence = '''
 rt/error.asm: `cProc B$RES0,<FAR,PUBLIC,FORCEFRAME>`, no parameters -- RESUME. B$RES_SETUP (rt/erhandlr.asm) clears b$errnum and b$inonerr, or pops its return and `JMP B$ERR_RE` when no error is in progress, hence raises_error. B$CALCLINE finds the start of the failing statement from b$erradr; RESRET drops the return offset, calls B$EXSA and RETFs to that statement, never to the byte after the call. BCOM45.LIB error 0062..007c is that code. BCL71ENR.LIB and VBDCL10E.LIB 00b4..00f5 share it but keep the error address in the user frame ([bx-10h] / [bx-12h]); a procedure-local handler resumes by `POP CX` / `PUSH AX` / RETF without B$EXSA, and RES_SETUP at 0000 is `MOV BX,14h` / `JMP B$RUNERR`. Like B$RESN, the direct footprint is runtime state and string temporaries.
 '''
 
+["B$RES0".call]
+pushed = 0
+control = "never"
+enters_user_code = true
+error_handling = true
+evidence = '''
+QB45 rt/error.asm B$RES0 calls B$RES_SETUP, reloads b$erradr, unwinds with B$EXSA, and transfers through RESRET to the failing statement.
+'''
+
 ["B$RESA"]
 cleanup = 0
 control = "never"
@@ -915,6 +1083,21 @@ established = true
 inputs = ["ax"]
 evidence = '''
 rt/error.asm: `cProc B$RESA,<FAR,PUBLIC,FORCEFRAME>`, `Entry: [AX] = Address to RESUME to` -- RESUME label, no stack parameters. B$RES_SETUP leaves AX alone (the source says so) and its XOR kills incoming flags; no error in progress is B$ERR_RE. The address is saved, B$CEvtHndlr and B$STDALCALLTMP run, and it either rewrites the frame's return offset and RETFs or joins B$RES0's RESRET, so it never returns to the byte after the call. BCOM45.LIB error 0038..0061. BCL71ENR.LIB and VBDCL10E.LIB 006a..00b3 are the same with frame-kept error state; their RES_SETUP at 0000 writes only BX, CX and memory, and the local-handler exit at 00e9 is `PUSH AX` / RETF, so ax is read in every family.
+'''
+
+# A RESUME to a label. QB45 rt/error.asm documents B$RESA's target in AX and
+# its exit as a transfer to that address after B$RES_SETUP/B$EXSA. VBDOS
+# LOCERR.OBJ and PDS71 PDLOCAL.OBJ independently spell `mov ax,offset target`
+# immediately before a far B$RESA call. The AX move is inserted only after
+# final code labels exist, so it is not a stack argument.
+["B$RESA".call]
+pushed = 0
+label = true
+control = "never"
+enters_user_code = true
+error_handling = true
+evidence = '''
+QB45 rt/error.asm B$RESA takes the resume offset in AX, calls B$RES_SETUP, unwinds with B$EXSA, and transfers through RESRET; measured VBDOS LOCERR.OBJ and PDS71 PDLOCAL.OBJ use the same MOV AX,offset / far-call shape.
 '''
 
 ["B$RMI4"]
@@ -948,6 +1131,10 @@ evidence = '''
 rt/string.asm: `cProc B$ASSN,<FAR,PUBLIC>,<DI,SI,ES>` with parmD pSrc, parmW cbSrc, parmD pDest, parmW cbDest, `Uses: per convention`. It reads its operands off the stack, and `OR AX,AX` sets the flags before any branch reads them. A fixed-length destination is written through pDest outright (`REP MOVSB` / `REP STOSB`); a descriptor destination goes through B$LDFS and B$SASS, or B$LSET for a descriptor source, which reach string allocation and so B$STCPCT. BCOM45.LIB 0050..00a1 and BCL71ENR.LIB 0028..0079 are the same code: PUSH SI/DI/ES on entry, every path joins POP ES/DI/SI/BP / RETF 0Ch. ES is listed anyway: VBDCL10E.LIB's farstr B$ASSN loads it and does not restore it. Its code: VBDCL10E.LIB string.asm 005e..00b3 saves SI/DI (and DS around the fixed copy), calls B$LDFS (0030..005b, which restores DS/DI/SI/BP) then B$SASS, or B$LSET, and joins POP DI/SI/BP / RETF 0Ch: the same effects, ES included.
 '''
 
+["B$ASSN".call]
+pushed = 12
+audit = "string"
+
 ["B$LDFS"]
 cleanup = 6
 control = "returns"
@@ -962,6 +1149,10 @@ inputs = []
 evidence = '''
 rt/string.asm: `cProc B$LDFS,<PUBLIC,FAR>,<ES,SI,DI>` with parmD pString, parmW cbString; it reads [cbString] into BX, calls B$STALCTMP for a temporary (BX = descriptor, DX = data), copies from pString with DS saved around the block move, and returns the descriptor in AX. What it writes is the temporary, and allocation reaches B$STCPCT, which moves other strings: string space, not the caller's data. `Exceptions: Runtime error can occur (such as 'insufficient string space')`. BCOM45.LIB 002b..004d and BCL71ENR.LIB 0000..0025 both PUSH SI/DI/ES, POP ES/DI/SI/BP and RETF 6. VBDCL10E.LIB string.asm 0030..005b is the same: PUSH SI/DI/DS, B$AlcTmpSH unless the count is zero (AX = b$nuldes), the block move from [bp+0Ah]:[bp+8], POP DS/DI/SI/BP / RETF 6; ES is left as the allocator set it.
 '''
+
+["B$LDFS".call]
+pushed = 6
+audit = "string"
 
 ["B$SASS"]
 cleanup = 4
@@ -984,6 +1175,10 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 evidence = '''
 VBDCL10E.LIB stcore.asm 0025..00b2: PUSH SI/DI/DS, B$RefString and B$ReallocHandle, which loads ES; POP DS/DI/SI / RETF 4.
 '''
+
+["B$SASS".call]
+pushed = 4
+audit = "string"
 
 ["B$SCAT"]
 cleanup = 4
@@ -1060,6 +1255,11 @@ evidence = '''
 VBDCL10E.LIB strfcn.asm 0182..01a3: PUSH DI around B$AlcTmpSH, which returns the data in ES:DI, then REP STOSB; RETF 2.
 '''
 
+# Also: Typed SPACE$ supplies the word count seen at [BP+6]; VBDOS D_SURF.OBJ 2d1c..2d24 shows that one pushed word, and farstr strfcn.asm's Pascal entry returns past 2 bytes. Allocation, alias and error effects remain conservative.
+["B$SPAC".call]
+pushed = 2
+audit = "string"
+
 ["B$FCHR"]
 cleanup = 2
 control = "returns"
@@ -1082,6 +1282,10 @@ evidence = '''
 VBDCL10E.LIB stcore.asm 0264..0280: PUSH DI, B$AlcTmpSH before the range check, the byte stored through ES:DI; RETF 2.
 '''
 
+["B$FCHR".call]
+pushed = 2
+audit = "string"
+
 ["B$FASC"]
 cleanup = 2
 control = "returns"
@@ -1103,6 +1307,10 @@ clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 evidence = '''
 VBDCL10E.LIB strfcn.asm 004e..0063: B$RefStringArgLast, a byte read through ES:BX, B$DelTempSH; RETF 2.
 '''
+
+["B$FASC".call]
+pushed = 2
+audit = "string"
 
 ["B$LEFT"]
 cleanup = 4
@@ -1128,6 +1336,10 @@ VBDCL10E.LIB strfcn.asm 00dd..00f6: B$RefString, then helper 0113..0181, which s
 
 # Routines established only per family: each table is worst() with the
 # fields it states.
+
+["B$LEFT".call]
+pushed = 4
+audit = "string"
 
 ["B$RETA".pds71]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1224,17 +1436,31 @@ evidence = '''
 VBDCL10E.LIB: loclof.asm 0049 enters 0035 and calls LocateFDB (dvcore.asm 00e2); XOR SI,SI at 00e6 overwrites arithmetic flags before lookup/dispatch. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
 '''
 
+["B$FLOF".call]
+pushed = 2
+evidence = '''
+{evidence} Typed LOF supplies the single file-number word; MAIN.OBJ 0ec4..0ecc shows that exact call shape and the runtime wrapper's normal return consumes it. Device/error effects remain conservative.
+'''
+
 ["B$GET3".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: dvgetput.asm 0043 enters local 00a4 with stacked position words; its first call is LocateFDB, which overwrites arithmetic flags before lookup. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
 '''
 
+["B$GET3".call]
+pushed = 8
+audit = "record-3"
+
 ["B$GET4".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: dvgetput.asm 0064 reads the record position and OR CX,CX at 006c overwrites arithmetic flags before validation and local 00a4 dispatch. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
 '''
+
+["B$GET4".call]
+pushed = 12
+audit = "record-4"
 
 ["B$SACT".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1248,16 +1474,32 @@ evidence = '''
 VBDCL10E.LIB: dvgetput.asm 005d sets AL=5 and joins GET3 at 0048, calling local 00a4; LocateFDB (dvcore.asm 00e2) kills arithmetic flags with XOR SI,SI at 00e6. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
 '''
 
+["B$PUT3".call]
+pushed = 8
+audit = "record-3"
+
 ["B$SMID".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: farstr mid.asm 0000 first calls strutil.asm 0013 with BX=[BP+0Ah]; OR AX,AX at 0016 kills arithmetic flags before any branch or further call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
 '''
 
+["B$SMID".call]
+pushed = 12
+evidence = '''
+{evidence} QB45 rt/mid.asm declares one dword and four word parameters; cEnd returns past all 12 bytes. VBDOS listings use the same stack shape. Other effects remain conservative.
+'''
+
 ["B$RND0".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: random.asm 0000 calls local 0033; MUL CX at 003b sets CF/OF, ADD BX,AX at 0045 sets arithmetic flags before the later ADC. The straight-line body updates the seed, stores an x87 result, and returns its address through XCHG BX,AX at 0075. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$RND0".call]
+pushed = 0
+evidence = '''
+{evidence} QB45 random.asm declares B$RND0 with no parameters and returns its result address in AX with a bare RETF.
 '''
 
 ["B$ATN4".vbdos]
@@ -1272,10 +1514,20 @@ evidence = '''
 VBDCL10E.LIB: dynamic.asm 0133 reads the dimension from [BP+6]; OR DH,DH at 013b overwrites incoming arithmetic flags before the first branch at 013d. Descriptor reads, the B$DeLink call and the B$ERR_BS tail remain intact. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
 '''
 
+["B$UBND".call]
+pushed = 4
+audit = "bounds"
+
 ["B$SSEK".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: dkrandio.asm 0145 calls local 0114 then B$LocateFDB in dvcore.asm 00e2; PUSH saves precede XOR SI,SI at 00e6 and CMP at 00e8, overwriting incoming arithmetic flags before any branch. Seeking stays a call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$SSEK".call]
+pushed = 6
+evidence = '''
+{evidence} QB45 rt/dkio.asm declares FileNum word and RecNum dword; B$SSEK is a far Pascal entry returning past all 6 bytes.
 '''
 
 ["B$STRI".vbdos]
@@ -1284,10 +1536,21 @@ evidence = '''
 VBDCL10E.LIB: farstr strfcn.asm 01a3 loads AL and CX from stack arguments then calls local 0191, whose OR CX,CX overwrites incoming arithmetic flags before branching or allocation. String construction stays a call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
 '''
 
+# Also: QB45 rt/strfcn.asm declares two word parameters for B$STRI; the far Pascal entry returns past all 4 bytes.
+["B$STRI".call]
+pushed = 4
+audit = "string"
+
 ["B$RNZP".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: random.asm 0079 loads the stack argument at BP+0Ah, XORs its words at 0081, stores the seed and RETFs at 0088; the straight-line body reads no incoming arithmetic flag. Randomization stays a call. All GP inputs retained; cleanup, memory, preservation and transitive control/error effects remain unknown. No runtime operation is replaced.
+'''
+
+["B$RNZP".call]
+pushed = 8
+evidence = '''
+{evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 reads its R8 seed at [BP+0Ah] and returns with RETF 8; MAIN.OBJ 07fe..080c pushes the high and low dwords before the call.
 '''
 
 ["B$STR4".vbdos]
@@ -1296,8 +1559,18 @@ evidence = '''
 VBDCL10E stringfp.asm entries 0000/001e pass AL=4/8 and BX=BP+6 to string.asm 001e (STR_COMMON). FOUTBX at ifout.asm 0000 overwrites arithmetic flags with CMP at 0003 before dispatching to floating formatting. Retain all GP inputs. Wrappers end POP BP / RETF 4 or 8, but the dependency graph through FOUTBX and StrAlcTmpCopy has unproved stack paths: cleanup remains unknown, as do all memory/control/error effects. No preservation or arithmetic replacement is claimed.
 '''
 
+["B$STR4".call]
+pushed = "any"
+family = "vbdos"
+audit = "string-of-float"
+
 ["B$STR8".vbdos]
 from = "B$STR4.vbdos"
+
+["B$STR8".call]
+pushed = "any"
+family = "vbdos"
+audit = "string-of-float"
 
 ["B$INT4".vbdos]
 cleanup = 0
@@ -1315,6 +1588,10 @@ evidence = '''
 VBDCL10E.LIB prnval.asm 018f: establishes BP, saves ES/SI, loads FInput and OR AL,AL at 0197 kills incoming arithmetic flags before any branch/call. All GP inputs retained; BP/SP, segments and direction are runtime environment. Terminal input relocates the frame at 019d..01b7; disk/print paths skip it. Cleanup remains unknown, as do all memory, clobber, control and error effects.
 '''
 
+["B$PEOS".call]
+pushed = 0
+audit = "output"
+
 ["B$EXTS".vbdos]
 cleanup = 0
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1329,12 +1606,20 @@ evidence = '''
 VBDCL10E osstmt.asm 01c9: establishes BP, saves SI/DI/DS, then calls B$RefStringArgLast (farstr/strutil.asm 0010). That helper loads [bp+6], then OR AX,AX at 0016 overwrites incoming arithmetic flags before any flag use or further call. All GP inputs and unknown memory/clobber/control/error effects retained. Cleanup remains unknown because the transitive dependency audit is incomplete. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$FEVS".call]
+pushed = 2
+audit = "event-argument"
+
 ["B$CHOU".vbdos]
 cleanup = 2
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB pr0a.asm 0055: PUSH BP / MOV BP,SP; reads channel at [bp+6], calls B$ChkFNUM and B$SetFNum, POP BP / RETF 2 at 0061..0064. All GP inputs and unknown clobber/memory/control/error effects retained; only the normal-return argument cleanup is established. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+["B$CHOU".call]
+pushed = 2
+audit = "output"
 
 ["B$CSCN".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1348,11 +1633,23 @@ evidence = '''
 QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/gwscreen.asm takes a count-led parameter block entirely on the stack. B$ScSetup in rt/gwscr.asm pops its near continuation, establishes BP, reads the count at BP+6, and SHL AX,1 overwrites incoming arithmetic flags before dispatch. B$ScCleanUpParms removes twice the runtime count; cleanup is variable rather than zero. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
 '''
 
+["B$CSCN".call]
+pushed = 6
+evidence = '''
+{evidence} The audited one-mode SCREEN source form emits two count-led parameter words plus the count; SYS.OBJ 0787..0792 shows six bytes and the shared cleanup removes exactly that block. Display, alias and error effects remain conservative.
+'''
+
 ["B$WIDT".vbdos]
 cleanup = 4
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: VBDCL10E ioscrn.asm 002b establishes BP and calls EnsureFI, whose CMP at gwini.asm 0000 kills incoming arithmetic flags. Arguments at BP+8/+6 feed SWIDTH; normal exit POP BP / RETF 4 at 006d. Invalid width tails ERR_FC; BIOS/display and error effects unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$WIDT".call]
+pushed = 4
+evidence = '''
+{evidence} QB45 runtime/rt/iotty.asm declares width and height as two Pascal words; the typed source site supplies exactly those four bytes.
 '''
 
 ["B$SLEP".vbdos]
@@ -1361,6 +1658,10 @@ inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: VBDCL10E evtkey.asm 00b3 establishes BP; local 0157 CMP kills incoming flags. SetKybdInt saves/restores DS/DX/AX/BX/ES across BIOS/DOS interrupts and RETF at llcevt.asm 005b. SetClockInt restores its saves and RET at llaevt.asm 00c4. SleepInit 0101 calls stack-balanced tick conversion 00c9..0100. Event wait joins POP BP / RETF 4 at 00e6; interrupt/control effects unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+["B$SLEP".call]
+pushed = 4
+audit = "statement"
 
 ["B$FRI2".vbdos]
 cleanup = 2
@@ -1383,12 +1684,20 @@ evidence = '''
 VBDCL10E.LIB: rt/strnum.asm 005e..0070: SI addresses the word argument at BP+6, CX=2; StrAlcTmpCopy at strutil.asm 01f5 calls AlcTmpSH, whose CMP at 0103 overwrites incoming arithmetic flags before dependencies. Copy returns near; POP SI/BP / RETF 2. Allocation, aliases and errors remain unknown; no register preservation inferred from local saves. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$FMKI".call]
+pushed = 2
+audit = "string"
+
 ["B$FMKL".vbdos]
 cleanup = 4
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: rt/strnum.asm 0073..0085: SI addresses the dword argument at BP+6, CX=4; StrAlcTmpCopy -> AlcTmpSH overwrites incoming arithmetic flags at strutil.asm 0103. Near copy return followed by POP SI/BP / RETF 4. Heap writes, aliases, errors and register clobbers remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+["B$FMKL".call]
+pushed = 4
+audit = "string"
 
 ["B$FCVI".vbdos]
 cleanup = 2
@@ -1397,12 +1706,20 @@ evidence = '''
 VBDCL10E.LIB: rt/strnum.asm 0024..0041: XOR CH,CH at 0029 replaces incoming arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. Helper reads the string through RefString, checks length, copies two bytes and calls DelTempSH, or tails ERR_FC. Normal POP DI/BP / RETF 2; temporary deletion, memory writes and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$FCVI".call]
+pushed = 2
+audit = "string"
+
 ["B$FCVS".vbdos]
 cleanup = 2
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: rt/strnum.asm 0044..005b: XOR CH,CH at 0049 replaces incoming arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. Shared conversion helper checks length and copies four bytes, with RefString and DelTempSH dependencies or ERR_FC. POP DI/BP / RETF 2; no purity, preservation or error-path guarantee. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+["B$FCVS".call]
+pushed = 2
+audit = "string"
 
 ["B$RGHT".vbdos]
 cleanup = 4
@@ -1411,12 +1728,20 @@ evidence = '''
 VBDCL10E.LIB: farstr/strfcn.asm 00c9: RefString first overwrites incoming arithmetic flags. Reads count at BP+6, computes start from length, then joins LEFT at 00e9 or 00eb. Substring wrapper 0113 consumes two internal words with RET 4; shared normal exit is POP BP / RETF 4 at 00f2. Allocation, temporary deletion and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$RGHT".call]
+pushed = 4
+audit = "string"
+
 ["B$RTRM".vbdos]
 cleanup = 2
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: farstr/strfcn.asm 0215..0253: RefStringArgLast overwrites arithmetic flags before branching; reverse space scan uses STD then CLD. Substring helper 011d returns near; normal exit POP DI/BP / RETF 2. Allocation, temporary deletion, aliases and errors remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+["B$RTRM".call]
+pushed = 2
+audit = "string"
 
 ["B$LCAS".vbdos]
 cleanup = 2
@@ -1425,12 +1750,20 @@ evidence = '''
 VBDCL10E.LIB: VBDCL10E farstr/strfcn.asm 01e8..0213: descriptor at BP+6 via RefStringArgLast; RefString OR AX,AX at strutil.asm 0016 replaces incoming arithmetic flags. Empty path pops saved DX and joins 0208; nonempty path copies/allocates through helper 0000 and converts bytes. The indirect CALL BX is fixed by the 01e9 relocation to B$ToLower (gwini.asm 00a7..00e0, RETF), balanced by PUSH CS / near CALL. Both normal paths restore DS/DI/SI/BP then RETF 2 at 020c. Allocation, aliases, register preservation and error effects remain unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$LCAS".call]
+pushed = 2
+audit = "string"
+
 ["B$LNIN".vbdos]
 cleanup = 10
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: rt/lininp.asm 0000..006e: initial CMP at 0004 overwrites arithmetic flags before terminal/disk dispatch. Both normal paths join string assignment (six internal words, ASSN RETF 12), InpReset, POP SI/BP and RETF 10. InpReset is a near reset, not PEOS's frame-relocating epilogue. FillBuf has indirect device calls; input, alias, control and error effects remain unknown. Cleanup describes only normal return. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+["B$LNIN".call]
+pushed = 10
+audit = "statement"
 
 ["B$ERS1".vbdos]
 cleanup = 2
@@ -1457,6 +1790,10 @@ inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/stcore.asm `XOR DX,DX` falls into `cProc SCMP,<FAR>,<ES,SI,DI>` with `parmW psdL` and `parmW psdR`, so RETF 4. The result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
 '''
+
+["B$SCMP".call]
+pushed = 4
+audit = "string"
 
 ["B$SCPF".vbdos]
 cleanup = 2
@@ -1486,6 +1823,10 @@ evidence = '''
 VBDCL10E.LIB: farstr/strfcn.asm 00f6..0112 reads descriptor/start/count at [bp+0a/08/06]. First dependency RefString (strutil.asm 0013) overwrites incoming flags with OR AX,AX at 0016 before branching; it has no dependencies or stack adjustments and returns near. The substring wrapper 0113..011c consumes two internal words with RET 4; public normal return is POP BP / RETF 6. Invalid ranges tail ERR_FC and allocation/freeing remain unknown effects; no purity, preservation or error-path guarantee. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$FMID".call]
+pushed = 6
+audit = "string"
+
 ["B$FLEN".vbdos]
 cleanup = 2
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
@@ -1493,11 +1834,20 @@ evidence = '''
 VBDCL10E.LIB: farstr/stcore.asm 02b9 reads a far-string descriptor at [bp+6]; OR AX,AX at 02c1 kills incoming arithmetic flags before any branch/dependency. Empty and nonempty paths join POP BP / RETF 2 at 02f6..02f9. Temporary strings call FreeDataPpv with two words (RETF 4 at 01da), which calls FreeHandle (RET at 010c). Freeing may mutate aliased heap state; no memory or register preservation is claimed. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+# Also: Typed LEN supplies one descriptor word. BCOM45 strfcn.asm B$FLEN 000f..001c, BCL71ENR stcommon.asm 0050..005d, and VBDCL10E stcore.asm 02b9..02f9 each end RETF 2. Heap, alias and error effects remain conservative.
+["B$FLEN".call]
+pushed = 2
+audit = "string"
+
 ["B$RDIM".vbdos]
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: erase.asm 0000 establishes BP and reads descriptor [bp+6]; OR BL,BL at 0009 kills incoming flags before branches or dependencies. All GP inputs retained. DIM_COMMON consumes rank-dependent stack arguments, so cleanup stays unknown unless separately proven at the call site. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+["B$RDIM".call]
+pushed = "any"
+audit = "dim"
 
 ["B$FEOF".vbdos]
 cleanup = 2
@@ -1512,12 +1862,26 @@ evidence = '''
 VBDCL10E.LIB: dvcore.asm 01b4 reads a stack count and file words; JCXZ selects CLOSF or LocateFDB. CLOSF's CMP at 019f and LocateFDB's XOR SI,SI at 00e6 kill incoming flags before dependencies. Return restores SP from the advanced argument cursor at 01e3, so cleanup stays unknown, not zero. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+# CLOS walks a count followed by that many file words and restores SP from
+# the resulting cursor; the typed site makes the variable cleanup exact.
+["B$CLOS".call]
+pushed = "any"
+evidence = '''
+{evidence} Typed CLOSE site supplies its count and a word per file number, so normal cleanup is {pushed}. All other effects remain conservative.
+'''
+
 ["B$OPEN".vbdos]
 cleanup = 8
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: dkutil.asm 00c0..00f4 reads four stack words, calls DOS3CHECK and OPENIT, and restores BP then RETF 8 at 00f1. Other branches tail ERR_AFE or ERR_IFN; device, allocation and error effects are not established. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+# Path descriptor, channel, record length -1 and mode; BCOM45 dkopen.asm
+# B$OPEN at 0224 returns with RETF 8 at 0252.
+["B$OPEN".call]
+pushed = 8
+audit = "statement"
 
 ["B$DSKI".vbdos]
 cleanup = 2
@@ -1532,11 +1896,23 @@ evidence = '''
 VBDCL10E.LIB: VBDCL10E rt/dkdir.asm 0003 sets search mode, establishes BP, and sets DOS DTA (AH=1Ah, DS:DX); TEST at 0014 replaces arithmetic flags before search dispatch. RefStringArgLast reads BP+6; GET_PATHNAME, DelTempSH, DOS find-first/find-next, GetZStrLen and StrAlcTmpCopy perform path, directory and heap work. Shared exit restores DI/SI/BP then mode-selects RETF or RETF 2 (007e/007f); cleanup remains unknown rather than assuming the shared mode survives every dependency. All GP inputs retained; memory, aliases, control and errors unknown. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$FDR1".call]
+pushed = 2
+evidence = '''
+{evidence} The typed DIR$ source form selects the FDR1 find-first entry and supplies its one descriptor word; VBDCL10E rt/dkdir.asm's saved nonzero mode selects the shared RETF 2 exit. Filesystem, heap, alias and error effects remain conservative.
+'''
+
 ["B$FREF".vbdos]
 cleanup = 0
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: dvstmt.asm 0031..0051 walks B$NextFDB, restores SI/BP and RETF. NextFDB saves AX/BX/CX/DX and calls PpvWalkHeap with two words; lwalk.asm PpvWalkHeap returns RETF 4 at 0039. No caller arguments. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
+'''
+
+["B$FREF".call]
+pushed = 0
+evidence = '''
+{evidence} QB45 rt/dvstmt.asm declares `int pascal B$FREF(void)` and its cProc has no parameters; the measured PDS71 PDLOCAL.OBJ call likewise has no preceding argument push.
 '''
 
 ["B$BLOD".qb45]
@@ -1554,12 +1930,24 @@ evidence = '''
 QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/gwscr.asm `cProc B$SCLS,<PUBLIC,FAR>` with one `parmW ScnNum`; `MOV BX,ScnNum` / `INC BX` sets flags before any branch. cEnd is RETF 2. Out-of-range parameters tail B$ERR_FC. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
 '''
 
+["B$SCLS".call]
+pushed = 2
+evidence = '''
+{evidence} QB45 rt/gwscr.asm declares B$SCLS with one ScnNum word; its Pascal far entry consumes that selector. VBDOS uses the same typed runtime entry.
+'''
+
 ["B$INKY".qb45]
 cleanup = 0
 enters_user_code = false
 inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: rt/stinkey.asm `cProc B$INKY,<FAR,PUBLIC,FORCEFRAME>`, `sd * pascal B$INKY(void)`: no parameters, descriptor returned in AX. TEST b$IOFLAG sets flags before any branch. cEnd is RETF; redirected end of input jumps to B$END instead. All six allocatable GP inputs are retained conservatively; BP/SP, segments and direction are runtime environment. Unknown memory, clobber, control and error effects remain unchanged.
+'''
+
+["B$INKY".call]
+pushed = 0
+evidence = '''
+{evidence} QB45 rt/stinkey.asm declares sd* pascal B$INKY(void); its far entry returns the descriptor in AX with no parameters.
 '''
 
 ["B$BSAV".qb45]
@@ -1577,15 +1965,31 @@ evidence = '''
 rt/prnvalfp.asm: scalar argument pushed by value; entry sets AL=VT_R4 (4) or VT_R8 (8), AH=terminator, then tails B$PRINT. VBDCL10E.LIB prnvalfp.asm entries 0000/0006/0012/0018/001e match; prnval.asm 003d saves the type and 0087 reloads it. Normal exits select RETF 4 at 009a or RETF 8 at 0094. Source PRINTX documents the same argument-width cleanup. Device dispatch and error effects remain unknown; all GP inputs retained. Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
 
+["B$PCR4".call]
+pushed = 4
+audit = "print"
+
 ["B$PSR4".vbdos]
 from = "B$PCR4.vbdos"
+
+["B$PSR4".call]
+pushed = 4
+audit = "print"
 
 ["B$PCR8".vbdos]
 from = "B$PCR4.vbdos"
 cleanup = 8
 
+["B$PCR8".call]
+pushed = 8
+audit = "print"
+
 ["B$PSR8".vbdos]
 from = "B$PCR8.vbdos"
+
+["B$PSR8".call]
+pushed = 8
+audit = "print"
 
 ["B$EVK1".pds71]
 from = "B$EVCK"
@@ -1642,3 +2046,230 @@ writes_cells = { qb45 = ["b$seg"] }
 
 ["ABSOLUTE"]
 writes_cells = { qb45 = ["b$seg"] }
+
+# Routines described only by how a typed source call reaches them.
+
+["B$BEEP".call]
+pushed = 0
+audit = "statement"
+
+["B$PAL2".call]
+pushed = 6
+audit = "graphics"
+
+["B$N1I2".call]
+pushed = 4
+audit = "graphics"
+
+["B$N2I2".call]
+pushed = 4
+audit = "graphics"
+
+["B$N1R4".call]
+pushed = 8
+audit = "graphics"
+
+["B$N2R4".call]
+pushed = 8
+audit = "graphics"
+
+["B$CSTT".call]
+pushed = 4
+audit = "graphics"
+
+["B$CSTO".call]
+pushed = 4
+audit = "graphics"
+
+["B$CASP".call]
+pushed = 4
+audit = "graphics"
+
+# circle.asm: parmD Radius, parmW Color.
+["B$CIRC".call]
+pushed = 6
+audit = "graphics"
+
+["B$LINE".call]
+pushed = 6
+audit = "graphics"
+
+["B$PAIN".call]
+pushed = 4
+audit = "graphics"
+
+["B$PSTC".call]
+pushed = 2
+audit = "graphics"
+
+["B$PNI2".call]
+pushed = 4
+audit = "graphics"
+
+["B$PNR4".call]
+pushed = 8
+audit = "graphics"
+
+["B$GGET".call]
+pushed = 6
+audit = "graphics"
+
+["B$GPUT".call]
+pushed = 8
+audit = "graphics"
+
+["B$FTAB".call]
+pushed = 2
+audit = "graphics"
+
+["B$FCVD".call]
+pushed = 2
+audit = "string"
+
+["B$FCVL".call]
+pushed = 2
+audit = "string"
+
+["B$FHEX".call]
+pushed = 4
+audit = "string"
+
+["B$FMKD".call]
+pushed = 8
+audit = "string"
+
+["B$FMKS".call]
+pushed = 4
+audit = "string"
+
+["B$FMDF".call]
+pushed = 8
+audit = "string"
+
+["B$FMSF".call]
+pushed = 4
+audit = "string"
+
+["B$FOCT".call]
+pushed = 4
+audit = "string"
+
+["B$INS2".call]
+pushed = 4
+audit = "string"
+
+["B$INS3".call]
+pushed = 6
+audit = "string"
+
+["B$MCVD".call]
+pushed = 2
+audit = "string"
+
+["B$MCVS".call]
+pushed = 2
+audit = "string"
+
+["B$SCPY".call]
+pushed = 2
+audit = "string"
+
+# Also: QB45 rt/strfcn.asm declares two word parameters for B$STRS; the far Pascal entry returns past all 4 bytes.
+["B$STRS".call]
+pushed = 4
+audit = "string"
+
+["B$UCAS".call]
+pushed = 2
+audit = "string"
+
+["B$COLR".call]
+pushed = "even >= 2"
+audit = "screen-parameters"
+
+["B$LOCT".call]
+pushed = "even >= 2"
+audit = "screen-parameters"
+
+["B$PUT4".call]
+pushed = 12
+audit = "record-4"
+
+["B$POKE".call]
+pushed = 4
+family = "qb45"
+evidence = '''
+{evidence} QB45 rt/peek.asm declares addr then val as two Pascal words; B$POKE ends through cEnd and normally removes all 4 bytes. Memory and error effects remain conservative.
+'''
+
+["B$FEVI".call]
+pushed = 2
+audit = "event-argument"
+
+["B$PCI2".call]
+pushed = 2
+audit = "print"
+
+["B$PCI4".call]
+pushed = 4
+audit = "print"
+
+["B$PCSD".call]
+pushed = 2
+audit = "print"
+
+["B$INPP".call]
+pushed = 6
+evidence = '''
+{evidence} QB45 runtime/rt/inptty.asm declares one near prompt descriptor and one far input-table pointer; its cProc frame reads the six-byte argument block at [BP+6]..[BP+0A]. PDS and VBDOS retain the same documented entry, confirmed by the measured VBDOS INP*.OBJ sites.
+'''
+
+["B$RDR8".call]
+pushed = 4
+audit = "read"
+
+["B$LBND".call]
+pushed = 4
+audit = "bounds"
+
+["B$RDSD".call]
+pushed = 6
+evidence = '''
+{evidence} QB45 rt/read.asm AssignStr consumes a far destination pointer plus a word fixed-string length; shared return removes 6 bytes.
+'''
+
+["B$FRSD".call]
+pushed = 2
+evidence = '''
+{evidence} QB45, PDS71 and VBDOS stfree.asm B$FRSD read the descriptor word at [BP+6] and join a RETF 2 epilogue; the FRE("") VBDOS probe pushes the canonical null descriptor. Heap and error effects remain conservative.
+'''
+
+["B$RND1".call]
+pushed = 4
+evidence = '''
+{evidence} VBDCL10E.LIB random.asm B$RND1 reads its R4 selector at [BP+6]/[BP+8], returns its result address in AX, and exits with RETF 4; RND.OBJ shows the matching dword push.
+'''
+
+["B$RSTB".call]
+pushed = 2
+evidence = '''
+{evidence} VBDOS REST.OBJ moves the labeled DATA key to AX, pushes it, and calls B$RSTB with one word.
+'''
+
+["B$VWPT".call]
+pushed = 4
+evidence = '''
+{evidence} QB45 runtime/rt/grview.asm declares TopLine and BotLine as two Pascal words; VBDOS VIEWP.OBJ independently confirms that call shape.
+'''
+
+["B$SPLY".call]
+pushed = 2
+evidence = '''
+{evidence} QB45 runtime/rt/gwplays.asm declares one near string descriptor; VBDOS PLAY.OBJ independently confirms that call shape.
+'''
+
+["B$USNG".call]
+pushed = 2
+evidence = '''
+{evidence} QB45 runtime/rt/prtu.asm declares one near format descriptor; VBDOS PRTUSING.OBJ independently confirms that call shape.
+'''
