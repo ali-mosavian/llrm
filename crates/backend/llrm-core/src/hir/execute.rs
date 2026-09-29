@@ -455,9 +455,9 @@ impl<'p> Machine<'p> {
             })
             .collect();
         let frame = memory(layout.size);
-        if self.program.dialect == model::Dialect::Quickr {
-            // QuickrBASIC zeroes locals with its own stores, not the runtime's
-            // frame: anything else a local holds is garbage.
+        if self.program.frames == model::Frames::Own {
+            // A procedure that frames itself zeroes locals with its own
+            // stores: anything else a local holds is garbage.
             frame.borrow_mut().bytes.fill(0xCC);
         }
         let mut activation = Activation {

@@ -729,27 +729,24 @@ fn _materialize_error_registrations(
     (body.with_blocks(blocks), callees)
 }
 
-/// QuickrBASIC frames a procedure itself, its HIR zeroing what locals need
-/// it, where the runtime needs no frame of its own: no error lands in it (the
-/// runtime reaches a handler or RESUME target through its frame chain), and
-/// no local STRING asks B$ENRA for a VBDOS string handle. The runtime's stack
-/// check goes with it.
+/// Under `Frames::Own` a procedure frames itself, its HIR zeroing what locals
+/// need it, where the runtime needs no frame of its own: no error lands in it
+/// (the runtime reaches a handler or RESUME target through its frame chain),
+/// and no local STRING asks B$ENRA for a VBDOS string handle. The runtime's
+/// stack check goes with it.
 pub(super) fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
-    program.dialect == model::Dialect::Quickr
+    program.frames == model::Frames::Own
         && !module.lands_errors(function)
         && function.external_entries.is_empty()
         && _temporary_string_slots(module, function) == 0
 }
 
-/// QuickrBASIC calls a module-internal procedure near where it frames
-/// itself, as the C frontend does for a near function: no other module can
-/// call it, and every caller shares its code segment. One on the runtime's
-/// frame stays far, whose chain is only known to hold far returns.
+/// A module-internal procedure that frames itself is called near, as the C
+/// frontend does for a near function: no other module can call it, and every
+/// caller shares its code segment. One on the runtime's frame stays far,
+/// whose chain is only known to hold far returns.
 fn _near_procedures(program: &model::Program) -> model::Program {
     let mut program = program.clone();
-    if program.dialect != model::Dialect::Quickr {
-        return program;
-    }
     for index in 0..program.modules.len() {
         let original = program.modules[index].clone();
         let near: BTreeSet<&str> = original

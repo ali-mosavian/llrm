@@ -100,6 +100,7 @@ plain_enums!(
     ArrayOrder,
     FloatMode,
     FloatSemantics,
+    Frames,
     TypeKind,
     AddressKind,
     FloatEvaluation,
@@ -338,6 +339,9 @@ impl _Plain for model::Program {
         }
         if !self.zeroed_locals {
             out.insert("zeroed_locals".to_owned(), self.zeroed_locals._plain());
+        }
+        if self.frames != model::Frames::Runtime {
+            out.insert("frames".to_owned(), self.frames._plain());
         }
         if self.promises != model::RuntimePromises::default() {
             out.insert("promises".to_owned(), self.promises._plain());
@@ -639,6 +643,7 @@ made_enums!(
     ArrayOrder,
     FloatMode,
     FloatSemantics,
+    Frames,
     TypeKind,
     AddressKind,
     FloatEvaluation,
@@ -1238,6 +1243,7 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("zeroed_locals", _Hint::Bool, false),
+        ("frames", enum_hint!(Frames), false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
         ("entries", _Hint::Tuple(&_Hint::Str), false),
         ("preserved", _Hint::Tuple(&_Hint::Str), false),
@@ -1254,6 +1260,7 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             zeroed_locals: _default(args, "zeroed_locals", true)?,
+            frames: _default(args, "frames", model::Frames::Runtime)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,
             entries: _default(args, "entries", Vec::new())?,
             preserved: _default(args, "preserved", Vec::new())?,

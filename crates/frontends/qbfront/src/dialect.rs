@@ -32,9 +32,9 @@ impl Dialect {
         self == Self::Quickr
     }
 
-    /// A procedure's locals start at zero through explicit stores, not
-    /// through the runtime's frame.
-    pub fn zeroes_locals(self) -> bool {
+    /// A procedure frames itself where the runtime needs no frame, by
+    /// default: its locals start at zero through explicit stores.
+    pub fn own_frames(self) -> bool {
         self == Self::Quickr
     }
 

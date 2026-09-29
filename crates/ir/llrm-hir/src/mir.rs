@@ -42,8 +42,9 @@ pub struct Emitted {
 }
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
-    // QuickrBASIC zeroes locals with its own stores; its frame holds garbage.
-    let zeroed = program.zeroed_locals && program.dialect != model::Dialect::Quickr;
+    // A procedure that frames itself zeroes locals with its own stores; its
+    // frame holds garbage.
+    let zeroed = program.zeroed_locals && program.frames == model::Frames::Runtime;
     program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed, &program.promises.nounwind)).collect()
 }
 
