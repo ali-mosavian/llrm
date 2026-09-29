@@ -1326,3 +1326,7 @@ impl LIRTransform for FloatAssign<'_> {
         assigned(&body, frame.as_deref_mut(), pool.as_deref_mut(), self.basic_semantics, self.cpu).map_err(|error| error.to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "floatassign_tests.rs"]
+mod tests;
