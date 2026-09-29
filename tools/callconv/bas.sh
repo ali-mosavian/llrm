@@ -7,7 +7,7 @@
 # missing means the run crashed or hung; see run.events.
 set -eu
 D=$1; W=$2
-R=~/scratch/callconv; B=$R/target/release; SRC=$R/tests/fixtures/callconv/bas
+R="$(cd "$(dirname "$0")/../.." && pwd)"; B="${LLRM_BIN:-$R/target/release}"; SRC=$R/tests/fixtures/callconv/bas
 TC=~/work/other/d32x/toolchains
 DOSRUN=${DOSRUN:-$HOME/scratch/pr-dosbox/src/dosbox-x}
 case $D in
