@@ -9276,10 +9276,14 @@ impl Compiler {
                 }
                 out.push('}');
             }
+            // CDECL is Microsoft C's convention: a float result comes back
+            // as the address of the callee's copy.
+            let float_return = |cdecl: bool| if cdecl { ",\"float_return\":\"address\"" } else { "" };
             write!(
                 out,
-                "],\"abi\":{{\"cleanup\":\"{}\",\"distance\":\"far\",\"parameter_bytes\":{}}},\"calls\":[",
+                "],\"abi\":{{\"cleanup\":\"{}\",\"distance\":\"far\"{},\"parameter_bytes\":{}}},\"calls\":[",
                 if function.caller_cleanup { "caller" } else { "callee" },
+                float_return(function.caller_cleanup),
                 function.parameter_bytes
             )
             .unwrap();
@@ -9289,7 +9293,7 @@ impl Compiler {
                 }
                 write!(
                     out,
-                    "{{\"callee\":{},\"cleanup\":\"{}\",\"distance\":\"far\",\"instruction\":{},\"order\":[",
+                    "{{\"callee\":{},\"cleanup\":\"{}\",\"distance\":\"far\"{},\"instruction\":{},\"order\":[",
                     call.callee
                         .map(|one| one.to_string())
                         .unwrap_or_else(|| "null".into()),
@@ -9298,6 +9302,7 @@ impl Compiler {
                     } else {
                         "callee"
                     },
+                    float_return(call.caller_cleanup && call.callee.is_some()),
                     call.instruction
                 )
                 .unwrap();

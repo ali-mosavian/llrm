@@ -603,6 +603,9 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let types = &mut module.context.types;
     let parameters: Vec<TypeId> = function.parameters.iter().map(|one| value_type(types, tables.types[&values[one]])).collect::<Emit<_>>()?;
+    if function.abi.as_ref().is_some_and(|abi| abi.float_return == model::FloatReturn::Address) && tables.types[&function.result_type].kind == model::TypeKind::Float {
+        return Err(format!("{}: a floating result returned as its address, which only a caller of Microsoft C's is", function.name));
+    }
     let returns = match result_destination(tables, function) {
         Some(at) => parameters[at],
         None => value_type(types, tables.types[&function.result_type])?,
@@ -758,11 +761,12 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let site = function.calls.iter().find(|one| one.instruction == instruction.id);
         let order = site.and_then(|site| passed(site, instruction.operands.len())).unwrap_or_else(|| (0..instruction.operands.len()).collect());
         let parameters: Vec<TypeId> = order.iter().map(|&one| value_type(types, tables.types[&operand_type(&instruction.operands[one], &values, &places)])).collect::<Emit<_>>()?;
-        let through = site.is_some_and(|site| matches!(instruction.results[..], [result] if site.returns_through(tables.types[&values[&result]])));
+        let answer = site.map_or(Answer::Value, |site| answer(site, &instruction.results, |result| tables.types[&values[&result]]));
         let returns = match instruction.results[..] {
             // A comparison's callee returns the sign of the first against the second.
             [_] if three_way(instruction.op).is_some() => types.int(16),
-            [_] if through => *parameters.last().ok_or("a floating result with no destination")?,
+            [_] if answer == Answer::Through => *parameters.last().ok_or("a floating result with no destination")?,
+            [_] if answer == Answer::Address => types.ptr(0),
             [result] => value_type(types, tables.types[&values[&result]])?,
             [] => types.void(),
             // Answered in several registers: one aggregate, as LLVM returns them.
@@ -833,6 +837,24 @@ fn fixed(types: &mut Types, op: Op, ty: TypeId) -> Option<(String, Vec<TypeId>)>
     };
     let bits = types.int_bits(ty)?;
     Some((format!("{name}.i{bits}"), vec![ty, ty, types.int(32)]))
+}
+
+/// How a call's result comes back: as the value; as the address of the
+/// destination the call passes last; or as the address of the callee's copy.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Value,
+    Through,
+    Address,
+}
+
+/// How `site`'s one floating result, typed as `hir_type` says, comes back.
+fn answer<'t>(site: &model::CallAbi, results: &[i64], hir_type: impl Fn(i64) -> &'t model::Type) -> Answer {
+    match results {
+        [result] if site.returns_through(hir_type(*result)) => Answer::Through,
+        [result] if site.returns_address(hir_type(*result)) => Answer::Address,
+        _ => Answer::Value,
+    }
 }
 
 /// The address of a parameter's incoming stack slot.
@@ -1460,9 +1482,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let (convention, _) = convention(site.cleanup, site.distance)?;
                 let operands = self.operands(instruction)?;
                 let [callee, ref arguments @ ..] = operands[..] else { return Err("an indirect call of nothing".to_owned()) };
-                let through = self.through_destination(instruction);
+                let through = self.answer(instruction);
                 let returns = match instruction.results.first() {
-                    Some(_) if through => self.b.type_of(*arguments.last().ok_or("a floating result with no destination")?),
+                    Some(_) if through == Answer::Through => self.b.type_of(*arguments.last().ok_or("a floating result with no destination")?),
+                    Some(_) if through == Answer::Address => self.b.context.types.ptr(0),
                     Some(&result) => self.result_type(result)?,
                     None => self.b.context.types.void(),
                 };
@@ -1490,9 +1513,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         attributes.push((index, attribute));
                     }
                 }
-                let through = self.through_destination(instruction);
+                let through = self.answer(instruction);
                 let returns = match instruction.results[..] {
-                    [_] if through => self.b.type_of(*arguments.last().ok_or("a floating result with no destination")?),
+                    [_] if through == Answer::Through => self.b.type_of(*arguments.last().ok_or("a floating result with no destination")?),
+                    [_] if through == Answer::Address => self.b.context.types.ptr(0),
                     [result] => self.result_type(result)?,
                     [] => self.b.context.types.void(),
                     ref results => {
@@ -1545,17 +1569,16 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             .collect()
     }
 
-    /// Whether `instruction`'s one floating result comes back through the
-    /// destination it passes last.
-    fn through_destination(&self, instruction: &model::Instruction) -> bool {
-        let Some(site) = self.function.calls.iter().find(|one| one.instruction == instruction.id) else { return false };
-        matches!(instruction.results[..], [result] if site.returns_through(self.hir_type(self.value_types[&result])))
+    /// How `instruction`'s result comes back.
+    fn answer(&self, instruction: &model::Instruction) -> Answer {
+        let Some(site) = self.function.calls.iter().find(|one| one.instruction == instruction.id) else { return Answer::Value };
+        answer(site, &instruction.results, |result| self.hir_type(self.value_types[&result]))
     }
 
-    /// The call's answer: the float loaded through the destination it
-    /// returned, where it returned one.
-    fn answered(&mut self, instruction: &model::Instruction, through: bool, answer: Value) -> Emit<Value> {
-        if !through {
+    /// The call's answer: the float loaded from where it returned the
+    /// address of, where it returned one.
+    fn answered(&mut self, instruction: &model::Instruction, through: Answer, answer: Value) -> Emit<Value> {
+        if through == Answer::Value {
             return Ok(answer);
         }
         let ty = self.result_type(instruction.results[0])?;

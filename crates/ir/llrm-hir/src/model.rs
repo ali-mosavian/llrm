@@ -126,10 +126,12 @@ str_enum!(StackCleanup {
 });
 
 // Where a procedure's float result goes: stored through a near pointer the
-// caller passes last, which comes back in `ax` (BASIC's, the default), or
-// in `st(0)`, as C and Pascal return it.
+// caller passes last, which comes back in `ax` (BASIC's, the default); the
+// near address of the callee's own copy, in `ax` (Microsoft C's, which
+// BASIC's CDECL is); or in `st(0)`, as Borland C and Pascal return it.
 str_enum!(FloatReturn {
     Pointer("POINTER") = "pointer",
+    Address("ADDRESS") = "address",
     Register("REGISTER") = "register",
 });
 
@@ -549,7 +551,7 @@ impl ProcedureAbi {
     pub fn result_destination(&self, result: &Type, parameters: &[&Type]) -> Option<usize> {
         let last = parameters.len().checked_sub(1)?;
         let points = parameters[last].kind == TypeKind::Pointer && parameters[last].element == Some(result.id);
-        (points && through_destination(self.float_return, self.cleanup, result)).then_some(last)
+        (points && self.float_return.leaves(FloatReturn::Pointer, result)).then_some(last)
     }
 }
 
@@ -557,15 +559,21 @@ impl CallAbi {
     /// Whether the callee returns a floating `result` through the
     /// destination this call passes last, the pointer to it coming back.
     pub fn returns_through(&self, result: &Type) -> bool {
-        through_destination(self.float_return, self.cleanup, result)
+        self.float_return.leaves(FloatReturn::Pointer, result)
+    }
+
+    /// Whether the callee returns a floating `result` as the address of its
+    /// own copy.
+    pub fn returns_address(&self, result: &Type) -> bool {
+        self.float_return.leaves(FloatReturn::Address, result)
     }
 }
 
-/// Microsoft BASIC's floating results leave through a destination the
-/// caller passes; C's and Pascal's leave in st(0), as does any result a
-/// caller pops arguments for.
-fn through_destination(float_return: FloatReturn, cleanup: StackCleanup, result: &Type) -> bool {
-    float_return == FloatReturn::Pointer && cleanup == StackCleanup::Callee && result.kind == TypeKind::Float
+impl FloatReturn {
+    /// Whether a `result` of this ABI leaves as `how` says: only a float's does.
+    fn leaves(self, how: FloatReturn, result: &Type) -> bool {
+        self == how && result.kind == TypeKind::Float
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
