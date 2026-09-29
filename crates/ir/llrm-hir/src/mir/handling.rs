@@ -16,7 +16,7 @@ use llrm_mir::opcode::Attribute;
 use llrm_mir::{BlockId, Constant, ConstantKind, Operand as Value, TypeId};
 
 use super::{Body, Emit};
-use crate::model::{self, Operand, Statement, Storage, TerminatorKind};
+use crate::model::{self, Operand, Statement, Storage};
 use crate::onerror::Handled;
 
 const REGISTER: &str = "$QB$OERG:";
@@ -37,6 +37,18 @@ pub(super) fn owns(callee: &str) -> bool {
     callee.starts_with(REGISTER) || callee.starts_with(LABEL) || [NEXT, AGAIN, ERL].contains(&callee)
 }
 
+/// What raises error `n`, as ERROR does: RESUME reached by falling
+/// through raises RESUME_WITHOUT_ERROR with it, and the module handler run
+/// to the module's end NO_RESUME.
+pub(super) const RAISE: &str = "B$SERR";
+pub(super) const RESUME_WITHOUT_ERROR: i128 = 20;
+pub(super) const NO_RESUME: i128 = 19;
+
+/// Whether `callee`, somewhere in `function`, is a RESUME or RESUME NEXT.
+pub(super) fn resumes(callee: &str) -> bool {
+    [NEXT, AGAIN].contains(&callee)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Resume {
     Next,
@@ -45,13 +57,22 @@ enum Resume {
 
 /// The module's handlers: the body's blocks they run, run as the function
 /// `outlined`, `i16 (i16 err, i16 erl)`, which answers the RESUME it ran.
+/// A block the body also runs, falling through to a handler's label, is
+/// emitted in both: in the body it is ordinary code.
 #[derive(Clone, Debug)]
 pub(super) struct ModuleHandler {
     /// The module body's function, whose ON ERROR GOTOs name them.
     pub owner: i64,
     /// Each handler, numbered from 1 in this order.
     handlers: Vec<i64>,
+    /// The blocks the handlers reach.
     inside: BTreeSet<i64>,
+    /// Those the body does not: its copy leaves them out.
+    only: BTreeSet<i64>,
+    /// The line of the last error it took, a global: ERL outside it.
+    last_erl: Value,
+    /// Whether RESUME clears it, as the runtime's does.
+    resume_clears_erl: bool,
     /// Each RESUME label's block, in the order the answers number them.
     labels: Vec<i64>,
     /// The number of the handler ON ERROR GOTO last named, a global.
@@ -62,14 +83,17 @@ pub(super) struct ModuleHandler {
 impl ModuleHandler {
     /// The handlers of `owner`, whose ON ERROR GOTOs name them, as the
     /// function `outlined`, keeping the one ON ERROR GOTO last named in
-    /// `active`; refused where a local both they and the body use would be
-    /// two, one in each frame.
-    pub(super) fn of(owner: &model::Function, active: Value, outlined: (Value, TypeId)) -> Emit<Self> {
+    /// `active` and the line of the last error it took in `erl`, with
+    /// whether RESUME clears it; refused where a local both they and the
+    /// body use would be two, one in each frame.
+    pub(super) fn of(owner: &model::Function, active: Value, erl: (Value, bool), outlined: (Value, TypeId)) -> Emit<Self> {
+        let (last_erl, resume_clears_erl) = erl;
         let handlers = handlers(owner)?;
-        let inside = apart(owner, &handlers)?;
+        let (inside, ran) = reaches(owner, &handlers);
+        let only: BTreeSet<i64> = inside.difference(&ran).copied().collect();
         let used = |blocks: &mut dyn Iterator<Item = &model::Block>| -> BTreeSet<i64> { blocks.flat_map(places_of).collect() };
         let theirs = used(&mut owner.blocks.iter().filter(|one| inside.contains(&one.id)));
-        let body = used(&mut owner.blocks.iter().filter(|one| !inside.contains(&one.id)));
+        let body = used(&mut owner.blocks.iter().filter(|one| !only.contains(&one.id)));
         if let Some(place) = owner.places.iter().find(|one| one.storage == Storage::Local && theirs.contains(&one.id) && body.contains(&one.id)) {
             return Err(format!("{}, a local both the body and its error handler use: the handler runs on the frame of the procedure that raised", place.name));
         }
@@ -82,7 +106,7 @@ impl ModuleHandler {
                 }
             }
         }
-        Ok(Self { owner: owner.id, handlers, inside, labels, active, outlined })
+        Ok(Self { owner: owner.id, handlers, inside, only, last_erl, resume_clears_erl, labels, active, outlined })
     }
 }
 
@@ -138,10 +162,17 @@ fn handlers(function: &model::Function) -> Emit<Vec<i64>> {
     Ok(handlers)
 }
 
-/// The blocks `handlers` reach, which the body must not.
-fn apart(function: &model::Function, handlers: &[i64]) -> Emit<BTreeSet<i64>> {
+/// The blocks `handlers` reach, and those the body does.
+fn reaches(function: &model::Function, handlers: &[i64]) -> (BTreeSet<i64>, BTreeSet<i64>) {
     let inside = reached(function, handlers.iter().copied());
     let body = reached(function, std::iter::once(function.entry).chain(function.external_entries.iter().copied().filter(|one| !inside.contains(one))));
+    (inside, body)
+}
+
+/// The blocks `handlers` reach, which the body must not: a procedure's own
+/// handler runs in it, where one block cannot be both.
+fn apart(function: &model::Function, handlers: &[i64]) -> Emit<BTreeSet<i64>> {
+    let (inside, body) = reaches(function, handlers);
     match inside.intersection(&body).next() {
         Some(shared) => Err(format!("block {shared}, which both the body and its error handler run")),
         None => Ok(inside),
@@ -177,7 +208,7 @@ impl Body<'_, '_, '_> {
     /// The blocks another function runs: the module handler's, in its body.
     pub(super) fn elsewhere(&self) -> BTreeSet<i64> {
         match &self.tables.module_handler {
-            Some(handler) if handler.owner == self.function.id && self.outlined.is_none() => handler.inside.clone(),
+            Some(handler) if handler.owner == self.function.id && self.outlined.is_none() => handler.only.clone(),
             _ => BTreeSet::new(),
         }
     }
@@ -235,7 +266,7 @@ impl Body<'_, '_, '_> {
                 self.b.unreachable();
                 resumes.push((block, form));
             }
-            let inside = if module.owner == self.function.id { module.inside.clone() } else { BTreeSet::new() };
+            let inside = if module.owner == self.function.id { module.only.clone() } else { BTreeSet::new() };
             let served = module.owner != self.function.id;
             Handling { handled, handlers: module.handlers, active: module.active, pad, selector, site, statements, inside, raising: BTreeSet::new(), resumes, labels: module.labels, served, handling: false }
         };
@@ -264,15 +295,13 @@ impl Body<'_, '_, '_> {
         self.b.position(entry);
         self.allocate()?;
         let word = self.b.context.types.int(16);
+        let (err, erl) = (self.b.parameter(0), self.b.parameter(1));
+        self.b.store(erl, handler.last_erl, false);
         let number = self.b.load(word, handler.active, false, "");
         let cases: Vec<(Value, BlockId)> = handler.handlers.iter().enumerate().map(|(at, &one)| (self.b.int(16, at as i128 + 1), self.block(one))).collect();
         self.dispatch(number, &cases);
-        let (err, erl) = (self.b.parameter(0), self.b.parameter(1));
         self.outlined = Some(Outlined { handler, handled, err, erl });
         for block in blocks {
-            if block.terminator.kind == TerminatorKind::Return {
-                return Err("an error handler that runs to the module's end, which its RESUME answer cannot say".to_owned());
-            }
             self.emit_block(block)?;
         }
         Ok(())
@@ -311,6 +340,10 @@ impl Body<'_, '_, '_> {
             },
         };
         crate::onerror::resuming(self.b, &outlined.handled);
+        if outlined.handler.resume_clears_erl {
+            let none = self.b.int(16, 0);
+            self.b.store(none, outlined.handler.last_erl, false);
+        }
         let answer = self.b.int(16, answer);
         self.b.ret(Some(answer));
         // What the block holds past its RESUME runs nowhere.
@@ -319,14 +352,24 @@ impl Body<'_, '_, '_> {
         Ok(Some(None))
     }
 
+    /// Whether a RESUME or RESUME NEXT of `callee` is reached by falling
+    /// through into a handler's code, where no error is being handled.
+    pub(super) fn fallen_resume(&self, callee: &str) -> bool {
+        resumes(callee) && self.outlined.is_none() && self.handling.as_ref().is_some_and(|one| !one.handling)
+    }
+
     /// A call of `callee` this owns, or `None`.
     pub(super) fn handling_call(&mut self, callee: &str, returns: TypeId) -> Emit<Option<Option<Value>>> {
         if self.outlined.is_some() {
             return self.outlined_call(callee, returns);
         }
         if callee == ERL && !self.handling.as_ref().is_some_and(|one| one.handling) {
-            // The runtime's ERL knows no line of the recompiled code.
-            return Err("ERL outside the error handler".to_owned());
+            // The runtime's ERL knows no line of the recompiled code: the
+            // module handler keeps the last one it took.
+            let Some(module) = &self.tables.module_handler else { return Err("ERL outside the error handler".to_owned()) };
+            let word = self.b.context.types.int(16);
+            let line = self.b.load(word, module.last_erl, false, "erl");
+            return Ok(Some(Some(if returns == word { line } else { self.b.cast(llrm_mir::CastOp::ZExt, line, returns, "") })));
         }
         if let Some(registered) = callee.strip_prefix(REGISTER) {
             let (handler, scope) = registered.split_once(':').ok_or("an ON ERROR marker without its scope")?;
@@ -356,7 +399,7 @@ impl Body<'_, '_, '_> {
             _ => return Ok(None),
         };
         if !handling.handling {
-            return Err("a RESUME outside the error handler".to_owned());
+            return Err("a RESUME label outside the error handler".to_owned());
         }
         crate::onerror::resuming(self.b, &handling.handled);
         let Some(form) = form else {

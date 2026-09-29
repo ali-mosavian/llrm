@@ -81,6 +81,16 @@ pub fn active_global(module: &mut Module) -> Result<ConstantId, String> {
     Ok(module.reference(global))
 }
 
+/// The module's slot keeping the line of the last error the module
+/// handler took, 0 for none: ERL outside the handler. The runtime's own
+/// knows no line of the recompiled code.
+pub fn last_erl_global(module: &mut Module) -> Result<ConstantId, String> {
+    let i16 = module.context.types.int(16);
+    let none = module.context.int(i16, 0);
+    let global = module.add_variable("$QB$ERL", GlobalVariable { ty: i16, constant: false, initializer: Some(none), align: None }, Linkage::Internal)?;
+    Ok(module.reference(global))
+}
+
 /// ON ERROR GOTO the handler numbered `handler`, 0 for none. Inside the
 /// handler trapping stays off until RESUME turns on what this names.
 pub fn goto(b: &mut Builder, handled: &Handled, active: Operand, handler: u16, inside: bool) -> Result<(), String> {

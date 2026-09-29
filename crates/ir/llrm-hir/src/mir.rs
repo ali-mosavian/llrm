@@ -45,7 +45,7 @@ pub fn emit(program: &model::Program) -> Vec<Emitted> {
     // A procedure that frames itself zeroes locals with its own stores; its
     // frame holds garbage.
     let zeroed = program.zeroed_locals && program.frames == model::Frames::Runtime;
-    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed, &program.promises.nounwind)).collect()
+    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed, &program.promises.nounwind, program.runtime)).collect()
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the
@@ -241,7 +241,7 @@ struct Tables<'h> {
     nounwind: &'h [String],
 }
 
-fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String]) -> Emitted {
+fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
     let mut tables = Tables {
@@ -338,7 +338,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         variable.initializer = Some(initializer);
     }
     let statements = hir.statements();
-    let outlined = match module_handler(&mut module, &functions) {
+    let outlined = match module_handler(&mut module, &functions, runtime) {
         Ok(outlined) => outlined,
         Err((name, why)) => {
             refused.push((name, why));
@@ -400,7 +400,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
 /// The module body's ON ERROR GOTO handlers, declared as the function they
 /// run as, with what its code refers to, and the body's HIR function.
 #[allow(clippy::type_complexity)]
-fn module_handler<'h>(module: &mut Module, functions: &[(&'h model::Function, Option<GlobalId>)]) -> Result<Option<(handling::ModuleHandler, (GlobalId, Handled), &'h model::Function)>, (String, String)> {
+fn module_handler<'h>(module: &mut Module, functions: &[(&'h model::Function, Option<GlobalId>)], runtime: model::RuntimeProfile) -> Result<Option<(handling::ModuleHandler, (GlobalId, Handled), &'h model::Function)>, (String, String)> {
     let Some(&(owner, Some(_))) = functions.iter().find(|(one, _)| one.error_handler.is_some() && !one.error_handler_local) else { return Ok(None) };
     let refusal = |why: String| (owner.name.clone(), why);
     let i16 = module.context.types.int(16);
@@ -409,8 +409,9 @@ fn module_handler<'h>(module: &mut Module, functions: &[(&'h model::Function, Op
     place_function(module, global, (0, FAR));
     let handled = onerror::handled(module, global, &[], false).map_err(refusal)?;
     let active = Value::Constant(onerror::active_global(module).map_err(refusal)?);
+    let last_erl = Value::Constant(onerror::last_erl_global(module).map_err(refusal)?);
     let outlined = (Value::Constant(module.reference(global)), ty);
-    let handler = handling::ModuleHandler::of(owner, active, outlined).map_err(refusal)?;
+    let handler = handling::ModuleHandler::of(owner, active, (last_erl, runtime.resume_clears_erl()), outlined).map_err(refusal)?;
     Ok(Some((handler, (global, handled), owner)))
 }
 
@@ -696,6 +697,10 @@ fn memset_type(types: &mut Types) -> TypeId {
 fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::Function) -> Emit<()> {
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
+    if function.error_handler.is_some() && !function.error_handler_local {
+        // The module handler run to the module's end raises "No RESUME".
+        declare_runtime(module, tables, handling::RAISE, 1)?;
+    }
     for place in &function.places {
         if !matches!(place.storage, Storage::Local | Storage::Parameter) && !tables.data.contains_key(&place.symbol) {
             let ty = stored_type(&mut module.context.types, tables.types[&place.r#type])?;
@@ -748,6 +753,10 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             }
         }
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call || three_way(instruction.op).is_some()) else { continue };
+        if handling::resumes(callee) {
+            // A RESUME fallen into raises its error as ERROR does.
+            declare_runtime(module, tables, handling::RAISE, 1)?;
+        }
         if handling::owns(callee) {
             continue;
         }
@@ -791,6 +800,24 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         tables.callees.insert(callee.to_owned(), reference);
         tables.conventions.insert(callee.to_owned(), abi.0);
     }
+    Ok(())
+}
+
+/// The runtime routine `name`, far and cleaning up its `words` word
+/// arguments, returning nothing, where the module does not declare it yet:
+/// one the ON ERROR lowering calls where the HIR does not.
+fn declare_runtime(module: &mut Module, tables: &mut Tables, name: &str, words: usize) -> Emit<()> {
+    if tables.callees.contains_key(name) {
+        return Ok(());
+    }
+    let abi = convention(model::StackCleanup::Callee, model::CallDistance::Far)?;
+    let types = &mut module.context.types;
+    let (void, word) = (types.void(), types.int(16));
+    let ty = function_type(types, void, vec![word; words]);
+    let global = module.add_function(&format!("{RUNTIME}{name}"), ty, Linkage::External)?;
+    place_function(module, global, abi);
+    tables.callees.insert(name.to_owned(), module.reference(global));
+    tables.conventions.insert(name.to_owned(), abi.0);
     Ok(())
 }
 
@@ -1549,6 +1576,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         self.b.context.types.intern(Type::Struct { fields, packed: false })
                     }
                 };
+                if self.fallen_resume(callee) {
+                    // Falling through, not by an error: "RESUME without
+                    // error", raised as ERROR raises it, which the runtime
+                    // places at this call.
+                    let (convention, _) = convention(model::StackCleanup::Callee, model::CallDistance::Far)?;
+                    let number = self.b.int(16, handling::RESUME_WITHOUT_ERROR);
+                    let (void, word) = (self.b.context.types.void(), self.b.context.types.int(16));
+                    let ty = function_type(&mut self.b.context.types, void, vec![word]);
+                    let raise = Value::Constant(self.tables.callees[handling::RAISE]);
+                    self.raising_call(instruction.id, true, convention, ty, raise, &[number], &[])?;
+                    return Ok(());
+                }
                 let result = match self.handling_call(callee, returns)? {
                     Some(result) => result,
                     None => {
@@ -1681,6 +1720,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a switch on a non-integer")?;
                 let cases: Vec<(Value, BlockId)> = terminator.cases.iter().map(|&(case, target)| (self.b.int(bits, i128::from(case)), self.block(target))).collect();
                 self.b.switch(value, self.block(terminator.targets[0]), &cases);
+            }
+            TerminatorKind::Return if self.outlined.is_some() => {
+                // The module handler run to the module's end is "No
+                // RESUME", raised with trapping off: it ends the program.
+                let (convention, _) = convention(model::StackCleanup::Callee, model::CallDistance::Far)?;
+                let (void, word) = (self.b.context.types.void(), self.b.context.types.int(16));
+                let ty = function_type(&mut self.b.context.types, void, vec![word]);
+                let raise = Value::Constant(self.tables.callees[handling::RAISE]);
+                let number = self.b.int(16, handling::NO_RESUME);
+                self.b.call_as(convention, ty, raise, &[number], "");
+                self.b.unreachable();
             }
             TerminatorKind::Return => {
                 let mut value = terminator.operands.first().map(|one| self.value(one)).transpose()?;

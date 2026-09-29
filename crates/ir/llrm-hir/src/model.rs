@@ -62,6 +62,15 @@ str_enum!(RuntimeProfile {
     Freestanding("FREESTANDING") = "freestanding",
 });
 
+impl RuntimeProfile {
+    /// Whether RESUME clears ERL. Measured through BC's route: QB 4.5's
+    /// BCOM45 prints the handled line after RESUME, PDS 7.1's and VBDOS's,
+    /// whose error state is kept in the user frame, print 0.
+    pub fn resume_clears_erl(self) -> bool {
+        self != Self::Qb45
+    }
+}
+
 str_enum!(Dialect {
     Qbasic11("QBASIC11") = "qbasic11",
     Qb45("QB45") = "qb45",
