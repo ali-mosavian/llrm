@@ -1426,7 +1426,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
                 let ty = function_type(&mut self.b.context.types, returns, parameters);
-                if let Some(result) = self.raising_call(instruction.id, true, convention, ty, callee, arguments, &[])? {
+                let order: Vec<usize> = (1..instruction.operands.len()).collect();
+                let attributes = self.extensions(instruction, &order);
+                if let Some(result) = self.raising_call(instruction.id, true, convention, ty, callee, arguments, &attributes)? {
                     self.define(instruction, result);
                 }
             }
@@ -1439,6 +1441,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let filled = site
                     .map(|site| site.promises.iter().filter_map(|one| Some((order.iter().position(|&at| at as i64 == one.operand)?, one.bytes))).collect::<Vec<_>>())
                     .unwrap_or_default();
+                let mut attributes = self.extensions(instruction, &order);
+                for &(index, bytes) in &filled {
+                    for attribute in [Attribute::Flag("nocapture".to_owned()), Attribute::Flag("writeonly".to_owned()), Attribute::Initializes(vec![(0, bytes)])] {
+                        attributes.push((index, attribute));
+                    }
+                }
                 let returns = match instruction.results[..] {
                     [result] => self.result_type(result)?,
                     [] => self.b.context.types.void(),
@@ -1455,7 +1463,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                         let convention = self.tables.conventions[callee];
                         let raises = !self.tables.nounwind.iter().any(|one| one == callee);
                         let callee = Value::Constant(self.tables.callees[callee]);
-                        self.raising_call(instruction.id, raises, convention, ty, callee, &arguments, &filled)?
+                        self.raising_call(instruction.id, raises, convention, ty, callee, &arguments, &attributes)?
                     }
                 };
                 if let Some(result) = result {
@@ -1472,6 +1480,23 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             other => return Err(format!("HIR {other}")),
         }
         Ok(())
+    }
+
+    /// Each byte argument's extension to a stack word, as its HIR type's
+    /// signedness says: LLVM's signext and zeroext. `order` is the operands
+    /// in argument order.
+    fn extensions(&self, instruction: &model::Instruction, order: &[usize]) -> Vec<(usize, Attribute)> {
+        let values = self.function.values.iter().map(|one| (one.id, one.r#type)).collect();
+        let places = self.function.places.iter().map(|one| (one.id, one)).collect();
+        order
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &at)| {
+                let ty = self.hir_type(operand_type(&instruction.operands[at], &values, &places));
+                let signed = ty.signed.filter(|_| ty.kind == model::TypeKind::Integer && ty.width == 1)?;
+                Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.to_owned())))
+            })
+            .collect()
     }
 
     /// A call of the declared `callee` by its convention.

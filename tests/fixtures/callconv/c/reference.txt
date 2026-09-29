@@ -216,7 +216,7 @@ cf call _w_uc #1 stack          11 11 _in_uc[0] - 22 22                  bcc/CFC
 cf call _w_uc #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
 cf call _r_uc #2 stack                                                   bcc/CFCALLER.ASM:40
 cf call _r_uc #2 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
-cf call _w_ch #1 stack          11 11 _in_ch[0] 00 22 22                 bcc/CFCALLER.ASM:40
+cf call _w_ch #1 stack          11 11 _in_ch[0] - 22 22                  bcc/CFCALLER.ASM:40
 cf call _w_ch #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
 cf call _r_ch #2 stack                                                   bcc/CFCALLER.ASM:40
 cf call _r_ch #2 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
@@ -587,7 +587,7 @@ cn call _w_uc #1 stack          11 11 _in_uc[0] - 22 22                  bcc/CNC
 cn call _w_uc #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
 cn call _r_uc #2 stack                                                   bcc/CNCALLER.ASM:40
 cn call _r_uc #2 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
-cn call _w_ch #1 stack          11 11 _in_ch[0] 00 22 22                 bcc/CNCALLER.ASM:40
+cn call _w_ch #1 stack          11 11 _in_ch[0] - 22 22                  bcc/CNCALLER.ASM:40
 cn call _w_ch #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
 cn call _r_ch #2 stack                                                   bcc/CNCALLER.ASM:40
 cn call _r_ch #2 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
@@ -927,7 +927,7 @@ pf call w_uc #1 stack           22 22 _in_uc[0] - 11 11                  bcc/PFC
 pf call w_uc #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
 pf call r_uc #2 stack                                                    bcc/PFCALLER.ASM:40
 pf call r_uc #2 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
-pf call w_ch #1 stack           22 22 _in_ch[0] 00 11 11                 bcc/PFCALLER.ASM:40
+pf call w_ch #1 stack           22 22 _in_ch[0] - 11 11                  bcc/PFCALLER.ASM:40
 pf call w_ch #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
 pf call r_ch #2 stack                                                    bcc/PFCALLER.ASM:40
 pf call r_ch #2 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
@@ -1256,7 +1256,7 @@ pn call w_uc #1 stack           22 22 _in_uc[0] - 11 11                  bcc/PNC
 pn call w_uc #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
 pn call r_uc #2 stack                                                    bcc/PNCALLER.ASM:40
 pn call r_uc #2 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
-pn call w_ch #1 stack           22 22 _in_ch[0] 00 11 11                 bcc/PNCALLER.ASM:40
+pn call w_ch #1 stack           22 22 _in_ch[0] - 11 11                  bcc/PNCALLER.ASM:40
 pn call w_ch #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
 pn call r_ch #2 stack                                                    bcc/PNCALLER.ASM:40
 pn call r_ch #2 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
