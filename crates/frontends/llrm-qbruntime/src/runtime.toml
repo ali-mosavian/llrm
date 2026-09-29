@@ -41,7 +41,8 @@
 #                  other count gets ({name} is the statement's), `terminates`
 #                  when control never comes back
 #   source         the source form that picks it by operand: `form`, and
-#                  `type`, `mbf` or `record` where the choice depends on them
+#                  `type`, `mbf`, `record` or `family` where the choice
+#                  depends on them; the row naming the most of them wins
 # A table named `PREFIX*` gives its facts to every routine with that prefix.
 
 # How a typed source call to a routine is described: its `call` table.
@@ -360,6 +361,10 @@ inputs = []
 evidence = '''
 rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption. VBDCL10E.LIB erase.asm B$ERAS 0020..00c4 is the same: PUSH BP/SI/DI, pAd from [bp+6], an empty array straight to the epilogue, the rest through B$EraseAllAFHDs, B$DeLink, B$DelStrBlock/B$FreePpv/B$CompactSB, B$FHDealloc or B$ADArraySize with B$STD1 or REP STOSW through ES; every path joins POP DI/SI/BP / RETF 2.
 '''
+
+# A procedure's local arrays, erased on its exit.
+["B$ERAS".source]
+form = "local ERASE"
 
 ["B$EVCK"]
 calls_program = true
@@ -1889,6 +1894,13 @@ inputs = ["ax", "bx", "cx", "di", "dx", "si"]
 evidence = '''
 VBDCL10E.LIB: rt/recarray.asm 014b..016e reads descriptor [bp+6], XOR CX,CX at 0152 overwrites incoming arithmetic flags. Empty and nonempty paths join POP SI/BP / RETF 2. Nonempty calls FreePpv with two words (RETF 4 at lmove.asm 01da), then stack-neutral DeLink at 0075..008f. FreePpv -> FreeHandle mutates heap state; no alias/preservation claim. All GP inputs and unknown effects retained; cleanup only where stated. SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301.
 '''
+
+# VBDOS erases a local STRING array with B$ERS1; QB 4.5 and PDS 7.1 have no
+# such routine.
+["B$ERS1".source]
+form = "local ERASE"
+type = "STRING"
+family = "vbdos"
 
 ["B$SCMP"]
 # rt/stcore.asm SCMP: the result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF
