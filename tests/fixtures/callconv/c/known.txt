@@ -17,7 +17,6 @@ cf _p_variadic _gva_u
 cf _p_variadic _gva_uc
 cf _p_variadic _gva_ul
 cf _r_ld result
-cf _w_ch _gw_ch
 cf call _p_ld #1 stack
 cf call _p_ld #1 cleanup
 cf call _p_mixed #1 stack
@@ -25,7 +24,6 @@ cf call _p_mixed #1 cleanup
 cf call _p_variadic #1 stack
 cf call _p_variadic #1 cleanup
 cf keeps _out_ld
-cf keeps _ow_ch
 cfaggee refused
 cfagger refused
 cn _p_ld _gt_ld
@@ -46,7 +44,6 @@ cn _p_variadic _gva_u
 cn _p_variadic _gva_uc
 cn _p_variadic _gva_ul
 cn _r_ld result
-cn _w_ch _gw_ch
 cn call _p_ld #1 stack
 cn call _p_ld #1 cleanup
 cn call _p_mixed #1 stack
@@ -54,7 +51,6 @@ cn call _p_mixed #1 cleanup
 cn call _p_variadic #1 stack
 cn call _p_variadic #1 cleanup
 cn keeps _out_ld
-cn keeps _ow_ch
 cnaggee refused
 cnagger refused
 pf p_ld return
@@ -68,11 +64,9 @@ pf p_mixed _gm_d
 pf p_mixed _gm_e
 pf p_mixed _gm_f
 pf p_mixed _gm_h
-pf w_ch _gw_ch
 pf call p_ld #1 stack
 pf call p_mixed #1 stack
 pf keeps _out_ld
-pf keeps _ow_ch
 pfaggee refused
 pfagger refused
 pn p_ld return
@@ -86,10 +80,8 @@ pn p_mixed _gm_d
 pn p_mixed _gm_e
 pn p_mixed _gm_f
 pn p_mixed _gm_h
-pn w_ch _gw_ch
 pn call p_ld #1 stack
 pn call p_mixed #1 stack
 pn keeps _out_ld
-pn keeps _ow_ch
 pnaggee refused
 pnagger refused
