@@ -41,8 +41,13 @@ fn expected(path: &str) -> BTreeSet<String> {
     std::fs::read_to_string(root().join(path)).unwrap().lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(str::to_owned).collect()
 }
 
-fn run(script: &str, arguments: &[&str]) {
-    let status = Command::new(root().join(script)).args(arguments).env("LLRM_BIN", Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap()).status().unwrap();
+fn run(script: &str, arguments: &[&str], switches: Option<&str>) {
+    let mut command = Command::new(root().join(script));
+    command.args(arguments).env("LLRM_BIN", Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap());
+    if let Some(switches) = switches {
+        command.env("BCSW", switches);
+    }
+    let status = command.status().unwrap();
     assert!(status.success(), "{script} {arguments:?}");
 }
 
@@ -56,7 +61,7 @@ fn assert_runs(got: BTreeSet<String>, want: BTreeSet<String>, file: &str) {
 #[ignore = "needs BCC 3.1's libraries and dosrun"]
 fn test_c_conventions_run_against_bcc() {
     let work = tempfile::tempdir().unwrap();
-    run("tools/callconv/c.sh", &[work.path().to_str().unwrap()]);
+    run("tools/callconv/c.sh", &[work.path().to_str().unwrap()], None);
     let programs = ["CF", "CN", "PF", "PN"].iter().flat_map(|one| ["BB", "LB", "BL", "LL"].map(|pair| format!("{one}{pair}")));
     assert_runs(failures(work.path(), programs), expected("tests/fixtures/callconv/c/runs.txt"), "c/runs.txt");
 }
@@ -65,11 +70,12 @@ fn test_c_conventions_run_against_bcc() {
 #[ignore = "needs VBDOS, PDS 7.1 and QB 4.5 and dosrun"]
 fn test_basic_conventions_run_against_bc() {
     let mut got = BTreeSet::new();
-    for dialect in ["vbdos", "pds71", "qb45"] {
+    // VBDOS's /G3 pushes a LONG as one dword.
+    for (tag, dialect, switches) in [("vbdos", "vbdos", None), ("vbdos-g3", "vbdos", Some("/O /FPi /G3 /Zi")), ("pds71", "pds71", None), ("qb45", "qb45", None)] {
         let work = tempfile::tempdir().unwrap();
-        run("tools/callconv/bas.sh", &[dialect, work.path().join("w").to_str().unwrap()]);
+        run("tools/callconv/bas.sh", &[dialect, work.path().join("w").to_str().unwrap()], switches);
         let reported = failures(&work.path().join("w"), ["BB", "LB", "BL", "LL"].map(str::to_owned));
-        got.extend(reported.into_iter().map(|one| format!("{dialect} {one}")));
+        got.extend(reported.into_iter().map(|one| format!("{tag} {one}")));
     }
     assert_runs(got, expected("tests/fixtures/callconv/bas/runs.txt"), "bas/runs.txt");
 }
