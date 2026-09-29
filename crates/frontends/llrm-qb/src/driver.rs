@@ -100,6 +100,8 @@ pub struct Frontend {
     pub array_order: String,
     pub huge_arrays: bool,
     pub checked_arrays: bool,
+    /// Integer division raises error 11 in code: `--checked-division`.
+    pub checked_division: bool,
     pub unchecked_bounds: bool,
     pub mbf: bool,
     pub alternate_math: bool,
@@ -122,6 +124,7 @@ impl Frontend {
             array_order: "column-major".into(),
             huge_arrays: false,
             checked_arrays: false,
+            checked_division: false,
             unchecked_bounds: false,
             mbf: false,
             alternate_math: false,
@@ -149,6 +152,7 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
     for (on, flag) in [
         (frontend.huge_arrays, "--huge-arrays"),
         (frontend.checked_arrays, "--checked-arrays"),
+        (frontend.checked_division, "--checked-division"),
         (frontend.unchecked_bounds, "--unchecked-bounds"),
         (frontend.mbf, "--mbf"),
         (frontend.alternate_math, "--alternate-math"),
