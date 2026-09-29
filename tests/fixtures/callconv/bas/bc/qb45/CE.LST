@@ -1,0 +1,849 @@
+                                                                      PAGE   1
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 0030   0006    ' Callees: each keeps what arrived and writes back through its
+ 0030   0006    ' by-reference parameter.
+ 0030   0006    '$include: 'CC.BI'
+ 0030   0006    ' Shared by every module. Callees and callers keep what arrived
+                 and what
+ 0030   0006    ' came back in PROBE.ASM's slots (put*); the harness reads them
+                 (getB).
+ 0030   0006    type Rec
+ 0030   0006        a as integer
+ 0030   0006        b as long
+ 0030   0006        c as double
+ 0030   0006        s as string * 4
+ 0030   0006    end type
+ 0030   0006    
+ 0030   0006    ' PROBE.ASM
+ 0030   0006    declare sub trash ()
+ 0030   0006    declare sub arm ()
+ 0030   0006    declare sub verify (byval k as integer)
+ 0030   0006    declare sub armX ()
+ 0030   0006    declare sub verifyX (byval k as integer)
+ 0030   0006    declare sub badRegs ()
+ 0030   0006    declare function probeMask% (byval k as integer)
+ 0030   0006    declare sub putI (byval k as integer, byval v as integer)
+ 0030   0006    declare sub putL (byval k as integer, byval v as long)
+ 0030   0006    declare sub putF (byval k as integer, byval v as single)
+ 0030   0006    declare sub putD (byval k as integer, byval v as double)
+ 0030   0006    declare sub putC (byval k as integer, byval i as integer, byval
+                 c as integer)
+ 0030   0006    declare function getB% (byval k as integer, byval i as integer)
+ 0030   0006    declare sub recVal (byval a as integer, byval b as long, byval 
+                c as single, byval d as double)
+ 0030   0006    declare sub recSeg (seg a as integer, seg b as double)
+ 0030   0006    declare sub recCdl cdecl (byval a as integer, byval b as long, 
+                byval c as double)
+ 0030   0006    declare function aInt% ()
+ 0030   0006    declare function aLng& ()
+ 0030   0006    declare function aSng! ()
+ 0030   0006    declare function aDbl# ()
+ 0030   0006    declare sub keepDesc (s as string)
+ 0030   0006    declare function aStr$ ()
+ 0030   0006    declare function xInt% cdecl ()
+ 0030   0006    declare function xLng& cdecl ()
+ 0030   0006    declare function xSng! cdecl ()
+ 0030   0006    declare function xDbl# cdecl ()
+ 0030   0006    
+ 0030   0006    ' CE.BAS
+ 0030   0006    declare sub pInt (h as integer, v as integer, t as integer)
+ 0030   0006    declare sub pLng (h as integer, v as long, t as integer)
+ 0030   0006    declare sub pSng (h as integer, v as single, t as integer)
+ 0030   0006    declare sub pDbl (h as integer, v as double, t as integer)
+ 0030   0006    declare sub pStr (h as integer, v as string, t as integer)
+ 0030   0006    declare sub pFix (h as integer, v as string, t as integer)
+ 0030   0006    declare sub pRec (h as integer, v as Rec, t as integer)
+ 0030   0006    declare sub pArrI (h as integer, v() as integer, t as integer)
+                                                                      PAGE   2
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 0030   0006    declare sub pArrS (h as integer, v() as string, t as integer)
+ 0030   0006    declare sub pMix (a as integer, b as long, c as single, d as do
+                uble, e as string, f as integer)
+ 0030   0006    declare sub sVoid ()
+ 0030   0006    declare function rInt% (h as integer)
+ 0030   0006    declare function rLng& (h as integer)
+ 0030   0006    declare function rSng! (h as integer)
+ 0030   0006    declare function rDbl# (h as integer)
+ 0030   0006    declare sub ceStr (k as integer, s as string)
+ 0030   0006    
+ 0030   0006    ' CES.BAS
+ 0030   0006    declare function rStr$ (h as integer)
+ 0030   0006    
+ 0030   0006    ' CR.BAS, CRS.BAS
+ 0030   0006    declare sub callAll ()
+ 0030   0006    declare sub crStr (k as integer, s as string)
+ 0030   0006    declare sub callStrs ()
+ 0030   0006    
+ 0030   0006    '$include: 'CUR.BI'
+ 0030   0006    ' No CURRENCY in QB 4.5.
+ 0030   0006    '$include: 'V71.BI'
+ 0030   0006    ' No BYVAL or SEG in a QB 4.5 SUB definition.
+ 0030   0006    
+ 0030   0006    sub ceStr (k as integer, s as string)
+ 0030    **            I00002: jmp   I00003
+ 0033    **            CESTR:  mov   cx,0000h
+ 0036    **                    call  B$ENRA
+ 003B   0006        dim i as integer
+ 003B   0006        putI k, len(s)
+ 003B    **                    mov   si,08h[bp]
+ 003E    **                    push  [si]
+ 0040    **                    push  06h[bp]
+ 0043    **                    call  B$FLEN
+ 0048    **                    push  ax
+ 0049    **                    call  PUTI
+ 004E   0006        for i = 1 to len(s)
+ 004E    **                    push  06h[bp]
+ 0051    **                    call  B$FLEN
+ 0056    **                    mov   0F2h[bp],ax
+ 0059    **                    mov   ax,0001h
+ 005C    **                    jmp   I00005
+ 0060   0006            putC k, i + 1, asc(mid$(s, i, 1))
+ 005F    **            I00006: mov   si,08h[bp]
+ 0063    **                    push  [si]
+ 0065    **                    inc   ax
+ 0066    **                    push  ax
+ 0067    **                    push  06h[bp]
+ 006A    **                    push  0F4h[bp]
+ 006D    **                    mov   ax,0001h
+ 0070    **                    push  ax
+ 0071    **                    call  B$FMID
+ 0076    **                    push  ax
+ 0077    **                    call  B$FASC
+ 007C    **                    push  ax
+                                                                      PAGE   3
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 007D    **                    call  PUTC
+ 0082   0006        next
+ 0082    **                    mov   ax,0F4h[bp]
+ 0085    **                    inc   ax
+ 0086    **            I00005: mov   0F4h[bp],ax
+ 0089    **                    cmp   ax,0F2h[bp]
+ 008C    **                    jng   $-2Eh
+ 008E   0006    end sub
+ 008E    **            I00004: call  B$EXSA
+ 0093    **                    ret   0004h
+ 0096   0006    
+ 0096   0006    sub pInt (h as integer, v as integer, t as integer)
+ 0096    **            I00003: jmp   I00007
+ 0099    **            PINT:   mov   cx,0000h
+ 009C    **                    call  B$ENRA
+ 00A1   0006        trash
+ 00A1    **                    call  TRASH
+ 00A6   0006        putI 1, h: putI 2, v: putI 3, t
+ 00A6    **                    mov   ax,0001h
+ 00A9    **                    push  ax
+ 00AA    **                    mov   si,0Ah[bp]
+ 00AD    **                    push  [si]
+ 00AF    **                    call  PUTI
+ 00B4    **                    mov   ax,0002h
+ 00B7    **                    push  ax
+ 00B8    **                    mov   si,08h[bp]
+ 00BB    **                    push  [si]
+ 00BD    **                    call  PUTI
+ 00C2    **                    mov   ax,0003h
+ 00C5    **                    push  ax
+ 00C6    **                    mov   si,06h[bp]
+ 00C9    **                    push  [si]
+ 00CB    **                    call  PUTI
+ 00D0   0006        v = v + 1
+ 00D0   0006    end sub
+ 00D0    **                    mov   si,08h[bp]
+ 00D3    **                    inc   [si]
+ 00D5    **            I00008: call  B$EXSA
+ 00DA    **                    ret   0006h
+ 00DD   0006    
+ 00DD   0006    sub pLng (h as integer, v as long, t as integer)
+ 00DD    **            I00007: jmp   I00009
+ 00E0    **            PLNG:   mov   cx,0000h
+ 00E3    **                    call  B$ENRA
+ 00E8   0006        trash
+ 00E8    **                    call  TRASH
+ 00ED   0006        putI 5, h: putL 6, v: putI 7, t
+ 00ED    **                    mov   ax,0005h
+ 00F0    **                    push  ax
+ 00F1    **                    mov   si,0Ah[bp]
+ 00F4    **                    push  [si]
+ 00F6    **                    call  PUTI
+ 00FB    **                    mov   ax,0006h
+ 00FE    **                    push  ax
+                                                                      PAGE   4
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 00FF    **                    mov   si,08h[bp]
+ 0102    **                    push  02h[si]
+ 0105    **                    push  [si]
+ 0107    **                    call  PUTL
+ 010C    **                    mov   ax,0007h
+ 010F    **                    push  ax
+ 0110    **                    mov   si,06h[bp]
+ 0113    **                    push  [si]
+ 0115    **                    call  PUTI
+ 011A   0006        v = v + 1
+ 011A   0006    end sub
+ 011A    **                    mov   si,08h[bp]
+ 011D    **                    mov   ax,[si]
+ 011F    **                    mov   dx,02h[si]
+ 0122    **                    add   ax,0001h
+ 0125    **                    adc   dx,00h
+ 0128    **                    mov   [si],ax
+ 012A    **                    mov   02h[si],dx
+ 012D    **            I00010: call  B$EXSA
+ 0132    **                    ret   0006h
+ 0135   0006    
+ 0135   0006    sub pSng (h as integer, v as single, t as integer)
+ 0135    **            I00009: jmp   I00011
+ 0138    **            PSNG:   mov   cx,0000h
+ 013B    **                    call  B$ENRA
+ 0140   0006        trash
+ 0140    **                    call  TRASH
+ 0145   0006        putI 9, h: putF 10, v: putI 11, t
+ 0145    **                    mov   ax,0009h
+ 0148    **                    push  ax
+ 0149    **                    mov   si,0Ah[bp]
+ 014C    **                    push  [si]
+ 014E    **                    call  PUTI
+ 0153    **                    mov   ax,000Ah
+ 0156    **                    push  ax
+ 0157    **                    mov   si,08h[bp]
+ 015A    **                    push  02h[si]
+ 015D    **                    push  [si]
+ 015F    **                    call  PUTF
+ 0164    **                    mov   ax,000Bh
+ 0167    **                    push  ax
+ 0168    **                    mov   si,06h[bp]
+ 016B    **                    push  [si]
+ 016D    **                    call  PUTI
+ 0172   0006        v = v * 2
+ 0172   0006    end sub
+ 0172    **                    mov   si,08h[bp]
+ 0175    **                    int   35h
+ 0177    **                    db    04h
+ 0178    **                    int   34h
+ 017A    **                    db    0Eh
+ 017B    **                    dw    <00000040>
+ 017D    **                    int   35h
+ 017F    **                    db    1Ch
+                                                                      PAGE   5
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 0180    **                    int   3Dh
+ 0182    **            I00012: call  B$EXSA
+ 0187    **                    ret   0006h
+ 018A   0006    
+ 018A   0006    sub pDbl (h as integer, v as double, t as integer)
+ 018A    **            I00011: jmp   I00013
+ 018D    **            PDBL:   mov   cx,0000h
+ 0190    **                    call  B$ENRA
+ 0195   0006        trash
+ 0195    **                    call  TRASH
+ 019A   0006        putI 13, h: putD 14, v: putI 15, t
+ 019A    **                    mov   ax,000Dh
+ 019D    **                    push  ax
+ 019E    **                    mov   si,0Ah[bp]
+ 01A1    **                    push  [si]
+ 01A3    **                    call  PUTI
+ 01A8    **                    mov   ax,000Eh
+ 01AB    **                    push  ax
+ 01AC    **                    mov   si,08h[bp]
+ 01AF    **                    mov   bx,si
+ 01B1    **                    push  06h[bx]
+ 01B4    **                    push  04h[bx]
+ 01B7    **                    push  02h[bx]
+ 01BA    **                    push  [bx]
+ 01BC    **                    call  PUTD
+ 01C1    **                    mov   ax,000Fh
+ 01C4    **                    push  ax
+ 01C5    **                    mov   si,06h[bp]
+ 01C8    **                    push  [si]
+ 01CA    **                    call  PUTI
+ 01CF   0006        v = v * 2
+ 01CF   0006    end sub
+ 01CF    **                    mov   si,08h[bp]
+ 01D2    **                    int   39h
+ 01D4    **                    db    04h
+ 01D5    **                    int   38h
+ 01D7    **                    db    0Eh
+ 01D8    **                    dw    <0000000000000040>
+ 01DA    **                    int   39h
+ 01DC    **                    db    1Ch
+ 01DD    **                    int   3Dh
+ 01DF    **            I00014: call  B$EXSA
+ 01E4    **                    ret   0006h
+ 01E7   0006    
+ 01E7   0006    sub pStr (h as integer, v as string, t as integer)
+ 01E7    **            I00013: jmp   I00015
+ 01EA    **            PSTR:   mov   cx,0000h
+ 01ED    **                    call  B$ENRA
+ 01F2   0006        trash
+ 01F2    **                    call  TRASH
+ 01F7   0006        putI 17, h: ceStr 18, v: putI 19, t
+ 01F7    **                    mov   ax,0011h
+ 01FA    **                    push  ax
+ 01FB    **                    mov   si,0Ah[bp]
+                                                                      PAGE   6
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 01FE    **                    push  [si]
+ 0200    **                    call  PUTI
+ 0205    **                    mov   0F4h[bp],0012h
+ 020A    **                    lea   ax,0F4h[bp]
+ 020D    **                    push  ax
+ 020E    **                    push  08h[bp]
+ 0211    **                    call  CESTR
+ 0216    **                    mov   ax,0013h
+ 0219    **                    push  ax
+ 021A    **                    mov   si,06h[bp]
+ 021D    **                    push  [si]
+ 021F    **                    call  PUTI
+ 0224   0006        v = v + "!"
+ 0224   0006    end sub
+ 0224    **                    push  08h[bp]
+ 0227    **                    mov   ax,offset <const>
+ 022A    **                    push  ax
+ 022B    **                    call  B$SCAT
+ 0230    **                    push  ax
+ 0231    **                    push  08h[bp]
+ 0234    **                    call  B$SASS
+ 0239    **            I00016: call  B$EXSA
+ 023E    **                    ret   0006h
+ 0241   0006    
+ 0241   0006    sub pFix (h as integer, v as string, t as integer)
+ 0241    **            I00015: jmp   I00017
+ 0244    **            PFIX:   mov   cx,0000h
+ 0247    **                    call  B$ENRA
+ 024C   0006        trash
+ 024C    **                    call  TRASH
+ 0251   0006        putI 21, h: ceStr 22, v: putI 23, t
+ 0251    **                    mov   ax,0015h
+ 0254    **                    push  ax
+ 0255    **                    mov   si,0Ah[bp]
+ 0258    **                    push  [si]
+ 025A    **                    call  PUTI
+ 025F    **                    mov   0F4h[bp],0016h
+ 0264    **                    lea   ax,0F4h[bp]
+ 0267    **                    push  ax
+ 0268    **                    push  08h[bp]
+ 026B    **                    call  CESTR
+ 0270    **                    mov   ax,0017h
+ 0273    **                    push  ax
+ 0274    **                    mov   si,06h[bp]
+ 0277    **                    push  [si]
+ 0279    **                    call  PUTI
+ 027E   0006        v = "XY"
+ 027E   0006    end sub
+ 027E    **                    mov   ax,offset <const>
+ 0281    **                    push  ax
+ 0282    **                    push  08h[bp]
+ 0285    **                    call  B$SASS
+ 028A    **            I00018: call  B$EXSA
+ 028F    **                    ret   0006h
+                                                                      PAGE   7
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 0292   0006    
+ 0292   0006    sub pRec (h as integer, v as Rec, t as integer)
+ 0292    **            I00017: jmp   I00019
+ 0295    **            PREC:   mov   cx,0000h
+ 0298    **                    call  B$ENRA
+ 029D   0006        trash
+ 029D    **                    call  TRASH
+ 02A2   0006        putI 25, h: putI 26, v.a: putL 27, v.b: putD 28, v.c: ceStr
+                 29, v.s: putI 30, t
+ 02A2    **                    mov   ax,0019h
+ 02A5    **                    push  ax
+ 02A6    **                    mov   si,0Ah[bp]
+ 02A9    **                    push  [si]
+ 02AB    **                    call  PUTI
+ 02B0    **                    mov   ax,001Ah
+ 02B3    **                    push  ax
+ 02B4    **                    mov   si,08h[bp]
+ 02B7    **                    push  [si]
+ 02B9    **                    call  PUTI
+ 02BE    **                    mov   ax,001Bh
+ 02C1    **                    push  ax
+ 02C2    **                    mov   ax,08h[bp]
+ 02C5    **                    add   ax,0002h
+ 02C8    **                    mov   si,ax
+ 02CA    **                    push  02h[si]
+ 02CD    **                    push  [si]
+ 02CF    **                    call  PUTL
+ 02D4    **                    mov   ax,001Ch
+ 02D7    **                    push  ax
+ 02D8    **                    mov   ax,08h[bp]
+ 02DB    **                    add   ax,0006h
+ 02DE    **                    mov   bx,ax
+ 02E0    **                    push  06h[bx]
+ 02E3    **                    push  04h[bx]
+ 02E6    **                    push  02h[bx]
+ 02E9    **                    push  [bx]
+ 02EB    **                    call  PUTD
+ 02F0    **                    mov   0F4h[bp],001Dh
+ 02F5    **                    mov   ax,08h[bp]
+ 02F8    **                    add   ax,000Eh
+ 02FB    **                    push  ds
+ 02FC    **                    push  ax
+ 02FD    **                    mov   bx,ax
+ 02FF    **                    mov   ax,0004h
+ 0302    **                    push  ax
+ 0303    **                    mov   0EEh[bp],bx
+ 0306    **                    call  B$LDFS
+ 030B    **                    push  ax
+ 030C    **                    lea   ax,0F0h[bp]
+ 030F    **                    push  ax
+ 0310    **                    call  B$SASS
+ 0315    **                    lea   ax,0F4h[bp]
+ 0318    **                    push  ax
+ 0319    **                    lea   ax,0F0h[bp]
+                                                                      PAGE   8
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 031C    **                    push  ax
+ 031D    **                    call  CESTR
+ 0322    **                    lea   ax,0F0h[bp]
+ 0325    **                    push  ds
+ 0326    **                    push  ax
+ 0327    **                    xor   ax,ax
+ 0329    **                    push  ax
+ 032A    **                    push  ds
+ 032B    **                    push  0EEh[bp]
+ 032E    **                    mov   ax,0004h
+ 0331    **                    push  ax
+ 0332    **                    call  B$ASSN
+ 0337    **                    lea   ax,0F0h[bp]
+ 033A    **                    push  ax
+ 033B    **                    call  B$STDL
+ 0340    **                    mov   ax,001Eh
+ 0343    **                    push  ax
+ 0344    **                    mov   si,06h[bp]
+ 0347    **                    push  [si]
+ 0349    **                    call  PUTI
+ 034E   0006        v.a = v.a + 1
+ 034E   0006        v.s = "WXYZ"
+ 034E   0006    end sub
+ 034E    **                    mov   si,08h[bp]
+ 0351    **                    inc   [si]
+ 0353    **                    mov   ax,offset <const>
+ 0356    **                    push  ds
+ 0357    **                    push  ax
+ 0358    **                    xor   ax,ax
+ 035A    **                    push  ax
+ 035B    **                    mov   ax,08h[bp]
+ 035E    **                    add   ax,000Eh
+ 0361    **                    push  ds
+ 0362    **                    push  ax
+ 0363    **                    mov   ax,0004h
+ 0366    **                    push  ax
+ 0367    **                    call  B$ASSN
+ 036C    **            I00020: call  B$EXSA
+ 0371    **                    ret   0006h
+ 0374   0006    
+ 0374   0006    sub pArrI (h as integer, v() as integer, t as integer)
+ 0374    **            I00019: jmp   I00021
+ 0377    **            PARRI:  mov   cx,0000h
+ 037A    **                    call  B$ENRA
+ 037F   0006        dim i as integer
+ 037F   0006        trash
+ 037F    **                    call  TRASH
+ 0384   0006        putI 33, h: putI 34, lbound(v): putI 35, ubound(v)
+ 0384    **                    mov   ax,0021h
+ 0387    **                    push  ax
+ 0388    **                    mov   si,0Ah[bp]
+ 038B    **                    push  [si]
+ 038D    **                    call  PUTI
+ 0392    **                    mov   ax,0022h
+                                                                      PAGE   9
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 0395    **                    push  ax
+ 0396    **                    push  08h[bp]
+ 0399    **                    mov   ax,0001h
+ 039C    **                    push  ax
+ 039D    **                    call  B$LBND
+ 03A2    **                    push  ax
+ 03A3    **                    call  PUTI
+ 03A8    **                    mov   ax,0023h
+ 03AB    **                    push  ax
+ 03AC    **                    push  08h[bp]
+ 03AF    **                    mov   ax,0001h
+ 03B2    **                    push  ax
+ 03B3    **                    call  B$UBND
+ 03B8    **                    push  ax
+ 03B9    **                    call  PUTI
+ 03BE   0006        for i = lbound(v) to ubound(v)
+ 03BE    **                    push  08h[bp]
+ 03C1    **                    mov   ax,0001h
+ 03C4    **                    push  ax
+ 03C5    **                    call  B$UBND
+ 03CA    **                    mov   0F2h[bp],ax
+ 03CD    **                    push  08h[bp]
+ 03D0    **                    mov   ax,0001h
+ 03D3    **                    push  ax
+ 03D4    **                    call  B$LBND
+ 03D9    **                    jmp   I00023
+ 03DC   0006            putI 36 + i - lbound(v), v(i)
+ 03DC    **            I00024: push  08h[bp]
+ 03DF    **                    mov   ax,0001h
+ 03E2    **                    push  ax
+ 03E3    **                    call  B$LBND
+ 03E8    **                    mov   cx,0024h
+ 03EB    **                    sub   cx,ax
+ 03ED    **                    add   cx,0F4h[bp]
+ 03F0    **                    push  cx
+ 03F1    **                    mov   bx,0F4h[bp]
+ 03F4    **                    sal   bx,1
+ 03F6    **                    mov   si,08h[bp]
+ 03F9    **                    add   bx,0Ah[si]
+ 03FC    **                    mov   es,02h[si]
+ 03FF    **                    es:   
+ 0400    **                    push  [bx]
+ 0402    **                    call  PUTI
+ 0407   0006        next
+ 0407    **                    mov   ax,0F4h[bp]
+ 040A    **                    inc   ax
+ 040B    **            I00023: mov   0F4h[bp],ax
+ 040E    **                    cmp   ax,0F2h[bp]
+ 0411    **                    jng   $-37h
+ 0413   0006        putI 40, t
+ 0413    **                    mov   ax,0028h
+ 0416    **                    push  ax
+ 0417    **                    mov   si,06h[bp]
+ 041A    **                    push  [si]
+                                                                      PAGE  10
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 041C    **                    call  PUTI
+ 0421   0006        v(lbound(v) + 1) = 99
+ 0421   0006    end sub
+ 0421    **                    push  08h[bp]
+ 0424    **                    mov   ax,0001h
+ 0427    **                    push  ax
+ 0428    **                    call  B$LBND
+ 042D    **                    sal   ax,1
+ 042F    **                    add   ax,0002h
+ 0432    **                    mov   bx,ax
+ 0434    **                    mov   si,08h[bp]
+ 0437    **                    add   bx,0Ah[si]
+ 043A    **                    mov   es,02h[si]
+ 043D    **                    es:   
+ 043E    **                    mov   [bx],0063h
+ 0442    **            I00022: call  B$EXSA
+ 0447    **                    ret   0006h
+ 044A   0006    
+ 044A   0006    sub pArrS (h as integer, v() as string, t as integer)
+ 044A    **            I00021: jmp   I00025
+ 044D    **            PARRS:  mov   cx,0000h
+ 0450    **                    call  B$ENRA
+ 0455   0006        dim i as integer
+ 0455   0006        trash
+ 0455    **                    call  TRASH
+ 045A   0006        putI 42, h: putI 43, lbound(v): putI 44, ubound(v)
+ 045A    **                    mov   ax,002Ah
+ 045D    **                    push  ax
+ 045E    **                    mov   si,0Ah[bp]
+ 0461    **                    push  [si]
+ 0463    **                    call  PUTI
+ 0468    **                    mov   ax,002Bh
+ 046B    **                    push  ax
+ 046C    **                    push  08h[bp]
+ 046F    **                    mov   ax,0001h
+ 0472    **                    push  ax
+ 0473    **                    call  B$LBND
+ 0478    **                    push  ax
+ 0479    **                    call  PUTI
+ 047E    **                    mov   ax,002Ch
+ 0481    **                    push  ax
+ 0482    **                    push  08h[bp]
+ 0485    **                    mov   ax,0001h
+ 0488    **                    push  ax
+ 0489    **                    call  B$UBND
+ 048E    **                    push  ax
+ 048F    **                    call  PUTI
+ 0494   0006        for i = lbound(v) to ubound(v)
+ 0494    **                    push  08h[bp]
+ 0497    **                    mov   ax,0001h
+ 049A    **                    push  ax
+ 049B    **                    call  B$UBND
+ 04A0    **                    mov   0F2h[bp],ax
+ 04A3    **                    push  08h[bp]
+                                                                      PAGE  11
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 04A6    **                    mov   ax,0001h
+ 04A9    **                    push  ax
+ 04AA    **                    call  B$LBND
+ 04AF    **                    jmp   I00027
+ 04B2   0006            ceStr 45 + i - lbound(v), v(i)
+ 04B2    **            I00028: push  08h[bp]
+ 04B5    **                    mov   ax,0001h
+ 04B8    **                    push  ax
+ 04B9    **                    call  B$LBND
+ 04BE    **                    mov   cx,002Dh
+ 04C1    **                    sub   cx,ax
+ 04C3    **                    add   cx,0F4h[bp]
+ 04C6    **                    mov   ax,cx
+ 04C8    **                    mov   0F0h[bp],ax
+ 04CB    **                    mov   bx,0F4h[bp]
+ 04CE    **                    sal   bx,1
+ 04D0    **                    sal   bx,1
+ 04D2    **                    mov   si,08h[bp]
+ 04D5    **                    mov   dx,bx
+ 04D7    **                    add   bx,0Ah[si]
+ 04DA    **                    push  bx
+ 04DB    **                    lea   ax,0ECh[bp]
+ 04DE    **                    push  ax
+ 04DF    **                    mov   0EAh[bp],dx
+ 04E2    **                    call  B$SASS
+ 04E7    **                    lea   ax,0F0h[bp]
+ 04EA    **                    push  ax
+ 04EB    **                    lea   ax,0ECh[bp]
+ 04EE    **                    push  ax
+ 04EF    **                    call  CESTR
+ 04F4    **                    lea   ax,0ECh[bp]
+ 04F7    **                    push  ax
+ 04F8    **                    mov   si,08h[bp]
+ 04FB    **                    mov   bx,0EAh[bp]
+ 04FE    **                    add   bx,0Ah[si]
+ 0501    **                    push  bx
+ 0502    **                    call  B$SASS
+ 0507   0006        next
+ 0507    **                    mov   ax,0F4h[bp]
+ 050A    **                    inc   ax
+ 050B    **            I00027: mov   0F4h[bp],ax
+ 050E    **                    cmp   ax,0F2h[bp]
+ 0511    **                    jng   $-61h
+ 0513   0006        putI 48, t
+ 0513    **                    mov   ax,0030h
+ 0516    **                    push  ax
+ 0517    **                    mov   si,06h[bp]
+ 051A    **                    push  [si]
+ 051C    **                    call  PUTI
+ 0521   0006        v(lbound(v) + 1) = "Q"
+ 0521   0006    end sub
+ 0521    **                    mov   ax,offset <const>
+ 0524    **                    push  ax
+ 0525    **                    push  08h[bp]
+                                                                      PAGE  12
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 0528    **                    mov   ax,0001h
+ 052B    **                    push  ax
+ 052C    **                    call  B$LBND
+ 0531    **                    sal   ax,1
+ 0533    **                    sal   ax,1
+ 0535    **                    add   ax,0004h
+ 0538    **                    mov   bx,ax
+ 053A    **                    mov   si,08h[bp]
+ 053D    **                    add   bx,0Ah[si]
+ 0540    **                    push  bx
+ 0541    **                    call  B$SASS
+ 0546    **            I00026: lea   ax,0ECh[bp]
+ 0549    **                    push  ax
+ 054A    **                    call  B$STDL
+ 054F    **                    call  B$EXSA
+ 0554    **                    ret   0006h
+ 0557   0006    
+ 0557   0006    sub pMix (a as integer, b as long, c as single, d as double, e 
+                as string, f as integer)
+ 0557    **            I00025: jmp   I00029
+ 055A    **            PMIX:   mov   cx,0000h
+ 055D    **                    call  B$ENRA
+ 0562   0006        trash
+ 0562    **                    call  TRASH
+ 0567   0006        putI 50, a: putL 51, b: putF 52, c: putD 53, d: ceStr 54, e
+                : putI 55, f
+ 0567    **                    mov   ax,0032h
+ 056A    **                    push  ax
+ 056B    **                    mov   si,10h[bp]
+ 056E    **                    push  [si]
+ 0570    **                    call  PUTI
+ 0575    **                    mov   ax,0033h
+ 0578    **                    push  ax
+ 0579    **                    mov   si,0Eh[bp]
+ 057C    **                    push  02h[si]
+ 057F    **                    push  [si]
+ 0581    **                    call  PUTL
+ 0586    **                    mov   ax,0034h
+ 0589    **                    push  ax
+ 058A    **                    mov   si,0Ch[bp]
+ 058D    **                    push  02h[si]
+ 0590    **                    push  [si]
+ 0592    **                    call  PUTF
+ 0597    **                    mov   ax,0035h
+ 059A    **                    push  ax
+ 059B    **                    mov   si,0Ah[bp]
+ 059E    **                    mov   bx,si
+ 05A0    **                    push  06h[bx]
+ 05A3    **                    push  04h[bx]
+ 05A6    **                    push  02h[bx]
+ 05A9    **                    push  [bx]
+ 05AB    **                    call  PUTD
+ 05B0    **                    mov   0F4h[bp],0036h
+ 05B5    **                    lea   ax,0F4h[bp]
+                                                                      PAGE  13
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 05B8    **                    push  ax
+ 05B9    **                    push  08h[bp]
+ 05BC    **                    call  CESTR
+ 05C1    **                    mov   ax,0037h
+ 05C4    **                    push  ax
+ 05C5    **                    mov   si,06h[bp]
+ 05C8    **                    push  [si]
+ 05CA    **                    call  PUTI
+ 05CF   0006    end sub
+ 05CF    **            I00030: call  B$EXSA
+ 05D4    **                    ret   000Ch
+ 05D7   0006    
+ 05D7   0006    sub sVoid
+ 05D7    **            I00029: jmp   I00031
+ 05DA    **            SVOID:  mov   cx,0000h
+ 05DD    **                    call  B$ENRA
+ 05E2   0006        trash
+ 05E2    **                    call  TRASH
+ 05E7   0006        putI 56, &H5555
+ 05E7    **                    mov   ax,0038h
+ 05EA    **                    push  ax
+ 05EB    **                    mov   ax,5555h
+ 05EE    **                    push  ax
+ 05EF    **                    call  PUTI
+ 05F4   0006    end sub
+ 05F4    **            I00032: call  B$EXSA
+ 05F9    **                    ret   0000h
+ 05FC   0006    
+ 05FC   0006    function rInt% (h as integer)
+ 05FC    **            I00031: jmp   I00033
+ 05FF    **            RINT%:  mov   cx,0000h
+ 0602    **                    call  B$ENRA
+ 0607   0006        trash
+ 0607    **                    call  TRASH
+ 060C   0006        putI 57, h
+ 060C    **                    mov   ax,0039h
+ 060F    **                    push  ax
+ 0610    **                    mov   si,06h[bp]
+ 0613    **                    push  [si]
+ 0615    **                    call  PUTI
+ 061A   0006        rInt% = -&H1235
+ 061A   0006    end function
+ 061A    **                    mov   0F4h[bp],0EDCBh
+ 061F    **            I00034: mov   ax,0F4h[bp]
+ 0622    **                    call  B$EXSA
+ 0627    **                    ret   0002h
+ 062A   0006    
+ 062A   0006    function rLng& (h as integer)
+ 062A    **            I00033: jmp   I00035
+ 062D    **            RLNG&:  mov   cx,0000h
+ 0630    **                    call  B$ENRA
+ 0635   0006        trash
+ 0635    **                    call  TRASH
+ 063A   0006        putI 59, h
+                                                                      PAGE  14
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 063A    **                    mov   ax,003Bh
+ 063D    **                    push  ax
+ 063E    **                    mov   si,06h[bp]
+ 0641    **                    push  [si]
+ 0643    **                    call  PUTI
+ 0648   0006        rLng& = -&H12345679
+ 0648   0006    end function
+ 0648    **                    mov   0F2h[bp],0A987h
+ 064D    **                    mov   0F4h[bp],0EDCBh
+ 0652    **            I00036: mov   ax,0F2h[bp]
+ 0655    **                    mov   dx,0F4h[bp]
+ 0658    **                    call  B$EXSA
+ 065D    **                    ret   0002h
+ 0660   0006    
+ 0660   0006    function rSng! (h as integer)
+ 0660    **            I00035: jmp   I00037
+ 0663    **            RSNG!:  mov   cx,0000h
+ 0666    **                    call  B$ENRA
+ 066B   0006        trash
+ 066B    **                    call  TRASH
+ 0670   0006        putI 61, h
+ 0670    **                    mov   ax,003Dh
+ 0673    **                    push  ax
+ 0674    **                    mov   si,08h[bp]
+ 0677    **                    push  [si]
+ 0679    **                    call  PUTI
+ 067E   0006        rSng! = 1.5
+ 067E   0006    end function
+ 067E    **                    int   35h
+ 0680    **                    db    06h
+ 0681    **                    dw    <0000C03F>
+ 0683    **                    mov   si,06h[bp]
+ 0686    **                    int   35h
+ 0688    **                    db    1Ch
+ 0689    **                    int   3Dh
+ 068B    **            I00038: mov   ax,06h[bp]
+ 068E    **                    call  B$EXSA
+ 0693    **                    ret   0004h
+ 0696   0006    
+ 0696   0006    function rDbl# (h as integer)
+ 0696    **            I00037: jmp   I00039
+ 0699    **            RDBL#:  mov   cx,0000h
+ 069C    **                    call  B$ENRA
+ 06A1   0006        trash
+ 06A1    **                    call  TRASH
+ 06A6   0006        putI 63, h
+ 06A6    **                    mov   ax,003Fh
+ 06A9    **                    push  ax
+ 06AA    **                    mov   si,08h[bp]
+ 06AD    **                    push  [si]
+ 06AF    **                    call  PUTI
+ 06B4   0006        rDbl# = -2.25
+ 06B4   0006    end function
+ 06B4    **                    int   39h
+                                                                      PAGE  15
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line      Microsoft (R) QuickBASIC Compiler Version 4.50
+
+ 06B6    **                    db    06h
+ 06B7    **                    dw    <00000000000002C0>
+ 06B9    **                    mov   si,06h[bp]
+ 06BC    **                    int   39h
+ 06BE    **                    db    1Ch
+ 06BF    **                    int   3Dh
+ 06C1    **            I00040: mov   ax,06h[bp]
+ 06C4    **                    call  B$EXSA
+ 06C9    **                    ret   0004h
+ 06CC   0006    
+ 06CC    **            I00039: call  B$CENP
+ 06D1   0006    
+
+43949 Bytes Available
+38536 Bytes Free
+
+    0 Warning Error(s)
+    0 Severe  Error(s)

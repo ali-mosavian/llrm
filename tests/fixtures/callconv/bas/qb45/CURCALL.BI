@@ -1,0 +1,1 @@
+    ' No CURRENCY in QB 4.5.

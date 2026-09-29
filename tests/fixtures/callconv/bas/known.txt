@@ -1,0 +1,73 @@
+# Facts where llrm-qb still differs from BC; see the test's report.
+vbdos CUE refused
+vbdos PSEGD return
+vbdos PSEGD call PUTI #1 stack
+vbdos PSEGD call PUTI #2 stack
+vbdos CALLALL call _RECCDL #1 stack
+vbdos CALLALL call _RECCDL #1 cleanup
+vbdos CALLALL call _XINT #1 stack
+vbdos CALLALL call _XINT #1 cleanup
+vbdos CALLALL call _XLNG #1 stack
+vbdos CALLALL call _XLNG #1 cleanup
+vbdos CALLALL call _XSNG #1 stack
+vbdos CALLALL call _XSNG #1 cleanup
+vbdos CALLALL call PUTF #4 stack
+vbdos CALLALL call _XDBL #1 stack
+vbdos CALLALL call _XDBL #1 cleanup
+vbdos CALLALL call PUTD #4 stack
+vbdos CALLALL call __AFCYLD #1 stack
+vbdos CALLALL call __AFCYLD #1 cleanup
+vbdos CALLALL call __AFCYST #1 stack
+vbdos CALLALL call __AFCYST #1 cleanup
+vbdos CALLALL call PCUR #1 stack
+vbdos CALLALL call PCUR #1 cleanup
+vbdos CALLALL call PUTY #1 stack
+vbdos CALLALL call PUTY #1 cleanup
+vbdos CALLALL call RCUR #1 stack
+vbdos CALLALL call RCUR #1 cleanup
+vbdos CALLALL call PUTY #2 stack
+vbdos CALLALL call PUTY #2 cleanup
+pds71 CES refused
+pds71 CUE refused
+pds71 PSEGD return
+pds71 PSEGD call PUTI #1 stack
+pds71 PSEGD call PUTI #2 stack
+pds71 CALLALL call _RECCDL #1 stack
+pds71 CALLALL call _RECCDL #1 cleanup
+pds71 CALLALL call _XINT #1 stack
+pds71 CALLALL call _XINT #1 cleanup
+pds71 CALLALL call _XLNG #1 stack
+pds71 CALLALL call _XLNG #1 cleanup
+pds71 CALLALL call _XSNG #1 stack
+pds71 CALLALL call _XSNG #1 cleanup
+pds71 CALLALL call PUTF #4 stack
+pds71 CALLALL call _XDBL #1 stack
+pds71 CALLALL call _XDBL #1 cleanup
+pds71 CALLALL call PUTD #4 stack
+pds71 CALLALL call __AFCYLD #1 stack
+pds71 CALLALL call __AFCYLD #1 cleanup
+pds71 CALLALL call __AFCYST #1 stack
+pds71 CALLALL call __AFCYST #1 cleanup
+pds71 CALLALL call PCUR #1 stack
+pds71 CALLALL call PCUR #1 cleanup
+pds71 CALLALL call PUTY #1 stack
+pds71 CALLALL call PUTY #1 cleanup
+pds71 CALLALL call RCUR #1 stack
+pds71 CALLALL call RCUR #1 cleanup
+pds71 CALLALL call PUTY #2 stack
+pds71 CALLALL call PUTY #2 cleanup
+pds71 CRS refused
+qb45 CES refused
+qb45 CALLALL call _RECCDL #1 stack
+qb45 CALLALL call _RECCDL #1 cleanup
+qb45 CALLALL call _XINT #1 stack
+qb45 CALLALL call _XINT #1 cleanup
+qb45 CALLALL call _XLNG #1 stack
+qb45 CALLALL call _XLNG #1 cleanup
+qb45 CALLALL call _XSNG #1 stack
+qb45 CALLALL call _XSNG #1 cleanup
+qb45 CALLALL call PUTF #4 stack
+qb45 CALLALL call _XDBL #1 stack
+qb45 CALLALL call _XDBL #1 cleanup
+qb45 CALLALL call PUTD #4 stack
+qb45 CRS refused

@@ -1,0 +1,225 @@
+                                                                      PAGE   1
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0030   0006    ' The STRING-array and STRING-result calls, apart: llrm-qb refu
+                ses a local
+ 0030   0006    ' STRING array for QB 4.5 and PDS 7.1.
+ 0030   0006    '$include: 'CC.BI'
+ 0030   0006    ' Shared by every module. Callees and callers keep what arrived
+                 and what
+ 0030   0006    ' came back in PROBE.ASM's slots (put*); the harness reads them
+                 (getB).
+ 0030   0006    type Rec
+ 0030   0006        a as integer
+ 0030   0006        b as long
+ 0030   0006        c as double
+ 0030   0006        s as string * 4
+ 0030   0006    end type
+ 0030   0006    
+ 0030   0006    ' PROBE.ASM
+ 0030   0006    declare sub trash ()
+ 0030   0006    declare sub arm ()
+ 0030   0006    declare sub verify (byval k as integer)
+ 0030   0006    declare sub armX ()
+ 0030   0006    declare sub verifyX (byval k as integer)
+ 0030   0006    declare sub badRegs ()
+ 0030   0006    declare function probeMask% (byval k as integer)
+ 0030   0006    declare sub putI (byval k as integer, byval v as integer)
+ 0030   0006    declare sub putL (byval k as integer, byval v as long)
+ 0030   0006    declare sub putF (byval k as integer, byval v as single)
+ 0030   0006    declare sub putD (byval k as integer, byval v as double)
+ 0030   0006    declare sub putC (byval k as integer, byval i as integer, byval
+                 c as integer)
+ 0030   0006    declare function getB% (byval k as integer, byval i as integer)
+ 0030   0006    declare sub recVal (byval a as integer, byval b as long, byval 
+                c as single, byval d as double)
+ 0030   0006    declare sub recSeg (seg a as integer, seg b as double)
+ 0030   0006    declare sub recCdl cdecl (byval a as integer, byval b as long, 
+                byval c as double)
+ 0030   0006    declare function aInt% ()
+ 0030   0006    declare function aLng& ()
+ 0030   0006    declare function aSng! ()
+ 0030   0006    declare function aDbl# ()
+ 0030   0006    declare sub keepDesc (s as string)
+ 0030   0006    declare function aStr$ ()
+ 0030   0006    declare function xInt% cdecl ()
+ 0030   0006    declare function xLng& cdecl ()
+ 0030   0006    declare function xSng! cdecl ()
+ 0030   0006    declare function xDbl# cdecl ()
+ 0030   0006    
+ 0030   0006    ' CE.BAS
+ 0030   0006    declare sub pInt (h as integer, v as integer, t as integer)
+ 0030   0006    declare sub pLng (h as integer, v as long, t as integer)
+ 0030   0006    declare sub pSng (h as integer, v as single, t as integer)
+ 0030   0006    declare sub pDbl (h as integer, v as double, t as integer)
+ 0030   0006    declare sub pStr (h as integer, v as string, t as integer)
+ 0030   0006    declare sub pFix (h as integer, v as string, t as integer)
+ 0030   0006    declare sub pRec (h as integer, v as Rec, t as integer)
+                                                                      PAGE   2
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0030   0006    declare sub pArrI (h as integer, v() as integer, t as integer)
+ 0030   0006    declare sub pArrS (h as integer, v() as string, t as integer)
+ 0030   0006    declare sub pMix (a as integer, b as long, c as single, d as do
+                uble, e as string, f as integer)
+ 0030   0006    declare sub sVoid ()
+ 0030   0006    declare function rInt% (h as integer)
+ 0030   0006    declare function rLng& (h as integer)
+ 0030   0006    declare function rSng! (h as integer)
+ 0030   0006    declare function rDbl# (h as integer)
+ 0030   0006    declare sub ceStr (k as integer, s as string)
+ 0030   0006    
+ 0030   0006    ' CES.BAS
+ 0030   0006    declare function rStr$ (h as integer)
+ 0030   0006    
+ 0030   0006    ' CR.BAS, CRS.BAS
+ 0030   0006    declare sub callAll ()
+ 0030   0006    declare sub crStr (k as integer, s as string)
+ 0030   0006    declare sub callStrs ()
+ 0030   0006    
+ 0030   0006    '$include: 'CUR.BI'
+ 0030   0006    ' CURRENCY cases: PDS 7.1 and VBDOS. QB 4.5 includes the empty 
+                qb45/ copy.
+ 0030   0006    declare sub putY (byval k as integer, byval v as currency)
+ 0030   0006    declare sub pCur (h as integer, v as currency, t as integer)
+ 0030   0006    declare function rCur@ (h as integer)
+ 0030   0006    '$include: 'V71.BI'
+ 0030   0006    ' BYVAL and SEG in a SUB definition: PDS 7.1 and VBDOS. QB 4.5 
+                includes the
+ 0030   0006    ' empty qb45/ copy.
+ 0030   0006    declare sub pByv (byval h as integer, byval v as long, byval s 
+                as single, byval d as double, byval t as integer)
+ 0030   0006    declare sub pSegd (h as integer, seg v as integer, t as integer
+                )
+ 0030   0006    
+ 0030   0006    sub callStrs
+ 0030    **        I00002:   jmp     I00003
+ 0033    **        CALLSTRS: mov     cx,0000h
+ 0036    **                  call    B$ENRA
+ 003B   0006        dim st as string, ss(0 to 2) as string
+ 003B    **                  push    00h
+ 003D    **                  push    02h
+ 003F    **                  push    04h
+ 0041    **                  push    8001h
+ 0044    **                  lea     ax,0D8h[bp]
+ 0047    **                  push    ax
+ 0048    **                  call    B$DDIM
+ 004D   0006    
+ 004D   0006        ss(0) = "a": ss(1) = "bb": ss(2) = "ccc"
+ 004D   0006        call arm: pArrS &H1111, ss(), &H2222: verify 9
+ 004D    **                  push    offset <const>
+ 0050    **                  lea     si,0D8h[bp]
+ 0053    **                  xor     bx,bx
+ 0055    **                  add     bx,0Ah[si]
+ 0058    **                  push    bx
+                                                                      PAGE   3
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0059    **                  call    B$SASS
+ 005E    **                  push    offset <const>
+ 0061    **                  lea     si,0D8h[bp]
+ 0064    **                  mov     bx,0004h
+ 0067    **                  add     bx,0Ah[si]
+ 006A    **                  push    bx
+ 006B    **                  call    B$SASS
+ 0070    **                  push    offset <const>
+ 0073    **                  lea     si,0D8h[bp]
+ 0076    **                  mov     bx,0008h
+ 0079    **                  add     bx,0Ah[si]
+ 007C    **                  push    bx
+ 007D    **                  call    B$SASS
+ 0082    **                  call    ARM
+ 0087    **                  mov     0D6h[bp],1111h
+ 008C    **                  mov     0D4h[bp],2222h
+ 0091    **                  lea     ax,0D6h[bp]
+ 0094    **                  push    ax
+ 0095    **                  lea     ax,0D8h[bp]
+ 0098    **                  push    ax
+ 0099    **                  lea     ax,0D4h[bp]
+ 009C    **                  push    ax
+ 009D    **                  call    PARRS
+ 00A2    **                  push    09h
+ 00A4    **                  call    VERIFY
+ 00A9   0006        crStr 49, ss(1)
+ 00A9    **                  mov     0D2h[bp],0031h
+ 00AE    **                  lea     si,0D8h[bp]
+ 00B1    **                  mov     bx,0004h
+ 00B4    **                  add     bx,0Ah[si]
+ 00B7    **                  push    bx
+ 00B8    **                  lea     ax,0CEh[bp]
+ 00BB    **                  push    ax
+ 00BC    **                  call    B$SASS
+ 00C1    **                  lea     ax,0D2h[bp]
+ 00C4    **                  push    ax
+ 00C5    **                  lea     ax,0CEh[bp]
+ 00C8    **                  push    ax
+ 00C9    **                  call    CRSTR
+ 00CE    **                  lea     ax,0CEh[bp]
+ 00D1    **                  push    ax
+ 00D2    **                  lea     si,0D8h[bp]
+ 00D5    **                  mov     bx,0004h
+ 00D8    **                  add     bx,0Ah[si]
+ 00DB    **                  push    bx
+ 00DC    **                  call    B$SASF
+ 00E1    **                  lea     ax,0CEh[bp]
+ 00E4    **                  push    ax
+ 00E5    **                  call    B$STDL
+ 00EA   0006        call arm: st = rStr$(&H3333): verify 24
+ 00EA    **                  call    ARM
+ 00EF    **                  mov     0CCh[bp],3333h
+ 00F4    **                  lea     ax,0CCh[bp]
+ 00F7    **                  push    ax
+                                                                      PAGE   4
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 00F8    **                  call    RSTR$
+ 00FD    **                  push    ax
+ 00FE    **                  lea     ax,0C8h[bp]
+ 0101    **                  push    ax
+ 0102    **                  call    B$SASS
+ 0107    **                  lea     ax,0C8h[bp]
+ 010A    **                  push    ax
+ 010B    **                  lea     ax,0EAh[bp]
+ 010E    **                  push    ax
+ 010F    **                  call    B$SASS
+ 0114    **                  push    18h
+ 0116    **                  call    VERIFY
+ 011B   0006        crStr 66, st
+ 011B    **                  mov     0C6h[bp],0042h
+ 0120    **                  lea     ax,0C6h[bp]
+ 0123    **                  push    ax
+ 0124    **                  lea     ax,0EAh[bp]
+ 0127    **                  push    ax
+ 0128    **                  call    CRSTR
+ 012D   0006    end sub
+ 012D    **        I00004:   lea     ax,0C8h[bp]
+ 0130    **                  push    ax
+ 0131    **                  call    B$STDL
+ 0136    **                  lea     ax,0CEh[bp]
+ 0139    **                  push    ax
+ 013A    **                  call    B$STDL
+ 013F    **                  lea     ax,0D8h[bp]
+ 0142    **                  push    ax
+ 0143    **                  call    B$ERAS
+ 0148    **                  lea     ax,0EAh[bp]
+ 014B    **                  push    ax
+ 014C    **                  call    B$STDL
+ 0151    **                  call    B$EXSA
+ 0156    **                  ret     0000h
+ 0159   0006    
+ 0159    **        I00003:   call    B$CENP
+ 015E   0006    
+
+45994 Bytes Available
+42292 Bytes Free
+
+    0 Warning Error(s)
+    0 Severe  Error(s)

@@ -30,3 +30,6 @@ mod test_runtime_model;
 mod test_pipeline;
 #[cfg(test)]
 mod test_cellmap;
+
+#[cfg(test)]
+mod callconv_tests;

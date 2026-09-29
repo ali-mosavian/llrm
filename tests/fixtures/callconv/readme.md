@@ -24,3 +24,18 @@ what came back.
 
 `cargo test --release -p llrm-c --features toolchain callconv` runs the
 unit level.
+
+## BASIC (`bas/`)
+
+`CE`/`CES` are callees, `CR`/`CRS` callers, `HN` the harness; `CUE`
+(CURRENCY) and `CVE` (BYVAL and SEG in a definition) are PDS 7.1's and
+VBDOS's only, and QB 4.5 includes the empty `qb45/` copies of their `.BI`
+files. `PROBE.ASM` holds the register probe, a CDECL and a pascal asm
+callee, and the slots the modules keep values in (llrm-qb refuses COMMON).
+
+- `bc/<dialect>/` is BC's `/A` listings, rebuilt by
+  `tools/callconv/basref.sh`; `reference.txt` and `known.txt` as for C.
+- `tools/callconv/bas.sh <dialect> <dir>` builds and runs the four
+  directions under dosrun (see its header).
+
+`cargo test --release -p llrm-qb callconv` runs the unit level.
