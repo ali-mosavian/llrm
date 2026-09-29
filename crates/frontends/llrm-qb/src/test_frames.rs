@@ -72,3 +72,19 @@ fn own_frames_locals_still_start_at_zero() {
         }
     }
 }
+
+
+/// Zeroed a word store at a time, qbdemo's PLASMA grew 38 stores for four
+/// local array descriptors, and the demo 10% more code, where B$ENRA had
+/// cleared the frame in one call.
+#[test]
+fn own_frames_clear_zeroed_aggregates_in_one_fill() {
+    let source = "SUB s (n AS INTEGER)\nDIM a(n) AS INTEGER, b(n) AS LONG, c(n) AS SINGLE, d(n, n) AS INTEGER\n\
+        a(0) = 1: b(0) = 2: c(0) = 3: d(0, 0) = 4\nPRINT a(0); b(0); c(0); d(0, 0)\nEND SUB\n";
+    for (dialect, runtime) in DIALECTS {
+        let own = procedure(source, dialect, runtime, true, "S");
+        let entry = own.split("call far ptr").next().expect("a call");
+        assert_eq!(entry.matches("rep stosd").count(), 1, "{dialect}: {own}");
+        assert!(!entry.contains("mov word ptr [bp") && !entry.contains("mov dword ptr [bp"), "{dialect}: {own}");
+    }
+}
