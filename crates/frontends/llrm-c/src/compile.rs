@@ -1503,6 +1503,17 @@ mod tests {
         assert!(!body.iter().any(|one| one.contains("ptr e") && one.contains("x:")), "{body:#?}");
     }
 
+    /// A crowded x87 compare shares its source position with its branches;
+    /// the spill victim was looked for at the last branch, where nothing is
+    /// live, and qb-qrender's d_faces.c was refused.
+    #[test]
+    fn test_floats_crowding_a_compare_before_its_branches_spill() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/x87crowd.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "x87crowd", None, &llrm_core::driver::Options::of(machine));
+        assert!(built.is_ok(), "{:?}", built.err());
+    }
+
     /// Watcom types a void function as an int whose returns give none;
     /// raised as `ret i16 poison`, isel refused all of qmove.
     #[test]
