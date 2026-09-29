@@ -36,3 +36,30 @@ fn test_a_struct_result_pointer_is_written_through() {
     assert_eq!(written[..2], [Byte::Global("_in".into(), 0), Byte::Global("_in".into(), 1)]);
     assert_eq!(one.register("dxax"), (4..8).map(Byte::Incoming).collect::<Vec<_>>());
 }
+
+/// A BC /A listing of one SUB, its code lines as `**` rows.
+fn bc_listing(compiler: &str, code: &[&str]) -> String {
+    let rows: String = code.iter().map(|one| format!(" 0000    **                  {one}\n")).collect();
+    format!("Offset  Data    Source Line      Microsoft (R) {compiler}\n 0030   0006    sub f (x as integer)\n 0030    **        F:        mov     cx,0000h\n{rows}")
+}
+
+/// BC writes -208 as 0FF30h[bp]; read as +65328 it put callAll's
+/// temporaries above the frame and every value pushed from them read as
+/// an argument.
+#[test]
+fn test_a_bc_displacement_is_sixteen_bits_signed() {
+    let text = bc_listing("Visual Basic", &["call    B$ENRA", "mov     word ptr [bp-208],1234h", "push    0FF30h[bp]", "call    G", "call    B$EXSA", "ret     0002h"]);
+    let one = super::boundary::procedures(&text).remove("F").unwrap();
+    assert_eq!(one.calls[0].stack, [Byte::Const(0x34), Byte::Const(0x12)]);
+}
+
+/// QB 4.5 and PDS list a pool constant in memory order, VBDOS as its value;
+/// read one way for all, QB 4.5's SINGLE 1.5 read as 0000C03F.
+#[test]
+fn test_each_compiler_spells_its_constants_its_own_way() {
+    for (compiler, constant) in [("Visual Basic", "<3FC00000>"), ("QuickBASIC Compiler Version 4.50", "<0000C03F>")] {
+        let text = bc_listing(compiler, &["call    B$ENRA", &format!("push    {constant}"), &format!("push    {constant}"), "call    G", "call    B$EXSA", "ret     0002h"]);
+        let one = super::boundary::procedures(&text).remove("F").unwrap();
+        assert_eq!(one.calls[0].stack, [0x00, 0x00, 0xC0, 0x3F].map(Byte::Const), "{compiler}");
+    }
+}
