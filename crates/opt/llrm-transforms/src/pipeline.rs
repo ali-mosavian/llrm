@@ -140,7 +140,7 @@ impl Options {
             "strength" | "zeroed" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "fill" => self.fill,
+            "fill" | "merge" => self.fill,
             _ => true,
         }
     }
@@ -191,6 +191,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill),
         Box::new(indvars::CountToZero),
+        Box::new(fill::Merge),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -277,6 +278,8 @@ pub struct Fixed {
     passes: Vec<Box<dyn FunctionPass>>,
     unrollers: Vec<Box<dyn FunctionPass>>,
     peelers: Vec<Box<dyn FunctionPass>>,
+    /// Once, after everything else.
+    last: Vec<Box<dyn FunctionPass>>,
     unswitch: Option<unswitch::Unswitch>,
     only: bool,
     dump: Option<PathBuf>,
@@ -298,13 +301,14 @@ impl Fixed {
         let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
         let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
+        let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "merge");
         // A candidate is judged after the whole pipeline, unswitching off.
         let unswitch = applied.options.unswitch.then(|| {
             let options = Options { unswitch: false, ..applied.options.clone() };
             let reoptimize = Applied { options, only: None, dump: None, ..applied.clone() };
             unswitch::Unswitch { passes: vec![Box::new(Fixed::new(&reoptimize))] }
         });
-        Self { boundary, passes, unrollers, peelers, unswitch, only: only.is_some(), dump: applied.dump.clone(), runs: 0 }
+        Self { boundary, passes, unrollers, peelers, last, unswitch, only: only.is_some(), dump: applied.dump.clone(), runs: 0 }
     }
 
     fn transacted(&mut self, unit: &mut Unit, analyses: &mut Analyses, run: &mut Run) -> Result<(), String> {
@@ -337,6 +341,10 @@ impl Fixed {
         }
         if let Some(unswitch) = &mut self.unswitch {
             run.step(unswitch, "unswitch", unit, analyses);
+        }
+        for one in &mut self.last {
+            let stage = one.name();
+            run.step(&mut **one, stage, unit, analyses);
         }
         Ok(run.settled(unit, analyses))
     }

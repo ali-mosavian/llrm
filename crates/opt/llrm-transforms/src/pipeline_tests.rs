@@ -105,6 +105,52 @@ b3:
     }
 }
 
+/// Zero stores merged into a memset mid-pipeline left a call in the loop
+/// that loop motion could not see past: nbodys' `accX = 0: accY = 0` kept
+/// posY's loads in its inner loop, 1.9% more instructions. The merge waits
+/// for the scalar passes.
+#[test]
+fn zeros_stored_in_a_loop_leave_its_invariant_loads_hoisted() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@acc = internal global [2 x i16] zeroinitializer
+@g = internal global [4 x i16] zeroinitializer
+
+declare void @print(i16) nocallback
+
+define void @main(i16 %n, i16 %m) {{
+b0:
+  %next = getelementptr i16, ptr @acc, i16 1
+  %w = getelementptr i16, ptr @g, i16 %n
+  store i16 %n, ptr %w
+  %r = getelementptr i16, ptr @g, i16 %m
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  store i16 0, ptr @acc
+  store i16 0, ptr %next
+  %v = load i16, ptr %r
+  call void @print(i16 %v)
+  %j = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    let text = llrm_mir::print::module(&module);
+    let body = &text[text.find("b2:").expect("the loop")..];
+    let body = &body[..body.find("br i1").expect("its latch")];
+    assert!(!body.contains("load"), "{text}");
+}
+
 /// matmul8's init: an inner loop branching on `i == j` is peeled, then its
 /// outer loop, which decides every branch. Peel ran once per body, so the
 /// outer loop stayed rolled around eight undecided diamonds.

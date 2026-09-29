@@ -25,6 +25,9 @@
 //!   divisions, which trap.
 //!
 //! llrm-mir has no idiom pass.
+//!
+//! Straight-line stores of one repeated byte to adjacent bytes of one
+//! object are one memset too: LLVM's MemCpyOpt, `tryMergingIntoMemset`.
 
 use std::collections::BTreeSet;
 
@@ -57,6 +60,157 @@ impl FunctionPass for Fill {
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         if filled(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
+}
+
+/// The straight-line fills, once the scalar passes have settled: no pass
+/// asks a memset what a cell holds, so merged sooner a store's value is
+/// lost to the forwarding after it. LLVM merges stores in codegen, too.
+pub struct Merge;
+
+impl FunctionPass for Merge {
+    fn name(&self) -> &'static str {
+        "merge"
+    }
+
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        if merged(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// One store a merge may take: its object's address, the bytes it covers
+/// there, the byte it repeats, its pointer.
+struct _Cell {
+    store: InstId,
+    /// Its place in its block.
+    order: usize,
+    root: Operand,
+    low: i64,
+    high: i64,
+    byte: u128,
+    pointer: Operand,
+}
+
+/// `function` with each run of at least two straight-line stores of one
+/// repeated byte to adjacent bytes of one object made one memset where the
+/// last of them stood; whether any was. Between them only work that touches
+/// no memory, and stores to other bytes, may stand.
+pub fn merged(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, declared: &mut Declared) -> bool {
+    let mut runs: Vec<(Vec<_Cell>, u32, u32)> = Vec::new();
+    {
+        let unit = Unit::within(context, layout, function, outer);
+        for block in function.layout() {
+            let mut open: Vec<_Cell> = Vec::new();
+            for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
+                if let Some(cell) = _cell(&unit, inst, order) {
+                    open.push(cell);
+                } else if !_pure(unit.context, callees, function, inst) || matches!(function.instruction(inst).opcode, Opcode::Store { .. }) {
+                    runs.extend(_adjacent(&unit, std::mem::take(&mut open)));
+                }
+            }
+            runs.extend(_adjacent(&unit, open));
+        }
+    }
+    for (run, space, width) in &runs {
+        let length: i64 = run.iter().map(|one| one.high - one.low).sum();
+        let (callee, function_type) = _memset(context, declared, *space, *width);
+        let ty = context.types.ptr(0);
+        let callee = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Global(callee) }));
+        let byte = counting::constant(context, &BigInt::from(run[0].byte), 8);
+        let count = counting::constant(context, &BigInt::from(length), *width);
+        let off = counting::constant(context, &BigInt::from(0), 1);
+        let void = context.types.void();
+        let info = CallInfo { function_type, calling_convention: 0, return_attrs: Vec::new(), argument_attrs: vec![Vec::new(); 4], attrs: Vec::new(), tail: Default::default() };
+        let lowest = run.iter().min_by_key(|one| one.low).expect("a run has stores");
+        let last = run.iter().max_by_key(|one| one.order).expect("a run has stores").store;
+        let call = function.create_instruction(Opcode::Call(Box::new(info)), void, vec![lowest.pointer, byte, count, off, callee], Flags::default(), None);
+        function.insert(call, Position::Before(last)).expect("a placed store");
+        for one in run {
+            function.erase(one.store).expect("a store has no result");
+        }
+    }
+    !runs.is_empty()
+}
+
+/// The store `inst` is, where it writes one repeated byte at a constant
+/// displacement in an object.
+fn _cell(unit: &Unit, inst: InstId, order: usize) -> Option<_Cell> {
+    let op = unit.function.instruction(inst);
+    let Opcode::Store { volatile: false, .. } = op.opcode else { return None };
+    let (value, pointer) = (op.operands[0], op.operands[1]);
+    let width = unit.int_bits(value)?;
+    let byte = _repeated(unit, value, width)?;
+    let reference = MemRef::at(unit, pointer, width / 8);
+    let root = reference.root.filter(|_| reference.object && reference.base.is_none() && reference.segment.is_none())?;
+    Some(_Cell { store: inst, order, root, low: reference.disp, high: reference.disp + i64::from(width / 8), byte, pointer })
+}
+
+/// Whether `run` is better one memset, as LLVM's `isProfitableToUseMemset`
+/// judges: four stores or 16 bytes are; fewer only where the memset needs
+/// fewer stores of the widest native integer, `widest` bytes, since the
+/// code generator pairs stores itself.
+fn _profitable(run: &[_Cell], widest: i64) -> bool {
+    let bytes: i64 = run.iter().map(|one| one.high - one.low).sum();
+    if run.len() >= 4 || bytes >= 16 {
+        return true;
+    }
+    run.len() > 1 && run.len() as i64 > bytes / widest + bytes % widest
+}
+
+/// The byte `value`, `width` bits of one byte repeated, is made of.
+fn _repeated(unit: &Unit, value: Operand, width: u32) -> Option<u128> {
+    if width % 8 != 0 || width == 0 {
+        return None;
+    }
+    let bits = unit.int_constant(value)?;
+    let byte = bits & 0xFF;
+    (0..width / 8).all(|at| (bits >> (8 * at)) & 0xFF == byte).then_some(byte)
+}
+
+/// The runs `open`'s stores make: those of one object and byte that tile
+/// its bytes without a gap, where no other store in `open` touches them.
+fn _adjacent(unit: &Unit, open: Vec<_Cell>) -> Vec<(Vec<_Cell>, u32, u32)> {
+    let mut objects: Vec<Vec<_Cell>> = Vec::new();
+    for cell in open {
+        match objects.iter_mut().find(|object| object[0].root == cell.root) {
+            Some(object) => object.push(cell),
+            None => objects.push(vec![cell]),
+        }
+    }
+    // Two stores to one byte keep their order: leave the object alone.
+    let mut groups: Vec<Vec<_Cell>> = Vec::new();
+    for mut object in objects {
+        object.sort_by_key(|one| one.low);
+        if object.windows(2).any(|pair| pair[1].low < pair[0].high) {
+            continue;
+        }
+        // A near and a far pointer to one object are two memsets' operands.
+        for cell in object {
+            match groups.iter_mut().find(|group| group[0].root == cell.root && unit.space(group[0].pointer) == unit.space(cell.pointer)) {
+                Some(group) => group.push(cell),
+                None => groups.push(vec![cell]),
+            }
+        }
+    }
+    let mut runs = Vec::new();
+    for group in groups {
+        let Some(space) = unit.space(group[0].pointer) else { continue };
+        let width = unit.layout.pointer(space).index_bits;
+        let widest = i64::from(unit.layout.largest_legal_integer() / 8).max(1);
+        let mut run: Vec<_Cell> = Vec::new();
+        for cell in group {
+            if run.last().is_some_and(|last| last.high != cell.low || last.byte != cell.byte) {
+                if _profitable(&run, widest) {
+                    runs.push((std::mem::take(&mut run), space, width));
+                }
+                run.clear();
+            }
+            run.push(cell);
+        }
+        if _profitable(&run, widest) {
+            runs.push((run, space, width));
+        }
+    }
+    runs
 }
 
 /// `function` with every such loop's body made one fill; whether any was.
@@ -280,12 +434,7 @@ fn _stored(unit: &Unit, callees: &Callees, effect: InstId, still: &induction::In
     if width == 8 {
         return Some((pointer, Byte::Operand(value), bytes));
     }
-    let bits = unit.int_constant(value)?;
-    let byte = bits & 0xFF;
-    if (0..width / 8).any(|at| (bits >> (8 * at)) & 0xFF != byte) {
-        return None;
-    }
-    Some((pointer, Byte::Number(byte), bytes))
+    Some((pointer, Byte::Number(_repeated(unit, value, width)?), bytes))
 }
 
 /// The header phi `inst` steps, if it is one's step: a constant added, the
