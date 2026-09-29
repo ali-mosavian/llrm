@@ -176,7 +176,9 @@ impl Type {
 
 str_enum!(Storage {
     Local("LOCAL") = "local",
-    // A parameter's incoming stack slot; `symbol` is the parameter's value.
+    // A variadic function's parameter, in the memory its arguments were
+    // passed in: `offset` bytes from its first variadic argument, `symbol`
+    // the parameter's value.
     Parameter("PARAMETER") = "parameter",
     Static("STATIC") = "static",
     Module("MODULE") = "module",
@@ -543,6 +545,8 @@ pub struct ProcedureAbi {
     pub distance: CallDistance,
     pub parameter_bytes: i64,
     pub float_return: FloatReturn,
+    /// It takes arguments past its parameters, as C's `...` does.
+    pub variadic: bool,
 }
 
 impl ProcedureAbi {

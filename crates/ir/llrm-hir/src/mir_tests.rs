@@ -35,7 +35,7 @@ fn a_function_becomes_its_llvm_ir() {
 fn a_call_repeats_its_callees_convention() {
     use crate::model::{CallAbi, CallDistance, FloatReturn, ProcedureAbi, StackCleanup};
     let mut function = difference();
-    function.abi = Some(ProcedureAbi { cleanup: StackCleanup::Callee, distance: CallDistance::Far, parameter_bytes: 4, float_return: FloatReturn::Pointer });
+    function.abi = Some(ProcedureAbi { cleanup: StackCleanup::Callee, distance: CallDistance::Far, parameter_bytes: 4, float_return: FloatReturn::Pointer, variadic: false });
     let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]);
     call.callee = Some("B$NEAR".to_owned());
     function.values.push(Value { id: 4, r#type: 1 });

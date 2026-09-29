@@ -346,6 +346,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         flagged: BTreeSet::new(),
         pool,
         unsealed: false,
+        variadic: None,
     };
     let body = selector.body(name, &convention)?;
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
@@ -461,26 +462,17 @@ struct Selector<'m, 'c, 'p> {
     pool: &'p mut Pool,
     /// The body addresses an argument's own slot.
     unsealed: bool,
+    /// Where the first variadic argument is, by its displacement from BP:
+    /// past the last parameter's slot.
+    variadic: Option<i64>,
 }
 
 impl Selector<'_, '_, '_> {
-    /// `inst`'s address and the argument slot it names, if it is
-    /// `llrm.ia16.argument`.
-    fn argument_slot(&self, inst: InstId, convention: &Convention) -> Option<(ValueId, i64)> {
-        let instruction = self.function.instruction(inst);
-        let Opcode::Call(_) = instruction.opcode else { return None };
-        let [Operand::Constant(index), Operand::Constant(callee)] = instruction.operands[..] else { return None };
-        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-        let name = self.module.global(global).name.as_deref()?;
-        if !llrm_mir::intrinsics::is_reserved(name) || Intrinsic::named(name) != Some(Intrinsic::Argument) {
-            return None;
-        }
-        let ConstantKind::Int(index) = self.module.context.get(index).kind else { return None };
-        Some((instruction.result?, *convention.parameters.get(index as usize)?))
-    }
-
     fn body(&mut self, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
         let function = self.function;
+        if let (Some(&last), Some(&disp)) = (function.parameters().last(), convention.parameters.last()) {
+            self.variadic = Some(disp + slot(size_of(self.module, &self.layout, function.value(last).ty)?));
+        }
         // Only what execution can reach is selected, as LLVM's code generator
         // drops unreachable blocks.
         // A landing pad is entered by the runtime, not by an edge.
@@ -509,11 +501,6 @@ impl Selector<'_, '_, '_> {
                     if llrm_analysis::frameescape::exposes(function, address) {
                         reach.insert((-self.depth, -self.depth + size));
                     }
-                }
-                if let Some((address, disp)) = self.argument_slot(inst, convention) {
-                    // An argument's own slot, addressed: its cells are no longer sealed.
-                    self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
-                    self.unsealed = true;
                 }
             }
         }
@@ -1253,6 +1240,18 @@ impl Selector<'_, '_, '_> {
                 Ok(held)
             }
         }
+    }
+
+    /// `llvm.va_start`: the list made to point at the first variadic
+    /// argument, which leaves the argument slots addressable.
+    fn va_start(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let Some(disp) = self.variadic else { return refuse("va_start with no parameter before the variadic arguments") };
+        self.unsealed = true;
+        let held = Held { value: self.fresh(), width: 2 };
+        out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1 }, held)));
+        let list = self.pointer(arguments[0])?;
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(list, 2))], vec![Loc::Held(held)])));
+        Ok(())
     }
 
     /// `held` made the address `pointer` names.
@@ -2078,8 +2077,7 @@ impl Selector<'_, '_, '_> {
                 Some(intrinsic @ (Intrinsic::PortIn | Intrinsic::PortOut)) => self.port(intrinsic == Intrinsic::PortIn, inst, arguments, at, out),
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 Some(Intrinsic::Code) => self.inline_code(inst, convention, name, arguments, at, out),
-                // Its address is a frame cell, folded where it is used.
-                Some(Intrinsic::Argument) => Ok(()),
+                Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 _ => refuse(format!("@{name}")),
             };
         }

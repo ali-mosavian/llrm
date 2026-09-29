@@ -30,10 +30,9 @@ pub enum Intrinsic {
     PortIn,
     /// A value written to an I/O port.
     PortOut,
-    /// The address of the incoming stack slot of the parameter its
-    /// constant argument numbers: where a C parameter whose address is
-    /// taken lives, as Borland's `va_start` expects.
-    Argument,
+    /// `llvm.va_start`: the list its argument points to made to point at
+    /// the calling function's first variadic argument.
+    VaStart,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -238,13 +237,13 @@ const TABLE: [Spec; 28] = [
         memory: PORT_MEMORY,
     },
     Spec {
-        name: "llrm.ia16.argument",
-        intrinsic: Intrinsic::Argument,
+        name: "llvm.va_start",
+        intrinsic: Intrinsic::VaStart,
         overloads: &[Kind::Pointer],
-        returns: Slot::Any(0),
-        parameters: &[(Slot::Int(16), &["immarg"])],
-        attrs: PURE,
-        memory: NO_MEMORY,
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &[])],
+        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "readwrite")],
     },
     Spec {
         name: "llrm.ia16.out",

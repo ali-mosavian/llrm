@@ -220,6 +220,9 @@ impl _Plain for model::ProcedureAbi {
         out.insert("distance".to_owned(), self.distance._plain());
         out.insert("parameter_bytes".to_owned(), self.parameter_bytes._plain());
         float_return(&mut out, self.float_return);
+        if self.variadic {
+            out.insert("variadic".to_owned(), self.variadic._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1049,6 +1052,7 @@ static PROCEDURE_ABI: _Record = _Record {
         ("distance", enum_hint!(CallDistance), true),
         ("parameter_bytes", _Hint::Int, true),
         ("float_return", enum_hint!(FloatReturn), false),
+        ("variadic", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::ProcedureAbi {
@@ -1056,6 +1060,7 @@ static PROCEDURE_ABI: _Record = _Record {
             distance: _required(args, "distance")?,
             parameter_bytes: _required(args, "parameter_bytes")?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
+            variadic: _default(args, "variadic", false)?,
         })
     },
 };
