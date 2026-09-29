@@ -225,8 +225,14 @@ pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result
         }
         std::fs::write(dump, &stdout).map_err(|error| FrontendError(error.to_string()))?;
     }
+    decoded(&stdout)
+}
+
+/// The program qbfront's HIR text `text` states, with what the runtime
+/// adds: its entry, and what its routines promise.
+pub fn decoded(text: &str) -> Result<model::Program, FrontendError> {
     let mut program =
-        codec::decode(&stdout).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
+        codec::decode(text).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
     let family = program.runtime.value();
     for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
         if object_.linkage == model::DataLinkage::External && llrm_core::abi::runtime::named_only(&object_.name, family) {
