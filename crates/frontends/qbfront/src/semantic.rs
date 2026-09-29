@@ -5845,10 +5845,12 @@ impl Compiler {
         Ok(Operand::Value(result))
     }
 
+    /// A STRING argument by reference; a fixed-length lvalue's place and
+    /// type too, which BC assigns back from the temporary after the call.
     fn byref_string_argument(
         &mut self,
         expression: &Expr,
-    ) -> Result<(Operand, Passing), SemanticError> {
+    ) -> Result<(Operand, Passing, Option<(Operand, u32)>), SemanticError> {
         // A genuine dynamic STRING lvalue already owns a stable descriptor,
         // so ordinary BYREF aliasing passes that descriptor directly. A
         // literal, fixed string, concatenation, or string-function result is
@@ -5875,10 +5877,10 @@ impl Compiler {
             Expr::Field { .. } | Expr::Index { .. } => Some(self.destination(expression)?),
             _ => None,
         };
-        if let Some((place, type_id)) = lvalue {
-            if self.string_width(type_id) == Some(0) {
-                let passing = self.passed(&place);
-                return Ok((self.near_string_address(place), passing));
+        if let Some((place, type_id)) = &lvalue {
+            if self.string_width(*type_id) == Some(0) {
+                let passing = self.passed(place);
+                return Ok((self.near_string_address(place.clone()), passing, None));
             }
         }
 
@@ -5886,7 +5888,7 @@ impl Compiler {
         let temporary = self.owned_string_temporary()?;
         let destination = self.near_string_address(Operand::Place(temporary));
         self.emit_runtime_call("B$SASS", Vec::new(), vec![source, destination.clone()]);
-        Ok((destination, Passing::Temporary))
+        Ok((destination, Passing::Temporary, lvalue))
     }
 
     /// Each dimension's lower and upper bound, evaluated where the DIM or
@@ -7614,6 +7616,7 @@ impl Compiler {
         let mut operands = Vec::new();
         let mut passing = Vec::new();
         let mut string_cleanups = Vec::new();
+        let mut string_copybacks = Vec::new();
         let mut byref_copybacks = Vec::new();
         for (argument, (parameter_type, by_value, segmented, array)) in
             arguments.iter().zip(&signature.parameters)
@@ -7678,9 +7681,12 @@ impl Compiler {
                     passing.push(Passing::Value);
                     self.string_descriptor(argument)?
                 } else {
-                    let (operand, passed) = self.byref_string_argument(argument)?;
+                    let (operand, passed, fixed) = self.byref_string_argument(argument)?;
                     let cleanup = passed == Passing::Temporary;
                     passing.push(passed);
+                    if let Some(fixed) = fixed {
+                        string_copybacks.push((fixed, operand.clone()));
+                    }
                     if cleanup {
                         string_cleanups.push(operand.clone());
                     }
@@ -7873,6 +7879,19 @@ impl Compiler {
                     vec![destination, Operand::Value(value)],
                 );
             }
+        }
+        // A fixed-length string passed by reference goes as a STRING copy,
+        // which BC assigns back to it with B$ASSN after the call.
+        for ((destination, destination_type), descriptor) in string_copybacks.into_iter().rev() {
+            let width = self.string_width(destination_type).expect("a fixed-length string");
+            let target = self.far_address(destination, destination_type);
+            let source = self.far_descriptor(descriptor)?;
+            self.emit_runtime_call(
+                "B$ASSN",
+                Vec::new(),
+                vec![source, Operand::Constant(INTEGER, Number::Integer(0)), Operand::Value(target), Operand::Constant(INTEGER, Number::Integer(width as i64))],
+            );
+            self.filled(2, width);
         }
         // BC ends the lifetime of each descriptor it materialized solely for
         // this source call. B$STDL clears that owned descriptor without heap

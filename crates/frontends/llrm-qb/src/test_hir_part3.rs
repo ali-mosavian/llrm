@@ -2668,3 +2668,17 @@ fn test_the_listing_is_the_code_the_object_holds() {
     let keep = between(&text, "KEEP proc far", "KEEP endp");
     assert!(!keep.contains("push bp") && !keep.contains("pop bp") && keep.contains("call far ptr B$ENRA"), "{keep}");
 }
+
+/// A fixed-length string passed to a STRING parameter goes as a copy that BC
+/// assigns back with B$ASSN after the call; llrm-qb only released the copy,
+/// so pFix's caller kept 'abcdef' where the callee wrote 'XY'.
+#[test]
+fn test_a_fixed_length_argument_is_assigned_back_after_the_call() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "fixback.bas", b"DECLARE SUB Fill (s AS STRING)\nDIM f AS STRING * 6\nf = \"abcdef\"\nFill f\nPRINT f\nSUB Fill (s AS STRING)\ns = \"XY\"\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
+    let text = rich_listing(&program);
+    let after = &text[text.find("call far ptr FILL").expect("the call")..];
+    let assigned = after.find("call far ptr B$ASSN").expect("an assignment back");
+    assert!(after.find("call far ptr B$STDL").is_none_or(|released| assigned < released), "{after}");
+}
