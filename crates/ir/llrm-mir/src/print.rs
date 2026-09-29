@@ -114,7 +114,7 @@ fn global_names(module: &Module) -> Vec<String> {
 /// else the hex of its bits as a double.
 fn float(kind: FloatKind, bits: u64) -> String {
     let value = match kind {
-        FloatKind::Double => f64::from_bits(bits),
+        FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
     };
     if value.is_finite() {

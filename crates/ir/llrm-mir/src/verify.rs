@@ -342,7 +342,7 @@ impl Checker<'_> {
             (CastOp::AddrSpaceCast, Type::Pointer(x), Type::Pointer(y)) => x != y,
             (CastOp::BitCast, Type::Pointer(x), Type::Pointer(y)) => x == y,
             (CastOp::BitCast, Type::Int(bits), Type::Float(kind)) | (CastOp::BitCast, Type::Float(kind), Type::Int(bits)) => {
-                *bits == if *kind == crate::types::FloatKind::Float { 32 } else { 64 }
+                *bits == crate::datalayout::float_bits(*kind)
             }
             (CastOp::BitCast, x, y) => x == y && matches!(x, Type::Int(_) | Type::Float(_)),
             _ => false,

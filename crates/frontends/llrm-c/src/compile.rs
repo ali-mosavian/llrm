@@ -837,11 +837,11 @@ struct Args {
 pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
     let wccq = Path::new(option_env!("LLRM_WCCQ").ok_or_else(|| hir::Unsupported("llrm was built without the toolchain feature".into()))?);
-    // Borland's medium model: far code, near data, cdecl, signed char, byte-packed
-    // structs, 16-bit enums, x87 inline, no stack probes, no default library. -fp3
-    // is for inline assembly: qcport's own uses 387 instructions.
+    // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
+    // double, byte-packed structs, 16-bit enums, x87 inline, no stack probes, no
+    // default library. -fp3 is for inline assembly: qcport's own uses 387 instructions.
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
-    let flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
+    let flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
     let out = scratch.path().join("unit.cgs");

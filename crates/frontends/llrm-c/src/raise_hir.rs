@@ -41,12 +41,13 @@ pub fn widths(type_: &str) -> Option<u32> {
         // A float moves as its bits; only arithmetic and conversion need the x87.
         "TY_SINGLE" => 4,
         "TY_DOUBLE" => 8,
+        "TY_LONG_DOUBLE" => 10,
         _ => return None,
     })
 }
 
 pub(crate) fn is_float(type_: &str) -> bool {
-    matches!(type_, "TY_SINGLE" | "TY_DOUBLE")
+    matches!(type_, "TY_SINGLE" | "TY_DOUBLE" | "TY_LONG_DOUBLE")
 }
 
 fn float_arithmetic_kind(cg_op: &str) -> Option<Kind> {
@@ -167,6 +168,7 @@ pub(crate) fn classes(type_: &str) -> Option<&'static str> {
         "TY_INT_8" | "TY_UINT_8" => "int8",
         "TY_SINGLE" => "float4",
         "TY_DOUBLE" => "float8",
+        "TY_LONG_DOUBLE" => "float10",
         "TY_NEAR_POINTER" => "pointer2",
         "TY_LONG_POINTER" | "TY_HUGE_POINTER" => "pointer4",
         _ => return None,

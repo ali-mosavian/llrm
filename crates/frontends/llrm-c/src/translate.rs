@@ -235,7 +235,7 @@ enum Shape {
 /// character type, which may alias anything.
 const ROOT: &str = "Simple C/C++ TBAA";
 const CHAR: &str = "omnipotent char";
-const CLASSES: [&str; 7] = ["int2", "int4", "int8", "float4", "float8", "pointer2", "pointer4"];
+const CLASSES: [&str; 8] = ["int2", "int4", "int8", "float4", "float8", "float10", "pointer2", "pointer4"];
 
 /// The module's types, each made once, by shape and aliasing class.
 struct Types<'u> {
@@ -320,6 +320,7 @@ impl<'u> Types<'u> {
             "TY_LONG_POINTER" | "TY_HUGE_POINTER" | "TY_LONG_CODE_PTR" => Shape::Pointer(4),
             "TY_SINGLE" => Shape::Float(4),
             "TY_DOUBLE" => Shape::Float(8),
+            "TY_LONG_DOUBLE" => Shape::Float(10),
             other => match (widths(other), self.aggregate(other)) {
                 (Some(width), _) => Shape::Int(i64::from(width), signed(other)),
                 (None, Some(size)) => return refuse(format!("a {size}-byte aggregate as a value")),

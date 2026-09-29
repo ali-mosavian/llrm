@@ -81,7 +81,7 @@ fn unnamed_values_count_the_entry_block() {
 #[test]
 fn constructs_outside_the_subset_are_refused() {
     assert_eq!(refusal("define i16 @f() {\n  ret i16 undef\n}\n"), "line 2: `undef` is outside MIR's subset of LLVM");
-    assert_eq!(refusal("@x = global x86_fp80 zeroinitializer\n"), "line 1: `x86_fp80` is outside MIR's subset of LLVM");
+    assert_eq!(refusal("@x = global fp128 zeroinitializer\n"), "line 1: `fp128` is outside MIR's subset of LLVM");
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 
@@ -148,4 +148,15 @@ fn every_invalid_fixture_is_refused_for_its_reason() {
 fn an_intrinsic_declaration_takes_llvms_attributes() {
     let module = parse::module("declare i16 @llvm.smax.i16(i16 noundef, i16) cold\n").unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(print::module(&module), "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n");
+}
+
+/// BCC stores 3.125L as 00 00 00 00 00 00 00 C8 00 40; a long double
+/// global llrm lays down must hold the same ten bytes.
+#[test]
+fn test_a_double_is_laid_down_in_x87_extended_form() {
+    let extended = |value: f64| crate::types::x87_extended(value.to_bits());
+    assert_eq!(extended(3.125), [0, 0, 0, 0, 0, 0, 0, 0xC8, 0x00, 0x40]);
+    assert_eq!(extended(-2.25), [0, 0, 0, 0, 0, 0, 0, 0x90, 0x00, 0xC0]);
+    assert_eq!(extended(0.0), [0; 10]);
+    assert_eq!(extended(f64::from_bits(1)), [0, 0, 0, 0, 0, 0, 0, 0x80, 0xCD, 0x3B]);
 }

@@ -9,6 +9,32 @@ pub struct TypeId(u32);
 pub enum FloatKind {
     Float,
     Double,
+    /// x87's 80-bit extended format, 10 bytes in memory. A constant of it
+    /// holds the bits of the double nearest its value.
+    X86Fp80,
+}
+
+/// The 10 bytes of x87's extended format holding the double whose bits
+/// are `double`: its sign and exponent rebiased to 15 bits, and its fraction
+/// under an explicit integer bit.
+pub fn x87_extended(double: u64) -> [u8; 10] {
+    let sign = (double >> 63) as u16;
+    let exponent = ((double >> 52) & 0x7FF) as i32;
+    let fraction = double & ((1 << 52) - 1);
+    let (exponent, mantissa) = match (exponent, fraction) {
+        (0, 0) => (0, 0),
+        // A subnormal double is a normal extended one.
+        (0, _) => {
+            let shift = fraction.leading_zeros() - 11;
+            ((1 - 1023 + 16383 - shift as i32) as u16, (fraction << shift) << 11)
+        }
+        (0x7FF, _) => (0x7FFF, (1 << 63) | (fraction << 11)),
+        _ => ((exponent - 1023 + 16383) as u16, (1 << 63) | (fraction << 11)),
+    };
+    let mut bytes = [0; 10];
+    bytes[..8].copy_from_slice(&mantissa.to_le_bytes());
+    bytes[8..].copy_from_slice(&((sign << 15) | exponent).to_le_bytes());
+    bytes
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -134,6 +160,7 @@ impl Types {
             Type::Int(bits) => format!("i{bits}"),
             Type::Float(FloatKind::Float) => "float".to_owned(),
             Type::Float(FloatKind::Double) => "double".to_owned(),
+            Type::Float(FloatKind::X86Fp80) => "x86_fp80".to_owned(),
             Type::Pointer(0) => "ptr".to_owned(),
             Type::Pointer(space) => format!("ptr addrspace({space})"),
             Type::Array { element, count } => format!("[{count} x {}]", self.display(*element)),

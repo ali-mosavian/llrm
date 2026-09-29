@@ -177,7 +177,7 @@ fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Uns
         Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
         Type::Pointer(space @ (0 | 2)) => Ok(layout.pointer(*space).bits / 8),
         // An x87 register holds any float, extended.
-        Type::Float(FloatKind::Float | FloatKind::Double) => Ok(FLOAT),
+        Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
     }
 }
@@ -246,6 +246,7 @@ fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unse
         Type::Int(64) => Ok(8),
         Type::Float(FloatKind::Float) => Ok(4),
         Type::Float(FloatKind::Double) => Ok(8),
+        Type::Float(FloatKind::X86Fp80) => Ok(10),
         _ => width_of(module, layout, ty),
     }
 }
@@ -2188,8 +2189,11 @@ impl Selector<'_, '_, '_> {
                 }
                 let held = self.float(argument, at, out)?;
                 let cell = self.float_stored(held, "fstp", size, at, out);
-                for by in (0..i64::from(size) / 4).rev().map(|dword| dword * 4) {
-                    out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Mem(Self::memory(cell.moved(by), 4))])));
+                // Its highest bytes pushed first: dwords, and an extended float's last word.
+                let dwords = (0..i64::from(size) / 4).map(|dword| (dword * 4, 4));
+                let word = (size % 4 == 2).then(|| (i64::from(size) - 2, 2));
+                for (by, width) in dwords.chain(word).collect::<Vec<_>>().into_iter().rev() {
+                    out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Mem(Self::memory(cell.moved(by), width))])));
                 }
                 pushed += i64::from(size);
                 continue;
