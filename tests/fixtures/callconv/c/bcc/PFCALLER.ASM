@@ -16,10 +16,10 @@ $comm	macro	name,dist,size,count
 	endif
 	?debug	V 300h
 	?debug	S "pfcaller.c"
-	?debug	C E992603D5D0A706663616C6C65722E63
-	?debug	C E992603D5D0470662E68
-	?debug	C E992603D5D0863616C6C65722E68
-	?debug	C E992603D5D0763617365732E68
+	?debug	C E9996A3D5D0A706663616C6C65722E63
+	?debug	C E9996A3D5D0470662E68
+	?debug	C E9996A3D5D0863616C6C65722E68
+	?debug	C E9996A3D5D0763617365732E68
 PFCALLER_TEXT	segment byte public use16 'CODE'
 PFCALLER_TEXT	ends
 DGROUP	group	_DATA,_BSS
@@ -214,6 +214,11 @@ _call_scalars	proc	far
    ;	#define VARG(n, T, P) , in_##n
    ;	    ARM(); p_variadic(0x1111 PROMOTED(VARG)); VERIFY("p_variadic");
    ;	#undef VARG
+   ;	#endif
+   ;	#ifdef INTERRUPTS
+   ;	    /* Last: after calling an interrupt function BCC counts its pushf as still
+   ;	       on the stack, and every BP-relative temporary it makes is 2 bytes off. */
+   ;	    ARM(); i_plain(); VERIFY("i_plain");
    ;	#endif
    ;	}
    ;	

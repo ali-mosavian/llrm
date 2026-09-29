@@ -176,9 +176,9 @@ impl Type {
 
 str_enum!(Storage {
     Local("LOCAL") = "local",
-    // A variadic function's parameter, in the memory its arguments were
-    // passed in: `offset` bytes from its first variadic argument, `symbol`
-    // the parameter's value.
+    // A parameter in the memory it was passed in, `symbol` its value:
+    // `offset` bytes from a variadic function's first variadic argument, or
+    // from the first register an interrupt handler saved.
     Parameter("PARAMETER") = "parameter",
     Static("STATIC") = "static",
     Module("MODULE") = "module",

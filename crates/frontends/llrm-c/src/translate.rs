@@ -443,19 +443,24 @@ fn cleanup(symbol: &hir::Symbol) -> R<StackCleanup> {
     }
 }
 
-/// Borland's STDARG.H steps `va_start` on from the last parameter's
-/// address, by its size rounded to an int: in a variadic function a
-/// parameter whose address is taken lives with the arguments after it, not
-/// in a copy. `sizes` is each parameter value's bytes.
+/// Parameters that live in the memory they were passed in, `sizes` each
+/// parameter value's bytes. Borland's STDARG.H steps `va_start` on from the
+/// last parameter's address by its size rounded to an int: in a variadic
+/// function an address-taken parameter lives with the arguments after it.
+/// An interrupt handler's parameters are the registers it saved, BP first,
+/// and what it writes to them is what it returns to.
 fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64]) {
-    if !function.abi.as_ref().is_some_and(|abi| abi.variadic) {
+    let Some(abi) = function.abi.as_ref() else { return };
+    let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
+    if !interrupt && !variadic {
         return;
     }
     let exposed = llrm_core::hir::escape::exposed_frame(function);
-    for &(home, parameter) in homes.iter().filter(|(home, _)| exposed.contains(home)) {
+    // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
+    let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
+    for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
-        // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
-        let offset = -sizes[at..].iter().map(|size| (size + 1) & !1).sum::<i64>();
+        let offset = if interrupt { rounded(&sizes[..at]) } else { -rounded(&sizes[at..]) };
         let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
         (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, offset);
         let copy = |one: &h::Instruction| one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)];
@@ -466,7 +471,11 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
 }
 
 fn distance(symbol: &hir::Symbol) -> CallDistance {
-    if symbol.far() { CallDistance::Far } else { CallDistance::Near }
+    match symbol {
+        _ if symbol.interrupt() => CallDistance::Interrupt,
+        _ if symbol.far() => CallDistance::Far,
+        _ => CallDistance::Near,
+    }
 }
 
 /// Whether some restrict lvalue names parameter `symbol`.

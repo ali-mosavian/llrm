@@ -16,7 +16,7 @@ use crate::backend::isel::{self, Selected};
 use crate::backend::{addressvalues, frame, globals, jumps, masm};
 use crate::flow;
 use crate::model::lir::LirBody;
-use crate::model::ir::Space;
+use crate::model::ir::{Addr, Space};
 use crate::support::hash::IndexMap;
 
 /// What only the frontend knows: each call's contract, and the symbol each
@@ -74,6 +74,12 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                     referenced.insert(linked.clone(), far.contains(at));
                     callees.insert(*at, masm::Callee::new(linked, far.contains(at)));
                 }
+                // An interrupt handler loads DGROUP into DS itself.
+                let interrupt = (function.calling_convention == llrm_mir::opcode::X86_INTR).then(|| {
+                    let (space, index) = crate::hir::lower::DGROUP;
+                    names.insert((space, index), globals::DGROUP.to_owned());
+                    Addr { index, ..Addr::new(space, 0) }
+                });
                 let procedure = masm::Procedure {
                     name: names[&(Space::Segment, at as i64)].clone(),
                     public: global.linkage == Linkage::External,
@@ -81,7 +87,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                     body,
                     reserve,
                     callees,
-                    interrupt: None,
+                    interrupt,
                 };
                 let overhead = masm::return_overhead_bytes(&procedure).map_err(|error| error.to_string())? as i64;
                 let body = jumps::duplicated_returns(procedure.body.clone(), overhead);

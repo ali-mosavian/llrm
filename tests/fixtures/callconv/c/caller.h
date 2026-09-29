@@ -24,6 +24,9 @@ void CONV DIST p_mixed(signed char a, long b, double c, int d, float e, char far
 #ifdef VARIADIC
 void CONV DIST p_variadic(int n, ...);
 #endif
+#ifdef INTERRUPTS
+void interrupt i_plain(void);
+#endif
 #endif
 
 #define CALL(n, T) ARM(); p_##n(0x1111, in_##n, 0x2222); VERIFY("p_" #n); \
@@ -45,6 +48,11 @@ void far call_scalars(void) {
 #define VARG(n, T, P) , in_##n
     ARM(); p_variadic(0x1111 PROMOTED(VARG)); VERIFY("p_variadic");
 #undef VARG
+#endif
+#ifdef INTERRUPTS
+    /* Last: after calling an interrupt function BCC counts its pushf as still
+       on the stack, and every BP-relative temporary it makes is 2 bytes off. */
+    ARM(); i_plain(); VERIFY("i_plain");
 #endif
 }
 #endif

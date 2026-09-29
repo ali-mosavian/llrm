@@ -577,7 +577,8 @@ fn convention(cleanup: model::StackCleanup, distance: model::CallDistance) -> Em
     let space = match distance {
         model::CallDistance::Near => 0,
         model::CallDistance::Far => FAR,
-        model::CallDistance::Interrupt => return Err("an interrupt handler".to_owned()),
+        // Entered with the flags pushed and left by iret, as LLVM's x86_intrcc.
+        model::CallDistance::Interrupt => return Ok((llrm_mir::opcode::X86_INTR, FAR)),
     };
     Ok((convention, space))
 }
@@ -602,7 +603,11 @@ fn place_function(module: &mut Module, global: GlobalId, (convention, space): (u
 fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> Emit<(GlobalId, u32)> {
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let types = &mut module.context.types;
-    let parameters: Vec<TypeId> = function.parameters.iter().map(|one| value_type(types, tables.types[&values[one]])).collect::<Emit<_>>()?;
+    // An interrupt handler is given the registers it saved, as LLVM's x86_intrcc its frame.
+    let parameters: Vec<TypeId> = match interrupted(function) {
+        true => vec![types.ptr(0)],
+        false => function.parameters.iter().map(|one| value_type(types, tables.types[&values[one]])).collect::<Emit<_>>()?,
+    };
     if function.abi.as_ref().is_some_and(|abi| abi.float_return == model::FloatReturn::Address) && tables.types[&function.result_type].kind == model::TypeKind::Float {
         return Err(format!("{}: a floating result returned as its address, which only a caller of Microsoft C's is", function.name));
     }
@@ -707,7 +712,7 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             tables.callees.insert(MEMSET.to_owned(), reference);
         }
     }
-    if function.places.iter().any(|one| one.storage == Storage::Parameter) && !tables.callees.contains_key(VA_START) {
+    if !interrupted(function) && function.places.iter().any(|one| one.storage == Storage::Parameter) && !tables.callees.contains_key(VA_START) {
         let types = &mut module.context.types;
         let (void, pointer) = (types.void(), types.ptr(0));
         let ty = function_type(types, void, vec![pointer]);
@@ -858,6 +863,11 @@ fn answer<'t>(site: &model::CallAbi, results: &[i64], hir_type: impl Fn(i64) -> 
     }
 }
 
+/// Whether an interrupt enters `function`.
+fn interrupted(function: &model::Function) -> bool {
+    function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
+}
+
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
 
@@ -977,7 +987,11 @@ struct Body<'b, 'm, 'h> {
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn new(b: &'b mut Builder<'m>, tables: &'b Tables<'h>, function: &'h model::Function) -> Emit<Self> {
-        let values = function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect();
+        let values = match interrupted(function) {
+            // Its parameters are only ever its saved registers' memory.
+            true => HashMap::new(),
+            false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
+        };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
         Ok(Self {
             b,
@@ -1053,7 +1067,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             self.objects.push(self.b.alloca(group.ty, ""));
         }
-        if self.function.places.iter().any(|one| one.storage == Storage::Parameter) {
+        if interrupted(self.function) {
+            self.passed = Some(self.b.parameter(0));
+        } else if self.function.places.iter().any(|one| one.storage == Storage::Parameter) {
             let pointer = self.b.context.types.ptr(0);
             let list = self.b.alloca(pointer, "");
             let (void, callee) = (self.b.context.types.void(), Value::Constant(self.tables.callees[VA_START]));

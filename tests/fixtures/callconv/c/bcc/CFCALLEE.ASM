@@ -16,10 +16,10 @@ $comm	macro	name,dist,size,count
 	endif
 	?debug	V 300h
 	?debug	S "cfcallee.c"
-	?debug	C E992603D5D0A636663616C6C65652E63
-	?debug	C E992603D5D0463662E68
-	?debug	C E992603D5D0863616C6C65652E68
-	?debug	C E992603D5D0763617365732E68
+	?debug	C E9996A3D5D0A636663616C6C65652E63
+	?debug	C E9996A3D5D0463662E68
+	?debug	C E9996A3D5D0863616C6C65652E68
+	?debug	C E9996A3D5D0763617365732E68
 CFCALLEE_TEXT	segment byte public use16 'CODE'
 CFCALLEE_TEXT	ends
 DGROUP	group	_DATA,_BSS
@@ -510,6 +510,105 @@ _p_mixed	proc	far
 	ret	
 _p_mixed	endp
    ;	
+   ;	void interrupt i_regs(unsigned bp, unsigned di, unsigned si, unsigned ds, unsigned es,
+   ;	
+	assume	cs:CFCALLEE_TEXT
+_i_regs	proc	far
+	push	ax
+	push	bx
+	push	cx
+	push	dx
+	push	es
+	push	ds
+	push	si
+	push	di
+	push	bp
+	mov	bp,DGROUP
+	mov	ds,bp
+	mov	bp,sp
+   ;	
+   ;	    unsigned dx, unsigned cx, unsigned bx, unsigned ax) {
+   ;	    trash();
+   ;	
+	call	far ptr _trash
+   ;	
+   ;	    gi_regs[0] = bp; gi_regs[1] = di; gi_regs[2] = si; gi_regs[3] = ds; gi_regs[4] = es;
+   ;	
+	mov	ax,word ptr [bp]
+	mov	word ptr DGROUP:_gi_regs,ax
+	mov	ax,word ptr [bp+2]
+	mov	word ptr DGROUP:_gi_regs+2,ax
+	mov	ax,word ptr [bp+4]
+	mov	word ptr DGROUP:_gi_regs+4,ax
+	mov	ax,word ptr [bp+6]
+	mov	word ptr DGROUP:_gi_regs+6,ax
+	mov	ax,word ptr [bp+8]
+	mov	word ptr DGROUP:_gi_regs+8,ax
+   ;	
+   ;	    gi_regs[5] = dx; gi_regs[6] = cx; gi_regs[7] = bx; gi_regs[8] = ax;
+   ;	
+	mov	ax,word ptr [bp+10]
+	mov	word ptr DGROUP:_gi_regs+10,ax
+	mov	ax,word ptr [bp+12]
+	mov	word ptr DGROUP:_gi_regs+12,ax
+	mov	ax,word ptr [bp+14]
+	mov	word ptr DGROUP:_gi_regs+14,ax
+	mov	ax,word ptr [bp+16]
+	mov	word ptr DGROUP:_gi_regs+16,ax
+   ;	
+   ;	    ax = 0x7777;
+   ;	
+	mov	word ptr [bp+16],30583
+   ;	
+   ;	    bx = ~bx;
+   ;	
+	mov	ax,word ptr [bp+14]
+	not	ax
+	mov	word ptr [bp+14],ax
+   ;	
+   ;	}
+   ;	
+	pop	bp
+	pop	di
+	pop	si
+	pop	ds
+	pop	es
+	pop	dx
+	pop	cx
+	pop	bx
+	pop	ax
+	iret	
+_i_regs	endp
+   ;	
+   ;	void interrupt i_plain(void) { trash(); gi_plain = 0x1234; }
+   ;	
+	assume	cs:CFCALLEE_TEXT
+_i_plain	proc	far
+	push	ax
+	push	bx
+	push	cx
+	push	dx
+	push	es
+	push	ds
+	push	si
+	push	di
+	push	bp
+	mov	bp,DGROUP
+	mov	ds,bp
+	call	far ptr _trash
+	mov	word ptr DGROUP:_gi_plain,4660
+	pop	bp
+	pop	di
+	pop	si
+	pop	ds
+	pop	es
+	pop	dx
+	pop	cx
+	pop	bx
+	pop	ax
+	iret	
+_i_plain	endp
+   ;	
    ;	void CONV DIST p_variadic(int n, ...) {
    ;	
 	assume	cs:CFCALLEE_TEXT
@@ -640,6 +739,10 @@ _gva_uc	label	word
 	db	2 dup (?)
 _gva_sc	label	word
 	db	2 dup (?)
+_gi_plain	label	word
+	db	2 dup (?)
+_gi_regs	label	word
+	db	18 dup (?)
 _gm_h	label	qword
 	db	10 dup (?)
 _gm_f	label	dword
@@ -766,6 +869,10 @@ CFCALLEE_TEXT	ends
 	public	_gva_ch
 	public	_gva_uc
 	public	_gva_sc
+	public	_i_plain
+	public	_i_regs
+	public	_gi_plain
+	public	_gi_regs
 	public	_p_mixed
 	public	_gm_h
 	public	_gm_f
