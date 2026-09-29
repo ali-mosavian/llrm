@@ -1,0 +1,928 @@
+                                                                      PAGE   1
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0030   0006    ' Caller: passes known inputs, keeps what came back. Each call 
+                sits between
+ 0030   0006    ' arm and verify, which the armed probe uses to check preserved
+                 registers.
+ 0030   0006    '$include: 'CC.BI'
+ 0030   0006    ' Shared by every module. Callees and callers keep what arrived
+                 and what
+ 0030   0006    ' came back in PROBE.ASM's slots (put*); the harness reads them
+                 (getB).
+ 0030   0006    type Rec
+ 0030   0006        a as integer
+ 0030   0006        b as long
+ 0030   0006        c as double
+ 0030   0006        s as string * 4
+ 0030   0006    end type
+ 0030   0006    
+ 0030   0006    ' PROBE.ASM
+ 0030   0006    declare sub trash ()
+ 0030   0006    declare sub arm ()
+ 0030   0006    declare sub verify (byval k as integer)
+ 0030   0006    declare sub armX ()
+ 0030   0006    declare sub verifyX (byval k as integer)
+ 0030   0006    declare sub badRegs ()
+ 0030   0006    declare function probeMask% (byval k as integer)
+ 0030   0006    declare sub putI (byval k as integer, byval v as integer)
+ 0030   0006    declare sub putL (byval k as integer, byval v as long)
+ 0030   0006    declare sub putF (byval k as integer, byval v as single)
+ 0030   0006    declare sub putD (byval k as integer, byval v as double)
+ 0030   0006    declare sub putC (byval k as integer, byval i as integer, byval
+                 c as integer)
+ 0030   0006    declare function getB% (byval k as integer, byval i as integer)
+ 0030   0006    declare sub recVal (byval a as integer, byval b as long, byval 
+                c as single, byval d as double)
+ 0030   0006    declare sub recSeg (seg a as integer, seg b as double)
+ 0030   0006    declare sub recCdl cdecl (byval a as integer, byval b as long, 
+                byval c as double)
+ 0030   0006    declare function aInt% ()
+ 0030   0006    declare function aLng& ()
+ 0030   0006    declare function aSng! ()
+ 0030   0006    declare function aDbl# ()
+ 0030   0006    declare sub keepDesc (s as string)
+ 0030   0006    declare function aStr$ ()
+ 0030   0006    declare function xInt% cdecl ()
+ 0030   0006    declare function xLng& cdecl ()
+ 0030   0006    declare function xSng! cdecl ()
+ 0030   0006    declare function xDbl# cdecl ()
+ 0030   0006    
+ 0030   0006    ' CE.BAS
+ 0030   0006    declare sub pInt (h as integer, v as integer, t as integer)
+ 0030   0006    declare sub pLng (h as integer, v as long, t as integer)
+ 0030   0006    declare sub pSng (h as integer, v as single, t as integer)
+ 0030   0006    declare sub pDbl (h as integer, v as double, t as integer)
+ 0030   0006    declare sub pStr (h as integer, v as string, t as integer)
+ 0030   0006    declare sub pFix (h as integer, v as string, t as integer)
+                                                                      PAGE   2
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0030   0006    declare sub pRec (h as integer, v as Rec, t as integer)
+ 0030   0006    declare sub pArrI (h as integer, v() as integer, t as integer)
+ 0030   0006    declare sub pArrS (h as integer, v() as string, t as integer)
+ 0030   0006    declare sub pMix (a as integer, b as long, c as single, d as do
+                uble, e as string, f as integer)
+ 0030   0006    declare sub sVoid ()
+ 0030   0006    declare function rInt% (h as integer)
+ 0030   0006    declare function rLng& (h as integer)
+ 0030   0006    declare function rSng! (h as integer)
+ 0030   0006    declare function rDbl# (h as integer)
+ 0030   0006    declare sub ceStr (k as integer, s as string)
+ 0030   0006    
+ 0030   0006    ' CES.BAS
+ 0030   0006    declare function rStr$ (h as integer)
+ 0030   0006    
+ 0030   0006    ' CR.BAS, CRS.BAS
+ 0030   0006    declare sub callAll ()
+ 0030   0006    declare sub crStr (k as integer, s as string)
+ 0030   0006    declare sub callStrs ()
+ 0030   0006    
+ 0030   0006    '$include: 'CUR.BI'
+ 0030   0006    ' CURRENCY cases: PDS 7.1 and VBDOS. QB 4.5 includes the empty 
+                qb45/ copy.
+ 0030   0006    declare sub putY (byval k as integer, byval v as currency)
+ 0030   0006    declare sub pCur (h as integer, v as currency, t as integer)
+ 0030   0006    declare function rCur@ (h as integer)
+ 0030   0006    '$include: 'V71.BI'
+ 0030   0006    ' BYVAL and SEG in a SUB definition: PDS 7.1 and VBDOS. QB 4.5 
+                includes the
+ 0030   0006    ' empty qb45/ copy.
+ 0030   0006    declare sub pByv (byval h as integer, byval v as long, byval s 
+                as single, byval d as double, byval t as integer)
+ 0030   0006    declare sub pSegd (h as integer, seg v as integer, t as integer
+                )
+ 0030   0006    
+ 0030   0006    sub crStr (k as integer, s as string)
+ 0030    **        I00002:   jmp     I00003
+ 0033    **        CRSTR:    mov     cx,0000h
+ 0036    **                  call    B$ENRA
+ 003B   0006        dim i as integer
+ 003B   0006        putI k, len(s)
+ 003B    **                  mov     si,08h[bp]
+ 003E    **                  push    [si]
+ 0040    **                  push    06h[bp]
+ 0043    **                  call    B$FLEN
+ 0048    **                  push    ax
+ 0049    **                  call    PUTI
+ 004E   0006        for i = 1 to len(s)
+ 004E    **                  mov     si,06h[bp]
+ 0051    **                  mov     ax,[si]
+ 0053    **                  mov     0EAh[bp],ax
+ 0056    **                  mov     ax,0001h
+ 0059    **                  jmp     I00005
+ 005C   0006            putC k, i + 1, asc(mid$(s, i, 1))
+                                                                      PAGE   3
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 005C    **        I00006:   mov     si,08h[bp]
+ 005F    **                  push    [si]
+ 0061    **                  mov     ax,0ECh[bp]
+ 0064    **                  inc     ax
+ 0065    **                  push    ax
+ 0066    **                  push    06h[bp]
+ 0069    **                  push    0ECh[bp]
+ 006C    **                  push    01h
+ 006E    **                  call    B$FMID
+ 0073    **                  push    ax
+ 0074    **                  call    B$FASC
+ 0079    **                  push    ax
+ 007A    **                  call    PUTC
+ 007F   0006        next
+ 007F    **                  mov     ax,0ECh[bp]
+ 0082    **                  inc     ax
+ 0083    **        I00005:   mov     0ECh[bp],ax
+ 0086    **                  cmp     ax,0EAh[bp]
+ 0089    **                  jng     I00006
+ 008B   0006    end sub
+ 008B    **        I00004:   call    B$EXSA
+ 0090    **                  ret     0004h
+ 0093   0006    
+ 0093   0006    sub callAll
+ 0093    **        I00003:   jmp     I00007
+ 0096    **        CALLALL:  mov     cx,0000h
+ 0099    **                  call    B$ENRA
+ 009E   0006        dim i as integer, l as long, s as single, d as double
+ 009E   0006        dim st as string, sr as string, fx as string * 6, r as Rec
+ 009E   0006        dim ai(2 to 5) as integer
+ 009E    **                  push    02h
+ 00A0    **                  push    05h
+ 00A2    **                  push    02h
+ 00A4    **                  push    0101h
+ 00A7    **                  lea     ax,0AAh[bp]
+ 00AA    **                  push    ax
+ 00AB    **                  call    B$DDIM
+ 00B0   0006        dim segI as integer, segD as double
+ 00B0   0006    
+ 00B0   0006        i = -&H1235
+ 00B0   0006        call arm: pInt &H1111, i, &H2222: verify 1
+ 00B0    **                  mov     0ECh[bp],0EDCBh
+ 00B5    **                  call    ARM
+ 00BA    **                  mov     9Eh[bp],1111h
+ 00BF    **                  mov     9Ch[bp],2222h
+ 00C4    **                  lea     ax,9Eh[bp]
+ 00C7    **                  push    ax
+ 00C8    **                  lea     ax,0ECh[bp]
+ 00CB    **                  push    ax
+ 00CC    **                  lea     ax,9Ch[bp]
+ 00CF    **                  push    ax
+ 00D0    **                  call    PINT
+ 00D5    **                  push    01h
+ 00D7    **                  call    VERIFY
+                                                                      PAGE   4
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 00DC   0006        putI 4, i
+ 00DC    **                  push    04h
+ 00DE    **                  push    0ECh[bp]
+ 00E1    **                  call    PUTI
+ 00E6   0006        l = -&H12345679
+ 00E6   0006        call arm: pLng &H1111, l, &H2222: verify 2
+ 00E6    **                  mov     0E8h[bp],0A987h
+ 00EB    **                  mov     0EAh[bp],0EDCBh
+ 00F0    **                  call    ARM
+ 00F5    **                  mov     9Ah[bp],1111h
+ 00FA    **                  mov     98h[bp],2222h
+ 00FF    **                  lea     ax,9Ah[bp]
+ 0102    **                  push    ax
+ 0103    **                  lea     ax,0E8h[bp]
+ 0106    **                  push    ax
+ 0107    **                  lea     ax,98h[bp]
+ 010A    **                  push    ax
+ 010B    **                  call    PLNG
+ 0110    **                  push    02h
+ 0112    **                  call    VERIFY
+ 0117   0006        putL 8, l
+ 0117    **                  push    08h
+ 0119    **                  push    0EAh[bp]
+ 011C    **                  push    0E8h[bp]
+ 011F    **                  call    PUTL
+ 0124   0006        s = 1.5
+ 0124   0006        call arm: pSng &H1111, s, &H2222: verify 3
+ 0124    **                  mov     0E4h[bp],0000h
+ 0129    **                  mov     0E6h[bp],3FC0h
+ 012E    **                  call    ARM
+ 0133    **                  mov     96h[bp],1111h
+ 0138    **                  mov     94h[bp],2222h
+ 013D    **                  lea     ax,96h[bp]
+ 0140    **                  push    ax
+ 0141    **                  lea     ax,0E4h[bp]
+ 0144    **                  push    ax
+ 0145    **                  lea     ax,94h[bp]
+ 0148    **                  push    ax
+ 0149    **                  call    PSNG
+ 014E    **                  push    03h
+ 0150    **                  call    VERIFY
+ 0155   0006        putF 12, s
+ 0155    **                  push    0Ch
+ 0157    **                  push    0E6h[bp]
+ 015A    **                  push    0E4h[bp]
+ 015D    **                  call    PUTF
+ 0162   0006        d = -2.25
+ 0162   0006        call arm: pDbl &H1111, d, &H2222: verify 4
+ 0162    **                  lea     di,0DCh[bp]
+ 0165    **                  mov     si,offset <00000000000002C0>
+ 0168    **                  push    ds
+ 0169    **                  pop     es
+ 016A    **                  movsw   
+ 016B    **                  movsw   
+                                                                      PAGE   5
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 016C    **                  movsw   
+ 016D    **                  movsw   
+ 016E    **                  call    ARM
+ 0173    **                  mov     92h[bp],1111h
+ 0178    **                  mov     90h[bp],2222h
+ 017D    **                  lea     ax,92h[bp]
+ 0180    **                  push    ax
+ 0181    **                  lea     ax,0DCh[bp]
+ 0184    **                  push    ax
+ 0185    **                  lea     ax,90h[bp]
+ 0188    **                  push    ax
+ 0189    **                  call    PDBL
+ 018E    **                  push    04h
+ 0190    **                  call    VERIFY
+ 0195   0006        putD 16, d
+ 0195    **                  push    10h
+ 0197    **                  lea     bx,0DCh[bp]
+ 019A    **                  push    06h[bx]
+ 019D    **                  push    04h[bx]
+ 01A0    **                  push    02h[bx]
+ 01A3    **                  push    [bx]
+ 01A5    **                  call    PUTD
+ 01AA   0006        st = "hello"
+ 01AA   0006        call arm: pStr &H1111, st, &H2222: verify 5
+ 01AA    **                  push    offset <const>
+ 01AD    **                  lea     ax,0D8h[bp]
+ 01B0    **                  push    ax
+ 01B1    **                  call    B$SASS
+ 01B6    **                  call    ARM
+ 01BB    **                  mov     8Eh[bp],1111h
+ 01C0    **                  mov     8Ch[bp],2222h
+ 01C5    **                  lea     ax,8Eh[bp]
+ 01C8    **                  push    ax
+ 01C9    **                  lea     ax,0D8h[bp]
+ 01CC    **                  push    ax
+ 01CD    **                  lea     ax,8Ch[bp]
+ 01D0    **                  push    ax
+ 01D1    **                  call    PSTR
+ 01D6    **                  push    05h
+ 01D8    **                  call    VERIFY
+ 01DD   0006        crStr 20, st
+ 01DD    **                  mov     8Ah[bp],0014h
+ 01E2    **                  lea     ax,8Ah[bp]
+ 01E5    **                  push    ax
+ 01E6    **                  lea     ax,0D8h[bp]
+ 01E9    **                  push    ax
+ 01EA    **                  call    CRSTR
+ 01EF   0006        fx = "abcdef"
+ 01EF   0006        call arm: pFix &H1111, fx, &H2222: verify 6
+ 01EF    **                  push    ds
+ 01F0    **                  push    offset <const>
+ 01F3    **                  xor     ax,ax
+ 01F5    **                  push    ax
+ 01F6    **                  lea     ax,0CEh[bp]
+                                                                      PAGE   6
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 01F9    **                  push    ds
+ 01FA    **                  push    ax
+ 01FB    **                  mov     ax,0006h
+ 01FE    **                  push    ax
+ 01FF    **                  call    B$ASSN
+ 0204    **                  call    ARM
+ 0209    **                  mov     88h[bp],1111h
+ 020E    **                  lea     ax,0CEh[bp]
+ 0211    **                  push    ds
+ 0212    **                  push    ax
+ 0213    **                  mov     ax,0006h
+ 0216    **                  push    ax
+ 0217    **                  call    B$LDFS
+ 021C    **                  push    ax
+ 021D    **                  lea     ax,84h[bp]
+ 0220    **                  push    ax
+ 0221    **                  call    B$SASS
+ 0226    **                  mov     82h[bp],2222h
+ 022B    **                  lea     ax,88h[bp]
+ 022E    **                  push    ax
+ 022F    **                  lea     ax,84h[bp]
+ 0232    **                  push    ax
+ 0233    **                  lea     ax,82h[bp]
+ 0236    **                  push    ax
+ 0237    **                  call    PFIX
+ 023C    **                  lea     ax,84h[bp]
+ 023F    **                  push    ds
+ 0240    **                  push    ax
+ 0241    **                  xor     ax,ax
+ 0243    **                  push    ax
+ 0244    **                  lea     ax,0CEh[bp]
+ 0247    **                  push    ds
+ 0248    **                  push    ax
+ 0249    **                  mov     ax,0006h
+ 024C    **                  push    ax
+ 024D    **                  call    B$ASSN
+ 0252    **                  lea     ax,84h[bp]
+ 0255    **                  push    ax
+ 0256    **                  call    B$STDL
+ 025B    **                  push    06h
+ 025D    **                  call    VERIFY
+ 0262   0006        crStr 24, fx
+ 0262    **                  mov     80h[bp],0018h
+ 0267    **                  lea     ax,0CEh[bp]
+ 026A    **                  push    ds
+ 026B    **                  push    ax
+ 026C    **                  mov     ax,0006h
+ 026F    **                  push    ax
+ 0270    **                  call    B$LDFS
+ 0275    **                  push    ax
+ 0276    **                  lea     ax,0FF7Ch[bp]
+ 027A    **                  push    ax
+ 027B    **                  call    B$SASS
+ 0280    **                  lea     ax,80h[bp]
+                                                                      PAGE   7
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0283    **                  push    ax
+ 0284    **                  lea     ax,0FF7Ch[bp]
+ 0288    **                  push    ax
+ 0289    **                  call    CRSTR
+ 028E    **                  lea     ax,0FF7Ch[bp]
+ 0292    **                  push    ds
+ 0293    **                  push    ax
+ 0294    **                  xor     ax,ax
+ 0296    **                  push    ax
+ 0297    **                  lea     ax,0CEh[bp]
+ 029A    **                  push    ds
+ 029B    **                  push    ax
+ 029C    **                  mov     ax,0006h
+ 029F    **                  push    ax
+ 02A0    **                  call    B$ASSN
+ 02A5    **                  lea     ax,0FF7Ch[bp]
+ 02A9    **                  push    ax
+ 02AA    **                  call    B$STDL
+ 02AF   0006        r.a = &HA0B: r.b = &H1020304: r.c = 3.125: r.s = "wxyz"
+ 02AF   0006        call arm: pRec &H1111, r, &H2222: verify 7
+ 02AF    **                  mov     0BCh[bp],0A0Bh
+ 02B4    **                  mov     0BEh[bp],0304h
+ 02B9    **                  mov     0C0h[bp],0102h
+ 02BE    **                  lea     di,0C2h[bp]
+ 02C1    **                  mov     si,offset <0000000000000940>
+ 02C4    **                  push    ds
+ 02C5    **                  pop     es
+ 02C6    **                  movsw   
+ 02C7    **                  movsw   
+ 02C8    **                  movsw   
+ 02C9    **                  movsw   
+ 02CA    **                  push    ds
+ 02CB    **                  push    offset <const>
+ 02CE    **                  xor     ax,ax
+ 02D0    **                  push    ax
+ 02D1    **                  lea     ax,0CAh[bp]
+ 02D4    **                  push    ds
+ 02D5    **                  push    ax
+ 02D6    **                  mov     ax,0004h
+ 02D9    **                  push    ax
+ 02DA    **                  call    B$ASSN
+ 02DF    **                  call    ARM
+ 02E4    **                  mov     0FF7Ah[bp],1111h
+ 02EA    **                  mov     0FF78h[bp],2222h
+ 02F0    **                  lea     ax,0FF7Ah[bp]
+ 02F4    **                  push    ax
+ 02F5    **                  lea     ax,0BCh[bp]
+ 02F8    **                  push    ax
+ 02F9    **                  lea     ax,0FF78h[bp]
+ 02FD    **                  push    ax
+ 02FE    **                  call    PREC
+ 0303    **                  push    07h
+ 0305    **                  call    VERIFY
+ 030A   0006        putI 31, r.a: crStr 32, r.s
+                                                                      PAGE   8
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 030A    **                  push    1Fh
+ 030C    **                  push    0BCh[bp]
+ 030F    **                  call    PUTI
+ 0314    **                  mov     0FF76h[bp],0020h
+ 031A    **                  lea     ax,0CAh[bp]
+ 031D    **                  push    ds
+ 031E    **                  push    ax
+ 031F    **                  mov     ax,0004h
+ 0322    **                  push    ax
+ 0323    **                  call    B$LDFS
+ 0328    **                  push    ax
+ 0329    **                  lea     ax,0FF72h[bp]
+ 032D    **                  push    ax
+ 032E    **                  call    B$SASS
+ 0333    **                  lea     ax,0FF76h[bp]
+ 0337    **                  push    ax
+ 0338    **                  lea     ax,0FF72h[bp]
+ 033C    **                  push    ax
+ 033D    **                  call    CRSTR
+ 0342    **                  lea     ax,0FF72h[bp]
+ 0346    **                  push    ds
+ 0347    **                  push    ax
+ 0348    **                  xor     ax,ax
+ 034A    **                  push    ax
+ 034B    **                  lea     ax,0CAh[bp]
+ 034E    **                  push    ds
+ 034F    **                  push    ax
+ 0350    **                  mov     ax,0004h
+ 0353    **                  push    ax
+ 0354    **                  call    B$ASSN
+ 0359    **                  lea     ax,0FF72h[bp]
+ 035D    **                  push    ax
+ 035E    **                  call    B$STDL
+ 0363   0006        ai(2) = 10: ai(3) = 20: ai(4) = 30: ai(5) = 40
+ 0363   0006        call arm: pArrI &H1111, ai(), &H2222: verify 8
+ 0363    **                  lea     si,0AAh[bp]
+ 0366    **                  mov     bx,0004h
+ 0369    **                  add     bx,0Ah[si]
+ 036C    **                  mov     es,02h[si]
+ 036F    **                  es:     
+ 0370    **                  mov     [bx],000Ah
+ 0374    **                  mov     bx,0006h
+ 0377    **                  add     bx,0Ah[si]
+ 037A    **                  mov     es,02h[si]
+ 037D    **                  es:     
+ 037E    **                  mov     [bx],0014h
+ 0382    **                  mov     bx,0008h
+ 0385    **                  add     bx,0Ah[si]
+ 0388    **                  mov     es,02h[si]
+ 038B    **                  es:     
+ 038C    **                  mov     [bx],001Eh
+ 0390    **                  mov     bx,000Ah
+ 0393    **                  add     bx,0Ah[si]
+ 0396    **                  mov     es,02h[si]
+                                                                      PAGE   9
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0399    **                  es:     
+ 039A    **                  mov     [bx],0028h
+ 039E    **                  call    ARM
+ 03A3    **                  mov     0FF70h[bp],1111h
+ 03A9    **                  mov     0FF6Eh[bp],2222h
+ 03AF    **                  lea     ax,0FF70h[bp]
+ 03B3    **                  push    ax
+ 03B4    **                  lea     ax,0AAh[bp]
+ 03B7    **                  push    ax
+ 03B8    **                  lea     ax,0FF6Eh[bp]
+ 03BC    **                  push    ax
+ 03BD    **                  call    PARRI
+ 03C2    **                  push    08h
+ 03C4    **                  call    VERIFY
+ 03C9   0006        putI 41, ai(3)
+ 03C9    **                  push    29h
+ 03CB    **                  lea     si,0AAh[bp]
+ 03CE    **                  mov     bx,0006h
+ 03D1    **                  add     bx,0Ah[si]
+ 03D4    **                  mov     es,02h[si]
+ 03D7    **                  es:     
+ 03D8    **                  push    [bx]
+ 03DA    **                  call    PUTI
+ 03DF   0006        i = -&H1235: l = -&H12345679: s = 1.5: d = -2.25: st = "mix
+                "
+ 03DF   0006        call arm: pMix i, l, s, d, st, &H2222: verify 10
+ 03DF    **                  mov     0ECh[bp],0EDCBh
+ 03E4    **                  mov     0E8h[bp],0A987h
+ 03E9    **                  mov     0EAh[bp],0EDCBh
+ 03EE    **                  mov     0E4h[bp],0000h
+ 03F3    **                  mov     0E6h[bp],3FC0h
+ 03F8    **                  lea     di,0DCh[bp]
+ 03FB    **                  mov     si,offset <00000000000002C0>
+ 03FE    **                  push    ds
+ 03FF    **                  pop     es
+ 0400    **                  movsw   
+ 0401    **                  movsw   
+ 0402    **                  movsw   
+ 0403    **                  movsw   
+ 0404    **                  push    offset <const>
+ 0407    **                  lea     ax,0D8h[bp]
+ 040A    **                  push    ax
+ 040B    **                  call    B$SASS
+ 0410    **                  call    ARM
+ 0415    **                  mov     0FF6Ch[bp],2222h
+ 041B    **                  lea     ax,0ECh[bp]
+ 041E    **                  push    ax
+ 041F    **                  lea     ax,0E8h[bp]
+ 0422    **                  push    ax
+ 0423    **                  lea     ax,0E4h[bp]
+ 0426    **                  push    ax
+ 0427    **                  lea     ax,0DCh[bp]
+ 042A    **                  push    ax
+ 042B    **                  lea     ax,0D8h[bp]
+                                                                      PAGE  10
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 042E    **                  push    ax
+ 042F    **                  lea     ax,0FF6Ch[bp]
+ 0433    **                  push    ax
+ 0434    **                  call    PMIX
+ 0439    **                  push    0Ah
+ 043B    **                  call    VERIFY
+ 0440   0006        call arm: sVoid: verify 11
+ 0440    **                  call    ARM
+ 0445    **                  call    SVOID
+ 044A    **                  push    0Bh
+ 044C    **                  call    VERIFY
+ 0451   0006    
+ 0451   0006        call arm: putI 58, rInt%(&H3333): verify 20
+ 0451    **                  call    ARM
+ 0456    **                  mov     0FF6Ah[bp],3333h
+ 045C    **                  lea     ax,0FF6Ah[bp]
+ 0460    **                  push    ax
+ 0461    **                  call    RINT%
+ 0466    **                  mov     0FF68h[bp],ax
+ 046A    **                  push    3Ah
+ 046C    **                  push    0FF68h[bp]
+ 0470    **                  call    PUTI
+ 0475    **                  push    14h
+ 0477    **                  call    VERIFY
+ 047C   0006        call arm: putL 60, rLng&(&H3333): verify 21
+ 047C    **                  call    ARM
+ 0481    **                  mov     0FF66h[bp],3333h
+ 0487    **                  lea     ax,0FF66h[bp]
+ 048B    **                  push    ax
+ 048C    **                  call    RLNG&
+ 0491    **                  mov     0FF62h[bp],ax
+ 0495    **                  mov     0FF64h[bp],dx
+ 0499    **                  push    3Ch
+ 049B    **                  push    0FF64h[bp]
+ 049F    **                  push    0FF62h[bp]
+ 04A3    **                  call    PUTL
+ 04A8    **                  push    15h
+ 04AA    **                  call    VERIFY
+ 04AF   0006        call arm: putF 62, rSng!(&H3333): verify 22
+ 04AF    **                  call    ARM
+ 04B4    **                  mov     0FF60h[bp],3333h
+ 04BA    **                  lea     ax,0FF60h[bp]
+ 04BE    **                  push    ax
+ 04BF    **                  lea     ax,0FF5Ch[bp]
+ 04C3    **                  push    ax
+ 04C4    **                  call    RSNG!
+ 04C9    **                  push    3Eh
+ 04CB    **                  push    0FF5Eh[bp]
+ 04CF    **                  push    0FF5Ch[bp]
+ 04D3    **                  call    PUTF
+ 04D8    **                  push    16h
+ 04DA    **                  call    VERIFY
+ 04DF   0006        call arm: putD 64, rDbl#(&H3333): verify 23
+ 04DF    **                  call    ARM
+                                                                      PAGE  11
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 04E4    **                  mov     0FF5Ah[bp],3333h
+ 04EA    **                  lea     ax,0FF5Ah[bp]
+ 04EE    **                  push    ax
+ 04EF    **                  lea     ax,0FF52h[bp]
+ 04F3    **                  push    ax
+ 04F4    **                  call    RDBL#
+ 04F9    **                  push    40h
+ 04FB    **                  lea     bx,0FF52h[bp]
+ 04FF    **                  push    06h[bx]
+ 0502    **                  push    04h[bx]
+ 0505    **                  push    02h[bx]
+ 0508    **                  push    [bx]
+ 050A    **                  call    PUTD
+ 050F    **                  push    17h
+ 0511    **                  call    VERIFY
+ 0516   0006        callStrs
+ 0516    **                  call    CALLSTRS
+ 051B   0006    
+ 051B   0006        call arm: recVal -&H1235, -&H12345679, 1.5, -2.25: verify 3
+                0
+ 051B    **                  call    ARM
+ 0520    **                  push    0EDCBh
+ 0523    **                  push    0EDCBh
+ 0526    **                  push    0A987h
+ 0529    **                  push    3FC0h
+ 052C    **                  push    00h
+ 052E    **                  push    0C002h
+ 0531    **                  push    00h
+ 0533    **                  push    00h
+ 0535    **                  push    00h
+ 0537    **                  call    RECVAL
+ 053C    **                  push    1Eh
+ 053E    **                  call    VERIFY
+ 0543   0006        segI = -&H1235: segD = -2.25
+ 0543   0006        call arm: recSeg segI, segD: verify 31
+ 0543    **                  mov     0A8h[bp],0EDCBh
+ 0548    **                  lea     di,0A0h[bp]
+ 054B    **                  mov     si,offset <00000000000002C0>
+ 054E    **                  push    ds
+ 054F    **                  pop     es
+ 0550    **                  movsw   
+ 0551    **                  movsw   
+ 0552    **                  movsw   
+ 0553    **                  movsw   
+ 0554    **                  call    ARM
+ 0559    **                  lea     bx,0A8h[bp]
+ 055C    **                  push    ds
+ 055D    **                  pop     es
+ 055E    **                  push    es
+ 055F    **                  push    bx
+ 0560    **                  lea     bx,0A0h[bp]
+ 0563    **                  push    ds
+ 0564    **                  pop     es
+ 0565    **                  push    es
+                                                                      PAGE  12
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0566    **                  push    bx
+ 0567    **                  call    RECSEG
+ 056C    **                  push    1Fh
+ 056E    **                  call    VERIFY
+ 0573   0006        putI 67, segI
+ 0573    **                  push    43h
+ 0575    **                  push    0A8h[bp]
+ 0578    **                  call    PUTI
+ 057D   0006        call arm: recCdl -&H1235, -&H12345679, -2.25: verify 32
+ 057D    **                  call    ARM
+ 0582    **                  push    0C002h
+ 0585    **                  push    00h
+ 0587    **                  push    00h
+ 0589    **                  push    00h
+ 058B    **                  push    0EDCBh
+ 058E    **                  push    0A987h
+ 0591    **                  push    0EDCBh
+ 0594    **                  call    _reccdl
+ 0599    **                  add     sp,0Eh
+ 059C    **                  push    20h
+ 059E    **                  call    VERIFY
+ 05A3   0006        call arm: putI 68, aInt%: verify 33
+ 05A3    **                  call    ARM
+ 05A8    **                  call    AINT%
+ 05AD    **                  mov     0FF50h[bp],ax
+ 05B1    **                  push    44h
+ 05B3    **                  push    0FF50h[bp]
+ 05B7    **                  call    PUTI
+ 05BC    **                  push    21h
+ 05BE    **                  call    VERIFY
+ 05C3   0006        call arm: putL 69, aLng&: verify 34
+ 05C3    **                  call    ARM
+ 05C8    **                  call    ALNG&
+ 05CD    **                  mov     0FF4Ch[bp],ax
+ 05D1    **                  mov     0FF4Eh[bp],dx
+ 05D5    **                  push    45h
+ 05D7    **                  push    0FF4Eh[bp]
+ 05DB    **                  push    0FF4Ch[bp]
+ 05DF    **                  call    PUTL
+ 05E4    **                  push    22h
+ 05E6    **                  call    VERIFY
+ 05EB   0006        call arm: putF 70, aSng!: verify 35
+ 05EB    **                  call    ARM
+ 05F0    **                  lea     ax,0FF48h[bp]
+ 05F4    **                  push    ax
+ 05F5    **                  call    ASNG!
+ 05FA    **                  push    46h
+ 05FC    **                  push    0FF4Ah[bp]
+ 0600    **                  push    0FF48h[bp]
+ 0604    **                  call    PUTF
+ 0609    **                  push    23h
+ 060B    **                  call    VERIFY
+ 0610   0006        call arm: putD 71, aDbl#: verify 36
+ 0610    **                  call    ARM
+                                                                      PAGE  13
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0615    **                  lea     ax,0FF40h[bp]
+ 0619    **                  push    ax
+ 061A    **                  call    ADBL#
+ 061F    **                  push    47h
+ 0621    **                  lea     bx,0FF40h[bp]
+ 0625    **                  push    06h[bx]
+ 0628    **                  push    04h[bx]
+ 062B    **                  push    02h[bx]
+ 062E    **                  push    [bx]
+ 0630    **                  call    PUTD
+ 0635    **                  push    24h
+ 0637    **                  call    VERIFY
+ 063C   0006        st = "abc": keepDesc st
+ 063C    **                  push    offset <const>
+ 063F    **                  lea     ax,0D8h[bp]
+ 0642    **                  push    ax
+ 0643    **                  call    B$SASS
+ 0648    **                  lea     ax,0D8h[bp]
+ 064B    **                  push    ax
+ 064C    **                  call    KEEPDESC
+ 0651   0006        call arm: sr = aStr$: verify 37
+ 0651    **                  call    ARM
+ 0656    **                  call    ASTR$
+ 065B    **                  push    ax
+ 065C    **                  lea     ax,0FF3Ch[bp]
+ 0660    **                  push    ax
+ 0661    **                  call    B$SASS
+ 0666    **                  lea     ax,0FF3Ch[bp]
+ 066A    **                  push    ax
+ 066B    **                  lea     ax,0D4h[bp]
+ 066E    **                  push    ax
+ 066F    **                  call    B$SASS
+ 0674    **                  push    25h
+ 0676    **                  call    VERIFY
+ 067B   0006        crStr 72, sr
+ 067B    **                  mov     0FF3Ah[bp],0048h
+ 0681    **                  lea     ax,0FF3Ah[bp]
+ 0685    **                  push    ax
+ 0686    **                  lea     ax,0D4h[bp]
+ 0689    **                  push    ax
+ 068A    **                  call    CRSTR
+ 068F   0006        call arm: putI 73, xInt%: verify 38
+ 068F    **                  call    ARM
+ 0694    **                  call    _xint%
+ 0699    **                  mov     0FF38h[bp],ax
+ 069D    **                  push    49h
+ 069F    **                  push    0FF38h[bp]
+ 06A3    **                  call    PUTI
+ 06A8    **                  push    26h
+ 06AA    **                  call    VERIFY
+ 06AF   0006        call arm: putL 74, xLng&: verify 39
+ 06AF    **                  call    ARM
+ 06B4    **                  call    _xlng&
+ 06B9    **                  mov     0FF34h[bp],ax
+                                                                      PAGE  14
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 06BD    **                  mov     0FF36h[bp],dx
+ 06C1    **                  push    4Ah
+ 06C3    **                  push    0FF36h[bp]
+ 06C7    **                  push    0FF34h[bp]
+ 06CB    **                  call    PUTL
+ 06D0    **                  push    27h
+ 06D2    **                  call    VERIFY
+ 06D7   0006        ' BC reads a CDECL float through SI: no register check.
+ 06D7   0006        putF 75, xSng!
+ 06D7    **                  call    _xsng!
+ 06DC    **                  mov     si,ax
+ 06DE    **                  int     35h
+ 06E0    **                  db      04h
+ 06E1    **                  int     35h
+ 06E3    **                  db      9Eh
+ 06E4    **                  dw      0FF30h
+ 06E6    **                  int     3Dh
+ 06E8    **                  push    4Bh
+ 06EA    **                  push    0FF32h[bp]
+ 06EE    **                  push    0FF30h[bp]
+ 06F2    **                  call    PUTF
+ 06F7   0006        putD 76, xDbl#
+ 06F7    **                  call    _xdbl#
+ 06FC    **                  mov     si,ax
+ 06FE    **                  lea     di,0FF28h[bp]
+ 0702    **                  push    ds
+ 0703    **                  pop     es
+ 0704    **                  movsw   
+ 0705    **                  movsw   
+ 0706    **                  movsw   
+ 0707    **                  movsw   
+ 0708    **                  push    4Ch
+ 070A    **                  lea     bx,0FF28h[bp]
+ 070E    **                  push    06h[bx]
+ 0711    **                  push    04h[bx]
+ 0714    **                  push    02h[bx]
+ 0717    **                  push    [bx]
+ 0719    **                  call    PUTD
+ 071E   0006    
+ 071E   0006    '$include: 'CURCALL.BI'
+ 071E   0006        dim c as currency
+ 071E   0006        c = -1234.5678
+ 071E   0006        call arm: pCur &H1111, c, &H2222: verify 40
+ 071E    **                  mov     bx,offset <B29E43FFFFFFFFFF>
+ 0721    **                  call    __aFcyld
+ 0726    **                  lea     bx,0FF20h[bp]
+ 072A    **                  call    __aFcyst
+ 072F    **                  call    ARM
+ 0734    **                  mov     0FF1Eh[bp],1111h
+ 073A    **                  mov     0FF1Ch[bp],2222h
+ 0740    **                  lea     ax,0FF1Eh[bp]
+ 0744    **                  push    ax
+ 0745    **                  lea     ax,0FF20h[bp]
+ 0749    **                  push    ax
+                                                                      PAGE  15
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 074A    **                  lea     ax,0FF1Ch[bp]
+ 074E    **                  push    ax
+ 074F    **                  call    PCUR
+ 0754    **                  push    28h
+ 0756    **                  call    VERIFY
+ 075B   0006        putY 83, c
+ 075B    **                  push    53h
+ 075D    **                  lea     bx,0FF20h[bp]
+ 0761    **                  push    06h[bx]
+ 0764    **                  push    04h[bx]
+ 0767    **                  push    02h[bx]
+ 076A    **                  push    [bx]
+ 076C    **                  call    PUTY
+ 0771   0006        call arm: putY 85, rCur@(&H3333): verify 41
+ 0771    **                  call    ARM
+ 0776    **                  mov     0FF1Ah[bp],3333h
+ 077C    **                  lea     ax,0FF1Ah[bp]
+ 0780    **                  push    ax
+ 0781    **                  lea     ax,0FF12h[bp]
+ 0785    **                  push    ax
+ 0786    **                  call    RCUR@
+ 078B    **                  push    55h
+ 078D    **                  lea     bx,0FF12h[bp]
+ 0791    **                  push    06h[bx]
+ 0794    **                  push    04h[bx]
+ 0797    **                  push    02h[bx]
+ 079A    **                  push    [bx]
+ 079C    **                  call    PUTY
+ 07A1    **                  push    29h
+ 07A3    **                  call    VERIFY
+ 07A8   0006    '$include: 'V71CALL.BI'
+ 07A8   0006        dim byvH as integer, byvL as long
+ 07A8   0006        byvH = &H1111: byvL = -&H12345679
+ 07A8   0006        call arm: pByv byvH, byvL, 1.5, -2.25, &H2222: verify 44
+ 07A8    **                  mov     0FF10h[bp],1111h
+ 07AE    **                  mov     0FF0Ch[bp],0A987h
+ 07B4    **                  mov     0FF0Eh[bp],0EDCBh
+ 07BA    **                  call    ARM
+ 07BF    **                  push    0FF10h[bp]
+ 07C3    **                  push    0FF0Eh[bp]
+ 07C7    **                  push    0FF0Ch[bp]
+ 07CB    **                  push    3FC0h
+ 07CE    **                  push    00h
+ 07D0    **                  push    0C002h
+ 07D3    **                  push    00h
+ 07D5    **                  push    00h
+ 07D7    **                  push    00h
+ 07D9    **                  push    2222h
+ 07DC    **                  call    PBYV
+ 07E1    **                  push    2Ch
+ 07E3    **                  call    VERIFY
+ 07E8   0006        putI 97, byvH: putL 98, byvL
+ 07E8    **                  push    61h
+ 07EA    **                  push    0FF10h[bp]
+                                                                      PAGE  16
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 07EE    **                  call    PUTI
+ 07F3    **                  push    62h
+ 07F5    **                  push    0FF0Eh[bp]
+ 07F9    **                  push    0FF0Ch[bp]
+ 07FD    **                  call    PUTL
+ 0802   0006    end sub
+ 0802    **        I00008:   lea     ax,0FF3Ch[bp]
+ 0806    **                  push    ax
+ 0807    **                  call    B$STDL
+ 080C    **                  lea     ax,0FF72h[bp]
+ 0810    **                  push    ax
+ 0811    **                  call    B$STDL
+ 0816    **                  lea     ax,0FF7Ch[bp]
+ 081A    **                  push    ax
+ 081B    **                  call    B$STDL
+ 0820    **                  lea     ax,84h[bp]
+ 0823    **                  push    ax
+ 0824    **                  call    B$STDL
+ 0829    **                  lea     ax,0AAh[bp]
+ 082C    **                  push    ax
+ 082D    **                  call    B$ERAS
+ 0832    **                  lea     ax,0D4h[bp]
+ 0835    **                  push    ax
+ 0836    **                  call    B$STDL
+ 083B    **                  lea     ax,0D8h[bp]
+ 083E    **                  push    ax
+ 083F    **                  call    B$STDL
+ 0844    **                  call    B$EXSA
+ 0849    **                  ret     0000h
+ 084C   0006    
+ 084C    **        I00007:   call    B$CENP
+ 0851   0006    
+
+45996 Bytes Available
+40968 Bytes Free
+
+    0 Warning Error(s)
+    0 Severe  Error(s)

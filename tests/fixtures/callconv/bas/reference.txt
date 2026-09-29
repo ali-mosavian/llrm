@@ -1,0 +1,783 @@
+vbdos PDBL return                          far pops 6                               bc/vbdos/CE.LST:263
+vbdos PDBL keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:263
+vbdos PDBL call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 0D 00      bc/vbdos/CE.LST:263
+vbdos PDBL call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:263
+vbdos PDBL call PUTD #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 *(in+6 in+7)+6 *(in+6 in+7)+7 0E 00 bc/vbdos/CE.LST:263
+vbdos PDBL call PUTD #1 cleanup            far pops 0                               bc/vbdos/CE.LST:263
+vbdos PDBL call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 0F 00      bc/vbdos/CE.LST:263
+vbdos PDBL call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:263
+vbdos PFIX return                          far pops 6                               bc/vbdos/CE.LST:342
+vbdos PFIX keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:342
+vbdos PFIX call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 15 00      bc/vbdos/CE.LST:342
+vbdos PFIX call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:342
+vbdos PFIX call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/vbdos/CE.LST:342
+vbdos PFIX call CESTR #1 cleanup           far pops 0                               bc/vbdos/CE.LST:342
+vbdos PFIX call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 17 00      bc/vbdos/CE.LST:342
+vbdos PFIX call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:342
+vbdos PINT return                          far pops 6                               bc/vbdos/CE.LST:149
+vbdos PINT keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:149
+vbdos PINT call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 01 00      bc/vbdos/CE.LST:149
+vbdos PINT call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:149
+vbdos PINT call PUTI #2 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 02 00      bc/vbdos/CE.LST:149
+vbdos PINT call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:149
+vbdos PINT call PUTI #3 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 03 00      bc/vbdos/CE.LST:149
+vbdos PINT call PUTI #3 cleanup            far pops 0                               bc/vbdos/CE.LST:149
+vbdos PLNG return                          far pops 6                               bc/vbdos/CE.LST:184
+vbdos PLNG keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:184
+vbdos PLNG call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 05 00      bc/vbdos/CE.LST:184
+vbdos PLNG call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:184
+vbdos PLNG call PUTL #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 06 00 bc/vbdos/CE.LST:184
+vbdos PLNG call PUTL #1 cleanup            far pops 0                               bc/vbdos/CE.LST:184
+vbdos PLNG call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 07 00      bc/vbdos/CE.LST:184
+vbdos PLNG call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:184
+vbdos PMIX return                          far pops 12                              bc/vbdos/CE.LST:688
+vbdos PMIX keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:688
+vbdos PMIX call PUTI #1 stack              *(in+14 in+15)+0 *(in+14 in+15)+1 32 00  bc/vbdos/CE.LST:688
+vbdos PMIX call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:688
+vbdos PMIX call PUTL #1 stack              *(in+12 in+13)+0 *(in+12 in+13)+1 *(in+12 in+13)+2 *(in+12 in+13)+3 33 00 bc/vbdos/CE.LST:688
+vbdos PMIX call PUTL #1 cleanup            far pops 0                               bc/vbdos/CE.LST:688
+vbdos PMIX call PUTF #1 stack              *(in+10 in+11)+0 *(in+10 in+11)+1 *(in+10 in+11)+2 *(in+10 in+11)+3 34 00 bc/vbdos/CE.LST:688
+vbdos PMIX call PUTF #1 cleanup            far pops 0                               bc/vbdos/CE.LST:688
+vbdos PMIX call PUTD #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 *(in+8 in+9)+2 *(in+8 in+9)+3 *(in+8 in+9)+4 *(in+8 in+9)+5 *(in+8 in+9)+6 *(in+8 in+9)+7 35 00 bc/vbdos/CE.LST:688
+vbdos PMIX call PUTD #1 cleanup            far pops 0                               bc/vbdos/CE.LST:688
+vbdos PMIX call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/vbdos/CE.LST:688
+vbdos PMIX call CESTR #1 cleanup           far pops 0                               bc/vbdos/CE.LST:688
+vbdos PMIX call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 37 00      bc/vbdos/CE.LST:688
+vbdos PMIX call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:688
+vbdos PREC return                          far pops 6                               bc/vbdos/CE.LST:379
+vbdos PREC keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:379
+vbdos PREC call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 19 00      bc/vbdos/CE.LST:379
+vbdos PREC call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:379
+vbdos PREC call PUTI #2 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 1A 00      bc/vbdos/CE.LST:379
+vbdos PREC call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:379
+vbdos PREC call PUTL #1 stack              *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 1B 00 bc/vbdos/CE.LST:379
+vbdos PREC call PUTL #1 cleanup            far pops 0                               bc/vbdos/CE.LST:379
+vbdos PREC call PUTD #1 stack              *(in+6 in+7)+6 *(in+6 in+7)+7 *(in+6 in+7)+8 *(in+6 in+7)+9 *(in+6 in+7)+10 *(in+6 in+7)+11 *(in+6 in+7)+12 *(in+6 in+7)+13 1C 00 bc/vbdos/CE.LST:379
+vbdos PREC call PUTD #1 cleanup            far pops 0                               bc/vbdos/CE.LST:379
+vbdos PREC call CESTR #1 stack             &.0 &.1 &.0 &.1                          bc/vbdos/CE.LST:379
+vbdos PREC call CESTR #1 cleanup           far pops 0                               bc/vbdos/CE.LST:379
+vbdos PREC call PUTI #3 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 1E 00      bc/vbdos/CE.LST:379
+vbdos PREC call PUTI #3 cleanup            far pops 0                               bc/vbdos/CE.LST:379
+vbdos PSNG return                          far pops 6                               bc/vbdos/CE.LST:220
+vbdos PSNG keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:220
+vbdos PSNG call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 09 00      bc/vbdos/CE.LST:220
+vbdos PSNG call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:220
+vbdos PSNG call PUTF #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 0A 00 bc/vbdos/CE.LST:220
+vbdos PSNG call PUTF #1 cleanup            far pops 0                               bc/vbdos/CE.LST:220
+vbdos PSNG call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 0B 00      bc/vbdos/CE.LST:220
+vbdos PSNG call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:220
+vbdos PSTR return                          far pops 6                               bc/vbdos/CE.LST:309
+vbdos PSTR keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:309
+vbdos PSTR call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 11 00      bc/vbdos/CE.LST:309
+vbdos PSTR call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:309
+vbdos PSTR call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/vbdos/CE.LST:309
+vbdos PSTR call CESTR #1 cleanup           far pops 0                               bc/vbdos/CE.LST:309
+vbdos PSTR call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 13 00      bc/vbdos/CE.LST:309
+vbdos PSTR call PUTI #2 cleanup            far pops 0                               bc/vbdos/CE.LST:309
+vbdos RDBL return                          far pops 4                               bc/vbdos/CE.LST:833
+vbdos RDBL keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:833
+vbdos RDBL result                          through in+4 in+5: 00 00 00 00 00 00 02 C0 ax in+4 in+5 bc/vbdos/CE.LST:833
+vbdos RDBL call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 3F 00      bc/vbdos/CE.LST:833
+vbdos RDBL call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:833
+vbdos RINT return                          far pops 2                               bc/vbdos/CE.LST:759
+vbdos RINT keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:759
+vbdos RINT result                          ax CB ED                                 bc/vbdos/CE.LST:759
+vbdos RINT call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 39 00      bc/vbdos/CE.LST:759
+vbdos RINT call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:759
+vbdos RLNG return                          far pops 2                               bc/vbdos/CE.LST:784
+vbdos RLNG keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:784
+vbdos RLNG result                          dxax 87 A9 CB ED                         bc/vbdos/CE.LST:784
+vbdos RLNG call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 3B 00      bc/vbdos/CE.LST:784
+vbdos RLNG call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:784
+vbdos RSNG return                          far pops 4                               bc/vbdos/CE.LST:806
+vbdos RSNG keeps                           si di bp ds ss sp df                     bc/vbdos/CE.LST:806
+vbdos RSNG result                          through in+4 in+5: 00 00 C0 3F ax in+4 in+5 bc/vbdos/CE.LST:806
+vbdos RSNG call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 3D 00      bc/vbdos/CE.LST:806
+vbdos RSNG call PUTI #1 cleanup            far pops 0                               bc/vbdos/CE.LST:806
+vbdos SVOID return                         far pops 0                               bc/vbdos/CE.LST:742
+vbdos SVOID keeps                          si di bp ds ss sp df                     bc/vbdos/CE.LST:742
+vbdos SVOID call PUTI #1 stack             55 55 38 00                              bc/vbdos/CE.LST:742
+vbdos SVOID call PUTI #1 cleanup           far pops 0                               bc/vbdos/CE.LST:742
+vbdos RSTR return                          far pops 2                               bc/vbdos/CES.LST:100
+vbdos RSTR keeps                           si di bp ds ss sp df                     bc/vbdos/CES.LST:100
+vbdos RSTR result                          ax B$SCPF:eax.0 B$SCPF:eax.1             bc/vbdos/CES.LST:100
+vbdos RSTR call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 41 00      bc/vbdos/CES.LST:100
+vbdos RSTR call PUTI #1 cleanup            far pops 0                               bc/vbdos/CES.LST:100
+vbdos PCUR return                          far pops 6                               bc/vbdos/CUE.LST:99
+vbdos PCUR keeps                           si di bp ds ss sp df                     bc/vbdos/CUE.LST:99
+vbdos PCUR call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 50 00      bc/vbdos/CUE.LST:99
+vbdos PCUR call PUTI #1 cleanup            far pops 0                               bc/vbdos/CUE.LST:99
+vbdos PCUR call PUTY #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 *(in+6 in+7)+6 *(in+6 in+7)+7 51 00 bc/vbdos/CUE.LST:99
+vbdos PCUR call PUTY #1 cleanup            far pops 0                               bc/vbdos/CUE.LST:99
+vbdos PCUR call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 52 00      bc/vbdos/CUE.LST:99
+vbdos PCUR call PUTI #2 cleanup            far pops 0                               bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYLD #1 stack                                                   bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYLD #1 cleanup        far pops 0                               bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYLD #2 stack                                                   bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYLD #2 cleanup        far pops 0                               bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYMUL #1 stack                                                  bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYMUL #1 cleanup       far pops 0                               bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYST #1 stack                                                   bc/vbdos/CUE.LST:99
+vbdos PCUR call __AFCYST #1 cleanup        far pops 0                               bc/vbdos/CUE.LST:99
+vbdos RCUR return                          far pops 4                               bc/vbdos/CUE.LST:143
+vbdos RCUR keeps                           si di bp ds ss sp df                     bc/vbdos/CUE.LST:143
+vbdos RCUR result                          ax in+4 in+5                             bc/vbdos/CUE.LST:143
+vbdos RCUR call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 54 00      bc/vbdos/CUE.LST:143
+vbdos RCUR call PUTI #1 cleanup            far pops 0                               bc/vbdos/CUE.LST:143
+vbdos RCUR call __AFCYLD #1 stack                                                   bc/vbdos/CUE.LST:143
+vbdos RCUR call __AFCYLD #1 cleanup        far pops 0                               bc/vbdos/CUE.LST:143
+vbdos RCUR call __AFCYST #1 stack                                                   bc/vbdos/CUE.LST:143
+vbdos RCUR call __AFCYST #1 cleanup        far pops 0                               bc/vbdos/CUE.LST:143
+vbdos PBYV return                          far pops 20                              bc/vbdos/CVE.LST:100
+vbdos PBYV keeps                           si di bp ds ss sp df                     bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTI #1 stack              in+22 in+23 56 00                        bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTI #1 cleanup            far pops 0                               bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTL #1 stack              in+18 in+19 in+20 in+21 57 00            bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTL #1 cleanup            far pops 0                               bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTF #1 stack              in+14 in+15 in+16 in+17 58 00            bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTF #1 cleanup            far pops 0                               bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTD #1 stack              in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 59 00 bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTD #1 cleanup            far pops 0                               bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTI #2 stack              in+4 in+5 5D 00                          bc/vbdos/CVE.LST:100
+vbdos PBYV call PUTI #2 cleanup            far pops 0                               bc/vbdos/CVE.LST:100
+vbdos PSEGD return                         far pops 6                               bc/vbdos/CVE.LST:151
+vbdos PSEGD keeps                          si di bp ds ss sp df                     bc/vbdos/CVE.LST:151
+vbdos PSEGD call PUTI #1 stack             *(in+8 in+9)+0 *(in+8 in+9)+1 5E 00      bc/vbdos/CVE.LST:151
+vbdos PSEGD call PUTI #1 cleanup           far pops 0                               bc/vbdos/CVE.LST:151
+vbdos PSEGD call PUTI #2 stack             *(in+6 in+7)+0 *(in+6 in+7)+1 5F 00      bc/vbdos/CVE.LST:151
+vbdos PSEGD call PUTI #2 cleanup           far pops 0                               bc/vbdos/CVE.LST:151
+vbdos PSEGD call PUTI #3 stack             *(in+4 in+5)+0 *(in+4 in+5)+1 60 00      bc/vbdos/CVE.LST:151
+vbdos PSEGD call PUTI #3 cleanup           far pops 0                               bc/vbdos/CVE.LST:151
+vbdos CALLALL return                       far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL keeps                        si di bp ds ss sp df                     bc/vbdos/CR.LST:151
+vbdos CALLALL call PINT #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PINT #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #1 stack           - - 04 00                                bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PLNG #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PLNG #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #1 stack           - - - - 08 00                            bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PSNG #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PSNG #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #1 stack           - - - - 0C 00                            bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PDBL #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PDBL #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #1 stack           - - - - - - - - 10 00                    bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PSTR #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PSTR #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #1 stack          &.0 &.1 &.0 &.1                          bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #1 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PFIX #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PFIX #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #2 stack          &.0 &.1 &.0 &.1                          bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #2 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PREC #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PREC #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #2 stack           - - 1F 00                                bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #2 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #3 stack          &.0 &.1 &.0 &.1                          bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #3 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PARRI #1 stack          &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PARRI #1 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #3 stack           - - 29 00                                bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #3 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PMIX #1 stack           &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 bc/vbdos/CR.LST:151
+vbdos CALLALL call PMIX #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call SVOID #1 stack                                                   bc/vbdos/CR.LST:151
+vbdos CALLALL call SVOID #1 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call RINT #1 stack           &.0 &.1                                  bc/vbdos/CR.LST:151
+vbdos CALLALL call RINT #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #4 stack           - - 3A 00                                bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #4 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call RLNG #1 stack           &.0 &.1                                  bc/vbdos/CR.LST:151
+vbdos CALLALL call RLNG #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #2 stack           - - - - 3C 00                            bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #2 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call RSNG #1 stack           &.0 &.1 &.0 &.1                          bc/vbdos/CR.LST:151
+vbdos CALLALL call RSNG #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #2 stack           - - - - 3E 00                            bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #2 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call RDBL #1 stack           &.0 &.1 &.0 &.1                          bc/vbdos/CR.LST:151
+vbdos CALLALL call RDBL #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #2 stack           - - - - - - - - 40 00                    bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #2 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call CALLSTRS #1 stack                                                bc/vbdos/CR.LST:151
+vbdos CALLALL call CALLSTRS #1 cleanup     far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call RECVAL #1 stack         00 00 00 00 00 00 02 C0 00 00 C0 3F 87 A9 CB ED CB ED bc/vbdos/CR.LST:151
+vbdos CALLALL call RECVAL #1 cleanup       far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call RECSEG #1 stack         &.0 &.1 dgroup.0 dgroup.1 &.0 &.1 dgroup.0 dgroup.1 bc/vbdos/CR.LST:151
+vbdos CALLALL call RECSEG #1 cleanup       far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #5 stack           - - 43 00                                bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #5 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call _RECCDL #1 stack        CB ED 87 A9 CB ED 00 00 00 00 00 00 02 C0 bc/vbdos/CR.LST:151
+vbdos CALLALL call _RECCDL #1 cleanup      far pops 14                              bc/vbdos/CR.LST:151
+vbdos CALLALL call AINT #1 stack                                                    bc/vbdos/CR.LST:151
+vbdos CALLALL call AINT #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #6 stack           - - 44 00                                bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #6 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call ALNG #1 stack                                                    bc/vbdos/CR.LST:151
+vbdos CALLALL call ALNG #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #3 stack           - - - - 45 00                            bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #3 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call ASNG #1 stack           &.0 &.1                                  bc/vbdos/CR.LST:151
+vbdos CALLALL call ASNG #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #3 stack           - - - - 46 00                            bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #3 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call ADBL #1 stack           &.0 &.1                                  bc/vbdos/CR.LST:151
+vbdos CALLALL call ADBL #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #3 stack           - - - - - - - - 47 00                    bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #3 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call KEEPDESC #1 stack       &.0 &.1                                  bc/vbdos/CR.LST:151
+vbdos CALLALL call KEEPDESC #1 cleanup     far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call ASTR #1 stack                                                    bc/vbdos/CR.LST:151
+vbdos CALLALL call ASTR #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #4 stack          &.0 &.1 &.0 &.1                          bc/vbdos/CR.LST:151
+vbdos CALLALL call CRSTR #4 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call _XINT #1 stack                                                   bc/vbdos/CR.LST:151
+vbdos CALLALL call _XINT #1 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #7 stack           - - 49 00                                bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #7 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call _XLNG #1 stack                                                   bc/vbdos/CR.LST:151
+vbdos CALLALL call _XLNG #1 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #4 stack           - - - - 4A 00                            bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #4 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call _XSNG #1 stack                                                   bc/vbdos/CR.LST:151
+vbdos CALLALL call _XSNG #1 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #4 stack           *(_XSNG:eax.0 _XSNG:eax.1)+0 *(_XSNG:eax.0 _XSNG:eax.1)+1 *(_XSNG:eax.0 _XSNG:eax.1)+2 *(_XSNG:eax.0 _XSNG:eax.1)+3 4B 00 bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTF #4 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call _XDBL #1 stack                                                   bc/vbdos/CR.LST:151
+vbdos CALLALL call _XDBL #1 cleanup        far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #4 stack           *(_XDBL:eax.0 _XDBL:eax.1)+0 *(_XDBL:eax.0 _XDBL:eax.1)+1 *(_XDBL:eax.0 _XDBL:eax.1)+2 *(_XDBL:eax.0 _XDBL:eax.1)+3 *(_XDBL:eax.0 _XDBL:eax.1)+4 *(_XDBL:eax.0 _XDBL:eax.1)+5 *(_XDBL:eax.0 _XDBL:eax.1)+6 *(_XDBL:eax.0 _XDBL:eax.1)+7 4C 00 bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTD #4 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call __AFCYLD #1 stack                                                bc/vbdos/CR.LST:151
+vbdos CALLALL call __AFCYLD #1 cleanup     far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call __AFCYST #1 stack                                                bc/vbdos/CR.LST:151
+vbdos CALLALL call __AFCYST #1 cleanup     far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PCUR #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CR.LST:151
+vbdos CALLALL call PCUR #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTY #1 stack           - - - - - - - - 53 00                    bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTY #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call RCUR #1 stack           &.0 &.1 &.0 &.1                          bc/vbdos/CR.LST:151
+vbdos CALLALL call RCUR #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTY #2 stack           - - - - - - - - 55 00                    bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTY #2 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PBYV #1 stack           22 22 00 00 00 00 00 00 02 C0 00 00 C0 3F 87 A9 CB ED 11 11 bc/vbdos/CR.LST:151
+vbdos CALLALL call PBYV #1 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #8 stack           11 11 61 00                              bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTI #8 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #5 stack           87 A9 CB ED 62 00                        bc/vbdos/CR.LST:151
+vbdos CALLALL call PUTL #5 cleanup         far pops 0                               bc/vbdos/CR.LST:151
+vbdos CALLSTRS return                      far pops 0                               bc/vbdos/CRS.LST:101
+vbdos CALLSTRS keeps                       si di bp ds ss sp df                     bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call PARRS #1 stack         &.0 &.1 &.0 &.1 &.0 &.1                  bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call PARRS #1 cleanup       far pops 0                               bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call CRSTR #1 stack         &.0 &.1 &.0 &.1                          bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call CRSTR #1 cleanup       far pops 0                               bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call RSTR #1 stack          &.0 &.1                                  bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call RSTR #1 cleanup        far pops 0                               bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call CRSTR #2 stack         &.0 &.1 &.0 &.1                          bc/vbdos/CRS.LST:101
+vbdos CALLSTRS call CRSTR #2 cleanup       far pops 0                               bc/vbdos/CRS.LST:101
+pds71 PDBL return                          far pops 6                               bc/pds71/CE.LST:249
+pds71 PDBL keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:249
+pds71 PDBL call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 0D 00      bc/pds71/CE.LST:249
+pds71 PDBL call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:249
+pds71 PDBL call PUTD #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 *(in+6 in+7)+6 *(in+6 in+7)+7 0E 00 bc/pds71/CE.LST:249
+pds71 PDBL call PUTD #1 cleanup            far pops 0                               bc/pds71/CE.LST:249
+pds71 PDBL call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 0F 00      bc/pds71/CE.LST:249
+pds71 PDBL call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:249
+pds71 PFIX return                          far pops 6                               bc/pds71/CE.LST:320
+pds71 PFIX keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:320
+pds71 PFIX call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 15 00      bc/pds71/CE.LST:320
+pds71 PFIX call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:320
+pds71 PFIX call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/pds71/CE.LST:320
+pds71 PFIX call CESTR #1 cleanup           far pops 0                               bc/pds71/CE.LST:320
+pds71 PFIX call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 17 00      bc/pds71/CE.LST:320
+pds71 PFIX call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:320
+pds71 PINT return                          far pops 6                               bc/pds71/CE.LST:147
+pds71 PINT keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:147
+pds71 PINT call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 01 00      bc/pds71/CE.LST:147
+pds71 PINT call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:147
+pds71 PINT call PUTI #2 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 02 00      bc/pds71/CE.LST:147
+pds71 PINT call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:147
+pds71 PINT call PUTI #3 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 03 00      bc/pds71/CE.LST:147
+pds71 PINT call PUTI #3 cleanup            far pops 0                               bc/pds71/CE.LST:147
+pds71 PLNG return                          far pops 6                               bc/pds71/CE.LST:173
+pds71 PLNG keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:173
+pds71 PLNG call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 05 00      bc/pds71/CE.LST:173
+pds71 PLNG call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:173
+pds71 PLNG call PUTL #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 06 00 bc/pds71/CE.LST:173
+pds71 PLNG call PUTL #1 cleanup            far pops 0                               bc/pds71/CE.LST:173
+pds71 PLNG call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 07 00      bc/pds71/CE.LST:173
+pds71 PLNG call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:173
+pds71 PMIX return                          far pops 12                              bc/pds71/CE.LST:639
+pds71 PMIX keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:639
+pds71 PMIX call PUTI #1 stack              *(in+14 in+15)+0 *(in+14 in+15)+1 32 00  bc/pds71/CE.LST:639
+pds71 PMIX call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:639
+pds71 PMIX call PUTL #1 stack              *(in+12 in+13)+0 *(in+12 in+13)+1 *(in+12 in+13)+2 *(in+12 in+13)+3 33 00 bc/pds71/CE.LST:639
+pds71 PMIX call PUTL #1 cleanup            far pops 0                               bc/pds71/CE.LST:639
+pds71 PMIX call PUTF #1 stack              *(in+10 in+11)+0 *(in+10 in+11)+1 *(in+10 in+11)+2 *(in+10 in+11)+3 34 00 bc/pds71/CE.LST:639
+pds71 PMIX call PUTF #1 cleanup            far pops 0                               bc/pds71/CE.LST:639
+pds71 PMIX call PUTD #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 *(in+8 in+9)+2 *(in+8 in+9)+3 *(in+8 in+9)+4 *(in+8 in+9)+5 *(in+8 in+9)+6 *(in+8 in+9)+7 35 00 bc/pds71/CE.LST:639
+pds71 PMIX call PUTD #1 cleanup            far pops 0                               bc/pds71/CE.LST:639
+pds71 PMIX call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/pds71/CE.LST:639
+pds71 PMIX call CESTR #1 cleanup           far pops 0                               bc/pds71/CE.LST:639
+pds71 PMIX call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 37 00      bc/pds71/CE.LST:639
+pds71 PMIX call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:639
+pds71 PREC return                          far pops 6                               bc/pds71/CE.LST:348
+pds71 PREC keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:348
+pds71 PREC call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 19 00      bc/pds71/CE.LST:348
+pds71 PREC call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:348
+pds71 PREC call PUTI #2 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 1A 00      bc/pds71/CE.LST:348
+pds71 PREC call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:348
+pds71 PREC call PUTL #1 stack              *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 1B 00 bc/pds71/CE.LST:348
+pds71 PREC call PUTL #1 cleanup            far pops 0                               bc/pds71/CE.LST:348
+pds71 PREC call PUTD #1 stack              *(in+6 in+7)+6 *(in+6 in+7)+7 *(in+6 in+7)+8 *(in+6 in+7)+9 *(in+6 in+7)+10 *(in+6 in+7)+11 *(in+6 in+7)+12 *(in+6 in+7)+13 1C 00 bc/pds71/CE.LST:348
+pds71 PREC call PUTD #1 cleanup            far pops 0                               bc/pds71/CE.LST:348
+pds71 PREC call CESTR #1 stack             &.0 &.1 &.0 &.1                          bc/pds71/CE.LST:348
+pds71 PREC call CESTR #1 cleanup           far pops 0                               bc/pds71/CE.LST:348
+pds71 PREC call PUTI #3 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 1E 00      bc/pds71/CE.LST:348
+pds71 PREC call PUTI #3 cleanup            far pops 0                               bc/pds71/CE.LST:348
+pds71 PSNG return                          far pops 6                               bc/pds71/CE.LST:210
+pds71 PSNG keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:210
+pds71 PSNG call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 09 00      bc/pds71/CE.LST:210
+pds71 PSNG call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:210
+pds71 PSNG call PUTF #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 0A 00 bc/pds71/CE.LST:210
+pds71 PSNG call PUTF #1 cleanup            far pops 0                               bc/pds71/CE.LST:210
+pds71 PSNG call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 0B 00      bc/pds71/CE.LST:210
+pds71 PSNG call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:210
+pds71 PSTR return                          far pops 6                               bc/pds71/CE.LST:286
+pds71 PSTR keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:286
+pds71 PSTR call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 11 00      bc/pds71/CE.LST:286
+pds71 PSTR call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:286
+pds71 PSTR call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/pds71/CE.LST:286
+pds71 PSTR call CESTR #1 cleanup           far pops 0                               bc/pds71/CE.LST:286
+pds71 PSTR call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 13 00      bc/pds71/CE.LST:286
+pds71 PSTR call PUTI #2 cleanup            far pops 0                               bc/pds71/CE.LST:286
+pds71 RDBL return                          far pops 4                               bc/pds71/CE.LST:764
+pds71 RDBL keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:764
+pds71 RDBL result                          through in+4 in+5: 00 00 00 00 00 00 02 C0 ax in+4 in+5 bc/pds71/CE.LST:764
+pds71 RDBL call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 3F 00      bc/pds71/CE.LST:764
+pds71 RDBL call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:764
+pds71 RINT return                          far pops 2                               bc/pds71/CE.LST:701
+pds71 RINT keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:701
+pds71 RINT result                          ax CB ED                                 bc/pds71/CE.LST:701
+pds71 RINT call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 39 00      bc/pds71/CE.LST:701
+pds71 RINT call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:701
+pds71 RLNG return                          far pops 2                               bc/pds71/CE.LST:724
+pds71 RLNG keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:724
+pds71 RLNG result                          dxax 87 A9 CB ED                         bc/pds71/CE.LST:724
+pds71 RLNG call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 3B 00      bc/pds71/CE.LST:724
+pds71 RLNG call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:724
+pds71 RSNG return                          far pops 4                               bc/pds71/CE.LST:744
+pds71 RSNG keeps                           si di bp ds ss sp df                     bc/pds71/CE.LST:744
+pds71 RSNG result                          through in+4 in+5: 00 00 C0 3F ax in+4 in+5 bc/pds71/CE.LST:744
+pds71 RSNG call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 3D 00      bc/pds71/CE.LST:744
+pds71 RSNG call PUTI #1 cleanup            far pops 0                               bc/pds71/CE.LST:744
+pds71 SVOID return                         far pops 0                               bc/pds71/CE.LST:687
+pds71 SVOID keeps                          si di bp ds ss sp df                     bc/pds71/CE.LST:687
+pds71 SVOID call PUTI #1 stack             55 55 38 00                              bc/pds71/CE.LST:687
+pds71 SVOID call PUTI #1 cleanup           far pops 0                               bc/pds71/CE.LST:687
+pds71 RSTR return                          far pops 2                               bc/pds71/CES.LST:100
+pds71 RSTR keeps                           si di bp ds ss sp df                     bc/pds71/CES.LST:100
+pds71 RSTR result                          ax B$SCPF:eax.0 B$SCPF:eax.1             bc/pds71/CES.LST:100
+pds71 RSTR call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 41 00      bc/pds71/CES.LST:100
+pds71 RSTR call PUTI #1 cleanup            far pops 0                               bc/pds71/CES.LST:100
+pds71 PCUR return                          far pops 6                               bc/pds71/CUE.LST:99
+pds71 PCUR keeps                           si di bp ds ss sp df                     bc/pds71/CUE.LST:99
+pds71 PCUR call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 50 00      bc/pds71/CUE.LST:99
+pds71 PCUR call PUTI #1 cleanup            far pops 0                               bc/pds71/CUE.LST:99
+pds71 PCUR call PUTY #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 *(in+6 in+7)+6 *(in+6 in+7)+7 51 00 bc/pds71/CUE.LST:99
+pds71 PCUR call PUTY #1 cleanup            far pops 0                               bc/pds71/CUE.LST:99
+pds71 PCUR call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 52 00      bc/pds71/CUE.LST:99
+pds71 PCUR call PUTI #2 cleanup            far pops 0                               bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYLD #1 stack                                                   bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYLD #1 cleanup        far pops 0                               bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYLD #2 stack                                                   bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYLD #2 cleanup        far pops 0                               bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYMUL #1 stack                                                  bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYMUL #1 cleanup       far pops 0                               bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYST #1 stack                                                   bc/pds71/CUE.LST:99
+pds71 PCUR call __AFCYST #1 cleanup        far pops 0                               bc/pds71/CUE.LST:99
+pds71 RCUR return                          far pops 4                               bc/pds71/CUE.LST:139
+pds71 RCUR keeps                           si di bp ds ss sp df                     bc/pds71/CUE.LST:139
+pds71 RCUR result                          ax in+4 in+5                             bc/pds71/CUE.LST:139
+pds71 RCUR call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 54 00      bc/pds71/CUE.LST:139
+pds71 RCUR call PUTI #1 cleanup            far pops 0                               bc/pds71/CUE.LST:139
+pds71 RCUR call __AFCYLD #1 stack                                                   bc/pds71/CUE.LST:139
+pds71 RCUR call __AFCYLD #1 cleanup        far pops 0                               bc/pds71/CUE.LST:139
+pds71 RCUR call __AFCYST #1 stack                                                   bc/pds71/CUE.LST:139
+pds71 RCUR call __AFCYST #1 cleanup        far pops 0                               bc/pds71/CUE.LST:139
+pds71 PBYV return                          far pops 20                              bc/pds71/CVE.LST:100
+pds71 PBYV keeps                           si di bp ds ss sp df                     bc/pds71/CVE.LST:100
+pds71 PBYV call PUTI #1 stack              in+22 in+23 56 00                        bc/pds71/CVE.LST:100
+pds71 PBYV call PUTI #1 cleanup            far pops 0                               bc/pds71/CVE.LST:100
+pds71 PBYV call PUTL #1 stack              in+18 in+19 in+20 in+21 57 00            bc/pds71/CVE.LST:100
+pds71 PBYV call PUTL #1 cleanup            far pops 0                               bc/pds71/CVE.LST:100
+pds71 PBYV call PUTF #1 stack              in+14 in+15 in+16 in+17 58 00            bc/pds71/CVE.LST:100
+pds71 PBYV call PUTF #1 cleanup            far pops 0                               bc/pds71/CVE.LST:100
+pds71 PBYV call PUTD #1 stack              in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 59 00 bc/pds71/CVE.LST:100
+pds71 PBYV call PUTD #1 cleanup            far pops 0                               bc/pds71/CVE.LST:100
+pds71 PBYV call PUTI #2 stack              in+4 in+5 5D 00                          bc/pds71/CVE.LST:100
+pds71 PBYV call PUTI #2 cleanup            far pops 0                               bc/pds71/CVE.LST:100
+pds71 PSEGD return                         far pops 6                               bc/pds71/CVE.LST:145
+pds71 PSEGD keeps                          si di bp ds ss sp df                     bc/pds71/CVE.LST:145
+pds71 PSEGD call PUTI #1 stack             *(in+8 in+9)+0 *(in+8 in+9)+1 5E 00      bc/pds71/CVE.LST:145
+pds71 PSEGD call PUTI #1 cleanup           far pops 0                               bc/pds71/CVE.LST:145
+pds71 PSEGD call PUTI #2 stack             *(in+6 in+7)+0 *(in+6 in+7)+1 5F 00      bc/pds71/CVE.LST:145
+pds71 PSEGD call PUTI #2 cleanup           far pops 0                               bc/pds71/CVE.LST:145
+pds71 PSEGD call PUTI #3 stack             *(in+4 in+5)+0 *(in+4 in+5)+1 60 00      bc/pds71/CVE.LST:145
+pds71 PSEGD call PUTI #3 cleanup           far pops 0                               bc/pds71/CVE.LST:145
+pds71 CALLALL return                       far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL keeps                        si di bp ds ss sp df                     bc/pds71/CR.LST:149
+pds71 CALLALL call PINT #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PINT #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #1 stack           - - 04 00                                bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PLNG #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PLNG #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #1 stack           - - - - 08 00                            bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PSNG #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PSNG #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #1 stack           - - - - 0C 00                            bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PDBL #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PDBL #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #1 stack           - - - - - - - - 10 00                    bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PSTR #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PSTR #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #1 stack          &.0 &.1 &.0 &.1                          bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #1 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PFIX #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PFIX #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #2 stack          &.0 &.1 &.0 &.1                          bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #2 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PREC #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PREC #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #2 stack           - - 1F 00                                bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #2 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #3 stack          &.0 &.1 &.0 &.1                          bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #3 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PARRI #1 stack          &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PARRI #1 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #3 stack           - - 29 00                                bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #3 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PMIX #1 stack           &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 bc/pds71/CR.LST:149
+pds71 CALLALL call PMIX #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call SVOID #1 stack                                                   bc/pds71/CR.LST:149
+pds71 CALLALL call SVOID #1 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call RINT #1 stack           &.0 &.1                                  bc/pds71/CR.LST:149
+pds71 CALLALL call RINT #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #4 stack           - - 3A 00                                bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #4 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call RLNG #1 stack           &.0 &.1                                  bc/pds71/CR.LST:149
+pds71 CALLALL call RLNG #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #2 stack           - - - - 3C 00                            bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #2 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call RSNG #1 stack           &.0 &.1 &.0 &.1                          bc/pds71/CR.LST:149
+pds71 CALLALL call RSNG #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #2 stack           - - - - 3E 00                            bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #2 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call RDBL #1 stack           &.0 &.1 &.0 &.1                          bc/pds71/CR.LST:149
+pds71 CALLALL call RDBL #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #2 stack           - - - - - - - - 40 00                    bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #2 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call CALLSTRS #1 stack                                                bc/pds71/CR.LST:149
+pds71 CALLALL call CALLSTRS #1 cleanup     far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call RECVAL #1 stack         00 00 00 00 00 00 02 C0 00 00 C0 3F 87 A9 CB ED CB ED bc/pds71/CR.LST:149
+pds71 CALLALL call RECVAL #1 cleanup       far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call RECSEG #1 stack         &.0 &.1 dgroup.0 dgroup.1 &.0 &.1 dgroup.0 dgroup.1 bc/pds71/CR.LST:149
+pds71 CALLALL call RECSEG #1 cleanup       far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #5 stack           - - 43 00                                bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #5 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call _RECCDL #1 stack        CB ED 87 A9 CB ED 00 00 00 00 00 00 02 C0 bc/pds71/CR.LST:149
+pds71 CALLALL call _RECCDL #1 cleanup      far pops 14                              bc/pds71/CR.LST:149
+pds71 CALLALL call AINT #1 stack                                                    bc/pds71/CR.LST:149
+pds71 CALLALL call AINT #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #6 stack           - - 44 00                                bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #6 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call ALNG #1 stack                                                    bc/pds71/CR.LST:149
+pds71 CALLALL call ALNG #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #3 stack           - - - - 45 00                            bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #3 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call ASNG #1 stack           &.0 &.1                                  bc/pds71/CR.LST:149
+pds71 CALLALL call ASNG #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #3 stack           - - - - 46 00                            bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #3 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call ADBL #1 stack           &.0 &.1                                  bc/pds71/CR.LST:149
+pds71 CALLALL call ADBL #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #3 stack           - - - - - - - - 47 00                    bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #3 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call KEEPDESC #1 stack       &.0 &.1                                  bc/pds71/CR.LST:149
+pds71 CALLALL call KEEPDESC #1 cleanup     far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call ASTR #1 stack                                                    bc/pds71/CR.LST:149
+pds71 CALLALL call ASTR #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #4 stack          &.0 &.1 &.0 &.1                          bc/pds71/CR.LST:149
+pds71 CALLALL call CRSTR #4 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call _XINT #1 stack                                                   bc/pds71/CR.LST:149
+pds71 CALLALL call _XINT #1 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #7 stack           - - 49 00                                bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #7 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call _XLNG #1 stack                                                   bc/pds71/CR.LST:149
+pds71 CALLALL call _XLNG #1 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #4 stack           - - - - 4A 00                            bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #4 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call _XSNG #1 stack                                                   bc/pds71/CR.LST:149
+pds71 CALLALL call _XSNG #1 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #4 stack           *(_XSNG:eax.0 _XSNG:eax.1)+0 *(_XSNG:eax.0 _XSNG:eax.1)+1 *(_XSNG:eax.0 _XSNG:eax.1)+2 *(_XSNG:eax.0 _XSNG:eax.1)+3 4B 00 bc/pds71/CR.LST:149
+pds71 CALLALL call PUTF #4 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call _XDBL #1 stack                                                   bc/pds71/CR.LST:149
+pds71 CALLALL call _XDBL #1 cleanup        far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #4 stack           *(_XDBL:eax.0 _XDBL:eax.1)+0 *(_XDBL:eax.0 _XDBL:eax.1)+1 *(_XDBL:eax.0 _XDBL:eax.1)+2 *(_XDBL:eax.0 _XDBL:eax.1)+3 *(_XDBL:eax.0 _XDBL:eax.1)+4 *(_XDBL:eax.0 _XDBL:eax.1)+5 *(_XDBL:eax.0 _XDBL:eax.1)+6 *(_XDBL:eax.0 _XDBL:eax.1)+7 4C 00 bc/pds71/CR.LST:149
+pds71 CALLALL call PUTD #4 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call __AFCYLD #1 stack                                                bc/pds71/CR.LST:149
+pds71 CALLALL call __AFCYLD #1 cleanup     far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call __AFCYST #1 stack                                                bc/pds71/CR.LST:149
+pds71 CALLALL call __AFCYST #1 cleanup     far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PCUR #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CR.LST:149
+pds71 CALLALL call PCUR #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTY #1 stack           - - - - - - - - 53 00                    bc/pds71/CR.LST:149
+pds71 CALLALL call PUTY #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call RCUR #1 stack           &.0 &.1 &.0 &.1                          bc/pds71/CR.LST:149
+pds71 CALLALL call RCUR #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTY #2 stack           - - - - - - - - 55 00                    bc/pds71/CR.LST:149
+pds71 CALLALL call PUTY #2 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PBYV #1 stack           22 22 00 00 00 00 00 00 02 C0 00 00 C0 3F 87 A9 CB ED 11 11 bc/pds71/CR.LST:149
+pds71 CALLALL call PBYV #1 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #8 stack           11 11 61 00                              bc/pds71/CR.LST:149
+pds71 CALLALL call PUTI #8 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #5 stack           87 A9 CB ED 62 00                        bc/pds71/CR.LST:149
+pds71 CALLALL call PUTL #5 cleanup         far pops 0                               bc/pds71/CR.LST:149
+pds71 CALLSTRS return                      far pops 0                               bc/pds71/CRS.LST:101
+pds71 CALLSTRS keeps                       si di bp ds ss sp df                     bc/pds71/CRS.LST:101
+pds71 CALLSTRS call PARRS #1 stack         &.0 &.1 &.0 &.1 &.0 &.1                  bc/pds71/CRS.LST:101
+pds71 CALLSTRS call PARRS #1 cleanup       far pops 0                               bc/pds71/CRS.LST:101
+pds71 CALLSTRS call CRSTR #1 stack         &.0 &.1 &.0 &.1                          bc/pds71/CRS.LST:101
+pds71 CALLSTRS call CRSTR #1 cleanup       far pops 0                               bc/pds71/CRS.LST:101
+pds71 CALLSTRS call RSTR #1 stack          &.0 &.1                                  bc/pds71/CRS.LST:101
+pds71 CALLSTRS call RSTR #1 cleanup        far pops 0                               bc/pds71/CRS.LST:101
+pds71 CALLSTRS call CRSTR #2 stack         &.0 &.1 &.0 &.1                          bc/pds71/CRS.LST:101
+pds71 CALLSTRS call CRSTR #2 cleanup       far pops 0                               bc/pds71/CRS.LST:101
+qb45  PDBL return                          far pops 6                               bc/qb45/CE.LST:248
+qb45  PDBL keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:248
+qb45  PDBL call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 0D 00      bc/qb45/CE.LST:248
+qb45  PDBL call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:248
+qb45  PDBL call PUTD #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 *(in+6 in+7)+6 *(in+6 in+7)+7 0E 00 bc/qb45/CE.LST:248
+qb45  PDBL call PUTD #1 cleanup            far pops 0                               bc/qb45/CE.LST:248
+qb45  PDBL call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 0F 00      bc/qb45/CE.LST:248
+qb45  PDBL call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:248
+qb45  PFIX return                          far pops 6                               bc/qb45/CE.LST:327
+qb45  PFIX keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:327
+qb45  PFIX call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 15 00      bc/qb45/CE.LST:327
+qb45  PFIX call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:327
+qb45  PFIX call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/qb45/CE.LST:327
+qb45  PFIX call CESTR #1 cleanup           far pops 0                               bc/qb45/CE.LST:327
+qb45  PFIX call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 17 00      bc/qb45/CE.LST:327
+qb45  PFIX call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:327
+qb45  PINT return                          far pops 6                               bc/qb45/CE.LST:137
+qb45  PINT keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:137
+qb45  PINT call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 01 00      bc/qb45/CE.LST:137
+qb45  PINT call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:137
+qb45  PINT call PUTI #2 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 02 00      bc/qb45/CE.LST:137
+qb45  PINT call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:137
+qb45  PINT call PUTI #3 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 03 00      bc/qb45/CE.LST:137
+qb45  PINT call PUTI #3 cleanup            far pops 0                               bc/qb45/CE.LST:137
+qb45  PLNG return                          far pops 6                               bc/qb45/CE.LST:166
+qb45  PLNG keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:166
+qb45  PLNG call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 05 00      bc/qb45/CE.LST:166
+qb45  PLNG call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:166
+qb45  PLNG call PUTL #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 06 00 bc/qb45/CE.LST:166
+qb45  PLNG call PUTL #1 cleanup            far pops 0                               bc/qb45/CE.LST:166
+qb45  PLNG call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 07 00      bc/qb45/CE.LST:166
+qb45  PLNG call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:166
+qb45  PMIX return                          far pops 12                              bc/qb45/CE.LST:675
+qb45  PMIX keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:675
+qb45  PMIX call PUTI #1 stack              *(in+14 in+15)+0 *(in+14 in+15)+1 32 00  bc/qb45/CE.LST:675
+qb45  PMIX call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:675
+qb45  PMIX call PUTL #1 stack              *(in+12 in+13)+0 *(in+12 in+13)+1 *(in+12 in+13)+2 *(in+12 in+13)+3 33 00 bc/qb45/CE.LST:675
+qb45  PMIX call PUTL #1 cleanup            far pops 0                               bc/qb45/CE.LST:675
+qb45  PMIX call PUTF #1 stack              *(in+10 in+11)+0 *(in+10 in+11)+1 *(in+10 in+11)+2 *(in+10 in+11)+3 34 00 bc/qb45/CE.LST:675
+qb45  PMIX call PUTF #1 cleanup            far pops 0                               bc/qb45/CE.LST:675
+qb45  PMIX call PUTD #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 *(in+8 in+9)+2 *(in+8 in+9)+3 *(in+8 in+9)+4 *(in+8 in+9)+5 *(in+8 in+9)+6 *(in+8 in+9)+7 35 00 bc/qb45/CE.LST:675
+qb45  PMIX call PUTD #1 cleanup            far pops 0                               bc/qb45/CE.LST:675
+qb45  PMIX call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/qb45/CE.LST:675
+qb45  PMIX call CESTR #1 cleanup           far pops 0                               bc/qb45/CE.LST:675
+qb45  PMIX call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 37 00      bc/qb45/CE.LST:675
+qb45  PMIX call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:675
+qb45  PREC return                          far pops 6                               bc/qb45/CE.LST:363
+qb45  PREC keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:363
+qb45  PREC call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 19 00      bc/qb45/CE.LST:363
+qb45  PREC call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:363
+qb45  PREC call PUTI #2 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 1A 00      bc/qb45/CE.LST:363
+qb45  PREC call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:363
+qb45  PREC call PUTL #1 stack              *(in+6 in+7)+2 *(in+6 in+7)+3 *(in+6 in+7)+4 *(in+6 in+7)+5 1B 00 bc/qb45/CE.LST:363
+qb45  PREC call PUTL #1 cleanup            far pops 0                               bc/qb45/CE.LST:363
+qb45  PREC call PUTD #1 stack              *(in+6 in+7)+6 *(in+6 in+7)+7 *(in+6 in+7)+8 *(in+6 in+7)+9 *(in+6 in+7)+10 *(in+6 in+7)+11 *(in+6 in+7)+12 *(in+6 in+7)+13 1C 00 bc/qb45/CE.LST:363
+qb45  PREC call PUTD #1 cleanup            far pops 0                               bc/qb45/CE.LST:363
+qb45  PREC call CESTR #1 stack             &.0 &.1 &.0 &.1                          bc/qb45/CE.LST:363
+qb45  PREC call CESTR #1 cleanup           far pops 0                               bc/qb45/CE.LST:363
+qb45  PREC call PUTI #3 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 1E 00      bc/qb45/CE.LST:363
+qb45  PREC call PUTI #3 cleanup            far pops 0                               bc/qb45/CE.LST:363
+qb45  PSNG return                          far pops 6                               bc/qb45/CE.LST:206
+qb45  PSNG keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:206
+qb45  PSNG call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 09 00      bc/qb45/CE.LST:206
+qb45  PSNG call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:206
+qb45  PSNG call PUTF #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 *(in+6 in+7)+2 *(in+6 in+7)+3 0A 00 bc/qb45/CE.LST:206
+qb45  PSNG call PUTF #1 cleanup            far pops 0                               bc/qb45/CE.LST:206
+qb45  PSNG call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 0B 00      bc/qb45/CE.LST:206
+qb45  PSNG call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:206
+qb45  PSTR return                          far pops 6                               bc/qb45/CE.LST:288
+qb45  PSTR keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:288
+qb45  PSTR call PUTI #1 stack              *(in+8 in+9)+0 *(in+8 in+9)+1 11 00      bc/qb45/CE.LST:288
+qb45  PSTR call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:288
+qb45  PSTR call CESTR #1 stack             in+6 in+7 &.0 &.1                        bc/qb45/CE.LST:288
+qb45  PSTR call CESTR #1 cleanup           far pops 0                               bc/qb45/CE.LST:288
+qb45  PSTR call PUTI #2 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 13 00      bc/qb45/CE.LST:288
+qb45  PSTR call PUTI #2 cleanup            far pops 0                               bc/qb45/CE.LST:288
+qb45  RDBL return                          far pops 4                               bc/qb45/CE.LST:814
+qb45  RDBL keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:814
+qb45  RDBL result                          through in+4 in+5: 00 00 00 00 00 00 02 C0 ax in+4 in+5 bc/qb45/CE.LST:814
+qb45  RDBL call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 3F 00      bc/qb45/CE.LST:814
+qb45  RDBL call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:814
+qb45  RINT return                          far pops 2                               bc/qb45/CE.LST:744
+qb45  RINT keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:744
+qb45  RINT result                          ax CB ED                                 bc/qb45/CE.LST:744
+qb45  RINT call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 39 00      bc/qb45/CE.LST:744
+qb45  RINT call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:744
+qb45  RLNG return                          far pops 2                               bc/qb45/CE.LST:763
+qb45  RLNG keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:763
+qb45  RLNG result                          dxax 87 A9 CB ED                         bc/qb45/CE.LST:763
+qb45  RLNG call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 3B 00      bc/qb45/CE.LST:763
+qb45  RLNG call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:763
+qb45  RSNG return                          far pops 4                               bc/qb45/CE.LST:789
+qb45  RSNG keeps                           si di bp ds ss sp df                     bc/qb45/CE.LST:789
+qb45  RSNG result                          through in+4 in+5: 00 00 C0 3F ax in+4 in+5 bc/qb45/CE.LST:789
+qb45  RSNG call PUTI #1 stack              *(in+6 in+7)+0 *(in+6 in+7)+1 3D 00      bc/qb45/CE.LST:789
+qb45  RSNG call PUTI #1 cleanup            far pops 0                               bc/qb45/CE.LST:789
+qb45  SVOID return                         far pops 0                               bc/qb45/CE.LST:728
+qb45  SVOID keeps                          si di bp ds ss sp df                     bc/qb45/CE.LST:728
+qb45  SVOID call PUTI #1 stack             55 55 38 00                              bc/qb45/CE.LST:728
+qb45  SVOID call PUTI #1 cleanup           far pops 0                               bc/qb45/CE.LST:728
+qb45  RSTR return                          far pops 2                               bc/qb45/CES.LST:90
+qb45  RSTR keeps                           si di bp ds ss sp df                     bc/qb45/CES.LST:90
+qb45  RSTR result                          ax B$SCPF:eax.0 B$SCPF:eax.1             bc/qb45/CES.LST:90
+qb45  RSTR call PUTI #1 stack              *(in+4 in+5)+0 *(in+4 in+5)+1 41 00      bc/qb45/CES.LST:90
+qb45  RSTR call PUTI #1 cleanup            far pops 0                               bc/qb45/CES.LST:90
+qb45  CALLALL return                       far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL keeps                        si di bp ds ss sp df                     bc/qb45/CR.LST:139
+qb45  CALLALL call PINT #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PINT #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #1 stack           - - 04 00                                bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PLNG #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PLNG #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #1 stack           - - - - 08 00                            bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PSNG #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PSNG #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #1 stack           - - - - 0C 00                            bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PDBL #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PDBL #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #1 stack           - - - - - - - - 10 00                    bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PSTR #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PSTR #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #1 stack          &.0 &.1 &.0 &.1                          bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #1 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PFIX #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PFIX #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #2 stack          &.0 &.1 &.0 &.1                          bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #2 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PREC #1 stack           &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PREC #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #2 stack           - - 1F 00                                bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #2 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #3 stack          &.0 &.1 &.0 &.1                          bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #3 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PARRI #1 stack          &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CR.LST:139
+qb45  CALLALL call PARRI #1 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #3 stack           - - 29 00                                bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #3 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PMIX #1 stack           &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 &.0 &.1 bc/qb45/CR.LST:139
+qb45  CALLALL call PMIX #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call SVOID #1 stack                                                   bc/qb45/CR.LST:139
+qb45  CALLALL call SVOID #1 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call RINT #1 stack           &.0 &.1                                  bc/qb45/CR.LST:139
+qb45  CALLALL call RINT #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #4 stack           - - 3A 00                                bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #4 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call RLNG #1 stack           &.0 &.1                                  bc/qb45/CR.LST:139
+qb45  CALLALL call RLNG #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #2 stack           - - - - 3C 00                            bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #2 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call RSNG #1 stack           &.0 &.1 &.0 &.1                          bc/qb45/CR.LST:139
+qb45  CALLALL call RSNG #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #2 stack           - - - - 3E 00                            bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #2 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call RDBL #1 stack           &.0 &.1 &.0 &.1                          bc/qb45/CR.LST:139
+qb45  CALLALL call RDBL #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #2 stack           - - - - - - - - 40 00                    bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #2 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call CALLSTRS #1 stack                                                bc/qb45/CR.LST:139
+qb45  CALLALL call CALLSTRS #1 cleanup     far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call RECVAL #1 stack         00 00 00 00 00 00 02 C0 00 00 C0 3F 87 A9 CB ED CB ED bc/qb45/CR.LST:139
+qb45  CALLALL call RECVAL #1 cleanup       far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call RECSEG #1 stack         &.0 &.1 dgroup.0 dgroup.1 &.0 &.1 dgroup.0 dgroup.1 bc/qb45/CR.LST:139
+qb45  CALLALL call RECSEG #1 cleanup       far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #5 stack           - - 43 00                                bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #5 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call _RECCDL #1 stack        CB ED 87 A9 CB ED 00 00 00 00 00 00 02 C0 bc/qb45/CR.LST:139
+qb45  CALLALL call _RECCDL #1 cleanup      far pops 14                              bc/qb45/CR.LST:139
+qb45  CALLALL call AINT #1 stack                                                    bc/qb45/CR.LST:139
+qb45  CALLALL call AINT #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #6 stack           - - 44 00                                bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #6 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call ALNG #1 stack                                                    bc/qb45/CR.LST:139
+qb45  CALLALL call ALNG #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #3 stack           - - - - 45 00                            bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #3 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call ASNG #1 stack           &.0 &.1                                  bc/qb45/CR.LST:139
+qb45  CALLALL call ASNG #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #3 stack           - - - - 46 00                            bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #3 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call ADBL #1 stack           &.0 &.1                                  bc/qb45/CR.LST:139
+qb45  CALLALL call ADBL #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #3 stack           - - - - - - - - 47 00                    bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #3 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call KEEPDESC #1 stack       &.0 &.1                                  bc/qb45/CR.LST:139
+qb45  CALLALL call KEEPDESC #1 cleanup     far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call ASTR #1 stack                                                    bc/qb45/CR.LST:139
+qb45  CALLALL call ASTR #1 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #4 stack          &.0 &.1 &.0 &.1                          bc/qb45/CR.LST:139
+qb45  CALLALL call CRSTR #4 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call _XINT #1 stack                                                   bc/qb45/CR.LST:139
+qb45  CALLALL call _XINT #1 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #7 stack           - - 49 00                                bc/qb45/CR.LST:139
+qb45  CALLALL call PUTI #7 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call _XLNG #1 stack                                                   bc/qb45/CR.LST:139
+qb45  CALLALL call _XLNG #1 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #4 stack           - - - - 4A 00                            bc/qb45/CR.LST:139
+qb45  CALLALL call PUTL #4 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call _XSNG #1 stack                                                   bc/qb45/CR.LST:139
+qb45  CALLALL call _XSNG #1 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #4 stack           *(_XSNG:eax.0 _XSNG:eax.1)+0 *(_XSNG:eax.0 _XSNG:eax.1)+1 *(_XSNG:eax.0 _XSNG:eax.1)+2 *(_XSNG:eax.0 _XSNG:eax.1)+3 4B 00 bc/qb45/CR.LST:139
+qb45  CALLALL call PUTF #4 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call _XDBL #1 stack                                                   bc/qb45/CR.LST:139
+qb45  CALLALL call _XDBL #1 cleanup        far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #4 stack           *(_XDBL:eax.0 _XDBL:eax.1)+0 *(_XDBL:eax.0 _XDBL:eax.1)+1 *(_XDBL:eax.0 _XDBL:eax.1)+2 *(_XDBL:eax.0 _XDBL:eax.1)+3 *(_XDBL:eax.0 _XDBL:eax.1)+4 *(_XDBL:eax.0 _XDBL:eax.1)+5 *(_XDBL:eax.0 _XDBL:eax.1)+6 *(_XDBL:eax.0 _XDBL:eax.1)+7 4C 00 bc/qb45/CR.LST:139
+qb45  CALLALL call PUTD #4 cleanup         far pops 0                               bc/qb45/CR.LST:139
+qb45  CALLSTRS return                      far pops 0                               bc/qb45/CRS.LST:91
+qb45  CALLSTRS keeps                       si di bp ds ss sp df                     bc/qb45/CRS.LST:91
+qb45  CALLSTRS call PARRS #1 stack         &.0 &.1 &.0 &.1 &.0 &.1                  bc/qb45/CRS.LST:91
+qb45  CALLSTRS call PARRS #1 cleanup       far pops 0                               bc/qb45/CRS.LST:91
+qb45  CALLSTRS call CRSTR #1 stack         &.0 &.1 &.0 &.1                          bc/qb45/CRS.LST:91
+qb45  CALLSTRS call CRSTR #1 cleanup       far pops 0                               bc/qb45/CRS.LST:91
+qb45  CALLSTRS call RSTR #1 stack          &.0 &.1                                  bc/qb45/CRS.LST:91
+qb45  CALLSTRS call RSTR #1 cleanup        far pops 0                               bc/qb45/CRS.LST:91
+qb45  CALLSTRS call CRSTR #2 stack         &.0 &.1 &.0 &.1                          bc/qb45/CRS.LST:91
+qb45  CALLSTRS call CRSTR #2 cleanup       far pops 0                               bc/qb45/CRS.LST:91

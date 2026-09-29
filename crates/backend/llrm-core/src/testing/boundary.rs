@@ -23,6 +23,8 @@ pub enum Byte {
     Returned(String, &'static str, u8),
     /// Byte `2` of what call `0` wrote through a pointer argument, at offset `1`.
     Written(String, i32),
+    /// The byte at offset `1` through the pointer `0`, as it was when read.
+    Pointed(Vec<Byte>, i32),
     /// Byte `2` of the x87 value whose own bytes are `0`, stored `1` bytes wide.
     Converted(Vec<Byte>, u8, u8),
     /// The sign of a byte, filling a wider value.
@@ -59,6 +61,7 @@ impl fmt::Display for Byte {
                     _ => write!(f, "({}):f{bits}[{at}]", source.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")),
                 }
             }
+            Byte::Pointed(pointer, at) => write!(f, "*({}){at:+}", pointer.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")),
             Byte::Sign(byte) => write!(f, "sign({byte})"),
             Byte::Unknown => write!(f, "?"),
         }
@@ -95,6 +98,8 @@ pub struct Procedure {
     pub top: Option<Vec<Byte>>,
     /// Whether it returns with the direction flag clear.
     pub forward: bool,
+    /// A branch ended the run before any return: only what came before it is here.
+    pub cut: bool,
 }
 
 impl Procedure {
@@ -112,6 +117,10 @@ impl Procedure {
 
 /// Each procedure in `listing`, by name.
 pub fn procedures(listing: &str) -> BTreeMap<String, Procedure> {
+    if listing.contains("Source Line") && listing.contains(" ** ") {
+        return bc_procedures(listing);
+    }
+    let constants = data(listing);
     let mut found = BTreeMap::new();
     let mut open: Option<(String, bool, usize, Vec<Line>)> = None;
     for (number, raw) in listing.lines().enumerate() {
@@ -122,7 +131,7 @@ pub fn procedures(listing: &str) -> BTreeMap<String, Procedure> {
             [name, "endp"] => {
                 if let Some((open_name, far, line, lines)) = open.take() {
                     assert_eq!(&open_name, name, "{name} ends another procedure");
-                    found.insert(open_name.clone(), Procedure { line, ..run(&open_name, far, &lines) });
+                    found.insert(open_name.clone(), Procedure { line, ..run(&open_name, far, &lines, &constants) });
                 }
             }
             _ => {
@@ -133,6 +142,180 @@ pub fn procedures(listing: &str) -> BTreeMap<String, Procedure> {
         }
     }
     found
+}
+
+/// Each SUB and FUNCTION in a BC `/A` listing, from its entry label to its
+/// return. Every BASIC procedure is far; BC lists its `retf` as `ret`.
+fn bc_procedures(listing: &str) -> BTreeMap<String, Procedure> {
+    // VBDOS lists a pool constant as its value, high byte first; QuickBASIC
+    // 4.5 and PDS 7.1 list its bytes in memory order.
+    let memory_order = !listing.contains("Visual Basic");
+    let mut found = BTreeMap::new();
+    let (mut pending, mut open): (Option<String>, Option<(String, usize, Vec<Line>)>) = (None, None);
+    let mut prefix: Option<&'static str> = None;
+    let mut emulator: Option<(u8, Vec<String>)> = None;
+    for (row, raw) in listing.lines().enumerate() {
+        let raw = raw.trim_end_matches('\r');
+        let Some(at) = raw.find(" ** ") else {
+            // A source line: `sub name (...)` or `function name (...)` opens one.
+            let source = raw.get(16..).unwrap_or("").trim().to_lowercase();
+            let mut words = source.split(|one: char| one.is_whitespace() || one == '(');
+            if let (Some("sub" | "function"), Some(name)) = (words.next(), words.next()) {
+                pending = Some(name.to_uppercase());
+            }
+            continue;
+        };
+        let code = raw[at + 4..].trim();
+        let (label, instruction) = match code.split_once(':') {
+            Some((label, rest)) if is_label(label.trim()) && !label.trim().contains(' ') => (Some(label.trim().to_uppercase()), rest.trim()),
+            _ => (None, code),
+        };
+        if label.is_some() && label == pending {
+            open = Some((pending.take().expect("a name"), row + 1, Vec::new()));
+        }
+        let Some((_, _, lines)) = open.as_mut() else { continue };
+        let mut text = instruction.to_lowercase();
+        // /FPi: an emulator interrupt stands for an ESC opcode, its operand in
+        // the db and dw lines after it.
+        if let Some(interrupt) = text.strip_prefix("int").map(str::trim).and_then(|one| number(one)).filter(|one| (0x34..=0x3B).contains(one)) {
+            emulator = Some((0xD8 + (interrupt - 0x34) as u8, Vec::new()));
+            continue;
+        }
+        if let Some((opcode, operand)) = emulator.as_mut() {
+            if let Some(rest) = text.strip_prefix("db").or_else(|| text.strip_prefix("dw")) {
+                operand.push(rest.trim().to_owned());
+                if let Some(decoded) = escape(*opcode, operand) {
+                    emulator = None;
+                    text = decoded;
+                } else {
+                    continue;
+                }
+            } else {
+                emulator = None;
+            }
+        }
+        if text == "int     3dh" || text.split_whitespace().collect::<Vec<_>>() == ["int", "3dh"] {
+            continue;
+        }
+        // A segment override on a line of its own belongs to the next instruction.
+        if let Some(segment) = ["es:", "cs:", "ss:", "ds:"].iter().find(|one| text == **one) {
+            prefix = register(&segment[..2]);
+            continue;
+        }
+        if memory_order {
+            text = reordered(&text);
+        }
+        let Some(mut line) = parse(&text) else { continue };
+        // BC lists its far calls as plain `call`: every call it makes is far.
+        if let (true, [Operand::Target(_, far @ None)]) = (line.op == "call", line.operands.as_mut_slice()) {
+            *far = Some(true);
+        }
+        if let Some(segment) = prefix.take() {
+            for one in &mut line.operands {
+                if let Operand::Memory { segment: none @ None, .. } = one {
+                    *none = Some(segment);
+                }
+            }
+        }
+        // A constant pushed a word at a time is listed twice by one name:
+        // the first push is its high word.
+        if let (Some(previous), "push", [Operand::Memory { name: Some(name), registers, .. }]) = (lines.last_mut(), line.op.as_str(), line.operands.as_slice()) {
+            if let ("push", [Operand::Memory { name: Some(before), registers: none, displacement, .. }]) = (previous.op.as_str(), previous.operands.as_mut_slice()) {
+                if before == name && name.starts_with('<') && registers.is_empty() && none.is_empty() && *displacement == 0 {
+                    *displacement = 2;
+                }
+            }
+        }
+        let returns = matches!(line.op.as_str(), "ret" | "retf");
+        lines.push(line);
+        if returns {
+            let (name, line, lines) = open.take().expect("an open procedure");
+            found.insert(name.clone(), Procedure { line, ..run(&name, true, &lines, &HashMap::new()) });
+        }
+    }
+    found
+}
+
+/// `text` with each `<hex>` constant turned from memory order to value order.
+fn reordered(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('<') {
+        let Some(end) = rest[start..].find('>') else { break };
+        let hex = &rest[start + 1..start + end];
+        let flipped: String = (0..hex.len()).step_by(2).rev().filter_map(|at| hex.get(at..at + 2)).collect();
+        out += &rest[..start];
+        out += &format!("<{flipped}>");
+        rest = &rest[start + end + 1..];
+    }
+    out + rest
+}
+
+/// The x87 instruction `opcode` and the listed operand bytes spell, once
+/// they are all there: its ModRM byte, then any displacement (BC lists a
+/// constant's as `<value>`).
+fn escape(opcode: u8, operand: &[String]) -> Option<String> {
+    let modrm = number(&operand[0].to_lowercase())? as u8;
+    let (mode, reg, rm) = (modrm >> 6, (modrm >> 3) & 7, modrm & 7);
+    let displacement = match (mode, rm) {
+        (0, 6) | (2, _) => Some(operand.get(1)?.clone()),
+        (1, _) => Some(operand.get(1)?.clone()),
+        _ => None,
+    };
+    if mode == 3 {
+        return Some(format!("f{opcode:02x}{modrm:02x}"));
+    }
+    let base = ["bx+si", "bx+di", "bp+si", "bp+di", "si", "di", "bp", "bx"][rm as usize];
+    let place = match (mode, displacement) {
+        (0, Some(constant)) => format!("[{}]", constant.trim_matches(['<', '>'])),
+        (_, Some(disp)) => format!("[{base}+{}]", number(&disp).map_or(disp.clone(), |one| if mode == 1 { (one as i8).to_string() } else { (one as i16).to_string() })),
+        (_, None) => format!("[{base}]"),
+    };
+    let (name, width) = match (opcode, reg) {
+        (0xD9, 0) => ("fld", "dword"),
+        (0xDD, 0) => ("fld", "qword"),
+        (0xDB, 5) => ("fld", "tbyte"),
+        (0xD9, 2) => ("fst", "dword"),
+        (0xDD, 2) => ("fst", "qword"),
+        (0xD9, 3) => ("fstp", "dword"),
+        (0xDD, 3) => ("fstp", "qword"),
+        (0xDB, 7) => ("fstp", "tbyte"),
+        (0xDF, 0) | (0xDB, 0) | (0xDF, 5) => ("fild", "word"),
+        _ => ("farith", "dword"),
+    };
+    // A constant's displacement is a pool object: name it as one.
+    let place = if place.starts_with('[') && !place.contains('+') && !place.contains("bx") && !place.contains("si") && !place.contains("di") && !place.contains("bp") { format!("<{}>", place.trim_matches(['[', ']'])) } else { place };
+    Some(format!("{name} {width} ptr {place}"))
+}
+
+/// Each `name label byte` the listing follows with `db` bytes.
+fn data(listing: &str) -> HashMap<String, Vec<u8>> {
+    let mut found: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut open: Option<String> = None;
+    for line in listing.lines().map(|one| one.trim().to_lowercase()) {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words.as_slice() {
+            [name, "label", _] => open = Some((*name).to_owned()),
+            ["db", ..] if open.is_some() => {
+                let bytes: Option<Vec<u8>> = line[2..].split(',').map(|one| number(one).map(|value| value as u8)).collect();
+                match bytes {
+                    Some(bytes) => found.entry(open.clone().expect("a label")).or_default().extend(bytes),
+                    None => open = None,
+                }
+            }
+            _ => open = None,
+        }
+    }
+    found
+}
+
+/// A constant's bytes: data the listing defines, or BC's `<hex>` operand,
+/// its value written high byte first.
+fn data_constant(constants: &HashMap<String, Vec<u8>>, name: &str) -> Option<Vec<u8>> {
+    if let Some(hex) = name.strip_prefix('<').and_then(|rest| rest.strip_suffix('>')).or_else(|| name.strip_prefix("k<").and_then(|rest| rest.strip_suffix('>'))) {
+        return (0..hex.len()).step_by(2).rev().map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect();
+    }
+    constants.get(name).cloned()
 }
 
 /// A line without its comment and BC's listing columns, lowercased.
@@ -152,7 +335,7 @@ fn clean(raw: &str) -> String {
 }
 
 fn is_label(word: &str) -> bool {
-    !word.is_empty() && !matches!(word.to_lowercase().as_str(), "es" | "cs" | "ss" | "ds" | "fs" | "gs" | "dgroup") && word.chars().all(|one| one.is_alphanumeric() || "_@$?".contains(one))
+    !word.is_empty() && !matches!(word.to_lowercase().as_str(), "es" | "cs" | "ss" | "ds" | "fs" | "gs" | "dgroup") && word.chars().all(|one| one.is_alphanumeric() || "_@$?!#%&".contains(one))
 }
 
 #[derive(Clone, Debug)]
@@ -294,10 +477,16 @@ fn operand(text: &str) -> Operand {
         None => (rest, ""),
     };
     let (mut name, mut displacement) = (None, 0);
-    if !outside.is_empty() {
-        let (symbol_name, at) = symbol(outside);
-        name = Some(symbol_name);
-        displacement += at;
+    match number(outside) {
+        // BC writes a displacement before the brackets, 16 bits wide:
+        // 08h[bp], and 0FF30h[bp] for -208.
+        Some(value) if !inside.is_empty() => displacement += i32::from(value as u16 as i16),
+        _ if !outside.is_empty() => {
+            let (symbol_name, at) = symbol(outside);
+            name = Some(symbol_name);
+            displacement += at;
+        }
+        _ => {}
     }
     let mut registers = Vec::new();
     for term in inside.replace('-', "+-").split('+').map(str::trim).filter(|one| !one.is_empty()) {
@@ -376,6 +565,8 @@ enum Place {
 
 struct Machine<'a> {
     name: &'a str,
+    /// Read-only data the listing defines, by lowercased name.
+    constants: &'a HashMap<String, Vec<u8>>,
     registers: HashMap<&'static str, Vec<Byte>>,
     memory: HashMap<Place, Byte>,
     written: BTreeMap<String, Vec<Byte>>,
@@ -389,9 +580,10 @@ struct Machine<'a> {
     base: i32,
     /// The call whose caller cleanup is still being counted.
     pending: Option<usize>,
+    cut: bool,
 }
 
-fn run(name: &str, far: bool, lines: &[Line]) -> Procedure {
+fn run(name: &str, far: bool, lines: &[Line], constants: &HashMap<String, Vec<u8>>) -> Procedure {
     let mut registers = HashMap::new();
     for one in GENERAL {
         registers.insert(one, (0..4).map(|at| Byte::Entry(one, at)).collect());
@@ -401,6 +593,7 @@ fn run(name: &str, far: bool, lines: &[Line]) -> Procedure {
     }
     let mut machine = Machine {
         name,
+        constants,
         registers,
         memory: HashMap::new(),
         written: BTreeMap::new(),
@@ -411,6 +604,7 @@ fn run(name: &str, far: bool, lines: &[Line]) -> Procedure {
         calls: Vec::new(),
         base: 0,
         pending: None,
+        cut: false,
     };
     machine.set("sp", address(Base::Stack, 0, 2));
     let mut in_prologue = true;
@@ -421,20 +615,12 @@ fn run(name: &str, far: bool, lines: &[Line]) -> Procedure {
             machine.base = machine.sp;
         }
         if let Some(popped) = machine.step(line) {
-            return Procedure {
-                line: 0,
-                far,
-                popped,
-                calls: machine.calls,
-                globals: machine.written,
-                through: machine.through,
-                top: machine.floats.last().cloned(),
-                forward: machine.forward,
-                registers: machine.registers,
-            };
+            return machine.finished(far, popped);
         }
     }
-    panic!("{name} does not return");
+    // It runs off its end, into what follows: as cut short as a branch.
+    machine.cut = true;
+    machine.finished(far, 0)
 }
 
 fn address(base: Base, at: i32, bytes: u8) -> Vec<Byte> {
@@ -455,6 +641,21 @@ fn known(bytes: &[Byte]) -> Option<i64> {
 }
 
 impl Machine<'_> {
+    fn finished(self, far: bool, popped: i32) -> Procedure {
+        Procedure {
+            line: 0,
+            far,
+            popped,
+            top: self.floats.last().cloned(),
+            calls: self.calls,
+            globals: self.written,
+            through: self.through,
+            forward: self.forward,
+            cut: self.cut,
+            registers: self.registers,
+        }
+    }
+
     fn get(&self, name: &str) -> Vec<Byte> {
         let (full, from, width) = view(name).unwrap_or_else(|| panic!("{}: no register {name}", self.name));
         self.registers[full][from..from + width].to_vec()
@@ -503,8 +704,10 @@ impl Machine<'_> {
             Some(Base::Stack) => Place::Stack(offset),
             Some(Base::Global(name)) => Place::Global(name, offset),
             Some(Base::Pointer(bytes)) => {
-                // A far pointer: its segment is the segment register the access names.
-                let segment = segment.map(|one| self.get(one));
+                // A far pointer: its segment is the segment register the access
+                // names, unless that holds DGROUP, as DS does.
+                let dgroup: Vec<Byte> = (0..2).map(|at| Byte::Entry("ds", at)).collect();
+                let segment = segment.map(|one| self.get(one)).filter(|one| *one != dgroup);
                 Place::Through([bytes, segment.unwrap_or_default()].concat(), offset)
             }
             _ => Place::Nowhere,
@@ -522,7 +725,11 @@ impl Machine<'_> {
                 };
                 self.memory.get(&one).cloned().unwrap_or_else(|| match &one {
                     Place::Stack(offset) if *offset >= 0 => Byte::Incoming(*offset),
-                    Place::Global(name, offset) => Byte::Global(name.clone(), *offset),
+                    Place::Through(pointer, offset) => Byte::Pointed(pointer.clone(), *offset),
+                    Place::Global(name, offset) => match data_constant(self.constants, name).and_then(|bytes| bytes.get(*offset as usize).copied()) {
+                        Some(value) => Byte::Const(value),
+                        None => Byte::Global(name.clone(), *offset),
+                    },
                     _ => Byte::Unknown,
                 })
             })
@@ -614,6 +821,8 @@ impl Machine<'_> {
             }
             _ => match known(value) {
                 Some(known) => constant(known + amount, value.len()),
+                // A pointer from elsewhere, stepped: the same base, an offset on.
+                None if value.len() == 2 && !value.contains(&Byte::Unknown) => address(Base::Pointer(value.to_vec()), amount as i32, 2),
                 None => vec![Byte::Unknown; value.len()],
             },
         }
@@ -661,6 +870,25 @@ impl Machine<'_> {
         self.floats = vec![(0..10).map(|at| Byte::Returned(target.to_owned(), "st", at)).collect()];
     }
 
+    /// `count` moves of `op`'s width from DS:[SI] to ES:[DI], forward.
+    fn string_move(&mut self, op: &str, count: i64) {
+        let width = match op {
+            "movsb" => 1,
+            "movsw" => 2,
+            _ => 4,
+        };
+        for _ in 0..count {
+            let from = Operand::Memory { width: Some(width), segment: None, name: None, registers: vec!["si"], displacement: 0 };
+            let to = Operand::Memory { width: Some(width), segment: Some("es"), name: None, registers: vec!["di"], displacement: 0 };
+            let value = self.read(&from, width);
+            self.write(&to, value);
+            for one in ["si", "di"] {
+                let moved = Self::add_constant(&self.get(one), width as i64);
+                self.set(one, moved);
+            }
+        }
+    }
+
     /// Borland's struct push: CX bytes from DX:AX, rounded to a word.
     fn struct_push(&mut self) {
         let size = known(&self.get("cx")).unwrap_or(0) as usize;
@@ -701,6 +929,11 @@ impl Machine<'_> {
             self.set("sp", address(Base::Stack, sp, 2));
         }
         match (line.op.as_str(), operands.as_slice()) {
+            // Straight-line code only: a branch ends the run.
+            (op, [Operand::Target(..)]) if op.starts_with('j') || op.starts_with("loop") => {
+                self.cut = true;
+                return Some(0);
+            }
             ("ret" | "retf" | "iret", rest) => {
                 let popped = match rest {
                     [Operand::Immediate(value)] => *value as i32,
@@ -714,6 +947,12 @@ impl Machine<'_> {
                 }
             }
             ("std", _) => self.forward = false,
+            ("movsb" | "movsw" | "movsd", []) => self.string_move(&line.op, 1),
+            ("rep", [Operand::Memory { name: Some(op), registers, .. }]) if registers.is_empty() && op.starts_with("movs") => {
+                let count = known(&self.get("cx")).unwrap_or(0);
+                self.string_move(op, count);
+                self.set("cx", constant(0, 2));
+            }
             ("push", [one]) => {
                 let bytes = self.operand_width(one, None).max(2);
                 let value = self.read(one, bytes);
@@ -833,6 +1072,24 @@ impl Machine<'_> {
                 self.set("sp", bp);
                 let value = self.pop(2);
                 self.set("bp", value);
+            }
+            // The runtime frame: B$ENRA saves BP as a prologue would and
+            // points BP at it; B$EXSA restores BP, SI and DI and leaves SP
+            // at the return address.
+            ("call", [Operand::Target(target, _)]) if target == "b$enra" => {
+                let bp = self.get("bp");
+                self.store(&Place::Stack(-2), bp);
+                self.set("bp", address(Base::Stack, -2, 2));
+                // Below any frame a BASIC procedure has: its locals stay apart from what it pushes.
+                self.set("sp", address(Base::Stack, -0x800, 2));
+                self.base = self.sp;
+            }
+            ("call", [Operand::Target(target, _)]) if target == "b$exsa" => {
+                for one in ["ebp", "esi", "edi"] {
+                    let entry = (0..4).map(|at| Byte::Entry(one, at)).collect();
+                    self.registers.insert(one, entry);
+                }
+                self.set("sp", address(Base::Stack, 0, 2));
             }
             ("call", [Operand::Target(target, far)]) => {
                 if target == "f_spush@" || target == "n_spush@" {

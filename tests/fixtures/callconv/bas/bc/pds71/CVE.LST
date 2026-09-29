@@ -1,0 +1,176 @@
+                                                                      PAGE   1
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0030   0006    ' BYVAL and SEG in a SUB definition: PDS 7.1 and VBDOS.
+ 0030   0006    '$include: 'CC.BI'
+ 0030   0006    ' Shared by every module. Callees and callers keep what arrived
+                 and what
+ 0030   0006    ' came back in PROBE.ASM's slots (put*); the harness reads them
+                 (getB).
+ 0030   0006    type Rec
+ 0030   0006        a as integer
+ 0030   0006        b as long
+ 0030   0006        c as double
+ 0030   0006        s as string * 4
+ 0030   0006    end type
+ 0030   0006    
+ 0030   0006    ' PROBE.ASM
+ 0030   0006    declare sub trash ()
+ 0030   0006    declare sub arm ()
+ 0030   0006    declare sub verify (byval k as integer)
+ 0030   0006    declare sub armX ()
+ 0030   0006    declare sub verifyX (byval k as integer)
+ 0030   0006    declare sub badRegs ()
+ 0030   0006    declare function probeMask% (byval k as integer)
+ 0030   0006    declare sub putI (byval k as integer, byval v as integer)
+ 0030   0006    declare sub putL (byval k as integer, byval v as long)
+ 0030   0006    declare sub putF (byval k as integer, byval v as single)
+ 0030   0006    declare sub putD (byval k as integer, byval v as double)
+ 0030   0006    declare sub putC (byval k as integer, byval i as integer, byval
+                 c as integer)
+ 0030   0006    declare function getB% (byval k as integer, byval i as integer)
+ 0030   0006    declare sub recVal (byval a as integer, byval b as long, byval 
+                c as single, byval d as double)
+ 0030   0006    declare sub recSeg (seg a as integer, seg b as double)
+ 0030   0006    declare sub recCdl cdecl (byval a as integer, byval b as long, 
+                byval c as double)
+ 0030   0006    declare function aInt% ()
+ 0030   0006    declare function aLng& ()
+ 0030   0006    declare function aSng! ()
+ 0030   0006    declare function aDbl# ()
+ 0030   0006    declare sub keepDesc (s as string)
+ 0030   0006    declare function aStr$ ()
+ 0030   0006    declare function xInt% cdecl ()
+ 0030   0006    declare function xLng& cdecl ()
+ 0030   0006    declare function xSng! cdecl ()
+ 0030   0006    declare function xDbl# cdecl ()
+ 0030   0006    
+ 0030   0006    ' CE.BAS
+ 0030   0006    declare sub pInt (h as integer, v as integer, t as integer)
+ 0030   0006    declare sub pLng (h as integer, v as long, t as integer)
+ 0030   0006    declare sub pSng (h as integer, v as single, t as integer)
+ 0030   0006    declare sub pDbl (h as integer, v as double, t as integer)
+ 0030   0006    declare sub pStr (h as integer, v as string, t as integer)
+ 0030   0006    declare sub pFix (h as integer, v as string, t as integer)
+ 0030   0006    declare sub pRec (h as integer, v as Rec, t as integer)
+ 0030   0006    declare sub pArrI (h as integer, v() as integer, t as integer)
+ 0030   0006    declare sub pArrS (h as integer, v() as string, t as integer)
+                                                                      PAGE   2
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 0030   0006    declare sub pMix (a as integer, b as long, c as single, d as do
+                uble, e as string, f as integer)
+ 0030   0006    declare sub sVoid ()
+ 0030   0006    declare function rInt% (h as integer)
+ 0030   0006    declare function rLng& (h as integer)
+ 0030   0006    declare function rSng! (h as integer)
+ 0030   0006    declare function rDbl# (h as integer)
+ 0030   0006    declare sub ceStr (k as integer, s as string)
+ 0030   0006    
+ 0030   0006    ' CES.BAS
+ 0030   0006    declare function rStr$ (h as integer)
+ 0030   0006    
+ 0030   0006    ' CR.BAS, CRS.BAS
+ 0030   0006    declare sub callAll ()
+ 0030   0006    declare sub crStr (k as integer, s as string)
+ 0030   0006    declare sub callStrs ()
+ 0030   0006    
+ 0030   0006    '$include: 'CUR.BI'
+ 0030   0006    ' CURRENCY cases: PDS 7.1 and VBDOS. QB 4.5 includes the empty 
+                qb45/ copy.
+ 0030   0006    declare sub putY (byval k as integer, byval v as currency)
+ 0030   0006    declare sub pCur (h as integer, v as currency, t as integer)
+ 0030   0006    declare function rCur@ (h as integer)
+ 0030   0006    '$include: 'V71.BI'
+ 0030   0006    ' BYVAL and SEG in a SUB definition: PDS 7.1 and VBDOS. QB 4.5 
+                includes the
+ 0030   0006    ' empty qb45/ copy.
+ 0030   0006    declare sub pByv (byval h as integer, byval v as long, byval s 
+                as single, byval d as double, byval t as integer)
+ 0030   0006    declare sub pSegd (h as integer, seg v as integer, t as integer
+                )
+ 0030   0006    
+ 0030   0006    sub pByv (byval h as integer, byval v as long, byval s as singl
+                e, byval d as double, byval t as integer)
+ 0030    **        I00002:   jmp     I00003
+ 0033    **        PBYV:     mov     cx,0000h
+ 0036    **                  call    B$ENRA
+ 003B   0006        trash
+ 003B    **                  call    TRASH
+ 0040   0006        putI 86, h: putL 87, v: putF 88, s: putD 89, d: putI 93, t
+ 0040    **                  push    56h
+ 0042    **                  push    18h[bp]
+ 0045    **                  call    PUTI
+ 004A    **                  push    57h
+ 004C    **                  push    16h[bp]
+ 004F    **                  push    14h[bp]
+ 0052    **                  call    PUTL
+ 0057    **                  push    58h
+ 0059    **                  push    12h[bp]
+ 005C    **                  push    10h[bp]
+ 005F    **                  call    PUTF
+ 0064    **                  push    59h
+ 0066    **                  lea     bx,08h[bp]
+ 0069    **                  push    06h[bx]
+                                                                      PAGE   3
+                                                                      29 Sep 26
+                                                                      12:35:30
+Offset  Data    Source Line           Microsoft (R) BASIC Compiler Version 7.10
+
+ 006C    **                  push    04h[bx]
+ 006F    **                  push    02h[bx]
+ 0072    **                  push    [bx]
+ 0074    **                  call    PUTD
+ 0079    **                  push    5Dh
+ 007B    **                  push    06h[bp]
+ 007E    **                  call    PUTI
+ 0083   0006        h = 0: v = 0
+ 0083   0006    end sub
+ 0083    **                  mov     18h[bp],0000h
+ 0088    **                  mov     14h[bp],0000h
+ 008D    **                  mov     16h[bp],0000h
+ 0092    **        I00004:   call    B$EXSA
+ 0097    **                  ret     0014h
+ 009A   0006    
+ 009A   0006    ' Never called: BC's callers of the SEG DECLARE push a far poin
+                ter, while BC
+ 009A   0006    ' compiles this definition with a near one (retf 6). No referen
+                ce to hold to.
+ 009A   0006    sub pSegd (h as integer, seg v as integer, t as integer)
+ 009A    **        I00003:   jmp     I00005
+ 009D    **        PSEGD:    mov     cx,0000h
+ 00A0    **                  call    B$ENRA
+ 00A5   0006        trash
+ 00A5    **                  call    TRASH
+ 00AA   0006        putI 94, h: putI 95, v: putI 96, t
+ 00AA    **                  push    5Eh
+ 00AC    **                  mov     si,0Ah[bp]
+ 00AF    **                  push    [si]
+ 00B1    **                  call    PUTI
+ 00B6    **                  push    5Fh
+ 00B8    **                  mov     si,08h[bp]
+ 00BB    **                  push    [si]
+ 00BD    **                  call    PUTI
+ 00C2    **                  push    60h
+ 00C4    **                  mov     si,06h[bp]
+ 00C7    **                  push    [si]
+ 00C9    **                  call    PUTI
+ 00CE   0006        v = v + 1
+ 00CE   0006    end sub
+ 00CE    **                  mov     si,08h[bp]
+ 00D1    **                  inc     [si]
+ 00D3    **        I00006:   call    B$EXSA
+ 00D8    **                  ret     0006h
+ 00DB   0006    
+ 00DB    **        I00005:   call    B$CENP
+ 00E0   0006    
+
+45994 Bytes Available
+42491 Bytes Free
+
+    0 Warning Error(s)
+    0 Severe  Error(s)
