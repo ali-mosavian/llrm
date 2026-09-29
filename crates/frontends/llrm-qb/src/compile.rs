@@ -133,6 +133,11 @@ pub fn _object_name(name: &str) -> String {
     name.trim_end_matches(['%', '&', '!', '#', '$']).to_uppercase()
 }
 
+/// The name a procedure links by: the frontend's, or BC's default.
+fn _link_name(callable: &model::Callable) -> String {
+    callable.symbol.clone().unwrap_or_else(|| _object_name(&callable.name))
+}
+
 /// BC keeps source globals typed; compiler-owned data keeps `$D<n>`, and so
 /// does a global whose name is `taken`: a scalar and an array may share one.
 fn _data_name(module: &model::Module, object_: &model::DataObject, taken: &BTreeSet<String>) -> String {
@@ -1273,8 +1278,8 @@ fn _lowered_machine(
 fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result<masm::Module, CompileError> {
     let program = &_positional_data(program)?;
     let module = &program.modules[0];
-    let procedures = module.functions.iter().map(|one| &one.name).chain(module.callables.iter().map(|one| &one.name));
-    let symbols: BTreeMap<String, String> = procedures.map(|name| (name.clone(), _object_name(name))).collect();
+    let functions = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name)));
+    let symbols: BTreeMap<String, String> = functions.chain(module.callables.iter().map(|one| (one.name.clone(), _link_name(one)))).collect();
     let data = _data_names(module).into_iter().filter(|((space, _), _)| matches!(space, Space::Segment | Space::External)).map(|((_, id), name)| (id, name)).collect();
     let mut placed: IndexMap<&str, Vec<basic::Item>> = ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
     for object_ in _placed(module) {
@@ -1392,10 +1397,8 @@ pub fn assembled_by(
     }
     let semantic = _alias_annotated(module, &module.functions, &semantic, program.runtime.value())?;
 
-    let callable_names: IndexMap<&str, String> =
-        module.callables.iter().map(|one| (one.name.as_str(), _object_name(&one.name))).collect();
-    let defined: BTreeSet<String> =
-        module.callables.iter().filter(|one| one.defined).map(|one| _object_name(&one.name)).collect();
+    let callable_names: IndexMap<&str, String> = module.callables.iter().map(|one| (one.name.as_str(), _link_name(one))).collect();
+    let defined: BTreeSet<String> = module.callables.iter().filter(|one| one.defined).map(_link_name).collect();
     let mut procedures: Vec<masm::Procedure> = Vec::new();
     let data_rows = _read_data_lines(module)?;
     let data_keys: IndexMap<i64, i64> = (0..data_rows.len() as i64).map(|row| (row, -(row + 1))).collect();

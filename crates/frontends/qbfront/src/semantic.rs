@@ -136,6 +136,17 @@ struct Signature {
     cdecl: bool,
 }
 
+/// The name BC links a procedure by, where it is not BASIC's own
+/// uppercase: an ALIAS as written, and a CDECL name as C spells it,
+/// lowercase with an underscore and no type suffix.
+fn link_name(procedure: &Procedure) -> Option<String> {
+    match (&procedure.alias, procedure.cdecl) {
+        (Some(alias), _) => Some(alias.clone()),
+        (None, true) => Some(format!("_{}", procedure.name.trim_end_matches(['%', '&', '!', '#', '$', '@']).to_ascii_lowercase())),
+        (None, false) => None,
+    }
+}
+
 fn signatures_compatible(left: &Signature, right: &Signature) -> bool {
     left.result == right.result
         // `f%` and a DEFINT `f` are one FUNCTION; the result type decides.
@@ -160,6 +171,8 @@ struct Callable {
     result_type: Option<u32>,
     parameters: Vec<(u32, bool, bool, bool)>,
     defined: bool,
+    /// The name it links by, where BC does not derive it from `name`.
+    symbol: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1899,6 +1912,7 @@ impl Compiler {
                     result_type: signature.result,
                     parameters: signature.parameters.clone(),
                     defined: !procedure.declaration,
+                    symbol: link_name(procedure),
                 });
                 self.signatures.insert(key.into(), signature);
             }
@@ -9425,7 +9439,12 @@ impl Compiler {
                 }
                 out.push_str(if *segmented { "true" } else { "false" });
             }
-            out.push_str("]}");
+            out.push(']');
+            if let Some(symbol) = &callable.symbol {
+                out.push_str(",\"symbol\":");
+                string(&mut out, symbol);
+            }
+            out.push('}');
         }
         out.push_str("],\"data\":[");
         for (index, object) in self.data.iter().enumerate() {
