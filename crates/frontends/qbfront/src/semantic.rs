@@ -3141,7 +3141,7 @@ impl Compiler {
                     ]);
                     let form = if *write { "PUT" } else { "GET" };
                     let Some(callee) =
-                        llrm_qbruntime::routine_for(form, None, self.options.mbf, position.is_some())
+                        llrm_qbruntime::routine_for(form, None, self.options.mbf, position.is_some(), &self.runtime)
                     else {
                         return self.fail(format!("{form} has no runtime routine for this form"));
                     };
@@ -7341,7 +7341,7 @@ impl Compiler {
 
     /// The runtime routine source form `form` calls for an operand of `type_id`.
     fn runtime_routine(&self, form: &str, type_id: u32) -> Option<&'static str> {
-        llrm_qbruntime::routine_for(form, Some(self.runtime_type(type_id)?), self.options.mbf, false)
+        llrm_qbruntime::routine_for(form, Some(self.runtime_type(type_id)?), self.options.mbf, false, &self.runtime)
     }
 
     /// The READ routine storing into a destination at `address`, and its operands:
@@ -9022,9 +9022,10 @@ impl Compiler {
     }
 
     fn cleanup_local_arrays(&mut self) -> Result<(), SemanticError> {
-        // VBDOS erases a STRING array with B$ERS1; QB 4.5 and PDS 7.1 have
-        // no such routine and use B$ERAS for every array.
-        let strings = if self.runtime == "vbdos" { "B$ERS1" } else { "B$ERAS" };
+        let eraser = |element: Option<u32>| {
+            let type_ = (element == Some(STRING)).then_some("STRING");
+            llrm_qbruntime::routine_for("local ERASE", type_, false, false, &self.runtime).expect("runtime.toml erases every local array")
+        };
         let descriptors: Vec<(u32, u32, &'static str)> = self
             .variables
             .values()
@@ -9038,15 +9039,7 @@ impl Compiler {
                     .iter()
                     .find(|one| one.id == place && one.storage == "local")
                     .map(|one| {
-                        (
-                            place,
-                            one.type_id,
-                            if element == Some(STRING) {
-                                strings
-                            } else {
-                                "B$ERAS"
-                            },
-                        )
+                        (place, one.type_id, eraser(element))
                     })
             })
             .collect();
