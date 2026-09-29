@@ -238,6 +238,8 @@ impl Machine<'_> {
                 None
             }
             "B$STDL" => None,
+            // ERROR n with no handler: the program ends reporting it.
+            "B$SERR" => return self.panic(&format!("error {}", arguments[0].whole()?)),
             // MID$(destination, start, maximum) = source overwrites in place:
             // the destination keeps its length.
             "B$SMID" => {

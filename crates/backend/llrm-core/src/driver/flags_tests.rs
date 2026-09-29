@@ -84,3 +84,17 @@ fn stack_is_data_only_when_asked() {
     assert!(machine(&["-mstack-is-data"]));
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
 }
+
+/// gcc's run-time check names: each sanitizer alone, `undefined` all of
+/// them, `-fno-sanitize` and `-ftrapv` as gcc reads them.
+#[test]
+fn sanitizers_take_gccs_names() {
+    let sanitize = |arguments: &[&str]| parsed(arguments).unwrap().sanitize;
+    let all = Sanitize { bounds: true, integer_divide_by_zero: true, signed_integer_overflow: true };
+    assert_eq!(sanitize(&[]), Sanitize::default());
+    assert_eq!(sanitize(&["-fsanitize=undefined"]), all);
+    assert_eq!(sanitize(&["-fsanitize=bounds,integer-divide-by-zero"]), Sanitize { signed_integer_overflow: false, ..all });
+    assert_eq!(sanitize(&["-fsanitize=undefined", "-fno-sanitize=bounds"]), Sanitize { bounds: false, ..all });
+    assert_eq!(sanitize(&["-ftrapv"]), Sanitize { signed_integer_overflow: true, ..Sanitize::default() });
+    assert!(parsed(&["-fsanitize=address"]).is_err());
+}

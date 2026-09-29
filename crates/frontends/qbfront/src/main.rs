@@ -13,6 +13,7 @@ fn main() -> ExitCode {
     let mut huge_arrays = false;
     let mut checked_arrays = false;
     let mut checked_division = false;
+    let mut checked_overflow = false;
     let mut unchecked_bounds = false;
     let mut mbf = false;
     let mut alternate_math = false;
@@ -52,6 +53,8 @@ fn main() -> ExitCode {
             checked_arrays = true;
         } else if argument == "--checked-division" {
             checked_division = true;
+        } else if argument == "--checked-overflow" {
+            checked_overflow = true;
         } else if argument == "--unchecked-bounds" {
             unchecked_bounds = true;
         } else if argument == "--mbf" {
@@ -96,7 +99,7 @@ fn main() -> ExitCode {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--unchecked-bounds] [--whole-program] [--array-merging] [--own-frames] [--include DIR] [--syntax] FILE"
+            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--unchecked-bounds] [--whole-program] [--array-merging] [--own-frames] [--include DIR] [--syntax] FILE"
         );
         return ExitCode::from(2);
     };
@@ -132,6 +135,7 @@ fn main() -> ExitCode {
                     huge_arrays,
                     checked_arrays,
                     checked_division,
+                    checked_overflow,
                     unchecked_bounds,
                     mbf,
                     alternate_math,

@@ -3,11 +3,13 @@
 //!
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
-//!         [--huge-arrays] [--checked-arrays] [--checked-division] [--unchecked-bounds] [--alternate-math]
+//!         [--huge-arrays] [--unchecked-bounds] [--alternate-math]
 //!         [--mbf] [--whole-program] [--array-merging] [--own-frames] [--include DIR]... [--mir] [--dump DIR] [--legacy] [OPTIONS]
 //! ```
 //!
-//! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them. `--legacy`
+//! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them;
+//! `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow` (all
+//! three: `undefined`) are BC's /D checks. `--legacy`
 //! compiles through the old MIR.
 
 use std::path::PathBuf;
@@ -23,7 +25,7 @@ use llrm_core::model::passes::Options;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--checked-arrays] [--checked-division] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] \
+[--huge-arrays] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] \
 [--include INCLUDE] [--mir] [--dump DUMP] [--legacy] {} source",
         flags::USAGE
     )
@@ -81,8 +83,6 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             }
             "--dump-hir" => dump_hir = Some(PathBuf::from(value("--dump-hir")?)),
             "--huge-arrays" => frontend.huge_arrays = true,
-            "--checked-arrays" => frontend.checked_arrays = true,
-            "--checked-division" => frontend.checked_division = true,
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
             "--alternate-math" => frontend.alternate_math = true,
             "--mbf" => frontend.mbf = true,
@@ -103,6 +103,9 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     if mir && flags.output.is_some() {
         return Err("--mir and --output cannot be used together".into());
     }
+    frontend.checked_arrays = flags.sanitize.bounds;
+    frontend.checked_division = flags.sanitize.integer_divide_by_zero;
+    frontend.checked_overflow = flags.sanitize.signed_integer_overflow;
     let codegen = flags.driver(flags.machine(llrm_core::abi::machine::BASIC.clone())?);
     Ok(Arguments { source, frontend, dump_hir, mir, options: flags.legacy(), flags, dump, route, codegen })
 }

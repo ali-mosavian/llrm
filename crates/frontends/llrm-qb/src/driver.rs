@@ -100,8 +100,11 @@ pub struct Frontend {
     pub array_order: String,
     pub huge_arrays: bool,
     pub checked_arrays: bool,
-    /// Integer division raises error 11 in code: `--checked-division`.
+    /// Integer division raises error 11 in code: `-fsanitize=integer-divide-by-zero`.
     pub checked_division: bool,
+    /// Integer arithmetic and narrowing raise error 6, Overflow:
+    /// `-fsanitize=signed-integer-overflow`.
+    pub checked_overflow: bool,
     pub unchecked_bounds: bool,
     pub mbf: bool,
     pub alternate_math: bool,
@@ -125,6 +128,7 @@ impl Frontend {
             huge_arrays: false,
             checked_arrays: false,
             checked_division: false,
+            checked_overflow: false,
             unchecked_bounds: false,
             mbf: false,
             alternate_math: false,
@@ -153,6 +157,7 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
         (frontend.huge_arrays, "--huge-arrays"),
         (frontend.checked_arrays, "--checked-arrays"),
         (frontend.checked_division, "--checked-division"),
+        (frontend.checked_overflow, "--checked-overflow"),
         (frontend.unchecked_bounds, "--unchecked-bounds"),
         (frontend.mbf, "--mbf"),
         (frontend.alternate_math, "--alternate-math"),
