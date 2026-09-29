@@ -346,7 +346,9 @@ pub const CONVENTIONS: [(&str, u32); 6] = [("ccc", 0), ("fastcc", 8), ("coldcc",
 pub const BASIC: u32 = 1000;
 
 /// LLVM's `x86_intrcc`: an interrupt handler, entered with the flags pushed
-/// and left by `iret`.
+/// and left by `iret`. Unlike LLVM's, its one parameter points at the
+/// registers the handler saved, which Borland C's handlers take as their
+/// parameters, not at the IP, CS and flags the interrupt pushed.
 pub const X86_INTR: u32 = 83;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

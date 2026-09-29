@@ -114,7 +114,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
     in_the_frame(&function.parameter_attrs)?;
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
-        _ if interrupt => crate::backend::masm::INTERRUPT_PARAMETERS,
+        _ if interrupt => crate::backend::masm::interrupt_parameters(),
         _ if far(global)? => 6,
         _ => 4,
     };
