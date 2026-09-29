@@ -1,0 +1,1400 @@
+cf _p_ch return                 far pops 0                               bcc/CFCALLEE.ASM:74
+cf _p_ch keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:74
+cf _p_ch _gh_ch                 in+4 in+5                                bcc/CFCALLEE.ASM:74
+cf _p_ch _gt_ch                 in+8 in+9                                bcc/CFCALLEE.ASM:74
+cf _p_ch _gv_ch                 in+6                                     bcc/CFCALLEE.ASM:74
+cf _p_d return                  far pops 0                               bcc/CFCALLEE.ASM:227
+cf _p_d keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:227
+cf _p_d _gh_d                   in+4 in+5                                bcc/CFCALLEE.ASM:227
+cf _p_d _gt_d                   in+14 in+15                              bcc/CFCALLEE.ASM:227
+cf _p_d _gv_d                   in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 bcc/CFCALLEE.ASM:227
+cf _p_f return                  far pops 0                               bcc/CFCALLEE.ASM:210
+cf _p_f keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:210
+cf _p_f _gh_f                   in+4 in+5                                bcc/CFCALLEE.ASM:210
+cf _p_f _gt_f                   in+10 in+11                              bcc/CFCALLEE.ASM:210
+cf _p_f _gv_f                   in+6 in+7 in+8 in+9                      bcc/CFCALLEE.ASM:210
+cf _p_fp return                 far pops 0                               bcc/CFCALLEE.ASM:176
+cf _p_fp keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:176
+cf _p_fp _gh_fp                 in+4 in+5                                bcc/CFCALLEE.ASM:176
+cf _p_fp _gt_fp                 in+10 in+11                              bcc/CFCALLEE.ASM:176
+cf _p_fp _gv_fp                 in+6 in+7 in+8 in+9                      bcc/CFCALLEE.ASM:176
+cf _p_hp return                 far pops 0                               bcc/CFCALLEE.ASM:193
+cf _p_hp keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:193
+cf _p_hp _gh_hp                 in+4 in+5                                bcc/CFCALLEE.ASM:193
+cf _p_hp _gt_hp                 in+10 in+11                              bcc/CFCALLEE.ASM:193
+cf _p_hp _gv_hp                 in+6 in+7 in+8 in+9                      bcc/CFCALLEE.ASM:193
+cf _p_i return                  far pops 0                               bcc/CFCALLEE.ASM:91
+cf _p_i keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:91
+cf _p_i _gh_i                   in+4 in+5                                bcc/CFCALLEE.ASM:91
+cf _p_i _gt_i                   in+8 in+9                                bcc/CFCALLEE.ASM:91
+cf _p_i _gv_i                   in+6 in+7                                bcc/CFCALLEE.ASM:91
+cf _p_l return                  far pops 0                               bcc/CFCALLEE.ASM:125
+cf _p_l keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:125
+cf _p_l _gh_l                   in+4 in+5                                bcc/CFCALLEE.ASM:125
+cf _p_l _gt_l                   in+10 in+11                              bcc/CFCALLEE.ASM:125
+cf _p_l _gv_l                   in+6 in+7 in+8 in+9                      bcc/CFCALLEE.ASM:125
+cf _p_ld return                 far pops 0                               bcc/CFCALLEE.ASM:245
+cf _p_ld keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:245
+cf _p_ld _gh_ld                 in+4 in+5                                bcc/CFCALLEE.ASM:245
+cf _p_ld _gt_ld                 in+16 in+17                              bcc/CFCALLEE.ASM:245
+cf _p_ld _gv_ld                 in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 in+14 in+15 bcc/CFCALLEE.ASM:245
+cf _p_mixed return              far pops 0                               bcc/CFCALLEE.ASM:483
+cf _p_mixed keeps               si di bp sp ds ss df                     bcc/CFCALLEE.ASM:483
+cf _p_mixed _gm_a               in+4                                     bcc/CFCALLEE.ASM:483
+cf _p_mixed _gm_b               in+6 in+7 in+8 in+9                      bcc/CFCALLEE.ASM:483
+cf _p_mixed _gm_c               in+10 in+11 in+12 in+13 in+14 in+15 in+16 in+17 bcc/CFCALLEE.ASM:483
+cf _p_mixed _gm_d               in+18 in+19                              bcc/CFCALLEE.ASM:483
+cf _p_mixed _gm_e               in+20 in+21 in+22 in+23                  bcc/CFCALLEE.ASM:483
+cf _p_mixed _gm_f               in+24 in+25 in+26 in+27                  bcc/CFCALLEE.ASM:483
+cf _p_mixed _gm_h               in+28 in+29 in+30 in+31 in+32 in+33 in+34 in+35 in+36 in+37 bcc/CFCALLEE.ASM:483
+cf _p_np return                 far pops 0                               bcc/CFCALLEE.ASM:159
+cf _p_np keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:159
+cf _p_np _gh_np                 in+4 in+5                                bcc/CFCALLEE.ASM:159
+cf _p_np _gt_np                 in+8 in+9                                bcc/CFCALLEE.ASM:159
+cf _p_np _gv_np                 in+6 in+7                                bcc/CFCALLEE.ASM:159
+cf _p_sc return                 far pops 0                               bcc/CFCALLEE.ASM:40
+cf _p_sc keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:40
+cf _p_sc _gh_sc                 in+4 in+5                                bcc/CFCALLEE.ASM:40
+cf _p_sc _gt_sc                 in+8 in+9                                bcc/CFCALLEE.ASM:40
+cf _p_sc _gv_sc                 in+6                                     bcc/CFCALLEE.ASM:40
+cf _p_u return                  far pops 0                               bcc/CFCALLEE.ASM:108
+cf _p_u keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:108
+cf _p_u _gh_u                   in+4 in+5                                bcc/CFCALLEE.ASM:108
+cf _p_u _gt_u                   in+8 in+9                                bcc/CFCALLEE.ASM:108
+cf _p_u _gv_u                   in+6 in+7                                bcc/CFCALLEE.ASM:108
+cf _p_uc return                 far pops 0                               bcc/CFCALLEE.ASM:57
+cf _p_uc keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:57
+cf _p_uc _gh_uc                 in+4 in+5                                bcc/CFCALLEE.ASM:57
+cf _p_uc _gt_uc                 in+8 in+9                                bcc/CFCALLEE.ASM:57
+cf _p_uc _gv_uc                 in+6                                     bcc/CFCALLEE.ASM:57
+cf _p_ul return                 far pops 0                               bcc/CFCALLEE.ASM:142
+cf _p_ul keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:142
+cf _p_ul _gh_ul                 in+4 in+5                                bcc/CFCALLEE.ASM:142
+cf _p_ul _gt_ul                 in+10 in+11                              bcc/CFCALLEE.ASM:142
+cf _p_ul _gv_ul                 in+6 in+7 in+8 in+9                      bcc/CFCALLEE.ASM:142
+cf _p_variadic return           far pops 0                               bcc/CFCALLEE.ASM:516
+cf _p_variadic keeps            si di bp sp ds ss df                     bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_ch          in+10 in+11                              bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_d           in+38 in+39 in+40 in+41 in+42 in+43 in+44 in+45 bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_f           in+30 in+31 in+32 in+33 in+34 in+35 in+36 in+37 bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_fp          in+26 in+27 in+28 in+29                  bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_i           in+12 in+13                              bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_l           in+16 in+17 in+18 in+19                  bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_ld          in+46 in+47 in+48 in+49 in+50 in+51 in+52 in+53 in+54 in+55 bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_n           in+4 in+5                                bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_np          in+24 in+25                              bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_s3          in+56 in+57 in+58                        bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_s5          in+60 in+61 in+62 in+63 in+64            bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_sc          in+6 in+7                                bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_u           in+14 in+15                              bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_uc          in+8 in+9                                bcc/CFCALLEE.ASM:516
+cf _p_variadic _gva_ul          in+20 in+21 in+22 in+23                  bcc/CFCALLEE.ASM:516
+cf _r_ch return                 far pops 0                               bcc/CFCALLEE.ASM:281
+cf _r_ch keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:281
+cf _r_ch result                 al _in_ch[0]                             bcc/CFCALLEE.ASM:281
+cf _r_d return                  far pops 0                               bcc/CFCALLEE.ASM:366
+cf _r_d keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:366
+cf _r_d result                  st _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] bcc/CFCALLEE.ASM:366
+cf _r_f return                  far pops 0                               bcc/CFCALLEE.ASM:357
+cf _r_f keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:357
+cf _r_f result                  st _in_f[0] _in_f[1] _in_f[2] _in_f[3]   bcc/CFCALLEE.ASM:357
+cf _r_fp return                 far pops 0                               bcc/CFCALLEE.ASM:337
+cf _r_fp keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:337
+cf _r_fp result                 al _in_fp[0]                             bcc/CFCALLEE.ASM:337
+cf _r_hp return                 far pops 0                               bcc/CFCALLEE.ASM:347
+cf _r_hp keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:347
+cf _r_hp result                 al _in_hp[0]                             bcc/CFCALLEE.ASM:347
+cf _r_i return                  far pops 0                               bcc/CFCALLEE.ASM:290
+cf _r_i keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:290
+cf _r_i result                  al _in_i[0]                              bcc/CFCALLEE.ASM:290
+cf _r_l return                  far pops 0                               bcc/CFCALLEE.ASM:308
+cf _r_l keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:308
+cf _r_l result                  al _in_l[0]                              bcc/CFCALLEE.ASM:308
+cf _r_ld return                 far pops 0                               bcc/CFCALLEE.ASM:375
+cf _r_ld keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:375
+cf _r_ld result                 st _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] bcc/CFCALLEE.ASM:375
+cf _r_np return                 far pops 0                               bcc/CFCALLEE.ASM:328
+cf _r_np keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:328
+cf _r_np result                 al _in_np[0]                             bcc/CFCALLEE.ASM:328
+cf _r_sc return                 far pops 0                               bcc/CFCALLEE.ASM:263
+cf _r_sc keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:263
+cf _r_sc result                 al _in_sc[0]                             bcc/CFCALLEE.ASM:263
+cf _r_u return                  far pops 0                               bcc/CFCALLEE.ASM:299
+cf _r_u keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:299
+cf _r_u result                  al _in_u[0]                              bcc/CFCALLEE.ASM:299
+cf _r_uc return                 far pops 0                               bcc/CFCALLEE.ASM:272
+cf _r_uc keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:272
+cf _r_uc result                 al _in_uc[0]                             bcc/CFCALLEE.ASM:272
+cf _r_ul return                 far pops 0                               bcc/CFCALLEE.ASM:318
+cf _r_ul keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:318
+cf _r_ul result                 al _in_ul[0]                             bcc/CFCALLEE.ASM:318
+cf _r_void return               far pops 0                               bcc/CFCALLEE.ASM:475
+cf _r_void keeps                si di bp sp ds ss df                     bcc/CFCALLEE.ASM:475
+cf _r_void result               none                                     bcc/CFCALLEE.ASM:475
+cf _w_ch return                 far pops 0                               bcc/CFCALLEE.ASM:422
+cf _w_ch keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:422
+cf _w_ch _gh_ch                 in+4 in+5                                bcc/CFCALLEE.ASM:422
+cf _w_ch _gt_ch                 in+8 in+9                                bcc/CFCALLEE.ASM:422
+cf _w_ch _gw_ch                 in+6 sign(in+6) sign(in+6) sign(in+6)    bcc/CFCALLEE.ASM:422
+cf _w_i return                  far pops 0                               bcc/CFCALLEE.ASM:441
+cf _w_i keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:441
+cf _w_i _gh_i                   in+4 in+5                                bcc/CFCALLEE.ASM:441
+cf _w_i _gt_i                   in+8 in+9                                bcc/CFCALLEE.ASM:441
+cf _w_i _gw_i                   in+6 in+7 sign(in+7) sign(in+7)          bcc/CFCALLEE.ASM:441
+cf _w_sc return                 far pops 0                               bcc/CFCALLEE.ASM:384
+cf _w_sc keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:384
+cf _w_sc _gh_sc                 in+4 in+5                                bcc/CFCALLEE.ASM:384
+cf _w_sc _gt_sc                 in+8 in+9                                bcc/CFCALLEE.ASM:384
+cf _w_sc _gw_sc                 in+6 sign(in+6) sign(in+6) sign(in+6)    bcc/CFCALLEE.ASM:384
+cf _w_u return                  far pops 0                               bcc/CFCALLEE.ASM:458
+cf _w_u keeps                   si di bp sp ds ss df                     bcc/CFCALLEE.ASM:458
+cf _w_u _gh_u                   in+4 in+5                                bcc/CFCALLEE.ASM:458
+cf _w_u _gt_u                   in+8 in+9                                bcc/CFCALLEE.ASM:458
+cf _w_u _gw_u                   in+6 in+7 00 00                          bcc/CFCALLEE.ASM:458
+cf _w_uc return                 far pops 0                               bcc/CFCALLEE.ASM:403
+cf _w_uc keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:403
+cf _w_uc _gh_uc                 in+4 in+5                                bcc/CFCALLEE.ASM:403
+cf _w_uc _gt_uc                 in+8 in+9                                bcc/CFCALLEE.ASM:403
+cf _w_uc _gw_uc                 in+6 00 00 00                            bcc/CFCALLEE.ASM:403
+cf call _p_sc #1 stack          11 11 _in_sc[0] - 22 22                  bcc/CFCALLER.ASM:40
+cf call _p_sc #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_sc #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_sc #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_uc #1 stack          11 11 _in_uc[0] - 22 22                  bcc/CFCALLER.ASM:40
+cf call _p_uc #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_uc #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_uc #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_ch #1 stack          11 11 _in_ch[0] - 22 22                  bcc/CFCALLER.ASM:40
+cf call _p_ch #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_ch #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_ch #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_i #1 stack           11 11 _in_i[0] _in_i[1] 22 22            bcc/CFCALLER.ASM:40
+cf call _p_i #1 cleanup         far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_i #1 stack                                                    bcc/CFCALLER.ASM:40
+cf call _r_i #1 cleanup         far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_u #1 stack           11 11 _in_u[0] _in_u[1] 22 22            bcc/CFCALLER.ASM:40
+cf call _p_u #1 cleanup         far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_u #1 stack                                                    bcc/CFCALLER.ASM:40
+cf call _r_u #1 cleanup         far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_l #1 stack           11 11 _in_l[0] _in_l[1] _in_l[2] _in_l[3] 22 22 bcc/CFCALLER.ASM:40
+cf call _p_l #1 cleanup         far pops 8                               bcc/CFCALLER.ASM:40
+cf call _r_l #1 stack                                                    bcc/CFCALLER.ASM:40
+cf call _r_l #1 cleanup         far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_ul #1 stack          11 11 _in_ul[0] _in_ul[1] _in_ul[2] _in_ul[3] 22 22 bcc/CFCALLER.ASM:40
+cf call _p_ul #1 cleanup        far pops 8                               bcc/CFCALLER.ASM:40
+cf call _r_ul #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_ul #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_np #1 stack          11 11 _in_np[0] _in_np[1] 22 22          bcc/CFCALLER.ASM:40
+cf call _p_np #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_np #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_np #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_fp #1 stack          11 11 _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] 22 22 bcc/CFCALLER.ASM:40
+cf call _p_fp #1 cleanup        far pops 8                               bcc/CFCALLER.ASM:40
+cf call _r_fp #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_fp #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_hp #1 stack          11 11 _in_hp[0] _in_hp[1] _in_hp[2] _in_hp[3] 22 22 bcc/CFCALLER.ASM:40
+cf call _p_hp #1 cleanup        far pops 8                               bcc/CFCALLER.ASM:40
+cf call _r_hp #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_hp #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_f #1 stack           11 11 _in_f[0] _in_f[1] _in_f[2] _in_f[3] 22 22 bcc/CFCALLER.ASM:40
+cf call _p_f #1 cleanup         far pops 8                               bcc/CFCALLER.ASM:40
+cf call _r_f #1 stack                                                    bcc/CFCALLER.ASM:40
+cf call _r_f #1 cleanup         far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_d #1 stack           11 11 _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] 22 22 bcc/CFCALLER.ASM:40
+cf call _p_d #1 cleanup         far pops 12                              bcc/CFCALLER.ASM:40
+cf call _r_d #1 stack                                                    bcc/CFCALLER.ASM:40
+cf call _r_d #1 cleanup         far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_ld #1 stack          11 11 _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] 22 22 bcc/CFCALLER.ASM:40
+cf call _p_ld #1 cleanup        far pops 14                              bcc/CFCALLER.ASM:40
+cf call _r_ld #1 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_ld #1 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _w_sc #1 stack          11 11 _in_sc[0] - 22 22                  bcc/CFCALLER.ASM:40
+cf call _w_sc #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_sc #2 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_sc #2 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _w_uc #1 stack          11 11 _in_uc[0] - 22 22                  bcc/CFCALLER.ASM:40
+cf call _w_uc #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_uc #2 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_uc #2 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _w_ch #1 stack          11 11 _in_ch[0] 00 22 22                 bcc/CFCALLER.ASM:40
+cf call _w_ch #1 cleanup        far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_ch #2 stack                                                   bcc/CFCALLER.ASM:40
+cf call _r_ch #2 cleanup        far pops 0                               bcc/CFCALLER.ASM:40
+cf call _w_i #1 stack           11 11 _in_i[0] _in_i[1] 22 22            bcc/CFCALLER.ASM:40
+cf call _w_i #1 cleanup         far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_i #2 stack                                                    bcc/CFCALLER.ASM:40
+cf call _r_i #2 cleanup         far pops 0                               bcc/CFCALLER.ASM:40
+cf call _w_u #1 stack           11 11 _in_u[0] _in_u[1] 22 22            bcc/CFCALLER.ASM:40
+cf call _w_u #1 cleanup         far pops 6                               bcc/CFCALLER.ASM:40
+cf call _r_u #2 stack                                                    bcc/CFCALLER.ASM:40
+cf call _r_u #2 cleanup         far pops 0                               bcc/CFCALLER.ASM:40
+cf call _r_void #1 stack                                                 bcc/CFCALLER.ASM:40
+cf call _r_void #1 cleanup      far pops 0                               bcc/CFCALLER.ASM:40
+cf call _p_mixed #1 stack       _in_sc[0] - _in_l[0] _in_l[1] _in_l[2] _in_l[3] _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] _in_i[0] _in_i[1] _in_f[0] _in_f[1] _in_f[2] _in_f[3] _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] bcc/CFCALLER.ASM:40
+cf call _p_mixed #1 cleanup     far pops 34                              bcc/CFCALLER.ASM:40
+cf call _p_variadic #1 stack    11 11 _in_sc[0] sign(_in_sc[0]) _in_uc[0] 00 _in_ch[0] sign(_in_ch[0]) _in_i[0] _in_i[1] _in_u[0] _in_u[1] _in_l[0] _in_l[1] _in_l[2] _in_l[3] _in_ul[0] _in_ul[1] _in_ul[2] _in_ul[3] _in_np[0] _in_np[1] _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] _in_f:f64[0] _in_f:f64[1] _in_f:f64[2] _in_f:f64[3] _in_f:f64[4] _in_f:f64[5] _in_f:f64[6] _in_f:f64[7] _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] _in_s3[0] _in_s3[1] _in_s3[2] - _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] - bcc/CFCALLER.ASM:40
+cf call _p_variadic #1 cleanup  far pops 62                              bcc/CFCALLER.ASM:40
+cf keeps _out_ch                _r_ch:eax.0                              bcc/CFCALLER.ASM:40
+cf keeps _out_d                 _r_d:st.0 _r_d:st.1 _r_d:st.2 _r_d:st.3 _r_d:st.4 _r_d:st.5 _r_d:st.6 _r_d:st.7 bcc/CFCALLER.ASM:40
+cf keeps _out_f                 _r_f:st.0 _r_f:st.1 _r_f:st.2 _r_f:st.3  bcc/CFCALLER.ASM:40
+cf keeps _out_fp                _r_fp:eax.0 _r_fp:eax.1 _r_fp:edx.0 _r_fp:edx.1 bcc/CFCALLER.ASM:40
+cf keeps _out_hp                _r_hp:eax.0 _r_hp:eax.1 _r_hp:edx.0 _r_hp:edx.1 bcc/CFCALLER.ASM:40
+cf keeps _out_i                 _r_i:eax.0 _r_i:eax.1                    bcc/CFCALLER.ASM:40
+cf keeps _out_l                 _r_l:eax.0 _r_l:eax.1 _r_l:edx.0 _r_l:edx.1 bcc/CFCALLER.ASM:40
+cf keeps _out_ld                _r_ld:st.0 _r_ld:st.1 _r_ld:st.2 _r_ld:st.3 _r_ld:st.4 _r_ld:st.5 _r_ld:st.6 _r_ld:st.7 _r_ld:st.8 _r_ld:st.9 bcc/CFCALLER.ASM:40
+cf keeps _out_np                _r_np:eax.0 _r_np:eax.1                  bcc/CFCALLER.ASM:40
+cf keeps _out_sc                _r_sc:eax.0                              bcc/CFCALLER.ASM:40
+cf keeps _out_u                 _r_u:eax.0 _r_u:eax.1                    bcc/CFCALLER.ASM:40
+cf keeps _out_uc                _r_uc:eax.0                              bcc/CFCALLER.ASM:40
+cf keeps _out_ul                _r_ul:eax.0 _r_ul:eax.1 _r_ul:edx.0 _r_ul:edx.1 bcc/CFCALLER.ASM:40
+cf keeps _ow_ch                 _r_ch:eax.0 sign(_r_ch:eax.0) sign(_r_ch:eax.0) sign(_r_ch:eax.0) bcc/CFCALLER.ASM:40
+cf keeps _ow_i                  _r_i:eax.0 _r_i:eax.1 sign(_r_i:eax.1) sign(_r_i:eax.1) bcc/CFCALLER.ASM:40
+cf keeps _ow_sc                 _r_sc:eax.0 sign(_r_sc:eax.0) sign(_r_sc:eax.0) sign(_r_sc:eax.0) bcc/CFCALLER.ASM:40
+cf keeps _ow_u                  _r_u:eax.0 _r_u:eax.1 00 00              bcc/CFCALLER.ASM:40
+cf keeps _ow_uc                 _r_uc:eax.0 00 00 00                     bcc/CFCALLER.ASM:40
+cf _p_s1 return                 far pops 0                               bcc/CFAGGEE.ASM:40
+cf _p_s1 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:40
+cf _p_s1 _gh_s1                 in+4 in+5                                bcc/CFAGGEE.ASM:40
+cf _p_s1 _gt_s1                 in+8 in+9                                bcc/CFAGGEE.ASM:40
+cf _p_s1 _gv_s1                 in+6                                     bcc/CFAGGEE.ASM:40
+cf _p_s2 return                 far pops 0                               bcc/CFAGGEE.ASM:57
+cf _p_s2 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:57
+cf _p_s2 _gh_s2                 in+4 in+5                                bcc/CFAGGEE.ASM:57
+cf _p_s2 _gt_s2                 in+8 in+9                                bcc/CFAGGEE.ASM:57
+cf _p_s2 _gv_s2                 in+6 in+7                                bcc/CFAGGEE.ASM:57
+cf _p_s3 return                 far pops 0                               bcc/CFAGGEE.ASM:74
+cf _p_s3 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:74
+cf _p_s3 _gh_s3                 in+4 in+5                                bcc/CFAGGEE.ASM:74
+cf _p_s3 _gt_s3                 in+10 in+11                              bcc/CFAGGEE.ASM:74
+cf _p_s3 _gv_s3                 in+6 in+7 in+8                           bcc/CFAGGEE.ASM:74
+cf _p_s4 return                 far pops 0                               bcc/CFAGGEE.ASM:93
+cf _p_s4 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:93
+cf _p_s4 _gh_s4                 in+4 in+5                                bcc/CFAGGEE.ASM:93
+cf _p_s4 _gt_s4                 in+10 in+11                              bcc/CFAGGEE.ASM:93
+cf _p_s4 _gv_s4                 in+6 in+7 in+8 in+9                      bcc/CFAGGEE.ASM:93
+cf _p_s5 return                 far pops 0                               bcc/CFAGGEE.ASM:110
+cf _p_s5 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:110
+cf _p_s5 _gh_s5                 in+4 in+5                                bcc/CFAGGEE.ASM:110
+cf _p_s5 _gt_s5                 in+12 in+13                              bcc/CFAGGEE.ASM:110
+cf _p_s5 _gv_s5                 in+6 in+7 in+8 in+9 in+10                bcc/CFAGGEE.ASM:110
+cf _p_s7 return                 far pops 0                               bcc/CFAGGEE.ASM:131
+cf _p_s7 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:131
+cf _p_s7 _gh_s7                 in+4 in+5                                bcc/CFAGGEE.ASM:131
+cf _p_s7 _gt_s7                 in+14 in+15                              bcc/CFAGGEE.ASM:131
+cf _p_s7 _gv_s7                 in+6 in+7 in+8 in+9 in+10 in+11 in+12    bcc/CFAGGEE.ASM:131
+cf _p_s8 return                 far pops 0                               bcc/CFAGGEE.ASM:154
+cf _p_s8 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:154
+cf _p_s8 _gh_s8                 in+4 in+5                                bcc/CFAGGEE.ASM:154
+cf _p_s8 _gt_s8                 in+14 in+15                              bcc/CFAGGEE.ASM:154
+cf _p_s8 _gv_s8                 in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 bcc/CFAGGEE.ASM:154
+cf _p_s9 return                 far pops 0                               bcc/CFAGGEE.ASM:177
+cf _p_s9 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:177
+cf _p_s9 _gh_s9                 in+4 in+5                                bcc/CFAGGEE.ASM:177
+cf _p_s9 _gt_s9                 in+16 in+17                              bcc/CFAGGEE.ASM:177
+cf _p_s9 _gv_s9                 in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 in+14 bcc/CFAGGEE.ASM:177
+cf _p_sci return                far pops 0                               bcc/CFAGGEE.ASM:202
+cf _p_sci keeps                 si di bp sp ds ss df                     bcc/CFAGGEE.ASM:202
+cf _p_sci _gh_sci               in+4 in+5                                bcc/CFAGGEE.ASM:202
+cf _p_sci _gt_sci               in+10 in+11                              bcc/CFAGGEE.ASM:202
+cf _p_sci _gv_sci               in+6 in+7 in+8                           bcc/CFAGGEE.ASM:202
+cf _r_s1 return                 far pops 0                               bcc/CFAGGEE.ASM:221
+cf _r_s1 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:221
+cf _r_s1 result                 al _in_s1[0]                             bcc/CFAGGEE.ASM:221
+cf _r_s2 return                 far pops 0                               bcc/CFAGGEE.ASM:230
+cf _r_s2 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:230
+cf _r_s2 result                 al _in_s2[0]                             bcc/CFAGGEE.ASM:230
+cf _r_s3 return                 far pops 0                               bcc/CFAGGEE.ASM:239
+cf _r_s3 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:239
+cf _r_s3 result                 through in+4 in+5 in+6 in+7 _in_s3[0] _in_s3[1] _in_s3[2] dxax in+4 in+5 in+6 in+7 bcc/CFAGGEE.ASM:239
+cf _r_s4 return                 far pops 0                               bcc/CFAGGEE.ASM:257
+cf _r_s4 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:257
+cf _r_s4 result                 al _in_s4[0]                             bcc/CFAGGEE.ASM:257
+cf _r_s5 return                 far pops 0                               bcc/CFAGGEE.ASM:267
+cf _r_s5 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:267
+cf _r_s5 result                 through in+4 in+5 in+6 in+7 _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] dxax in+4 in+5 in+6 in+7 bcc/CFAGGEE.ASM:267
+cf _r_s7 return                 far pops 0                               bcc/CFAGGEE.ASM:287
+cf _r_s7 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:287
+cf _r_s7 result                 through in+4 in+5 in+6 in+7 _in_s7[0] _in_s7[1] _in_s7[2] _in_s7[3] _in_s7[4] _in_s7[5] _in_s7[6] dxax in+4 in+5 in+6 in+7 bcc/CFAGGEE.ASM:287
+cf _r_s8 return                 far pops 0                               bcc/CFAGGEE.ASM:309
+cf _r_s8 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:309
+cf _r_s8 result                 through in+4 in+5 in+6 in+7 _in_s8[0] _in_s8[1] _in_s8[2] _in_s8[3] _in_s8[4] _in_s8[5] _in_s8[6] _in_s8[7] dxax in+4 in+5 in+6 in+7 bcc/CFAGGEE.ASM:309
+cf _r_s9 return                 far pops 0                               bcc/CFAGGEE.ASM:331
+cf _r_s9 keeps                  si di bp sp ds ss df                     bcc/CFAGGEE.ASM:331
+cf _r_s9 result                 through in+4 in+5 in+6 in+7 _in_s9[0] _in_s9[1] _in_s9[2] _in_s9[3] _in_s9[4] _in_s9[5] _in_s9[6] _in_s9[7] _in_s9[8] dxax in+4 in+5 in+6 in+7 bcc/CFAGGEE.ASM:331
+cf _r_sci return                far pops 0                               bcc/CFAGGEE.ASM:355
+cf _r_sci keeps                 si di bp sp ds ss df                     bcc/CFAGGEE.ASM:355
+cf _r_sci result                through in+4 in+5 in+6 in+7 _in_sci[0] _in_sci[1] _in_sci[2] dxax in+4 in+5 in+6 in+7 bcc/CFAGGEE.ASM:355
+cf call _p_s1 #1 stack          11 11 _in_s1[0] - 22 22                  bcc/CFAGGER.ASM:40
+cf call _p_s1 #1 cleanup        far pops 6                               bcc/CFAGGER.ASM:40
+cf call _r_s1 #1 stack                                                   bcc/CFAGGER.ASM:40
+cf call _r_s1 #1 cleanup        far pops 0                               bcc/CFAGGER.ASM:40
+cf call _p_s2 #1 stack          11 11 _in_s2[0] _in_s2[1] 22 22          bcc/CFAGGER.ASM:40
+cf call _p_s2 #1 cleanup        far pops 6                               bcc/CFAGGER.ASM:40
+cf call _r_s2 #1 stack                                                   bcc/CFAGGER.ASM:40
+cf call _r_s2 #1 cleanup        far pops 0                               bcc/CFAGGER.ASM:40
+cf call _p_s3 #1 stack          11 11 _in_s3[0] _in_s3[1] _in_s3[2] - 22 22 bcc/CFAGGER.ASM:40
+cf call _p_s3 #1 cleanup        far pops 8                               bcc/CFAGGER.ASM:40
+cf call _r_s3 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CFAGGER.ASM:40
+cf call _r_s3 #1 cleanup        far pops 4                               bcc/CFAGGER.ASM:40
+cf call _p_s4 #1 stack          11 11 _in_s4[0] _in_s4[1] _in_s4[2] _in_s4[3] 22 22 bcc/CFAGGER.ASM:40
+cf call _p_s4 #1 cleanup        far pops 8                               bcc/CFAGGER.ASM:40
+cf call _r_s4 #1 stack                                                   bcc/CFAGGER.ASM:40
+cf call _r_s4 #1 cleanup        far pops 0                               bcc/CFAGGER.ASM:40
+cf call _p_s5 #1 stack          11 11 _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] - 22 22 bcc/CFAGGER.ASM:40
+cf call _p_s5 #1 cleanup        far pops 10                              bcc/CFAGGER.ASM:40
+cf call _r_s5 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CFAGGER.ASM:40
+cf call _r_s5 #1 cleanup        far pops 4                               bcc/CFAGGER.ASM:40
+cf call _p_s7 #1 stack          11 11 _in_s7[0] _in_s7[1] _in_s7[2] _in_s7[3] _in_s7[4] _in_s7[5] _in_s7[6] - 22 22 bcc/CFAGGER.ASM:40
+cf call _p_s7 #1 cleanup        far pops 12                              bcc/CFAGGER.ASM:40
+cf call _r_s7 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CFAGGER.ASM:40
+cf call _r_s7 #1 cleanup        far pops 4                               bcc/CFAGGER.ASM:40
+cf call _p_s8 #1 stack          11 11 _in_s8[0] _in_s8[1] _in_s8[2] _in_s8[3] _in_s8[4] _in_s8[5] _in_s8[6] _in_s8[7] 22 22 bcc/CFAGGER.ASM:40
+cf call _p_s8 #1 cleanup        far pops 12                              bcc/CFAGGER.ASM:40
+cf call _r_s8 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CFAGGER.ASM:40
+cf call _r_s8 #1 cleanup        far pops 4                               bcc/CFAGGER.ASM:40
+cf call _p_s9 #1 stack          11 11 _in_s9[0] _in_s9[1] _in_s9[2] _in_s9[3] _in_s9[4] _in_s9[5] _in_s9[6] _in_s9[7] _in_s9[8] - 22 22 bcc/CFAGGER.ASM:40
+cf call _p_s9 #1 cleanup        far pops 14                              bcc/CFAGGER.ASM:40
+cf call _r_s9 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CFAGGER.ASM:40
+cf call _r_s9 #1 cleanup        far pops 4                               bcc/CFAGGER.ASM:40
+cf call _p_sci #1 stack         11 11 _in_sci[0] _in_sci[1] _in_sci[2] - 22 22 bcc/CFAGGER.ASM:40
+cf call _p_sci #1 cleanup       far pops 8                               bcc/CFAGGER.ASM:40
+cf call _r_sci #1 stack         &data.0 &data.1 dgroup.0 dgroup.1        bcc/CFAGGER.ASM:40
+cf call _r_sci #1 cleanup       far pops 4                               bcc/CFAGGER.ASM:40
+cf keeps _out_s1                _r_s1:eax.0                              bcc/CFAGGER.ASM:40
+cf keeps _out_s2                _r_s2:eax.0 _r_s2:eax.1                  bcc/CFAGGER.ASM:40
+cf keeps _out_s3                _r_s3:*0 _r_s3:*1 _r_s3:*2               bcc/CFAGGER.ASM:40
+cf keeps _out_s4                _r_s4:eax.0 _r_s4:eax.1 _r_s4:edx.0 _r_s4:edx.1 bcc/CFAGGER.ASM:40
+cf keeps _out_s5                _r_s5:*0 _r_s5:*1 _r_s5:*2 _r_s5:*3 _r_s5:*4 bcc/CFAGGER.ASM:40
+cf keeps _out_s7                _r_s7:*0 _r_s7:*1 _r_s7:*2 _r_s7:*3 _r_s7:*4 _r_s7:*5 _r_s7:*6 bcc/CFAGGER.ASM:40
+cf keeps _out_s8                _r_s8:*0 _r_s8:*1 _r_s8:*2 _r_s8:*3 _r_s8:*4 _r_s8:*5 _r_s8:*6 _r_s8:*7 bcc/CFAGGER.ASM:40
+cf keeps _out_s9                _r_s9:*0 _r_s9:*1 _r_s9:*2 _r_s9:*3 _r_s9:*4 _r_s9:*5 _r_s9:*6 _r_s9:*7 _r_s9:*8 bcc/CFAGGER.ASM:40
+cf keeps _out_sci               _r_sci:*0 _r_sci:*1 _r_sci:*2            bcc/CFAGGER.ASM:40
+cn _p_ch return                 near pops 0                              bcc/CNCALLEE.ASM:74
+cn _p_ch keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:74
+cn _p_ch _gh_ch                 in+2 in+3                                bcc/CNCALLEE.ASM:74
+cn _p_ch _gt_ch                 in+6 in+7                                bcc/CNCALLEE.ASM:74
+cn _p_ch _gv_ch                 in+4                                     bcc/CNCALLEE.ASM:74
+cn _p_d return                  near pops 0                              bcc/CNCALLEE.ASM:227
+cn _p_d keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:227
+cn _p_d _gh_d                   in+2 in+3                                bcc/CNCALLEE.ASM:227
+cn _p_d _gt_d                   in+12 in+13                              bcc/CNCALLEE.ASM:227
+cn _p_d _gv_d                   in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 bcc/CNCALLEE.ASM:227
+cn _p_f return                  near pops 0                              bcc/CNCALLEE.ASM:210
+cn _p_f keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:210
+cn _p_f _gh_f                   in+2 in+3                                bcc/CNCALLEE.ASM:210
+cn _p_f _gt_f                   in+8 in+9                                bcc/CNCALLEE.ASM:210
+cn _p_f _gv_f                   in+4 in+5 in+6 in+7                      bcc/CNCALLEE.ASM:210
+cn _p_fp return                 near pops 0                              bcc/CNCALLEE.ASM:176
+cn _p_fp keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:176
+cn _p_fp _gh_fp                 in+2 in+3                                bcc/CNCALLEE.ASM:176
+cn _p_fp _gt_fp                 in+8 in+9                                bcc/CNCALLEE.ASM:176
+cn _p_fp _gv_fp                 in+4 in+5 in+6 in+7                      bcc/CNCALLEE.ASM:176
+cn _p_hp return                 near pops 0                              bcc/CNCALLEE.ASM:193
+cn _p_hp keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:193
+cn _p_hp _gh_hp                 in+2 in+3                                bcc/CNCALLEE.ASM:193
+cn _p_hp _gt_hp                 in+8 in+9                                bcc/CNCALLEE.ASM:193
+cn _p_hp _gv_hp                 in+4 in+5 in+6 in+7                      bcc/CNCALLEE.ASM:193
+cn _p_i return                  near pops 0                              bcc/CNCALLEE.ASM:91
+cn _p_i keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:91
+cn _p_i _gh_i                   in+2 in+3                                bcc/CNCALLEE.ASM:91
+cn _p_i _gt_i                   in+6 in+7                                bcc/CNCALLEE.ASM:91
+cn _p_i _gv_i                   in+4 in+5                                bcc/CNCALLEE.ASM:91
+cn _p_l return                  near pops 0                              bcc/CNCALLEE.ASM:125
+cn _p_l keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:125
+cn _p_l _gh_l                   in+2 in+3                                bcc/CNCALLEE.ASM:125
+cn _p_l _gt_l                   in+8 in+9                                bcc/CNCALLEE.ASM:125
+cn _p_l _gv_l                   in+4 in+5 in+6 in+7                      bcc/CNCALLEE.ASM:125
+cn _p_ld return                 near pops 0                              bcc/CNCALLEE.ASM:245
+cn _p_ld keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:245
+cn _p_ld _gh_ld                 in+2 in+3                                bcc/CNCALLEE.ASM:245
+cn _p_ld _gt_ld                 in+14 in+15                              bcc/CNCALLEE.ASM:245
+cn _p_ld _gv_ld                 in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 bcc/CNCALLEE.ASM:245
+cn _p_mixed return              near pops 0                              bcc/CNCALLEE.ASM:483
+cn _p_mixed keeps               si di bp sp ds ss df                     bcc/CNCALLEE.ASM:483
+cn _p_mixed _gm_a               in+2                                     bcc/CNCALLEE.ASM:483
+cn _p_mixed _gm_b               in+4 in+5 in+6 in+7                      bcc/CNCALLEE.ASM:483
+cn _p_mixed _gm_c               in+8 in+9 in+10 in+11 in+12 in+13 in+14 in+15 bcc/CNCALLEE.ASM:483
+cn _p_mixed _gm_d               in+16 in+17                              bcc/CNCALLEE.ASM:483
+cn _p_mixed _gm_e               in+18 in+19 in+20 in+21                  bcc/CNCALLEE.ASM:483
+cn _p_mixed _gm_f               in+22 in+23 in+24 in+25                  bcc/CNCALLEE.ASM:483
+cn _p_mixed _gm_h               in+26 in+27 in+28 in+29 in+30 in+31 in+32 in+33 in+34 in+35 bcc/CNCALLEE.ASM:483
+cn _p_np return                 near pops 0                              bcc/CNCALLEE.ASM:159
+cn _p_np keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:159
+cn _p_np _gh_np                 in+2 in+3                                bcc/CNCALLEE.ASM:159
+cn _p_np _gt_np                 in+6 in+7                                bcc/CNCALLEE.ASM:159
+cn _p_np _gv_np                 in+4 in+5                                bcc/CNCALLEE.ASM:159
+cn _p_sc return                 near pops 0                              bcc/CNCALLEE.ASM:40
+cn _p_sc keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:40
+cn _p_sc _gh_sc                 in+2 in+3                                bcc/CNCALLEE.ASM:40
+cn _p_sc _gt_sc                 in+6 in+7                                bcc/CNCALLEE.ASM:40
+cn _p_sc _gv_sc                 in+4                                     bcc/CNCALLEE.ASM:40
+cn _p_u return                  near pops 0                              bcc/CNCALLEE.ASM:108
+cn _p_u keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:108
+cn _p_u _gh_u                   in+2 in+3                                bcc/CNCALLEE.ASM:108
+cn _p_u _gt_u                   in+6 in+7                                bcc/CNCALLEE.ASM:108
+cn _p_u _gv_u                   in+4 in+5                                bcc/CNCALLEE.ASM:108
+cn _p_uc return                 near pops 0                              bcc/CNCALLEE.ASM:57
+cn _p_uc keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:57
+cn _p_uc _gh_uc                 in+2 in+3                                bcc/CNCALLEE.ASM:57
+cn _p_uc _gt_uc                 in+6 in+7                                bcc/CNCALLEE.ASM:57
+cn _p_uc _gv_uc                 in+4                                     bcc/CNCALLEE.ASM:57
+cn _p_ul return                 near pops 0                              bcc/CNCALLEE.ASM:142
+cn _p_ul keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:142
+cn _p_ul _gh_ul                 in+2 in+3                                bcc/CNCALLEE.ASM:142
+cn _p_ul _gt_ul                 in+8 in+9                                bcc/CNCALLEE.ASM:142
+cn _p_ul _gv_ul                 in+4 in+5 in+6 in+7                      bcc/CNCALLEE.ASM:142
+cn _p_variadic return           near pops 0                              bcc/CNCALLEE.ASM:516
+cn _p_variadic keeps            si di bp sp ds ss df                     bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_ch          in+8 in+9                                bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_d           in+36 in+37 in+38 in+39 in+40 in+41 in+42 in+43 bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_f           in+28 in+29 in+30 in+31 in+32 in+33 in+34 in+35 bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_fp          in+24 in+25 in+26 in+27                  bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_i           in+10 in+11                              bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_l           in+14 in+15 in+16 in+17                  bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_ld          in+44 in+45 in+46 in+47 in+48 in+49 in+50 in+51 in+52 in+53 bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_n           in+2 in+3                                bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_np          in+22 in+23                              bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_s3          in+54 in+55 in+56                        bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_s5          in+58 in+59 in+60 in+61 in+62            bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_sc          in+4 in+5                                bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_u           in+12 in+13                              bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_uc          in+6 in+7                                bcc/CNCALLEE.ASM:516
+cn _p_variadic _gva_ul          in+18 in+19 in+20 in+21                  bcc/CNCALLEE.ASM:516
+cn _r_ch return                 near pops 0                              bcc/CNCALLEE.ASM:281
+cn _r_ch keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:281
+cn _r_ch result                 al _in_ch[0]                             bcc/CNCALLEE.ASM:281
+cn _r_d return                  near pops 0                              bcc/CNCALLEE.ASM:366
+cn _r_d keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:366
+cn _r_d result                  st _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] bcc/CNCALLEE.ASM:366
+cn _r_f return                  near pops 0                              bcc/CNCALLEE.ASM:357
+cn _r_f keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:357
+cn _r_f result                  st _in_f[0] _in_f[1] _in_f[2] _in_f[3]   bcc/CNCALLEE.ASM:357
+cn _r_fp return                 near pops 0                              bcc/CNCALLEE.ASM:337
+cn _r_fp keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:337
+cn _r_fp result                 al _in_fp[0]                             bcc/CNCALLEE.ASM:337
+cn _r_hp return                 near pops 0                              bcc/CNCALLEE.ASM:347
+cn _r_hp keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:347
+cn _r_hp result                 al _in_hp[0]                             bcc/CNCALLEE.ASM:347
+cn _r_i return                  near pops 0                              bcc/CNCALLEE.ASM:290
+cn _r_i keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:290
+cn _r_i result                  al _in_i[0]                              bcc/CNCALLEE.ASM:290
+cn _r_l return                  near pops 0                              bcc/CNCALLEE.ASM:308
+cn _r_l keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:308
+cn _r_l result                  al _in_l[0]                              bcc/CNCALLEE.ASM:308
+cn _r_ld return                 near pops 0                              bcc/CNCALLEE.ASM:375
+cn _r_ld keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:375
+cn _r_ld result                 st _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] bcc/CNCALLEE.ASM:375
+cn _r_np return                 near pops 0                              bcc/CNCALLEE.ASM:328
+cn _r_np keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:328
+cn _r_np result                 al _in_np[0]                             bcc/CNCALLEE.ASM:328
+cn _r_sc return                 near pops 0                              bcc/CNCALLEE.ASM:263
+cn _r_sc keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:263
+cn _r_sc result                 al _in_sc[0]                             bcc/CNCALLEE.ASM:263
+cn _r_u return                  near pops 0                              bcc/CNCALLEE.ASM:299
+cn _r_u keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:299
+cn _r_u result                  al _in_u[0]                              bcc/CNCALLEE.ASM:299
+cn _r_uc return                 near pops 0                              bcc/CNCALLEE.ASM:272
+cn _r_uc keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:272
+cn _r_uc result                 al _in_uc[0]                             bcc/CNCALLEE.ASM:272
+cn _r_ul return                 near pops 0                              bcc/CNCALLEE.ASM:318
+cn _r_ul keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:318
+cn _r_ul result                 al _in_ul[0]                             bcc/CNCALLEE.ASM:318
+cn _r_void return               near pops 0                              bcc/CNCALLEE.ASM:475
+cn _r_void keeps                si di bp sp ds ss df                     bcc/CNCALLEE.ASM:475
+cn _r_void result               none                                     bcc/CNCALLEE.ASM:475
+cn _w_ch return                 near pops 0                              bcc/CNCALLEE.ASM:422
+cn _w_ch keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:422
+cn _w_ch _gh_ch                 in+2 in+3                                bcc/CNCALLEE.ASM:422
+cn _w_ch _gt_ch                 in+6 in+7                                bcc/CNCALLEE.ASM:422
+cn _w_ch _gw_ch                 in+4 sign(in+4) sign(in+4) sign(in+4)    bcc/CNCALLEE.ASM:422
+cn _w_i return                  near pops 0                              bcc/CNCALLEE.ASM:441
+cn _w_i keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:441
+cn _w_i _gh_i                   in+2 in+3                                bcc/CNCALLEE.ASM:441
+cn _w_i _gt_i                   in+6 in+7                                bcc/CNCALLEE.ASM:441
+cn _w_i _gw_i                   in+4 in+5 sign(in+5) sign(in+5)          bcc/CNCALLEE.ASM:441
+cn _w_sc return                 near pops 0                              bcc/CNCALLEE.ASM:384
+cn _w_sc keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:384
+cn _w_sc _gh_sc                 in+2 in+3                                bcc/CNCALLEE.ASM:384
+cn _w_sc _gt_sc                 in+6 in+7                                bcc/CNCALLEE.ASM:384
+cn _w_sc _gw_sc                 in+4 sign(in+4) sign(in+4) sign(in+4)    bcc/CNCALLEE.ASM:384
+cn _w_u return                  near pops 0                              bcc/CNCALLEE.ASM:458
+cn _w_u keeps                   si di bp sp ds ss df                     bcc/CNCALLEE.ASM:458
+cn _w_u _gh_u                   in+2 in+3                                bcc/CNCALLEE.ASM:458
+cn _w_u _gt_u                   in+6 in+7                                bcc/CNCALLEE.ASM:458
+cn _w_u _gw_u                   in+4 in+5 00 00                          bcc/CNCALLEE.ASM:458
+cn _w_uc return                 near pops 0                              bcc/CNCALLEE.ASM:403
+cn _w_uc keeps                  si di bp sp ds ss df                     bcc/CNCALLEE.ASM:403
+cn _w_uc _gh_uc                 in+2 in+3                                bcc/CNCALLEE.ASM:403
+cn _w_uc _gt_uc                 in+6 in+7                                bcc/CNCALLEE.ASM:403
+cn _w_uc _gw_uc                 in+4 00 00 00                            bcc/CNCALLEE.ASM:403
+cn call _p_sc #1 stack          11 11 _in_sc[0] - 22 22                  bcc/CNCALLER.ASM:40
+cn call _p_sc #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_sc #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_sc #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_uc #1 stack          11 11 _in_uc[0] - 22 22                  bcc/CNCALLER.ASM:40
+cn call _p_uc #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_uc #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_uc #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_ch #1 stack          11 11 _in_ch[0] - 22 22                  bcc/CNCALLER.ASM:40
+cn call _p_ch #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_ch #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_ch #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_i #1 stack           11 11 _in_i[0] _in_i[1] 22 22            bcc/CNCALLER.ASM:40
+cn call _p_i #1 cleanup         near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_i #1 stack                                                    bcc/CNCALLER.ASM:40
+cn call _r_i #1 cleanup         near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_u #1 stack           11 11 _in_u[0] _in_u[1] 22 22            bcc/CNCALLER.ASM:40
+cn call _p_u #1 cleanup         near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_u #1 stack                                                    bcc/CNCALLER.ASM:40
+cn call _r_u #1 cleanup         near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_l #1 stack           11 11 _in_l[0] _in_l[1] _in_l[2] _in_l[3] 22 22 bcc/CNCALLER.ASM:40
+cn call _p_l #1 cleanup         near pops 8                              bcc/CNCALLER.ASM:40
+cn call _r_l #1 stack                                                    bcc/CNCALLER.ASM:40
+cn call _r_l #1 cleanup         near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_ul #1 stack          11 11 _in_ul[0] _in_ul[1] _in_ul[2] _in_ul[3] 22 22 bcc/CNCALLER.ASM:40
+cn call _p_ul #1 cleanup        near pops 8                              bcc/CNCALLER.ASM:40
+cn call _r_ul #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_ul #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_np #1 stack          11 11 _in_np[0] _in_np[1] 22 22          bcc/CNCALLER.ASM:40
+cn call _p_np #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_np #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_np #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_fp #1 stack          11 11 _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] 22 22 bcc/CNCALLER.ASM:40
+cn call _p_fp #1 cleanup        near pops 8                              bcc/CNCALLER.ASM:40
+cn call _r_fp #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_fp #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_hp #1 stack          11 11 _in_hp[0] _in_hp[1] _in_hp[2] _in_hp[3] 22 22 bcc/CNCALLER.ASM:40
+cn call _p_hp #1 cleanup        near pops 8                              bcc/CNCALLER.ASM:40
+cn call _r_hp #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_hp #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_f #1 stack           11 11 _in_f[0] _in_f[1] _in_f[2] _in_f[3] 22 22 bcc/CNCALLER.ASM:40
+cn call _p_f #1 cleanup         near pops 8                              bcc/CNCALLER.ASM:40
+cn call _r_f #1 stack                                                    bcc/CNCALLER.ASM:40
+cn call _r_f #1 cleanup         near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_d #1 stack           11 11 _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] 22 22 bcc/CNCALLER.ASM:40
+cn call _p_d #1 cleanup         near pops 12                             bcc/CNCALLER.ASM:40
+cn call _r_d #1 stack                                                    bcc/CNCALLER.ASM:40
+cn call _r_d #1 cleanup         near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_ld #1 stack          11 11 _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] 22 22 bcc/CNCALLER.ASM:40
+cn call _p_ld #1 cleanup        near pops 14                             bcc/CNCALLER.ASM:40
+cn call _r_ld #1 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_ld #1 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _w_sc #1 stack          11 11 _in_sc[0] - 22 22                  bcc/CNCALLER.ASM:40
+cn call _w_sc #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_sc #2 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_sc #2 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _w_uc #1 stack          11 11 _in_uc[0] - 22 22                  bcc/CNCALLER.ASM:40
+cn call _w_uc #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_uc #2 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_uc #2 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _w_ch #1 stack          11 11 _in_ch[0] 00 22 22                 bcc/CNCALLER.ASM:40
+cn call _w_ch #1 cleanup        near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_ch #2 stack                                                   bcc/CNCALLER.ASM:40
+cn call _r_ch #2 cleanup        near pops 0                              bcc/CNCALLER.ASM:40
+cn call _w_i #1 stack           11 11 _in_i[0] _in_i[1] 22 22            bcc/CNCALLER.ASM:40
+cn call _w_i #1 cleanup         near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_i #2 stack                                                    bcc/CNCALLER.ASM:40
+cn call _r_i #2 cleanup         near pops 0                              bcc/CNCALLER.ASM:40
+cn call _w_u #1 stack           11 11 _in_u[0] _in_u[1] 22 22            bcc/CNCALLER.ASM:40
+cn call _w_u #1 cleanup         near pops 6                              bcc/CNCALLER.ASM:40
+cn call _r_u #2 stack                                                    bcc/CNCALLER.ASM:40
+cn call _r_u #2 cleanup         near pops 0                              bcc/CNCALLER.ASM:40
+cn call _r_void #1 stack                                                 bcc/CNCALLER.ASM:40
+cn call _r_void #1 cleanup      near pops 0                              bcc/CNCALLER.ASM:40
+cn call _p_mixed #1 stack       _in_sc[0] - _in_l[0] _in_l[1] _in_l[2] _in_l[3] _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] _in_i[0] _in_i[1] _in_f[0] _in_f[1] _in_f[2] _in_f[3] _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] bcc/CNCALLER.ASM:40
+cn call _p_mixed #1 cleanup     near pops 34                             bcc/CNCALLER.ASM:40
+cn call _p_variadic #1 stack    11 11 _in_sc[0] sign(_in_sc[0]) _in_uc[0] 00 _in_ch[0] sign(_in_ch[0]) _in_i[0] _in_i[1] _in_u[0] _in_u[1] _in_l[0] _in_l[1] _in_l[2] _in_l[3] _in_ul[0] _in_ul[1] _in_ul[2] _in_ul[3] _in_np[0] _in_np[1] _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] _in_f:f64[0] _in_f:f64[1] _in_f:f64[2] _in_f:f64[3] _in_f:f64[4] _in_f:f64[5] _in_f:f64[6] _in_f:f64[7] _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] _in_s3[0] _in_s3[1] _in_s3[2] - _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] - bcc/CNCALLER.ASM:40
+cn call _p_variadic #1 cleanup  near pops 62                             bcc/CNCALLER.ASM:40
+cn keeps _out_ch                _r_ch:eax.0                              bcc/CNCALLER.ASM:40
+cn keeps _out_d                 _r_d:st.0 _r_d:st.1 _r_d:st.2 _r_d:st.3 _r_d:st.4 _r_d:st.5 _r_d:st.6 _r_d:st.7 bcc/CNCALLER.ASM:40
+cn keeps _out_f                 _r_f:st.0 _r_f:st.1 _r_f:st.2 _r_f:st.3  bcc/CNCALLER.ASM:40
+cn keeps _out_fp                _r_fp:eax.0 _r_fp:eax.1 _r_fp:edx.0 _r_fp:edx.1 bcc/CNCALLER.ASM:40
+cn keeps _out_hp                _r_hp:eax.0 _r_hp:eax.1 _r_hp:edx.0 _r_hp:edx.1 bcc/CNCALLER.ASM:40
+cn keeps _out_i                 _r_i:eax.0 _r_i:eax.1                    bcc/CNCALLER.ASM:40
+cn keeps _out_l                 _r_l:eax.0 _r_l:eax.1 _r_l:edx.0 _r_l:edx.1 bcc/CNCALLER.ASM:40
+cn keeps _out_ld                _r_ld:st.0 _r_ld:st.1 _r_ld:st.2 _r_ld:st.3 _r_ld:st.4 _r_ld:st.5 _r_ld:st.6 _r_ld:st.7 _r_ld:st.8 _r_ld:st.9 bcc/CNCALLER.ASM:40
+cn keeps _out_np                _r_np:eax.0 _r_np:eax.1                  bcc/CNCALLER.ASM:40
+cn keeps _out_sc                _r_sc:eax.0                              bcc/CNCALLER.ASM:40
+cn keeps _out_u                 _r_u:eax.0 _r_u:eax.1                    bcc/CNCALLER.ASM:40
+cn keeps _out_uc                _r_uc:eax.0                              bcc/CNCALLER.ASM:40
+cn keeps _out_ul                _r_ul:eax.0 _r_ul:eax.1 _r_ul:edx.0 _r_ul:edx.1 bcc/CNCALLER.ASM:40
+cn keeps _ow_ch                 _r_ch:eax.0 sign(_r_ch:eax.0) sign(_r_ch:eax.0) sign(_r_ch:eax.0) bcc/CNCALLER.ASM:40
+cn keeps _ow_i                  _r_i:eax.0 _r_i:eax.1 sign(_r_i:eax.1) sign(_r_i:eax.1) bcc/CNCALLER.ASM:40
+cn keeps _ow_sc                 _r_sc:eax.0 sign(_r_sc:eax.0) sign(_r_sc:eax.0) sign(_r_sc:eax.0) bcc/CNCALLER.ASM:40
+cn keeps _ow_u                  _r_u:eax.0 _r_u:eax.1 00 00              bcc/CNCALLER.ASM:40
+cn keeps _ow_uc                 _r_uc:eax.0 00 00 00                     bcc/CNCALLER.ASM:40
+cn _p_s1 return                 near pops 0                              bcc/CNAGGEE.ASM:40
+cn _p_s1 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:40
+cn _p_s1 _gh_s1                 in+2 in+3                                bcc/CNAGGEE.ASM:40
+cn _p_s1 _gt_s1                 in+6 in+7                                bcc/CNAGGEE.ASM:40
+cn _p_s1 _gv_s1                 in+4                                     bcc/CNAGGEE.ASM:40
+cn _p_s2 return                 near pops 0                              bcc/CNAGGEE.ASM:57
+cn _p_s2 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:57
+cn _p_s2 _gh_s2                 in+2 in+3                                bcc/CNAGGEE.ASM:57
+cn _p_s2 _gt_s2                 in+6 in+7                                bcc/CNAGGEE.ASM:57
+cn _p_s2 _gv_s2                 in+4 in+5                                bcc/CNAGGEE.ASM:57
+cn _p_s3 return                 near pops 0                              bcc/CNAGGEE.ASM:74
+cn _p_s3 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:74
+cn _p_s3 _gh_s3                 in+2 in+3                                bcc/CNAGGEE.ASM:74
+cn _p_s3 _gt_s3                 in+8 in+9                                bcc/CNAGGEE.ASM:74
+cn _p_s3 _gv_s3                 in+4 in+5 in+6                           bcc/CNAGGEE.ASM:74
+cn _p_s4 return                 near pops 0                              bcc/CNAGGEE.ASM:93
+cn _p_s4 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:93
+cn _p_s4 _gh_s4                 in+2 in+3                                bcc/CNAGGEE.ASM:93
+cn _p_s4 _gt_s4                 in+8 in+9                                bcc/CNAGGEE.ASM:93
+cn _p_s4 _gv_s4                 in+4 in+5 in+6 in+7                      bcc/CNAGGEE.ASM:93
+cn _p_s5 return                 near pops 0                              bcc/CNAGGEE.ASM:110
+cn _p_s5 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:110
+cn _p_s5 _gh_s5                 in+2 in+3                                bcc/CNAGGEE.ASM:110
+cn _p_s5 _gt_s5                 in+10 in+11                              bcc/CNAGGEE.ASM:110
+cn _p_s5 _gv_s5                 in+4 in+5 in+6 in+7 in+8                 bcc/CNAGGEE.ASM:110
+cn _p_s7 return                 near pops 0                              bcc/CNAGGEE.ASM:131
+cn _p_s7 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:131
+cn _p_s7 _gh_s7                 in+2 in+3                                bcc/CNAGGEE.ASM:131
+cn _p_s7 _gt_s7                 in+12 in+13                              bcc/CNAGGEE.ASM:131
+cn _p_s7 _gv_s7                 in+4 in+5 in+6 in+7 in+8 in+9 in+10      bcc/CNAGGEE.ASM:131
+cn _p_s8 return                 near pops 0                              bcc/CNAGGEE.ASM:154
+cn _p_s8 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:154
+cn _p_s8 _gh_s8                 in+2 in+3                                bcc/CNAGGEE.ASM:154
+cn _p_s8 _gt_s8                 in+12 in+13                              bcc/CNAGGEE.ASM:154
+cn _p_s8 _gv_s8                 in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 bcc/CNAGGEE.ASM:154
+cn _p_s9 return                 near pops 0                              bcc/CNAGGEE.ASM:177
+cn _p_s9 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:177
+cn _p_s9 _gh_s9                 in+2 in+3                                bcc/CNAGGEE.ASM:177
+cn _p_s9 _gt_s9                 in+14 in+15                              bcc/CNAGGEE.ASM:177
+cn _p_s9 _gv_s9                 in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 in+12 bcc/CNAGGEE.ASM:177
+cn _p_sci return                near pops 0                              bcc/CNAGGEE.ASM:202
+cn _p_sci keeps                 si di bp sp ds ss df                     bcc/CNAGGEE.ASM:202
+cn _p_sci _gh_sci               in+2 in+3                                bcc/CNAGGEE.ASM:202
+cn _p_sci _gt_sci               in+8 in+9                                bcc/CNAGGEE.ASM:202
+cn _p_sci _gv_sci               in+4 in+5 in+6                           bcc/CNAGGEE.ASM:202
+cn _r_s1 return                 near pops 0                              bcc/CNAGGEE.ASM:221
+cn _r_s1 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:221
+cn _r_s1 result                 al _in_s1[0]                             bcc/CNAGGEE.ASM:221
+cn _r_s2 return                 near pops 0                              bcc/CNAGGEE.ASM:230
+cn _r_s2 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:230
+cn _r_s2 result                 al _in_s2[0]                             bcc/CNAGGEE.ASM:230
+cn _r_s3 return                 near pops 0                              bcc/CNAGGEE.ASM:239
+cn _r_s3 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:239
+cn _r_s3 result                 through in+2 in+3 in+4 in+5 _in_s3[0] _in_s3[1] _in_s3[2] dxax in+2 in+3 in+4 in+5 bcc/CNAGGEE.ASM:239
+cn _r_s4 return                 near pops 0                              bcc/CNAGGEE.ASM:257
+cn _r_s4 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:257
+cn _r_s4 result                 al _in_s4[0]                             bcc/CNAGGEE.ASM:257
+cn _r_s5 return                 near pops 0                              bcc/CNAGGEE.ASM:267
+cn _r_s5 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:267
+cn _r_s5 result                 through in+2 in+3 in+4 in+5 _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] dxax in+2 in+3 in+4 in+5 bcc/CNAGGEE.ASM:267
+cn _r_s7 return                 near pops 0                              bcc/CNAGGEE.ASM:287
+cn _r_s7 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:287
+cn _r_s7 result                 through in+2 in+3 in+4 in+5 _in_s7[0] _in_s7[1] _in_s7[2] _in_s7[3] _in_s7[4] _in_s7[5] _in_s7[6] dxax in+2 in+3 in+4 in+5 bcc/CNAGGEE.ASM:287
+cn _r_s8 return                 near pops 0                              bcc/CNAGGEE.ASM:309
+cn _r_s8 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:309
+cn _r_s8 result                 through in+2 in+3 in+4 in+5 _in_s8[0] _in_s8[1] _in_s8[2] _in_s8[3] _in_s8[4] _in_s8[5] _in_s8[6] _in_s8[7] dxax in+2 in+3 in+4 in+5 bcc/CNAGGEE.ASM:309
+cn _r_s9 return                 near pops 0                              bcc/CNAGGEE.ASM:331
+cn _r_s9 keeps                  si di bp sp ds ss df                     bcc/CNAGGEE.ASM:331
+cn _r_s9 result                 through in+2 in+3 in+4 in+5 _in_s9[0] _in_s9[1] _in_s9[2] _in_s9[3] _in_s9[4] _in_s9[5] _in_s9[6] _in_s9[7] _in_s9[8] dxax in+2 in+3 in+4 in+5 bcc/CNAGGEE.ASM:331
+cn _r_sci return                near pops 0                              bcc/CNAGGEE.ASM:355
+cn _r_sci keeps                 si di bp sp ds ss df                     bcc/CNAGGEE.ASM:355
+cn _r_sci result                through in+2 in+3 in+4 in+5 _in_sci[0] _in_sci[1] _in_sci[2] dxax in+2 in+3 in+4 in+5 bcc/CNAGGEE.ASM:355
+cn call _p_s1 #1 stack          11 11 _in_s1[0] - 22 22                  bcc/CNAGGER.ASM:40
+cn call _p_s1 #1 cleanup        near pops 6                              bcc/CNAGGER.ASM:40
+cn call _r_s1 #1 stack                                                   bcc/CNAGGER.ASM:40
+cn call _r_s1 #1 cleanup        near pops 0                              bcc/CNAGGER.ASM:40
+cn call _p_s2 #1 stack          11 11 _in_s2[0] _in_s2[1] 22 22          bcc/CNAGGER.ASM:40
+cn call _p_s2 #1 cleanup        near pops 6                              bcc/CNAGGER.ASM:40
+cn call _r_s2 #1 stack                                                   bcc/CNAGGER.ASM:40
+cn call _r_s2 #1 cleanup        near pops 0                              bcc/CNAGGER.ASM:40
+cn call _p_s3 #1 stack          11 11 _in_s3[0] _in_s3[1] _in_s3[2] - 22 22 bcc/CNAGGER.ASM:40
+cn call _p_s3 #1 cleanup        near pops 8                              bcc/CNAGGER.ASM:40
+cn call _r_s3 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CNAGGER.ASM:40
+cn call _r_s3 #1 cleanup        near pops 4                              bcc/CNAGGER.ASM:40
+cn call _p_s4 #1 stack          11 11 _in_s4[0] _in_s4[1] _in_s4[2] _in_s4[3] 22 22 bcc/CNAGGER.ASM:40
+cn call _p_s4 #1 cleanup        near pops 8                              bcc/CNAGGER.ASM:40
+cn call _r_s4 #1 stack                                                   bcc/CNAGGER.ASM:40
+cn call _r_s4 #1 cleanup        near pops 0                              bcc/CNAGGER.ASM:40
+cn call _p_s5 #1 stack          11 11 _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] - 22 22 bcc/CNAGGER.ASM:40
+cn call _p_s5 #1 cleanup        near pops 10                             bcc/CNAGGER.ASM:40
+cn call _r_s5 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CNAGGER.ASM:40
+cn call _r_s5 #1 cleanup        near pops 4                              bcc/CNAGGER.ASM:40
+cn call _p_s7 #1 stack          11 11 _in_s7[0] _in_s7[1] _in_s7[2] _in_s7[3] _in_s7[4] _in_s7[5] _in_s7[6] - 22 22 bcc/CNAGGER.ASM:40
+cn call _p_s7 #1 cleanup        near pops 12                             bcc/CNAGGER.ASM:40
+cn call _r_s7 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CNAGGER.ASM:40
+cn call _r_s7 #1 cleanup        near pops 4                              bcc/CNAGGER.ASM:40
+cn call _p_s8 #1 stack          11 11 _in_s8[0] _in_s8[1] _in_s8[2] _in_s8[3] _in_s8[4] _in_s8[5] _in_s8[6] _in_s8[7] 22 22 bcc/CNAGGER.ASM:40
+cn call _p_s8 #1 cleanup        near pops 12                             bcc/CNAGGER.ASM:40
+cn call _r_s8 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CNAGGER.ASM:40
+cn call _r_s8 #1 cleanup        near pops 4                              bcc/CNAGGER.ASM:40
+cn call _p_s9 #1 stack          11 11 _in_s9[0] _in_s9[1] _in_s9[2] _in_s9[3] _in_s9[4] _in_s9[5] _in_s9[6] _in_s9[7] _in_s9[8] - 22 22 bcc/CNAGGER.ASM:40
+cn call _p_s9 #1 cleanup        near pops 14                             bcc/CNAGGER.ASM:40
+cn call _r_s9 #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/CNAGGER.ASM:40
+cn call _r_s9 #1 cleanup        near pops 4                              bcc/CNAGGER.ASM:40
+cn call _p_sci #1 stack         11 11 _in_sci[0] _in_sci[1] _in_sci[2] - 22 22 bcc/CNAGGER.ASM:40
+cn call _p_sci #1 cleanup       near pops 8                              bcc/CNAGGER.ASM:40
+cn call _r_sci #1 stack         &data.0 &data.1 dgroup.0 dgroup.1        bcc/CNAGGER.ASM:40
+cn call _r_sci #1 cleanup       near pops 4                              bcc/CNAGGER.ASM:40
+cn keeps _out_s1                _r_s1:eax.0                              bcc/CNAGGER.ASM:40
+cn keeps _out_s2                _r_s2:eax.0 _r_s2:eax.1                  bcc/CNAGGER.ASM:40
+cn keeps _out_s3                _r_s3:*0 _r_s3:*1 _r_s3:*2               bcc/CNAGGER.ASM:40
+cn keeps _out_s4                _r_s4:eax.0 _r_s4:eax.1 _r_s4:edx.0 _r_s4:edx.1 bcc/CNAGGER.ASM:40
+cn keeps _out_s5                _r_s5:*0 _r_s5:*1 _r_s5:*2 _r_s5:*3 _r_s5:*4 bcc/CNAGGER.ASM:40
+cn keeps _out_s7                _r_s7:*0 _r_s7:*1 _r_s7:*2 _r_s7:*3 _r_s7:*4 _r_s7:*5 _r_s7:*6 bcc/CNAGGER.ASM:40
+cn keeps _out_s8                _r_s8:*0 _r_s8:*1 _r_s8:*2 _r_s8:*3 _r_s8:*4 _r_s8:*5 _r_s8:*6 _r_s8:*7 bcc/CNAGGER.ASM:40
+cn keeps _out_s9                _r_s9:*0 _r_s9:*1 _r_s9:*2 _r_s9:*3 _r_s9:*4 _r_s9:*5 _r_s9:*6 _r_s9:*7 _r_s9:*8 bcc/CNAGGER.ASM:40
+cn keeps _out_sci               _r_sci:*0 _r_sci:*1 _r_sci:*2            bcc/CNAGGER.ASM:40
+pf p_ch return                  far pops 6                               bcc/PFCALLEE.ASM:74
+pf p_ch keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:74
+pf p_ch _gh_ch                  in+8 in+9                                bcc/PFCALLEE.ASM:74
+pf p_ch _gt_ch                  in+4 in+5                                bcc/PFCALLEE.ASM:74
+pf p_ch _gv_ch                  in+6                                     bcc/PFCALLEE.ASM:74
+pf p_d return                   far pops 12                              bcc/PFCALLEE.ASM:227
+pf p_d keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:227
+pf p_d _gh_d                    in+14 in+15                              bcc/PFCALLEE.ASM:227
+pf p_d _gt_d                    in+4 in+5                                bcc/PFCALLEE.ASM:227
+pf p_d _gv_d                    in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 bcc/PFCALLEE.ASM:227
+pf p_f return                   far pops 8                               bcc/PFCALLEE.ASM:210
+pf p_f keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:210
+pf p_f _gh_f                    in+10 in+11                              bcc/PFCALLEE.ASM:210
+pf p_f _gt_f                    in+4 in+5                                bcc/PFCALLEE.ASM:210
+pf p_f _gv_f                    in+6 in+7 in+8 in+9                      bcc/PFCALLEE.ASM:210
+pf p_fp return                  far pops 8                               bcc/PFCALLEE.ASM:176
+pf p_fp keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:176
+pf p_fp _gh_fp                  in+10 in+11                              bcc/PFCALLEE.ASM:176
+pf p_fp _gt_fp                  in+4 in+5                                bcc/PFCALLEE.ASM:176
+pf p_fp _gv_fp                  in+6 in+7 in+8 in+9                      bcc/PFCALLEE.ASM:176
+pf p_hp return                  far pops 8                               bcc/PFCALLEE.ASM:193
+pf p_hp keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:193
+pf p_hp _gh_hp                  in+10 in+11                              bcc/PFCALLEE.ASM:193
+pf p_hp _gt_hp                  in+4 in+5                                bcc/PFCALLEE.ASM:193
+pf p_hp _gv_hp                  in+6 in+7 in+8 in+9                      bcc/PFCALLEE.ASM:193
+pf p_i return                   far pops 6                               bcc/PFCALLEE.ASM:91
+pf p_i keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:91
+pf p_i _gh_i                    in+8 in+9                                bcc/PFCALLEE.ASM:91
+pf p_i _gt_i                    in+4 in+5                                bcc/PFCALLEE.ASM:91
+pf p_i _gv_i                    in+6 in+7                                bcc/PFCALLEE.ASM:91
+pf p_l return                   far pops 8                               bcc/PFCALLEE.ASM:125
+pf p_l keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:125
+pf p_l _gh_l                    in+10 in+11                              bcc/PFCALLEE.ASM:125
+pf p_l _gt_l                    in+4 in+5                                bcc/PFCALLEE.ASM:125
+pf p_l _gv_l                    in+6 in+7 in+8 in+9                      bcc/PFCALLEE.ASM:125
+pf p_ld return                  far pops 14                              bcc/PFCALLEE.ASM:245
+pf p_ld keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:245
+pf p_ld _gh_ld                  in+16 in+17                              bcc/PFCALLEE.ASM:245
+pf p_ld _gt_ld                  in+4 in+5                                bcc/PFCALLEE.ASM:245
+pf p_ld _gv_ld                  in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 in+14 in+15 bcc/PFCALLEE.ASM:245
+pf p_mixed return               far pops 34                              bcc/PFCALLEE.ASM:483
+pf p_mixed keeps                si di bp sp ds ss df                     bcc/PFCALLEE.ASM:483
+pf p_mixed _gm_a                in+36                                    bcc/PFCALLEE.ASM:483
+pf p_mixed _gm_b                in+32 in+33 in+34 in+35                  bcc/PFCALLEE.ASM:483
+pf p_mixed _gm_c                in+24 in+25 in+26 in+27 in+28 in+29 in+30 in+31 bcc/PFCALLEE.ASM:483
+pf p_mixed _gm_d                in+22 in+23                              bcc/PFCALLEE.ASM:483
+pf p_mixed _gm_e                in+18 in+19 in+20 in+21                  bcc/PFCALLEE.ASM:483
+pf p_mixed _gm_f                in+14 in+15 in+16 in+17                  bcc/PFCALLEE.ASM:483
+pf p_mixed _gm_h                in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 bcc/PFCALLEE.ASM:483
+pf p_np return                  far pops 6                               bcc/PFCALLEE.ASM:159
+pf p_np keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:159
+pf p_np _gh_np                  in+8 in+9                                bcc/PFCALLEE.ASM:159
+pf p_np _gt_np                  in+4 in+5                                bcc/PFCALLEE.ASM:159
+pf p_np _gv_np                  in+6 in+7                                bcc/PFCALLEE.ASM:159
+pf p_sc return                  far pops 6                               bcc/PFCALLEE.ASM:40
+pf p_sc keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:40
+pf p_sc _gh_sc                  in+8 in+9                                bcc/PFCALLEE.ASM:40
+pf p_sc _gt_sc                  in+4 in+5                                bcc/PFCALLEE.ASM:40
+pf p_sc _gv_sc                  in+6                                     bcc/PFCALLEE.ASM:40
+pf p_u return                   far pops 6                               bcc/PFCALLEE.ASM:108
+pf p_u keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:108
+pf p_u _gh_u                    in+8 in+9                                bcc/PFCALLEE.ASM:108
+pf p_u _gt_u                    in+4 in+5                                bcc/PFCALLEE.ASM:108
+pf p_u _gv_u                    in+6 in+7                                bcc/PFCALLEE.ASM:108
+pf p_uc return                  far pops 6                               bcc/PFCALLEE.ASM:57
+pf p_uc keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:57
+pf p_uc _gh_uc                  in+8 in+9                                bcc/PFCALLEE.ASM:57
+pf p_uc _gt_uc                  in+4 in+5                                bcc/PFCALLEE.ASM:57
+pf p_uc _gv_uc                  in+6                                     bcc/PFCALLEE.ASM:57
+pf p_ul return                  far pops 8                               bcc/PFCALLEE.ASM:142
+pf p_ul keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:142
+pf p_ul _gh_ul                  in+10 in+11                              bcc/PFCALLEE.ASM:142
+pf p_ul _gt_ul                  in+4 in+5                                bcc/PFCALLEE.ASM:142
+pf p_ul _gv_ul                  in+6 in+7 in+8 in+9                      bcc/PFCALLEE.ASM:142
+pf r_ch return                  far pops 0                               bcc/PFCALLEE.ASM:281
+pf r_ch keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:281
+pf r_d return                   far pops 0                               bcc/PFCALLEE.ASM:366
+pf r_d keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:366
+pf r_f return                   far pops 0                               bcc/PFCALLEE.ASM:357
+pf r_f keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:357
+pf r_fp return                  far pops 0                               bcc/PFCALLEE.ASM:337
+pf r_fp keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:337
+pf r_hp return                  far pops 0                               bcc/PFCALLEE.ASM:347
+pf r_hp keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:347
+pf r_i return                   far pops 0                               bcc/PFCALLEE.ASM:290
+pf r_i keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:290
+pf r_l return                   far pops 0                               bcc/PFCALLEE.ASM:308
+pf r_l keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:308
+pf r_ld return                  far pops 0                               bcc/PFCALLEE.ASM:375
+pf r_ld keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:375
+pf r_np return                  far pops 0                               bcc/PFCALLEE.ASM:328
+pf r_np keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:328
+pf r_sc return                  far pops 0                               bcc/PFCALLEE.ASM:263
+pf r_sc keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:263
+pf r_u return                   far pops 0                               bcc/PFCALLEE.ASM:299
+pf r_u keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:299
+pf r_uc return                  far pops 0                               bcc/PFCALLEE.ASM:272
+pf r_uc keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:272
+pf r_ul return                  far pops 0                               bcc/PFCALLEE.ASM:318
+pf r_ul keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:318
+pf r_void return                far pops 0                               bcc/PFCALLEE.ASM:475
+pf r_void keeps                 si di bp sp ds ss df                     bcc/PFCALLEE.ASM:475
+pf w_ch return                  far pops 6                               bcc/PFCALLEE.ASM:422
+pf w_ch keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:422
+pf w_ch _gh_ch                  in+8 in+9                                bcc/PFCALLEE.ASM:422
+pf w_ch _gt_ch                  in+4 in+5                                bcc/PFCALLEE.ASM:422
+pf w_ch _gw_ch                  in+6 sign(in+6) sign(in+6) sign(in+6)    bcc/PFCALLEE.ASM:422
+pf w_i return                   far pops 6                               bcc/PFCALLEE.ASM:441
+pf w_i keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:441
+pf w_i _gh_i                    in+8 in+9                                bcc/PFCALLEE.ASM:441
+pf w_i _gt_i                    in+4 in+5                                bcc/PFCALLEE.ASM:441
+pf w_i _gw_i                    in+6 in+7 sign(in+7) sign(in+7)          bcc/PFCALLEE.ASM:441
+pf w_sc return                  far pops 6                               bcc/PFCALLEE.ASM:384
+pf w_sc keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:384
+pf w_sc _gh_sc                  in+8 in+9                                bcc/PFCALLEE.ASM:384
+pf w_sc _gt_sc                  in+4 in+5                                bcc/PFCALLEE.ASM:384
+pf w_sc _gw_sc                  in+6 sign(in+6) sign(in+6) sign(in+6)    bcc/PFCALLEE.ASM:384
+pf w_u return                   far pops 6                               bcc/PFCALLEE.ASM:458
+pf w_u keeps                    si di bp sp ds ss df                     bcc/PFCALLEE.ASM:458
+pf w_u _gh_u                    in+8 in+9                                bcc/PFCALLEE.ASM:458
+pf w_u _gt_u                    in+4 in+5                                bcc/PFCALLEE.ASM:458
+pf w_u _gw_u                    in+6 in+7 00 00                          bcc/PFCALLEE.ASM:458
+pf w_uc return                  far pops 6                               bcc/PFCALLEE.ASM:403
+pf w_uc keeps                   si di bp sp ds ss df                     bcc/PFCALLEE.ASM:403
+pf w_uc _gh_uc                  in+8 in+9                                bcc/PFCALLEE.ASM:403
+pf w_uc _gt_uc                  in+4 in+5                                bcc/PFCALLEE.ASM:403
+pf w_uc _gw_uc                  in+6 00 00 00                            bcc/PFCALLEE.ASM:403
+pf call p_sc #1 stack           22 22 _in_sc[0] - 11 11                  bcc/PFCALLER.ASM:40
+pf call p_sc #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_sc #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_sc #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_uc #1 stack           22 22 _in_uc[0] - 11 11                  bcc/PFCALLER.ASM:40
+pf call p_uc #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_uc #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_uc #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_ch #1 stack           22 22 _in_ch[0] - 11 11                  bcc/PFCALLER.ASM:40
+pf call p_ch #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_ch #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_ch #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_i #1 stack            22 22 _in_i[0] _in_i[1] 11 11            bcc/PFCALLER.ASM:40
+pf call p_i #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_i #1 stack                                                     bcc/PFCALLER.ASM:40
+pf call r_i #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_u #1 stack            22 22 _in_u[0] _in_u[1] 11 11            bcc/PFCALLER.ASM:40
+pf call p_u #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_u #1 stack                                                     bcc/PFCALLER.ASM:40
+pf call r_u #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_l #1 stack            22 22 _in_l[0] _in_l[1] _in_l[2] _in_l[3] 11 11 bcc/PFCALLER.ASM:40
+pf call p_l #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_l #1 stack                                                     bcc/PFCALLER.ASM:40
+pf call r_l #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_ul #1 stack           22 22 _in_ul[0] _in_ul[1] _in_ul[2] _in_ul[3] 11 11 bcc/PFCALLER.ASM:40
+pf call p_ul #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_ul #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_ul #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_np #1 stack           22 22 _in_np[0] _in_np[1] 11 11          bcc/PFCALLER.ASM:40
+pf call p_np #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_np #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_np #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_fp #1 stack           22 22 _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] 11 11 bcc/PFCALLER.ASM:40
+pf call p_fp #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_fp #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_fp #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_hp #1 stack           22 22 _in_hp[0] _in_hp[1] _in_hp[2] _in_hp[3] 11 11 bcc/PFCALLER.ASM:40
+pf call p_hp #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_hp #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_hp #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_f #1 stack            22 22 _in_f[0] _in_f[1] _in_f[2] _in_f[3] 11 11 bcc/PFCALLER.ASM:40
+pf call p_f #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_f #1 stack                                                     bcc/PFCALLER.ASM:40
+pf call r_f #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_d #1 stack            22 22 _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] 11 11 bcc/PFCALLER.ASM:40
+pf call p_d #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_d #1 stack                                                     bcc/PFCALLER.ASM:40
+pf call r_d #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_ld #1 stack           22 22 _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] 11 11 bcc/PFCALLER.ASM:40
+pf call p_ld #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_ld #1 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_ld #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call w_sc #1 stack           22 22 _in_sc[0] - 11 11                  bcc/PFCALLER.ASM:40
+pf call w_sc #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_sc #2 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_sc #2 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call w_uc #1 stack           22 22 _in_uc[0] - 11 11                  bcc/PFCALLER.ASM:40
+pf call w_uc #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_uc #2 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_uc #2 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call w_ch #1 stack           22 22 _in_ch[0] 00 11 11                 bcc/PFCALLER.ASM:40
+pf call w_ch #1 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_ch #2 stack                                                    bcc/PFCALLER.ASM:40
+pf call r_ch #2 cleanup         far pops 0                               bcc/PFCALLER.ASM:40
+pf call w_i #1 stack            22 22 _in_i[0] _in_i[1] 11 11            bcc/PFCALLER.ASM:40
+pf call w_i #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_i #2 stack                                                     bcc/PFCALLER.ASM:40
+pf call r_i #2 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call w_u #1 stack            22 22 _in_u[0] _in_u[1] 11 11            bcc/PFCALLER.ASM:40
+pf call w_u #1 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_u #2 stack                                                     bcc/PFCALLER.ASM:40
+pf call r_u #2 cleanup          far pops 0                               bcc/PFCALLER.ASM:40
+pf call r_void #1 stack                                                  bcc/PFCALLER.ASM:40
+pf call r_void #1 cleanup       far pops 0                               bcc/PFCALLER.ASM:40
+pf call p_mixed #1 stack        _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] _in_f[0] _in_f[1] _in_f[2] _in_f[3] _in_i[0] _in_i[1] _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] _in_l[0] _in_l[1] _in_l[2] _in_l[3] _in_sc[0] - bcc/PFCALLER.ASM:40
+pf call p_mixed #1 cleanup      far pops 0                               bcc/PFCALLER.ASM:40
+pf keeps _out_ch                r_ch:eax.0                               bcc/PFCALLER.ASM:40
+pf keeps _out_d                 r_d:st.0 r_d:st.1 r_d:st.2 r_d:st.3 r_d:st.4 r_d:st.5 r_d:st.6 r_d:st.7 bcc/PFCALLER.ASM:40
+pf keeps _out_f                 r_f:st.0 r_f:st.1 r_f:st.2 r_f:st.3      bcc/PFCALLER.ASM:40
+pf keeps _out_fp                r_fp:eax.0 r_fp:eax.1 r_fp:edx.0 r_fp:edx.1 bcc/PFCALLER.ASM:40
+pf keeps _out_hp                r_hp:eax.0 r_hp:eax.1 r_hp:edx.0 r_hp:edx.1 bcc/PFCALLER.ASM:40
+pf keeps _out_i                 r_i:eax.0 r_i:eax.1                      bcc/PFCALLER.ASM:40
+pf keeps _out_l                 r_l:eax.0 r_l:eax.1 r_l:edx.0 r_l:edx.1  bcc/PFCALLER.ASM:40
+pf keeps _out_ld                r_ld:st.0 r_ld:st.1 r_ld:st.2 r_ld:st.3 r_ld:st.4 r_ld:st.5 r_ld:st.6 r_ld:st.7 r_ld:st.8 r_ld:st.9 bcc/PFCALLER.ASM:40
+pf keeps _out_np                r_np:eax.0 r_np:eax.1                    bcc/PFCALLER.ASM:40
+pf keeps _out_sc                r_sc:eax.0                               bcc/PFCALLER.ASM:40
+pf keeps _out_u                 r_u:eax.0 r_u:eax.1                      bcc/PFCALLER.ASM:40
+pf keeps _out_uc                r_uc:eax.0                               bcc/PFCALLER.ASM:40
+pf keeps _out_ul                r_ul:eax.0 r_ul:eax.1 r_ul:edx.0 r_ul:edx.1 bcc/PFCALLER.ASM:40
+pf keeps _ow_ch                 r_ch:eax.0 sign(r_ch:eax.0) sign(r_ch:eax.0) sign(r_ch:eax.0) bcc/PFCALLER.ASM:40
+pf keeps _ow_i                  r_i:eax.0 r_i:eax.1 sign(r_i:eax.1) sign(r_i:eax.1) bcc/PFCALLER.ASM:40
+pf keeps _ow_sc                 r_sc:eax.0 sign(r_sc:eax.0) sign(r_sc:eax.0) sign(r_sc:eax.0) bcc/PFCALLER.ASM:40
+pf keeps _ow_u                  r_u:eax.0 r_u:eax.1 00 00                bcc/PFCALLER.ASM:40
+pf keeps _ow_uc                 r_uc:eax.0 00 00 00                      bcc/PFCALLER.ASM:40
+pf p_s1 return                  far pops 6                               bcc/PFAGGEE.ASM:40
+pf p_s1 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:40
+pf p_s1 _gh_s1                  in+8 in+9                                bcc/PFAGGEE.ASM:40
+pf p_s1 _gt_s1                  in+4 in+5                                bcc/PFAGGEE.ASM:40
+pf p_s1 _gv_s1                  in+6                                     bcc/PFAGGEE.ASM:40
+pf p_s2 return                  far pops 6                               bcc/PFAGGEE.ASM:57
+pf p_s2 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:57
+pf p_s2 _gh_s2                  in+8 in+9                                bcc/PFAGGEE.ASM:57
+pf p_s2 _gt_s2                  in+4 in+5                                bcc/PFAGGEE.ASM:57
+pf p_s2 _gv_s2                  in+6 in+7                                bcc/PFAGGEE.ASM:57
+pf p_s3 return                  far pops 8                               bcc/PFAGGEE.ASM:74
+pf p_s3 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:74
+pf p_s3 _gh_s3                  in+10 in+11                              bcc/PFAGGEE.ASM:74
+pf p_s3 _gt_s3                  in+4 in+5                                bcc/PFAGGEE.ASM:74
+pf p_s3 _gv_s3                  in+6 in+7 in+8                           bcc/PFAGGEE.ASM:74
+pf p_s4 return                  far pops 8                               bcc/PFAGGEE.ASM:93
+pf p_s4 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:93
+pf p_s4 _gh_s4                  in+10 in+11                              bcc/PFAGGEE.ASM:93
+pf p_s4 _gt_s4                  in+4 in+5                                bcc/PFAGGEE.ASM:93
+pf p_s4 _gv_s4                  in+6 in+7 in+8 in+9                      bcc/PFAGGEE.ASM:93
+pf p_s5 return                  far pops 10                              bcc/PFAGGEE.ASM:110
+pf p_s5 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:110
+pf p_s5 _gh_s5                  in+12 in+13                              bcc/PFAGGEE.ASM:110
+pf p_s5 _gt_s5                  in+4 in+5                                bcc/PFAGGEE.ASM:110
+pf p_s5 _gv_s5                  in+6 in+7 in+8 in+9 in+10                bcc/PFAGGEE.ASM:110
+pf p_s7 return                  far pops 12                              bcc/PFAGGEE.ASM:131
+pf p_s7 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:131
+pf p_s7 _gh_s7                  in+14 in+15                              bcc/PFAGGEE.ASM:131
+pf p_s7 _gt_s7                  in+4 in+5                                bcc/PFAGGEE.ASM:131
+pf p_s7 _gv_s7                  in+6 in+7 in+8 in+9 in+10 in+11 in+12    bcc/PFAGGEE.ASM:131
+pf p_s8 return                  far pops 12                              bcc/PFAGGEE.ASM:154
+pf p_s8 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:154
+pf p_s8 _gh_s8                  in+14 in+15                              bcc/PFAGGEE.ASM:154
+pf p_s8 _gt_s8                  in+4 in+5                                bcc/PFAGGEE.ASM:154
+pf p_s8 _gv_s8                  in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 bcc/PFAGGEE.ASM:154
+pf p_s9 return                  far pops 14                              bcc/PFAGGEE.ASM:177
+pf p_s9 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:177
+pf p_s9 _gh_s9                  in+16 in+17                              bcc/PFAGGEE.ASM:177
+pf p_s9 _gt_s9                  in+4 in+5                                bcc/PFAGGEE.ASM:177
+pf p_s9 _gv_s9                  in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 in+14 bcc/PFAGGEE.ASM:177
+pf p_sci return                 far pops 8                               bcc/PFAGGEE.ASM:202
+pf p_sci keeps                  si di bp sp ds ss df                     bcc/PFAGGEE.ASM:202
+pf p_sci _gh_sci                in+10 in+11                              bcc/PFAGGEE.ASM:202
+pf p_sci _gt_sci                in+4 in+5                                bcc/PFAGGEE.ASM:202
+pf p_sci _gv_sci                in+6 in+7 in+8                           bcc/PFAGGEE.ASM:202
+pf r_s1 return                  far pops 0                               bcc/PFAGGEE.ASM:221
+pf r_s1 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:221
+pf r_s2 return                  far pops 0                               bcc/PFAGGEE.ASM:230
+pf r_s2 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:230
+pf r_s3 return                  far pops 4                               bcc/PFAGGEE.ASM:239
+pf r_s3 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:239
+pf r_s4 return                  far pops 0                               bcc/PFAGGEE.ASM:257
+pf r_s4 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:257
+pf r_s5 return                  far pops 4                               bcc/PFAGGEE.ASM:267
+pf r_s5 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:267
+pf r_s7 return                  far pops 4                               bcc/PFAGGEE.ASM:287
+pf r_s7 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:287
+pf r_s8 return                  far pops 4                               bcc/PFAGGEE.ASM:309
+pf r_s8 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:309
+pf r_s9 return                  far pops 4                               bcc/PFAGGEE.ASM:331
+pf r_s9 keeps                   si di bp sp ds ss df                     bcc/PFAGGEE.ASM:331
+pf r_sci return                 far pops 4                               bcc/PFAGGEE.ASM:355
+pf r_sci keeps                  si di bp sp ds ss df                     bcc/PFAGGEE.ASM:355
+pf call p_s1 #1 stack           22 22 _in_s1[0] - 11 11                  bcc/PFAGGER.ASM:40
+pf call p_s1 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s1 #1 stack                                                    bcc/PFAGGER.ASM:40
+pf call r_s1 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_s2 #1 stack           22 22 _in_s2[0] _in_s2[1] 11 11          bcc/PFAGGER.ASM:40
+pf call p_s2 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s2 #1 stack                                                    bcc/PFAGGER.ASM:40
+pf call r_s2 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_s3 #1 stack           22 22 _in_s3[0] _in_s3[1] _in_s3[2] - 11 11 bcc/PFAGGER.ASM:40
+pf call p_s3 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s3 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PFAGGER.ASM:40
+pf call r_s3 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_s4 #1 stack           22 22 _in_s4[0] _in_s4[1] _in_s4[2] _in_s4[3] 11 11 bcc/PFAGGER.ASM:40
+pf call p_s4 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s4 #1 stack                                                    bcc/PFAGGER.ASM:40
+pf call r_s4 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_s5 #1 stack           22 22 _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] - 11 11 bcc/PFAGGER.ASM:40
+pf call p_s5 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s5 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PFAGGER.ASM:40
+pf call r_s5 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_s7 #1 stack           22 22 _in_s7[0] _in_s7[1] _in_s7[2] _in_s7[3] _in_s7[4] _in_s7[5] _in_s7[6] - 11 11 bcc/PFAGGER.ASM:40
+pf call p_s7 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s7 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PFAGGER.ASM:40
+pf call r_s7 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_s8 #1 stack           22 22 _in_s8[0] _in_s8[1] _in_s8[2] _in_s8[3] _in_s8[4] _in_s8[5] _in_s8[6] _in_s8[7] 11 11 bcc/PFAGGER.ASM:40
+pf call p_s8 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s8 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PFAGGER.ASM:40
+pf call r_s8 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_s9 #1 stack           22 22 _in_s9[0] _in_s9[1] _in_s9[2] _in_s9[3] _in_s9[4] _in_s9[5] _in_s9[6] _in_s9[7] _in_s9[8] - 11 11 bcc/PFAGGER.ASM:40
+pf call p_s9 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_s9 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PFAGGER.ASM:40
+pf call r_s9 #1 cleanup         far pops 0                               bcc/PFAGGER.ASM:40
+pf call p_sci #1 stack          22 22 _in_sci[0] _in_sci[1] _in_sci[2] - 11 11 bcc/PFAGGER.ASM:40
+pf call p_sci #1 cleanup        far pops 0                               bcc/PFAGGER.ASM:40
+pf call r_sci #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/PFAGGER.ASM:40
+pf call r_sci #1 cleanup        far pops 0                               bcc/PFAGGER.ASM:40
+pf keeps _out_s1                r_s1:eax.0                               bcc/PFAGGER.ASM:40
+pf keeps _out_s2                r_s2:eax.0 r_s2:eax.1                    bcc/PFAGGER.ASM:40
+pf keeps _out_s3                r_s3:*0 r_s3:*1 r_s3:*2                  bcc/PFAGGER.ASM:40
+pf keeps _out_s4                r_s4:eax.0 r_s4:eax.1 r_s4:edx.0 r_s4:edx.1 bcc/PFAGGER.ASM:40
+pf keeps _out_s5                r_s5:*0 r_s5:*1 r_s5:*2 r_s5:*3 r_s5:*4  bcc/PFAGGER.ASM:40
+pf keeps _out_s7                r_s7:*0 r_s7:*1 r_s7:*2 r_s7:*3 r_s7:*4 r_s7:*5 r_s7:*6 bcc/PFAGGER.ASM:40
+pf keeps _out_s8                r_s8:*0 r_s8:*1 r_s8:*2 r_s8:*3 r_s8:*4 r_s8:*5 r_s8:*6 r_s8:*7 bcc/PFAGGER.ASM:40
+pf keeps _out_s9                r_s9:*0 r_s9:*1 r_s9:*2 r_s9:*3 r_s9:*4 r_s9:*5 r_s9:*6 r_s9:*7 r_s9:*8 bcc/PFAGGER.ASM:40
+pf keeps _out_sci               r_sci:*0 r_sci:*1 r_sci:*2               bcc/PFAGGER.ASM:40
+pn p_ch return                  near pops 6                              bcc/PNCALLEE.ASM:74
+pn p_ch keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:74
+pn p_ch _gh_ch                  in+6 in+7                                bcc/PNCALLEE.ASM:74
+pn p_ch _gt_ch                  in+2 in+3                                bcc/PNCALLEE.ASM:74
+pn p_ch _gv_ch                  in+4                                     bcc/PNCALLEE.ASM:74
+pn p_d return                   near pops 12                             bcc/PNCALLEE.ASM:227
+pn p_d keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:227
+pn p_d _gh_d                    in+12 in+13                              bcc/PNCALLEE.ASM:227
+pn p_d _gt_d                    in+2 in+3                                bcc/PNCALLEE.ASM:227
+pn p_d _gv_d                    in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 bcc/PNCALLEE.ASM:227
+pn p_f return                   near pops 8                              bcc/PNCALLEE.ASM:210
+pn p_f keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:210
+pn p_f _gh_f                    in+8 in+9                                bcc/PNCALLEE.ASM:210
+pn p_f _gt_f                    in+2 in+3                                bcc/PNCALLEE.ASM:210
+pn p_f _gv_f                    in+4 in+5 in+6 in+7                      bcc/PNCALLEE.ASM:210
+pn p_fp return                  near pops 8                              bcc/PNCALLEE.ASM:176
+pn p_fp keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:176
+pn p_fp _gh_fp                  in+8 in+9                                bcc/PNCALLEE.ASM:176
+pn p_fp _gt_fp                  in+2 in+3                                bcc/PNCALLEE.ASM:176
+pn p_fp _gv_fp                  in+4 in+5 in+6 in+7                      bcc/PNCALLEE.ASM:176
+pn p_hp return                  near pops 8                              bcc/PNCALLEE.ASM:193
+pn p_hp keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:193
+pn p_hp _gh_hp                  in+8 in+9                                bcc/PNCALLEE.ASM:193
+pn p_hp _gt_hp                  in+2 in+3                                bcc/PNCALLEE.ASM:193
+pn p_hp _gv_hp                  in+4 in+5 in+6 in+7                      bcc/PNCALLEE.ASM:193
+pn p_i return                   near pops 6                              bcc/PNCALLEE.ASM:91
+pn p_i keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:91
+pn p_i _gh_i                    in+6 in+7                                bcc/PNCALLEE.ASM:91
+pn p_i _gt_i                    in+2 in+3                                bcc/PNCALLEE.ASM:91
+pn p_i _gv_i                    in+4 in+5                                bcc/PNCALLEE.ASM:91
+pn p_l return                   near pops 8                              bcc/PNCALLEE.ASM:125
+pn p_l keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:125
+pn p_l _gh_l                    in+8 in+9                                bcc/PNCALLEE.ASM:125
+pn p_l _gt_l                    in+2 in+3                                bcc/PNCALLEE.ASM:125
+pn p_l _gv_l                    in+4 in+5 in+6 in+7                      bcc/PNCALLEE.ASM:125
+pn p_ld return                  near pops 14                             bcc/PNCALLEE.ASM:245
+pn p_ld keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:245
+pn p_ld _gh_ld                  in+14 in+15                              bcc/PNCALLEE.ASM:245
+pn p_ld _gt_ld                  in+2 in+3                                bcc/PNCALLEE.ASM:245
+pn p_ld _gv_ld                  in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 in+12 in+13 bcc/PNCALLEE.ASM:245
+pn p_mixed return               near pops 34                             bcc/PNCALLEE.ASM:483
+pn p_mixed keeps                si di bp sp ds ss df                     bcc/PNCALLEE.ASM:483
+pn p_mixed _gm_a                in+34                                    bcc/PNCALLEE.ASM:483
+pn p_mixed _gm_b                in+30 in+31 in+32 in+33                  bcc/PNCALLEE.ASM:483
+pn p_mixed _gm_c                in+22 in+23 in+24 in+25 in+26 in+27 in+28 in+29 bcc/PNCALLEE.ASM:483
+pn p_mixed _gm_d                in+20 in+21                              bcc/PNCALLEE.ASM:483
+pn p_mixed _gm_e                in+16 in+17 in+18 in+19                  bcc/PNCALLEE.ASM:483
+pn p_mixed _gm_f                in+12 in+13 in+14 in+15                  bcc/PNCALLEE.ASM:483
+pn p_mixed _gm_h                in+2 in+3 in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 bcc/PNCALLEE.ASM:483
+pn p_np return                  near pops 6                              bcc/PNCALLEE.ASM:159
+pn p_np keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:159
+pn p_np _gh_np                  in+6 in+7                                bcc/PNCALLEE.ASM:159
+pn p_np _gt_np                  in+2 in+3                                bcc/PNCALLEE.ASM:159
+pn p_np _gv_np                  in+4 in+5                                bcc/PNCALLEE.ASM:159
+pn p_sc return                  near pops 6                              bcc/PNCALLEE.ASM:40
+pn p_sc keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:40
+pn p_sc _gh_sc                  in+6 in+7                                bcc/PNCALLEE.ASM:40
+pn p_sc _gt_sc                  in+2 in+3                                bcc/PNCALLEE.ASM:40
+pn p_sc _gv_sc                  in+4                                     bcc/PNCALLEE.ASM:40
+pn p_u return                   near pops 6                              bcc/PNCALLEE.ASM:108
+pn p_u keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:108
+pn p_u _gh_u                    in+6 in+7                                bcc/PNCALLEE.ASM:108
+pn p_u _gt_u                    in+2 in+3                                bcc/PNCALLEE.ASM:108
+pn p_u _gv_u                    in+4 in+5                                bcc/PNCALLEE.ASM:108
+pn p_uc return                  near pops 6                              bcc/PNCALLEE.ASM:57
+pn p_uc keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:57
+pn p_uc _gh_uc                  in+6 in+7                                bcc/PNCALLEE.ASM:57
+pn p_uc _gt_uc                  in+2 in+3                                bcc/PNCALLEE.ASM:57
+pn p_uc _gv_uc                  in+4                                     bcc/PNCALLEE.ASM:57
+pn p_ul return                  near pops 8                              bcc/PNCALLEE.ASM:142
+pn p_ul keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:142
+pn p_ul _gh_ul                  in+8 in+9                                bcc/PNCALLEE.ASM:142
+pn p_ul _gt_ul                  in+2 in+3                                bcc/PNCALLEE.ASM:142
+pn p_ul _gv_ul                  in+4 in+5 in+6 in+7                      bcc/PNCALLEE.ASM:142
+pn r_ch return                  near pops 0                              bcc/PNCALLEE.ASM:281
+pn r_ch keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:281
+pn r_d return                   near pops 0                              bcc/PNCALLEE.ASM:366
+pn r_d keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:366
+pn r_f return                   near pops 0                              bcc/PNCALLEE.ASM:357
+pn r_f keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:357
+pn r_fp return                  near pops 0                              bcc/PNCALLEE.ASM:337
+pn r_fp keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:337
+pn r_hp return                  near pops 0                              bcc/PNCALLEE.ASM:347
+pn r_hp keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:347
+pn r_i return                   near pops 0                              bcc/PNCALLEE.ASM:290
+pn r_i keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:290
+pn r_l return                   near pops 0                              bcc/PNCALLEE.ASM:308
+pn r_l keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:308
+pn r_ld return                  near pops 0                              bcc/PNCALLEE.ASM:375
+pn r_ld keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:375
+pn r_np return                  near pops 0                              bcc/PNCALLEE.ASM:328
+pn r_np keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:328
+pn r_sc return                  near pops 0                              bcc/PNCALLEE.ASM:263
+pn r_sc keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:263
+pn r_u return                   near pops 0                              bcc/PNCALLEE.ASM:299
+pn r_u keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:299
+pn r_uc return                  near pops 0                              bcc/PNCALLEE.ASM:272
+pn r_uc keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:272
+pn r_ul return                  near pops 0                              bcc/PNCALLEE.ASM:318
+pn r_ul keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:318
+pn r_void return                near pops 0                              bcc/PNCALLEE.ASM:475
+pn r_void keeps                 si di bp sp ds ss df                     bcc/PNCALLEE.ASM:475
+pn w_ch return                  near pops 6                              bcc/PNCALLEE.ASM:422
+pn w_ch keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:422
+pn w_ch _gh_ch                  in+6 in+7                                bcc/PNCALLEE.ASM:422
+pn w_ch _gt_ch                  in+2 in+3                                bcc/PNCALLEE.ASM:422
+pn w_ch _gw_ch                  in+4 sign(in+4) sign(in+4) sign(in+4)    bcc/PNCALLEE.ASM:422
+pn w_i return                   near pops 6                              bcc/PNCALLEE.ASM:441
+pn w_i keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:441
+pn w_i _gh_i                    in+6 in+7                                bcc/PNCALLEE.ASM:441
+pn w_i _gt_i                    in+2 in+3                                bcc/PNCALLEE.ASM:441
+pn w_i _gw_i                    in+4 in+5 sign(in+5) sign(in+5)          bcc/PNCALLEE.ASM:441
+pn w_sc return                  near pops 6                              bcc/PNCALLEE.ASM:384
+pn w_sc keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:384
+pn w_sc _gh_sc                  in+6 in+7                                bcc/PNCALLEE.ASM:384
+pn w_sc _gt_sc                  in+2 in+3                                bcc/PNCALLEE.ASM:384
+pn w_sc _gw_sc                  in+4 sign(in+4) sign(in+4) sign(in+4)    bcc/PNCALLEE.ASM:384
+pn w_u return                   near pops 6                              bcc/PNCALLEE.ASM:458
+pn w_u keeps                    si di bp sp ds ss df                     bcc/PNCALLEE.ASM:458
+pn w_u _gh_u                    in+6 in+7                                bcc/PNCALLEE.ASM:458
+pn w_u _gt_u                    in+2 in+3                                bcc/PNCALLEE.ASM:458
+pn w_u _gw_u                    in+4 in+5 00 00                          bcc/PNCALLEE.ASM:458
+pn w_uc return                  near pops 6                              bcc/PNCALLEE.ASM:403
+pn w_uc keeps                   si di bp sp ds ss df                     bcc/PNCALLEE.ASM:403
+pn w_uc _gh_uc                  in+6 in+7                                bcc/PNCALLEE.ASM:403
+pn w_uc _gt_uc                  in+2 in+3                                bcc/PNCALLEE.ASM:403
+pn w_uc _gw_uc                  in+4 00 00 00                            bcc/PNCALLEE.ASM:403
+pn call p_sc #1 stack           22 22 _in_sc[0] - 11 11                  bcc/PNCALLER.ASM:40
+pn call p_sc #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_sc #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_sc #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_uc #1 stack           22 22 _in_uc[0] - 11 11                  bcc/PNCALLER.ASM:40
+pn call p_uc #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_uc #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_uc #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_ch #1 stack           22 22 _in_ch[0] - 11 11                  bcc/PNCALLER.ASM:40
+pn call p_ch #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_ch #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_ch #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_i #1 stack            22 22 _in_i[0] _in_i[1] 11 11            bcc/PNCALLER.ASM:40
+pn call p_i #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_i #1 stack                                                     bcc/PNCALLER.ASM:40
+pn call r_i #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_u #1 stack            22 22 _in_u[0] _in_u[1] 11 11            bcc/PNCALLER.ASM:40
+pn call p_u #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_u #1 stack                                                     bcc/PNCALLER.ASM:40
+pn call r_u #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_l #1 stack            22 22 _in_l[0] _in_l[1] _in_l[2] _in_l[3] 11 11 bcc/PNCALLER.ASM:40
+pn call p_l #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_l #1 stack                                                     bcc/PNCALLER.ASM:40
+pn call r_l #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_ul #1 stack           22 22 _in_ul[0] _in_ul[1] _in_ul[2] _in_ul[3] 11 11 bcc/PNCALLER.ASM:40
+pn call p_ul #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_ul #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_ul #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_np #1 stack           22 22 _in_np[0] _in_np[1] 11 11          bcc/PNCALLER.ASM:40
+pn call p_np #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_np #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_np #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_fp #1 stack           22 22 _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] 11 11 bcc/PNCALLER.ASM:40
+pn call p_fp #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_fp #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_fp #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_hp #1 stack           22 22 _in_hp[0] _in_hp[1] _in_hp[2] _in_hp[3] 11 11 bcc/PNCALLER.ASM:40
+pn call p_hp #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_hp #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_hp #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_f #1 stack            22 22 _in_f[0] _in_f[1] _in_f[2] _in_f[3] 11 11 bcc/PNCALLER.ASM:40
+pn call p_f #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_f #1 stack                                                     bcc/PNCALLER.ASM:40
+pn call r_f #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_d #1 stack            22 22 _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] 11 11 bcc/PNCALLER.ASM:40
+pn call p_d #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_d #1 stack                                                     bcc/PNCALLER.ASM:40
+pn call r_d #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_ld #1 stack           22 22 _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] 11 11 bcc/PNCALLER.ASM:40
+pn call p_ld #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_ld #1 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_ld #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call w_sc #1 stack           22 22 _in_sc[0] - 11 11                  bcc/PNCALLER.ASM:40
+pn call w_sc #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_sc #2 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_sc #2 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call w_uc #1 stack           22 22 _in_uc[0] - 11 11                  bcc/PNCALLER.ASM:40
+pn call w_uc #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_uc #2 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_uc #2 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call w_ch #1 stack           22 22 _in_ch[0] 00 11 11                 bcc/PNCALLER.ASM:40
+pn call w_ch #1 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_ch #2 stack                                                    bcc/PNCALLER.ASM:40
+pn call r_ch #2 cleanup         near pops 0                              bcc/PNCALLER.ASM:40
+pn call w_i #1 stack            22 22 _in_i[0] _in_i[1] 11 11            bcc/PNCALLER.ASM:40
+pn call w_i #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_i #2 stack                                                     bcc/PNCALLER.ASM:40
+pn call r_i #2 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call w_u #1 stack            22 22 _in_u[0] _in_u[1] 11 11            bcc/PNCALLER.ASM:40
+pn call w_u #1 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_u #2 stack                                                     bcc/PNCALLER.ASM:40
+pn call r_u #2 cleanup          near pops 0                              bcc/PNCALLER.ASM:40
+pn call r_void #1 stack                                                  bcc/PNCALLER.ASM:40
+pn call r_void #1 cleanup       near pops 0                              bcc/PNCALLER.ASM:40
+pn call p_mixed #1 stack        _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] _in_f[0] _in_f[1] _in_f[2] _in_f[3] _in_i[0] _in_i[1] _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] _in_l[0] _in_l[1] _in_l[2] _in_l[3] _in_sc[0] - bcc/PNCALLER.ASM:40
+pn call p_mixed #1 cleanup      near pops 0                              bcc/PNCALLER.ASM:40
+pn keeps _out_ch                r_ch:eax.0                               bcc/PNCALLER.ASM:40
+pn keeps _out_d                 r_d:st.0 r_d:st.1 r_d:st.2 r_d:st.3 r_d:st.4 r_d:st.5 r_d:st.6 r_d:st.7 bcc/PNCALLER.ASM:40
+pn keeps _out_f                 r_f:st.0 r_f:st.1 r_f:st.2 r_f:st.3      bcc/PNCALLER.ASM:40
+pn keeps _out_fp                r_fp:eax.0 r_fp:eax.1 r_fp:edx.0 r_fp:edx.1 bcc/PNCALLER.ASM:40
+pn keeps _out_hp                r_hp:eax.0 r_hp:eax.1 r_hp:edx.0 r_hp:edx.1 bcc/PNCALLER.ASM:40
+pn keeps _out_i                 r_i:eax.0 r_i:eax.1                      bcc/PNCALLER.ASM:40
+pn keeps _out_l                 r_l:eax.0 r_l:eax.1 r_l:edx.0 r_l:edx.1  bcc/PNCALLER.ASM:40
+pn keeps _out_ld                r_ld:st.0 r_ld:st.1 r_ld:st.2 r_ld:st.3 r_ld:st.4 r_ld:st.5 r_ld:st.6 r_ld:st.7 r_ld:st.8 r_ld:st.9 bcc/PNCALLER.ASM:40
+pn keeps _out_np                r_np:eax.0 r_np:eax.1                    bcc/PNCALLER.ASM:40
+pn keeps _out_sc                r_sc:eax.0                               bcc/PNCALLER.ASM:40
+pn keeps _out_u                 r_u:eax.0 r_u:eax.1                      bcc/PNCALLER.ASM:40
+pn keeps _out_uc                r_uc:eax.0                               bcc/PNCALLER.ASM:40
+pn keeps _out_ul                r_ul:eax.0 r_ul:eax.1 r_ul:edx.0 r_ul:edx.1 bcc/PNCALLER.ASM:40
+pn keeps _ow_ch                 r_ch:eax.0 sign(r_ch:eax.0) sign(r_ch:eax.0) sign(r_ch:eax.0) bcc/PNCALLER.ASM:40
+pn keeps _ow_i                  r_i:eax.0 r_i:eax.1 sign(r_i:eax.1) sign(r_i:eax.1) bcc/PNCALLER.ASM:40
+pn keeps _ow_sc                 r_sc:eax.0 sign(r_sc:eax.0) sign(r_sc:eax.0) sign(r_sc:eax.0) bcc/PNCALLER.ASM:40
+pn keeps _ow_u                  r_u:eax.0 r_u:eax.1 00 00                bcc/PNCALLER.ASM:40
+pn keeps _ow_uc                 r_uc:eax.0 00 00 00                      bcc/PNCALLER.ASM:40
+pn p_s1 return                  near pops 6                              bcc/PNAGGEE.ASM:40
+pn p_s1 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:40
+pn p_s1 _gh_s1                  in+6 in+7                                bcc/PNAGGEE.ASM:40
+pn p_s1 _gt_s1                  in+2 in+3                                bcc/PNAGGEE.ASM:40
+pn p_s1 _gv_s1                  in+4                                     bcc/PNAGGEE.ASM:40
+pn p_s2 return                  near pops 6                              bcc/PNAGGEE.ASM:57
+pn p_s2 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:57
+pn p_s2 _gh_s2                  in+6 in+7                                bcc/PNAGGEE.ASM:57
+pn p_s2 _gt_s2                  in+2 in+3                                bcc/PNAGGEE.ASM:57
+pn p_s2 _gv_s2                  in+4 in+5                                bcc/PNAGGEE.ASM:57
+pn p_s3 return                  near pops 8                              bcc/PNAGGEE.ASM:74
+pn p_s3 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:74
+pn p_s3 _gh_s3                  in+8 in+9                                bcc/PNAGGEE.ASM:74
+pn p_s3 _gt_s3                  in+2 in+3                                bcc/PNAGGEE.ASM:74
+pn p_s3 _gv_s3                  in+4 in+5 in+6                           bcc/PNAGGEE.ASM:74
+pn p_s4 return                  near pops 8                              bcc/PNAGGEE.ASM:93
+pn p_s4 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:93
+pn p_s4 _gh_s4                  in+8 in+9                                bcc/PNAGGEE.ASM:93
+pn p_s4 _gt_s4                  in+2 in+3                                bcc/PNAGGEE.ASM:93
+pn p_s4 _gv_s4                  in+4 in+5 in+6 in+7                      bcc/PNAGGEE.ASM:93
+pn p_s5 return                  near pops 10                             bcc/PNAGGEE.ASM:110
+pn p_s5 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:110
+pn p_s5 _gh_s5                  in+10 in+11                              bcc/PNAGGEE.ASM:110
+pn p_s5 _gt_s5                  in+2 in+3                                bcc/PNAGGEE.ASM:110
+pn p_s5 _gv_s5                  in+4 in+5 in+6 in+7 in+8                 bcc/PNAGGEE.ASM:110
+pn p_s7 return                  near pops 12                             bcc/PNAGGEE.ASM:131
+pn p_s7 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:131
+pn p_s7 _gh_s7                  in+12 in+13                              bcc/PNAGGEE.ASM:131
+pn p_s7 _gt_s7                  in+2 in+3                                bcc/PNAGGEE.ASM:131
+pn p_s7 _gv_s7                  in+4 in+5 in+6 in+7 in+8 in+9 in+10      bcc/PNAGGEE.ASM:131
+pn p_s8 return                  near pops 12                             bcc/PNAGGEE.ASM:154
+pn p_s8 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:154
+pn p_s8 _gh_s8                  in+12 in+13                              bcc/PNAGGEE.ASM:154
+pn p_s8 _gt_s8                  in+2 in+3                                bcc/PNAGGEE.ASM:154
+pn p_s8 _gv_s8                  in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 bcc/PNAGGEE.ASM:154
+pn p_s9 return                  near pops 14                             bcc/PNAGGEE.ASM:177
+pn p_s9 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:177
+pn p_s9 _gh_s9                  in+14 in+15                              bcc/PNAGGEE.ASM:177
+pn p_s9 _gt_s9                  in+2 in+3                                bcc/PNAGGEE.ASM:177
+pn p_s9 _gv_s9                  in+4 in+5 in+6 in+7 in+8 in+9 in+10 in+11 in+12 bcc/PNAGGEE.ASM:177
+pn p_sci return                 near pops 8                              bcc/PNAGGEE.ASM:202
+pn p_sci keeps                  si di bp sp ds ss df                     bcc/PNAGGEE.ASM:202
+pn p_sci _gh_sci                in+8 in+9                                bcc/PNAGGEE.ASM:202
+pn p_sci _gt_sci                in+2 in+3                                bcc/PNAGGEE.ASM:202
+pn p_sci _gv_sci                in+4 in+5 in+6                           bcc/PNAGGEE.ASM:202
+pn r_s1 return                  near pops 0                              bcc/PNAGGEE.ASM:221
+pn r_s1 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:221
+pn r_s2 return                  near pops 0                              bcc/PNAGGEE.ASM:230
+pn r_s2 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:230
+pn r_s3 return                  near pops 4                              bcc/PNAGGEE.ASM:239
+pn r_s3 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:239
+pn r_s4 return                  near pops 0                              bcc/PNAGGEE.ASM:257
+pn r_s4 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:257
+pn r_s5 return                  near pops 4                              bcc/PNAGGEE.ASM:267
+pn r_s5 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:267
+pn r_s7 return                  near pops 4                              bcc/PNAGGEE.ASM:287
+pn r_s7 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:287
+pn r_s8 return                  near pops 4                              bcc/PNAGGEE.ASM:309
+pn r_s8 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:309
+pn r_s9 return                  near pops 4                              bcc/PNAGGEE.ASM:331
+pn r_s9 keeps                   si di bp sp ds ss df                     bcc/PNAGGEE.ASM:331
+pn r_sci return                 near pops 4                              bcc/PNAGGEE.ASM:355
+pn r_sci keeps                  si di bp sp ds ss df                     bcc/PNAGGEE.ASM:355
+pn call p_s1 #1 stack           22 22 _in_s1[0] - 11 11                  bcc/PNAGGER.ASM:40
+pn call p_s1 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s1 #1 stack                                                    bcc/PNAGGER.ASM:40
+pn call r_s1 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_s2 #1 stack           22 22 _in_s2[0] _in_s2[1] 11 11          bcc/PNAGGER.ASM:40
+pn call p_s2 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s2 #1 stack                                                    bcc/PNAGGER.ASM:40
+pn call r_s2 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_s3 #1 stack           22 22 _in_s3[0] _in_s3[1] _in_s3[2] - 11 11 bcc/PNAGGER.ASM:40
+pn call p_s3 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s3 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PNAGGER.ASM:40
+pn call r_s3 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_s4 #1 stack           22 22 _in_s4[0] _in_s4[1] _in_s4[2] _in_s4[3] 11 11 bcc/PNAGGER.ASM:40
+pn call p_s4 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s4 #1 stack                                                    bcc/PNAGGER.ASM:40
+pn call r_s4 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_s5 #1 stack           22 22 _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] - 11 11 bcc/PNAGGER.ASM:40
+pn call p_s5 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s5 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PNAGGER.ASM:40
+pn call r_s5 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_s7 #1 stack           22 22 _in_s7[0] _in_s7[1] _in_s7[2] _in_s7[3] _in_s7[4] _in_s7[5] _in_s7[6] - 11 11 bcc/PNAGGER.ASM:40
+pn call p_s7 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s7 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PNAGGER.ASM:40
+pn call r_s7 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_s8 #1 stack           22 22 _in_s8[0] _in_s8[1] _in_s8[2] _in_s8[3] _in_s8[4] _in_s8[5] _in_s8[6] _in_s8[7] 11 11 bcc/PNAGGER.ASM:40
+pn call p_s8 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s8 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PNAGGER.ASM:40
+pn call r_s8 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_s9 #1 stack           22 22 _in_s9[0] _in_s9[1] _in_s9[2] _in_s9[3] _in_s9[4] _in_s9[5] _in_s9[6] _in_s9[7] _in_s9[8] - 11 11 bcc/PNAGGER.ASM:40
+pn call p_s9 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_s9 #1 stack           &data.0 &data.1 dgroup.0 dgroup.1        bcc/PNAGGER.ASM:40
+pn call r_s9 #1 cleanup         near pops 0                              bcc/PNAGGER.ASM:40
+pn call p_sci #1 stack          22 22 _in_sci[0] _in_sci[1] _in_sci[2] - 11 11 bcc/PNAGGER.ASM:40
+pn call p_sci #1 cleanup        near pops 0                              bcc/PNAGGER.ASM:40
+pn call r_sci #1 stack          &data.0 &data.1 dgroup.0 dgroup.1        bcc/PNAGGER.ASM:40
+pn call r_sci #1 cleanup        near pops 0                              bcc/PNAGGER.ASM:40
+pn keeps _out_s1                r_s1:eax.0                               bcc/PNAGGER.ASM:40
+pn keeps _out_s2                r_s2:eax.0 r_s2:eax.1                    bcc/PNAGGER.ASM:40
+pn keeps _out_s3                r_s3:*0 r_s3:*1 r_s3:*2                  bcc/PNAGGER.ASM:40
+pn keeps _out_s4                r_s4:eax.0 r_s4:eax.1 r_s4:edx.0 r_s4:edx.1 bcc/PNAGGER.ASM:40
+pn keeps _out_s5                r_s5:*0 r_s5:*1 r_s5:*2 r_s5:*3 r_s5:*4  bcc/PNAGGER.ASM:40
+pn keeps _out_s7                r_s7:*0 r_s7:*1 r_s7:*2 r_s7:*3 r_s7:*4 r_s7:*5 r_s7:*6 bcc/PNAGGER.ASM:40
+pn keeps _out_s8                r_s8:*0 r_s8:*1 r_s8:*2 r_s8:*3 r_s8:*4 r_s8:*5 r_s8:*6 r_s8:*7 bcc/PNAGGER.ASM:40
+pn keeps _out_s9                r_s9:*0 r_s9:*1 r_s9:*2 r_s9:*3 r_s9:*4 r_s9:*5 r_s9:*6 r_s9:*7 r_s9:*8 bcc/PNAGGER.ASM:40
+pn keeps _out_sci               r_sci:*0 r_sci:*1 r_sci:*2               bcc/PNAGGER.ASM:40
