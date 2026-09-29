@@ -9124,6 +9124,9 @@ impl Compiler {
     }
 
     fn cleanup_local_arrays(&mut self) -> Result<(), SemanticError> {
+        // VBDOS erases a STRING array with B$ERS1; QB 4.5 and PDS 7.1 have
+        // no such routine and use B$ERAS for every array.
+        let strings = if self.runtime == "vbdos" { "B$ERS1" } else { "B$ERAS" };
         let descriptors: Vec<(u32, u32, &'static str)> = self
             .variables
             .values()
@@ -9141,7 +9144,7 @@ impl Compiler {
                             place,
                             one.type_id,
                             if element == Some(STRING) {
-                                "B$ERS1"
+                                strings
                             } else {
                                 "B$ERAS"
                             },

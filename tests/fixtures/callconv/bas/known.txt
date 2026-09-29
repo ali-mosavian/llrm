@@ -32,6 +32,4 @@ pds71 CALLALL call RCUR #1 stack
 pds71 CALLALL call RCUR #1 cleanup
 pds71 CALLALL call PUTY #2 stack
 pds71 CALLALL call PUTY #2 cleanup
-pds71 CRS refused
 qb45 CES refused
-qb45 CRS refused
