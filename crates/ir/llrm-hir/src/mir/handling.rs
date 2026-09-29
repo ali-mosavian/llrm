@@ -86,10 +86,16 @@ impl ModuleHandler {
     /// `active` and the line of the last error it took in `erl`, with
     /// whether RESUME clears it; refused where a local both they and the
     /// body use would be two, one in each frame.
-    pub(super) fn of(owner: &model::Function, active: Value, erl: (Value, bool), outlined: (Value, TypeId)) -> Emit<Self> {
+    /// `rows` are the owner's statements, `raises` whether a callee may raise.
+    pub(super) fn of(owner: &model::Function, active: Value, erl: (Value, bool), rows: &[Statement], raises: &dyn Fn(&str) -> bool, outlined: (Value, TypeId)) -> Emit<Self> {
         let (last_erl, resume_clears_erl) = erl;
         let handlers = handlers(owner)?;
-        let (inside, ran) = reaches(owner, &handlers);
+        // The body emits every block the handlers do not reach, however it
+        // is entered (a DATA block is no entry once laid out), and what those
+        // reach; and each statement RESUME may continue at from it.
+        let inside = reached(owner, handlers.iter().copied());
+        let ran = reached(owner, owner.blocks.iter().map(|one| one.id).filter(|one| !inside.contains(one)));
+        let ran = resumed(owner, ran, &numbered(rows, owner.id), raises);
         let only: BTreeSet<i64> = inside.difference(&ran).copied().collect();
         let used = |blocks: &mut dyn Iterator<Item = &model::Block>| -> BTreeSet<i64> { blocks.flat_map(places_of).collect() };
         let theirs = used(&mut owner.blocks.iter().filter(|one| inside.contains(&one.id)));
@@ -162,11 +168,37 @@ fn handlers(function: &model::Function) -> Emit<Vec<i64>> {
     Ok(handlers)
 }
 
-/// The blocks `handlers` reach, and those the body does.
+/// The blocks `handlers` reach, and those the body does, from its entry
+/// and the statements RESUME may continue at outside them.
 fn reaches(function: &model::Function, handlers: &[i64]) -> (BTreeSet<i64>, BTreeSet<i64>) {
     let inside = reached(function, handlers.iter().copied());
     let body = reached(function, std::iter::once(function.entry).chain(function.external_entries.iter().copied().filter(|one| !inside.contains(one))));
     (inside, body)
+}
+
+/// `body` grown by each statement RESUME may continue at from the body: a
+/// statement of it that may raise (`raises`, of a callee), and the one
+/// after, where RESUME NEXT goes though it be the handlers' code, as falling
+/// through reaches it. `rows` are `function`'s statements in source order.
+fn resumed(function: &model::Function, mut body: BTreeSet<i64>, rows: &[Statement], raises: &dyn Fn(&str) -> bool) -> BTreeSet<i64> {
+    let mut raising = vec![false; rows.len()];
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        let Some(callee) = instruction.callee.as_deref().filter(|one| raises(one)) else { continue };
+        if let Some(row) = rows.partition_point(|one| one.instruction <= instruction.id).checked_sub(1) {
+            raising[row] = true;
+        }
+    }
+    loop {
+        let added: Vec<i64> = (0..rows.len())
+            .filter(|&row| raising[row] && body.contains(&rows[row].block))
+            .filter_map(|row| rows.get(row + 1).map(|next| next.block))
+            .filter(|block| !body.contains(block))
+            .collect();
+        if added.is_empty() {
+            return body;
+        }
+        body = reached(function, body.iter().copied().chain(added));
+    }
 }
 
 /// The blocks `handlers` reach, which the body must not: a procedure's own
@@ -455,8 +487,11 @@ impl Body<'_, '_, '_> {
             let site = self.b.load(word, handling.site, false, "");
             let mut cases = Vec::new();
             for &raising in &handling.raising {
+                // The last statement is the body's end, where RESUME NEXT after
+                // the last one continues: an error its own exit raises (a
+                // string freed, an array erased) resumes there too.
                 let index = if form == Resume::Next { raising + 1 } else { raising };
-                let statement = handling.statements.get(index).ok_or("a RESUME NEXT past the last statement")?;
+                let statement = handling.statements.get(index.min(handling.statements.len().saturating_sub(1))).ok_or("a RESUME in a body with no statement")?;
                 if handling.inside.contains(&statement.block) {
                     return Err(format!("a RESUME into block {}, the error handler's", statement.block));
                 }

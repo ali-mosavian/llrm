@@ -690,3 +690,62 @@ fn a_block_the_body_and_its_module_handler_share_is_emitted_in_both() {
     };
     assert!(cleared(RuntimeProfile::Vbdos) && !cleared(RuntimeProfile::Qb45));
 }
+
+/// The emission input a fixture holds, as llrm-qb hands it on.
+fn fixture(text: &str) -> Program {
+    crate::codec::decode(text).expect("decodes")
+}
+
+/// `name`'s function in `program`'s module.
+fn function<'p>(program: &'p Program, name: &str) -> &'p Function {
+    program.modules[0].functions.iter().find(|one| one.name == name).expect("the function")
+}
+
+fn emits(program: &Program) {
+    let emitted = emit(program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+}
+
+/// GORILLA.BAS's DATA blocks are no entry once their rows are laid out,
+/// yet the body emits them, and one ran into the module's end, a statement
+/// the handler reaches too: left out of the body, "no entry found for key".
+#[test]
+fn a_block_nothing_enters_still_leads_the_body() {
+    let program = fixture(include_str!("fixtures/handler_data_block.json"));
+    let main = function(&program, "__main");
+    let theirs = reached(main, [main.error_handler.expect("a handler")]);
+    let entered = reached(main, std::iter::once(main.entry).chain(main.external_entries.iter().copied()));
+    // Premise: a block nothing enters jumps into the handler's.
+    let orphan = main.blocks.iter().find(|one| !entered.contains(&one.id) && !theirs.contains(&one.id) && one.terminator.targets.iter().any(|to| theirs.contains(to)));
+    assert!(orphan.is_some(), "the fixture no longer has the shape");
+    emits(&program);
+}
+
+/// GORILLA.BAS's RESUME continued at a statement the handler also runs,
+/// which the body had left out: "a RESUME into block 5, the error
+/// handler's".
+#[test]
+fn a_statement_the_handler_runs_is_the_bodys_too() {
+    let program = fixture(include_str!("fixtures/handler_statement_entry.json"));
+    let main = function(&program, "__main");
+    let theirs = reached(main, [main.error_handler.expect("a handler")]);
+    // Premise: RESUME may continue at a statement the handler runs.
+    let rows = program.modules[0].statements().expect("a statement table");
+    assert!(rows.iter().any(|one| one.function == main.id && theirs.contains(&one.block)), "the fixture no longer has the shape");
+    emits(&program);
+}
+
+/// GORILLA.BAS's PlayGame erases its arrays after its last statement row,
+/// END SUB's, and RESUME NEXT after that erase had nowhere to go: "a
+/// RESUME NEXT past the last statement". It continues at END SUB.
+#[test]
+fn resume_next_past_end_sub_continues_at_its_end() {
+    let program = fixture(include_str!("fixtures/resume_past_end_sub.json"));
+    let sub = function(&program, "S");
+    let rows = program.modules[0].statements().expect("a statement table");
+    let last = rows.iter().filter(|one| one.function == sub.id).map(|one| one.instruction).max().expect("rows");
+    // Premise: a call after the last statement row begins.
+    assert!(sub.calls.iter().any(|one| one.instruction > last), "the fixture no longer has the shape");
+    emits(&program);
+}
