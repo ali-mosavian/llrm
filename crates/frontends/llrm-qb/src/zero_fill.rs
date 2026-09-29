@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use llrm_core::hir::lower::Lowered;
-use llrm_core::hir::model::{self, Number, Operand, Storage};
+use llrm_core::hir::model::{self, Number, Operand, Storage, TypeKind};
 use llrm_core::model::ir::{Operation, Space};
 use llrm_core::model::mir::{Arg, Cell, Const, Held, Kind, MemRef, Op, OpCode, Value};
 
@@ -45,7 +45,10 @@ fn entry_zeroing(function: &model::Function) -> (usize, BTreeSet<i64>) {
 }
 
 /// `program` with each self-framed procedure's zeroed locals laid out as
-/// one block just below BP. A procedure that keeps the runtime's frame
+/// one block just below BP, aggregates first; two or more zeroed aggregates
+/// are one object, a place over them all, so one fill clears them. Scalars
+/// stay objects of their own, which promotion makes values. A procedure
+/// that keeps the runtime's frame
 /// (`framed_by_runtime`) is zeroed by B$ENRA, so its stores are dropped.
 pub(super) fn laid_out(
     program: &model::Program,
@@ -57,7 +60,7 @@ pub(super) fn laid_out(
     }
     let originals: Vec<model::Module> = program.modules.clone();
     for (module, original) in program.modules.iter_mut().zip(&originals) {
-        let widths: std::collections::HashMap<i64, i64> = original.types.iter().map(|one| (one.id, one.width)).collect();
+        let types: std::collections::HashMap<i64, &model::Type> = original.types.iter().map(|one| (one.id, one)).collect();
         for (function, source) in module.functions.iter_mut().zip(&original.functions) {
             let (count, zeroed) = entry_zeroing(function);
             if count == 0 {
@@ -69,16 +72,33 @@ pub(super) fn laid_out(
                 block.instructions.drain(..count);
                 continue;
             }
-            relayout(&mut function.places, &zeroed, &widths);
+            if let Some(span) = relayout(&mut function.places, &zeroed, &types) {
+                let id = function.places.iter().map(|one| one.id).max().unwrap_or(0) + 1;
+                function.places.push(span.into_place(id));
+            }
         }
     }
     program
 }
 
-/// Groups of local places that share bytes move together: zeroed groups
-/// first, just below BP, then the rest, each group word-aligned.
-fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, widths: &std::collections::HashMap<i64, i64>) {
-    let extent = |one: &model::Place| one.extent.unwrap_or(widths[&one.r#type]);
+/// The bytes, from `low` up to BP, of two or more zeroed aggregates, and
+/// a type of one of them.
+struct Span {
+    low: i64,
+    r#type: i64,
+}
+
+impl Span {
+    fn into_place(self, id: i64) -> model::Place {
+        model::Place { extent: Some(-self.low), ..model::Place::new(id, "$zeroed", self.r#type, Storage::Local, self.low) }
+    }
+}
+
+/// Groups of local places that share bytes move together: zeroed
+/// aggregates first, just below BP, then zeroed scalars, then the rest,
+/// each group word-aligned. The zeroed aggregates' span, where two or more.
+fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, types: &std::collections::HashMap<i64, &model::Type>) -> Option<Span> {
+    let extent = |one: &model::Place| one.extent.unwrap_or(types[&one.r#type].width);
     let mut locals: Vec<usize> = (0..places.len()).filter(|&index| places[index].storage == Storage::Local).collect();
     locals.sort_by_key(|&index| (places[index].offset, places[index].id));
     // (low, high, members, zeroed)
@@ -95,16 +115,30 @@ fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, widths: &std::c
             _ => groups.push((low, high, vec![index], is_zeroed)),
         }
     }
-    groups.sort_by_key(|group| !group.3);
+    let scalar = |members: &[usize]| {
+        matches!(members, [one] if matches!(types[&places[*one].r#type].kind, TypeKind::Integer | TypeKind::Float | TypeKind::Pointer | TypeKind::Boolean))
+    };
+    groups.sort_by_key(|group| match (group.3, scalar(&group.2)) {
+        (true, false) => 0,
+        (true, true) => 1,
+        (false, _) => 2,
+    });
+    let aggregates = groups.iter().filter(|group| group.3 && !scalar(&group.2)).count();
+    let r#type = groups.first().map(|group| places[group.2[0]].r#type);
     let mut cursor = 0;
-    for (low, high, members, _) in groups {
+    let mut span = None;
+    for (at, (low, high, members, _)) in groups.into_iter().enumerate() {
         let size = (high - low + 1) & !1;
         let delta = cursor - size - low;
         for index in members {
             places[index].offset += delta;
         }
         cursor -= size;
+        if at + 1 == aggregates && aggregates > 1 {
+            span = r#type.map(|r#type| Span { low: cursor, r#type });
+        }
     }
+    span
 }
 
 /// A frame store of constant zero, as its address and width.
