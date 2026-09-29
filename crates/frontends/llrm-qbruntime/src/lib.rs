@@ -1295,6 +1295,38 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
             );
         }
 
+        for (_family, _evidence) in [
+            (
+                "qb45",
+                concat!(
+                    "BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996, ",
+                    "module of B$SCPY/B$STDL, 0141..0157: PUSH BP / MOV BP,SP, pushes [bp+6] and ",
+                    "calls B$SCPY far, pushes AX and [bp+6] and calls B$STDL far, POP AX/BP / RETF 2."
+                ),
+            ),
+            (
+                "pds71",
+                concat!(
+                    "BCL71ENR.LIB SHA256 873fde67aa6fcf27961ec76d9f57ea8a621f6d16ea064da3312aa8d9e3a8c117, ",
+                    "module of B$SCPY/B$STDL, 0023..0039: the same sequence, POP AX/BP / RETF 2."
+                ),
+            ),
+        ] {
+            variants.insert(
+                ("B$SCPF", _family),
+                Contract {
+                    inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
+                    cleanup: Some(2),
+                    evidence: _evidence.to_owned()
+                        + concat!(
+                            " A STRING FUNCTION's result: the descriptor copied to a temporary ",
+                            "and the original released. Allocation, freeing and errors remain unknown."
+                        ),
+                    ..worst("B$SCPF")
+                },
+            );
+        }
+
         // Read in their source above, and none reaches the program's code: B$SCLS's
         // one indirect call is the runtime's own viewport vector, B$INKY's other exit
         // is B$END, and B$POW4's is B$RUNERR, which `raises_error` already says.
