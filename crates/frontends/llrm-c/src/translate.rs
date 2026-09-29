@@ -443,14 +443,21 @@ fn cleanup(symbol: &hir::Symbol) -> R<StackCleanup> {
     }
 }
 
-/// Borland C addresses a parameter in its own stack slot, and STDARG.H's
-/// `va_start` steps on from the last one's address: a parameter whose
-/// address is taken lives there, not in a copy.
-fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)]) {
+/// Borland's STDARG.H steps `va_start` on from the last parameter's
+/// address, by its size rounded to an int: in a variadic function a
+/// parameter whose address is taken lives with the arguments after it, not
+/// in a copy. `sizes` is each parameter value's bytes.
+fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64]) {
+    if !function.abi.as_ref().is_some_and(|abi| abi.variadic) {
+        return;
+    }
     let exposed = llrm_core::hir::escape::exposed_frame(function);
     for &(home, parameter) in homes.iter().filter(|(home, _)| exposed.contains(home)) {
+        let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
+        // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
+        let offset = -sizes[at..].iter().map(|size| (size + 1) & !1).sum::<i64>();
         let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
-        (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, 0);
+        (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, offset);
         let copy = |one: &h::Instruction| one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)];
         for block in &mut function.blocks {
             block.instructions.retain(|one| !copy(one));
@@ -506,7 +513,8 @@ impl<'a, 't> Body<'a, 't> {
             body.statement(one)?;
         }
         body.finish()?;
-        let parameter_bytes = parameters.iter().map(|&one| body.types.get(body.values[one as usize - 1].r#type).width).sum();
+        let body_widths: HashMap<i64, i64> = parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
+        let parameter_bytes = body_widths.values().sum();
         let blocks = body
             .blocks
             .into_iter()
@@ -515,13 +523,14 @@ impl<'a, 't> Body<'a, 't> {
         let linkage = if symbol.exported() { h::FunctionLinkage::External } else { h::FunctionLinkage::Internal };
         let mut function = h::Function {
             parameters,
-            abi: Some(h::ProcedureAbi { cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register }),
+            abi: Some(h::ProcedureAbi { cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
             calls: body.calls,
             linkage,
             promises,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
         };
-        in_their_slots(&mut function, &homes);
+        let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
+        in_their_slots(&mut function, &homes, &sizes);
         Ok(function)
     }
 

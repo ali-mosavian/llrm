@@ -23,6 +23,7 @@ pub const FE_IMPORT: i64 = 0x8;
 pub const PRIVATE: i64 = 0x40; // a segment of its own, outside DGROUP
 // call_class and call_class_target (cgauxcc.h, x86auxcc.h)
 pub const REVERSE_PARMS: i64 = 0x1;
+pub const HAS_VARARGS: i64 = 0x20;
 pub const CALLER_POPS: i64 = 0x80;
 pub const FAR_CALL: i64 = 0x4;
 // cg_target_switches (x86swi.h)
@@ -158,6 +159,11 @@ impl Symbol {
 
     pub fn far(&self) -> bool {
         self.call_target & FAR_CALL != 0
+    }
+
+    /// Whether it takes arguments past its parameters, as `...` does.
+    pub fn variadic(&self) -> bool {
+        self.call_class & HAS_VARARGS != 0
     }
 
     /// Whether arguments are pushed first first, as pascal's are.

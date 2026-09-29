@@ -1274,8 +1274,7 @@ mod tests {
         };
         let sine = decoded(&body("_sine"));
         let slot = |line: &str| line.split_once('[').map(|(_, rest)| rest.trim_end_matches(']').replace(' ', "").to_lowercase());
-        // rad is read in its own argument slot, as bcc's inline code reads it.
-        let stored = "bp+6";
+        let stored = sine.iter().find(|one| one.starts_with("fstp qword ptr")).and_then(|one| slot(one)).expect("rad's slot");
         let code = sine.iter().find(|one| one.contains("fsin")).expect("the code");
         let returned = sine.iter().rev().find(|one| one.starts_with("fld qword ptr")).and_then(|one| slot(one)).expect("result's slot");
         assert!(code.starts_with(&format!("fld qword [{stored}]")) && code.ends_with(&format!("fstp qword [{returned}]")), "{sine:#?}");

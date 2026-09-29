@@ -610,7 +610,8 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
         Some(at) => parameters[at],
         None => value_type(types, tables.types[&function.result_type])?,
     };
-    let ty = function_type(types, returns, parameters);
+    let variadic = function.abi.as_ref().is_some_and(|abi| abi.variadic);
+    let ty = types.intern(Type::Function { returns, parameters, variadic });
     let linkage = match function.linkage {
         model::FunctionLinkage::Internal => Linkage::Internal,
         model::FunctionLinkage::External => Linkage::External,
@@ -706,13 +707,13 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             tables.callees.insert(MEMSET.to_owned(), reference);
         }
     }
-    if function.places.iter().any(|one| one.storage == Storage::Parameter) && !tables.callees.contains_key(ARGUMENT) {
+    if function.places.iter().any(|one| one.storage == Storage::Parameter) && !tables.callees.contains_key(VA_START) {
         let types = &mut module.context.types;
-        let (pointer, word) = (types.ptr(0), types.int(16));
-        let ty = function_type(types, pointer, vec![word]);
-        let global = module.add_function(ARGUMENT, ty, Linkage::External)?;
+        let (void, pointer) = (types.void(), types.ptr(0));
+        let ty = function_type(types, void, vec![pointer]);
+        let global = module.add_function(VA_START, ty, Linkage::External)?;
         let reference = module.reference(global);
-        tables.callees.insert(ARGUMENT.to_owned(), reference);
+        tables.callees.insert(VA_START.to_owned(), reference);
     }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
         if let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first()) {
@@ -857,8 +858,8 @@ fn answer<'t>(site: &model::CallAbi, results: &[i64], hir_type: impl Fn(i64) -> 
     }
 }
 
-/// The address of a parameter's incoming stack slot.
-const ARGUMENT: &str = "llrm.ia16.argument.p0";
+/// Where a variadic function's variadic arguments start, stored in a list.
+const VA_START: &str = "llvm.va_start.p0";
 
 /// The target intrinsic a HIR instruction is a call of, its operands the
 /// arguments: an I/O port's.
@@ -962,6 +963,8 @@ struct Body<'b, 'm, 'h> {
     values: HashMap<i64, Value>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
+    /// Where a variadic function's variadic arguments start, if a parameter lives with them.
+    passed: Option<Value>,
     objects: Vec<Value>,
     /// Each value that is a place's address, and that place's size.
     addresses: HashMap<i64, i64>,
@@ -985,6 +988,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             blocks: HashMap::new(),
             values,
             frame: HashMap::new(),
+            passed: None,
             objects: Vec::new(),
             addresses: HashMap::new(),
             handling: None,
@@ -1048,6 +1052,14 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
             }
             self.objects.push(self.b.alloca(group.ty, ""));
+        }
+        if self.function.places.iter().any(|one| one.storage == Storage::Parameter) {
+            let pointer = self.b.context.types.ptr(0);
+            let list = self.b.alloca(pointer, "");
+            let (void, callee) = (self.b.context.types.void(), Value::Constant(self.tables.callees[VA_START]));
+            let ty = function_type(&mut self.b.context.types, void, vec![pointer]);
+            self.b.call(ty, callee, &[list], "");
+            self.passed = Some(self.b.load(pointer, list, false, ""));
         }
         if !self.tables.zeroed {
             return Ok(());
@@ -1191,13 +1203,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 Ok(self.offset(self.objects[object], offset, true))
             }
             Storage::Parameter => {
-                let at = self.function.parameters.iter().position(|&one| one == place.symbol).ok_or("a parameter slot of no parameter")?;
-                let callee = Value::Constant(self.tables.callees[ARGUMENT]);
-                let (pointer, word) = (self.b.context.types.ptr(0), self.b.context.types.int(16));
-                let ty = function_type(&mut self.b.context.types, pointer, vec![word]);
-                let index = self.b.int(16, at as i128);
-                let slot = self.b.call(ty, callee, &[index], "").expect("an address");
-                Ok(self.offset(slot, place.offset, false))
+                let area = self.passed.ok_or("a parameter's storage in a function that is not variadic")?;
+                Ok(self.offset(area, place.offset, false))
             }
             _ => {
                 let global = Value::Constant(self.tables.data[&place.symbol]);
