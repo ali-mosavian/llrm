@@ -287,3 +287,17 @@ fn test_a_variadic_byte_is_promoted_by_its_signedness() {
     let sign = Byte::Sign(Box::new(Byte::Global("_s".into(), 0)));
     assert_eq!(stack[2..], [Byte::Global("_s".into(), 0), sign, Byte::Global("_u".into(), 0), Byte::Const(0)]);
 }
+
+/// A variadic function taking a struct parameter's address got the address
+/// of the struct's local copy, so STDARG.H's `va_start` stepped from there
+/// into the frame; it is refused rather than miscompiled.
+#[test]
+fn test_a_variadic_struct_parameter_address_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("probe.c");
+    std::fs::write(&source, "typedef struct { char b[3]; } S3;\nint g;\nvoid far v(S3 s, ...) { char *p = (char *)&s; g = p[4]; }\n").unwrap();
+    let stream = crate::compile::recorded(&source, &[]).unwrap();
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+    let built = crate::compile::selected(&stream, "probe", None, &llrm_core::driver::Options::of(machine));
+    assert!(format!("{:?}", built.err()).contains("the address of a struct parameter"));
+}

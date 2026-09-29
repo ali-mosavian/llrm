@@ -452,13 +452,17 @@ fn cleanup(symbol: &hir::Symbol) -> R<StackCleanup> {
 /// function an address-taken parameter lives with the arguments after it.
 /// An interrupt handler's parameters are the registers it saved, BP first,
 /// and what it writes to them is what it returns to.
-fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64]) {
-    let Some(abi) = function.abi.as_ref() else { return };
+fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[i64]) -> R<()> {
+    let Some(abi) = function.abi.as_ref() else { return Ok(()) };
     let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
     if !interrupt && !variadic {
-        return;
+        return Ok(());
     }
     let exposed = llrm_core::hir::escape::exposed_frame(function);
+    // A struct parameter is a copy of its words; its address is not theirs.
+    if struct_homes.iter().any(|home| exposed.contains(home)) {
+        return refuse(format!("{}: the address of a struct parameter where its arguments are addressed", function.name));
+    }
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
     for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
@@ -471,6 +475,7 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
             block.instructions.retain(|one| !copy(one));
         }
     }
+    Ok(())
 }
 
 fn distance(symbol: &hir::Symbol) -> CallDistance {
@@ -486,6 +491,24 @@ fn distance(symbol: &hir::Symbol) -> CallDistance {
 /// memory that it pushes after every argument and gets back in DX:AX.
 fn returned_as_integer(size: i64) -> Option<i64> {
     matches!(size, 1 | 2 | 4).then_some(size)
+}
+
+/// A struct argument's words, by byte offset, in parameter order: they lie
+/// as the struct does, the first lowest, so last first where arguments are
+/// pushed in order.
+fn struct_words(size: i64, in_order: bool) -> Vec<i64> {
+    let words = (0..(size + 1) / 2).map(|at| at * 2);
+    if in_order { words.rev().collect() } else { words.collect() }
+}
+
+/// `parameters` with the far pointer to a struct result where it goes:
+/// pushed after every argument.
+fn with_destination(parameters: &mut Vec<i64>, destination: i64, in_order: bool) {
+    if in_order {
+        parameters.push(destination);
+    } else {
+        parameters.insert(0, destination);
+    }
 }
 
 /// Whether some restrict lvalue names parameter `symbol`.
@@ -535,7 +558,7 @@ impl<'a, 't> Body<'a, 't> {
             },
             None => body.ty(&proc.type_)?,
         };
-        let (parameters, promises, homes) = body.frame(cleanup)?;
+        let (parameters, promises, homes, struct_homes) = body.frame()?;
         for one in &proc.body {
             body.statement(one)?;
         }
@@ -557,7 +580,7 @@ impl<'a, 't> Body<'a, 't> {
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
         };
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
-        in_their_slots(&mut function, &homes, &sizes);
+        in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
         Ok(function)
     }
 
@@ -763,11 +786,13 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Each parameter and auto a place; each parameter stored into its own.
     /// A scalar parameter's home is also returned, by place and parameter.
-    fn frame(&mut self, cleanup: StackCleanup) -> R<(Vec<i64>, Vec<h::Promise>, Vec<(i64, i64)>)> {
+    fn frame(&mut self) -> R<(Vec<i64>, Vec<h::Promise>, Vec<(i64, i64)>, Vec<i64>)> {
         let mut parameters = Vec::new();
         let mut promises = Vec::new();
         let mut homes = Vec::new();
+        let mut struct_homes = Vec::new();
         let mut stores = Vec::new();
+        let in_order = self.unit.symbols[&self.proc.symbol].in_order();
         for (symbol, type_) in self.proc.parameters(&self.unit.symbols[&self.proc.symbol]) {
             match self.types.aggregate(type_) {
                 Some(size) => {
@@ -775,12 +800,8 @@ impl<'a, 't> Body<'a, 't> {
                     let ty = self.types.of(Shape::Bytes(words * 2), None);
                     let place = self.local(&format!("y{symbol}"), ty, words * 2);
                     let word = self.types.raw(2);
-                    // Its words as they lie, the first lowest: last first where pushes run in order.
-                    let mut offsets: Vec<i64> = (0..words).map(|at| at * 2).collect();
-                    if cleanup == StackCleanup::Callee {
-                        offsets.reverse();
-                    }
-                    for at in offsets {
+                    struct_homes.push(place);
+                    for at in struct_words(size, in_order) {
                         let parameter = self.value(word);
                         parameters.push(parameter);
                         stores.push((place, at, parameter));
@@ -807,11 +828,7 @@ impl<'a, 't> Body<'a, 't> {
         if self.types.aggregate(&self.proc.type_).is_some_and(|size| returned_as_integer(size).is_none()) {
             let far = self.types.pointer(FAR);
             let destination = self.value(far);
-            if cleanup == StackCleanup::Caller {
-                parameters.insert(0, destination);
-            } else {
-                parameters.push(destination);
-            }
+            with_destination(&mut parameters, destination, in_order);
             self.destination = Some(destination);
         }
         for (key, type_) in &self.proc.autos {
@@ -835,7 +852,7 @@ impl<'a, 't> Body<'a, 't> {
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
-        Ok((parameters, promises, homes))
+        Ok((parameters, promises, homes, struct_homes))
     }
 
     // ---- statements ----
@@ -1616,14 +1633,9 @@ impl<'a, 't> Body<'a, 't> {
                 continue;
             };
             let Got::Aggregate(from, _) = self.eval(node)? else { return self.refuse("a scalar passed as an aggregate") };
-            // Its words as they lie, the first lowest, listed last first as the
-            // arguments are; a last odd byte widened.
+            // Listed last first, as the arguments are; a last odd byte widened.
             let word = self.types.raw(2);
-            let mut offsets: Vec<i64> = (0..(size + 1) / 2).map(|one| one * 2).rev().collect();
-            if cleanup == StackCleanup::Callee {
-                offsets.reverse();
-            }
-            for at in offsets {
+            for at in struct_words(size, symbol.in_order()).into_iter().rev() {
                 let value = if at + 1 < size {
                     self.op(Op::Load, word, vec![Operand::IndirectPlace(indirect(from, at, word, false))])
                 } else {
@@ -1645,11 +1657,7 @@ impl<'a, 't> Body<'a, 't> {
             let near = self.address_of(temporary);
             let far = self.types.pointer(FAR);
             let destination = self.op(Op::Convert, far, vec![value_ref(near)]);
-            if cleanup == StackCleanup::Caller {
-                arguments.insert(0, destination);
-            } else {
-                arguments.push(destination);
-            }
+            with_destination(&mut arguments, destination, symbol.in_order());
         }
         let result = match (target, returned) {
             (Got::Function(symbol), _) if self.shared.valueless.contains(&symbol) => None,
