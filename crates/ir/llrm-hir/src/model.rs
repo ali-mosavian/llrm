@@ -730,6 +730,13 @@ impl Module {
         let word = |at: usize, size: usize| bytes[at..at + size].iter().rev().fold(0i64, |sum, &byte| (sum << 8) | i64::from(byte));
         Ok((0..bytes.len()).step_by(14).map(|at| Statement { function: word(at, 4), block: word(at + 4, 4), instruction: word(at + 8, 4), line: word(at + 12, 2) }).collect())
     }
+
+    /// Whether an error `function` raises lands in it: it has a handler of
+    /// its own, or the module body's ON ERROR GOTO takes every procedure's
+    /// error on that procedure's frame.
+    pub fn lands_errors(&self, function: &Function) -> bool {
+        function.error_handler.is_some() || self.functions.iter().any(|one| one.error_handler.is_some() && !one.error_handler_local)
+    }
 }
 
 /// The internal data object whose rows are where RESUME may continue.

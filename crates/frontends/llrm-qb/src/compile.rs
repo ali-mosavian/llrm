@@ -730,12 +730,13 @@ fn _materialize_error_registrations(
 }
 
 /// QuickrBASIC frames a procedure itself, its HIR zeroing what locals need
-/// it, where the runtime needs no frame of its own: no error handler or RESUME
-/// target walks the runtime's frame chain to it, and no local STRING asks
-/// B$ENRA for a VBDOS string handle. The runtime's stack check goes with it.
+/// it, where the runtime needs no frame of its own: no error lands in it (the
+/// runtime reaches a handler or RESUME target through its frame chain), and
+/// no local STRING asks B$ENRA for a VBDOS string handle. The runtime's stack
+/// check goes with it.
 pub(super) fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
     program.dialect == model::Dialect::Quickr
-        && function.error_handler.is_none()
+        && !module.lands_errors(function)
         && function.external_entries.is_empty()
         && _temporary_string_slots(module, function) == 0
 }

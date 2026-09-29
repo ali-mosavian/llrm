@@ -169,9 +169,10 @@ reads before assigning: every aggregate, and each number the use-before-def
 analysis cannot prove written first. The frame is otherwise not cleared. The
 backend lays those locals out as one block just below BP, and a block of 16
 bytes or more is cleared with one `rep stosd` rather than a store per word. It
-keeps the runtime's frame when the runtime needs one: when it has an error
-handler or RESUME target, which the runtime reaches through its frame chain,
-or a local STRING, for which VBDOS's `B$ENRA` reserves a string handle. An
+keeps the runtime's frame when the runtime needs one: when an error can land
+in it (its own handler, or the module body's ON ERROR GOTO), since the runtime
+reaches the handler or RESUME target through its frame chain, or when it has
+a local STRING, for which VBDOS's `B$ENRA` reserves a string handle. An
 inline frame has no runtime stack check, and `B$EXSA` no longer polls events
 when such a procedure returns.
 

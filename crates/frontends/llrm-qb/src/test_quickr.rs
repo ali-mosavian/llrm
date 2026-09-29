@@ -452,6 +452,17 @@ fn quickr_keeps_the_runtime_frame_where_the_runtime_needs_it() {
     }
 }
 
+/// A module handler resumed a self-framed SUB's error on the wrong frame:
+/// `FOR k = 0 TO 2: s k: NEXT` with `10 \ d` in S printed "done 0", not
+/// "done 3", on VBDOS.
+#[test]
+fn a_module_handler_keeps_procedures_on_the_runtime_frame() {
+    let source = "ON ERROR GOTO h\nDIM k AS INTEGER\nFOR k = 0 TO 2\ns k\nNEXT\nPRINT \"done\"; k\nEND\n\
+        h:\nRESUME NEXT\nSUB s (d AS INTEGER)\nDIM a AS INTEGER\na = 10 \\ d\nPRINT a\nEND SUB\n";
+    let listing = super::test_hir::rich_listing(&quickr_program(source));
+    assert!(super::test_hir::between(&listing, "S proc", "S endp").contains("B$ENRA"), "{listing}");
+}
+
 #[test]
 fn locals_read_before_assignment_start_at_zero() {
     // Frames hold garbage under quickr; entry stores must zero these locals.
