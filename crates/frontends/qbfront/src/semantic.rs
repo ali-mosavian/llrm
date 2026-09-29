@@ -367,6 +367,9 @@ pub struct Options {
     pub huge_arrays: bool,
     /// /D: every element through B$HARY.
     pub checked_arrays: bool,
+    /// Integer division raises its error 11 in code, not by the processor's
+    /// divide trap, whose statement the rich route cannot name.
+    pub checked_division: bool,
     /// LBOUND/UBOUND read the descriptor without checking it is allocated
     /// or the dimension in range, as unchecked subscripts do.
     pub unchecked_bounds: bool,
@@ -8029,6 +8032,13 @@ impl Compiler {
         } else {
             binary_name(op)
         };
+        if self.options.checked_division && matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
+            self.division_checked(&left_operand, &right_operand, common, narrow_divmod)?;
+            if !narrow_divmod {
+                self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
+                return Ok((Operand::Value(result), result_type));
+            }
+        }
         self.emit(operation, vec![result], vec![left_operand, right_operand]);
         if narrow_divmod {
             let narrowed = self.value(INTEGER);
@@ -8037,6 +8047,84 @@ impl Compiler {
         } else {
             Ok((Operand::Value(result), result_type))
         }
+    }
+
+    /// ERROR 11, Division by zero, where BC's divide traps: a zero divisor,
+    /// and for INTEGER operands (`narrow`, divided as LONG) -32768 by -1,
+    /// whose quotient overflows the 16-bit divide. A LONG MIN by -1 wraps in
+    /// BC's software divide.
+    fn division_checked(&mut self, dividend: &Operand, divisor: &Operand, type_id: u32, narrow: bool) -> Result<(), SemanticError> {
+        let constant = |operand: &Operand| match operand {
+            Operand::Constant(_, Number::Integer(value)) => Some(*value),
+            _ => None,
+        };
+        let mut tests = Vec::new();
+        if constant(divisor).is_none_or(|value| value == 0) {
+            tests.push((divisor.clone(), 0, None));
+        }
+        if narrow && constant(divisor).is_none_or(|value| value == -1) && constant(dividend).is_none_or(|value| value == -32768) {
+            tests.push((divisor.clone(), -1, Some(dividend.clone())));
+        }
+        if tests.is_empty() {
+            return Ok(());
+        }
+        let raise = self.error_block();
+        for (operand, value, and) in tests {
+            let equal = self.value(BOOLEAN);
+            self.emit("eq", vec![equal], vec![operand, Operand::Constant(type_id, Number::Integer(value))]);
+            let next = self.new_block();
+            match and {
+                None => self.terminate("branch", vec![Operand::Value(equal)], vec![raise, next])?,
+                Some(dividend) => {
+                    let minimum = self.new_block();
+                    self.terminate("branch", vec![Operand::Value(equal)], vec![minimum, next])?;
+                    self.select_block(minimum);
+                    let low = self.value(BOOLEAN);
+                    self.emit("eq", vec![low], vec![dividend, Operand::Constant(type_id, Number::Integer(-32768))]);
+                    self.terminate("branch", vec![Operand::Value(low)], vec![raise, next])?;
+                }
+            }
+            self.select_block(next);
+        }
+        let divide = self.blocks[self.current_block].id;
+        self.select_block(raise);
+        self.emit_runtime_call("B$SERR", Vec::new(), vec![Operand::Constant(INTEGER, Number::Integer(11))]);
+        self.terminate("unreachable", Vec::new(), Vec::new())?;
+        self.select_block(divide);
+        Ok(())
+    }
+
+    /// A LONG `dividend \ divisor` or MOD into `result` that wraps where
+    /// the divisor is -1, as BC's software divide does, rather than trap
+    /// in the processor's.
+    fn wrapped_division(&mut self, op: Binary, operation: &'static str, result: u32, dividend: Operand, divisor: Operand, type_id: u32) -> Result<(), SemanticError> {
+        if matches!(divisor, Operand::Constant(_, Number::Integer(value)) if value != -1) {
+            self.emit(operation, vec![result], vec![dividend, divisor]);
+            return Ok(());
+        }
+        let place = self.compiler_temporary("$quotient", type_id)?;
+        let negative = self.value(BOOLEAN);
+        self.emit("eq", vec![negative], vec![divisor.clone(), Operand::Constant(type_id, Number::Integer(-1))]);
+        let (negated, divide, join) = (self.new_block(), self.new_block(), self.new_block());
+        self.terminate("branch", vec![Operand::Value(negative)], vec![negated, divide])?;
+        self.select_block(negated);
+        let wrapped = if op == Binary::IntegerDivide {
+            let value = self.value(type_id);
+            self.emit("sub", vec![value], vec![Operand::Constant(type_id, Number::Integer(0)), dividend.clone()]);
+            Operand::Value(value)
+        } else {
+            Operand::Constant(type_id, Number::Integer(0))
+        };
+        self.emit("store", Vec::new(), vec![Operand::Place(place), wrapped]);
+        self.terminate("jump", Vec::new(), vec![join])?;
+        self.select_block(divide);
+        let quotient = self.value(type_id);
+        self.emit(operation, vec![quotient], vec![dividend, divisor]);
+        self.emit("store", Vec::new(), vec![Operand::Place(place), Operand::Value(quotient)]);
+        self.terminate("jump", Vec::new(), vec![join])?;
+        self.select_block(join);
+        self.emit("load", vec![result], vec![Operand::Place(place)]);
+        Ok(())
     }
 
     fn string_syntax(&self, expression: &Expr) -> bool {

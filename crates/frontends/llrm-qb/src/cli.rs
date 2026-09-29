@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
-//!         [--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--alternate-math]
+//!         [--huge-arrays] [--checked-arrays] [--checked-division] [--unchecked-bounds] [--alternate-math]
 //!         [--mbf] [--whole-program] [--array-merging] [--own-frames] [--include DIR]... [--mir] [--dump DIR] [--legacy] [OPTIONS]
 //! ```
 //!
@@ -23,7 +23,7 @@ use llrm_core::model::passes::Options;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--checked-arrays] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] \
+[--huge-arrays] [--checked-arrays] [--checked-division] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] \
 [--include INCLUDE] [--mir] [--dump DUMP] [--legacy] {} source",
         flags::USAGE
     )
@@ -82,6 +82,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--dump-hir" => dump_hir = Some(PathBuf::from(value("--dump-hir")?)),
             "--huge-arrays" => frontend.huge_arrays = true,
             "--checked-arrays" => frontend.checked_arrays = true,
+            "--checked-division" => frontend.checked_division = true,
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
             "--alternate-math" => frontend.alternate_math = true,
             "--mbf" => frontend.mbf = true,

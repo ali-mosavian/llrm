@@ -2707,3 +2707,56 @@ fn test_a_body_that_falls_into_its_handler_compiles_on_the_rich_route() {
         assert!(code.contains("call far ptr B$PSI2"), "{code}");
     }
 }
+
+/// Whether `instruction` calls B$SERR with constant `number`.
+fn raises(instruction: &llrm_core::hir::model::Instruction, number: i64) -> bool {
+    instruction.callee.as_deref() == Some("B$SERR")
+        && matches!(instruction.operands.as_slice(), [llrm_core::hir::model::Operand::Constant(one)] if one.value == llrm_core::hir::model::Number::Int(number.into()))
+}
+
+/// `k = 10 \ k` traps in the processor's divide, which names no statement:
+/// the rich route kept the last call's, and `checked-division.bas` looped
+/// printing `h 11 22` where BC prints `h 11 42`. `--checked-division`
+/// raises BC's error 11 in code, as ERROR does, and wraps a LONG MIN by -1
+/// as BC's software divide does; without it nothing changes.
+#[test]
+fn checked_division_raises_error_11_where_bcs_divide_traps() {
+    let hir = |checked_division| {
+        let frontend = qb_driver::Frontend { checked_division, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+        qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses")
+    };
+    let instructions = |program: &llrm_core::hir::model::Program| -> Vec<llrm_core::hir::model::Instruction> {
+        let main = program.modules[0].functions.iter().find(|one| one.name == "__main").expect("the module body");
+        main.blocks.iter().flat_map(|block| block.instructions.clone()).collect()
+    };
+    // Premise: divisions by variables, in a body whose errors land.
+    let plain = hir(false);
+    assert!(plain.modules[0].functions.iter().any(|one| one.name == "__main" && one.error_handler.is_some()));
+    let divisions = instructions(&plain).iter().filter(|one| matches!(one.op, llrm_core::hir::model::Op::Div | llrm_core::hir::model::Op::Rem) && !matches!(one.operands[1], llrm_core::hir::model::Operand::Constant(_))).count();
+    assert!(divisions >= 3, "{divisions}");
+    assert!(!instructions(&plain).iter().any(|one| raises(one, 11)));
+    let checked = instructions(&hir(true));
+    assert!(checked.iter().filter(|one| raises(one, 11)).count() >= divisions, "{checked:?}");
+}
+
+/// The same on the rich route: the error is a call the landing pad names.
+#[test]
+fn test_checked_division_raises_on_the_rich_route() {
+    let frontend = qb_driver::Frontend { checked_division: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let text = rich_listing(&qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses"));
+    assert!(text.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
+    assert!(!rich_listing(&parsed_as(&fixture("checked-division.bas"), "vbdos", "vbdos")).contains("pushw 11"));
+}
+
+/// BC's LONG divide is software: MIN by -1 wraps where the processor's
+/// traps, and `checked-division.bas` printed nothing past it. Under
+/// `--checked-division` it prints BC's -2147483648 and 0.
+#[test]
+fn checked_division_wraps_a_long_min_by_minus_one() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "wrap.bas", b"DIM a AS LONG, b AS LONG\na = -2147483647 - 1: b = -1\nPRINT a \\ b; a MOD b\n");
+    let frontend = qb_driver::Frontend { checked_division: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+    let run = llrm_core::hir::execute::run(&program, "__main", &[]).expect("runs");
+    assert_eq!((run.output.as_str(), run.panic), ("-2147483648  0 \n", None));
+}
