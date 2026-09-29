@@ -1,6 +1,10 @@
 //! Test support: `tests/corpus.py`'s loaders, without its caches, and the
 //! Python test idioms the Rust API spells differently.
 
+pub mod boundary;
+#[cfg(test)]
+mod boundary_tests;
+
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 

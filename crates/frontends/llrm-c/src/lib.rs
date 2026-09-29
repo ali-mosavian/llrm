@@ -6,3 +6,5 @@ pub mod raise_hir;
 pub mod libfunc;
 pub mod stream;
 pub mod translate;
+#[cfg(test)]
+mod callconv_tests;
