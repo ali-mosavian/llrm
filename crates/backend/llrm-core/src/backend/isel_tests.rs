@@ -1963,9 +1963,10 @@ define i16 @f() addrspace(1) {
     assert!(stores.iter().all(|line| line.ends_with(", eax")), "{got:?}");
 }
 
-/// Tuned for size, a memset is the smaller of its stores and `rep stosd`:
-/// a 22-byte descriptor's six stores are 31 bytes, the fill 23. Always
-/// stores, qbdemo cleared nine descriptors so and grew 1.5% at -Os.
+/// Tuned for size, a memset is the smaller of its stores and one
+/// `rep stosb`: a 22-byte descriptor's six stores are 31 bytes, the fill
+/// 16. Always stores, qbdemo cleared nine descriptors so and grew 1.5% at
+/// -Os; as `rep stosd` and a tail the fill was 23.
 #[test]
 fn test_a_memset_tuned_for_size_is_the_smaller_form() {
     let text = |size: u32| {
@@ -1985,9 +1986,11 @@ define i16 @f() addrspace(1) {{
         let module = assemble::assembled(&parsed(&text(size)), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
         masm::text(&module).expect("prints")
     };
-    assert!(sized(22).contains("rep stosd"), "{}", sized(22));
-    assert!(!sized(12).contains("rep stosd"), "{}", sized(12));
-    assert!(!assembled_on("486", &text(22)).contains("rep stosd"));
+    let filled = sized(22);
+    assert!(filled.contains("rep stosb") && !filled.contains("stosd") && !filled.contains("stosw"), "{filled}");
+    assert!(filled.contains("mov cx, 22"), "{filled}");
+    assert!(!sized(8).contains("stos"), "{}", sized(8));
+    assert!(!assembled_on("486", &text(22)).contains("stos"));
 }
 
 /// A far global is `seg name:offset name`, and a memset of a variable
