@@ -435,6 +435,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
             segmented: vec![false],
             arrays: vec![false],
             defined: true,
+            symbol: None,
         }],
         ..Module::new(1, "modref", vec![void, integer, pointer], vec![caller, callee])
     };

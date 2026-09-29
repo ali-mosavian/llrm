@@ -196,9 +196,23 @@ impl _Plain for model::CallAbi {
         Json::Dict(out)
     }
 }
-plain_record!(Callable, None, id => "id", name => "name", result_type => "result_type",
-    parameter_types => "parameter_types", by_value => "by_value", segmented => "segmented", arrays => "arrays",
-    defined => "defined");
+impl _Plain for model::Callable {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("id".to_owned(), self.id._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("result_type".to_owned(), self.result_type._plain());
+        out.insert("parameter_types".to_owned(), self.parameter_types._plain());
+        out.insert("by_value".to_owned(), self.by_value._plain());
+        out.insert("segmented".to_owned(), self.segmented._plain());
+        out.insert("arrays".to_owned(), self.arrays._plain());
+        out.insert("defined".to_owned(), self.defined._plain());
+        if self.symbol.is_some() {
+            out.insert("symbol".to_owned(), self.symbol._plain());
+        }
+        Json::Dict(out)
+    }
+}
 impl _Plain for model::ProcedureAbi {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -1011,6 +1025,7 @@ static CALLABLE: _Record = _Record {
         ("segmented", BOOLS, true),
         ("arrays", BOOLS, true),
         ("defined", _Hint::Bool, true),
+        ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Callable {
@@ -1022,6 +1037,7 @@ static CALLABLE: _Record = _Record {
             segmented: _required(args, "segmented")?,
             arrays: _required(args, "arrays")?,
             defined: _required(args, "defined")?,
+            symbol: _default(args, "symbol", None)?,
         })
     },
 };

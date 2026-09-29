@@ -531,6 +531,8 @@ pub struct Callable {
     pub segmented: Vec<bool>,
     pub arrays: Vec<bool>,
     pub defined: bool,
+    /// The name it links by, where not the language's own for `name`.
+    pub symbol: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

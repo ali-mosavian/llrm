@@ -1605,6 +1605,7 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
             segmented: Vec::new(),
             arrays: Vec::new(),
             defined,
+            symbol: None,
         })
         .id
 }
