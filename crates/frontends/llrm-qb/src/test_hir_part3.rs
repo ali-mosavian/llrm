@@ -2653,3 +2653,17 @@ d = cd(x)\r\nIF d < 50 THEN POKE x, d ELSE POKE x, f3(y - k)\r\nNEXT x\r\nNEXT y
     // Besides the frame, the loop reads only through a named array: `cd(x)`.
     assert!(!inner.lines().any(|line| line.contains("ptr [") && !line.contains("ptr [bp")), "{inner}");
 }
+
+/// llrm-qb -S printed the native BP shell the object strips where B$ENRA
+/// owns the frame, so a SUB read its parameters 2 bytes off from what ran.
+#[test]
+fn test_the_listing_is_the_code_the_object_holds() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(&directory, "shell.bas", b"DECLARE SUB Keep (x AS INTEGER)\nSUB Keep (x AS INTEGER)\nx = x + 1\nEND SUB\n");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
+    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
+    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
+    let text = llrm_core::driver::basic::text(&module).unwrap();
+    let keep = between(&text, "KEEP proc far", "KEEP endp");
+    assert!(!keep.contains("push bp") && !keep.contains("pop bp") && keep.contains("call far ptr B$ENRA"), "{keep}");
+}

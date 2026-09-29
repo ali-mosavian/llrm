@@ -140,6 +140,11 @@ pub struct Module {
 }
 
 pub fn text(module: &Module) -> Result<String, Unprintable> {
+    text_by(module, listing)
+}
+
+/// `module`'s text, each procedure's items as `listed` gives them.
+pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>) -> Result<String, Unprintable> {
     let mut out: Vec<String> = vec![".model medium".into(), ".386".into(), String::new()];
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     for (segment, items) in &module.data {
@@ -164,7 +169,7 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
     }));
     out.push(format!(".code {}", module.code));
     for (number, procedure) in module.procedures.iter().enumerate() {
-        out.extend(_procedure(procedure, &module.names, number)?);
+        out.extend(_procedure_of(procedure, listed(procedure, number)?, &module.names, number)?);
     }
     out.push("end".into());
     Ok(out.join("\n") + "\n")
@@ -418,8 +423,12 @@ pub fn _procedure(
     names: &IndexMap<(Space, i64), String>,
     number: usize,
 ) -> Result<Vec<String>, Unprintable> {
+    _procedure_of(procedure, listing(procedure, number)?, names, number)
+}
+
+fn _procedure_of(procedure: &Procedure, items: Vec<Item>, names: &IndexMap<(Space, i64), String>, number: usize) -> Result<Vec<String>, Unprintable> {
     let mut out = vec![format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" })];
-    for item in listing(procedure, number)? {
+    for item in items {
         match item {
             Item::Label(Label { name }) => out.push(format!("{name}:")),
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
