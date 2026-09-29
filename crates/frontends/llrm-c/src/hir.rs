@@ -160,6 +160,11 @@ impl Symbol {
         self.call_target & FAR_CALL != 0
     }
 
+    /// Whether arguments are pushed first first, as pascal's are.
+    pub fn in_order(&self) -> bool {
+        self.call_class & REVERSE_PARMS != 0
+    }
+
     pub fn object_name(&self) -> String {
         if self.pattern == "^" {
             return self.base.to_uppercase();
@@ -170,6 +175,14 @@ impl Symbol {
         } else {
             self.pattern.replace('*', base)
         }
+    }
+}
+
+impl Proc {
+    /// Its parameters first first. Open Watcom declares a REVERSE_PARMS
+    /// procedure's last first (cgen.c's DoFuncDefn, ParmReverse).
+    pub fn parameters<'p>(&'p self, symbol: &Symbol) -> Box<dyn Iterator<Item = &'p (i64, String)> + 'p> {
+        if symbol.in_order() { Box::new(self.parms.iter().rev()) } else { Box::new(self.parms.iter()) }
     }
 }
 
@@ -218,7 +231,7 @@ pub struct Statement {
 pub struct Proc {
     pub symbol: i64,
     pub type_: String,
-    pub parms: Vec<(i64, String)>,
+    pub parms: Vec<(i64, String)>, // as declared: last first where the convention pushes in order
     pub autos: Vec<(String, String)>, // ("y5" | "t3", type)
     pub body: Vec<Statement>,
 }

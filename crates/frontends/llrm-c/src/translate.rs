@@ -713,7 +713,7 @@ impl<'a, 't> Body<'a, 't> {
         let mut parameters = Vec::new();
         let mut promises = Vec::new();
         let mut stores = Vec::new();
-        for (symbol, type_) in &self.proc.parms {
+        for (symbol, type_) in self.proc.parameters(&self.unit.symbols[&self.proc.symbol]) {
             match self.types.aggregate(type_) {
                 Some(_) if cleanup != StackCleanup::Caller => return self.refuse("an aggregate argument by a callee-pops convention"),
                 Some(size) => {
