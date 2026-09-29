@@ -2581,15 +2581,20 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
     assert!(handler.contains("@llrm.qb.B$OEGA(ptr addrspace(1) @$QB$LANDING)"), "{handler}");
 }
 
-/// Outside the handler ERL is the runtime's, which knows no line of the
-/// recompiled code.
+/// Outside the handler ERL is the line the module handler last took, kept
+/// by the handler: the runtime's knows no line of the recompiled code. Once
+/// refused, which also refused qb-qrender's main.bas. RESUME keeps it on
+/// QB 4.5, as BC's code prints 100 here, and clears it on VBDOS, 0.
 #[test]
-fn erl_outside_the_handler_is_refused() {
+fn erl_outside_the_handler_is_the_line_the_handler_took() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nPRINT ERL\nEND\nh:\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let emitted = llrm_core::hir::mir::emit(&program).remove(0);
-    assert!(emitted.refused.iter().any(|(_, why)| why.contains("ERL outside the error handler")), "{:?}", emitted.refused);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let body = text.split("define ").find(|one| one.contains("void @__main()")).expect("the body");
+    assert!(body.contains("load i16, ptr @$QB$ERL\n"), "{body}");
 }
 
 /// DEF SEG stored to a b$seg the rich route defined in the module's own
@@ -2681,4 +2686,24 @@ fn test_a_fixed_length_argument_is_assigned_back_after_the_call() {
     let after = &text[text.find("call far ptr FILL").expect("the call")..];
     let assigned = after.find("call far ptr B$ASSN").expect("an assignment back");
     assert!(after.find("call far ptr B$STDL").is_none_or(|released| assigned < released), "{after}");
+}
+
+/// qb-qrender's main.bas runs from its body into its ON ERROR handler's
+/// label, and the rich route refused it: "@__main: block 2, which both the
+/// body and its error handler run". The shared code is in both: in the
+/// body its RESUME raises 20, "RESUME without error"; the handler run to the
+/// module's end raises 19, "No RESUME".
+#[test]
+fn test_a_body_that_falls_into_its_handler_compiles_on_the_rich_route() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "10 ON ERROR GOTO 100\n20 ERROR 5\n30 PRINT \"body\"; ERL\n100 PRINT \"h\"; ERR; ERL\n110 IF ERR = 0 THEN RESUME NEXT\n";
+    let path = written(&directory, "fall.bas", source.as_bytes());
+    let text = rich_listing(&parsed_as(&path, "vbdos", "vbdos"));
+    let body = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let handler = between(&text, "__main$handler proc", "__main$handler endp");
+    assert!(body.contains("pushw 20\n    call far ptr B$SERR"), "{body}");
+    assert!(handler.contains("pushw 19\n    call far ptr B$SERR"), "{handler}");
+    for code in [body, handler] {
+        assert!(code.contains("call far ptr B$PSI2"), "{code}");
+    }
 }

@@ -641,3 +641,52 @@ fn a_routine_reading_its_arguments_is_argmem_read() {
     let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
     assert!(runtime.contains("declare i16 @_strlen(ptr nocapture) memory(argmem: read)\n") && !runtime.contains("puts"), "{runtime}");
 }
+
+/// The blocks of `function` reached from `from`.
+fn reached(function: &Function, from: impl IntoIterator<Item = i64>) -> std::collections::BTreeSet<i64> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut pending: Vec<i64> = from.into_iter().collect();
+    while let Some(id) = pending.pop() {
+        let Some(block) = function.blocks.iter().find(|one| one.id == id) else { continue };
+        if seen.insert(id) {
+            pending.extend(block.terminator.targets.iter().chain(block.terminator.cases.iter().map(|(_, to)| to)).copied());
+        }
+    }
+    seen
+}
+
+/// qb-qrender's main.bas falls from its body into its ON ERROR handler's
+/// label, as BASIC allows, and the rich route refused it: "@__main: block
+/// 2, which both the body and its error handler run". Emitted in both, a
+/// shared block is ordinary code in the body: ERL there reads the line the
+/// handler last took, RESUME there raises "RESUME without error" (20), and
+/// the handler run to the module's end raises "No RESUME" (19).
+#[test]
+fn a_block_the_body_and_its_module_handler_share_is_emitted_in_both() {
+    // `10 ON ERROR GOTO 100: 20 ERROR 5: 30 PRINT "body"; ERL`
+    // `100 PRINT "h"; ERR; ERL: 110 IF ERR = 0 THEN RESUME NEXT`
+    let program = crate::codec::decode(include_str!("fixtures/handler_fallthrough.json")).expect("decodes");
+    let main = program.modules[0].functions.iter().find(|one| one.name == "__main").expect("the module body");
+    let handler = main.error_handler.expect("a module handler");
+    // The body runs from its entry and from where RESUME continues it.
+    let theirs = reached(main, [handler]);
+    let body = reached(main, std::iter::once(main.entry).chain(main.external_entries.iter().copied().filter(|one| !theirs.contains(one))));
+    let shared = &body & &theirs;
+    assert!(!shared.is_empty(), "the fixture no longer falls into its handler");
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    let body = text.split("define ").find(|one| one.contains("@__main()")).expect("the body");
+    let outlined = text.split("define ").find(|one| one.contains("@__main$handler(i16 %0, i16 %1)")).expect("the handler");
+    assert!(body.contains("@llrm.qb.B$SERR(i16 20)") && body.contains("load i16, ptr @$QB$ERL\n"), "{body}");
+    assert!(outlined.contains("@llrm.qb.B$SERR(i16 19)"), "{outlined}");
+    // RESUME clears ERL on VBDOS, as legacy prints `h 0 0` after it; QB 4.5
+    // keeps it, `h 0 20`.
+    let cleared = |runtime| {
+        let program = crate::model::Program { runtime, ..program.clone() };
+        let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+        text.split("define ").find(|one| one.contains("@__main$handler(i16 %0, i16 %1)")).expect("the handler").contains("store i16 0, ptr @$QB$ERL")
+    };
+    assert!(cleared(RuntimeProfile::Vbdos) && !cleared(RuntimeProfile::Qb45));
+}
