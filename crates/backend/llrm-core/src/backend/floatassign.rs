@@ -1277,24 +1277,26 @@ pub fn assigned(
     let mut plan = Plan { body: &body, floating, homes, allocnos, costs: IndexMap::default() };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();
-    let at_of: HashMap<(i64, i64), usize> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter().enumerate().map(move |(position, one)| ((block.at, one.at), position)))
-        .collect();
+    // One `at` can name several instructions: a compare and its branches.
+    let mut at_of: HashMap<(i64, i64), Vec<usize>> = HashMap::default();
+    for block in &body.blocks {
+        for (position, one) in block.insns.iter().enumerate() {
+            at_of.entry((block.at, one.at)).or_default().push(position);
+        }
+    }
     loop {
         let rewritten = plan.rewritten(&spilled, &mut frame, cpu)?;
         let Some((block, position)) = _crowded(&rewritten, &_floating_values(&rewritten)) else {
             return Ok(rewritten);
         };
-        let original = rewritten
+        let originals = rewritten
             .blocks
             .iter()
             .find(|one| one.at == block)
             .and_then(|one| one.insns.get(position))
-            .and_then(|one| at_of.get(&(block, one.at)).copied())
-            .unwrap_or(position);
-        let Some(victim) = plan.victim(block, original, &spilled) else {
+            .and_then(|one| at_of.get(&(block, one.at)).cloned())
+            .unwrap_or_else(|| vec![position]);
+        let Some(victim) = originals.iter().find_map(|original| plan.victim(block, *original, &spilled)) else {
             return Err(unlowered("floating instruction requires too many stack operands"));
         };
         spilled.insert(victim);
