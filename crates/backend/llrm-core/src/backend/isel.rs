@@ -238,6 +238,11 @@ const FLOAT: u32 = 10;
 /// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
 
+/// The bytes of a constant memset's `rep stosd` through es:di, as
+/// `memset` makes it: `lea di`, ES saved and set, the value, the count,
+/// the fill, a tail store, and DI's save in the frame.
+const FILL_BYTES: i64 = 3 + 4 + 6 + 3 + 3 + 2 + 2;
+
 /// The bytes a value of `ty` takes in memory or on the stack: a far
 /// pointer is its offset and selector, in two registers.
 fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
@@ -2343,8 +2348,18 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// The bytes of the stores `memset` expands a constant `length` to,
+    /// each at a one-byte displacement: two or more dwords store a register.
+    fn stored_bytes(length: i64) -> i64 {
+        let dwords = length / 4;
+        let each = if dwords > 1 { 4 } else { 8 };
+        let setup = if dwords > 1 { 6 } else { 0 };
+        setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
+    }
+
     /// A memset, as LLVM's getMemset lowers one: a constant byte over a
-    /// constant length in at most `MEMSET_STORES` stores, widest first, or
+    /// constant length in at most `MEMSET_STORES` stores, widest first,
+    /// where tuned for size only where they are no larger than the fill, or
     /// else `rep stos` through es:di, as the old route's `_fill` makes it:
     /// a constant byte's dwords first, then its tail's bytes. A far
     /// destination's selector is ES; a near one's segment is set in ES
@@ -2360,12 +2375,24 @@ impl Selector<'_, '_, '_> {
         let constant = byte.zip(self.constant(length, 2));
         if let Some((byte, length)) = constant
             && length / 4 + (length % 4).count_ones() as i64 <= MEMSET_STORES
+            && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES)
         {
+            // Two or more dwords store one register, as LLVM keeps a
+            // memset's value in one: a dword immediate is four more bytes
+            // of each store in 16-bit code.
+            let dwords = if length / 4 > 1 {
+                let held = self.fresh_held(4);
+                put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![imm(pattern(byte, 4), 4)]), out);
+                Loc::Held(held)
+            } else {
+                imm(pattern(byte, 4), 4)
+            };
             let mut offset = 0;
             for width in [4, 2, 1] {
                 while length - offset >= i64::from(width) {
                     let cell = Self::memory(pointer.moved(offset), width);
-                    put(semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![imm(pattern(byte, width), width)]), out);
+                    let value = if width == 4 { dwords.clone() } else { imm(pattern(byte, width), width) };
+                    put(semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![value]), out);
                     offset += i64::from(width);
                 }
             }

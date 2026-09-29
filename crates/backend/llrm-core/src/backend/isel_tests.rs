@@ -1945,6 +1945,51 @@ fn test_an_i64_to_a_float_is_filds_qword() {
     assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "mov ebx, 0", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
 }
 
+/// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
+/// bytes each: qbdemo's WHITEFADE spent 45 bytes clearing it.
+#[test]
+fn test_a_memsets_dwords_store_one_register() {
+    let text = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define i16 @f() addrspace(1) {
+  %a = alloca [12 x i8]
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 12, i1 false)
+  %v = load i16, ptr %a
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    let stores: Vec<&String> = got.iter().filter(|line| line.starts_with("mov dword ptr")).collect();
+    assert_eq!(stores.len(), 3, "{got:?}");
+    assert!(stores.iter().all(|line| line.ends_with(", eax")), "{got:?}");
+}
+
+/// Tuned for size, a memset is the smaller of its stores and `rep stosd`:
+/// a 22-byte descriptor's six stores are 31 bytes, the fill 23. Always
+/// stores, qbdemo cleared nine descriptors so and grew 1.5% at -Os.
+#[test]
+fn test_a_memset_tuned_for_size_is_the_smaller_form() {
+    let text = |size: u32| {
+        format!(
+            "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{size} x i8]
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 {size}, i1 false)
+  %v = load i16, ptr %a
+  ret i16 %v
+}}
+"
+        )
+    };
+    let sized = |size: u32| {
+        let cpu = crate::backend::cpu::tuned("486", true).expect("a target");
+        let module = assemble::assembled(&parsed(&text(size)), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    assert!(sized(22).contains("rep stosd"), "{}", sized(22));
+    assert!(!sized(12).contains("rep stosd"), "{}", sized(12));
+    assert!(!assembled_on("486", &text(22)).contains("rep stosd"));
+}
+
 /// A far global is `seg name:offset name`, and a memset of a variable
 /// length `rep stosd` then `rep stosb` through it, as the old route made
 /// C's `fill_far`; isel refused "a far global", then the variable length.
