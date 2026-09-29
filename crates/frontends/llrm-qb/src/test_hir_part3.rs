@@ -2856,3 +2856,43 @@ fn sanitizers_select_bcs_debug_checks() {
     assert!(frontend("-ftrapv").checked_overflow);
     assert!(!frontend("-O2").checked_arrays);
 }
+
+/// Each call in a body that handles errors comes after a statement row:
+/// the row locates an error the call raises, and RESUME continues from it.
+fn rows_precede_calls(program: &llrm_core::hir::model::Program) -> Vec<(String, i64)> {
+    let module = &program.modules[0];
+    let rows = module.statements().expect("a statement table");
+    let mut orphans = Vec::new();
+    for function in &module.functions {
+        let first = rows.iter().filter(|one| one.function == function.id).map(|one| one.instruction).min();
+        let Some(first) = first else { continue };
+        for call in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.op == llrm_core::hir::model::Op::Call && one.id < first) {
+            orphans.push((function.name.clone(), call.id));
+        }
+    }
+    orphans
+}
+
+/// GORILLA.BAS DIMs its dynamic arrays before InitVars sets ON ERROR, and
+/// the rich route refused it: "@__main: a call before the first
+/// statement". Rows began only once ON ERROR was compiled, and DIM, though
+/// a dynamic one allocates, was no statement.
+#[test]
+fn a_dynamic_dim_before_on_error_is_a_statement() {
+    let program = parsed_as(&fixture("dim-before-on-error.bas"), "qb45", "qb45");
+    // Premise: B$DDIM runs in the module body and in S, both handled.
+    let calls = |name: &str| program.modules[0].functions.iter().find(|one| one.name == name).expect("the function").blocks.iter().flat_map(|block| block.instructions.clone()).filter(|one| one.callee.as_deref() == Some("B$DDIM")).count();
+    assert!(calls("__main") > 0 && calls("S") > 0);
+    assert_eq!(rows_precede_calls(&program), Vec::<(String, i64)>::new());
+    rich_listing(&program);
+}
+
+/// The DATA rows' markers leave the rich route's input, and their ABI with
+/// them: left behind, the HIR no longer encodes ("ABI site 33 is not a call").
+#[test]
+fn positional_data_drops_the_markers_abi_too() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "data.bas", b"READ a\nPRINT a\nEND\nDATA 1\n");
+    let program = super::compile::_positional_data(&parsed_as(&path, "qb45", "qb45")).expect("lays DATA out");
+    llrm_core::hir::codec::encode(&program, None).expect("encodes");
+}

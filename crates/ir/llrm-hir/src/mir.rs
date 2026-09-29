@@ -338,7 +338,10 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         variable.initializer = Some(initializer);
     }
     let statements = hir.statements();
-    let outlined = match module_handler(&mut module, &functions, runtime) {
+    let rows = statements.clone().unwrap_or_default();
+    // A RESUME marker the body falls into raises; the handlers' markers do not.
+    let raises = |callee: &str| handling::resumes(callee) || (!handling::owns(callee) && !nounwind.iter().any(|one| one == callee));
+    let outlined = match module_handler(&mut module, &functions, runtime, &rows, &raises) {
         Ok(outlined) => outlined,
         Err((name, why)) => {
             refused.push((name, why));
@@ -400,7 +403,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
 /// The module body's ON ERROR GOTO handlers, declared as the function they
 /// run as, with what its code refers to, and the body's HIR function.
 #[allow(clippy::type_complexity)]
-fn module_handler<'h>(module: &mut Module, functions: &[(&'h model::Function, Option<GlobalId>)], runtime: model::RuntimeProfile) -> Result<Option<(handling::ModuleHandler, (GlobalId, Handled), &'h model::Function)>, (String, String)> {
+fn module_handler<'h>(module: &mut Module, functions: &[(&'h model::Function, Option<GlobalId>)], runtime: model::RuntimeProfile, rows: &[model::Statement], raises: &dyn Fn(&str) -> bool) -> Result<Option<(handling::ModuleHandler, (GlobalId, Handled), &'h model::Function)>, (String, String)> {
     let Some(&(owner, Some(_))) = functions.iter().find(|(one, _)| one.error_handler.is_some() && !one.error_handler_local) else { return Ok(None) };
     let refusal = |why: String| (owner.name.clone(), why);
     let i16 = module.context.types.int(16);
@@ -411,7 +414,7 @@ fn module_handler<'h>(module: &mut Module, functions: &[(&'h model::Function, Op
     let active = Value::Constant(onerror::active_global(module).map_err(refusal)?);
     let last_erl = Value::Constant(onerror::last_erl_global(module).map_err(refusal)?);
     let outlined = (Value::Constant(module.reference(global)), ty);
-    let handler = handling::ModuleHandler::of(owner, active, (last_erl, runtime.resume_clears_erl()), outlined).map_err(refusal)?;
+    let handler = handling::ModuleHandler::of(owner, active, (last_erl, runtime.resume_clears_erl()), rows, raises, outlined).map_err(refusal)?;
     Ok(Some((handler, (global, handled), owner)))
 }
 

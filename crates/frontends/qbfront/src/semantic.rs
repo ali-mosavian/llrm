@@ -301,6 +301,10 @@ struct Compiler {
     result_name: Option<String>,
     error_handler: Option<u32>,
     error_handler_local: bool,
+    /// The body being compiled has ON ERROR GOTO somewhere: each of its
+    /// statements, before that one too, is one RESUME may reach and an
+    /// error is located at.
+    handles_errors: bool,
     error_handlers: BTreeSet<u32>,
     /// The module body has ON ERROR GOTO, whose handler takes an error any
     /// procedure raises, on that procedure's frame, and RESUMEs there.
@@ -622,6 +626,7 @@ fn built(
         compiler.each_declared.clear();
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
+        compiler.handles_errors = handles_errors(&procedure.body);
         compiler
             .statement_list(&procedure.body)
             .map_err(|error| SemanticError {
@@ -903,6 +908,44 @@ fn loop_keyword(dialect: Dialect, name: &str) -> bool {
     dialect.loop_control() && matches!(canonical(name), "BREAK" | "CONTINUE")
 }
 
+/// The labels `statements`' ON ERROR GOTOs name, nested blocks included.
+fn error_targets(statements: &[Statement], targets: &mut BTreeSet<String>) {
+    for statement in statements {
+        match statement {
+            Statement::OnError { label, .. } if label != "0" => {
+                targets.insert(canonical(label).into());
+            }
+            Statement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                error_targets(then_branch, targets);
+                error_targets(else_branch, targets);
+            }
+            Statement::For { body, .. }
+            | Statement::While { body, .. }
+            | Statement::Do { body, .. } => error_targets(body, targets),
+            Statement::Select {
+                arms, otherwise, ..
+            } => {
+                for (_, body) in arms {
+                    error_targets(body, targets);
+                }
+                error_targets(otherwise, targets);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether `statements` handle errors: some ON ERROR GOTO names a handler.
+fn handles_errors(statements: &[Statement]) -> bool {
+    let mut targets = BTreeSet::new();
+    error_targets(statements, &mut targets);
+    !targets.is_empty()
+}
+
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
     fn visit(statements: &[Statement], targets: &mut BTreeSet<String>) {
         for statement in statements {
@@ -975,36 +1018,6 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             }
         }
         Ok(())
-    }
-
-    fn error_targets(statements: &[Statement], targets: &mut BTreeSet<String>) {
-        for statement in statements {
-            match statement {
-                Statement::OnError { label, .. } if label != "0" => {
-                    targets.insert(canonical(label).into());
-                }
-                Statement::If {
-                    then_branch,
-                    else_branch,
-                    ..
-                } => {
-                    error_targets(then_branch, targets);
-                    error_targets(else_branch, targets);
-                }
-                Statement::For { body, .. }
-                | Statement::While { body, .. }
-                | Statement::Do { body, .. } => error_targets(body, targets),
-                Statement::Select {
-                    arms, otherwise, ..
-                } => {
-                    for (_, body) in arms {
-                        error_targets(body, targets);
-                    }
-                    error_targets(otherwise, targets);
-                }
-                _ => {}
-            }
-        }
     }
 
     fn ends_error_handler(statement: &Statement) -> bool {
@@ -1300,6 +1313,7 @@ impl Compiler {
             result_place: None,
             result_name: None,
             error_handler: None,
+            handles_errors: false,
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
             module_handled: false,
@@ -1363,6 +1377,7 @@ impl Compiler {
         self.result_name = None;
         self.error_handler = None;
         self.error_handler_local = false;
+        self.handles_errors = false;
         self.error_handlers.clear();
         self.statement_entries.clear();
         self.data_entries.clear();
@@ -2729,13 +2744,14 @@ impl Compiler {
     }
 
     fn statements(&mut self, module: &Module) -> Result<(), SemanticError> {
+        self.handles_errors = handles_errors(&module.statements);
         self.statement_list(&module.statements)
     }
 
     /// The body's end, END SUB's or the module's, where RESUME NEXT after
     /// the last statement continues.
     fn end_statement(&mut self) {
-        if self.error_handler.is_some() || self.module_handled {
+        if self.handles_errors || self.module_handled {
             let line = self.pending_numeric_line.unwrap_or(0);
             self.begin_resumable_statement(line);
         }
@@ -2760,10 +2776,10 @@ impl Compiler {
         for statement in statements {
             self.current_source_line = statement.span().line;
             self.position = source_position(statement.span());
+            // DIM is a statement: a dynamic array's allocates, and may raise.
             let metadata_only = matches!(
                 statement,
-                Statement::Dim(_)
-                    | Statement::Static(_)
+                Statement::Static(_)
                     | Statement::Shared(_)
                     | Statement::DefType { .. }
                     | Statement::TypeDecl { .. }
@@ -2774,7 +2790,7 @@ impl Compiler {
                     | Statement::Data { .. }
                     | Statement::Label(_, _)
             );
-            if (self.error_handler.is_some() || self.module_handled) && !metadata_only {
+            if (self.handles_errors || self.module_handled) && !metadata_only {
                 // A numbered BASIC line remains the active ERL value for
                 // every following statement until another numeric label.
                 // PDS 7.1 BC emits that number on every statement-table row;
