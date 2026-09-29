@@ -2,20 +2,9 @@
 cf _p_ld _gt_ld
 cf _p_ld _gv_ld
 cf _p_mixed _gm_h
-cf _p_variadic _gva_ch
-cf _p_variadic _gva_d
-cf _p_variadic _gva_f
-cf _p_variadic _gva_fp
-cf _p_variadic _gva_i
-cf _p_variadic _gva_l
 cf _p_variadic _gva_ld
-cf _p_variadic _gva_np
 cf _p_variadic _gva_s3
 cf _p_variadic _gva_s5
-cf _p_variadic _gva_sc
-cf _p_variadic _gva_u
-cf _p_variadic _gva_uc
-cf _p_variadic _gva_ul
 cf _r_ld result
 cf call _p_ld #1 stack
 cf call _p_ld #1 cleanup
@@ -29,20 +18,9 @@ cfagger refused
 cn _p_ld _gt_ld
 cn _p_ld _gv_ld
 cn _p_mixed _gm_h
-cn _p_variadic _gva_ch
-cn _p_variadic _gva_d
-cn _p_variadic _gva_f
-cn _p_variadic _gva_fp
-cn _p_variadic _gva_i
-cn _p_variadic _gva_l
 cn _p_variadic _gva_ld
-cn _p_variadic _gva_np
 cn _p_variadic _gva_s3
 cn _p_variadic _gva_s5
-cn _p_variadic _gva_sc
-cn _p_variadic _gva_u
-cn _p_variadic _gva_uc
-cn _p_variadic _gva_ul
 cn _r_ld result
 cn call _p_ld #1 stack
 cn call _p_ld #1 cleanup
