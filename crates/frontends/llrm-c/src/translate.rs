@@ -403,6 +403,8 @@ struct Body<'a, 't> {
     instructions: i64,
     /// What the last statement's inline code left in dx:ax.
     inlined: Option<i64>,
+    /// The far pointer to where a struct result goes, where it is passed one.
+    destination: Option<i64>,
 }
 
 /// Whether inline code is `symbol`: `_asm`, or `__emit__`'s bytes.
@@ -478,6 +480,13 @@ fn distance(symbol: &hir::Symbol) -> CallDistance {
     }
 }
 
+/// How Borland C returns a struct of `size` bytes: an integer that wide in
+/// AL, AX or DX:AX, or, where none, through a far pointer to the caller's
+/// memory that it pushes after every argument and gets back in DX:AX.
+fn returned_as_integer(size: i64) -> Option<i64> {
+    matches!(size, 1 | 2 | 4).then_some(size)
+}
+
 /// Whether some restrict lvalue names parameter `symbol`.
 fn restricted(unit: &hir::Unit, symbol: i64) -> bool {
     unit.nodes.values().any(|node| match (node.call.as_str(), &node.args[..]) {
@@ -513,10 +522,18 @@ impl<'a, 't> Body<'a, 't> {
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
+            destination: None,
         };
         let entry = body.block();
         body.current = entry;
-        let result_type = if shared.valueless.contains(&symbol.id) { body.types.of(Shape::Void, None) } else { body.ty(&proc.type_)? };
+        let result_type = match body.types.aggregate(&proc.type_) {
+            _ if shared.valueless.contains(&symbol.id) => body.types.of(Shape::Void, None),
+            Some(size) => match returned_as_integer(size) {
+                Some(width) => body.types.raw(width),
+                None => body.types.pointer(FAR),
+            },
+            None => body.ty(&proc.type_)?,
+        };
         let (parameters, promises, homes) = body.frame(cleanup)?;
         for one in &proc.body {
             body.statement(one)?;
@@ -752,16 +769,20 @@ impl<'a, 't> Body<'a, 't> {
         let mut stores = Vec::new();
         for (symbol, type_) in self.proc.parameters(&self.unit.symbols[&self.proc.symbol]) {
             match self.types.aggregate(type_) {
-                Some(_) if cleanup != StackCleanup::Caller => return self.refuse("an aggregate argument by a callee-pops convention"),
                 Some(size) => {
                     let words = (size + 1) / 2;
                     let ty = self.types.of(Shape::Bytes(words * 2), None);
                     let place = self.local(&format!("y{symbol}"), ty, words * 2);
                     let word = self.types.raw(2);
-                    let first = parameters.len();
-                    for at in 0..words {
-                        parameters.push(self.value(word));
-                        stores.push((place, at * 2, parameters[first + at as usize]));
+                    // Its words as they lie, the first lowest: last first where pushes run in order.
+                    let mut offsets: Vec<i64> = (0..words).map(|at| at * 2).collect();
+                    if cleanup == StackCleanup::Callee {
+                        offsets.reverse();
+                    }
+                    for at in offsets {
+                        let parameter = self.value(word);
+                        parameters.push(parameter);
+                        stores.push((place, at, parameter));
                     }
                     self.slots.insert(format!("y{symbol}"), place);
                 }
@@ -780,6 +801,17 @@ impl<'a, 't> Body<'a, 't> {
                     }
                 }
             }
+        }
+        // A struct result goes where a far pointer pushed after every argument says.
+        if self.types.aggregate(&self.proc.type_).is_some_and(|size| returned_as_integer(size).is_none()) {
+            let far = self.types.pointer(FAR);
+            let destination = self.value(far);
+            if cleanup == StackCleanup::Caller {
+                parameters.insert(0, destination);
+            } else {
+                parameters.push(destination);
+            }
+            self.destination = Some(destination);
         }
         for (key, type_) in &self.proc.autos {
             let (ty, size) = match self.types.aggregate(type_) {
@@ -879,6 +911,22 @@ impl<'a, 't> Body<'a, 't> {
         if node == "n0" {
             // A value-less return from a function that has one: nothing the caller may read.
             self.terminate(TerminatorKind::Return, Vec::new(), Vec::new());
+            return Ok(());
+        }
+        if let Some(size) = self.types.aggregate(type_) {
+            let Got::Aggregate(from, _) = self.eval(node)? else { return self.refuse("a scalar returned as a struct") };
+            let value = match (returned_as_integer(size), self.destination) {
+                (Some(width), _) => {
+                    let ty = self.types.raw(width);
+                    self.op(Op::Load, ty, vec![Operand::IndirectPlace(indirect(from, 0, ty, false))])
+                }
+                (None, Some(destination)) => {
+                    self.copy(destination, from, size);
+                    destination
+                }
+                (None, None) => return self.refuse("a struct result with no destination"),
+            };
+            self.terminate(TerminatorKind::Return, vec![value_ref(value)], Vec::new());
             return Ok(());
         }
         let value = self.value_as(node, type_)?;
@@ -1566,13 +1614,15 @@ impl<'a, 't> Body<'a, 't> {
                 arguments.push(self.value_as(node, type_)?);
                 continue;
             };
-            if cleanup != StackCleanup::Caller {
-                return self.refuse("an aggregate argument by a callee-pops convention");
-            }
             let Got::Aggregate(from, _) = self.eval(node)? else { return self.refuse("a scalar passed as an aggregate") };
-            // Its words, last first as the arguments are listed; a last odd byte widened.
+            // Its words as they lie, the first lowest, listed last first as the
+            // arguments are; a last odd byte widened.
             let word = self.types.raw(2);
-            for at in (0..(size + 1) / 2).rev().map(|one| one * 2) {
+            let mut offsets: Vec<i64> = (0..(size + 1) / 2).map(|one| one * 2).rev().collect();
+            if cleanup == StackCleanup::Callee {
+                offsets.reverse();
+            }
+            for at in offsets {
                 let value = if at + 1 < size {
                     self.op(Op::Load, word, vec![Operand::IndirectPlace(indirect(from, at, word, false))])
                 } else {
@@ -1584,9 +1634,32 @@ impl<'a, 't> Body<'a, 't> {
             }
         }
         arguments.reverse();
-        let result = match target {
-            Got::Function(symbol) if self.shared.valueless.contains(&symbol) => None,
-            _ => {
+        // A struct result: in a temporary, which the callee fills through a
+        // far pointer pushed last where it is not returned as an integer.
+        let returned = self.types.aggregate(&call.type_).map(|size| {
+            let ty = self.types.of(Shape::Bytes(size), None);
+            (self.local(&format!("r{}", self.places.len() + 1), ty, size), size)
+        });
+        if let Some((temporary, _)) = returned.filter(|&(_, size)| returned_as_integer(size).is_none()) {
+            let near = self.address_of(temporary);
+            let far = self.types.pointer(FAR);
+            let destination = self.op(Op::Convert, far, vec![value_ref(near)]);
+            if cleanup == StackCleanup::Caller {
+                arguments.insert(0, destination);
+            } else {
+                arguments.push(destination);
+            }
+        }
+        let result = match (target, returned) {
+            (Got::Function(symbol), _) if self.shared.valueless.contains(&symbol) => None,
+            (_, Some((_, size))) => {
+                let ty = match returned_as_integer(size) {
+                    Some(width) => self.types.raw(width),
+                    None => self.types.pointer(FAR),
+                };
+                Some(self.value(ty))
+            }
+            (_, None) => {
                 let ty = self.ty(&call.type_)?;
                 Some(self.value(ty))
             }
@@ -1605,7 +1678,13 @@ impl<'a, 't> Body<'a, 't> {
             _ => None,
         };
         self.call_site(name.as_deref(), result, operands, order, cleanup, distance);
-        Ok(Got::Returned(result))
+        let Some((temporary, size)) = returned else { return Ok(Got::Returned(result)) };
+        let address = self.address_of(temporary);
+        if let (Some(width), Some(value)) = (returned_as_integer(size), result) {
+            let ty = self.types.raw(width);
+            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(address, 0, ty, false)), value_ref(value)]);
+        }
+        Ok(Got::Value(address))
     }
 }
 
