@@ -23,7 +23,8 @@ what came back.
 - `known.txt` lists where llrm still differs.
 
 `cargo test --release -p llrm-c --features toolchain callconv` runs the
-unit level.
+unit level. `tools/callconv/c.sh` runs the programs: llrm and BCC callers
+and callees in all four pairings, a module llrm refuses replaced by BCC's.
 
 ## BASIC (`bas/`)
 
@@ -39,3 +40,10 @@ callee, and the slots the modules keep values in (llrm-qb refuses COMMON).
   directions under dosrun (see its header).
 
 `cargo test --release -p llrm-qb callconv` runs the unit level.
+
+## Running them
+
+`cargo test --release --test callconv -- --ignored` runs both matrices
+under dosrun (`DOSRUN`, else ~/scratch/pr-dosbox's, else the built one),
+about ten seconds. `runs.txt` beside each lists the failures still
+expected.
