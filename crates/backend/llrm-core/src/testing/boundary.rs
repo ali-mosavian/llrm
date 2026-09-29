@@ -100,6 +100,8 @@ pub struct Procedure {
     pub forward: bool,
     /// A branch ended the run before any return: only what came before it is here.
     pub cut: bool,
+    /// It returned by `iret`, as an interrupt handler does.
+    pub iret: bool,
 }
 
 impl Procedure {
@@ -581,6 +583,7 @@ struct Machine<'a> {
     /// The call whose caller cleanup is still being counted.
     pending: Option<usize>,
     cut: bool,
+    iret: bool,
 }
 
 fn run(name: &str, far: bool, lines: &[Line], constants: &HashMap<String, Vec<u8>>) -> Procedure {
@@ -605,11 +608,20 @@ fn run(name: &str, far: bool, lines: &[Line], constants: &HashMap<String, Vec<u8
         base: 0,
         pending: None,
         cut: false,
+        iret: false,
     };
     machine.set("sp", address(Base::Stack, 0, 2));
     let mut in_prologue = true;
     for line in lines {
-        let setup = matches!((line.op.as_str(), line.operands.as_slice()), ("push", [Operand::Register("bp" | "si" | "di" | "ds")]) | ("mov", [Operand::Register("bp"), Operand::Register("sp")]) | ("sub", [Operand::Register("sp"), Operand::Immediate(_)]) | ("enter", _));
+        // A frame's setup: an interrupt handler's saves and DGROUP loads too.
+        let dgroup = |one: &Operand| matches!(one, Operand::Memory { name: Some(name), registers, .. } if name == "dgroup" && registers.is_empty());
+        let setup = match (line.op.as_str(), line.operands.as_slice()) {
+            ("push", [Operand::Register(_)]) | ("pushad" | "cld" | "enter", _) | ("pop", [Operand::Register("ds" | "es")]) => true,
+            ("mov", [Operand::Register("bp"), Operand::Register("sp")]) | ("mov", [Operand::Register("ds"), Operand::Register("bp")]) => true,
+            ("mov", [Operand::Register("bp"), one]) | ("push" | "pushw", [one]) => dgroup(one),
+            ("sub", [Operand::Register("sp"), Operand::Immediate(_)]) => true,
+            _ => false,
+        };
         if in_prologue && !setup {
             in_prologue = false;
             machine.base = machine.sp;
@@ -652,6 +664,7 @@ impl Machine<'_> {
             through: self.through,
             forward: self.forward,
             cut: self.cut,
+            iret: self.iret,
             registers: self.registers,
         }
     }
@@ -783,6 +796,8 @@ impl Machine<'_> {
                 value.resize(bytes, Byte::Const(0));
                 value
             }
+            // DGROUP's selector, as DS holds it.
+            Operand::Memory { name: Some(name), registers, .. } if name == "dgroup" && registers.is_empty() => self.get("ds"),
             Operand::Memory { .. } => self.load(&self.place(operand), bytes),
             _ => vec![Byte::Unknown; bytes],
         }
@@ -935,6 +950,7 @@ impl Machine<'_> {
                 return Some(0);
             }
             ("ret" | "retf" | "iret", rest) => {
+                self.iret = line.op == "iret";
                 let popped = match rest {
                     [Operand::Immediate(value)] => *value as i32,
                     _ => 0,
@@ -947,6 +963,21 @@ impl Machine<'_> {
                 }
             }
             ("std", _) => self.forward = false,
+            ("pushf", []) => self.push(vec![Byte::Entry("flags", 0), Byte::Entry("flags", 1)]),
+            ("pushad", []) => {
+                for one in ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"] {
+                    let value = self.get(one);
+                    self.push(value);
+                }
+            }
+            ("popad", []) => {
+                for one in ["edi", "esi", "ebp", "esp", "ebx", "edx", "ecx", "eax"] {
+                    let value = self.pop(4);
+                    if one != "esp" {
+                        self.set(one, value);
+                    }
+                }
+            }
             ("movsb" | "movsw" | "movsd", []) => self.string_move(&line.op, 1),
             ("rep", [Operand::Memory { name: Some(op), registers, .. }]) if registers.is_empty() && op.starts_with("movs") => {
                 let count = known(&self.get("cx")).unwrap_or(0);

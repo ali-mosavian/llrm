@@ -18,6 +18,21 @@ void CONV DIST p_mixed(signed char a, long b, double c, int d, float e, char far
     trash(); gm_a = a; gm_b = b; gm_c = c; gm_d = d; gm_e = e; gm_f = f; gm_h = h;
 }
 
+#ifdef INTERRUPTS
+/* Borland's register parameters: what it saved, BP first. */
+unsigned gi_regs[9];
+int gi_plain;
+void interrupt i_regs(unsigned bp, unsigned di, unsigned si, unsigned ds, unsigned es,
+    unsigned dx, unsigned cx, unsigned bx, unsigned ax) {
+    trash();
+    gi_regs[0] = bp; gi_regs[1] = di; gi_regs[2] = si; gi_regs[3] = ds; gi_regs[4] = es;
+    gi_regs[5] = dx; gi_regs[6] = cx; gi_regs[7] = bx; gi_regs[8] = ax;
+    ax = 0x7777;
+    bx = ~bx;
+}
+void interrupt i_plain(void) { trash(); gi_plain = 0x1234; }
+#endif
+
 #ifdef VARIADIC
 #define VSTORE(n, T, P) P gva_##n;
 PROMOTED(VSTORE)

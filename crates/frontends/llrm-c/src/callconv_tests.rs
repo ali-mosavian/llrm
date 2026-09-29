@@ -31,7 +31,8 @@ struct Fact {
 fn junk(byte: &Byte, stack: bool) -> bool {
     match byte {
         Byte::Unknown => true,
-        Byte::Entry(register, _) => !matches!(*register, "ss" | "ds"),
+        // A register's value on entry is junk pushed, but an interrupt handler's parameter kept.
+        Byte::Entry(register, _) => stack && !matches!(*register, "ss" | "ds"),
         Byte::Returned(..) => stack,
         Byte::Sign(inner) => junk(inner, stack),
         // A struct's padding, pushed with it.
@@ -75,7 +76,8 @@ fn stack_tokens(bytes: &[Byte], reference: bool, variadic: bool) -> Vec<String> 
 fn size(global: &str) -> usize {
     let (prefix, case) = global.trim_start_matches('_').split_once('_').expect("a case global");
     match (prefix, case) {
-        ("gh" | "gt" | "gva", "n") | ("gh" | "gt", _) => 2,
+        ("gh" | "gt" | "gva", "n") | ("gh" | "gt", _) | ("gi", "plain") => 2,
+        ("gi", "regs") => 18,
         ("gw" | "ow", _) => 4,
         // p_mixed's a..h: signed char, long, double, int, float, far pointer, long double.
         ("gm", "a") => 1,
@@ -147,7 +149,8 @@ fn facts(callee: &BTreeMap<String, Procedure>, caller: &BTreeMap<String, Procedu
     let mut facts = Vec::new();
     let mut add = |name: String, value: Vec<String>, line: usize| facts.push(Fact { name, value, line });
     for (name, procedure) in callee.iter().filter(|(name, _)| !name.contains("call_")) {
-        add(format!("{name} return"), vec![if procedure.far { "far" } else { "near" }.to_owned(), format!("pops {}", procedure.popped)], procedure.line);
+        let by = if procedure.iret { "iret" } else if procedure.far { "far" } else { "near" };
+        add(format!("{name} return"), vec![by.to_owned(), format!("pops {}", procedure.popped)], procedure.line);
         add(format!("{name} keeps"), kept(procedure), procedure.line);
         for (global, bytes) in procedure.globals.iter().filter(|(global, _)| global.starts_with("_g")) {
             add(format!("{name} {global}"), tokens(&bytes[..size(global).min(bytes.len())], reference), procedure.line);

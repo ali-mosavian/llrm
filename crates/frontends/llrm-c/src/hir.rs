@@ -26,6 +26,7 @@ pub const REVERSE_PARMS: i64 = 0x1;
 pub const HAS_VARARGS: i64 = 0x20;
 pub const CALLER_POPS: i64 = 0x80;
 pub const FAR_CALL: i64 = 0x4;
+pub const INTERRUPT: i64 = 0x8;
 // cg_target_switches (x86swi.h)
 pub const BIG_DATA: i64 = 0x2;
 pub const BIG_CODE: i64 = 0x4;
@@ -159,6 +160,11 @@ impl Symbol {
 
     pub fn far(&self) -> bool {
         self.call_target & FAR_CALL != 0
+    }
+
+    /// Whether an interrupt enters it: `interrupt`, left by iret.
+    pub fn interrupt(&self) -> bool {
+        self.call_target & INTERRUPT != 0
     }
 
     /// Whether it takes arguments past its parameters, as `...` does.

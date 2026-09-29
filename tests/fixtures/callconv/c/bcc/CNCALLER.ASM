@@ -16,10 +16,10 @@ $comm	macro	name,dist,size,count
 	endif
 	?debug	V 300h
 	?debug	S "cncaller.c"
-	?debug	C E992603D5D0A636E63616C6C65722E63
-	?debug	C E992603D5D04636E2E68
-	?debug	C E992603D5D0863616C6C65722E68
-	?debug	C E992603D5D0763617365732E68
+	?debug	C E9996A3D5D0A636E63616C6C65722E63
+	?debug	C E9996A3D5D04636E2E68
+	?debug	C E9996A3D5D0863616C6C65722E68
+	?debug	C E9996A3D5D0763617365732E68
 CNCALLER_TEXT	segment byte public use16 'CODE'
 CNCALLER_TEXT	ends
 DGROUP	group	_DATA,_BSS
@@ -271,6 +271,11 @@ _call_scalars	proc	far
 	add	sp,62
    ;	
    ;	#undef VARG
+   ;	#endif
+   ;	#ifdef INTERRUPTS
+   ;	    /* Last: after calling an interrupt function BCC counts its pushf as still
+   ;	       on the stack, and every BP-relative temporary it makes is 2 bytes off. */
+   ;	    ARM(); i_plain(); VERIFY("i_plain");
    ;	#endif
    ;	}
    ;	

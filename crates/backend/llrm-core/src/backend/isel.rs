@@ -57,6 +57,8 @@ fn passing(convention: u32) -> Result<Passing, Unselected> {
     match convention {
         0 => Ok(Passing { in_order: false, pops: false }),
         llrm_mir::opcode::BASIC => Ok(Passing { in_order: true, pops: true }),
+        // Its parameters are the registers its frame saved; iret pops the rest.
+        llrm_mir::opcode::X86_INTR => Ok(Passing { in_order: false, pops: false }),
         other => refuse(format!("calling convention {other}")),
     }
 }
@@ -110,12 +112,20 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
     in_the_frame(&function.parameter_attrs)?;
-    let first = if far(global)? { 6 } else { 4 };
+    let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
+    let first = match () {
+        _ if interrupt => crate::backend::masm::INTERRUPT_PARAMETERS,
+        _ if far(global)? => 6,
+        _ => 4,
+    };
     let Passing { in_order, pops } = passing(function.calling_convention)?;
     let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
     // The last pushed is nearest: C's first argument, BASIC's last.
     if in_order {
         widths.reverse();
+    }
+    if interrupt && widths.iter().any(|&one| one != 2) {
+        return refuse("an interrupt handler's parameter that is not a register");
     }
     let mut parameters = Vec::new();
     let mut cursor = first;
@@ -128,6 +138,9 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
     }
     let types = &module.context.types;
     let (result, _, _) = module.signature(function.ty);
+    if interrupt && !types.is_void(result) {
+        return refuse("an interrupt handler that returns a value");
+    }
     // A float leaves in st(0), which no register names.
     let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { returned(size_of(module, layout, result)?) };
     let popped = if pops { cursor - first } else { 0 };
@@ -545,6 +558,12 @@ impl Selector<'_, '_, '_> {
         let entry = function.entry().expect("a body");
         let mut prologue = Vec::new();
         for (&parameter, &disp) in function.parameters().iter().zip(&convention.parameters) {
+            // An interrupt handler's one parameter is the address of the registers it saved.
+            if function.calling_convention == llrm_mir::opcode::X86_INTR {
+                self.pointers.insert(parameter, Pointer::Frame { disp, index: None, scale: 1 });
+                self.unsealed = true;
+                continue;
+            }
             // Only a used argument is loaded, as a DAG has no node for an unused one.
             if function.users(parameter).is_empty() {
                 continue;
@@ -2124,6 +2143,10 @@ impl Selector<'_, '_, '_> {
             Callee::Indirect(_) => String::new(),
         };
         let Passing { in_order, pops } = passing(convention)?;
+        if convention == llrm_mir::opcode::X86_INTR {
+            // An interrupt handler is entered with the flags pushed; its iret takes them.
+            out.push(insn(at, semantics(Operation::Nothing, "pushf", vec![], vec![])));
+        }
         // The arguments the ABI passes in registers are the call's last.
         let registers = self.abi.registers(&name).unwrap_or_default();
         let Some(stacked) = arguments.len().checked_sub(registers.arguments.len()) else {

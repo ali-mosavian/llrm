@@ -340,10 +340,14 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 5] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65)];
+pub const CONVENTIONS: [(&str, u32); 6] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83)];
 
 /// BASIC's own: arguments pushed left to right, popped by the callee.
 pub const BASIC: u32 = 1000;
+
+/// LLVM's `x86_intrcc`: an interrupt handler, entered with the flags pushed
+/// and left by `iret`.
+pub const X86_INTR: u32 = 83;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Clause {

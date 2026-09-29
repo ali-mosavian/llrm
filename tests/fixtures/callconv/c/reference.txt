@@ -1,3 +1,9 @@
+cf _i_plain return              iret pops 0                              bcc/CFCALLEE.ASM:586
+cf _i_plain keeps               si di bp sp ds ss df                     bcc/CFCALLEE.ASM:586
+cf _i_plain _gi_plain           34 12                                    bcc/CFCALLEE.ASM:586
+cf _i_regs return               iret pops 0                              bcc/CFCALLEE.ASM:516
+cf _i_regs keeps                si di bp sp ds ss df                     bcc/CFCALLEE.ASM:516
+cf _i_regs _gi_regs             ebp.0 ebp.1 edi.0 edi.1 esi.0 esi.1 dgroup.0 dgroup.1 es.0 es.1 edx.0 edx.1 ecx.0 ecx.1 ebx.0 ebx.1 eax.0 eax.1 bcc/CFCALLEE.ASM:516
 cf _p_ch return                 far pops 0                               bcc/CFCALLEE.ASM:74
 cf _p_ch keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:74
 cf _p_ch _gh_ch                 in+4 in+5                                bcc/CFCALLEE.ASM:74
@@ -72,23 +78,23 @@ cf _p_ul keeps                  si di bp sp ds ss df                     bcc/CFC
 cf _p_ul _gh_ul                 in+4 in+5                                bcc/CFCALLEE.ASM:142
 cf _p_ul _gt_ul                 in+10 in+11                              bcc/CFCALLEE.ASM:142
 cf _p_ul _gv_ul                 in+6 in+7 in+8 in+9                      bcc/CFCALLEE.ASM:142
-cf _p_variadic return           far pops 0                               bcc/CFCALLEE.ASM:516
-cf _p_variadic keeps            si di bp sp ds ss df                     bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_ch          in+10 in+11                              bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_d           in+38 in+39 in+40 in+41 in+42 in+43 in+44 in+45 bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_f           in+30 in+31 in+32 in+33 in+34 in+35 in+36 in+37 bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_fp          in+26 in+27 in+28 in+29                  bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_i           in+12 in+13                              bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_l           in+16 in+17 in+18 in+19                  bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_ld          in+46 in+47 in+48 in+49 in+50 in+51 in+52 in+53 in+54 in+55 bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_n           in+4 in+5                                bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_np          in+24 in+25                              bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_s3          in+56 in+57 in+58                        bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_s5          in+60 in+61 in+62 in+63 in+64            bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_sc          in+6 in+7                                bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_u           in+14 in+15                              bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_uc          in+8 in+9                                bcc/CFCALLEE.ASM:516
-cf _p_variadic _gva_ul          in+20 in+21 in+22 in+23                  bcc/CFCALLEE.ASM:516
+cf _p_variadic return           far pops 0                               bcc/CFCALLEE.ASM:615
+cf _p_variadic keeps            si di bp sp ds ss df                     bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_ch          in+10 in+11                              bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_d           in+38 in+39 in+40 in+41 in+42 in+43 in+44 in+45 bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_f           in+30 in+31 in+32 in+33 in+34 in+35 in+36 in+37 bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_fp          in+26 in+27 in+28 in+29                  bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_i           in+12 in+13                              bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_l           in+16 in+17 in+18 in+19                  bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_ld          in+46 in+47 in+48 in+49 in+50 in+51 in+52 in+53 in+54 in+55 bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_n           in+4 in+5                                bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_np          in+24 in+25                              bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_s3          in+56 in+57 in+58                        bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_s5          in+60 in+61 in+62 in+63 in+64            bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_sc          in+6 in+7                                bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_u           in+14 in+15                              bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_uc          in+8 in+9                                bcc/CFCALLEE.ASM:615
+cf _p_variadic _gva_ul          in+20 in+21 in+22 in+23                  bcc/CFCALLEE.ASM:615
 cf _r_ch return                 far pops 0                               bcc/CFCALLEE.ASM:281
 cf _r_ch keeps                  si di bp sp ds ss df                     bcc/CFCALLEE.ASM:281
 cf _r_ch result                 al _in_ch[0]                             bcc/CFCALLEE.ASM:281
@@ -234,6 +240,8 @@ cf call _p_mixed #1 stack       _in_sc[0] - _in_l[0] _in_l[1] _in_l[2] _in_l[3] 
 cf call _p_mixed #1 cleanup     far pops 34                              bcc/CFCALLER.ASM:40
 cf call _p_variadic #1 stack    11 11 _in_sc[0] sign(_in_sc[0]) _in_uc[0] 00 _in_ch[0] sign(_in_ch[0]) _in_i[0] _in_i[1] _in_u[0] _in_u[1] _in_l[0] _in_l[1] _in_l[2] _in_l[3] _in_ul[0] _in_ul[1] _in_ul[2] _in_ul[3] _in_np[0] _in_np[1] _in_fp[0] _in_fp[1] _in_fp[2] _in_fp[3] _in_f:f64[0] _in_f:f64[1] _in_f:f64[2] _in_f:f64[3] _in_f:f64[4] _in_f:f64[5] _in_f:f64[6] _in_f:f64[7] _in_d[0] _in_d[1] _in_d[2] _in_d[3] _in_d[4] _in_d[5] _in_d[6] _in_d[7] _in_ld[0] _in_ld[1] _in_ld[2] _in_ld[3] _in_ld[4] _in_ld[5] _in_ld[6] _in_ld[7] _in_ld[8] _in_ld[9] _in_s3[0] _in_s3[1] _in_s3[2] - _in_s5[0] _in_s5[1] _in_s5[2] _in_s5[3] _in_s5[4] - bcc/CFCALLER.ASM:40
 cf call _p_variadic #1 cleanup  far pops 62                              bcc/CFCALLER.ASM:40
+cf call _i_plain #1 stack       - -                                      bcc/CFCALLER.ASM:40
+cf call _i_plain #1 cleanup     far pops 0                               bcc/CFCALLER.ASM:40
 cf keeps _out_ch                _r_ch:eax.0                              bcc/CFCALLER.ASM:40
 cf keeps _out_d                 _r_d:st.0 _r_d:st.1 _r_d:st.2 _r_d:st.3 _r_d:st.4 _r_d:st.5 _r_d:st.6 _r_d:st.7 bcc/CFCALLER.ASM:40
 cf keeps _out_f                 _r_f:st.0 _r_f:st.1 _r_f:st.2 _r_f:st.3  bcc/CFCALLER.ASM:40

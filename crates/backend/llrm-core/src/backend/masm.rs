@@ -287,25 +287,37 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     (enter, leave)
 }
 
+/// The registers an interrupt handler saves first, in Borland C's order:
+/// its parameters, BP nearest.
+const INTERRUPTED: [Register; 9] =
+    [Register::AX, Register::BX, Register::CX, Register::DX, Register::ES, Register::DS, Register::SI, Register::DI, Register::BP];
+
+/// Where an interrupt handler's first parameter is above its own BP: past
+/// the saved BP, GS, FS and PUSHAD's eight dwords.
+pub const INTERRUPT_PARAMETERS: i64 = 2 + 2 + 2 + 32;
+
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
 /// so it saves every register it or a callee may change, and gives compiled
 /// code what it assumes: DGROUP in DS and ES, the direction flag clear.
-/// The x87 state is not saved.
+/// Borland C's nine words come first, so its parameters are those registers
+/// and what it writes to them is what `iret` goes back with; PUSHAD then
+/// keeps their high halves. The x87 state is not saved.
 fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
-    let segments = [Register::DS, Register::ES, Register::FS, Register::GS];
     let push = |one: Loc| semantics(Operation::Push, "push", vec![], vec![one]);
     let pop = |one: Register| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
-    let mut enter = vec![semantics(Operation::Nothing, "pushad", vec![], vec![])];
-    enter.extend(segments.iter().map(|one| push(reg(*one))));
+    let mut enter: Vec<Semantics> = INTERRUPTED.iter().map(|one| push(reg(*one))).collect();
     enter.extend([
+        semantics(Operation::Nothing, "pushad", vec![], vec![]),
+        push(reg(Register::FS)),
+        push(reg(Register::GS)),
         push(Loc::Imm(ir::Imm { value: 0, width: 2, address: Some(group) })),
         pop(Register::DS),
         push(reg(Register::DS)),
         pop(Register::ES),
         semantics(Operation::Nothing, "cld", vec![], vec![]),
     ]);
-    let mut leave: Vec<Semantics> = segments.iter().rev().map(|one| pop(*one)).collect();
-    leave.push(semantics(Operation::Nothing, "popad", vec![], vec![]));
+    let mut leave = vec![pop(Register::GS), pop(Register::FS), semantics(Operation::Nothing, "popad", vec![], vec![])];
+    leave.extend(INTERRUPTED.iter().rev().map(|one| pop(*one)));
     (enter, leave)
 }
 
