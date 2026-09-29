@@ -238,10 +238,10 @@ const FLOAT: u32 = 10;
 /// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
 
-/// The bytes of a constant memset's `rep stosd` through es:di, as
-/// `memset` makes it: `lea di`, ES saved and set, the value, the count,
-/// the fill, a tail store, and DI's save in the frame.
-const FILL_BYTES: i64 = 3 + 4 + 6 + 3 + 3 + 2 + 2;
+/// The bytes of a constant memset's `rep stosb` through es:di, as
+/// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
+/// the count, the fill, and DI's save in the frame.
+const FILL_BYTES: i64 = 3 + 4 + 2 + 3 + 2 + 2;
 
 /// The bytes a value of `ty` takes in memory or on the stack: a far
 /// pointer is its offset and selector, in two registers.
@@ -2401,6 +2401,17 @@ impl Selector<'_, '_, '_> {
         // Each part: the value stored, how many (none for one store), its width.
         let mut parts: Vec<(Held, Option<Loc>, u32)> = Vec::new();
         match (byte, constant) {
+            // Tuned for size, one `rep stosb`: no dword count, tail or
+            // operand-size prefix.
+            (Some(byte), _) if self.cpu.size => {
+                let count = match constant {
+                    Some((_, length)) => imm(length, 2),
+                    None => Loc::Held(self.held(length, self.function.operand_type(&self.module.context, length).expect("a typed length"), at, out)?),
+                };
+                let stored = self.fresh_held(1);
+                put(semantics(Operation::Move, "mov", vec![Loc::Held(stored)], vec![imm(pattern(byte, 1), 1)]), out);
+                parts.push((stored, Some(count), 1));
+            }
             (Some(byte), Some((_, length))) => {
                 let stored = self.fresh_held(4);
                 put(semantics(Operation::Move, "mov", vec![Loc::Held(stored)], vec![imm(pattern(byte, 4), 4)]), out);
