@@ -367,9 +367,13 @@ pub struct Options {
     pub huge_arrays: bool,
     /// /D: every element through B$HARY.
     pub checked_arrays: bool,
-    /// Integer division raises its error 11 in code, not by the processor's
-    /// divide trap, whose statement the rich route cannot name.
+    /// /D's division check: integer division raises its error 11 in code,
+    /// not by the processor's divide trap, whose statement the rich route
+    /// cannot name.
     pub checked_division: bool,
+    /// /D's overflow check: INTEGER + - * and negation, LONG + - and
+    /// negation, and LONG to INTEGER raise error 6.
+    pub checked_overflow: bool,
     /// LBOUND/UBOUND read the descriptor without checking it is allocated
     /// or the dimension in range, as unchecked subscripts do.
     pub unchecked_bounds: bool,
@@ -6067,6 +6071,12 @@ impl Compiler {
                 if *op == Unary::Not && !integral(type_id) {
                     return self.fail("NOT requires an integral operand");
                 }
+                if self.options.checked_overflow && *op == Unary::Negative && matches!(type_id, INTEGER | LONG) {
+                    // Only the most negative value has no negation.
+                    let minimum = if type_id == INTEGER { -32768 } else { -2147483648 };
+                    let lowest = self.computed("eq", BOOLEAN, vec![operand.clone(), Operand::Constant(type_id, Number::Integer(minimum))]);
+                    self.raise_if(lowest, 6)?;
+                }
                 let result = self.value(type_id);
                 self.emit(operation, vec![result], vec![operand]);
                 Ok((Operand::Value(result), type_id))
@@ -8039,6 +8049,13 @@ impl Compiler {
                 return Ok((Operand::Value(result), result_type));
             }
         }
+        if self.options.checked_overflow
+            && matches!(common, INTEGER | LONG)
+            && (matches!(op, Binary::Add | Binary::Subtract) || (op == Binary::Multiply && common == INTEGER))
+        {
+            self.overflow_checked(operation, result, left_operand, right_operand, common)?;
+            return Ok((Operand::Value(result), result_type));
+        }
         self.emit(operation, vec![result], vec![left_operand, right_operand]);
         if narrow_divmod {
             let narrowed = self.value(INTEGER);
@@ -8047,6 +8064,25 @@ impl Compiler {
         } else {
             Ok((Operand::Value(result), result_type))
         }
+    }
+
+    /// ERROR `number` where `condition` holds, raised as ERROR raises it.
+    fn raise_if(&mut self, condition: Operand, number: i64) -> Result<(), SemanticError> {
+        let raise = self.error_block();
+        let next = self.new_block();
+        self.terminate("branch", vec![condition], vec![raise, next])?;
+        self.select_block(raise);
+        self.emit_runtime_call("B$SERR", Vec::new(), vec![Operand::Constant(INTEGER, Number::Integer(number))]);
+        self.terminate("unreachable", Vec::new(), Vec::new())?;
+        self.select_block(next);
+        Ok(())
+    }
+
+    /// `op` of `operands`, of `type_id`, as a value.
+    fn computed(&mut self, op: &'static str, type_id: u32, operands: Vec<Operand>) -> Operand {
+        let result = self.value(type_id);
+        self.emit(op, vec![result], operands);
+        Operand::Value(result)
     }
 
     /// ERROR 11, Division by zero, where BC's divide traps: a zero divisor,
@@ -8058,40 +8094,58 @@ impl Compiler {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
         };
-        let mut tests = Vec::new();
+        let long = |value: i64| Operand::Constant(type_id, Number::Integer(value));
         if constant(divisor).is_none_or(|value| value == 0) {
-            tests.push((divisor.clone(), 0, None));
+            let zero = self.computed("eq", BOOLEAN, vec![divisor.clone(), long(0)]);
+            self.raise_if(zero, 11)?;
         }
         if narrow && constant(divisor).is_none_or(|value| value == -1) && constant(dividend).is_none_or(|value| value == -32768) {
-            tests.push((divisor.clone(), -1, Some(dividend.clone())));
+            // Both hold where (divisor + 1) | (dividend + 32768) is 0: INTEGER
+            // operands, as LONG, overflow neither sum.
+            let one = self.computed("add", type_id, vec![divisor.clone(), long(1)]);
+            let low = self.computed("add", type_id, vec![dividend.clone(), long(32768)]);
+            let either = self.computed("or", type_id, vec![one, low]);
+            let both = self.computed("eq", BOOLEAN, vec![either, long(0)]);
+            self.raise_if(both, 11)?;
         }
-        if tests.is_empty() {
+        Ok(())
+    }
+
+    /// ERROR 6, Overflow, where `value` of `from` does not fit INTEGER: BC's
+    /// /D narrowing check.
+    fn narrowing_checked(&mut self, value: &Operand, from: u32) -> Result<(), SemanticError> {
+        let bound = |value: i64| Operand::Constant(from, Number::Integer(value));
+        let low = self.computed("lt", BOOLEAN, vec![value.clone(), bound(-32768)]);
+        self.raise_if(low, 6)?;
+        let high = self.computed("gt", BOOLEAN, vec![value.clone(), bound(32767)]);
+        self.raise_if(high, 6)
+    }
+
+    /// `operation` of `left` and `right`, INTEGER or LONG, into `result`,
+    /// raising ERROR 6 where it overflows as BC's /D checks it: INTEGER
+    /// computed as LONG and narrowed; LONG + and - by their operands' and
+    /// result's signs. BC's LONG multiply is software and unchecked.
+    fn overflow_checked(&mut self, operation: &'static str, result: u32, left: Operand, right: Operand, type_id: u32) -> Result<(), SemanticError> {
+        if type_id == INTEGER {
+            let left = self.convert(left, INTEGER, LONG)?;
+            let right = self.convert(right, INTEGER, LONG)?;
+            let wide = self.computed(operation, LONG, vec![left, right]);
+            self.narrowing_checked(&wide, LONG)?;
+            self.emit("convert", vec![result], vec![wide]);
             return Ok(());
         }
-        let raise = self.error_block();
-        for (operand, value, and) in tests {
-            let equal = self.value(BOOLEAN);
-            self.emit("eq", vec![equal], vec![operand, Operand::Constant(type_id, Number::Integer(value))]);
-            let next = self.new_block();
-            match and {
-                None => self.terminate("branch", vec![Operand::Value(equal)], vec![raise, next])?,
-                Some(dividend) => {
-                    let minimum = self.new_block();
-                    self.terminate("branch", vec![Operand::Value(equal)], vec![minimum, next])?;
-                    self.select_block(minimum);
-                    let low = self.value(BOOLEAN);
-                    self.emit("eq", vec![low], vec![dividend, Operand::Constant(type_id, Number::Integer(-32768))]);
-                    self.terminate("branch", vec![Operand::Value(low)], vec![raise, next])?;
-                }
-            }
-            self.select_block(next);
-        }
-        let divide = self.blocks[self.current_block].id;
-        self.select_block(raise);
-        self.emit_runtime_call("B$SERR", Vec::new(), vec![Operand::Constant(INTEGER, Number::Integer(11))]);
-        self.terminate("unreachable", Vec::new(), Vec::new())?;
-        self.select_block(divide);
-        Ok(())
+        self.emit(operation, vec![result], vec![left.clone(), right.clone()]);
+        let sum = Operand::Value(result);
+        // An add overflows where both operands' signs differ from the sum's;
+        // a subtract where theirs differ and the left's differs from it.
+        let (one, other) = if operation == "add" {
+            (self.computed("xor", type_id, vec![left, sum.clone()]), self.computed("xor", type_id, vec![right, sum]))
+        } else {
+            (self.computed("xor", type_id, vec![left.clone(), right]), self.computed("xor", type_id, vec![left, sum]))
+        };
+        let signs = self.computed("and", type_id, vec![one, other]);
+        let overflowed = self.computed("lt", BOOLEAN, vec![signs, Operand::Constant(type_id, Number::Integer(0))]);
+        self.raise_if(overflowed, 6)
     }
 
     /// A LONG `dividend \ divisor` or MOD into `result` that wraps where
@@ -8526,6 +8580,9 @@ impl Compiler {
             let result = self.value(to);
             self.emit("convert", vec![result], vec![Operand::Place(place)]);
             return Ok(Operand::Value(result));
+        }
+        if self.options.checked_overflow && from == LONG && to == INTEGER {
+            self.narrowing_checked(&operand, LONG)?;
         }
         let result = self.value(to);
         self.emit("convert", vec![result], vec![operand]);

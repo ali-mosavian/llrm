@@ -10,7 +10,7 @@ use crate::abi::machine::Machine;
 use crate::model::passes;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +79,35 @@ const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 11] = [
     ("tree-loop-distribute-patterns", |options, on| options.fill = on),
 ];
 
+/// The run-time checks `-fsanitize` names, gcc's: what BC's /D checks.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Sanitize {
+    /// `bounds`: array subscripts.
+    pub bounds: bool,
+    /// `integer-divide-by-zero`: integer division, where the processor
+    /// would trap.
+    pub integer_divide_by_zero: bool,
+    /// `signed-integer-overflow`, or `-ftrapv`: integer arithmetic and
+    /// narrowing.
+    pub signed_integer_overflow: bool,
+}
+
+impl Sanitize {
+    /// Each check `list` names, `undefined` all of them, set to `on`.
+    fn set(&mut self, list: &str, on: bool) -> Result<(), String> {
+        for name in list.split(',') {
+            match name {
+                "bounds" => self.bounds = on,
+                "integer-divide-by-zero" => self.integer_divide_by_zero = on,
+                "signed-integer-overflow" => self.signed_integer_overflow = on,
+                "undefined" => *self = Self { bounds: on, integer_divide_by_zero: on, signed_integer_overflow: on },
+                _ => return Err(format!("unknown sanitizer {name}; choose bounds, integer-divide-by-zero, signed-integer-overflow or undefined")),
+            }
+        }
+        Ok(())
+    }
+}
+
 /// gcc's `-march`/`-mtune` names for the CPUs priced.
 const CPUS: [(&str, &str); 3] = [("i386", "386"), ("i486", "486"), ("pentium", "P5")];
 
@@ -96,11 +125,12 @@ pub struct Flags {
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
+    pub sanitize: Sanitize,
 }
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false, sanitize: Sanitize::default() }
     }
 }
 
@@ -134,6 +164,9 @@ impl Flags {
                 let cpu = CPUS.iter().find(|(gcc, _)| *gcc == name).ok_or_else(|| format!("unknown {option}={name}; choose i386, i486 or pentium"))?;
                 self.cpu = Some(cpu.1.to_owned());
             }
+            "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
+            _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
+            _ if flag.starts_with("-fno-sanitize=") => self.sanitize.set(&flag["-fno-sanitize=".len()..], false)?,
             _ if flag.starts_with("-f") => {
                 let (name, on) = match flag[2..].strip_prefix("no-") {
                     Some(name) => (name, false),

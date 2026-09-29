@@ -2795,3 +2795,64 @@ fn test_a_module_body_with_two_error_sites_takes_no_runtime_frame() {
         assert!(!body.contains("B$ENRA") && body.contains("$QB$FRAME"), "{runtime}: {body}");
     }
 }
+/// What `source` prints and the error it ends with, under `frontend`.
+fn run_as(source: &[u8], frontend: &qb_driver::Frontend) -> (String, Option<String>) {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "run.bas", source);
+    let program = qb_driver::parsed(&path, frontend, None).expect("parses");
+    let run = llrm_core::hir::execute::run(&program, "__main", &[]).expect("runs");
+    (run.output, run.panic)
+}
+
+/// BC's /D raises Overflow where INTEGER and LONG + - and negation, INTEGER
+/// *, and LONG to INTEGER overflow; LONG * (software) and floating to
+/// integer it leaves. Measured on VBDOS BC /D; without the check each of
+/// these wrapped, `i = 32767 + 1` printing -32768.
+#[test]
+fn checked_overflow_raises_error_6_where_bcs_debug_code_does() {
+    let checked = qb_driver::Frontend { checked_overflow: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let plain = qb_driver::Frontend::new("vbdos", "vbdos");
+    let declared = "DIM i AS INTEGER, a AS LONG, x AS SINGLE\n";
+    for statement in ["i = 32767: i = i + 1", "i = -32768: i = i - 1", "i = 200: i = i * i", "i = -32768: i = -i", "a = 2147483647: a = a + 1", "a = -2147483647: a = a - 2", "a = -2147483647 - 1: a = -a", "a = 40000: i = a"] {
+        let source = format!("{declared}{statement}\nPRINT \"wrapped\"\n");
+        assert_eq!(run_as(source.as_bytes(), &plain), ("wrapped\n".to_owned(), None), "{statement}");
+        assert_eq!(run_as(source.as_bytes(), &checked), (String::new(), Some("error 6".to_owned())), "{statement}");
+    }
+    for statement in ["a = 65536: a = a * a", "x = 40000: i = x"] {
+        let source = format!("{declared}{statement}\nPRINT \"wrapped\"\n");
+        assert_eq!(run_as(source.as_bytes(), &checked), ("wrapped\n".to_owned(), None), "{statement}");
+    }
+}
+
+/// `checked-overflow.bas` is BC /D's overflow cases: each checked operation
+/// raises error 6 in the HIR only under the check.
+#[test]
+fn checked_overflow_raises_in_the_hir_of_each_overflowing_operation() {
+    let hir = |checked_overflow| {
+        let frontend = qb_driver::Frontend { checked_overflow, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+        let program = qb_driver::parsed(&fixture("checked-overflow.bas"), &frontend, None).expect("parses");
+        let main = program.modules[0].functions.iter().find(|one| one.name == "__main").expect("the module body").clone();
+        main.blocks.iter().flat_map(|block| block.instructions.clone()).collect::<Vec<_>>()
+    };
+    use llrm_core::hir::model::Op;
+    // Premise: adds, subtracts, a multiply, negations and a narrowing.
+    let plain = hir(false);
+    for op in [Op::Add, Op::Sub, Op::Mul, Op::Neg, Op::Convert] {
+        assert!(plain.iter().any(|one| one.op == op), "{op:?}");
+    }
+    assert!(!plain.iter().any(|one| raises(one, 6)));
+    // Lines 20 to 38: LONG + - and negation, INTEGER - * and negation, CINT
+    // of a LONG; LONG * and the floating conversions stay unchecked.
+    assert!(hir(true).iter().filter(|one| raises(one, 6)).count() >= 7);
+}
+
+/// llrm-qb takes gcc's sanitizer names for BC's /D checks.
+#[test]
+fn sanitizers_select_bcs_debug_checks() {
+    let frontend = |flag: &str| super::cli::parse_args(&["x.bas".to_owned(), flag.to_owned()]).expect("parses").frontend;
+    let all = frontend("-fsanitize=undefined");
+    assert!(all.checked_arrays && all.checked_division && all.checked_overflow);
+    assert!(frontend("-fsanitize=bounds").checked_arrays && !frontend("-fsanitize=bounds").checked_overflow);
+    assert!(frontend("-ftrapv").checked_overflow);
+    assert!(!frontend("-O2").checked_arrays);
+}
