@@ -372,13 +372,12 @@ impl Body<'_, '_, '_> {
     }
 
     /// A call, an invoke to the pad where it may raise outside the handler;
-    /// `filled` its arguments the callee writes a prefix of before reading
-    /// any, by index and byte count.
+    /// `attributes` what it states of its arguments, by index.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn raising_call(&mut self, instruction: i64, raises: bool, convention: u32, ty: TypeId, callee: Value, arguments: &[Value], filled: &[(usize, i64)]) -> Emit<Option<Value>> {
+    pub(super) fn raising_call(&mut self, instruction: i64, raises: bool, convention: u32, ty: TypeId, callee: Value, arguments: &[Value], attributes: &[(usize, Attribute)]) -> Emit<Option<Value>> {
         let Some(handling) = self.handling.as_mut().filter(|one| raises && !one.handling) else {
             let answered = self.b.call_as(convention, ty, callee, arguments, "");
-            self.promised(filled);
+            self.attributed(attributes);
             return Ok(answered);
         };
         let site = handling.statements.partition_point(|one| one.instruction <= instruction).checked_sub(1).ok_or("a call before the first statement")?;
@@ -388,17 +387,14 @@ impl Body<'_, '_, '_> {
         self.b.store(number, pointer, false);
         let next = self.b.block("");
         let answered = self.b.invoke_as(convention, ty, callee, arguments, next, pad, "");
-        self.promised(filled);
+        self.attributed(attributes);
         self.b.position(next);
         Ok(answered)
     }
 
-    /// The call just emitted's promises of `filled` arguments.
-    fn promised(&mut self, filled: &[(usize, i64)]) {
-        for &(index, bytes) in filled {
-            self.b.argument_attr(index, Attribute::Flag("nocapture".to_owned()));
-            self.b.argument_attr(index, Attribute::Flag("writeonly".to_owned()));
-            self.b.argument_attr(index, Attribute::Initializes(vec![(0, bytes)]));
+    fn attributed(&mut self, attributes: &[(usize, Attribute)]) {
+        for (index, attribute) in attributes {
+            self.b.argument_attr(*index, attribute.clone());
         }
     }
 

@@ -57,8 +57,18 @@ fn tokens(bytes: &[Byte], reference: bool) -> Vec<String> {
     bytes.iter().map(|one| token(one, reference, false)).collect()
 }
 
-fn stack_tokens(bytes: &[Byte], reference: bool) -> Vec<String> {
-    bytes.iter().map(|one| token(one, reference, true)).collect()
+/// A stack image's bytes. The word a prototyped byte argument is pushed in
+/// holds junk above it; only a variadic call promotes it.
+fn stack_tokens(bytes: &[Byte], reference: bool, variadic: bool) -> Vec<String> {
+    let mut tokens: Vec<String> = bytes.iter().map(|one| token(one, reference, true)).collect();
+    for (at, one) in bytes.iter().enumerate() {
+        if let (Byte::Global(name, 0), false, true) = (one, variadic, reference) {
+            if size(name) == 1 && at + 1 < tokens.len() {
+                tokens[at + 1] = "-".to_owned();
+            }
+        }
+    }
+    tokens
 }
 
 /// How many bytes of a global the cases define: its type's size.
@@ -152,7 +162,7 @@ fn facts(callee: &BTreeMap<String, Procedure>, caller: &BTreeMap<String, Procedu
             let count = seen.entry(&call.target).or_default();
             *count += 1;
             let name = format!("call {} #{count}", call.target);
-            add(format!("{name} stack"), stack_tokens(&call.stack, reference), procedure.line);
+            add(format!("{name} stack"), stack_tokens(&call.stack, reference, call.target.contains("variadic")), procedure.line);
             add(format!("{name} cleanup"), vec![if call.far { "far" } else { "near" }.to_owned(), format!("pops {}", call.popped)], procedure.line);
         }
         for (global, bytes) in procedure.globals.iter().filter(|(global, _)| global.starts_with("_o")) {
@@ -252,4 +262,25 @@ fn test_llrm_lowers_each_call_boundary_as_bcc_does() {
     let unexpected: Vec<&String> = differ.iter().filter(|one| !known.contains(&one.as_str())).collect();
     let fixed: Vec<&&str> = known.iter().filter(|one| !differ.contains(&one.to_string())).collect();
     assert!(unexpected.is_empty() && fixed.is_empty(), "differ, not known:\n{}\n\nknown, no longer differ:\n{:?}\n\nall:\n{}", unexpected.iter().map(|one| one.as_str()).collect::<Vec<_>>().join("\n"), fixed, report.join("\n"));
+}
+
+/// `text` compiled by llrm, read by the instrument.
+fn llrm_text(text: &str) -> BTreeMap<String, Procedure> {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("probe.c");
+    std::fs::write(&source, text).unwrap();
+    let stream = crate::compile::recorded(&source, &[]).unwrap();
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+    let built = crate::compile::selected(&stream, "probe", None, &llrm_core::driver::Options::of(machine)).unwrap();
+    boundary::procedures(&llrm_core::backend::masm::text(&built).unwrap())
+}
+
+/// A signed char passed through `...` is promoted to int: llrm zero-extended
+/// it, so p_variadic read -2 as 254.
+#[test]
+fn test_a_variadic_byte_is_promoted_by_its_signedness() {
+    let built = llrm_text("signed char s; unsigned char u;\nvoid far v(int n, ...);\nvoid far f(void) { v(1, s, u); }\n");
+    let stack = &built["_f"].calls[0].stack;
+    let sign = Byte::Sign(Box::new(Byte::Global("_s".into(), 0)));
+    assert_eq!(stack[2..], [Byte::Global("_s".into(), 0), sign, Byte::Global("_u".into(), 0), Byte::Const(0)]);
 }
