@@ -336,6 +336,12 @@ pub fn _basic_listing(procedure: &masm::Procedure, number: usize) -> Result<Vec<
     Ok(stripped)
 }
 
+/// A BASIC module's text as its object holds it: without the native shell
+/// where the runtime owns the frame.
+pub fn text(module: &masm::Module) -> Result<String, String> {
+    masm::text_by(module, |procedure, number| _basic_listing(procedure, number).map_err(|error| masm::Unprintable(error.to_string()))).map_err(|error| error.0)
+}
+
 /// Encode BASIC listings with their frontend-owned runtime frame shell.
 fn _basic_code(
     segment: &mut omfwrite::Segment,

@@ -121,7 +121,7 @@ pub fn main(argv: &[String]) -> i32 {
         if args.flags.assembly {
             let module = compile::assembled_by(&program, None, &args.options, args.route, &args.codegen).map_err(|error| error.to_string())?;
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
-            std::fs::write(output, masm::text(&module).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+            std::fs::write(output, llrm_core::driver::basic::text(&module)?).map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes_by(&program, &args.source, None, &args.options, args.route, &args.codegen).map_err(|error| error.to_string())?;
             std::fs::write(output, bytes).map_err(|error| error.to_string())?;
