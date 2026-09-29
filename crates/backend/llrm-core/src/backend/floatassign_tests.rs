@@ -1,0 +1,63 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use super::*;
+use crate::abi::runtime::{EVERY, Reg};
+use crate::backend::constpool::Pool;
+use crate::backend::cpu::ProfileOrName;
+use crate::backend::{frame, isel, target};
+use crate::model::ir::Operation;
+
+/// x87crowd.c's `_deep` through isel and the machine phases before
+/// FloatAssign, under Borland C's medium model; and its frame.
+fn before_float_assign() -> (LirBody, Frame) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir/x87crowd.ll");
+    let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
+    let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
+    let abi = crate::abi::qb::HirAbi {
+        runtime: crate::hir::model::RuntimeProfile::Freestanding,
+        objects: Default::default(),
+        preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
+    };
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+    let pool = Rc::new(RefCell::new(Pool::new(0)));
+    let selected = isel::selected(&module, "_deep", &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
+    let mut made = frame::of(&selected.body, Some(&selected.calls), "", None).unwrap();
+    made.floor = made.floor.min(-selected.depth);
+    let shared = Rc::new(RefCell::new(made));
+    let pinned = selected.body.pins.clone();
+    let mut body = selected.body;
+    for mut phase in crate::flow::machine(&pinned, Some(Rc::clone(&shared)), Some(Rc::clone(&pool)), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN).unwrap() {
+        if phase.class_name() == "FloatAssign" {
+            break;
+        }
+        body = phase.transform(body).unwrap();
+    }
+    let frame = shared.borrow().clone();
+    (body, frame)
+}
+
+/// More than eight floats are live where a float compare and its branches,
+/// which share one source position, end a block. The spill victim was looked for at the last
+/// branch, where none is live: qb-qrender's d_faces.c was refused.
+#[test]
+fn test_a_compare_crowded_before_its_branches_spills() {
+    let (body, mut frame) = before_float_assign();
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+
+    // The premise, as `assigned` sees the body before its first spill.
+    let mut premise = frame.clone();
+    let loaded = _integer_loads(&body, Some(&mut premise), None).unwrap();
+    let stored = _aliased(&_integer_stores(&loaded, Some(&mut premise), false).unwrap());
+    let (block, position) = _crowded(&stored, &_floating_values(&stored)).expect("more than eight floats live somewhere");
+    let insns = &stored.blocks.iter().find(|one| one.at == block).unwrap().insns;
+    let shared: Vec<&Insn> = insns.iter().filter(|one| one.at == insns[position].at).map(|one| &**one).collect();
+    let op = |one: &Insn| one.what.as_ref().map(|what| what.op);
+    assert!(
+        shared.iter().any(|one| op(one) == Some(Operation::Compare)) && shared.last().is_some_and(|one| matches!(op(one), Some(Operation::Branch | Operation::Jump))),
+        "the crowded point's position is a float compare and its branches: {shared:#?}"
+    );
+
+    let assigned = assigned(&body, Some(&mut frame), None, false, cpu);
+    assert!(assigned.is_ok(), "{:?}", assigned.err());
+}
