@@ -24,6 +24,9 @@ mod test_hir_part3;
 mod test_quickr;
 
 #[cfg(test)]
+mod test_frames;
+
+#[cfg(test)]
 mod test_runtime_model;
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! QuickrBASIC's entry zeroing. The frontend stores zero at entry to each
+//! Entry zeroing where procedures frame themselves. The frontend stores zero at entry to each
 //! local that needs it. Here those locals are laid out as one block of the
 //! frame, and the block's stores become one fill.
 
@@ -44,7 +44,7 @@ fn entry_zeroing(function: &model::Function) -> (usize, BTreeSet<i64>) {
     (count, places)
 }
 
-/// `program` with each QuickrBASIC procedure's zeroed locals laid out as
+/// `program` with each self-framed procedure's zeroed locals laid out as
 /// one block just below BP. A procedure that keeps the runtime's frame
 /// (`framed_by_runtime`) is zeroed by B$ENRA, so its stores are dropped.
 pub(super) fn laid_out(
@@ -52,7 +52,7 @@ pub(super) fn laid_out(
     framed_by_runtime: impl Fn(&model::Module, &model::Function) -> bool,
 ) -> model::Program {
     let mut program = program.clone();
-    if program.dialect != model::Dialect::Quickr {
+    if program.frames != model::Frames::Own {
         return program;
     }
     let originals: Vec<model::Module> = program.modules.clone();

@@ -93,6 +93,14 @@ str_enum!(FloatSemantics {
     Machine("MACHINE") = "machine",
 });
 
+// Who frames a procedure: the runtime (BASIC's B$ENRA, which zeroes its
+// locals), or the procedure itself wherever the runtime needs no frame of
+// its own, its HIR storing zero to each local that needs it.
+str_enum!(Frames {
+    Runtime("RUNTIME") = "runtime",
+    Own("OWN") = "own",
+});
+
 str_enum!(TypeKind {
     Void("VOID") = "void",
     Boolean("BOOLEAN") = "boolean",
@@ -816,6 +824,7 @@ pub struct Program {
     /// A frame's locals start zeroed; false where the language leaves them
     /// indeterminate.
     pub zeroed_locals: bool,
+    pub frames: Frames,
     pub promises: RuntimePromises,
     /// The functions code outside the program calls whatever their
     /// linkage: the runtime's way into it.
@@ -840,6 +849,7 @@ impl Program {
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
             zeroed_locals: true,
+            frames: Frames::Runtime,
             promises: RuntimePromises::default(),
             entries: Vec::new(),
             preserved: Vec::new(),

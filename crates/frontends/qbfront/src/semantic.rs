@@ -379,6 +379,9 @@ pub struct Options {
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
+    /// Procedures frame themselves where the runtime needs no frame, as
+    /// the dialect may by default.
+    pub own_frames: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1394,7 +1397,7 @@ impl Compiler {
         if self.dialect.explicit_declarations() && !name.starts_with(PRELUDE_PREFIX) {
             self.warn_unassigned_reads(id == 1, &external_entries, &load_lines);
         }
-        if id != 1 && self.dialect.zeroes_locals() {
+        if id != 1 && self.own_frames() {
             self.zero_locals(&external_entries);
         }
         let table = self
@@ -9521,17 +9524,23 @@ impl Compiler {
         }
         write!(
             out,
-            "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"}}\n",
+            "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
                 "alternate"
             } else {
                 "inline"
-            }
+            },
+            if self.own_frames() { ",\"frames\":\"own\"" } else { "" }
         )
         .unwrap();
         out
+    }
+
+    /// Whether procedures frame themselves where the runtime needs no frame.
+    fn own_frames(&self) -> bool {
+        self.dialect.own_frames() || self.options.own_frames
     }
 
     fn fail<T>(&self, message: impl Into<String>) -> Result<T, SemanticError> {
