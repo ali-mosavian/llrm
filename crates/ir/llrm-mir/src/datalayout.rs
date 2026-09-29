@@ -91,6 +91,12 @@ impl DataLayout {
         self.legal.contains(&bits)
     }
 
+    /// The widest native integer, in bits: LLVM's
+    /// `getLargestLegalIntTypeSizeInBits`, 0 where none is stated.
+    pub fn largest_legal_integer(&self) -> u32 {
+        self.legal.iter().copied().max().unwrap_or(0)
+    }
+
     pub fn pointer(&self, space: u32) -> PointerSpec {
         self.pointers.get(&space).or_else(|| self.pointers.get(&0)).copied().expect("space 0 always has a pointer")
     }

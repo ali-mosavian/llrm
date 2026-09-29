@@ -4,7 +4,7 @@
 use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::passes::{Declared, Outer};
 
-use super::{Fill, filled};
+use super::{Fill, Merge, filled};
 use crate::testing::{managed, parsed, printed, results};
 
 const MEMSET: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\n";
@@ -192,4 +192,65 @@ b6:
 ".replace("MEMSET", MEMSET);
     let (after, _) = fill(&text, &[&[0, 0], &[0, 399]]);
     assert!(after.contains("call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 800, i1 false)"), "{after}");
+}
+
+/// @f storing `stores` into an 8-byte local, then returning the byte at `%q`.
+fn local(stores: &str) -> String {
+    format!(
+        "{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %a = alloca [8 x i8]
+  %p2 = getelementptr i8, ptr %a, i16 2
+  %p4 = getelementptr i8, ptr %a, i16 4
+  %p6 = getelementptr i8, ptr %a, i16 6
+  %p7 = getelementptr i8, ptr %a, i16 7
+{stores}  %r = getelementptr i8, ptr %a, i16 %q
+  %v = load i8, ptr %r
+  %w = zext i8 %v to i16
+  ret i16 %w
+}}"
+    )
+}
+
+const BYTES: &[&[i128]] = &[&[0, 0], &[0, 3], &[0, 6], &[0, 7]];
+
+/// QuickrBASIC's zeroed locals, and every dialect's under `--own-frames`,
+/// were zeroed a word store at a time: qbdemo's PLASMA grew 38 of them where
+/// B$ENRA had cleared the frame, 10% more code over the program.
+#[test]
+fn adjacent_stores_of_one_byte_are_one_memset() {
+    let stores = "  store i16 0, ptr %a\n  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i8 0, ptr %p6\n  store i8 0, ptr %p7\n";
+    let before = parsed(&format!("{DOS}{}", local(stores)));
+    let mut module = before.clone();
+    let text = managed(&mut module, Merge);
+    assert!(text.contains("call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 8, i1 false)") && !text.contains("store"), "{text}");
+    assert_eq!(results(&module, BYTES), results(&before, BYTES));
+}
+
+/// Three words are a dword and a word as a memset, no fewer stores: kept,
+/// as LLVM keeps them. Merged, deedlines' `1, 0, 0, 0` words lost the two
+/// dword stores the backend had paired them into, for three.
+#[test]
+fn stores_a_memset_would_not_reduce_are_kept() {
+    let stores = "  store i16 0, ptr %p2\n  store i16 0, ptr %p4\n  store i16 0, ptr %p6\n";
+    let before = parsed(&format!("{DOS}{}", local(stores)));
+    let mut module = before.clone();
+    let text = managed(&mut module, Merge);
+    assert!(!text.contains("call void @llvm.memset"), "{text}");
+}
+
+/// A gap, another byte, a read between, or a store that overlaps keeps them.
+#[test]
+fn stores_that_are_not_one_fill_are_kept() {
+    let unchanged = |stores: &str| {
+        let before = parsed(&format!("{DOS}{}", local(stores)));
+        let mut module = before.clone();
+        let text = managed(&mut module, Merge);
+        assert!(!text.contains("call void @llvm.memset"), "{text}");
+        assert_eq!(results(&module, BYTES), results(&before, BYTES));
+    };
+    unchanged("  store i16 0, ptr %a\n  store i16 0, ptr %p4\n");
+    unchanged("  store i16 0, ptr %a\n  store i16 257, ptr %p2\n");
+    unchanged("  store i16 0, ptr %a\n  %x = load i8, ptr %p2\n  store i16 0, ptr %p2\n");
+    unchanged("  store i16 0, ptr %a\n  store i16 0, ptr %p2\n  store i8 9, ptr %p2\n");
 }
