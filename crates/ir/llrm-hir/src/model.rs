@@ -174,6 +174,7 @@ impl Type {
 
 str_enum!(Storage {
     Local("LOCAL") = "local",
+    // A parameter's incoming stack slot; `symbol` is the parameter's value.
     Parameter("PARAMETER") = "parameter",
     Static("STATIC") = "static",
     Module("MODULE") = "module",

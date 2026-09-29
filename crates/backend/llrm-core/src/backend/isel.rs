@@ -345,6 +345,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         reachable: BTreeSet::new(),
         flagged: BTreeSet::new(),
         pool,
+        unsealed: false,
     };
     let body = selector.body(name, &convention)?;
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
@@ -458,9 +459,26 @@ struct Selector<'m, 'c, 'p> {
     flagged: BTreeSet<ValueId>,
     /// Where a float constant is loaded from, as LLVM's constant pool.
     pool: &'p mut Pool,
+    /// The body addresses an argument's own slot.
+    unsealed: bool,
 }
 
 impl Selector<'_, '_, '_> {
+    /// `inst`'s address and the argument slot it names, if it is
+    /// `llrm.ia16.argument`.
+    fn argument_slot(&self, inst: InstId, convention: &Convention) -> Option<(ValueId, i64)> {
+        let instruction = self.function.instruction(inst);
+        let Opcode::Call(_) = instruction.opcode else { return None };
+        let [Operand::Constant(index), Operand::Constant(callee)] = instruction.operands[..] else { return None };
+        let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
+        let name = self.module.global(global).name.as_deref()?;
+        if !llrm_mir::intrinsics::is_reserved(name) || Intrinsic::named(name) != Some(Intrinsic::Argument) {
+            return None;
+        }
+        let ConstantKind::Int(index) = self.module.context.get(index).kind else { return None };
+        Some((instruction.result?, *convention.parameters.get(index as usize)?))
+    }
+
     fn body(&mut self, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
         let function = self.function;
         // Only what execution can reach is selected, as LLVM's code generator
@@ -491,6 +509,11 @@ impl Selector<'_, '_, '_> {
                     if llrm_analysis::frameescape::exposes(function, address) {
                         reach.insert((-self.depth, -self.depth + size));
                     }
+                }
+                if let Some((address, disp)) = self.argument_slot(inst, convention) {
+                    // An argument's own slot, addressed: its cells are no longer sealed.
+                    self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
+                    self.unsealed = true;
                 }
             }
         }
@@ -678,7 +701,7 @@ impl Selector<'_, '_, '_> {
         let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks)))?;
         let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
-        body.sealed_arguments = true;
+        body.sealed_arguments = !self.unsealed;
         body.inputs = self.inputs.clone();
         body.ordered = true;
         body.loop_trip_counts = self.trip_counts(&block_at);
@@ -2055,6 +2078,8 @@ impl Selector<'_, '_, '_> {
                 Some(intrinsic @ (Intrinsic::PortIn | Intrinsic::PortOut)) => self.port(intrinsic == Intrinsic::PortIn, inst, arguments, at, out),
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 Some(Intrinsic::Code) => self.inline_code(inst, convention, name, arguments, at, out),
+                // Its address is a frame cell, folded where it is used.
+                Some(Intrinsic::Argument) => Ok(()),
                 _ => refuse(format!("@{name}")),
             };
         }

@@ -317,6 +317,7 @@ impl<'m> Machine<'m> {
             }
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => void,
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
+            Intrinsic::Argument => return unsupported("an argument's stack slot"),
             Intrinsic::Code => return unsupported("inline code"),
         })
     }

@@ -30,6 +30,10 @@ pub enum Intrinsic {
     PortIn,
     /// A value written to an I/O port.
     PortOut,
+    /// The address of the incoming stack slot of the parameter its
+    /// constant argument numbers: where a C parameter whose address is
+    /// taken lives, as Borland's `va_start` expects.
+    Argument,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -157,7 +161,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 27] = [
+const TABLE: [Spec; 28] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -232,6 +236,15 @@ const TABLE: [Spec; 27] = [
         parameters: &[(Slot::Int(16), &[])],
         attrs: PORT_ATTRS,
         memory: PORT_MEMORY,
+    },
+    Spec {
+        name: "llrm.ia16.argument",
+        intrinsic: Intrinsic::Argument,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Int(16), &["immarg"])],
+        attrs: PURE,
+        memory: NO_MEMORY,
     },
     Spec {
         name: "llrm.ia16.out",

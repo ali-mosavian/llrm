@@ -688,6 +688,14 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             tables.callees.insert(MEMSET.to_owned(), reference);
         }
     }
+    if function.places.iter().any(|one| one.storage == Storage::Parameter) && !tables.callees.contains_key(ARGUMENT) {
+        let types = &mut module.context.types;
+        let (pointer, word) = (types.ptr(0), types.int(16));
+        let ty = function_type(types, pointer, vec![word]);
+        let global = module.add_function(ARGUMENT, ty, Linkage::External)?;
+        let reference = module.reference(global);
+        tables.callees.insert(ARGUMENT.to_owned(), reference);
+    }
     for instruction in function.blocks.iter().flat_map(|one| &one.instructions) {
         if let (Some(operand), Some(result)) = (instruction.operands.first(), instruction.results.first()) {
             let types = &mut module.context.types;
@@ -809,6 +817,9 @@ fn fixed(types: &mut Types, op: Op, ty: TypeId) -> Option<(String, Vec<TypeId>)>
     let bits = types.int_bits(ty)?;
     Some((format!("{name}.i{bits}"), vec![ty, ty, types.int(32)]))
 }
+
+/// The address of a parameter's incoming stack slot.
+const ARGUMENT: &str = "llrm.ia16.argument.p0";
 
 /// The target intrinsic a HIR instruction is a call of, its operands the
 /// arguments: an I/O port's.
@@ -1136,7 +1147,15 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let (object, offset) = self.frame[&place.id];
                 Ok(self.offset(self.objects[object], offset, true))
             }
-            Storage::Parameter => Err("a parameter-storage place".to_owned()),
+            Storage::Parameter => {
+                let at = self.function.parameters.iter().position(|&one| one == place.symbol).ok_or("a parameter slot of no parameter")?;
+                let callee = Value::Constant(self.tables.callees[ARGUMENT]);
+                let (pointer, word) = (self.b.context.types.ptr(0), self.b.context.types.int(16));
+                let ty = function_type(&mut self.b.context.types, pointer, vec![word]);
+                let index = self.b.int(16, at as i128);
+                let slot = self.b.call(ty, callee, &[index], "").expect("an address");
+                Ok(self.offset(slot, place.offset, false))
+            }
             _ => {
                 let global = Value::Constant(self.tables.data[&place.symbol]);
                 Ok(self.offset(global, place.offset, false))

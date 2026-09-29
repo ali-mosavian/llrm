@@ -443,6 +443,21 @@ fn cleanup(symbol: &hir::Symbol) -> R<StackCleanup> {
     }
 }
 
+/// Borland C addresses a parameter in its own stack slot, and STDARG.H's
+/// `va_start` steps on from the last one's address: a parameter whose
+/// address is taken lives there, not in a copy.
+fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)]) {
+    let exposed = llrm_core::hir::escape::exposed_frame(function);
+    for &(home, parameter) in homes.iter().filter(|(home, _)| exposed.contains(home)) {
+        let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
+        (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, 0);
+        let copy = |one: &h::Instruction| one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)];
+        for block in &mut function.blocks {
+            block.instructions.retain(|one| !copy(one));
+        }
+    }
+}
+
 fn distance(symbol: &hir::Symbol) -> CallDistance {
     if symbol.far() { CallDistance::Far } else { CallDistance::Near }
 }
@@ -486,7 +501,7 @@ impl<'a, 't> Body<'a, 't> {
         let entry = body.block();
         body.current = entry;
         let result_type = if shared.valueless.contains(&symbol.id) { body.types.of(Shape::Void, None) } else { body.ty(&proc.type_)? };
-        let (parameters, promises) = body.frame(cleanup)?;
+        let (parameters, promises, homes) = body.frame(cleanup)?;
         for one in &proc.body {
             body.statement(one)?;
         }
@@ -498,14 +513,16 @@ impl<'a, 't> Body<'a, 't> {
             .map(|one| h::Block::new(one.id, one.instructions, one.terminator.expect("finished")))
             .collect();
         let linkage = if symbol.exported() { h::FunctionLinkage::External } else { h::FunctionLinkage::Internal };
-        Ok(h::Function {
+        let mut function = h::Function {
             parameters,
             abi: Some(h::ProcedureAbi { cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register }),
             calls: body.calls,
             linkage,
             promises,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
-        })
+        };
+        in_their_slots(&mut function, &homes);
+        Ok(function)
     }
 
     fn name(&self) -> String {
@@ -709,9 +726,11 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// Each parameter and auto a place; each parameter stored into its own.
-    fn frame(&mut self, cleanup: StackCleanup) -> R<(Vec<i64>, Vec<h::Promise>)> {
+    /// A scalar parameter's home is also returned, by place and parameter.
+    fn frame(&mut self, cleanup: StackCleanup) -> R<(Vec<i64>, Vec<h::Promise>, Vec<(i64, i64)>)> {
         let mut parameters = Vec::new();
         let mut promises = Vec::new();
+        let mut homes = Vec::new();
         let mut stores = Vec::new();
         for (symbol, type_) in self.proc.parameters(&self.unit.symbols[&self.proc.symbol]) {
             match self.types.aggregate(type_) {
@@ -735,6 +754,7 @@ impl<'a, 't> Body<'a, 't> {
                     let parameter = self.value(ty);
                     parameters.push(parameter);
                     stores.push((place, -1, parameter));
+                    homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
                     // C99 6.7.3.1: what a restrict parameter reaches, nothing else in its block does.
                     if restricted(self.unit, *symbol) {
@@ -764,7 +784,7 @@ impl<'a, 't> Body<'a, 't> {
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
-        Ok((parameters, promises))
+        Ok((parameters, promises, homes))
     }
 
     // ---- statements ----
