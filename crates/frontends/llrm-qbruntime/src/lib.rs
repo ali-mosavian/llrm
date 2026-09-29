@@ -693,12 +693,13 @@ pub struct Source {
     pub type_: Option<String>,
     pub mbf: Option<bool>,
     pub record: Option<bool>,
+    pub family: Option<String>,
 }
 
 impl Source {
     fn parse(name: &str, table: &toml::Table) -> Result<Source, String> {
         let at = |key: &str| format!("{name}.source.{key}");
-        if let Some(key) = table.keys().find(|key| !["form", "type", "mbf", "record"].contains(&key.as_str())) {
+        if let Some(key) = table.keys().find(|key| !["form", "type", "mbf", "record", "family"].contains(&key.as_str())) {
             return Err(format!("{} is not a source field", at(key)));
         }
         Ok(Source {
@@ -706,14 +707,21 @@ impl Source {
             type_: table.get("type").map(|value| string(value, &at("type")).map(str::to_owned)).transpose()?,
             mbf: table.get("mbf").map(|value| boolean(value, &at("mbf"))).transpose()?,
             record: table.get("record").map(|value| boolean(value, &at("record"))).transpose()?,
+            family: table.get("family").map(|value| string(value, &at("family")).map(str::to_owned)).transpose()?,
         })
     }
 
-    fn matches(&self, form: &str, type_: Option<&str>, mbf: bool, record: bool) -> bool {
+    fn matches(&self, form: &str, type_: Option<&str>, mbf: bool, record: bool, family: &str) -> bool {
         self.form == form
             && self.type_.as_deref().is_none_or(|one| Some(one) == type_)
             && self.mbf.is_none_or(|one| one == mbf)
             && self.record.is_none_or(|one| one == record)
+            && self.family.as_deref().is_none_or(|one| one == family)
+    }
+
+    /// How many operand facts the row names.
+    fn specificity(&self) -> usize {
+        [self.type_.is_some(), self.mbf.is_some(), self.record.is_some(), self.family.is_some()].into_iter().filter(|one| *one).count()
     }
 }
 
@@ -1093,9 +1101,14 @@ pub fn statement(name: &str) -> Option<(&'static str, &'static Statement)> {
 }
 
 /// The routine source form `form` calls for an operand of QB type `type_`,
-/// under MBF or IEEE, with or without a record number.
-pub fn routine_for(form: &str, type_: Option<&str>, mbf: bool, record: bool) -> Option<&'static str> {
-    RUNTIME.iter().find(|(_, one)| one.source.as_ref().is_some_and(|source| source.matches(form, type_, mbf, record))).map(|(name, _)| name.as_str())
+/// under MBF or IEEE, with or without a record number, in runtime `family`.
+/// The row naming the most of those wins.
+pub fn routine_for(form: &str, type_: Option<&str>, mbf: bool, record: bool, family: &str) -> Option<&'static str> {
+    RUNTIME
+        .iter()
+        .filter_map(|(name, one)| one.source.as_ref().filter(|source| source.matches(form, type_, mbf, record, family)).map(|source| (name.as_str(), source.specificity())))
+        .fold(None, |best: Option<(&str, usize)>, (name, rank)| if best.is_some_and(|(_, top)| top >= rank) { best } else { Some((name, rank)) })
+        .map(|(name, _)| name)
 }
 
 /// Whether a runtime entry never comes back to its caller: an established
@@ -1705,6 +1718,17 @@ mod tests {
         assert_eq!(routine.families["vbdos"], Contract { inputs: Some(BTreeSet::from([Reg::Bx])), ..worst("B$X") });
         assert_eq!(routine.families["pds71"], Contract { cleanup: Some(4), ..routine.contract.clone().unwrap() });
         assert!(!routine.families.contains_key("qb45"));
+    }
+
+    /// QB 4.5 and PDS 7.1 have no B$ERS1, so a local STRING array is
+    /// erased with B$ERAS there; VBDOS alone uses B$ERS1.
+    #[test]
+    fn test_a_local_string_array_is_erased_by_its_family_routine() {
+        let erase = |type_, family| routine_for("local ERASE", type_, false, false, family);
+        assert_eq!(erase(Some("STRING"), "vbdos"), Some("B$ERS1"));
+        assert_eq!(erase(Some("STRING"), "qb45"), Some("B$ERAS"));
+        assert_eq!(erase(Some("STRING"), "pds71"), Some("B$ERAS"));
+        assert_eq!(erase(None, "vbdos"), Some("B$ERAS"));
     }
 
     #[test]
