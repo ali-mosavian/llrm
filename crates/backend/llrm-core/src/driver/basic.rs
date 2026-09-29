@@ -113,6 +113,55 @@ pub fn _RUNTIME_FRAME_HEADER(runtime: model::RuntimeProfile) -> Result<i64, Stri
 /// BX is the maximum number of runtime-produced STRING temporaries an HIR
 /// instruction consumes and produces together. This count must come from
 /// resolved typed expressions, never from allocator spill slots.
+/// The main body's frame as the data object `MAIN_FRAME`, `size` bytes: each
+/// BP-relative local moved there. BC's module-level code has no frame of
+/// its own, and the runtime takes BP there for its own: framed by B$ENRA,
+/// QB 4.5 read the frame's missing return address as the error's, and
+/// reported a fatal error in "line 49152 of module $ p".
+pub fn _static_frame(body: &lir::LirBody, size: i64) -> lir::LirBody {
+    let moved = |addr: &Addr| -> Addr {
+        if addr.space != Space::Frame {
+            return *addr;
+        }
+        Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, ..*addr }
+    };
+    let framed = |addr: &Option<Addr>| addr.is_some_and(|addr| addr.space == Space::Frame);
+    // Through BP no longer: the data object's own address.
+    let through = |register: Register| if register == Register::BP { Register::None } else { register };
+    let operand = |r#where: &Loc| -> Loc {
+        match r#where {
+            Loc::Mem(mem) if framed(&mem.addr) => Loc::Mem(ir::Mem { addr: mem.addr.map(|addr| moved(&addr)), through: through(mem.through), ..mem.clone() }),
+            Loc::Address(address) if framed(&address.addr) => Loc::Address(ir::Address { addr: address.addr.map(|addr| moved(&addr)), through: through(address.through), ..address.clone() }),
+            other => other.clone(),
+        }
+    };
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns = block
+                .insns
+                .iter()
+                .map(|one| match &one.what {
+                    Some(what) => {
+                        let mut replaced = (**one).clone();
+                        replaced.what = Some(Semantics { dests: what.dests.iter().map(operand).collect(), sources: what.sources.iter().map(operand).collect(), ..what.clone() });
+                        Arc::new(replaced)
+                    }
+                    None => Arc::clone(one),
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
+/// The main body's static frame: its label, and its data object's id,
+/// which no global or pooled constant takes.
+pub const MAIN_FRAME: &str = "$QB$FRAME";
+pub const MAIN_FRAME_ID: i64 = i64::MAX;
+
 pub fn _runtime_frame(
     body: &lir::LirBody,
     size: i64,
@@ -643,6 +692,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     names.extend(crate::hir::lower::symbol_names());
     let main = module.named(&object.main).ok_or("no main body")?;
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
+    names.insert((Space::Segment, MAIN_FRAME_ID), MAIN_FRAME.to_owned());
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let segments = Segments::of(&options.machine);
     let cpu = options.cpu()?;
@@ -650,6 +700,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
     let mut rows = Vec::new();
     let mut handled = false;
+    let mut main_frame = 0;
     // The runtime enters the module right after its header.
     let order = std::iter::once(main).chain((0..module.globals.len() as u32).map(GlobalId).filter(|&id| id != main));
     for id in order {
@@ -660,7 +711,8 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         let frame = object.frames.get(module.global(id).name.as_deref().unwrap_or_default()).copied().unwrap_or(Frame::Runtime { strings: 0 });
         // B$ENRA zero-fills a runtime frame's locals.
         let target = Target { cpu, segments: &segments, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }) };
-        let (procedure, landing) = procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)?;
+        let (procedure, landing, statics) = procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)?;
+        main_frame += statics;
         for callee in procedure.callees.values() {
             referenced.insert(callee.name.clone(), callee.far);
         }
@@ -680,6 +732,9 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         data.push((segment.name.clone(), laid_out(module, segment, &names)?));
     }
     let mut pooled = Vec::new();
+    if main_frame > 0 {
+        pooled.extend([masm::Datum::Object(masm::Label { name: MAIN_FRAME.to_owned() }), masm::Datum::Bytes(vec![0; main_frame as usize])]);
+    }
     for (bytes, id) in pool.borrow().entries() {
         let label = format!("$QB$D{id}");
         names.insert((Space::Segment, id), label.clone());
@@ -725,7 +780,8 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
 /// A defined function selected, through the machine phases, and framed as
 /// BASIC frames it: a naked one not at all, the main body only where it
 /// reserves anything, and ending the program where it returns; every other
-/// as `frame` says. Its landing pad's block, where it has one.
+/// as `frame` says. Its landing pad's block, where it has one, and the
+/// bytes of the main body's frame, which is static.
 #[allow(clippy::too_many_arguments)]
 fn procedure(
     module: &Module,
@@ -737,18 +793,18 @@ fn procedure(
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
     runtime: model::RuntimeProfile,
-) -> Result<(masm::Procedure, Option<i64>), String> {
+) -> Result<(masm::Procedure, Option<i64>, i64), String> {
     let global = module.global(id);
     let machined = assemble::machined(module, global.name.as_deref().unwrap_or_default(), abi, pool, target)?;
     let finalized = finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
     let mut reserve = 0;
+    let mut statics = 0;
     let (body, framed) = if !super::framed(module, id) {
         (finalized.body, IndexMap::default())
-    } else if main && machined.reserve == 0 {
-        _initialize_frame(&finalized.body, 0)?
     } else if main {
-        _runtime_frame(&finalized.body, machined.reserve, runtime, 0)?
+        statics = machined.reserve + (machined.reserve & 1);
+        (_static_frame(&finalized.body, statics), IndexMap::default())
     } else {
         match frame {
             Frame::Runtime { strings } => _runtime_frame(&finalized.body, machined.reserve, runtime, strings)?,
@@ -786,7 +842,7 @@ fn procedure(
         callees,
         interrupt: None,
     };
-    Ok((procedure, machined.landing))
+    Ok((procedure, machined.landing, statics))
 }
 
 /// `segment`'s data: a segment the module header names starts with its

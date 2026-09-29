@@ -2760,3 +2760,38 @@ fn checked_division_wraps_a_long_min_by_minus_one() {
     let run = llrm_core::hir::execute::run(&program, "__main", &[]).expect("runs");
     assert_eq!((run.output.as_str(), run.panic), ("-2147483648  0 \n", None));
 }
+
+/// The module body's listing on the rich route.
+fn module_body(program: &llrm_core::hir::model::Program) -> String {
+    let text = rich_listing(program);
+    between(&text, "$QB$MAIN proc", "$QB$MAIN endp").to_owned()
+}
+
+/// A module body that needs frame storage (here, the error site of its
+/// two ERRORs) was framed by B$ENRA, and QB 4.5 read that frame's missing
+/// return address as the error's: `ERROR 7` reported "Out of stack space in
+/// line 49152 of module $ p at address 0000:0824". BC's module-level code
+/// has no frame; the body's is now a static data object, BP the runtime's.
+#[test]
+fn a_module_body_keeps_its_frame_in_static_data() {
+    // `10 ON ERROR GOTO 100: 20 ERROR 5: 25 ERROR 6: 27 ON ERROR GOTO 0`
+    // `28 ERROR 7: 30 END: 100 PRINT "h"; ERR: 110 RESUME NEXT`
+    let program = qb_driver::decoded(include_str!("fixtures/static_main_frame.json")).expect("decodes");
+    let body = module_body(&program);
+    // Premise: the body stores into a frame, BP's or the static one.
+    assert!(body.contains("[bp-") || body.contains("$QB$FRAME"), "{body}");
+    assert!(!body.contains("B$ENRA") && !body.contains("[bp"), "{body}");
+    assert!(body.contains("$QB$FRAME"), "{body}");
+}
+
+/// The same from source, on each runtime.
+#[test]
+fn test_a_module_body_with_two_error_sites_takes_no_runtime_frame() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = "10 ON ERROR GOTO 100\n20 ERROR 5\n25 ERROR 6\n30 END\n100 PRINT \"h\"; ERR\n110 RESUME NEXT\n";
+    let path = written(&directory, "frame.bas", source.as_bytes());
+    for runtime in ["qb45", "pds71", "vbdos"] {
+        let body = module_body(&parsed_as(&path, runtime, runtime));
+        assert!(!body.contains("B$ENRA") && body.contains("$QB$FRAME"), "{runtime}: {body}");
+    }
+}
