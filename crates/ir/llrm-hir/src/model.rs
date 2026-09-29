@@ -540,6 +540,31 @@ pub struct ProcedureAbi {
     pub float_return: FloatReturn,
 }
 
+impl ProcedureAbi {
+    /// The parameter a floating `result` is stored through: the last, when
+    /// it points at the result's type and the ABI returns floats by pointer.
+    pub fn result_destination(&self, result: &Type, parameters: &[&Type]) -> Option<usize> {
+        let last = parameters.len().checked_sub(1)?;
+        let points = parameters[last].kind == TypeKind::Pointer && parameters[last].element == Some(result.id);
+        (points && through_destination(self.float_return, self.cleanup, result)).then_some(last)
+    }
+}
+
+impl CallAbi {
+    /// Whether the callee returns a floating `result` through the
+    /// destination this call passes last, the pointer to it coming back.
+    pub fn returns_through(&self, result: &Type) -> bool {
+        through_destination(self.float_return, self.cleanup, result)
+    }
+}
+
+/// Microsoft BASIC's floating results leave through a destination the
+/// caller passes; C's and Pascal's leave in st(0), as does any result a
+/// caller pops arguments for.
+fn through_destination(float_return: FloatReturn, cleanup: StackCleanup, result: &Type) -> bool {
+    float_return == FloatReturn::Pointer && cleanup == StackCleanup::Callee && result.kind == TypeKind::Float
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Function {
     pub id: i64,

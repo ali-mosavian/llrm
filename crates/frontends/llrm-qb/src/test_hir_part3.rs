@@ -2447,6 +2447,29 @@ fn a_fixed_length_assignment_fills_its_destination() {
     assert!(text.contains("@llrm.qb.B$ASSN(ptr addrspace(1) %") && text.contains(", i16 1, ptr addrspace(1) nocapture writeonly initializes((0, 8)) %"), "{text}");
 }
 
+/// A FUNCTION AS SINGLE or AS DOUBLE returns as VBDOS's do: stored through
+/// the hidden destination its caller passes last, that pointer returned. The
+/// rich route left the result in ST(0), so a --legacy caller read its frame
+/// time through the FPU status word fnstsw left in AX: qrender's dt read 0
+/// and it never ticked.
+#[test]
+fn test_a_floating_function_returns_through_its_hidden_destination() {
+    for (suffix, mir, bytes) in [("!", "float", 4), ("#", "double", 8)] {
+        let directory = tempfile::TempDir::new().unwrap();
+        let basic = format!("DECLARE FUNCTION Half{suffix} (x AS {kind})\nDIM y AS {kind}\ny = Half{suffix}(3)\nPRINT y\nFUNCTION Half{suffix} (x AS {kind})\nHalf{suffix} = x / 2\nEND FUNCTION\n", kind = if bytes == 4 { "SINGLE" } else { "DOUBLE" });
+        let source = written(&directory, "fret.bas", basic.as_bytes());
+        let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
+        let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        let half = between(&text, &format!("define cc1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) %0, ptr %1)"), "\n}");
+        assert!(half.lines().any(|line| line.trim().starts_with(&format!("store {mir}")) && line.trim().ends_with(", ptr %1")), "{half}");
+        assert!(half.lines().any(|line| line.trim() == "ret ptr %1"), "{half}");
+        let call = text.lines().find(|line| line.contains(&format!("call cc1000 addrspace(1) ptr @\"HALF{suffix}\"("))).unwrap_or_else(|| panic!("{text}"));
+        let returned = call.trim().split(' ').next().expect("a named result");
+        assert!(text.contains(&format!("load {mir}, ptr {returned}")), "{text}");
+    }
+}
+
 /// UBOUND's "subscript out of range" call may RESUME, so its block jumps on
 /// rather than stopping: only the frontend's `cold` says it never runs.
 /// The MIR emitter dropped it, and noreturn found no such block cold.

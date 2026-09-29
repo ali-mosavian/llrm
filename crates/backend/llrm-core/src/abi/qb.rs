@@ -1149,14 +1149,8 @@ pub fn physicalize(
         .iter()
         .map(|parameter| types[&function.values.iter().find(|one| one.id == *parameter).expect("a parameter value").r#type])
         .collect();
-    let callee_cleanup = function.abi.as_ref().is_some_and(|abi| abi.cleanup == model::StackCleanup::Callee);
     // BASIC's own function convention, where the ABI says so.
-    let returns_legacy_float = result_type.kind == model::TypeKind::Float
-        && function.abi.as_ref().is_some_and(|abi| abi.float_return == model::FloatReturn::Pointer)
-        && callee_cleanup
-        && !function.parameters.is_empty()
-        && parameter_types[parameter_types.len() - 1].kind == model::TypeKind::Pointer
-        && parameter_types[parameter_types.len() - 1].element == Some(result_type.id);
+    let returns_legacy_float = function.abi.as_ref().and_then(|abi| abi.result_destination(result_type, &parameter_types)).is_some();
     let hidden_float_result =
         if returns_legacy_float { Some(lowered.values[&function.parameters[function.parameters.len() - 1]]) } else { None };
     let parameter_offsets = parameter_offsets(function, &parameter_types);
@@ -1459,9 +1453,7 @@ pub fn physicalize(
                 && semantic_type.is_some_and(_paired);
             let legacy_float = matches!(&result, Some(Arg::Held(held)) if held.width == 10)
                 && callable_.is_some()
-                && semantic_type.is_some_and(|type_| type_.kind == model::TypeKind::Float)
-                && site.cleanup == model::StackCleanup::Callee
-                && site.float_return == model::FloatReturn::Pointer;
+                && semantic_type.is_some_and(|type_| site.returns_through(type_));
             if let Some(registers) = registers(&name) {
                 if operation.results.len() != registers.results.len()
                     || operation.results.iter().any(|one| !matches!(one, Arg::Held(held) if held.width == 2))

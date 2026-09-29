@@ -378,7 +378,11 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     if let Some((handler, (global, handled), owner)) = outlined {
         let name = module.global(global).name.clone().unwrap_or_default();
         let mut builder = module.builder(global);
-        let emitted = Body::new(&mut builder, &tables, owner).and_then(|mut body| body.outline(handler, handled));
+        let emitted = Body::new(&mut builder, &tables, owner).and_then(|mut body| {
+            // The handler is its own function; the owner's parameters are not its.
+            body.destination = None;
+            body.outline(handler, handled)
+        });
         if emitted.is_err() {
             builder.function.delete_body();
         }
@@ -578,6 +582,14 @@ fn convention(cleanup: model::StackCleanup, distance: model::CallDistance) -> Em
     Ok((convention, space))
 }
 
+/// The parameter `function`'s floating result is stored through and
+/// returned in its place, where its ABI has one.
+fn result_destination(tables: &Tables, function: &model::Function) -> Option<usize> {
+    let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
+    let parameters: Vec<&model::Type> = function.parameters.iter().map(|one| tables.types[&values[one]]).collect();
+    function.abi.as_ref()?.result_destination(tables.types[&function.result_type], &parameters)
+}
+
 /// `global`, now a function of `convention` in code address space `space`.
 fn place_function(module: &mut Module, global: GlobalId, (convention, space): (u32, u32)) {
     let one = &mut module.globals[global.0 as usize];
@@ -590,8 +602,11 @@ fn place_function(module: &mut Module, global: GlobalId, (convention, space): (u
 fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> Emit<(GlobalId, u32)> {
     let values: HashMap<i64, i64> = function.values.iter().map(|one| (one.id, one.r#type)).collect();
     let types = &mut module.context.types;
-    let returns = value_type(types, tables.types[&function.result_type])?;
-    let parameters = function.parameters.iter().map(|one| value_type(types, tables.types[&values[one]])).collect::<Emit<_>>()?;
+    let parameters: Vec<TypeId> = function.parameters.iter().map(|one| value_type(types, tables.types[&values[one]])).collect::<Emit<_>>()?;
+    let returns = match result_destination(tables, function) {
+        Some(at) => parameters[at],
+        None => value_type(types, tables.types[&function.result_type])?,
+    };
     let ty = function_type(types, returns, parameters);
     let linkage = match function.linkage {
         model::FunctionLinkage::Internal => Linkage::Internal,
@@ -734,10 +749,12 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let types = &mut module.context.types;
         let site = function.calls.iter().find(|one| one.instruction == instruction.id);
         let order = site.and_then(|site| passed(site, instruction.operands.len())).unwrap_or_else(|| (0..instruction.operands.len()).collect());
-        let parameters = order.iter().map(|&one| value_type(types, tables.types[&operand_type(&instruction.operands[one], &values, &places)])).collect::<Emit<_>>()?;
+        let parameters: Vec<TypeId> = order.iter().map(|&one| value_type(types, tables.types[&operand_type(&instruction.operands[one], &values, &places)])).collect::<Emit<_>>()?;
+        let through = site.is_some_and(|site| matches!(instruction.results[..], [result] if site.returns_through(tables.types[&values[&result]])));
         let returns = match instruction.results[..] {
             // A comparison's callee returns the sign of the first against the second.
             [_] if three_way(instruction.op).is_some() => types.int(16),
+            [_] if through => *parameters.last().ok_or("a floating result with no destination")?,
             [result] => value_type(types, tables.types[&values[&result]])?,
             [] => types.void(),
             // Answered in several registers: one aggregate, as LLVM returns them.
@@ -918,11 +935,14 @@ struct Body<'b, 'm, 'h> {
     handling: Option<handling::Handling>,
     /// The module handler, where this emits its own function.
     outlined: Option<handling::Outlined>,
+    /// Where a floating result is stored, returned in its place.
+    destination: Option<Value>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn new(b: &'b mut Builder<'m>, tables: &'b Tables<'h>, function: &'h model::Function) -> Emit<Self> {
         let values = function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect();
+        let destination = result_destination(tables, function).map(|at| b.parameter(at));
         Ok(Self {
             b,
             tables,
@@ -936,6 +956,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             addresses: HashMap::new(),
             handling: None,
             outlined: None,
+            destination,
         })
     }
 
@@ -1420,13 +1441,16 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let (convention, _) = convention(site.cleanup, site.distance)?;
                 let operands = self.operands(instruction)?;
                 let [callee, ref arguments @ ..] = operands[..] else { return Err("an indirect call of nothing".to_owned()) };
+                let through = self.through_destination(instruction);
                 let returns = match instruction.results.first() {
+                    Some(_) if through => self.b.type_of(*arguments.last().ok_or("a floating result with no destination")?),
                     Some(&result) => self.result_type(result)?,
                     None => self.b.context.types.void(),
                 };
                 let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
                 let ty = function_type(&mut self.b.context.types, returns, parameters);
-                if let Some(result) = self.raising_call(instruction.id, true, convention, ty, callee, arguments, &[])? {
+                if let Some(answer) = self.raising_call(instruction.id, true, convention, ty, callee, arguments, &[])? {
+                    let result = self.answered(instruction, through, answer)?;
                     self.define(instruction, result);
                 }
             }
@@ -1439,7 +1463,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let filled = site
                     .map(|site| site.promises.iter().filter_map(|one| Some((order.iter().position(|&at| at as i64 == one.operand)?, one.bytes))).collect::<Vec<_>>())
                     .unwrap_or_default();
+                let through = self.through_destination(instruction);
                 let returns = match instruction.results[..] {
+                    [_] if through => self.b.type_of(*arguments.last().ok_or("a floating result with no destination")?),
                     [result] => self.result_type(result)?,
                     [] => self.b.context.types.void(),
                     ref results => {
@@ -1465,6 +1491,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                             self.values.insert(one, field);
                         }
                     } else {
+                        let result = self.answered(instruction, through, result)?;
                         self.define(instruction, result);
                     }
                 }
@@ -1472,6 +1499,23 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             other => return Err(format!("HIR {other}")),
         }
         Ok(())
+    }
+
+    /// Whether `instruction`'s one floating result comes back through the
+    /// destination it passes last.
+    fn through_destination(&self, instruction: &model::Instruction) -> bool {
+        let Some(site) = self.function.calls.iter().find(|one| one.instruction == instruction.id) else { return false };
+        matches!(instruction.results[..], [result] if site.returns_through(self.hir_type(self.value_types[&result])))
+    }
+
+    /// The call's answer: the float loaded through the destination it
+    /// returned, where it returned one.
+    fn answered(&mut self, instruction: &model::Instruction, through: bool, answer: Value) -> Emit<Value> {
+        if !through {
+            return Ok(answer);
+        }
+        let ty = self.result_type(instruction.results[0])?;
+        Ok(self.b.load(ty, answer, false, ""))
     }
 
     /// A call of the declared `callee` by its convention.
@@ -1548,6 +1592,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             TerminatorKind::Return => {
                 let mut value = terminator.operands.first().map(|one| self.value(one)).transpose()?;
+                if let Some(destination) = self.destination {
+                    // No value stores nothing, and the caller still loads through what comes back.
+                    if let Some(result) = value {
+                        self.b.store(result, destination, false);
+                    }
+                    value = Some(destination);
+                }
                 let Type::Function { returns, .. } = self.b.context.types.get(self.b.function.ty).clone() else { unreachable!("a function type") };
                 if value.is_none() && !self.b.context.types.is_void(returns) {
                     // No value from a function that has one: nothing the caller may read.
