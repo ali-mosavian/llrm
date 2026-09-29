@@ -292,9 +292,22 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
 const INTERRUPTED: [Register; 9] =
     [Register::AX, Register::BX, Register::CX, Register::DX, Register::ES, Register::DS, Register::SI, Register::DI, Register::BP];
 
-/// Where an interrupt handler's first parameter is above its own BP: past
-/// the saved BP, GS, FS and PUSHAD's eight dwords.
-pub const INTERRUPT_PARAMETERS: i64 = 2 + 2 + 2 + 32;
+/// Where an interrupt handler's first parameter, the first register it
+/// saved, is above its own BP: past what its entry pushes after those, and
+/// the BP its frame pushes.
+pub fn interrupt_parameters() -> i64 {
+    let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
+    let pushed: i64 = enter[INTERRUPTED.len()..]
+        .iter()
+        .map(|one| match (one.op, one.name.as_deref()) {
+            (_, Some("pushad")) => 32,
+            (Operation::Push, _) => 2,
+            (Operation::Pop, _) => -2,
+            _ => 0,
+        })
+        .sum();
+    pushed + 2
+}
 
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
 /// so it saves every register it or a callee may change, and gives compiled
