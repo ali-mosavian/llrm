@@ -1,8 +1,7 @@
 # Facts where llrm-qb still differs from BC; see the test's report.
+
+# CURRENCY: llrm-qb has no CURRENCY type.
 vbdos CUE refused
-vbdos PSEGD return
-vbdos PSEGD call PUTI #1 stack
-vbdos PSEGD call PUTI #2 stack
 vbdos CALLALL call __AFCYLD #1 stack
 vbdos CALLALL call __AFCYLD #1 cleanup
 vbdos CALLALL call __AFCYST #1 stack
@@ -16,9 +15,6 @@ vbdos CALLALL call RCUR #1 cleanup
 vbdos CALLALL call PUTY #2 stack
 vbdos CALLALL call PUTY #2 cleanup
 pds71 CUE refused
-pds71 PSEGD return
-pds71 PSEGD call PUTI #1 stack
-pds71 PSEGD call PUTI #2 stack
 pds71 CALLALL call __AFCYLD #1 stack
 pds71 CALLALL call __AFCYLD #1 cleanup
 pds71 CALLALL call __AFCYST #1 stack
@@ -31,3 +27,13 @@ pds71 CALLALL call RCUR #1 stack
 pds71 CALLALL call RCUR #1 cleanup
 pds71 CALLALL call PUTY #2 stack
 pds71 CALLALL call PUTY #2 cleanup
+
+# SEG in a SUB definition: BC's definition takes a near pointer (RETF 6)
+# while its own callers push a far one, so BC's program fails. llrm-qb
+# keeps the far pointer its callers and BC's push.
+vbdos PSEGD return
+vbdos PSEGD call PUTI #1 stack
+vbdos PSEGD call PUTI #2 stack
+pds71 PSEGD return
+pds71 PSEGD call PUTI #1 stack
+pds71 PSEGD call PUTI #2 stack
