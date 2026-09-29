@@ -155,12 +155,27 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
             out.push(flag.into());
         }
     }
+    // qbfront runs from ROOT: a relative path is the caller's.
+    let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string();
     for directory in &frontend.includes {
         out.push("--include".into());
-        out.push(directory.display().to_string());
+        out.push(absolute(directory));
     }
-    out.push(source.display().to_string());
+    out.push(absolute(source));
     Ok(out)
+}
+
+#[cfg(test)]
+mod options_tests {
+    use std::path::Path;
+
+    /// qbfront runs from the repo root, so `llrm-qb CE.BAS` from the
+    /// source's own directory said "CE.BAS: No such file or directory".
+    #[test]
+    fn test_a_relative_source_is_passed_as_the_callers_path() {
+        let options = super::_options(Path::new("CE.BAS"), &super::Frontend::new("vbdos", "vbdos")).unwrap();
+        assert_eq!(options.last().map(String::as_str), Some(std::env::current_dir().unwrap().join("CE.BAS").to_str().unwrap()));
+    }
 }
 
 /// Run `command() + arguments` from ROOT: stdout, or the refusal.
