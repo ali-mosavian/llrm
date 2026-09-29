@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
-use llrm_mir::datalayout::DataLayout;
+use llrm_mir::datalayout::{DataLayout, float_bits};
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
     Function, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Opcode, Operand as Value, Position, Type, TypeId, Types,
@@ -148,6 +148,7 @@ fn value_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
         TypeKind::Float => match hir.width {
             4 => types.intern(Type::Float(FloatKind::Float)),
             8 => types.intern(Type::Float(FloatKind::Double)),
+            10 => types.intern(Type::Float(FloatKind::X86Fp80)),
             _ => return Err(format!("a {}-byte float", hir.width)),
         },
         TypeKind::Pointer if hir.address == AddressKind::Segment => types.ptr(SEGMENT),
@@ -1139,8 +1140,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Type::Int(_), Number::Int(n)) => ConstantKind::Int(n as u128),
             (Type::Float(FloatKind::Float), Number::Int(n)) => ConstantKind::Float(u64::from((n as f32).to_bits())),
             (Type::Float(FloatKind::Float), Number::Float(x)) => ConstantKind::Float(u64::from((x as f32).to_bits())),
-            (Type::Float(FloatKind::Double), Number::Int(n)) => ConstantKind::Float((n as f64).to_bits()),
-            (Type::Float(FloatKind::Double), Number::Float(x)) => ConstantKind::Float(x.to_bits()),
+            (Type::Float(FloatKind::Double | FloatKind::X86Fp80), Number::Int(n)) => ConstantKind::Float((n as f64).to_bits()),
+            (Type::Float(FloatKind::Double | FloatKind::X86Fp80), Number::Float(x)) => ConstantKind::Float(x.to_bits()),
             (Type::Pointer(_), Number::Int(0)) => ConstantKind::Null,
             (other, value) => return Err(format!("a constant {value:?} of {other:?}")),
         };
@@ -1653,8 +1654,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             (Type::Int(_), Type::Int(_)) => CastOp::ZExt,
             (Type::Int(_), Type::Float(_)) if signed => CastOp::SIToFP,
             (Type::Int(_), Type::Float(_)) => CastOp::UIToFP,
-            (Type::Float(FloatKind::Float), Type::Float(FloatKind::Double)) => CastOp::FPExt,
-            (Type::Float(FloatKind::Double), Type::Float(FloatKind::Float)) => CastOp::FPTrunc,
+            (Type::Float(a), Type::Float(b)) if float_bits(*a) < float_bits(*b) => CastOp::FPExt,
+            (Type::Float(a), Type::Float(b)) if float_bits(*a) > float_bits(*b) => CastOp::FPTrunc,
             (Type::Float(_), Type::Int(_)) => return Ok(self.intrinsic(Op::Convert, value, to)?.expect("a rounding")),
             (Type::Int(_), Type::Pointer(_)) => CastOp::IntToPtr,
             (Type::Pointer(_), Type::Int(_)) => CastOp::PtrToInt,

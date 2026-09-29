@@ -34,7 +34,7 @@ impl Default for DataLayout {
             big_endian: false,
             pointers: BTreeMap::from([(0, PointerSpec { bits: 64, align: 8, index_bits: 64 })]),
             ints: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 4)]),
-            floats: BTreeMap::from([(16, 2), (32, 4), (64, 8), (128, 16)]),
+            floats: BTreeMap::from([(16, 2), (32, 4), (64, 8), (80, 2), (128, 16)]),
             legal: Vec::new(),
             aggregate_align: 1,
             alloca_space: 0,
@@ -197,5 +197,6 @@ pub fn float_bits(kind: FloatKind) -> u32 {
     match kind {
         FloatKind::Float => 32,
         FloatKind::Double => 64,
+        FloatKind::X86Fp80 => 80,
     }
 }

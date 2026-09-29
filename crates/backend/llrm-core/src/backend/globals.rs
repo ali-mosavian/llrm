@@ -124,6 +124,7 @@ impl Initializer<'_> {
             ConstantKind::Int(bits) => self.bytes(&bits.to_le_bytes()[..size]),
             ConstantKind::Float(bits) => match types.get(constant.ty) {
                 Type::Float(FloatKind::Float) => self.bytes(&(*bits as u32).to_le_bytes()),
+                Type::Float(FloatKind::X86Fp80) => self.bytes(&llrm_mir::types::x87_extended(*bits)),
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
             ConstantKind::Null | ConstantKind::Zero => self.bytes(&vec![0; self.layout.alloc_size(types, constant.ty) as usize]),

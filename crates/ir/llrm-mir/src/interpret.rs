@@ -283,14 +283,14 @@ impl<'m> Machine<'m> {
             // In the argument's own precision.
             Intrinsic::Unary(function) => match argument(0) {
                 Val::Float(FloatKind::Float, bits) => Val::Float(FloatKind::Float, u64::from((function.apply(f64::from(f32::from_bits(bits as u32))) as f32).to_bits())),
-                Val::Float(FloatKind::Double, bits) => Val::Float(FloatKind::Double, function.apply(f64::from_bits(bits)).to_bits()),
+                Val::Float(kind @ (FloatKind::Double | FloatKind::X86Fp80), bits) => Val::Float(kind, function.apply(f64::from_bits(bits)).to_bits()),
                 _ => Val::Poison,
             },
             Intrinsic::LRint => {
                 let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
                 let x = match kind {
                     FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
-                    FloatKind::Double => f64::from_bits(bits),
+                    FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
                 }
                 .round_ties_even();
                 let width = self.types().int_bits(returns).expect("an integer result");
@@ -692,14 +692,14 @@ fn insert(aggregate: Val, indices: &[u32], value: Val) -> Val {
 fn to_f64(kind: FloatKind, bits: u64) -> f64 {
     match kind {
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
-        FloatKind::Double => f64::from_bits(bits),
+        FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
     }
 }
 
 fn from_f64(kind: FloatKind, value: f64) -> Val {
     match kind {
         FloatKind::Float => Val::Float(kind, u64::from((value as f32).to_bits())),
-        FloatKind::Double => Val::Float(kind, value.to_bits()),
+        FloatKind::Double | FloatKind::X86Fp80 => Val::Float(kind, value.to_bits()),
     }
 }
 
@@ -717,7 +717,7 @@ fn float_binary(op: BinaryOp, kind: FloatKind, x: u64, y: u64) -> Val {
             };
             Val::Float(kind, u64::from(value.to_bits()))
         }
-        FloatKind::Double => {
+        FloatKind::Double | FloatKind::X86Fp80 => {
             let (a, b) = (f64::from_bits(x), f64::from_bits(y));
             let value = match op {
                 BinaryOp::FAdd => a + b,

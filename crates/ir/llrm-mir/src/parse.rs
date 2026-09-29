@@ -30,7 +30,7 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 10] = ["undef", "x86_fp80", "fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 9] = ["undef", "fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -662,6 +662,7 @@ impl Parser {
                 "token" => Type::Token,
                 "float" => Type::Float(FloatKind::Float),
                 "double" => Type::Float(FloatKind::Double),
+                "x86_fp80" => Type::Float(FloatKind::X86Fp80),
                 "ptr" => Type::Pointer(self.address_space()?),
                 _ => match word.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok()) {
                     Some(bits) if (1..=128).contains(&bits) => Type::Int(bits),
@@ -859,7 +860,7 @@ impl Parser {
 
     fn float(&self, shape: &Type, value: f64, line: usize) -> Parsed<ConstantKind> {
         match shape {
-            Type::Float(FloatKind::Double) => Ok(ConstantKind::Float(value.to_bits())),
+            Type::Float(FloatKind::Double | FloatKind::X86Fp80) => Ok(ConstantKind::Float(value.to_bits())),
             Type::Float(FloatKind::Float) => {
                 let narrow = value as f32;
                 if f64::from(narrow).to_bits() != value.to_bits() && !value.is_nan() {

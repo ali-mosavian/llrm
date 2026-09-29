@@ -279,6 +279,7 @@ fn mangle(types: &Types, ty: TypeId) -> String {
         Type::Int(bits) => format!("i{bits}"),
         Type::Float(FloatKind::Float) => "f32".to_owned(),
         Type::Float(FloatKind::Double) => "f64".to_owned(),
+        Type::Float(FloatKind::X86Fp80) => "f80".to_owned(),
         Type::Pointer(space) => format!("p{space}"),
         _ => types.display(ty),
     }
