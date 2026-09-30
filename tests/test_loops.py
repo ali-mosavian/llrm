@@ -327,3 +327,13 @@ def test_a_nib_case_keeps_its_symbolic_stride(tmp_path):
     import re
     m = re.findall(r"(%\d+)[,)]", header)[3]  # the fourth parameter: m
     assert re.search(re.escape(m) + r"\b", rest)
+
+
+def test_a_walk_on_a_far_array_points_far():
+    """A walk sharing a far array took its own near pointer type: the C cast
+    the far address to near, lost the segment and read DS instead."""
+    from spec import Ptr
+    walks = (Walk(I16, where="param", ptr="far"), Walk(I16, ("off", 1), where="param", ptr="near", same_as=0))
+    case = concurrent.build(Shape(walks, form="ptr"))
+    kinds = {kind.kind for _, kind in case.locals if isinstance(kind, Ptr)}
+    assert kinds == {"far"}

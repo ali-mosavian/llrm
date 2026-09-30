@@ -181,9 +181,10 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
     local_types = [("i", shape.counter), ("s", I32), ("u", I32), ("j", I32), ("q", I32), ("d", I32), ("k", I16),
                    *((f"r{x}", I32) for x in range(pressure))]
     for k in walked:
-        local_types.append((f"p{k}", Ptr(walks[k].elem, walks[k].ptr)))
+        # a walk on another's array points as that array does
+        local_types.append((f"p{k}", Ptr(walks[k].elem, next(a.ptr for a in arrays if a.name == name_of(k)))))
     if shape.form == "end":
-        local_types.append(("e", Ptr(walks[0].elem, walks[0].ptr)))
+        local_types.append(("e", Ptr(walks[0].elem, next(a.ptr for a in arrays if a.name == name_of(0)))))
 
     def access(k: int):
         w = walks[k]
