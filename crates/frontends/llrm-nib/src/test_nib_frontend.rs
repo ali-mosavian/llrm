@@ -1888,11 +1888,12 @@ fn test_a_program_compiles_through_the_rich_mir() {
 }
 
 /// The rich route priced every CPU as a 486, so a 386's dearer far call
-/// did not make evaluating `logic`'s calls pay.
+/// did not make evaluating `logic`'s calls pay. The body is one too dear to
+/// evaluate on a 486 after a complemented boolean folds to one compare.
 #[test]
 fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return a < b && !a == 0 || b == 7\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
+    let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
         let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
