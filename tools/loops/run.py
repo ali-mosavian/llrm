@@ -207,28 +207,28 @@ def measure(batch: Batch, result: Result) -> None:
 
 
 def references(cases: list[Case], config: build.Config, work: Path, result: Result) -> None:
+    """Each case alone through each reference compiler: as for llrm, its
+    loop must not depend on what else was in the file."""
     have = build.available()
     for ref, compile_ in build.REFERENCES.items():
         if not have[ref]:
             continue
-        chosen = [c for c in cases if not emit_c.expressible(c) and (ref != "llvm" or not _far(c))]
-        for k, group in enumerate(batches(chosen, "c")):
-            place = work / config.tag / ref / f"b{k:02d}"
+        for case in cases:
+            if emit_c.expressible(case) or (ref == "llvm" and _far(case)):
+                continue
+            place = work / config.tag / ref / case.name
             place.mkdir(parents=True, exist_ok=True)
             path = place / "p.c"
-            path.write_text(emit_c.library(group, ref))
+            path.write_text(emit_c.library([case], ref))
             obj = place / ("P.OBJ" if ref == "ow" else "p.o")
             try:
                 compile_(path, obj, config)
             except build.CompileError as why:
-                result.notes.append(f"{config.tag} {ref}: {str(why)[:200]}")
+                result.notes.append(f"{config.tag} {ref} {case.name}: {str(why)[:160]}")
                 continue
             loops = innerloops.loops(obj.read_bytes(), calls=True)
-            by_name: dict[str, list] = {}
-            for loop in loops:
-                by_name.setdefault(loop.name.rsplit("#", 1)[0].lstrip("_"), []).append(quality.facts(loop))
-            for case in group:
-                result.facts[(case.name, ref, config.tag)] = by_name.get(case.symbol, [])
+            result.facts[(case.name, ref, config.tag)] = [
+                quality.facts(one) for one in loops if one.name.rsplit("#", 1)[0].lstrip("_") == case.symbol]
 
 
 def _far(case: Case) -> bool:
@@ -240,6 +240,15 @@ def _far(case: Case) -> bool:
 
 def total(facts: list) -> tuple[int, int]:
     return sum(f.size for f in facts), sum(f.memory for f in facts)
+
+
+def reference_meets(result: Result, case: str, config: str, bound: int) -> bool:
+    """Whether Open Watcom or gcc-ia16 compiled the case's C within `bound`."""
+    for ref in ("ow", "gcc"):
+        facts = result.facts.get((case, ref, config))
+        if facts and max(f.ivs for f in facts) <= bound:
+            return True
+    return False
 
 
 def judge(cases: list[Case], langs: list[str], configs: list, result: Result) -> None:
@@ -261,12 +270,15 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
                     continue  # no loop left: a string instruction, or unrolled away
                 fits = wants and all(w.fits for w in wants)
                 if fits and all(w.ivs is not None for w in wants):
-                    result.judged |= {(*key, "ivs"), (*key, "mir-ivs")}
-                    if max(f.ivs for f in facts) > max(w.ivs for w in wants):
-                        result.short.add((*key, "ivs"))
+                    bound = max(w.ivs for w in wants)
+                    # a bound no reference compiler met on the same loop is an ideal
+                    kind = "ivs" if reference_meets(result, case.name, config.tag, bound) else "ivs-ideal"
+                    result.judged |= {(*key, kind), (*key, "mir-" + kind)}
+                    if max(f.ivs for f in facts) > bound:
+                        result.short.add((*key, kind))
                     counted = result.mir_ivs.get(key)
-                    if counted and max(counted) > max(w.ivs for w in wants):
-                        result.short.add((*key, "mir-ivs"))
+                    if counted and max(counted) > bound:
+                        result.short.add((*key, "mir-" + kind))
                 if fits and all(w.invariant_loads == 0 for w in wants):
                     result.judged.add((*key, "invariant-loads"))
                     if sum(f.invariant_loads for f in facts) > 0:
@@ -477,7 +489,10 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         jobs += [j for got in pool.map(one, all_batches) if got for j in got]
         if not args.no_refs:
-            list(pool.map(lambda cfg: references(per_lang.get("c", ([],))[0], cfg, work / "refs", result), configs))
+            chosen = per_lang.get("c", ([],))[0]
+            chunks = [chosen[k : k + 25] for k in range(0, len(chosen), 25)]
+            list(pool.map(lambda job: references(job[1], job[0], work / "refs", result),
+                          [(cfg, chunk) for cfg in configs for chunk in chunks]))
 
     if jobs:
         # one launch per configuration (and one for the oracle's BC checks), side by side
