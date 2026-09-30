@@ -16,9 +16,11 @@ program; [targets](docs/measurement/targets.md) has the evidence and current gap
 | Tool | Input |
 | --- | --- |
 | `llrm-qb` | QuickBASIC-family source: QB 4.5, QBasic 1.1, PDS 7.1, VBDOS, and QuickrBASIC |
-| `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`) |
-| `llrm-nib` | llrm's own language; see [the language](docs/frontends/nib/readme.md) |
+| `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`), in Borland's medium model |
+| `llrm-nib` | Nib, llrm's own language; see [the language](docs/frontends/nib/readme.md) |
 | `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
+| `llrm-run` | Runs a Nib module's entry on the host HIR interpreter |
+| `nib-lsp` | Nib's language server; see [the server](docs/frontends/nib/lsp.md) |
 
 QuickrBASIC (`--dialect quickr`) is VBDOS BASIC extended, linked against the VBDOS
 runtime. It adds sized and unsigned integers, mandatory declarations, f-strings,
@@ -44,7 +46,7 @@ FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)
 END FUNCTION
 ```
 
-`llrm-c` and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
+The compilers and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
 coprocessor is required.
 
 ## Use
@@ -61,10 +63,25 @@ sudo apt install build-essential git autoconf automake libtool libpng-dev libpca
 ```sh
 cargo build --release
 target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
-target/release/llrm-c program.c --opt -o PROGRAM.OBJ
+target/release/llrm-c program.c -o PROGRAM.OBJ
 target/release/llrm-nib program.nib -o PROGRAM.OBJ
 target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 486
 ```
+
+`llrm-qb`, `llrm-c` and `llrm-nib` share their options:
+
+| Option | Does |
+| --- | --- |
+| `-O0` `-O1` `-O2` `-O3` `-Os` `-Oz` `-Og` | Optimization level; `-O2` is the default |
+| `-f[no-]PASS` | One pass on or off, by gcc's name: `unroll-loops`, `peel-loops`, `inline-functions`, `strength-reduce`, `unswitch-loops`, `gcse`, `tree-dse`, `tree-dce`, `tree-sra`, `move-loop-invariants`, `tree-loop-distribute-patterns` |
+| `--cpu CPU`, `-march`, `-mtune` | The processor, `386` through `Core` |
+| `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow,undefined`, `-ftrapv` | The run-time checks BC's `/D` makes, as gcc names them |
+| `-g` | CodeView line numbers, symbols and types, for `LINK /CO` and CodeView |
+| `-S` | Writes the assembly listing instead of an object |
+| `--dump DIR` | Writes every stage to `DIR`, for diffing |
+
+`llrm-qb` also takes `--own-frames`, which frames procedures without the runtime's
+`B$ENRA`/`B$EXSA` wherever the runtime needs no frame of its own.
 
 `llrm-omf` takes every object and library in LINK order when a program spans
 modules, and writes nothing unless all of them succeed:
@@ -83,9 +100,12 @@ array checks. Audited external calls come from `--contracts PROFILE.json`; see
 ## Optimizations
 
 The middle end repeats its MIR passes to a fixed point: constant folding and
-propagation, algebraic simplification, GVN, load/store forwarding, promotion,
-LICM, loop rotation, unswitching, unrolling and peeling, induction variables and
-strength reduction, inlining and dead-code removal.
+propagation, algebraic simplification, GVN over MemorySSA (which also forwards
+loads and stores and reuses quotients), dead-store and dead-code removal,
+promotion of memory to values, LICM, loop rotation, unswitching, unrolling and
+peeling, induction variables and strength reduction, memset recognition,
+inlining, and interprocedural facts: which calls read or write what, and which
+never return.
 
 The backend chooses x86 address forms, uses 32-bit registers and arithmetic in
 real mode on the 386 and later, allocates registers with coalescing, live-range
@@ -95,6 +115,12 @@ LONG register pairs, runtime arithmetic calls and array descriptors; see
 [HARR](docs/optimizations/harr.md) for a before and after.
 
 ## Example
+
+One loop in three languages: a dot product of two `int` arrays, returned as a
+`long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
+prints with `--cpu 486`. C is in the medium model.
+
+C, `llrm-c dot.c --cpu 486 -S`:
 
 ```c
 long dot(const int *a, const int *b, int n)
@@ -107,37 +133,168 @@ long dot(const int *a, const int *b, int n)
 }
 ```
 
-`llrm-c dot.c --opt --cpu 486` gives, for the medium model:
-
 ```asm
 _dot proc far
     push bp
     mov bp, sp
     push si
     push di
+L0_0:
+    mov di, word ptr [bp+8]
+    mov bx, word ptr [bp+10]
+    mov cx, bx
+    neg cx
     xor eax, eax
-    mov bx, word ptr [bp+10]    ; n
-    mov si, word ptr [bp+6]     ; a
-    mov di, word ptr [bp+8]     ; b
-    cmp bx, 0
-    jle done
-loop:
-    movsx ecx, word ptr [si]
-    movsx edx, word ptr [di]
-    imul ecx, edx               ; 32-bit product, no runtime helper
-    add eax, ecx
-    add si, 2                   ; i is gone: both pointers step
-    add di, 2
-    dec bx                      ; the loop counts down to zero
-    jne loop
-done:
-    shld edx, eax, 16           ; return the long in DX:AX
+    or bx, bx
+    jle L0_3
+L0_20:
+    xor bx, bx
+L0_5:
+    mov si, word ptr [bp+6]
+    movsx edx, word ptr [bx+si]
+    movsx esi, word ptr [bx+di]
+    imul edx, esi
+    add eax, edx
+    add bx, 2
+    inc cx
+    jne L0_5
+L0_3:
+    shld edx, eax, 16
     pop di
     pop si
     pop bp
     retf
 _dot endp
 ```
+
+Nib, `llrm-nib dot.nib --entry dot --cpu 486 -S`:
+
+```
+fn dot(a: &[i16], b: &[i16], n: i16) -> i32:
+    let mut total: i32 = 0
+    for i in 0..n:
+        total += i32(a[i]) * i32(b[i])
+    return total
+```
+
+```asm
+_dot proc far
+    push bp
+    mov bp, sp
+    sub sp, 4
+    push si
+    push di
+L0_0:
+    les bx, dword ptr [bp+6]
+    lfs di, dword ptr [bp+10]
+    mov ax, word ptr es:[bx]
+    mov word ptr [bp-2], ax
+    les ax, dword ptr es:[bx+4]
+    mov word ptr [bp-4], ax
+    mov dx, word ptr fs:[di]
+    lfs di, dword ptr fs:[di+4]
+    xor cx, cx
+    xor eax, eax
+    jmp L0_7
+L0_11:
+    cmp cx, word ptr [bp-2]
+    jae L0_21
+L0_15:
+    lea bx, [ecx+ecx]
+    mov si, word ptr [bp-4]
+    movsx esi, word ptr es:[bx+si]
+    cmp cx, dx
+    jae L0_30
+L0_23:
+    movsx ebx, word ptr fs:[bx+di]
+    imul esi, ebx
+    add eax, esi
+    inc cx
+L0_7:
+    cmp cx, word ptr [bp+14]
+    jl L0_11
+L0_13:
+    shld edx, eax, 16
+    pop di
+    pop si
+    leave
+    retf
+L0_21:
+    call far ptr N$EBND
+L0_30:
+    call far ptr N$EBND
+_dot endp
+```
+
+Nib checks every index: a slice is a far pointer to its length and data pointer,
+and a bad index calls `N$EBND`. `--unchecked-bounds` leaves the C loop.
+
+BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 -S`:
+
+```basic
+FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER, n AS INTEGER)
+    DIM total AS LONG, i AS INTEGER
+    FOR i = 0 TO n - 1
+        total = total + CLNG(a(i)) * b(i)
+    NEXT
+    Dot& = total
+END FUNCTION
+```
+
+```asm
+DOT proc far
+L1_0:
+    mov cx, 2
+    mov bx, 0
+    call far ptr B$ENRA
+    mov si, word ptr [bp+10]
+    mov di, word ptr [bp+8]
+    mov bx, word ptr [bp+6]
+    mov bx, word ptr [bx]
+    dec bx
+    mov ax, word ptr [si+2]
+    mov cx, word ptr [si+10]
+    mov word ptr [bp-12], cx
+    mov es, ax
+    mov fs, word ptr [di+2]
+    mov di, word ptr [di+10]
+    mov cx, bx
+    inc cx
+    neg cx
+    xor eax, eax
+    or bx, bx
+    jl L1_35
+L1_37:
+    xor bx, bx
+L1_20:
+    mov si, word ptr [bp-12]
+    movsx edx, word ptr es:[bx+si]
+    movsx esi, word ptr fs:[bx+di]
+    imul edx, esi
+    add eax, edx
+    add bx, 2
+    inc cx
+    jne L1_20
+L1_35:
+    shld edx, eax, 16
+    call far ptr B$EXSA
+    retf 6
+DOT endp
+```
+
+An array is a descriptor: its segment goes in `es` or `fs` before the loop.
+`B$ENRA` and `B$EXSA` are the runtime's frame; `--own-frames` replaces them with a
+plain one.
+
+All three accumulate the long product in `eax` with `imul`, without a runtime
+call. C and BASIC count the index from `-n` up to zero.
+
+## Debug
+
+`-g` makes an object carry CodeView line numbers, symbols and types. `LINK /CO`
+and CVPACK accept it, and CodeView shows the source, locals, parameters and
+`TYPE`s. [debugging.md](docs/debugging.md) finds a miscompile in a running DOS
+program with dosrun: break on write, stack traces and map-file symbols.
 
 ## Validate
 
