@@ -1216,3 +1216,42 @@ done:
     let proofs = counted(&parsed.unit(), &parsed.only_loop(), None, true);
     assert_eq!(proofs.first().and_then(|proof| proof.maximum.clone()), Some(BigInt::from(32768)), "{proofs:?}");
 }
+
+/// `if (n > 0) do { ... } while (++i < n)`: the first test is proved by
+/// the branch over the loop, so it runs `n` trips, and the proof says so
+/// where it could say nothing of a loop tested after its trips.
+fn guarded_do(guard: &str) -> String {
+    format!(
+        "define i16 @f(i16 %n) {{
+entry:
+  %ok = icmp sgt i16 %n, {guard}
+  br i1 %ok, label %pre, label %done
+pre:
+  br label %body
+body:
+  %i = phi i16 [ 0, %pre ], [ %j, %body ]
+  %j = add nsw i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %body, label %after
+after:
+  br label %done
+done:
+  %r = phi i16 [ 0, %entry ], [ %j, %after ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+#[test]
+fn test_a_loop_tested_after_its_trips_is_counted_where_entry_proves_the_first() {
+    let proven = Parsed::new(&guarded_do("0"));
+    let proofs = counted(&proven.unit(), &proven.only_loop(), None, false);
+    let [proof] = &proofs[..] else { panic!("{proofs:?}") };
+    assert!(proof.posttested && proof.entry_guarded && proof.count.is_none(), "{proof:?}");
+    let n = Linear::of(&AffineOperand::Value(proven.value("n"), 16), 16);
+    assert_eq!(proof.trips_linear(), Some(n));
+    // Entered where `n > -5`, the first test is not proved: no count.
+    let unproven = Parsed::new(&guarded_do("-5"));
+    assert!(counted(&unproven.unit(), &unproven.only_loop(), None, false).is_empty());
+}

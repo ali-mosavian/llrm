@@ -437,7 +437,9 @@ fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
     }
     let trips = proof.trips_linear()?;
     let most = proof.most()?;
-    let guarded = !trips.terms.is_empty();
+    // A symbolic count needs a guard against no trip, unless a branch over
+    // the loop's entry already proves it runs one.
+    let guarded = !trips.terms.is_empty() && !proof.entry_guarded;
     if guarded && (proof.posttested || rotate::_shape(function, loop_).is_none()) {
         return None;
     }

@@ -132,6 +132,9 @@ pub struct CountedLoop {
     pub stepped: bool,
     /// Some other exit stops the program; `count` is the trips when it goes on.
     pub stops: bool,
+    /// A loop tested after its trips whose symbolic trips assume the first
+    /// would have continued, which the branches over its preheader prove.
+    pub entry_guarded: bool,
     pub count: Option<BigInt>,
     pub first: Option<BigInt>,
     pub last: Option<BigInt>,
@@ -823,12 +826,21 @@ fn _proven(
             (begin, count, equal) = (entered, Some(trips), entry);
         }
         let (mut first, mut last) = (None, None);
+        let mut entry_guarded = false;
+        // Tested after its trips with a bound not known, it runs the trips a
+        // pre-tested one would where its branch over the entry proves one.
+        let entered = shape.posttested
+            && stepped
+            && test != IntPredicate::Ne
+            && (begin.is_none() || limit.is_none())
+            && _entered(unit, &shape, &start, &bound, test, width);
         let maximum = if let Some(count) = &count {
             (first, last) = _signed_span(&equal, facts, width, count, &step);
             Some(count.clone())
-        } else if shape.posttested || abs(&step) != BigInt::from(1) {
+        } else if (shape.posttested && !entered) || abs(&step) != BigInt::from(1) {
             continue;
         } else {
+            entry_guarded = shape.posttested;
             let promised = _promised(function, update, &step, _unsigned(test));
             let found = _unit_maximum(unit, loop_, width, begin.as_ref(), limit.as_ref(), &step, test, inbounds, promised);
             if found.is_none() && _inclusive(test) {
@@ -853,12 +865,20 @@ fn _proven(
             posttested: shape.posttested,
             stepped,
             stops: shape.stops,
+            entry_guarded,
             count,
             first,
             last,
         });
     }
     proven
+}
+
+/// Whether the branches over the loop's preheader prove its first test
+/// would continue: `start test bound`, where the loop is entered.
+fn _entered(unit: &Unit, shape: &_Control, start: &AffineOperand, bound: &AffineOperand, test: IntPredicate, width: u32) -> bool {
+    let Some(preheader) = shape.preheader else { return false };
+    crate::guards::holds(unit, preheader, test, &Linear::of(start, width), &Linear::of(bound, width))
 }
 
 /// Where a loop leaves, and after how many trips: an exiting block, and
@@ -1996,7 +2016,7 @@ impl CountedLoop {
     /// places them.
     pub fn trips_linear(&self) -> Option<Linear> {
         let width = self.width();
-        if self.posttested {
+        if self.posttested && !self.entry_guarded {
             return self.count.as_ref().map(|count| Linear::constant(count.clone(), width));
         }
         if let Some(count) = &self.count {

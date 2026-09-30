@@ -1324,3 +1324,43 @@ fn test_frame_arrays_keep_their_own_pointers() {
     // The fill's two, and the loop's two: an offset and a count to zero.
     assert_eq!(counters(&printed), 4, "{printed}");
 }
+
+/// `if (n > 0) do { a[i]++; s += b[i]; } while (++i < n)`: no runtime
+/// guard, since the branch over the loop proves its first trip.
+const GUARDED_DO: &str = "  %ok = icmp sgt i16 %n, 0
+  br i1 %ok, label %pre, label %done
+
+pre:
+  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %pre ], [ %i.next, %l1 ]
+  %s = phi i16 [ 0, %pre ], [ %t, %l1 ]
+  %o = mul nsw i16 %i, 2
+  %pa = getelementptr inbounds i8, ptr @a, i16 %o
+  %va = load i16, ptr %pa
+  %wa = add i16 %va, 1
+  store i16 %wa, ptr %pa
+  %pb = getelementptr inbounds i8, ptr @b, i16 %o
+  %vb = load i16, ptr %pb
+  %t = add i16 %s, %vb
+  %i.next = add nsw i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l1, label %l3
+
+l3:
+  br label %done
+
+done:
+  %r = phi i16 [ 0, %start ], [ %t, %l3 ]
+  ret i16 %r
+";
+
+/// A loop tested after its trips, its entry guarded, counts to zero with
+/// one counter: conc2's `do ... while`, two counters and a pointer
+/// reloaded from the frame each trip.
+#[test]
+fn test_a_guarded_do_while_keeps_one_counter() {
+    let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", GUARDED_DO), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
+    assert_eq!(counters(&printed), 1, "{printed}");
+}
