@@ -1186,3 +1186,33 @@ done:
     let either = Parsed::new(&text.replace("and i1", "or i1"));
     assert_eq!(exits(&either.unit(), &either.only_loop(), None, false)[0].taken, None);
 }
+
+/// A loop to `i != n` reading `a[i]`, two-byte elements, in bounds: at
+/// most 32768 trips, as for `i < n`. The in-bounds bound was skipped for
+/// `!=`, and Nib's `zip` of two slices, its exits made one `!=`, could
+/// not count down to zero by two.
+#[test]
+fn test_an_inequality_loop_is_bounded_by_its_in_bounds_accesses() {
+    let text = "define i16 @f(ptr addrspace(1) %a, i16 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i16 [ 0, %entry ], [ %t, %body ]
+  %more = icmp ne i16 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %o = mul i16 %i, 2
+  %p = getelementptr inbounds i8, ptr addrspace(1) %a, i16 %o
+  %v = load i16, ptr addrspace(1) %p
+  %t = add i16 %s, %v
+  %j = add i16 %i, 1
+  br label %head
+done:
+  ret i16 %s
+}
+";
+    let parsed = Parsed::new(text);
+    let proofs = counted(&parsed.unit(), &parsed.only_loop(), None, true);
+    assert_eq!(proofs.first().and_then(|proof| proof.maximum.clone()), Some(BigInt::from(32768)), "{proofs:?}");
+}

@@ -1270,8 +1270,10 @@ fn _unit_maximum(
     inbounds: bool,
     promised: bool,
 ) -> Option<BigInt> {
+    // Both bound the trips; keep the tighter.
+    let bounded = if inbounds { _inbounds_trips(unit, loop_, *loop_.latches.first().expect("one latch")) } else { None };
     if test == IntPredicate::Ne {
-        return Some((BigInt::from(1) << width) - 1);
+        return Some((BigInt::from(1) << width) - 1).into_iter().chain(bounded).min();
     }
     let (unsigned, inclusive) = (_unsigned(test), _inclusive(test));
     let (low, high) = _extent(unsigned, width);
@@ -1302,8 +1304,6 @@ fn _unit_maximum(
         }
         _ => None,
     };
-    // Both bound the trips; keep the tighter.
-    let bounded = if inbounds { _inbounds_trips(unit, loop_, *loop_.latches.first().expect("one latch")) } else { None };
     ranged.into_iter().chain(bounded).min()
 }
 
