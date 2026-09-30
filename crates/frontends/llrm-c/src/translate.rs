@@ -52,15 +52,17 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
         .map(|proc| proc.symbol)
         .collect();
     let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
+    let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
-        functions.push(Body::function(&module, &mut types, &mut callables, proc, at as i64 + 1)?);
+        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, proc, at as i64 + 1)?);
     }
+    let debug = described.map(|one| one.finish(|symbol| keys.get(&Key::Symbol(symbol)).copied()));
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
     let (types, alias_classes) = types.finished();
-    let module = h::Module { data, callables, alias_classes, ..h::Module::new(1, name, types, functions) };
+    let module = h::Module { data, callables, alias_classes, debug, ..h::Module::new(1, name, types, functions) };
     // Borland's medium model: a call keeps what its contract does not clobber;
     // the compiler's constants go in CONST.
     let preserved = llrm_core::abi::runtime::preserves(&crate::raise_hir::medium_model(String::new(), true, 0));
@@ -406,6 +408,9 @@ struct Body<'a, 't> {
     inlined: Option<i64>,
     /// The far pointer to where a struct result goes, where it is passed one.
     destination: Option<i64>,
+    /// `-g`: the unit's debug types, and the statement's source line.
+    described: &'t mut Option<crate::debug::Described<'a>>,
+    line: i64,
 }
 
 /// Whether inline code is `symbol`: `_asm`, or `__emit__`'s bytes.
@@ -523,7 +528,14 @@ fn restricted(unit: &hir::Unit, symbol: i64) -> bool {
 }
 
 impl<'a, 't> Body<'a, 't> {
-    fn function(shared: &'a Shared<'a>, types: &'t mut Types<'a>, callables: &'t mut IndexMap<String, h::Callable>, proc: &'a hir::Proc, id: i64) -> R<h::Function> {
+    fn function(
+        shared: &'a Shared<'a>,
+        types: &'t mut Types<'a>,
+        callables: &'t mut IndexMap<String, h::Callable>,
+        described: &'t mut Option<crate::debug::Described<'a>>,
+        proc: &'a hir::Proc,
+        id: i64,
+    ) -> R<h::Function> {
         let unit = shared.unit;
         let symbol = &unit.symbols[&proc.symbol];
         let cleanup = cleanup(symbol)?;
@@ -547,6 +559,8 @@ impl<'a, 't> Body<'a, 't> {
             instructions: 0,
             inlined: None,
             destination: None,
+            described,
+            line: 0,
         };
         let entry = body.block();
         body.current = entry;
@@ -581,6 +595,18 @@ impl<'a, 't> Body<'a, 't> {
         };
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
+        if let Some(described) = body.described.as_mut() {
+            // A parameter as its home: where the function keeps it.
+            for &(symbol, handle) in &proc.debug {
+                let name = &unit.symbols[&symbol].name;
+                match (body.slots.get(&format!("y{symbol}")), shared.keys.get(&Key::Symbol(symbol))) {
+                    (Some(&place), _) => described.variable(place, name, handle),
+                    (None, Some(&object)) => described.local_static(object, name, handle),
+                    (None, None) => {}
+                }
+            }
+            described.function(id, &symbol.name, proc.debug_type);
+        }
         Ok(function)
     }
 
@@ -643,7 +669,10 @@ impl<'a, 't> Body<'a, 't> {
 
     fn instruction(&mut self, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> &mut h::Instruction {
         self.instructions += 1;
-        let made = h::Instruction::new(self.instructions, op, results, operands);
+        let mut made = h::Instruction::new(self.instructions, op, results, operands);
+        if self.described.is_some() && self.line > 0 {
+            made.line = Some(self.line);
+        }
         let block = &mut self.blocks[self.current];
         block.instructions.push(made);
         block.instructions.last_mut().expect("just pushed")
@@ -858,6 +887,7 @@ impl<'a, 't> Body<'a, 't> {
     // ---- statements ----
 
     fn statement(&mut self, one: &hir::Statement) -> R<()> {
+        self.line = one.line;
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
         if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn") {
             self.inlined = None;

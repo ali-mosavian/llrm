@@ -9,6 +9,7 @@ pub struct Builder {
     /// The function being compiled.
     parameters: Vec<DebugParameter>,
     variables: Vec<DebugVariable>,
+    statics: Vec<DebugGlobal>,
 }
 
 impl Builder {
@@ -72,7 +73,12 @@ impl Builder {
 
     /// A variable of the module, `offset` bytes into data object `object`.
     pub fn global(&mut self, object: i64, offset: i64, name: &str, r#type: i64) {
-        self.debug.globals.push(DebugGlobal { object, offset, name: name.to_owned(), r#type });
+        self.debug.globals.push(DebugGlobal { function: None, object, offset, name: name.to_owned(), r#type });
+    }
+
+    /// A variable of the function, in data: `offset` bytes into `object`.
+    pub fn local_static(&mut self, object: i64, offset: i64, name: &str, r#type: i64) {
+        self.statics.push(DebugGlobal { function: None, object, offset, name: name.to_owned(), r#type });
     }
 
     /// `place` holds no variable after all.
@@ -80,23 +86,38 @@ impl Builder {
         self.variables.retain(|one| one.place != place);
     }
 
+    /// A procedure returning `result`, None nothing, of `parameters`.
+    pub fn procedure(&mut self, result: Option<i64>, parameters: &[i64]) -> i64 {
+        let members = parameters.iter().map(|&r#type| DebugMember { name: String::new(), r#type, offset: 0 }).collect();
+        self.intern(DebugKind::Procedure, "", result, 0, DebugReach::Near, members)
+    }
+
     /// The function `function` just compiled, returning `result`: a
     /// procedure of the parameters and variables declared since the last.
     pub fn function(&mut self, function: i64, name: &str, result: Option<i64>) {
-        self.finished(function, false, name, result);
+        let parameters: Vec<i64> = self.parameters.iter().map(|one| one.r#type).collect();
+        let r#type = self.procedure(result, &parameters);
+        self.finished(function, false, name, r#type);
+    }
+
+    /// [`function`](Self::function), of the procedure type `r#type` the
+    /// frontend states.
+    pub fn typed_function(&mut self, function: i64, name: &str, r#type: i64) {
+        self.finished(function, false, name, r#type);
     }
 
     /// The module's own code just compiled, `function`: its variables are
     /// the module's.
     pub fn module_code(&mut self, function: i64) {
-        self.finished(function, true, "", None);
+        let r#type = self.procedure(None, &[]);
+        self.finished(function, true, "", r#type);
     }
 
-    fn finished(&mut self, function: i64, module: bool, name: &str, result: Option<i64>) {
+    fn finished(&mut self, function: i64, module: bool, name: &str, r#type: i64) {
         let parameters = std::mem::take(&mut self.parameters);
+        let statics = std::mem::take(&mut self.statics);
+        self.debug.globals.extend(statics.into_iter().map(|one| DebugGlobal { function: Some(function), ..one }));
         let variables = std::mem::take(&mut self.variables);
-        let members = parameters.iter().map(|one| DebugMember { name: String::new(), r#type: one.r#type, offset: 0 }).collect();
-        let r#type = self.intern(DebugKind::Procedure, "", result, 0, DebugReach::Near, members);
         self.debug.functions.push(DebugFunction { function, module, name: name.to_owned(), r#type, parameters, variables });
     }
 

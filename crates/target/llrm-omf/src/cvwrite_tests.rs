@@ -158,8 +158,11 @@ fn a_pointer_and_an_array_in_place_read_back() {
         data: vec![data("p", 1), data("a", 2)],
         ..Module::default()
     };
-    let (shape, _) = shape(&object(&written(&module, Flavor::default()).expect("writes")));
-    assert_eq!(shape, ["DATA a: 10 BYTES OF INTEGER", "DATA p: BYREF INTEGER"]);
-    let far = Module { types: vec![Type::Scalar(Scalar::Int16), Type::Pointer { target: 0, reach: Reach::Far }], data: vec![data("p", 1)], ..Module::default() };
-    assert!(written(&far, Flavor::default()).is_err(), "a far pointer was never measured");
+    let (read, _) = shape(&object(&written(&module, Flavor::default()).expect("writes")));
+    assert_eq!(read, ["DATA a: 10 BYTES OF INTEGER", "DATA p: BYREF INTEGER"]);
+    for reach in [Reach::Far, Reach::Huge] {
+        let module = Module { types: vec![Type::Scalar(Scalar::Int16), Type::Pointer { target: 0, reach }], data: vec![data("p", 1)], ..Module::default() };
+        let (read, _) = shape(&object(&written(&module, Flavor::default()).expect("writes")));
+        assert_eq!(read, ["DATA p: BYREF INTEGER"], "{reach:?}");
+    }
 }

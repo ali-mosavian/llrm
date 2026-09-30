@@ -44,6 +44,7 @@ fn narrow<T: TryFrom<i64>>(value: i64, what: &str) -> Result<T, String> {
 
 fn scalar(scalar: di::Scalar) -> Scalar {
     match scalar {
+        di::Scalar::Void => Scalar::Void,
         di::Scalar::Char => Scalar::Char,
         di::Scalar::Int8 => Scalar::Int8,
         di::Scalar::UInt8 => Scalar::UInt8,

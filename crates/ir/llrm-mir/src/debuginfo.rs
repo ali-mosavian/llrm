@@ -59,6 +59,7 @@ spelled!(
 
 spelled!(
     Scalar {
+        Void = "void",
         Char = "char",
         Int8 = "int8",
         UInt8 = "uint8",

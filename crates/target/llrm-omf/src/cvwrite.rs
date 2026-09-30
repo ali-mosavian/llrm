@@ -1,7 +1,6 @@
 //! The inverse of [`cvinfo`](crate::cvinfo): $$SYMBOLS and $$TYPES in BC's
 //! pre-link layout, which LINK /CO hands to CVPACK. docs/machine/codeview.md
-//! has the measurements behind every byte; what was never measured is
-//! refused, not guessed.
+//! has the measurements behind every byte.
 
 use llrm_support::hash::IndexMap;
 
@@ -13,6 +12,7 @@ pub type TypeId = usize;
 /// A scalar: its own primitive code, never a $$TYPES record.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Scalar {
+    Void,
     Char,
     Int8,
     UInt8,
@@ -29,10 +29,16 @@ pub enum Scalar {
 }
 
 impl Scalar {
-    /// The primitive code, where one was measured.
+    /// The primitive code, each measured against BC's objects or CodeView 4.
     pub fn code(self) -> Result<u16, String> {
         let code = match self {
-            Scalar::Int8 => cvinfo::CHAR,
+            Scalar::Void => cvinfo::VOID,
+            // CodeView has one char.
+            Scalar::Char | Scalar::Int8 => cvinfo::CHAR,
+            Scalar::UInt8 => cvinfo::UNSIGNED_CHAR,
+            Scalar::UInt16 => cvinfo::UNSIGNED_SHORT,
+            Scalar::UInt32 => cvinfo::UNSIGNED_LONG,
+            Scalar::Float80 => cvinfo::LONG_DOUBLE,
             Scalar::Int16 => cvinfo::INTEGER,
             Scalar::Int32 => cvinfo::LONG,
             Scalar::Float32 => cvinfo::SINGLE,
@@ -40,7 +46,6 @@ impl Scalar {
             Scalar::Currency => cvinfo::CURRENCY,
             Scalar::String { far: false } => cvinfo::NEAR_STRING,
             Scalar::String { far: true } => cvinfo::FAR_STRING,
-            other => return Err(format!("no primitive code measured for {other:?}")),
         };
         Ok(code as u16)
     }
@@ -74,7 +79,7 @@ pub enum Type {
     Pointer { target: TypeId, reach: Reach },
     /// A parameter passed by reference.
     Reference(TypeId),
-    /// `result` None returns nothing, which no record was measured for.
+    /// `result` None returns nothing: void.
     Procedure { result: Option<TypeId>, parameters: Vec<TypeId> },
 }
 
@@ -201,9 +206,13 @@ impl Table<'_> {
         self.record(leaf)
     }
 
-    /// A near pointer to `target`: the one reach measured.
-    fn pointer(&mut self, target: u16) -> Made<u16> {
-        self.record([&[Tag::Pointer as u8, cvinfo::NEAR][..], &reference(target)].concat())
+    fn pointer(&mut self, target: u16, reach: Reach) -> Made<u16> {
+        let reach = match reach {
+            Reach::Near => cvinfo::NEAR,
+            Reach::Far => cvinfo::FAR,
+            Reach::Huge => cvinfo::HUGE,
+        };
+        self.record([&[Tag::Pointer as u8, reach][..], &reference(target)].concat())
     }
 
     fn bits(bytes: u32) -> Made<u32> {
@@ -253,25 +262,27 @@ impl Table<'_> {
                 leaf.push(cvinfo::UNPACKED);
                 self.record(leaf)?
             }
-            &Type::Pointer { target, reach: Reach::Near } => {
+            &Type::Pointer { target, reach } => {
                 let target = self.index(target)?;
-                self.pointer(target)?
+                self.pointer(target, reach)?
             }
-            Type::Pointer { reach, .. } => return Err(format!("no {reach:?} pointer measured")),
             &Type::Reference(target) => match self.module.types[target] {
                 Type::Scalar(scalar) if self.flavor.qb45 => narrow::<u16>(usize::from(scalar.code()?) + cvinfo::QB45_BYREF as usize, "a reference code")?,
                 _ if self.flavor.qb45 => {
                     let target = self.index(target)?;
-                    self.pointer(target)?
+                    self.pointer(target, Reach::Near)?
                 }
                 _ => {
                     let target = self.index(target)?;
-                    let pointer = self.pointer(target)?;
+                    let pointer = self.pointer(target, Reach::Near)?;
                     self.record([&[Tag::ByRef as u8][..], &reference(pointer)].concat())?
                 }
             },
             Type::Procedure { result, parameters } => {
-                let result = self.index(result.ok_or("a procedure returning nothing: no such record measured")?)?;
+                let result = match result {
+                    Some(result) => self.index(*result)?,
+                    None => Scalar::Void.code()?,
+                };
                 let parameters = parameters.iter().map(|&one| self.index(one)).collect::<Made<Vec<u16>>>()?;
                 let list = self.list(&parameters)?;
                 // The count is a numeric leaf's value itself: under 0x80.

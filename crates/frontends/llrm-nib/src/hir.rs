@@ -79,6 +79,8 @@ pub struct Instruction {
     pub operands: Vec<Operand>,
     pub callee: Option<String>,
     pub asm: Option<Asm>,
+    /// The source line of the statement it belongs to, 0 for none.
+    pub line: u32,
 }
 
 /// An `asm` instruction's code and the 16-bit registers it reads and writes.
@@ -143,6 +145,8 @@ pub struct Function {
     /// How it is entered and left, when not as a native function is.
     pub abi: Option<ProcedureAbi>,
     pub promises: Vec<Promise>,
+    /// `-g`: each source parameter's value and name.
+    pub named_parameters: Vec<(u32, String)>,
 }
 
 /// What the language promises of a pointer parameter, as LLVM's
@@ -191,6 +195,8 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub callables: Vec<Callable>,
     pub data: Vec<DataObject>,
+    /// `-g`: what a debugger names and how it reads it.
+    pub debug: Option<llrm_core::hir::model::Debug>,
 }
 
 impl Program {
@@ -246,6 +252,10 @@ impl Program {
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);
+        if let Some(debug) = &self.debug {
+            out.push_str(",\"debug\":");
+            out.push_str(&llrm_core::hir::codec::debug_json(debug));
+        }
         out.push_str(",\"types\":[");
         for (index, type_) in self.types.iter().enumerate() {
             comma(&mut out, index);
@@ -318,7 +328,11 @@ fn function_json(out: &mut String, function: &Function) {
             operands(out, &instruction.operands);
             out.push_str("],\"pure\":false,\"results\":[");
             numbers(out, &instruction.results);
-            out.push_str("]}");
+            out.push(']');
+            if instruction.line > 0 {
+                write!(out, ",\"line\":{}", instruction.line).unwrap();
+            }
+            out.push('}');
         }
         out.push_str("],\"terminator\":{\"cases\":[],\"kind\":");
         string(out, block.terminator.kind);
