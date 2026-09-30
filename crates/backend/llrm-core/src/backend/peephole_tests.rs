@@ -2956,3 +2956,20 @@ fn test_a_store_through_another_register_is_not_fused() {
 
     assert_eq!(whats(&fused(&input).blocks[0].insns), whats(&head));
 }
+
+/// mandel's column counted to zero in memory kept `add [bp-10],1;
+/// cmp [bp-10],0; jne` across an anchor: the add's flags were the test.
+#[test]
+fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-10), 2) });
+    let step = insn(0, Some((0, 4)), Some(sem(Operation::Binary, "add", vec![cell.clone()], vec![cell.clone(), im(1, 2)])), vec![], vec![]);
+    let compare = insn(4, Some((4, 8)), Some(sem(Operation::Compare, "cmp", vec![], vec![cell, im(0, 2)])), vec![], vec![]);
+    let branch = insn(8, Some((8, 10)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
+    let ax = rl(Register::AX, 2);
+    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
+    let anchor = insn(4, None, Some(sem(Operation::Nothing, "", vec![], vec![])), vec![7], vec![5]);
+    let blocks = vec![block(0, vec![Arc::new(step), Arc::new(anchor), Arc::new(compare), Arc::new(branch)], vec![0, 10]), block(10, vec![Arc::new(flags), Arc::new(exit)], vec![])];
+    let names = tested(&body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    assert_eq!(names, ["add", "", "", "jne"]);
+}
