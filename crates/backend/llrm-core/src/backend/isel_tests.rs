@@ -3000,3 +3000,27 @@ no:
     assert!(got.iter().any(|line| line.contains("b[") && line.contains("*4]")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("shl")), "{got:?}");
 }
+
+/// A global indexed by one register and then another is `[bx+si+global]`:
+/// conc12's twelve arrays, each `array + 2n` for the count-to-zero
+/// counter, were twelve pointers spilled to the frame and reloaded each
+/// trip, where the two registers make each address in its access.
+#[test]
+fn test_a_global_indexed_by_two_registers_is_one_address() {
+    let text = "@g = internal global [64 x i16] zeroinitializer
+define i16 @f(i16 %n, i16 %i) addrspace(1) {
+entry:
+  %a = getelementptr i8, ptr @g, i16 %n
+  %b = getelementptr i8, ptr %a, i16 %i
+  %c = getelementptr i8, ptr %b, i16 18
+  %v = load i16, ptr %c, !tbaa !1
+  ret i16 %v
+}
+
+!0 = !{!\"short\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("g+18[") && line.contains('+')), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("add ") || line.starts_with("lea ")), "{got:?}");
+}
