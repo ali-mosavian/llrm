@@ -60,7 +60,8 @@ def write(short: set, issues: dict, default: str = "#98") -> None:
     for case, lang, config, check in short:
         grouped.setdefault((case, lang, check), set()).add(config)
     lines = [HEADER, kept, ""] if kept else [HEADER]
-    for (case, lang, check), configs in sorted(grouped.items()):
+    # the dot example first: issue #98's own evidence
+    for (case, lang, check), configs in sorted(grouped.items(), key=lambda kv: (kv[0][0] != "dot", kv[0])):
         lines += ["[[short]]", f'case = "{case}"', f'lang = "{lang}"', f'check = "{check}"',
                   "configs = [" + ", ".join(f'"{c}"' for c in sorted(configs)) + "]",
                   f'issue = "{issues.get((case, lang, check), default)}"', ""]

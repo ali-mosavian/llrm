@@ -47,7 +47,10 @@ def _run(command: list[str], env: dict | None = None, cwd: Path | None = None, t
     except subprocess.TimeoutExpired:
         raise CompileError(f"{Path(command[0]).name} did not finish in {timeout}s")
     if done.returncode != 0:
-        raise CompileError(f"{Path(command[0]).name}: {(done.stderr or done.stdout).strip()[:2000]}")
+        text = (done.stderr or done.stdout).strip()
+        # the tool's own lines, not a build's warnings before them
+        own = [line for line in text.splitlines() if line.startswith(Path(command[0]).name)]
+        raise CompileError(f"{Path(command[0]).name}: {chr(10).join(own) if own else text[:2000]}")
     return done.stdout
 
 
