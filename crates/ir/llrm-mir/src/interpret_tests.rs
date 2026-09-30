@@ -170,3 +170,14 @@ fn fixed_point_intrinsics_are_their_expansions() {
         }
     }
 }
+
+#[test]
+fn near_memory_stays_below_64k_whatever_is_far() {
+    // Globals were laid out in order, allocas after them, so a far array
+    // pushed a near global and every frame past 0xFFFF, and a near pointer
+    // stored in its 16 bits came back pointing at 0 (tools/loops batches).
+    let text = "@big = addrspace(1) global [70000 x i8] zeroinitializer\n@n = global i16 0\n\
+        define i16 @f() {\n  %slot = alloca ptr\n  store ptr @n, ptr %slot\n  %p = load ptr, ptr %slot\n  \
+        store i16 7, ptr %p\n  %v = load i16, ptr @n\n  ret i16 %v\n}\n";
+    assert_eq!(result(text), int(7, 16));
+}
