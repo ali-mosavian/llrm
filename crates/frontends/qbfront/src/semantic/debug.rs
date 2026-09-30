@@ -3,8 +3,8 @@
 
 use llrm_hir::model::DebugScalar;
 
-use super::{Compiler, DOUBLE, INTEGER, LONG, SINGLE, STRING};
-use crate::syntax::Span;
+use super::{Compiler, DOUBLE, INTEGER, LONG, SIGNED_BYTE, SINGLE, STRING};
+use crate::syntax::{Declaration, Span};
 
 const SIGILS: [char; 6] = ['%', '&', '!', '#', '$', '@'];
 
@@ -20,19 +20,57 @@ fn sigil(type_id: u32) -> Option<char> {
     }
 }
 
+/// Where a variable is held.
+pub(super) enum Held {
+    Place(u32),
+    /// `offset` bytes into a module data object.
+    Data(u32, isize),
+}
+
 impl Compiler {
-    /// `type_id`'s debug type, where it has one yet.
+    /// `type_id`'s debug type, where it has one: a scalar, a TYPE, or a
+    /// `STRING * n`.
     fn debug_type(&mut self, type_id: u32) -> Option<i64> {
+        if let Some(&made) = self.debug_structures.get(&type_id) {
+            return Some(made);
+        }
         let scalar = match type_id {
+            SIGNED_BYTE => DebugScalar::Int8,
             INTEGER => DebugScalar::Int16,
             LONG => DebugScalar::Int32,
             SINGLE => DebugScalar::Float32,
             DOUBLE => DebugScalar::Float64,
             STRING if self.runtime == "vbdos" => DebugScalar::FarString,
             STRING => DebugScalar::String,
-            _ => return None,
+            _ => return self.string_width(type_id).map(|width| self.debug.fixed_string(width as i64)),
         };
         Some(self.debug.scalar(scalar))
+    }
+
+    /// `type_id`'s, or an array of them.
+    fn debug_type_of(&mut self, type_id: u32, array: bool) -> Option<i64> {
+        let element = self.debug_type(type_id)?;
+        Some(if array { self.debug.array(element) } else { element })
+    }
+
+    /// The TYPE `declared` at `span`, `type_id`, of `fields` at `offsets`,
+    /// each of its type or `bytes` of it in place.
+    pub(super) fn debug_structure(&mut self, type_id: u32, declared: &str, span: Span, fields: &[(&Declaration, u32, usize, usize)], bytes: usize) {
+        if self.source.is_none() {
+            return;
+        }
+        let mut members = Vec::new();
+        for &(field, field_type, offset, extent) in fields {
+            let Some(mut r#type) = self.debug_type(field_type) else { return };
+            if !field.bounds.is_empty() {
+                r#type = self.debug.sized(r#type, extent as i64);
+            }
+            members.push((self.debug_name(&field.name, field.span, 0), r#type, offset as i64));
+        }
+        let name = self.debug_name(declared, span, 0);
+        let fields: Vec<(&str, i64, i64)> = members.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset)).collect();
+        let made = self.debug.structure(&name, bytes as i64, &fields);
+        self.debug_structures.insert(type_id, made);
     }
 
     /// `name`, declared at `span`, as BC's /Zi names it: VBDOS keeps the
@@ -67,26 +105,17 @@ impl Compiler {
         found.unwrap_or_else(|| name.to_owned())
     }
 
-    /// A variable `source` declared at `span`, held in `place`.
-    pub(super) fn debug_variable(&mut self, place: u32, source: &str, span: Span, type_id: u32) {
+    /// A variable `source` declared at `span`, of `type_id`s or an array
+    /// of them, `held` there; an array by its descriptor, as BC's.
+    pub(super) fn debug_held(&mut self, held: Held, source: &str, span: Span, type_id: u32, array: bool) {
         if self.source.is_none() || source.starts_with('$') {
             return;
         }
-        if let Some(r#type) = self.debug_type(type_id) {
-            let name = self.debug_name(source, span, type_id);
-            self.debug.variable(place.into(), &name, r#type);
-        }
-    }
-
-    /// A module variable `source` declared at `span`, `offset` bytes into
-    /// data object `object`.
-    pub(super) fn debug_global(&mut self, object: u32, offset: isize, source: &str, span: Span, type_id: u32) {
-        if self.source.is_none() || source.starts_with('$') {
-            return;
-        }
-        if let Some(r#type) = self.debug_type(type_id) {
-            let name = self.debug_name(source, span, type_id);
-            self.debug.global(object.into(), offset as i64, &name, r#type);
+        let Some(r#type) = self.debug_type_of(type_id, array) else { return };
+        let name = self.debug_name(source, span, type_id);
+        match held {
+            Held::Place(place) => self.debug.variable(place.into(), &name, r#type),
+            Held::Data(object, offset) => self.debug.global(object.into(), offset as i64, &name, r#type),
         }
     }
 
@@ -96,12 +125,12 @@ impl Compiler {
     }
 
     /// The function's `argument`th parameter, `source` declared at `span`,
-    /// by reference unless `by_value`.
-    pub(super) fn debug_parameter(&mut self, argument: usize, source: &str, span: Span, type_id: u32, by_value: bool) {
+    /// of `type_id`s or an array of them, by reference unless `by_value`.
+    pub(super) fn debug_parameter(&mut self, argument: usize, source: &str, span: Span, type_id: u32, array: bool, by_value: bool) {
         if self.source.is_none() {
             return;
         }
-        let Some(target) = self.debug_type(type_id) else { return };
+        let Some(target) = self.debug_type_of(type_id, array) else { return };
         let r#type = if by_value { target } else { self.debug.reference(target) };
         let name = self.debug_name(source, span, type_id);
         self.debug.parameter(argument as i64, &name, r#type);
