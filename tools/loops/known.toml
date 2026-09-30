@@ -110,7 +110,21 @@ issue = "#98"
 [[short]]
 case = "dot"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "dot"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "dot"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -181,7 +195,7 @@ issue = "#98"
 case = "bp3_frame"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -195,7 +209,7 @@ issue = "#98"
 case = "bp3_frame"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -489,7 +503,7 @@ issue = "#98"
 case = "conc10_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -762,7 +776,7 @@ issue = "#98"
 case = "conc10_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -776,7 +790,7 @@ issue = "#98"
 case = "conc10_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -908,6 +922,13 @@ issue = "#98"
 [[short]]
 case = "conc10_s2_xi_bgn_index_n_st1_sum_both_after"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc10_s2_xi_bgn_index_n_st1_sum_both_after"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -944,6 +965,13 @@ issue = "#98"
 case = "conc10_s2_xi_bgn_index_n_st1_sum_cond3rare"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc10_s2_xi_bgn_index_n_st1_sum_cond3rare"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -1056,7 +1084,7 @@ issue = "#98"
 case = "conc10_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1070,7 +1098,14 @@ issue = "#98"
 case = "conc10_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc10_s2_xi_bgn_index_n_st1_sum_invariant"
+lang = "nib"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1182,7 +1217,7 @@ issue = "#98"
 case = "conc10_s2_xi_bgn_index_n_st1_sum_storemaybe"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1196,7 +1231,7 @@ issue = "#98"
 case = "conc10_s2_xi_bgn_index_n_st1_sum_storemaybe"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1483,7 +1518,7 @@ issue = "#98"
 case = "conc11_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1707,7 +1742,7 @@ issue = "#98"
 case = "conc11_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1721,7 +1756,7 @@ issue = "#98"
 case = "conc11_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1847,13 +1882,20 @@ issue = "#98"
 case = "conc11_s2_xi_bgn_index_n_st1_sum_counteraffine_both_invariant"
 lang = "nib"
 check = "invariant-loads"
-configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
 case = "conc11_s2_xi_bgn_index_n_st1_sum_counteraffine_both_invariant"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc11_s2_xi_bgn_index_n_st1_sum_counteraffine_both_invariant"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -1973,7 +2015,7 @@ issue = "#98"
 case = "conc11_s2_xi_bgn_index_n_st1_sum_dead7"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -1987,7 +2029,7 @@ issue = "#98"
 case = "conc11_s2_xi_bgn_index_n_st1_sum_dead7"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -2316,7 +2358,7 @@ issue = "#98"
 case = "conc12_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -2582,7 +2624,7 @@ issue = "#98"
 case = "conc12_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -2596,7 +2638,7 @@ issue = "#98"
 case = "conc12_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -2728,6 +2770,13 @@ issue = "#98"
 [[short]]
 case = "conc12_s2_xi_bgn_index_n_st1_sum_exitbreak"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc12_s2_xi_bgn_index_n_st1_sum_exitbreak"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -2834,7 +2883,7 @@ issue = "#98"
 case = "conc12_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -2848,7 +2897,14 @@ issue = "#98"
 case = "conc12_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc12_s2_xi_bgn_index_n_st1_sum_invariant"
+lang = "nib"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -2960,7 +3016,7 @@ issue = "#98"
 case = "conc12_s2_xi_bgn_index_n_st1_sum_invariant_shift1"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -2974,7 +3030,14 @@ issue = "#98"
 case = "conc12_s2_xi_bgn_index_n_st1_sum_invariant_shift1"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc12_s2_xi_bgn_index_n_st1_sum_invariant_shift1"
+lang = "nib"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -3023,6 +3086,13 @@ issue = "#98"
 case = "conc12_s2_xi_bgn_index_n_st1_sum_storemaybe_cond0half"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc12_s2_xi_bgn_index_n_st1_sum_storemaybe_cond0half"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -3219,7 +3289,7 @@ issue = "#98"
 case = "conc1_s1_xi_bln_index_n_st1_sum_counteraffine_both_after"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -3233,7 +3303,7 @@ issue = "#98"
 case = "conc1_s1_xi_bln_index_n_st1_sum_counteraffine_both_after"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -3386,7 +3456,21 @@ issue = "#98"
 [[short]]
 case = "conc1_s2_xi_bpf_index_n_st1_sum_invariant_after_shift2"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xi_bpf_index_n_st1_sum_invariant_after_shift2"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xi_bpf_index_n_st1_sum_invariant_after_shift2"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -3505,7 +3589,21 @@ issue = "#98"
 [[short]]
 case = "conc1_s2_xi_bpf_index_n_st1_sum_storemaybe"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xi_bpf_index_n_st1_sum_storemaybe"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xi_bpf_index_n_st1_sum_storemaybe"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -3653,6 +3751,13 @@ issue = "#98"
 case = "conc1_s2_xi_bpn_do_n_st1_sum"
 lang = "nib"
 check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xi_bpn_do_n_st1_sum"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -3919,7 +4024,7 @@ issue = "#98"
 case = "conc1_s2_xi_bpn_index_n_st2_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -3989,7 +4094,7 @@ issue = "#98"
 case = "conc1_s2_xi_bpn_index_nmk_st2_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -4059,7 +4164,7 @@ issue = "#98"
 case = "conc1_s2_xi_bpn_index_npk_st2_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -4184,7 +4289,21 @@ issue = "#98"
 [[short]]
 case = "conc1_s2_xom1_bpn_index_n_st1_sum_counteraffine_shift13"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xom1_bpn_index_n_st1_sum_counteraffine_shift13"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xom1_bpn_index_n_st1_sum_counteraffine_shift13"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -4338,6 +4457,13 @@ issue = "#98"
 [[short]]
 case = "conc1_s2_xs2_bpn_index_n_st1_sum"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xs2_bpn_index_n_st1_sum"
+lang = "nib"
 check = "shape"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -4450,8 +4576,8 @@ issue = "#98"
 [[short]]
 case = "conc1_s2_xt_bpn_index_n_st1_sum"
 lang = "nib"
-check = "shape"
-configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+check = "mir-ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -4500,6 +4626,13 @@ issue = "#98"
 case = "conc1_s2_xy_bpn_index_n_st1_sum_counteraffine_cond10rare_shift1"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc1_s2_xy_bpn_index_n_st1_sum_counteraffine_cond10rare_shift1"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -4668,13 +4801,6 @@ issue = "#98"
 case = "conc2_s12_xi_bpn_index_n_st1_sum_as_ptr"
 lang = "c"
 check = "relation-size"
-configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
-issue = "#98"
-
-[[short]]
-case = "conc2_s12_xi_bpn_index_n_st1_sum_invariant"
-lang = "nib"
-check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -4905,6 +5031,13 @@ issue = "#98"
 [[short]]
 case = "conc2_s2_xi_bgn_index_len_st1_sum"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc2_s2_xi_bgn_index_len_st1_sum"
+lang = "nib"
 check = "shape"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -4947,6 +5080,13 @@ issue = "#98"
 [[short]]
 case = "conc2_s2_xi_bgn_index_len_st2_sum"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc2_s2_xi_bgn_index_len_st2_sum"
+lang = "nib"
 check = "shape"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -4983,6 +5123,13 @@ issue = "#98"
 case = "conc2_s2_xi_bgn_index_len_stm1_sum"
 lang = "nib"
 check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc2_s2_xi_bgn_index_len_stm1_sum"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -5074,7 +5221,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5088,7 +5235,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5221,7 +5368,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgn_index_n_st1_sum_at0x5"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5235,7 +5382,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgn_index_n_st1_sum_at0x5"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O2", "386-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5361,7 +5508,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgn_index_n_st1_sum_dead11_dup4"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5375,7 +5522,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgn_index_n_st1_sum_dead11_dup4"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5501,7 +5648,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgnpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5515,7 +5662,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgnpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5655,7 +5802,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgnpn_index_n_st1_sum_dead10_dup0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5669,7 +5816,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgnpn_index_n_st1_sum_dead10_dup0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5738,7 +5885,21 @@ issue = "#98"
 [[short]]
 case = "conc2_s2_xi_bgnpn_index_n_st1_sum_insert621"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc2_s2_xi_bgnpn_index_n_st1_sum_insert621"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc2_s2_xi_bgnpn_index_n_st1_sum_insert621"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -5837,7 +5998,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgnpn_index_n_st1_sum_shift13"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5851,7 +6012,7 @@ issue = "#98"
 case = "conc2_s2_xi_bgnpn_index_n_st1_sum_shift13"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5928,7 +6089,7 @@ issue = "#98"
 case = "conc2_s2_xi_bln_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -5942,7 +6103,7 @@ issue = "#98"
 case = "conc2_s2_xi_bln_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6025,7 +6186,21 @@ issue = "#98"
 [[short]]
 case = "conc2_s2_xi_bpf_index_n_st1_sum"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc2_s2_xi_bpf_index_n_st1_sum"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc2_s2_xi_bpf_index_n_st1_sum"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -6425,7 +6600,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_copy"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6439,7 +6614,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_copy"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6642,7 +6817,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_store"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6656,7 +6831,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_store"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6768,7 +6943,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6782,7 +6957,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6894,7 +7069,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_sum_at0x3"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -6908,7 +7083,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_sum_at0x3"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O2", "386-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -7020,7 +7195,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_sum_outer"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -7034,7 +7209,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_n_st1_sum_outer"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -7468,7 +7643,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_nmk_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -7482,7 +7657,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_nmk_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -7720,7 +7895,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_npk_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -7734,7 +7909,7 @@ issue = "#98"
 case = "conc2_s2_xi_bpn_index_npk_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8203,7 +8378,7 @@ issue = "#98"
 case = "conc2_s2_xin_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8217,7 +8392,7 @@ issue = "#98"
 case = "conc2_s2_xin_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8399,7 +8574,7 @@ issue = "#98"
 case = "conc2_s2_xin_bpn_index_n_st1_sum_dead9"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8413,7 +8588,7 @@ issue = "#98"
 case = "conc2_s2_xin_bpn_index_n_st1_sum_dead9"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8518,7 +8693,7 @@ issue = "#98"
 case = "conc2_s2_xin_bpn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "invariant-loads"
-configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8532,7 +8707,7 @@ issue = "#98"
 case = "conc2_s2_xin_bpn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8546,7 +8721,7 @@ issue = "#98"
 case = "conc2_s2_xin_bpn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8686,7 +8861,7 @@ issue = "#98"
 case = "conc2_s2_xo0o1_bpn_index_n_st1_sum_after_onmx0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8700,7 +8875,7 @@ issue = "#98"
 case = "conc2_s2_xo0o1_bpn_index_n_st1_sum_after_onmx0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8826,7 +9001,7 @@ issue = "#98"
 case = "conc2_s2_xo0o1_bpn_index_n_st1_sum_invariant_onmx0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8840,7 +9015,7 @@ issue = "#98"
 case = "conc2_s2_xo0o1_bpn_index_n_st1_sum_invariant_onmx0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8938,7 +9113,7 @@ issue = "#98"
 case = "conc2_s2_xo0o1_bpn_index_n_st1_sum_onmx0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -8952,7 +9127,7 @@ issue = "#98"
 case = "conc2_s2_xo0o1_bpn_index_n_st1_sum_onmx0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9113,7 +9288,7 @@ issue = "#98"
 case = "conc2_s2_xo0o2_bpn_index_n_st1_sum_onmx0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9127,7 +9302,7 @@ issue = "#98"
 case = "conc2_s2_xo0o2_bpn_index_n_st1_sum_onmx0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9400,7 +9575,7 @@ issue = "#98"
 case = "conc2_s2_xo1_bpn_index_n_st1_sum_counteraffine"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9414,7 +9589,7 @@ issue = "#98"
 case = "conc2_s2_xo1_bpn_index_n_st1_sum_counteraffine"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9666,7 +9841,7 @@ issue = "#98"
 case = "conc2_s2_xo7_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9680,7 +9855,7 @@ issue = "#98"
 case = "conc2_s2_xo7_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9792,7 +9967,7 @@ issue = "#98"
 case = "conc2_s2_xom1_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9806,7 +9981,7 @@ issue = "#98"
 case = "conc2_s2_xom1_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9918,7 +10093,7 @@ issue = "#98"
 case = "conc2_s2_xom5o5_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -9932,7 +10107,7 @@ issue = "#98"
 case = "conc2_s2_xom5o5_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O2", "386-O3", "P5-O2", "P5-O3"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10506,7 +10681,7 @@ issue = "#98"
 case = "conc2_s2_xs2_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10520,7 +10695,7 @@ issue = "#98"
 case = "conc2_s2_xs2_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10772,7 +10947,7 @@ issue = "#98"
 case = "conc2_s2_xs3_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10786,7 +10961,7 @@ issue = "#98"
 case = "conc2_s2_xs3_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10828,7 +11003,7 @@ issue = "#98"
 case = "conc2_s2_xt_bpn_index_n_st1_sum"
 lang = "nib"
 check = "invariant-loads"
-configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10848,7 +11023,7 @@ issue = "#98"
 [[short]]
 case = "conc2_s2_xt_bpn_index_n_st1_sum"
 lang = "nib"
-check = "shape"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -10939,13 +11114,6 @@ issue = "#98"
 [[short]]
 case = "conc2_s2_xy_bpn_index_n_st1_sum"
 lang = "nib"
-check = "invariant-loads"
-configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
-issue = "#98"
-
-[[short]]
-case = "conc2_s2_xy_bpn_index_n_st1_sum"
-lang = "nib"
 check = "ivs"
 configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
 issue = "#98"
@@ -10954,7 +11122,7 @@ issue = "#98"
 case = "conc2_s2_xy_bpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10968,7 +11136,7 @@ issue = "#98"
 case = "conc2_s2_xy_bpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -10996,6 +11164,13 @@ issue = "#98"
 case = "conc3_s124_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc3_s124_xi_bgn_index_n_st1_sum"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -11133,6 +11308,13 @@ configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2"
 issue = "#98"
 
 [[short]]
+case = "conc3_s24_xi_bgn_index_n_st1_sum"
+lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
 case = "conc3_s24_xi_bgnlnpn_index_n_st1_sum"
 lang = "c"
 check = "invariant-loads"
@@ -11157,6 +11339,13 @@ issue = "#98"
 case = "conc3_s24_xi_bgnlnpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc3_s24_xi_bgnlnpn_index_n_st1_sum"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -11346,7 +11535,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -11360,7 +11549,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -11576,6 +11765,13 @@ issue = "#98"
 [[short]]
 case = "conc3_s2_xi_bgn_index_n_st1_sum_cond5half_storemaybe_insert328"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc3_s2_xi_bgn_index_n_st1_sum_cond5half_storemaybe_insert328"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -11653,6 +11849,13 @@ issue = "#98"
 [[short]]
 case = "conc3_s2_xi_bgn_index_n_st1_sum_shift1_both"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc3_s2_xi_bgn_index_n_st1_sum_shift1_both"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -11710,7 +11913,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["486-Os", "Core-Os", "P5-Os"]
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -11724,7 +11927,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["P5-Os"]
+configs = ["P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -11857,7 +12060,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_dup5_storemaybe_shift1"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -11871,7 +12074,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_dup5_storemaybe_shift1"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -11919,6 +12122,13 @@ issue = "#98"
 [[short]]
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_exitbreak_cond0half_storemaybe"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_exitbreak_cond0half_storemaybe"
+lang = "nib"
 check = "relation-ivs"
 configs = ["P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -11948,6 +12158,13 @@ issue = "#98"
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_permute302_both_insert56"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_permute302_both_insert56"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -12011,7 +12228,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_permute650"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["486-Os", "Core-Os", "P5-Os"]
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12025,7 +12242,7 @@ issue = "#98"
 case = "conc3_s2_xi_bgnlnpn_index_n_st1_sum_permute650"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["P5-Os"]
+configs = ["P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12088,7 +12305,7 @@ issue = "#98"
 case = "conc3_s2_xi_bln_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12102,7 +12319,7 @@ issue = "#98"
 case = "conc3_s2_xi_bln_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12655,7 +12872,7 @@ issue = "#98"
 case = "conc3_s2_xo0o1o2_bpn_index_n_st1_sum_onmx0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12669,7 +12886,7 @@ issue = "#98"
 case = "conc3_s2_xo0o1o2_bpn_index_n_st1_sum_onmx0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12767,7 +12984,7 @@ issue = "#98"
 case = "conc3_s2_xo0o2o4_bpn_index_n_st1_sum_onmx0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12781,7 +12998,7 @@ issue = "#98"
 case = "conc3_s2_xo0o2o4_bpn_index_n_st1_sum_onmx0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -12871,6 +13088,13 @@ issue = "#98"
 [[short]]
 case = "conc3_s2_xom1_bpn_index_n_st1_sum_invariant_cond11half_callmidtick"
 lang = "c"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc3_s2_xom1_bpn_index_n_st1_sum_invariant_cond11half_callmidtick"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -13093,6 +13317,13 @@ configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2"
 issue = "#98"
 
 [[short]]
+case = "conc4_s24_xi_bgn_index_n_st1_sum"
+lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
 case = "conc4_s24_xi_bgnlnpfpn_index_n_st1_sum"
 lang = "c"
 check = "invariant-loads"
@@ -13124,6 +13355,13 @@ issue = "#98"
 case = "conc4_s24_xi_bgnlnpfpn_index_n_st1_sum"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s24_xi_bgnlnpfpn_index_n_st1_sum"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -13270,6 +13508,13 @@ issue = "#98"
 [[short]]
 case = "conc4_s2_xi_bgn_index_len_st1_sum"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgn_index_len_st1_sum"
+lang = "nib"
 check = "shape"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -13299,6 +13544,13 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_len_st2_sum"
 lang = "nib"
 check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgn_index_len_st2_sum"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -13347,6 +13599,13 @@ issue = "#98"
 [[short]]
 case = "conc4_s2_xi_bgn_index_len_stm1_sum"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgn_index_len_stm1_sum"
+lang = "nib"
 check = "shape"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -13446,7 +13705,7 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -13460,7 +13719,7 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -13656,7 +13915,7 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_n_st1_sum_at0x5x3x1"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -13670,7 +13929,7 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_n_st1_sum_at0x5x3x1"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -13789,7 +14048,7 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_n_st1_sum_counteraffine"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -13803,7 +14062,7 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_n_st1_sum_counteraffine"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -13901,6 +14160,13 @@ issue = "#98"
 case = "conc4_s2_xi_bgn_index_n_st1_sum_permute649_dead4_counterother"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgn_index_n_st1_sum_permute649_dead4_counterother"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -13970,7 +14236,21 @@ issue = "#98"
 [[short]]
 case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -14026,7 +14306,21 @@ issue = "#98"
 [[short]]
 case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_after_shift1_dead8"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_after_shift1_dead8"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_after_shift1_dead8"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -14131,6 +14425,13 @@ issue = "#98"
 [[short]]
 case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_exitbreak_both_after"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_exitbreak_both_after"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -14180,7 +14481,21 @@ issue = "#98"
 [[short]]
 case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_insert26"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_insert26"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_insert26"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -14236,7 +14551,21 @@ issue = "#98"
 [[short]]
 case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_invariant"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_invariant"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc4_s2_xi_bgnlnpfpn_index_n_st1_sum_invariant"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -14566,7 +14895,7 @@ issue = "#98"
 case = "conc4_s2_xo0o1o2o3_bpn_index_n_st1_sum_onmx0x0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -14580,7 +14909,7 @@ issue = "#98"
 case = "conc4_s2_xo0o1o2o3_bpn_index_n_st1_sum_onmx0x0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -14678,7 +15007,7 @@ issue = "#98"
 case = "conc4_s2_xo0o2o4o6_bpn_index_n_st1_sum_onmx0x0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -14692,7 +15021,7 @@ issue = "#98"
 case = "conc4_s2_xo0o2o4o6_bpn_index_n_st1_sum_onmx0x0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -14822,6 +15151,13 @@ configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2"
 issue = "#98"
 
 [[short]]
+case = "conc4_s2_xt_bpn_index_n_st1_sum_insert5_invariant_shift1"
+lang = "nib"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
 case = "conc5_s12468_xi_bpf_index_n_st1_sum_as_end"
 lang = "c"
 check = "relation-ivs"
@@ -14930,6 +15266,13 @@ issue = "#98"
 case = "conc5_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc5_s24_xi_bgn_index_n_st1_sum"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -15140,7 +15483,7 @@ issue = "#98"
 case = "conc5_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -15154,7 +15497,7 @@ issue = "#98"
 case = "conc5_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -15266,7 +15609,7 @@ issue = "#98"
 case = "conc5_s2_xi_bgn_index_n_st1_sum_after"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -15280,7 +15623,7 @@ issue = "#98"
 case = "conc5_s2_xi_bgn_index_n_st1_sum_after"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -15433,6 +15776,13 @@ issue = "#98"
 [[short]]
 case = "conc5_s2_xi_bgn_index_n_st1_sum_dup3_insert124_cond0half"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc5_s2_xi_bgn_index_n_st1_sum_dup3_insert124_cond0half"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -15469,6 +15819,13 @@ issue = "#98"
 case = "conc5_s2_xi_bgn_index_n_st1_sum_exitreturn_dup9"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc5_s2_xi_bgn_index_n_st1_sum_exitreturn_dup9"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -15707,7 +16064,7 @@ issue = "#98"
 case = "conc6_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -15924,7 +16281,7 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -15938,7 +16295,7 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16134,7 +16491,7 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum_at0x5x3x1x6x4"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16148,7 +16505,7 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum_at0x5x3x1x6x4"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16190,6 +16547,13 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum_exitreturn_both"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc6_s2_xi_bgn_index_n_st1_sum_exitreturn_both"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -16246,6 +16610,13 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum_exitreturn_insert284_dup2"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc6_s2_xi_bgn_index_n_st1_sum_exitreturn_insert284_dup2"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -16358,7 +16729,7 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16372,7 +16743,14 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc6_s2_xi_bgn_index_n_st1_sum_invariant"
+lang = "nib"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16414,6 +16792,13 @@ issue = "#98"
 case = "conc6_s2_xi_bgn_index_n_st1_sum_permute265_both"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc6_s2_xi_bgn_index_n_st1_sum_permute265_both"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -16624,7 +17009,7 @@ issue = "#98"
 case = "conc6_s2_xin_bpn_index_n_st1_sum_invariant_pressure2"
 lang = "nib"
 check = "relation-ivs"
-configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+configs = ["Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
 [[short]]
@@ -16743,7 +17128,7 @@ issue = "#98"
 case = "conc6_s2_xo0o10o2o4o6o8_bpn_index_n_st1_sum_onmx0x0x0x0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16757,7 +17142,7 @@ issue = "#98"
 case = "conc6_s2_xo0o10o2o4o6o8_bpn_index_n_st1_sum_onmx0x0x0x0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16882,6 +17267,13 @@ issue = "#98"
 [[short]]
 case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_invariant_dead3_onmx0x0x0x0x0"
 lang = "nib"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_invariant_dead3_onmx0x0x0x0x0"
+lang = "nib"
 check = "ivs"
 configs = ["386-O2", "P5-O2"]
 issue = "#98"
@@ -16890,7 +17282,7 @@ issue = "#98"
 case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_invariant_dead3_onmx0x0x0x0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -16904,7 +17296,7 @@ issue = "#98"
 case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_invariant_dead3_onmx0x0x0x0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17002,7 +17394,7 @@ issue = "#98"
 case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_onmx0x0x0x0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17016,7 +17408,7 @@ issue = "#98"
 case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_onmx0x0x0x0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17198,7 +17590,7 @@ issue = "#98"
 case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_pressure1_onmx0x0x0x0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17212,7 +17604,7 @@ issue = "#98"
 case = "conc6_s2_xo0o1o2o3o4o5_bpn_index_n_st1_sum_pressure1_onmx0x0x0x0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17562,7 +17954,7 @@ issue = "#98"
 case = "conc7_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17800,7 +18192,7 @@ issue = "#98"
 case = "conc7_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17814,7 +18206,7 @@ issue = "#98"
 case = "conc7_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -17939,6 +18331,13 @@ issue = "#98"
 [[short]]
 case = "conc7_s2_xi_bgn_index_n_st1_sum_cond11rare"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc7_s2_xi_bgn_index_n_st1_sum_cond11rare"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -18016,7 +18415,21 @@ issue = "#98"
 [[short]]
 case = "conc7_s2_xi_bgn_index_n_st1_sum_permute3_dup0_insert876"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc7_s2_xi_bgn_index_n_st1_sum_permute3_dup0_insert876"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc7_s2_xi_bgn_index_n_st1_sum_permute3_dup0_insert876"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -18157,7 +18570,7 @@ issue = "#98"
 case = "conc7_s2_xi_bgn_index_n_st1_sum_pressure2"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -18171,7 +18584,7 @@ issue = "#98"
 case = "conc7_s2_xi_bgn_index_n_st1_sum_pressure2"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -18290,7 +18703,7 @@ issue = "#98"
 case = "conc7_s2_xi_bgn_index_n_st1_sum_storemaybe"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -18304,7 +18717,7 @@ issue = "#98"
 case = "conc7_s2_xi_bgn_index_n_st1_sum_storemaybe"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -18619,7 +19032,7 @@ issue = "#98"
 case = "conc8_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -18906,7 +19319,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -18920,7 +19333,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19032,7 +19445,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum_after"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19046,7 +19459,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum_after"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19172,7 +19585,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum_both_invariant_dead1"
 lang = "nib"
 check = "invariant-loads"
-configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19185,6 +19598,13 @@ issue = "#98"
 [[short]]
 case = "conc8_s2_xi_bgn_index_n_st1_sum_both_invariant_dead1"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc8_s2_xi_bgn_index_n_st1_sum_both_invariant_dead1"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -19291,7 +19711,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum_invariant_permute210_shift2"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19305,7 +19725,14 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum_invariant_permute210_shift2"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc8_s2_xi_bgn_index_n_st1_sum_invariant_permute210_shift2"
+lang = "nib"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19417,7 +19844,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum_storemaybe"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19431,7 +19858,7 @@ issue = "#98"
 case = "conc8_s2_xi_bgn_index_n_st1_sum_storemaybe"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19732,7 +20159,7 @@ issue = "#98"
 case = "conc8_s2_xo0o1o2o3o4o5o6o7_bpn_index_n_st1_sum_onmx0x0x0x0x0x0x0"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -19746,7 +20173,7 @@ issue = "#98"
 case = "conc8_s2_xo0o1o2o3o4o5o6o7_bpn_index_n_st1_sum_onmx0x0x0x0x0x0x0"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-O3", "386-Os", "P5-O3", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -20201,7 +20628,7 @@ issue = "#98"
 case = "conc9_s24_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -20467,7 +20894,7 @@ issue = "#98"
 case = "conc9_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -20481,7 +20908,7 @@ issue = "#98"
 case = "conc9_s2_xi_bgn_index_n_st1_sum"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -20613,6 +21040,13 @@ issue = "#98"
 [[short]]
 case = "conc9_s2_xi_bgn_index_n_st1_sum_counteraffine_both_permute82"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc9_s2_xi_bgn_index_n_st1_sum_counteraffine_both_permute82"
+lang = "nib"
 check = "relation-ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -20656,6 +21090,13 @@ issue = "#98"
 case = "conc9_s2_xi_bgn_index_n_st1_sum_counterother_permute293"
 lang = "nib"
 check = "ivs"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc9_s2_xi_bgn_index_n_st1_sum_counterother_permute293"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
 issue = "#98"
 
@@ -20768,7 +21209,7 @@ issue = "#98"
 case = "conc9_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -20782,7 +21223,14 @@ issue = "#98"
 case = "conc9_s2_xi_bgn_index_n_st1_sum_invariant"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "conc9_s2_xi_bgn_index_n_st1_sum_invariant"
+lang = "nib"
+check = "relation-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -20985,7 +21433,7 @@ issue = "#98"
 case = "fixscale"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -20999,7 +21447,7 @@ issue = "#98"
 case = "fixscale"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -21145,6 +21593,13 @@ issue = "#98"
 [[short]]
 case = "horner"
 lang = "nib"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "horner"
+lang = "nib"
 check = "ivs"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
@@ -21152,7 +21607,21 @@ issue = "#98"
 [[short]]
 case = "horner"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "horner"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "horner"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -21202,6 +21671,13 @@ issue = "#98"
 case = "matmul_ijk"
 lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "matmul_ijk"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -21356,7 +21832,7 @@ issue = "#98"
 case = "prefix"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -21370,7 +21846,7 @@ issue = "#98"
 case = "prefix"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -21503,7 +21979,7 @@ issue = "#98"
 case = "saxpy"
 lang = "nib"
 check = "ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -21517,7 +21993,7 @@ issue = "#98"
 case = "saxpy"
 lang = "nib"
 check = "mir-ivs-ideal"
-configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -21691,7 +22167,21 @@ issue = "#98"
 [[short]]
 case = "wordcopy"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wordcopy"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wordcopy"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -21720,6 +22210,13 @@ issue = "#98"
 case = "wordlen"
 lang = "nib"
 check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wordlen"
+lang = "nib"
+check = "ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -21761,7 +22258,21 @@ issue = "#98"
 [[short]]
 case = "wordset"
 lang = "nib"
+check = "ivs-ideal"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wordset"
+lang = "nib"
 check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wordset"
+lang = "nib"
+check = "mir-ivs-ideal"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
