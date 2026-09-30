@@ -379,3 +379,10 @@ def test_every_cross_case_means_something_in_every_language_it_is_written_in():
         for lang, emitter in (("c", emit_c), ("bas", emit_bas), ("nib", emit_nib)):
             if not emitter.expressible(case):
                 oracle.evaluate(case, lang)
+def test_a_struct_with_a_byte_is_not_basic():
+    """A case reading only a struct's INTEGER field passed as BASIC, then the
+    driver's TYPE met the byte field and the whole run stopped."""
+    import emit_bas
+    from cases import cross
+    case = next(one for one in cross.cases() if one.tags >= {"elem:s3"})
+    assert emit_bas.expressible(case) is not None
