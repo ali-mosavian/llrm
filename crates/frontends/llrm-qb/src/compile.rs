@@ -1337,6 +1337,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         private,
         requests: graphics,
         frames,
+        line_numbers: module.line_numbers.iter().copied().collect(),
     };
     Ok(basic::compiled(program, &object, codegen)?)
 }

@@ -147,9 +147,10 @@ fn main() -> ExitCode {
                     own_frames,
                 };
                 let expanded = source.text.lines().count();
-                let debugged = debug.then(|| qbfront::semantic::DebugSource {
-                    text: source.text.lines().map(str::to_owned).collect(),
+                let debugged = Some(qbfront::semantic::DebugSource {
+                    text: if debug { source.text.lines().map(str::to_owned).collect() } else { Vec::new() },
                     lines: (1..=expanded).map(|line| source.location(line).map_or(0, |one| one.main_line)).collect(),
+                    debug,
                 });
                 match qbfront::semantic::compile_debugged(&module, name, dialect, &runtime, &options, debugged) {
                     Ok((hir, warnings)) => {

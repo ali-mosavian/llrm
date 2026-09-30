@@ -28,6 +28,16 @@ pub(super) enum Held {
 }
 
 impl Compiler {
+    /// `-g`.
+    pub(super) fn debugging(&self) -> bool {
+        self.source.as_ref().is_some_and(|source| source.debug)
+    }
+
+    /// Expanded line `line`'s in the main file, 0 for none.
+    pub(super) fn main_line(&self, line: usize) -> usize {
+        self.source.as_ref().and_then(|source| source.lines.get(line.wrapping_sub(1))).copied().unwrap_or(0)
+    }
+
     /// `type_id`'s debug type, where it has one: a scalar, a TYPE, or a
     /// `STRING * n`.
     fn debug_type(&mut self, type_id: u32) -> Option<i64> {
@@ -56,7 +66,7 @@ impl Compiler {
     /// The TYPE `declared` at `span`, `type_id`, of `fields` at `offsets`,
     /// each of its type or `bytes` of it in place.
     pub(super) fn debug_structure(&mut self, type_id: u32, declared: &str, span: Span, fields: &[(&Declaration, u32, usize, usize)], bytes: usize) {
-        if self.source.is_none() {
+        if !self.debugging() {
             return;
         }
         let mut members = Vec::new();
@@ -108,7 +118,7 @@ impl Compiler {
     /// A variable `source` declared at `span`, of `type_id`s or an array
     /// of them, `held` there; an array by its descriptor, as BC's.
     pub(super) fn debug_held(&mut self, held: Held, source: &str, span: Span, type_id: u32, array: bool) {
-        if self.source.is_none() || source.starts_with('$') {
+        if !self.debugging() || source.starts_with('$') {
             return;
         }
         let Some(r#type) = self.debug_type_of(type_id, array) else { return };
@@ -127,7 +137,7 @@ impl Compiler {
     /// The function's `argument`th parameter, `source` declared at `span`,
     /// of `type_id`s or an array of them, by reference unless `by_value`.
     pub(super) fn debug_parameter(&mut self, argument: usize, source: &str, span: Span, type_id: u32, array: bool, by_value: bool) {
-        if self.source.is_none() {
+        if !self.debugging() {
             return;
         }
         let Some(target) = self.debug_type_of(type_id, array) else { return };
@@ -139,7 +149,7 @@ impl Compiler {
     /// The function `id` just compiled, `source` declared at `span`
     /// returning `result`, None for a SUB.
     pub(super) fn debug_function(&mut self, id: u32, source: &str, span: Span, result: Option<u32>) {
-        if self.source.is_none() {
+        if !self.debugging() {
             return;
         }
         // BC gives a SUB an INTEGER result.

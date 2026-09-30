@@ -570,6 +570,8 @@ pub struct Object {
     /// How each function is framed, by its MIR name, where not by B$ENRA
     /// with no temporary STRING slot.
     pub frames: BTreeMap<String, Frame>,
+    /// Each source line's BASIC line number, for the statement table.
+    pub line_numbers: BTreeMap<i64, i64>,
 }
 
 /// How a function is framed.
@@ -607,7 +609,7 @@ pub fn compiled(program: &model::Program, object: &Object, options: &Options) ->
     let (mut mir, data) = super::emitted(program, options)?;
     let [(module, data)] = [(&mir.modules[0], &data[0])];
     let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.clone());
-    let mut resolved = Object { segments: Vec::new(), symbols: object.symbols.clone(), data: BTreeMap::new(), private: object.private.clone(), requests: object.requests.clone(), frames: object.frames.clone(), code: object.code.clone(), header: object.header.clone(), main: object.main.clone(), constants: object.constants.clone() };
+    let mut resolved = Object { segments: Vec::new(), symbols: object.symbols.clone(), data: BTreeMap::new(), private: object.private.clone(), requests: object.requests.clone(), frames: object.frames.clone(), line_numbers: object.line_numbers.clone(), code: object.code.clone(), header: object.header.clone(), main: object.main.clone(), constants: object.constants.clone() };
     resolved.symbols.extend(object.data.iter().filter_map(|(id, symbol)| Some((global(id)?, symbol.clone()))));
     for segment in &object.segments {
         let items = segment.items.iter().filter_map(|item| match item {
@@ -685,6 +687,16 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             referenced.insert(callee.name.clone(), callee.far);
         }
         rows.extend(procedure.body.blocks.first().map(|entry| super::entry_row(procedures.len(), entry.at)));
+        // RESUME NEXT (B$RESN) continues at the first row past the error:
+        // with a landing pad, that must be the pad. Without one, each line
+        // is a row, the runtime's for an error's line.
+        if landing.is_none() && !object.line_numbers.is_empty() {
+            let starts = masm::line_starts(&procedure, procedures.len()).map_err(|error| error.0)?;
+            for (order, (label, line)) in starts.into_iter().enumerate() {
+                let number = object.line_numbers.get(&i64::from(line)).copied().unwrap_or(0);
+                rows.push((procedures.len() as i64, order as i64, label, number));
+            }
+        }
         rows.extend(landing.map(|at| super::landing_row(procedures.len(), at)));
         handled |= landing.is_some();
         procedures.push(procedure);

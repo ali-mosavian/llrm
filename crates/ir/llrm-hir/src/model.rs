@@ -799,11 +799,14 @@ pub struct Module {
     pub alias_classes: Vec<AliasClass>,
     /// `-g`: what a debugger names and how it reads it.
     pub debug: Option<Debug>,
+    /// Each source line's BASIC line number, where a statement table
+    /// reports one: (line, number).
+    pub line_numbers: Vec<(i64, i64)>,
 }
 
 impl Module {
     pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
-        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), debug: None }
+        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), debug: None, line_numbers: Vec::new() }
     }
 
     /// The rows of the statement table, in source order; none without one.

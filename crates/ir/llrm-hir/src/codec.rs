@@ -322,6 +322,9 @@ impl _Plain for model::Module {
         if self.debug.is_some() {
             out.insert("debug".to_owned(), self.debug._plain());
         }
+        if !self.line_numbers.is_empty() {
+            out.insert("line_numbers".to_owned(), self.line_numbers._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1220,6 +1223,7 @@ static MODULE: _Record = _Record {
         ("callables", _Hint::Tuple(&_Hint::Record(&CALLABLE)), false),
         ("alias_classes", _Hint::Tuple(&_Hint::Record(&ALIAS_CLASS)), false),
         ("debug", _Hint::Union(&[_Hint::Record(&DEBUG), _Hint::NoneType]), false),
+        ("line_numbers", _Hint::Tuple(&_Hint::Tuple(&_Hint::Int)), false),
     ],
     build: |args| {
         _object(model::Module {
@@ -1231,6 +1235,7 @@ static MODULE: _Record = _Record {
             callables: _default(args, "callables", Vec::new())?,
             alias_classes: _default(args, "alias_classes", Vec::new())?,
             debug: _default(args, "debug", None)?,
+            line_numbers: _default(args, "line_numbers", Vec::new())?,
         })
     },
 };
