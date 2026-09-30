@@ -4,7 +4,7 @@
 code. Every frontend raises to one SSA IR (MIR), shares one optimizer and x86
 backend, and writes linkable OMF `.OBJ` files.
 
-![llrm pipeline: four frontends meet at MIR, one target-neutral optimizer, one x86 real-mode backend](docs/architecture/pipeline.svg)
+![llrm pipeline: QuickBASIC, Nib and C raise through HIR and BC objects straight to MIR; one target-neutral optimizer; one x86 real-mode backend](docs/architecture/pipeline.svg)
 
 MIR passes are machine-independent; only lowering, allocation and peephole see
 registers or instructions. See [the MIR boundary](docs/architecture/split.md). The goal is
@@ -19,6 +19,7 @@ program; [targets](docs/measurement/targets.md) has the evidence and current gap
 | `llrm-c` | C, through a patched Open Watcom front end (`toolchain/owshim/`), in Borland's medium model |
 | `llrm-nib` | Nib, llrm's own language; see [the language](docs/frontends/nib/readme.md) |
 | `llrm-omf` | OMF objects produced by QuickBASIC's BC, rewritten in place |
+| `llrm-mir` | MIR text: verifies it and writes it back; `--run` executes it on the interpreter, `--ivs` counts each innermost loop's induction variables |
 | `llrm-run` | Runs a Nib module's entry on the host HIR interpreter |
 | `nib-lsp` | Nib's language server; see [the server](docs/frontends/nib/lsp.md) |
 
@@ -293,7 +294,18 @@ program with dosrun: break on write, stack traces and map-file symbols.
 
 ```sh
 cargo test --release <name>
+uv run --project tools python tools/loops/run.py --quick
 ```
+
+The second command runs the loop corpus: one loop program per case, written once
+and emitted as C, QuickBASIC and Nib. An independent oracle checks each result,
+in llrm-mir's interpreter and on DOSBox. Each inner loop's induction variables,
+reloads and size are measured from the object's bytes, against bounds derived
+from the target and against gcc-ia16 and Open Watcom. `tools/loops/known.toml`
+lists what falls short today; a run fails for a shortfall not listed and for a
+listed one that is gone. Without `--quick` it covers every case, CPU and `-O`
+level, in about 23 minutes. [tools/readme.md](tools/readme.md) lists the other
+tools.
 
 For every failure, dump every stage and diff the first changed pair. Every fix
 needs a regression that fails before the fix. Testing details are in
