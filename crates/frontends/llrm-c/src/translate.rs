@@ -519,17 +519,6 @@ fn with_destination(parameters: &mut Vec<i64>, destination: i64, in_order: bool)
     }
 }
 
-/// Whether some restrict lvalue names parameter `symbol`.
-fn restricted(unit: &hir::Unit, symbol: i64) -> bool {
-    unit.nodes.values().any(|node| match (node.call.as_str(), &node.args[..]) {
-        ("CGAttr", [inner, attr]) if attr == "3" => {
-            let inner = &unit.nodes[&hir::handle(inner)];
-            inner.call == "CGFEName" && hir::handle(&inner.args[0]) == symbol
-        }
-        _ => false,
-    })
-}
-
 impl<'a, 't> Body<'a, 't> {
     fn function(
         shared: &'a Shared<'a>,
@@ -576,7 +565,7 @@ impl<'a, 't> Body<'a, 't> {
             },
             None => body.ty(&proc.type_)?,
         };
-        let (parameters, unaliased, homes, struct_homes) = body.frame()?;
+        let (parameters, stated, homes, struct_homes) = body.frame()?;
         for one in &proc.body {
             body.statement(one)?;
         }
@@ -596,9 +585,9 @@ impl<'a, 't> Body<'a, 't> {
             linkage,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
         };
-        for value in unaliased {
+        for (value, fact) in stated {
             let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
-            facts.state(Subject::Param { function: id, index }, Fact::NoAlias);
+            facts.state(Subject::Param { function: id, index }, fact);
         }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
@@ -822,9 +811,9 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Each parameter and auto a place; each parameter stored into its own.
     /// A scalar parameter's home is also returned, by place and parameter.
-    fn frame(&mut self) -> R<(Vec<i64>, Vec<i64>, Vec<(i64, i64)>, Vec<i64>)> {
+    fn frame(&mut self) -> R<(Vec<i64>, Vec<(i64, Fact)>, Vec<(i64, i64)>, Vec<i64>)> {
         let mut parameters = Vec::new();
-        let mut unaliased = Vec::new();
+        let mut stated = Vec::new();
         let mut homes = Vec::new();
         let mut struct_homes = Vec::new();
         let mut stores = Vec::new();
@@ -853,10 +842,8 @@ impl<'a, 't> Body<'a, 't> {
                     stores.push((place, -1, parameter));
                     homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
-                    // C99 6.7.3.1: what a restrict parameter reaches, nothing else in its block does.
-                    if restricted(self.unit, *symbol) {
-                        unaliased.push(parameter);
-                    }
+                    // What the language states of a parameter: C99 6.7.3.1 for restrict.
+                    stated.extend(crate::ow_facts::of_param(self.unit, *symbol).into_iter().map(|fact| (parameter, fact)));
                 }
             }
         }
@@ -888,7 +875,7 @@ impl<'a, 't> Body<'a, 't> {
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
-        Ok((parameters, unaliased, homes, struct_homes))
+        Ok((parameters, stated, homes, struct_homes))
     }
 
     // ---- statements ----
@@ -1104,6 +1091,7 @@ impl<'a, 't> Body<'a, 't> {
         match tree.call.as_str() {
             "CGCall" => self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
             "CGEval" | "CGVolatile" | "CGAttr" => self.type_of_node(&tree.args[0]),
+            "CGFact" => self.type_of_node(&tree.args[1]),
             "CGFlow" | "CGCompare" => "TY_BOOLEAN".to_owned(),
             _ => tree.args.last().cloned().unwrap_or_default(),
         }
@@ -1294,7 +1282,7 @@ impl<'a, 't> Body<'a, 't> {
                 self.position(join);
                 Got::Value(self.op(Op::Load, truth, vec![Operand::place_ref(flowed)]))
             }
-            ("CGEval", [inner]) | ("CGAttr", [inner, _]) => self.eval(inner)?,
+            ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
             ("CGVolatile", [inner]) => {
                 let got = self.eval(inner)?;
                 Got::Volatile(self.address(got)?.0)

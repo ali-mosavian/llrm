@@ -1322,7 +1322,7 @@ impl<'a> _Raise<'a> {
                     other => self.unsupported(format!("volatile access through {}", other.repr())),
                 };
             }
-            ("CGAttr", [inner, "3"]) => {
+            ("CGFact", [_, inner, "restrict"]) => {
                 let got = self.eval(inner)?;
                 let root = |kind: &str, n: i64| Identity::Tuple(vec![Identity::Str(kind.to_owned()), Identity::Int(n)]);
                 let root = match &got {
@@ -1333,7 +1333,7 @@ impl<'a> _Raise<'a> {
                 };
                 return Ok(Got::Restricted(Box::new(Restricted { value: got, root })));
             }
-            ("CGAttr", [inner, _]) => return self.eval(inner),
+            ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => return self.eval(inner),
             _ => {}
         }
         self.unsupported(format!("{} {}", tree.call, tree.args.join(" ")))
@@ -1424,6 +1424,7 @@ impl<'a> _Raise<'a> {
         match tree.call.as_str() {
             "CGCall" => return self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
             "CGEval" | "CGVolatile" | "CGAttr" => return self.type_of(&tree.args[0]),
+            "CGFact" => return self.type_of(&tree.args[1]),
             "CGFlow" | "CGCompare" => return "TY_BOOLEAN".to_owned(),
             _ => {}
         }
@@ -3084,7 +3085,7 @@ mod tests {
     #[test]
     fn test_restrict_reaches_mir_as_distinct_noalias_roots() {
         let text = fixture("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
-        assert_eq!(text.matches(" CGAttr ").count(), 3);
+        assert_eq!(text.matches(" CGFact ").count(), 3);
 
         let unit = unit(&text);
         let body = body(&unit, &unit.procs[0]);
