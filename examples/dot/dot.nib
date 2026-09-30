@@ -1,5 +1,5 @@
-fn dot(a: &[i16], b: &[i16], n: i16) -> i32:
+fn dot(a: &[i16], b: &[i16]) -> i32:
     let mut total: i32 = 0
-    for i in 0..n:
-        total += i32(a[i]) * i32(b[i])
+    for (x, y) in zip(a, b):
+        total += i32(x) * i32(y)
     return total

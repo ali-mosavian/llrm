@@ -170,10 +170,10 @@ _dot endp
 Nib, `llrm-nib dot.nib --entry dot --cpu 486 -S`:
 
 ```
-fn dot(a: &[i16], b: &[i16], n: i16) -> i32:
+fn dot(a: &[i16], b: &[i16]) -> i32:
     let mut total: i32 = 0
-    for i in 0..n:
-        total += i32(a[i]) * i32(b[i])
+    for (x, y) in zip(a, b):
+        total += i32(x) * i32(y)
     return total
 ```
 
@@ -185,49 +185,42 @@ _dot proc far
     push si
     push di
 L0_0:
-    les bx, dword ptr [bp+6]
+    les si, dword ptr [bp+6]
     lfs di, dword ptr [bp+10]
-    mov ax, word ptr es:[bx]
+    mov ax, word ptr es:[si]
     mov word ptr [bp-2], ax
-    les ax, dword ptr es:[bx+4]
+    mov ax, word ptr fs:[di]
     mov word ptr [bp-4], ax
-    mov dx, word ptr fs:[di]
+    les si, dword ptr es:[si+4]
     lfs di, dword ptr fs:[di+4]
-    xor cx, cx
+    xor dx, dx
     xor eax, eax
     jmp L0_7
+L0_24:
+    cmp dx, word ptr [bp-4]
+    jae L0_22
 L0_11:
-    cmp cx, word ptr [bp-2]
-    jae L0_21
-L0_15:
-    lea bx, [ecx+ecx]
-    mov si, word ptr [bp-4]
-    movsx esi, word ptr es:[bx+si]
-    cmp cx, dx
-    jae L0_30
-L0_23:
+    lea bx, [edx+edx]
+    movsx ecx, word ptr es:[bx+si]
     movsx ebx, word ptr fs:[bx+di]
-    imul esi, ebx
-    add eax, esi
-    inc cx
+    imul ecx, ebx
+    add eax, ecx
+    inc dx
 L0_7:
-    cmp cx, word ptr [bp+14]
-    jl L0_11
-L0_13:
+    cmp dx, word ptr [bp-2]
+    jb L0_24
+L0_22:
     shld edx, eax, 16
     pop di
     pop si
     leave
     retf
-L0_21:
-    call far ptr N$EBND
-L0_30:
-    call far ptr N$EBND
 _dot endp
 ```
 
-Nib checks every index: a slice is a far pointer to its length and data pointer,
-and a bad index calls `N$EBND`. `--unchecked-bounds` leaves the C loop.
+A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
+elements until the shorter slice ends, so there is no `n`, and no index to check.
+Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
 BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 -S`:
 
