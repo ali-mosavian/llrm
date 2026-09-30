@@ -1881,7 +1881,8 @@ pub fn tested(body: &LirBody) -> LirBody {
         let jumps = work.last().is_some_and(|&last| insns[last].what.as_ref().is_some_and(|what| what.op == Operation::Jump));
         let branch_at = work.len() as isize - 1 - isize::from(jumps);
         let mut test_at = branch_at - 1;
-        while test_at >= 0 && _moves(&insns[at(test_at)], None) {
+        // Moves and anchors change no flag.
+        while test_at >= 0 && (_moves(&insns[at(test_at)], None) || _nothing(&insns[at(test_at)])) {
             test_at -= 1;
         }
         let Some(register) = (test_at >= 0).then(|| _zero_tested(&insns[at(test_at)])).flatten() else {
