@@ -3,6 +3,10 @@
 //! rich MIR. LLVM's ScalarEvolution add recurrences and trip counts, with
 //! InductionDescriptor's view of a counter. A width is in bits.
 //!
+//! `Recurrence` is any such value as `pointer + start + step * trip`, with
+//! invariant symbols (`Linear`); `users` is what reads a loop's recurrences,
+//! as LLVM's IVUsers.
+//!
 //! A compare is the `icmp` a conditional `br` reads; a step is an `add` or
 //! a `sub` of a constant; a pointer offset is a `getelementptr`, scaled as
 //! the layout says. A counter tested narrower is a `trunc`, not a counter.

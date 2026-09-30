@@ -811,8 +811,8 @@ fn test_a_step_promised_not_to_wrap_ends_an_inclusive_symbolic_loop() {
     }
 }
 
-/// `i < n` from a known start cannot pass the width's end: CountToZero
-/// needs that bound to prove a recurrence reaches zero no earlier, and
+/// `i < n` from a known start cannot pass the width's end: `lsr` needs
+/// that bound to prove a recurrence reaches zero no earlier, and
 /// found none for a runtime `n` (the old body read it off `n`'s range).
 #[test]
 fn an_exclusive_test_is_bounded_by_its_widths_end() {

@@ -12,6 +12,8 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **A regression test passed at HEAD.** The first count-to-zero test (RIPPLE) never reproduced the bug; the loop was already right in isolation, and went wrong only beside another loop. A test not seen to fail is evidence of nothing; the replacement was checked against the HEAD build before and after.
 
+**The estimate ran a loop tested at its header one trip short.** `executed` gave every loop exit the stay probability (N−1)/N, right for a test after the trip and short by one for a test before it, so an unrotated loop's body counted one trip fewer than a rotated one: rotating ivchan's 21-trip loop read as three more memory operands. Guard: the header's test stays N/(N+1), with a test.
+
 **One price for two encodings.** The scorer and scheduler priced `shl r,1` (the D1 form, three clocks on the 386 and 486) as the two-clock imm8 form, so nothing saw that `add r,r` doubles in one. A golden carried over from the Python scorer held the wrong price as the expected answer. Guard: the D1 form has its own row, with a test.
 
 **The first test shape never reached the pass.** A one-dimensional lookup put its doubling into a scaled 32-bit address, so the new test passed without the fix. Check the listing contains the instruction under test before trusting the assertion.
@@ -32,11 +34,9 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 ## Pass order and interaction
 
-**A pass that settles early decides on another pass's leftovers.** Count-to-zero ran inside strength reduction, each round, so it rotated a loop before strength had made that loop's pointer, and chose the counter a later round would have killed. Guard: passes run in stages; count-to-zero waits until strength reduction has settled.
+**A load leaves a loop only once the loop is entered at its body.** Rotation comes last, since unroll and peel read the loop tested at its header, so `hoist` runs again after `lsr` and `rotate`: before it, a load in a loop that may run no trip cannot move. `zeroed` used to rotate mid-pipeline and gave sum_three.c's pointer loads that chance by accident. Guard: the pipeline test of zero stores beside invariant loads.
 
 **A reorder hid a bug.** Before df89fc8a, running `fused` before `high_extracts` hid SHLD's false read of its destination. A pass order that makes something work is a fact nobody wrote down; the fix was to make the effect right.
-
-**A credit that ignores what follows.** Strength reduction freed a counter whenever its scaled uses covered it, even with a symbolic trip count. Count-to-zero then had to take control through a pointer at a symbolic bias, which cost a register in every address and spilled (SUMTHREE 8 → 9). Guard: the credit applies only when a root can take control at a constant bias.
 
 ## Invariants of the machine form
 
