@@ -35,7 +35,10 @@ fn object() -> Vec<Rc<omf::Record>> {
     std::fs::write(&path, SOURCE).expect("writes");
     let frontend = crate::Frontend { debug: true, ..crate::Frontend::default() };
     let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
-    let module = crate::compile::assembled_from_mir(&program, "main", &llrm_core::driver::Options::of(crate::compile::machine())).expect("compiles");
+    // Not inlined: `scale` is a symbol and its lines are statements to read.
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(crate::compile::machine()) };
+    let module = crate::compile::assembled_from_mir(&program, "main", &options).expect("compiles");
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment).expect("writes")).expect("parses")
 }
 
