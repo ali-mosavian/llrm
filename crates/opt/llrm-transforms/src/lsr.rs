@@ -81,10 +81,9 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
-        changed = true;
-    }
-    if changed {
+        // What the loop no longer reads is no use for the loop around it.
         dead::dead(unit.context, outer.callees(), unit.function);
+        changed = true;
     }
     changed
 }
@@ -154,6 +153,8 @@ struct Site {
     inside: bool,
     /// The counted exit's compare, which may test a candidate's last value instead.
     exit: bool,
+    /// Its value, where it is read as the loop leaves on a known count.
+    known: Option<Linear>,
 }
 
 /// Where a realization is placed.
@@ -186,9 +187,6 @@ struct Plan {
     uses: Vec<(Site, usize, Fit)>,
     /// The candidate whose last value ends the loop, and that value.
     exit: Option<(Exit, usize)>,
-    /// Where each candidate scaled in the loop is made, once: the block
-    /// dominating its uses.
-    products: BTreeMap<(usize, BigInt), BlockId>,
 }
 
 /// Everything priced in one loop.
@@ -245,7 +243,7 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
             Place::End(block) | Place::Exit(block, _) => block,
         };
         let exit = exit.as_ref().is_some_and(|exit| exit.proof.compare == one.user);
-        sites.push(Site { one: one.clone(), at, frequency: frequency(block), inside, exit });
+        sites.push(Site { one: one.clone(), at, frequency: frequency(block), inside, exit, known: None });
     }
     // Exit phis that read one recurrence are realized once after the loop;
     // one reading several is realized on each way out.
@@ -271,6 +269,18 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
         } else {
             for &index in &indexes[1..] {
                 sites[index].frequency = 0;
+            }
+        }
+    }
+    // Read as the loop leaves its header on a known count, a value is its
+    // start plus its step each trip.
+    if let Some(exit) = exit.as_ref().filter(|exit| !exit.proof.posttested && exit.trips.terms.is_empty()) {
+        for site in &mut sites {
+            let Place::Exit(block, phi) = site.at else { continue };
+            let from_header = function.instruction(phi).operands.chunks(2).all(|pair| pair[1] == Operand::Block(cfg::block(loop_.header)));
+            if block == cfg::block(exit.proof.exit) && from_header {
+                let of = _normal(view, &site.one);
+                site.known = of.step.product(&exit.trips.truncated(of.width())).map(|walked| of.start.plus(&walked));
             }
         }
     }
@@ -338,8 +348,6 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
     let renumber = |index: usize| kept.iter().position(|&one| one == index).expect("a chosen candidate");
     let Problem { candidates, exit: exit_proof, .. } = problem;
     let uses = uses.into_iter().map(|(site, index, fit)| (site, renumber(index), fit)).collect::<Vec<_>>();
-    let guarded = exit.is_some() && exit_proof.as_ref().is_some_and(|one| one.guarded);
-    let products = _products(function, loop_, &uses, guarded);
     Some(Plan {
         loop_: loop_.clone(),
         preheader,
@@ -348,58 +356,7 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
         candidates: kept.iter().map(|&index| candidates[index].clone()).collect(),
         uses,
         exit: exit.and_then(|index| Some((exit_proof?, renumber(index)))),
-        products,
     })
-}
-
-/// For each candidate scaled in the loop, the block its product is made
-/// in: the nearest dominating every use of it, the body's first block
-/// where that is the header of a loop to be entered at its body.
-fn _products(function: &Function, loop_: &Loop, uses: &[(Site, usize, Fit)], guarded: bool) -> BTreeMap<(usize, BigInt), BlockId> {
-    let dominance = cfg::Dominance::of(function);
-    let mut blocks = BTreeMap::<(usize, BigInt), Vec<i64>>::new();
-    for (site, index, fit) in uses {
-        if !site.inside || fit.trip.is_some() || fit.next || fit.k == BigInt::from(0) || fit.k == BigInt::from(1) {
-            continue;
-        }
-        let block = match site.at {
-            Place::Before(inst) => function.parent(inst),
-            Place::End(block) => Some(block),
-            Place::Exit(..) => None,
-        };
-        blocks.entry((*index, fit.k.clone())).or_default().extend(block.map(cfg::id));
-    }
-    let ancestors = |mut at: i64| {
-        let mut chain = vec![at];
-        while let Some(up) = dominance.immediate(at) {
-            chain.push(up);
-            at = up;
-        }
-        chain
-    };
-    blocks
-        .into_iter()
-        .filter_map(|(key, at)| {
-            let mut common = ancestors(*at.first()?);
-            for &one in &at[1..] {
-                let theirs = ancestors(one);
-                common.retain(|block| theirs.contains(block));
-            }
-            let mut block = *common.first()?;
-            if !loop_.body.contains(&block) {
-                return None;
-            }
-            if guarded && block == loop_.header {
-                let inside = function.successors(cfg::block(block)).into_iter().filter(|&one| loop_.body.contains(&cfg::id(one))).collect::<Vec<_>>();
-                let [first] = inside[..] else { return None };
-                if !at.iter().all(|&one| dominance.dominates(cfg::id(first), one)) {
-                    return None;
-                }
-                block = cfg::id(first);
-            }
-            Some((key, cfg::block(block)))
-        })
-        .collect()
 }
 
 /// Where a use's realization goes, and whether that is inside the loop:
@@ -615,6 +572,10 @@ fn _fit(view: &memory::Unit, site: &Site, candidate: &Candidate, most: Option<&B
     let of = _normal(view, &site.one);
     if of.width() != candidate.of.width() {
         return None;
+    }
+    if let Some(known) = &site.known {
+        let constant = known.known().unwrap_or_else(|| _signed(&known.constant, known.width));
+        return Some(Fit { k: BigInt::from(0), base: of.pointer, rest: known.symbolic(), constant, next: false, trip: None, folded: None });
     }
     let Some(k) = of.step.over(&candidate.of.step) else { return _trip_fit(site, &of, candidate, most) };
     let (base, rest) = match (candidate.of.pointer, of.pointer) {
@@ -929,8 +890,8 @@ impl Problem<'_> {
                 }
                 (Some((one, _, price)), None) => {
                     cost += price.cost * site.frequency;
-                    if let Some((k, scaling, _)) = price.product
-                        && !products.insert((one, k, 0))
+                    if let Some((k, scaling, block)) = price.product
+                        && !products.insert((one, k, block))
                     {
                         cost -= scaling * site.frequency;
                     }
@@ -1233,8 +1194,7 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
         } else if fit.folded.is_some() {
             register
         } else {
-            let home = plan.products.get(&(*index, fit.k.clone())).copied();
-            _realized(context, function, &mut expander, &mut products, home, site, candidate, fit, register, ty, at)
+            _realized(context, function, &mut expander, &mut products, site, candidate, fit, register, ty, at)
         };
         match site.at {
             Place::Exit(_, phi) => {
@@ -1289,7 +1249,6 @@ fn _realized(
     function: &mut Function,
     expander: &mut Expander,
     products: &mut HashMap<(Operand, BigInt, BlockId), Operand>,
-    home: Option<BlockId>,
     site: &Site,
     candidate: &Candidate,
     fit: &Fit,
@@ -1324,13 +1283,11 @@ fn _realized(
         }
         None => (register, candidate.of.pointer),
     };
-    // A product in the loop is made once, at the top of the block that
-    // dominates its uses, or of its use's own block.
+    // A product in the loop is made once in its block, at its top.
     let shared = match (&fit.trip, site.at) {
-        (Some(_), _) | (_, Place::Exit(..)) => None,
-        (None, _) if home.is_some() => home,
         (None, Place::Before(inst)) => function.parent(inst),
         (None, Place::End(block)) => Some(block),
+        _ => None,
     };
     let scaled = |context: &mut Context, function: &mut Function, products: &mut HashMap<(Operand, BigInt, BlockId), Operand>| -> Option<Operand> {
         if fit.k == BigInt::from(0) {
