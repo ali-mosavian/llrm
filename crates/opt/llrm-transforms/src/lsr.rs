@@ -424,7 +424,9 @@ fn _hoisted(function: &Function, nested: &[Loop], at: Place) -> Place {
 /// The loop's counted exit, where its compare is read only by its branch.
 fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
     let function = view.function;
-    let proofs = induction::counted(view, loop_, None, true);
+    // The count holds whenever the loop goes on: where another exit stops
+    // the program, nothing after it reads what the counters were.
+    let proofs = induction::counted_unless_stopped(view, loop_, None, true);
     let [proof] = &proofs[..] else { return None };
     let result = function.instruction(proof.compare).result?;
     if function.users(result).iter().any(|one| one.user != proof.branch) || users.web.contains(&proof.compare) {
@@ -794,7 +796,9 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
         UseKind::Address => {
             let native = target.forms.first()?;
             if pointer_base(&fit) {
-                let key = _interned(keys, (fit.base, fit.rest.clone()));
+                // A constant or frame base is a displacement: only a value holds a register.
+                let held = fit.base.filter(|base| matches!(base, Operand::Value(value) if !frames.contains(value)));
+                let key = _interned(keys, (held, fit.rest.clone()));
                 price.held.push(key);
                 price.address.push(Reg::Held(key));
             }

@@ -1216,3 +1216,37 @@ fn test_a_count_after_a_loop_of_no_counted_exit_shares_its_address_counter() {
     assert_eq!(counters(&printed), 1, "{printed}");
     assert!(!printed.contains(", 0\n") || !printed.contains("sub i16 %lsr"), "a distance from a start of zero is the counter: {printed}");
 }
+
+/// Three word arrays summed to a symbolic `n`: a global is a displacement,
+/// so one count-to-zero counter over `2n` held once serves every array.
+/// Each array's own pointer was priced as a held register, twelve of them
+/// in loop-corpus's conc12, and two counters were kept to avoid them.
+#[test]
+fn test_arrays_at_displacements_share_one_counter_and_one_base() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %t, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %pa = getelementptr inbounds i16, ptr @a, i16 %i
+  %pb = getelementptr inbounds i16, ptr @b, i16 %i
+  %pc = getelementptr inbounds i16, ptr @c, i16 %i
+  %va = load i16, ptr %pa
+  %vb = load i16, ptr %pb
+  %vc = load i16, ptr %pc
+  %u = add i16 %s, %va
+  %w = add i16 %u, %vb
+  %t = add i16 %w, %vc
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  ret i16 %s
+";
+    let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2), ("c", "i16", 2)], "i16", body), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
+    assert_eq!(counters(&printed), 1, "{printed}");
+}
