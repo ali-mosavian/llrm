@@ -14,6 +14,8 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **The estimate ran a loop tested at its header one trip short.** `executed` gave every loop exit the stay probability (N−1)/N, right for a test after the trip and short by one for a test before it, so an unrotated loop's body counted one trip fewer than a rotated one: rotating ivchan's 21-trip loop read as three more memory operands. Guard: the header's test stays N/(N+1), with a test.
 
+**An uncounted loop ran fewer trips the more ways out it had.** `executed` gave each exit of a loop with no proven count a stay of 0.9, so a loop with its two exits merged into one read as running twice as often: Nib's `zip` went from 59 to 90 instructions with a shorter loop. Guard: an uncounted loop goes round nine times in ten whatever its exits, with a test.
+
 **One price for two encodings.** The scorer and scheduler priced `shl r,1` (the D1 form, three clocks on the 386 and 486) as the two-clock imm8 form, so nothing saw that `add r,r` doubles in one. A golden carried over from the Python scorer held the wrong price as the expected answer. Guard: the D1 form has its own row, with a test.
 
 **The first test shape never reached the pass.** A one-dimensional lookup put its doubling into a scaled 32-bit address, so the new test passed without the fix. Check the listing contains the instruction under test before trusting the assertion.
@@ -31,6 +33,10 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 **Refactoring one fact into one place changed its answer.** df89fc8a made liveness, regthrash and machinedce ask one `effect` per instruction — the right shape — but the shared answer carried the narrowest caller's assumption about calls. When facts merge, check each former caller's fallback, not only the common case.
 
 **A port was an unknown callee.** An OUT to a port that reaches memory was modelled as a call to an unknown function, which writes only what escaped, so a DMA write could not touch a global whose address was never taken. Nothing moved a load past it until loops were hoisted after rotation. Guard: such a port reads and writes every object, with a test.
+
+**The pass priced a form the selector did not build.** `lsr` priced twelve global arrays on one counter as one held register, since a global is a displacement, and the selector built twelve `array + 2n` pointers and spilled them. Nothing in the pass could see that. Guard: the selector builds `[bx+si+global]` from a global indexed by two registers, with a test; a frame object, which takes BP, stays priced as its own register, with a test.
+
+**A fact only the frontend knows stayed unsaid.** Nib reloaded a slice's length each trip because an element store might alias its descriptor, which kept every bounds check from being counted. The descriptor is `noalias readonly` and its panic routines end the program; the frontend says both, and `hoist` and `exitfold` read them. Guard: a test each for the load leaving the loop and the crashing exit tested ahead of it.
 
 **A parameter nobody read.** `ranges::constants` took the data group, but `consts::known` reads it only when calls are also given, and they never were. Hoist passing `None` and loop motion passing the group got the same answer, which the plan took for two derivations of one fact. Guard: the parameter is gone from `constants` and the functions that only forwarded it.
 

@@ -32,6 +32,38 @@ beats the counters it has.
 
 A symbolic count holds only once the loop is entered, so a loop tested for
 its last value behind a symbolic count is guarded and entered at its body.
+A loop tested after its trips needs no guard where a branch over its entry
+already proves the first trip: `induction::guards` reads what the branches
+over a block prove, as LLVM's `isLoopEntryGuardedByCond` does.
+
+## What the pass is told
+
+The pass prices; it does not know the machine. The facts it prices from each
+have one home:
+
+- The target (`llrm-x86-code16`) holds the registers a value may take and the
+  ones a C callee keeps. `Machine::kept_across` says how many a call to a
+  named callee keeps, from its ABI contract, and `Machine::multiply_by` what
+  a multiply by a constant costs, from the backend's shift and add chains.
+- `spill` is the one spill model: a spilled counter costs a memory update a
+  trip, an invariant a load per read, a far pointer two stores, and a truth
+  value only its own branch reads none. Both `lsr` and `gvn` price pressure
+  through it.
+- The frontend states what only it knows: an indexed borrow's address is
+  `inbounds`, a borrowed slice descriptor is `noalias readonly`, and the
+  runtime's panic routines end the program. The pass reads those.
+
+## Several exits
+
+`induction::exits` counts each exit the latch follows, and the loop's
+backedges are the least of them, as LLVM's exit limits do. `exitfold` then
+does, in `indvars`, what LLVM's IndVarSimplify does with them: an exit no
+count can reach is never taken, an exit tested against an invariant is
+tested once before the loop, and exits that only crash are tested once ahead
+of it. One rule is beyond LLVM and GCC, which never merge live exits: exits
+that leave to the same place with the same values, with nothing seen or
+trapping between them, become one test on the least of their counts. That is
+what gives Nib's `zip` of two slices the loop C's dot has.
 
 ## What it replaced
 
@@ -64,7 +96,12 @@ counters breaking a tie. Pricing each register over instructions made
 
 ## Limits
 
-A loop with two exits has no count, so Nib's `zip` loop keeps its two
-compares. A counter stepping by more than one has no symbolic count either.
-Past the target's registers the pressure estimate is coarse: a few programs
-trade instructions for memory operands.
+A counter stepping by more than one has no symbolic count. A loop tested
+on a value other than a counter plus a constant (a scaled compare, as
+`bubble`'s bounds checks on `j` beside addresses on `2j`) keeps a counter for
+the compare. Past the target's registers the pressure estimate is coarse: a
+few programs trade instructions for memory operands. A symbolic stride
+(matmul's `k * dim1`) is a counter with a held step the pass prices but
+seldom chooses under pressure, where main's strength pass walked a pointer.
+Choosing which value is the base and which the index of a two-register
+address is the backend's, and its choice decides some of these.
