@@ -101,6 +101,7 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
     llrm_transforms::pipeline::applied(program, &applied)?;
     program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
+    program.modules.iter_mut().try_for_each(crate::backend::selects::lowered)?;
     verified(program, "the pipeline")
 }
 
