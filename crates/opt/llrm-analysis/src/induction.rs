@@ -750,8 +750,26 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
     let [condition, Operand::Block(taken), Operand::Block(_)] = function.instruction(branch).operands[..] else { return Vec::new() };
     let Some((compare, icmp)) = unit.defining(condition) else { return Vec::new() };
     let Opcode::ICmp(predicate) = icmp.opcode else { return Vec::new() };
+    let continuing = if loop_.body.contains(&cfg::id(taken)) { predicate } else { predicate.inverse() };
+    _proven(unit, loop_, facts, inbounds, &shape, branch, compare, continuing)
+}
+
+/// Every counter whose compare `compare`, which keeps the loop going while
+/// `continuing` holds, ends it at the branch `shape` places.
+#[allow(clippy::too_many_arguments)]
+fn _proven(
+    unit: &Unit,
+    loop_: &Loop,
+    facts: &IndexMap<ValueId, Known>,
+    inbounds: bool,
+    shape: &_Control,
+    branch: InstId,
+    compare: InstId,
+    continuing: IntPredicate,
+) -> Vec<CountedLoop> {
+    let function = unit.function;
+    let icmp = function.instruction(compare);
     let inside = &loop_.body;
-    let continuing = if inside.contains(&cfg::id(taken)) { predicate } else { predicate.inverse() };
     let latch = *loop_.latches.first().expect("_control proved one latch");
     let still = invariant(function, inside);
 
@@ -841,6 +859,144 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
         });
     }
     proven
+}
+
+/// Where a loop leaves, and after how many trips: an exiting block, and
+/// the backedges taken before its branch leaves, where counted.
+#[derive(Clone, Debug)]
+pub struct ExitCount {
+    pub block: i64,
+    pub branch: InstId,
+    pub exit: i64,
+    /// The backedges taken before it leaves: the least of these. A branch
+    /// leaving as soon as any of its compares fails takes the least of
+    /// theirs; one leaving only when all fail, their one count.
+    pub taken: Option<Vec<Linear>>,
+    /// The proofs its compares were counted by.
+    pub proofs: Vec<CountedLoop>,
+}
+
+/// Every exit of a single-latch loop, in dominance order where they
+/// dominate its latch, each counted where its compares are: LLVM's exit
+/// limits. An exit the latch does not follow is not counted.
+pub fn exits(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>, inbounds: bool) -> Vec<ExitCount> {
+    let function = unit.function;
+    let computed;
+    let facts = match facts {
+        Some(facts) => facts,
+        None => {
+            computed = unit.registers();
+            &*computed
+        }
+    };
+    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Vec::new() };
+    let shape = unit.shape();
+    let graph = cfg::graph(function);
+    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let inside = &loop_.body;
+    let outside = graph.iter().filter(|block| block.succ.contains(&loop_.header) && !inside.contains(&block.at)).map(|block| block.at).collect::<BTreeSet<_>>();
+    let preheader = match outside.first() {
+        Some(&one) if outside.len() == 1 && blocks[&one].succ.as_slice() == [loop_.header] => Some(one),
+        _ => None,
+    };
+    let mut exiting = inside.iter().copied().filter(|at| blocks.get(at).is_some_and(|block| block.succ.iter().any(|to| !inside.contains(to)))).collect::<Vec<_>>();
+    // Those the latch follows are in a chain: each dominates the next.
+    exiting.sort_by_key(|&at| (!shape.dominance.dominates(at, latch), inside.iter().filter(|&&other| shape.dominance.dominates(other, at)).count()));
+    exiting
+        .into_iter()
+        .map(|at| {
+            let branch = function.terminator(cfg::block(at)).expect("a terminated block");
+            let block = blocks[&at];
+            let exit = block.succ.iter().copied().find(|to| !inside.contains(to)).expect("an exiting block");
+            let mut found = ExitCount { block: at, branch, exit, taken: None, proofs: Vec::new() };
+            let operands = &function.instruction(branch).operands;
+            let [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] = operands[..] else { return found };
+            let (Some(entered), true) = (block.succ.iter().copied().find(|to| inside.contains(to)), block.succ.len() == 2) else { return found };
+            if !shape.dominance.dominates(at, latch) {
+                return found;
+            }
+            let shaped = _Control { block: at, preheader, entered, exit, posttested: at == latch, stops: false };
+            let stays = inside.contains(&cfg::id(taken));
+            let (leaves, first) = _leaves(function, condition, stays);
+            let mut counts = Vec::new();
+            for compare in leaves {
+                let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { return found };
+                let continuing = if stays { predicate } else { predicate.inverse() };
+                let Some(proof) = _proven(unit, loop_, facts, inbounds, &shaped, branch, compare, continuing).into_iter().next() else { return found };
+                let Some(count) = _backedges(&proof) else { return found };
+                counts.push(count);
+                found.proofs.push(proof);
+            }
+            // Leaving only once every compare fails is counted where they all agree.
+            if !first {
+                counts.dedup();
+                if counts.len() != 1 {
+                    return found;
+                }
+            }
+            found.taken = Some(counts);
+            found
+        })
+        .collect()
+}
+
+/// The compares a branch on `condition` reads through `and`s and `or`s,
+/// and whether it leaves as soon as one fails: a branch staying while
+/// `condition` holds (`stays`) leaves at the first to fail of an `and`'s,
+/// one leaving while it holds at the first to hold of an `or`'s.
+fn _leaves(function: &Function, condition: ValueId, stays: bool) -> (Vec<InstId>, bool) {
+    let joined = |value: ValueId| -> Option<(BinaryOp, [Operand; 2])> {
+        let inst = defining(function, value)?;
+        let op = function.instruction(inst);
+        match (&op.opcode, &op.operands[..]) {
+            (Opcode::Binary(kind @ (BinaryOp::And | BinaryOp::Or)), [left, right]) => Some((*kind, [*left, *right])),
+            _ => None,
+        }
+    };
+    let Some((kind, _)) = joined(condition) else { return (defining(function, condition).into_iter().collect(), true) };
+    let mut leaves = Vec::new();
+    let mut pending = vec![condition];
+    while let Some(value) = pending.pop() {
+        match joined(value) {
+            Some((one, parts)) if one == kind => pending.extend(parts.iter().filter_map(|part| match part {
+                Operand::Value(value) => Some(*value),
+                _ => None,
+            })),
+            _ => leaves.extend(defining(function, value)),
+        }
+    }
+    let first = (kind == BinaryOp::And) == stays;
+    (leaves, first)
+}
+
+/// The backedges a proof's loop takes before it leaves at the proof's
+/// branch: its trips, one fewer where tested after them.
+fn _backedges(proof: &CountedLoop) -> Option<Linear> {
+    let width = proof.width();
+    if let Some(count) = &proof.count {
+        return Some(Linear::constant(count - u8::from(proof.posttested), width));
+    }
+    if proof.posttested {
+        return None;
+    }
+    let (ahead, behind) = if proof.step > BigInt::from(0) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
+    Some(Linear::of(ahead, width).minus(&Linear::of(behind, width)).plus(&Linear::constant(u8::from(proof.inclusive()), width)))
+}
+
+/// The backedges a loop takes: the least of every exit's, where each is
+/// counted and the latch follows them all. LLVM's exact backedge-taken count.
+pub fn backedges(exits: &[ExitCount]) -> Option<Vec<Linear>> {
+    let mut least = Vec::new();
+    for one in exits {
+        least.extend(one.taken.clone()?);
+    }
+    (!least.is_empty()).then_some(least)
+}
+
+/// The most backedges a loop takes: the least of the counted exits'.
+/// LLVM's symbolic maximum.
+pub fn most_backedges(exits: &[ExitCount]) -> Vec<Linear> {
+    exits.iter().filter_map(|one| one.taken.clone()).flatten().collect()
 }
 
 /// A start carried round an enclosing loop: a phi outside `loop_` whose

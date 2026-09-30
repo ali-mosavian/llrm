@@ -1119,3 +1119,70 @@ b3:
     let of = &found.values[&parsed.value("w")];
     assert_eq!((of.start.known(), of.step.known()), (Some(BigInt::from(-16)), Some(BigInt::from(1))));
 }
+
+/// `zip(a, b)`: the index tested against each slice's length, one exit
+/// at the header and one in the body. No single-exit proof counted it.
+const ZIPPED: &str = "define i16 @f(i16 %la, i16 %lb) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i16 [ 0, %entry ], [ %t, %body ]
+  %ina = icmp ult i16 %i, %la
+  br i1 %ina, label %check, label %done
+check:
+  %inb = icmp ult i16 %i, %lb
+  br i1 %inb, label %body, label %done
+body:
+  %t = add i16 %s, %i
+  %j = add nuw i16 %i, 1
+  br label %head
+done:
+  %r = phi i16 [ %s, %head ], [ %s, %check ]
+  ret i16 %r
+}
+";
+
+/// Each exit the latch follows is counted by its own compare, and the
+/// loop takes the least of their counts: `la` and `lb` backedges.
+#[test]
+fn test_every_exit_is_counted_and_the_loop_takes_the_least() {
+    let parsed = Parsed::new(ZIPPED);
+    assert!(counted(&parsed.unit(), &parsed.only_loop(), None, false).is_empty());
+    let found = exits(&parsed.unit(), &parsed.only_loop(), None, false);
+    let (la, lb) = (parsed.value("la"), parsed.value("lb"));
+    let taken = found.iter().map(|one| one.taken.clone()).collect::<Vec<_>>();
+    assert_eq!(
+        taken,
+        [Some(vec![Linear::of(&AffineOperand::Value(la, 16), 16)]), Some(vec![Linear::of(&AffineOperand::Value(lb, 16), 16)])],
+        "{found:?}"
+    );
+    assert_eq!(backedges(&found).map(|least| least.len()), Some(2));
+}
+
+/// A branch leaving as soon as either of two compares fails takes the
+/// least of their counts; the same compares under an `or`, leaving only
+/// when both fail, count only where they agree.
+#[test]
+fn test_a_branch_on_two_compares_takes_the_least_of_their_counts() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %head ]
+  %j = add nuw i16 %i, 1
+  %a = icmp ult i16 %j, 10
+  %b = icmp ult i16 %j, 7
+  %c = and i1 %a, %b
+  br i1 %c, label %head, label %done
+done:
+  ret i16 %j
+}
+";
+    let parsed = Parsed::new(text);
+    let found = exits(&parsed.unit(), &parsed.only_loop(), None, false);
+    let taken = found[0].taken.clone().expect("counted");
+    assert_eq!(taken.iter().filter_map(Linear::known).min(), Some(BigInt::from(6)), "{found:?}");
+    let either = Parsed::new(&text.replace("and i1", "or i1"));
+    assert_eq!(exits(&either.unit(), &either.only_loop(), None, false)[0].taken, None);
+}
