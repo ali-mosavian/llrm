@@ -120,19 +120,20 @@ pub fn _RUNTIME_FRAME_HEADER(runtime: model::RuntimeProfile) -> Result<i64, Stri
 /// reported a fatal error in "line 49152 of module $ p".
 pub fn _static_frame(body: &lir::LirBody, size: i64) -> lir::LirBody {
     let moved = |addr: &Addr| -> Addr {
-        if addr.space != Space::Frame {
-            return *addr;
-        }
-        Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, ..*addr }
+        let segment = if addr.segment == Register::SS { Register::None } else { addr.segment };
+        Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, segment, ..*addr }
     };
-    let variables = body.variables.iter().map(|one| lir::DebugVariable { addr: moved(&one.addr), ..one.clone() }).collect();
-    let framed = |addr: &Option<Addr>| addr.is_some_and(|addr| addr.space == Space::Frame);
+    let variables = body
+        .variables
+        .iter()
+        .map(|one| lir::DebugVariable { addr: if one.addr.space == Space::Frame { moved(&one.addr) } else { one.addr }, ..one.clone() })
+        .collect();
     // Through BP no longer: the data object's own address.
-    let through = |register: Register| if register == Register::BP { Register::None } else { register };
+    let through = |register: Register| if matches!(register, Register::BP | Register::EBP) { Register::None } else { register };
     let operand = |r#where: &Loc| -> Loc {
         match r#where {
-            Loc::Mem(mem) if framed(&mem.addr) => Loc::Mem(ir::Mem { addr: mem.addr.map(|addr| moved(&addr)), through: through(mem.through), ..mem.clone() }),
-            Loc::Address(address) if framed(&address.addr) => Loc::Address(ir::Address { addr: address.addr.map(|addr| moved(&addr)), through: through(address.through), ..address.clone() }),
+            Loc::Mem(mem) if mem.in_frame() => Loc::Mem(ir::Mem { addr: mem.addr.map(|addr| moved(&addr)), through: through(mem.through), ..mem.clone() }),
+            Loc::Address(address) if address.in_frame() => Loc::Address(ir::Address { addr: address.addr.map(|addr| moved(&addr)), through: through(address.through), ..address.clone() }),
             other => other.clone(),
         }
     };
@@ -221,10 +222,10 @@ pub fn _runtime_frame(
     let variables = body.variables.iter().map(|one| lir::DebugVariable { addr: moved(&one.addr), ..one.clone() }).collect();
     let operand = |r#where: &Loc| -> Loc {
         match r#where {
-            Loc::Mem(mem) if mem.addr.is_some_and(|addr| addr.space == Space::Frame) => {
+            Loc::Mem(mem) if mem.in_frame() => {
                 Loc::Mem(ir::Mem { addr: Some(moved(&mem.addr.unwrap())), ..mem.clone() })
             }
-            Loc::Address(address) if address.addr.is_some_and(|addr| addr.space == Space::Frame) => {
+            Loc::Address(address) if address.in_frame() => {
                 Loc::Address(ir::Address { addr: Some(moved(&address.addr.unwrap())), ..address.clone() })
             }
             other => other.clone(),
@@ -907,3 +908,7 @@ pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::C
     }
     (lir::LirBody { noreturn: true, ..body.with_blocks(blocks) }, sites)
 }
+
+#[cfg(test)]
+#[path = "basic_tests.rs"]
+mod basic_tests;
