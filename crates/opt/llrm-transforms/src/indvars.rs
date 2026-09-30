@@ -41,10 +41,11 @@ impl FunctionPass for IndVars {
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let evaluated = crate::loopexit::evaluated(unit.context, unit.layout, unit.function, &outer).unwrap_or_else(|error| panic!("indvars: {error}"));
+        let folded = crate::exitfold::folded(unit.context, unit.layout, unit.function, &outer);
         let sunk = crate::exitsink::sunk(unit.function);
         let rewound = rewound(unit.context, unit.layout, unit.function, analyses, crate::profit::registers(&outer).registers, &crate::profit::costs(&outer));
         let dead = (sunk || rewound) && dead::dead(unit.context, outer.callees(), unit.function);
-        if evaluated {
+        if evaluated || folded {
             PreservedAnalyses::none()
         } else if sunk || rewound || dead {
             // Blocks and edges are as they were.
