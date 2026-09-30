@@ -82,15 +82,17 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             }
         }
         if split.is_none() && successors.len() == 2 {
-            let guarded: Vec<&loops::Loop> = natural
+            // A block that only falls into a loop enters it as its header does.
+            let entered = |at: i64, header: i64| at == header || successors_of.get(&at).is_some_and(|succ| succ == &[header]);
+            let guarded: Vec<(&loops::Loop, i64)> = natural
                 .iter()
-                .filter(|one| {
-                    successors.contains(&one.header)
-                        && successors.iter().all(|at| *at == one.header || !one.body.contains(at))
+                .filter_map(|one| {
+                    let into = successors.iter().copied().find(|&at| entered(at, one.header) && (at == one.header || !one.body.contains(&at)))?;
+                    successors.iter().all(|at| *at == into || !one.body.contains(at)).then_some((one, into))
                 })
                 .collect();
-            if let [one] = guarded.as_slice() {
-                split = Some(successors.iter().map(|at| (*at, if *at == one.header { 0.9 } else { 0.1 })).collect());
+            if let [(_, into)] = guarded.as_slice() {
+                split = Some(successors.iter().map(|at| (*at, if at == into { 0.9 } else { 0.1 })).collect());
             }
         }
         let split = split.unwrap_or_else(|| successors.iter().map(|at| (*at, 1.0 / successors.len() as f64)).collect());
@@ -273,6 +275,28 @@ mod tests {
         // The entry's jump, five trips of the body's move and test, four of
         // the way back, the return.
         assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 10.0 + 4.0 + 1.0);
+    }
+
+    /// A guard entering a loop through a preheader enters it as often as
+    /// one branching to its header: nbody's inner loop read 180 entries
+    /// where its guard jumped to the header and 100 where it jumped to a
+    /// block that jumped there, the same code either way.
+    #[test]
+    fn test_a_guard_into_a_preheader_enters_its_loop_as_into_the_header() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let looped = |preheader: bool| {
+            let mut blocks = vec![block(1, vec![insn(1, Operation::Branch, "jne", vec![], vec![])], vec![if preheader { 2 } else { 3 }, 4])];
+            if preheader {
+                blocks.push(block(2, vec![insn(2, Operation::Jump, "jmp", vec![], vec![])], vec![3]));
+            }
+            blocks.push(block(3, vec![insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]), insn(4, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]));
+            blocks.push(block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]));
+            executed(&LirBody::new("guarded", 1, blocks, IndexMap::default(), IndexMap::default())).expect("a loop").instructions
+        };
+        // The preheader's jump, taken nine times in ten, is all that differs.
+        assert!((looped(true) - 0.9 - looped(false)).abs() < 1e-9, "{} {}", looped(true), looped(false));
     }
 
     /// An x87 spill store was counted while its restores, unflagged, were
