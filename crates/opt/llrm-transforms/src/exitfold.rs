@@ -19,6 +19,14 @@
 //! test is of the counter's start; failing it, the loop leaves on the first
 //! trip, as it did.
 //!
+//! Exits that leave to the same place with the same values, nothing seen
+//! or trapping between them, become one: the first leaves on the trip the
+//! least of all their counts ends, testing its counter against its value
+//! then, and the others never leave. Whichever would have left first, the
+//! first leaves on that trip, earlier in it, to the same place: nothing in
+//! between could be seen. Neither LLVM nor GCC merges live exits; this is
+//! what lets a loop bounded by several lengths count one.
+//!
 //! A loop that writes nothing, or only plain stores where each exit it
 //! leaves by early crashes at once touching no memory the program sees,
 //! and whose exits carry no values out, leaves on its first trip through
@@ -32,8 +40,8 @@ use llrm_analysis::{cfg, guards, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
+use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use num_bigint::BigInt;
 
@@ -61,26 +69,52 @@ struct Hoisted {
 /// Every loop's exits their counts decide, folded, and those tested once
 /// hoisted; whether any was.
 pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
-    let (decided, hoisted, predicated) = {
+    let (decided, hoisted, predicated, merged) = {
         let unit = memory::Unit::within(context, layout, function, outer);
         let facts = unit.registers();
         let loops = unit.shape().loops.clone();
         let mut decided = Vec::new();
         let mut hoisted = Vec::new();
         let mut predicated = Vec::new();
+        let mut merged = Vec::new();
         for loop_ in &loops {
             let exits = induction::exits(&unit, loop_, Some(&facts), false);
             let folding = _decided(&unit, loop_, &exits);
             let lifting = _hoisted(&unit, loop_, &exits);
             // One rewrite of a loop's exits a round: each reads them as they were.
             if folding.is_empty() && lifting.is_empty() {
-                predicated.extend(_predicated(&unit, outer, loop_, &exits));
+                match _merged(&unit, outer, loop_, &exits) {
+                    Some(merge) => merged.push(merge),
+                    None => predicated.extend(_predicated(&unit, outer, loop_, &exits)),
+                }
             }
             decided.extend(folding);
             hoisted.extend(lifting);
         }
-        (decided, hoisted, predicated)
+        (decided, hoisted, predicated, merged)
     };
+    for one in &merged {
+        let mut expander = Expander::new(one.before);
+        let trips = expander.least(context, function, &one.counts);
+        let width = one.counts[0].width;
+        let at = Position::Before(one.before);
+        let ty = context.types.int(width);
+        let magnitude = BigInt::from(one.step.magnitude().clone());
+        let walked = expand::scaled(context, function, trips, &magnitude, width, at);
+        let start = expander.int(context, function, &one.start);
+        let kind = if one.step > BigInt::from(0) { BinaryOp::Add } else { BinaryOp::Sub };
+        let end = expand::placed(context, function, Opcode::Binary(kind), ty, vec![start, walked], at);
+        let stays_on_true = !matches!(function.instruction(one.first).operands[..], [_, Operand::Block(yes), _] if cfg::id(yes) == one.exit);
+        let predicate = if stays_on_true { IntPredicate::Ne } else { IntPredicate::Eq };
+        let bit = context.types.int(1);
+        let test = function.create_instruction(Opcode::ICmp(predicate), bit, vec![Operand::Value(one.counter), end], Flags::default(), None);
+        function.insert(test, Position::Before(one.first)).expect("the first exit's branch");
+        _replaced(function, one.first, Operand::Value(function.instruction(test).result.expect("a value")));
+        for &(branch, exit) in &one.others {
+            let stays_on_true = !matches!(function.instruction(branch).operands[..], [_, Operand::Block(yes), _] if cfg::id(yes) == exit);
+            _replaced(function, branch, counting::constant(context, &BigInt::from(u8::from(stays_on_true)), 1));
+        }
+    }
     for one in &predicated {
         let mut expander = Expander::new(one.before);
         let loop_count = expander.least(context, function, &one.loop_count);
@@ -115,7 +149,142 @@ pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Functio
         let condition = counting::constant(context, &BigInt::from(u8::from(holds)), 1);
         function.set_operand(branch, 0, condition);
     }
-    !decided.is_empty() || !hoisted.is_empty() || !predicated.is_empty()
+    !decided.is_empty() || !hoisted.is_empty() || !predicated.is_empty() || !merged.is_empty()
+}
+
+/// Exits made one: the first, testing `counter` against `start + step *
+/// least(counts)`, and the others, never leaving.
+struct Merged {
+    before: InstId,
+    first: InstId,
+    exit: i64,
+    counter: ValueId,
+    start: Linear,
+    step: BigInt,
+    counts: Vec<Linear>,
+    others: Vec<(InstId, i64)>,
+}
+
+/// The exits of `loop_` that may become one with its first counted exit.
+fn _merged(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCount]) -> Option<Merged> {
+    let function = unit.function;
+    let header = cfg::block(loop_.header);
+    let outside = function.predecessors(header).into_iter().filter(|&one| !loop_.body.contains(&cfg::id(one))).collect::<Vec<_>>();
+    let [preheader] = outside[..] else { return None };
+    let before = function.terminator(preheader)?;
+    let innermost = |at: i64| unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len());
+    let single = |exit: &ExitCount| match (&exit.taken, &exit.proofs[..]) {
+        (Some(taken), [proof]) if taken.len() == 1 && innermost(exit.block) => Some(proof.clone()),
+        _ => None,
+    };
+    let (first_at, first) = exits.iter().enumerate().find(|(_, one)| single(one).is_some())?;
+    let proof = single(first)?;
+    // The counter tested as the trip begins, stepping without wrapping up to its count.
+    if proof.stepped || proof.posttested || proof.test == IntPredicate::Ne {
+        return None;
+    }
+    let width = proof.width();
+    let leaving = _leaving(function, first.exit, first.block)?;
+    let mut counts = first.taken.clone()?;
+    let mut others = Vec::new();
+    for other in &exits[first_at + 1..] {
+        let Some(taken) = other.taken.clone().filter(|taken| taken.len() == 1 && taken[0].width == width && innermost(other.block)) else { continue };
+        if _leaving(function, other.exit, other.block).as_ref() != Some(&leaving) || !_quiet(unit, outer, loop_, first.block, other.block) {
+            continue;
+        }
+        counts.extend(taken);
+        others.push((other.branch, other.exit));
+    }
+    if others.is_empty() {
+        return None;
+    }
+    Some(Merged {
+        before,
+        first: first.branch,
+        exit: first.exit,
+        counter: proof.counter.value,
+        start: Linear::of(&proof.start, width),
+        step: proof.step.clone(),
+        counts,
+        others,
+    })
+}
+
+/// Where leaving `from` for `exit` goes, and with what: the block the
+/// values arrive at, and each of its phis' value. An exit block of phis
+/// only its jump reads, as LCSSA makes, is passed through.
+fn _leaving(function: &Function, exit: i64, from: i64) -> Option<(i64, Vec<(InstId, Operand)>)> {
+    let block = cfg::block(exit);
+    let body = function.block(block).instructions();
+    let (phis, rest): (Vec<InstId>, Vec<InstId>) = body.iter().copied().partition(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+    let arriving = |phi: InstId, from: llrm_mir::module::BlockId| function.instruction(phi).operands.chunks(2).find(|pair| pair[1] == Operand::Block(from)).map(|pair| pair[0]);
+    let own = |to: llrm_mir::module::BlockId, through: llrm_mir::module::BlockId, map: &dyn Fn(Operand) -> Option<Operand>| -> Option<Vec<(InstId, Operand)>> {
+        function.block(to).instructions().iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).map(|phi| Some((phi, map(arriving(phi, through)?)?))).collect()
+    };
+    let jump = match rest[..] {
+        [only] => match function.instruction(only).operands[..] {
+            [Operand::Block(to)] => Some(to),
+            _ => None,
+        },
+        _ => None,
+    };
+    let passed = jump.filter(|_| {
+        phis.iter().all(|&phi| {
+            function.instruction(phi).operands.len() == 2
+                && function.instruction(phi).result.is_some_and(|value| function.users(value).iter().all(|one| function.parent(one.user) == jump))
+        })
+    });
+    match passed {
+        Some(to) => {
+            let through = |operand: Operand| match operand {
+                Operand::Value(value) => match phis.iter().find(|&&phi| function.instruction(phi).result == Some(value)) {
+                    Some(&phi) => arriving(phi, cfg::block(from)),
+                    None => Some(operand),
+                },
+                other => Some(other),
+            };
+            Some((cfg::id(to), own(to, block, &through)?))
+        }
+        None => Some((exit, own(block, cfg::block(from), &Some)?)),
+    }
+}
+
+/// Whether nothing seen or trapping runs between the tests of blocks
+/// `first` and `later` on a trip: on every way from one to the other
+/// short of the header.
+fn _quiet(unit: &memory::Unit, outer: &Outer, loop_: &Loop, first: i64, later: i64) -> bool {
+    let function = unit.function;
+    let reaches = |from: i64, to: i64| {
+        let mut seen = std::collections::BTreeSet::from([from]);
+        let mut pending = vec![from];
+        while let Some(at) = pending.pop() {
+            if at == to {
+                return true;
+            }
+            for next in function.successors(cfg::block(at)) {
+                let next = cfg::id(next);
+                if loop_.body.contains(&next) && next != loop_.header && seen.insert(next) {
+                    pending.push(next);
+                }
+            }
+        }
+        false
+    };
+    let between = loop_.body.iter().copied().filter(|&at| at != first && reaches(first, at) && reaches(at, later));
+    between.chain([later]).all(|at| {
+        let body = function.block(cfg::block(at)).instructions();
+        body[..body.len().saturating_sub(1)].iter().all(|&inst| {
+            let op = function.instruction(inst);
+            match op.opcode {
+                Opcode::Load { volatile: false, align } => {
+                    let width = op.result.and_then(|value| unit.int_bits(Operand::Value(value))).map_or(8, |bits| u64::from(bits.div_ceil(8)));
+                    !outer.target().load_may_trap(width, align.map_or(1, u64::from))
+                }
+                Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => false,
+                _ => llrm_mir::memory::only_value(unit.context, outer.callees(), function, inst),
+            }
+        })
+    })
 }
 
 /// `branch` on `condition`, its old compare gone where nothing else read it.

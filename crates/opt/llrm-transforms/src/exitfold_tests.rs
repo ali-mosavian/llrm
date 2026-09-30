@@ -202,3 +202,69 @@ fn test_a_storing_loop_with_an_ordinary_exit_keeps_its_trips() {
     let printed = folded(&scanned(store, "  ret i16 2\n"), SCANS);
     assert!(printed.contains("icmp ult i16 %i, %len"), "{printed}");
 }
+
+/// `zip` over three lengths, as Nib lowers it: an exit per length, each
+/// through its own LCSSA block into one join with the sum so far.
+fn zipped(between: &str) -> String {
+    format!(
+        "define i16 @f(i16 %la, i16 %lb, i16 %lc) {{
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i16 [ 0, %entry ], [ %t, %body ]
+  %ina = icmp ult i16 %i, %la
+  br i1 %ina, label %checkb, label %outa
+checkb:
+{between}  %inb = icmp ult i16 %i, %lb
+  br i1 %inb, label %checkc, label %outb
+checkc:
+  %inc = icmp ult i16 %i, %lc
+  br i1 %inc, label %body, label %outc
+body:
+  %t = add i16 %s, %i
+  %j = add i16 %i, 1
+  br label %head
+outa:
+  %sa = phi i16 [ %s, %head ]
+  br label %done
+outb:
+  %sb = phi i16 [ %s, %checkb ]
+  br label %done
+outc:
+  %sc = phi i16 [ %s, %checkc ]
+  br label %done
+done:
+  %r = phi i16 [ %sa, %outa ], [ %sb, %outb ], [ %sc, %outc ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+const LENGTHS: &[&[i128]] = &[&[0, 5, 5], &[3, 5, 9], &[5, 2, 9], &[9, 9, 4], &[7, 7, 7], &[4, 0, 3]];
+
+/// Every exit to the same place with the same values joins the first: one
+/// test against the least of all their counts, the others never leaving.
+#[test]
+fn test_exits_to_one_place_become_one_on_the_least_count() {
+    let printed = folded(&zipped(""), LENGTHS);
+    assert!(printed.contains("br i1 true, label %checkc") && printed.contains("br i1 true, label %body"), "{printed}");
+    assert_eq!(printed.matches("select").count(), 2, "{printed}");
+}
+
+/// A store between two tests keeps the later one: leaving earlier would
+/// skip it.
+#[test]
+fn test_an_exit_after_a_store_keeps_its_test() {
+    let text = format!("@g = global i16 0\n\n{}", zipped("  store i16 %i, ptr @g\n"));
+    let printed = folded(&text, LENGTHS);
+    assert!(printed.contains("icmp ult i16 %i, %lb"), "{printed}");
+}
+
+/// An exit carrying another value out keeps its test.
+#[test]
+fn test_an_exit_carrying_another_value_keeps_its_test() {
+    let printed = folded(&zipped("").replace("%sb = phi i16 [ %s, %checkb ]", "%sb = phi i16 [ %i, %checkb ]"), LENGTHS);
+    assert!(printed.contains("icmp ult i16 %i, %lb"), "{printed}");
+}
