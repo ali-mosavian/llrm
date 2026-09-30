@@ -148,6 +148,83 @@ configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2"
 issue = "#98"
 
 [[short]]
+case = "alias"
+lang = "bas"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "bas"
+check = "ivs"
+configs = ["486-O2", "486-O3", "Core-O2", "Core-O3"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "bas"
+check = "ivs-ideal"
+configs = ["486-Os", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "bas"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "bas"
+check = "mir-ivs-ideal"
+configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "bas"
+check = "shape"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "c"
+check = "ivs"
+configs = ["386-O2", "386-O3", "486-O2", "486-O3", "Core-O2", "Core-O3", "P5-O2", "P5-O3"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "c"
+check = "ivs-ideal"
+configs = ["386-Os", "486-Os", "Core-Os", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "c"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "P5-O2", "P5-O3"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "c"
+check = "mir-ivs-ideal"
+configs = ["386-Os", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "alias"
+lang = "c"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
 case = "bp3_frame"
 lang = "c"
 check = "invariant-loads"
@@ -354,6 +431,20 @@ issue = "#98"
 case = "bubble"
 lang = "nib"
 check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "chase"
+lang = "bas"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "chase"
+lang = "nib"
+check = "invariant-loads"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
@@ -21638,6 +21729,307 @@ configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
+case = "ladder1x1"
+lang = "bas"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "bas"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "bas"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "c"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "c"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "c"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "nib"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "nib"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x1"
+lang = "nib"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "bas"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "bas"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "bas"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "c"
+check = "invariant-loads"
+configs = ["486-O2", "486-O3", "486-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "c"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "c"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "c"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "nib"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "nib"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder1x2"
+lang = "nib"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "bas"
+check = "invariant-loads"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "bas"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "bas"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "bas"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "c"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "c"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "c"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "c"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "nib"
+check = "invariant-loads"
+configs = ["486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "nib"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "nib"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x0"
+lang = "nib"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "bas"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "bas"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "bas"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "bas"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "c"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "c"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "c"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "c"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "nib"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "nib"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "nib"
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "ladder2x1"
+lang = "nib"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
 case = "matmul_ijk"
 lang = "bas"
 check = "invariant-loads"
@@ -26349,6 +26741,34 @@ configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2"
 issue = "#98"
 
 [[short]]
+case = "single"
+lang = "bas"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "single"
+lang = "bas"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "single"
+lang = "c"
+check = "invariant-loads"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "single"
+lang = "c"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
 case = "stencil"
 lang = "bas"
 check = "invariant-loads"
@@ -26623,6 +27043,27 @@ issue = "#98"
 
 [[short]]
 case = "wordset"
+lang = "nib"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wrap8"
+lang = "c"
+check = "shape"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wrap8"
+lang = "nib"
+check = "ivs"
+configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+issue = "#98"
+
+[[short]]
+case = "wrap8"
 lang = "nib"
 check = "shape"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
