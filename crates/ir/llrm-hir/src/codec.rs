@@ -112,7 +112,9 @@ plain_enums!(
     FunctionLinkage,
     DescriptorField,
     Op,
-    TerminatorKind
+    TerminatorKind,
+    DebugKind,
+    DebugReach
 );
 
 macro_rules! plain_record {
@@ -136,6 +138,15 @@ plain_record!(Type, None, id => "id", name => "name", kind => "kind", width => "
 plain_record!(Place, None, id => "id", name => "name", r#type => "type", storage => "storage", offset => "offset",
     symbol => "symbol", extent => "extent", address => "address", volatile => "volatile");
 plain_record!(Value, None, id => "id", r#type => "type");
+plain_record!(DebugType, None, id => "id", kind => "kind", name => "name", target => "target", size => "size",
+    reach => "reach", members => "members");
+plain_record!(DebugMember, None, name => "name", r#type => "type", offset => "offset");
+plain_record!(DebugParameter, None, argument => "argument", name => "name", r#type => "type");
+plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
+plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
+    variables => "variables");
+plain_record!(DebugGlobal, None, object => "object", offset => "offset", name => "name", r#type => "type");
+plain_record!(Debug, None, types => "types", functions => "functions", globals => "globals");
 plain_record!(ValueRef, Some("value"), value => "value");
 plain_record!(Constant, Some("constant"), r#type => "type", value => "value");
 plain_record!(PlaceRef, Some("place"), place => "place");
@@ -307,6 +318,9 @@ impl _Plain for model::Module {
         out.insert("callables".to_owned(), self.callables._plain());
         if !self.alias_classes.is_empty() {
             out.insert("alias_classes".to_owned(), self.alias_classes._plain());
+        }
+        if self.debug.is_some() {
+            out.insert("debug".to_owned(), self.debug._plain());
         }
         Json::Dict(out)
     }
@@ -539,6 +553,12 @@ fn _record(type_: &_Record, value: &JSON, where_: &str, tagged: bool) -> Result<
     (type_.build)(&mut args)
 }
 
+/// `debug` as the module's `debug` field holds it, for a frontend
+/// writing HIR as text.
+pub fn debug_json(debug: &model::Debug) -> String {
+    pyjson::dumps(&debug._plain(), None, Some((",", ":")), true)
+}
+
 pub fn decode(text: &str) -> Result<model::Program, InvalidHIR> {
     let raw = pyjson::loads(text).map_err(|error| InvalidHIR(format!("invalid HIR JSON: {error}")))?;
     let _Made::Object(program) = _record(&PROGRAM, &raw, "program", false)? else {
@@ -658,7 +678,9 @@ made_enums!(
     FunctionLinkage,
     DescriptorField,
     Op,
-    TerminatorKind
+    TerminatorKind,
+    DebugKind,
+    DebugReach
 );
 
 macro_rules! made_records {
@@ -695,7 +717,14 @@ made_records!(
     DataRelocation,
     DataObject,
     AliasClass,
-    Module
+    Module,
+    DebugType,
+    DebugMember,
+    DebugParameter,
+    DebugVariable,
+    DebugFunction,
+    DebugGlobal,
+    Debug
 );
 
 impl _FromMade for model::Operand {
@@ -1190,6 +1219,7 @@ static MODULE: _Record = _Record {
         ("data", _Hint::Tuple(&_Hint::Record(&DATA_OBJECT)), false),
         ("callables", _Hint::Tuple(&_Hint::Record(&CALLABLE)), false),
         ("alias_classes", _Hint::Tuple(&_Hint::Record(&ALIAS_CLASS)), false),
+        ("debug", _Hint::Union(&[_Hint::Record(&DEBUG), _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Module {
@@ -1200,8 +1230,96 @@ static MODULE: _Record = _Record {
             data: _default(args, "data", Vec::new())?,
             callables: _default(args, "callables", Vec::new())?,
             alias_classes: _default(args, "alias_classes", Vec::new())?,
+            debug: _default(args, "debug", None)?,
         })
     },
+};
+
+static DEBUG_TYPE: _Record = _Record {
+    name: "DebugType",
+    fields: &[
+        ("id", _Hint::Int, true),
+        ("kind", enum_hint!(DebugKind), true),
+        ("name", _Hint::Str, true),
+        ("target", OPTIONAL_INT, true),
+        ("size", _Hint::Int, true),
+        ("reach", enum_hint!(DebugReach), true),
+        ("members", _Hint::Tuple(&_Hint::Record(&DEBUG_MEMBER)), true),
+    ],
+    build: |args| {
+        _object(model::DebugType {
+            id: _required(args, "id")?,
+            kind: _required(args, "kind")?,
+            name: _required(args, "name")?,
+            target: _required(args, "target")?,
+            size: _required(args, "size")?,
+            reach: _required(args, "reach")?,
+            members: _required(args, "members")?,
+        })
+    },
+};
+
+static DEBUG_MEMBER: _Record = _Record {
+    name: "DebugMember",
+    fields: &[("name", _Hint::Str, true), ("type", _Hint::Int, true), ("offset", _Hint::Int, true)],
+    build: |args| _object(model::DebugMember { name: _required(args, "name")?, r#type: _required(args, "type")?, offset: _required(args, "offset")? }),
+};
+
+static DEBUG_PARAMETER: _Record = _Record {
+    name: "DebugParameter",
+    fields: &[("argument", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
+    build: |args| _object(model::DebugParameter { argument: _required(args, "argument")?, name: _required(args, "name")?, r#type: _required(args, "type")? }),
+};
+
+static DEBUG_VARIABLE: _Record = _Record {
+    name: "DebugVariable",
+    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
+    build: |args| _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")? }),
+};
+
+static DEBUG_FUNCTION: _Record = _Record {
+    name: "DebugFunction",
+    fields: &[
+        ("function", _Hint::Int, true),
+        ("module", _Hint::Bool, true),
+        ("name", _Hint::Str, true),
+        ("type", _Hint::Int, true),
+        ("parameters", _Hint::Tuple(&_Hint::Record(&DEBUG_PARAMETER)), true),
+        ("variables", _Hint::Tuple(&_Hint::Record(&DEBUG_VARIABLE)), true),
+    ],
+    build: |args| {
+        _object(model::DebugFunction {
+            function: _required(args, "function")?,
+            module: _required(args, "module")?,
+            name: _required(args, "name")?,
+            r#type: _required(args, "type")?,
+            parameters: _required(args, "parameters")?,
+            variables: _required(args, "variables")?,
+        })
+    },
+};
+
+static DEBUG_GLOBAL: _Record = _Record {
+    name: "DebugGlobal",
+    fields: &[("object", _Hint::Int, true), ("offset", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
+    build: |args| {
+        _object(model::DebugGlobal {
+            object: _required(args, "object")?,
+            offset: _required(args, "offset")?,
+            name: _required(args, "name")?,
+            r#type: _required(args, "type")?,
+        })
+    },
+};
+
+static DEBUG: _Record = _Record {
+    name: "Debug",
+    fields: &[
+        ("types", _Hint::Tuple(&_Hint::Record(&DEBUG_TYPE)), true),
+        ("functions", _Hint::Tuple(&_Hint::Record(&DEBUG_FUNCTION)), true),
+        ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
+    ],
+    build: |args| _object(model::Debug { types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? }),
 };
 
 static ALIAS_CLASS: _Record = _Record {

@@ -137,6 +137,8 @@ pub struct Module {
     pub private: BTreeSet<String>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
+    /// `-g`'s debug information.
+    pub debug: Option<super::codeview::Debug>,
 }
 
 pub fn text(module: &Module) -> Result<String, Unprintable> {
@@ -197,8 +199,20 @@ pub enum Item {
     Label(Label),
     Callee(Callee),
     Semantics(Semantics),
+    Mark(Mark),
+}
+
+/// `-g`: a place in the code a debugger is told of.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mark {
     /// The code after it is this source line's.
     Line(u32),
+    /// The procedure's own code starts, its prologue done: the first code
+    /// of a source line.
+    BodyStart,
+    /// The procedure's own code ends, its epilogue next: after the last
+    /// code of a source line but a return.
+    BodyEnd,
 }
 
 fn reg(register: Register) -> Loc {
@@ -352,15 +366,24 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
     let (enter, leave) = _frame_parts(procedure);
     let blocks = &procedure.body.blocks;
+    let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
+    let first = lined().next();
+    let last = lined().filter(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Return)).last();
     // The prologue is the first line's, not the previous procedure's last.
-    let mut line = blocks.iter().flat_map(|block| &block.insns).find_map(|one| one.line);
-    let mut out: Vec<Item> = line.map(Item::Line).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
+    let mut line = first.and_then(|one| one.line);
+    let mut out: Vec<Item> = line.map(|one| Item::Mark(Mark::Line(one))).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
         for one in &block.insns {
+            if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
+                out.push(Item::Mark(Mark::BodyStart));
+            }
             if fallthrough.is_some_and(|jump| Arc::ptr_eq(jump, one)) {
+                if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
+                    out.push(Item::Mark(Mark::BodyEnd));
+                }
                 continue;
             }
             let Some(what) = &one.what else {
@@ -368,7 +391,7 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
             };
             if one.line.is_some() && one.line != line {
                 line = one.line;
-                out.extend(line.map(Item::Line));
+                out.extend(line.map(|one| Item::Mark(Mark::Line(one))));
             }
             match what.op {
                 Operation::Move if _segment(&what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
@@ -404,6 +427,9 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
                     out.push(Item::Semantics(Semantics { name: Some(name), ..what.clone() }));
                 }
                 _ => out.push(Item::Semantics(what.clone())),
+            }
+            if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
+                out.push(Item::Mark(Mark::BodyEnd));
             }
         }
         let fall = _falls_to(block, &procedure.name)?;
@@ -459,12 +485,13 @@ pub fn _procedure(
     _procedure_of(procedure, listing(procedure, number)?, names, number)
 }
 
-fn _procedure_of(procedure: &Procedure, items: Vec<Item>, names: &IndexMap<(Space, i64), String>, number: usize) -> Result<Vec<String>, Unprintable> {
+/// The procedure's text, of the `items` a listing gives.
+pub fn _procedure_of(procedure: &Procedure, items: Vec<Item>, names: &IndexMap<(Space, i64), String>, number: usize) -> Result<Vec<String>, Unprintable> {
     let mut out = vec![format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" })];
     for item in items {
         match item {
             Item::Label(Label { name }) => out.push(format!("{name}:")),
-            Item::Line(_) => {}
+            Item::Mark(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }

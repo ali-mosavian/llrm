@@ -39,16 +39,39 @@ impl Kind {
     }
 }
 
+/// The primitive codes BC writes: 1, mode:2, kind:3, size:2.
+pub const INTEGER: i64 = 0x81;
+pub const LONG: i64 = 0x82;
+pub const SINGLE: i64 = 0x88;
+pub const DOUBLE: i64 = 0x89;
+pub const NEAR_STRING: i64 = 0x97;
+pub const CURRENCY: i64 = 0x99;
+pub const FAR_STRING: i64 = 0x9C;
+/// A signed byte: QB 4.5's `STRING * n` is an array of them.
+pub const CHAR: i64 = 0x80;
+/// QB 4.5 names a BYREF scalar by the scalar's code plus this.
+pub const QB45_BYREF: i64 = 0x20;
+
+/// Leaf bytes: an empty leaf, a u32 follows, and a structure's trailer.
+pub const NIL: u8 = 0x80;
+pub const U32: u8 = 0x86;
+pub const UNPACKED: u8 = 0x69;
+/// The reach byte BC writes on every pointer, SEG or not, which CodeView
+/// shows as near.
+pub const NEAR: u8 = 0x74;
+/// The calling convention byte BC writes on every signature.
+pub const BASIC_CALL: u8 = 0x73;
+
 /// type_index -> BASIC scalar type. STRING has two: which one a compiler
 /// picks looks tied to its near/far string memory model.
 pub static PRIMITIVES: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| {
     [
-        (0x81, "INTEGER"),
-        (0x82, "LONG"),
-        (0x88, "SINGLE"),
-        (0x89, "DOUBLE"),
-        (0x97, "STRING"),
-        (0x9C, "STRING"),
+        (INTEGER, "INTEGER"),
+        (LONG, "LONG"),
+        (SINGLE, "SINGLE"),
+        (DOUBLE, "DOUBLE"),
+        (NEAR_STRING, "STRING"),
+        (FAR_STRING, "STRING"),
     ]
     .into_iter()
     .collect()
@@ -70,17 +93,8 @@ pub static SIGILS: LazyLock<IndexMap<char, &'static str>> = LazyLock::new(|| {
 
 /// QB 4.5's own BYREF-parameter codes. Not a $$TYPES index at all; it never
 /// leaves the PRIMITIVES-sized number space.
-pub static QB45_BYREF_PRIMITIVES: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| {
-    [
-        (0xA1, "INTEGER"),
-        (0xA2, "LONG"),
-        (0xB7, "STRING"),
-        (0xA8, "SINGLE"),
-        (0xA9, "DOUBLE"),
-    ]
-    .into_iter()
-    .collect()
-});
+pub static QB45_BYREF_PRIMITIVES: LazyLock<IndexMap<i64, &'static str>> =
+    LazyLock::new(|| PRIMITIVES.iter().filter(|one| *one.0 != FAR_STRING).map(|(code, name)| (code + QB45_BYREF, *name)).collect());
 
 pub const BASE_TYPE_INDEX: i64 = 0x0200;
 
@@ -106,8 +120,8 @@ pub enum Tag {
     Struct = 0x79,
     /// VBDOS/PDS: always followed by a second, constant 0x00 byte
     FixedString = 0x8D,
-    /// QB 4.5's own encoding of the same field: 0x86, a size_bits:u32 8x the
-    /// declared length, then a fixed 0x83 0x80 0x00 tail that isn't decoded.
+    /// An array in place: 0x86, its size_bits:u32, then its element's
+    /// type_ref. QB 4.5 writes a `STRING * n` field as one of chars.
     FixedStringQb45 = 0x78,
     /// a procedure's own return type + arglist -- always followed by 0x80
     Signature = 0x75,
@@ -212,6 +226,13 @@ pub struct Array {
     pub element: i64,
 }
 
+/// An array laid out in place, `size_bits` long.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Sized {
+    pub element: i64,
+    pub size_bits: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pointer {
     pub target: i64,
@@ -275,6 +296,7 @@ pub enum TypeEntry {
     TypeList(TypeList),
     NamedOffsetList(NamedOffsetList),
     FixedString(FixedString),
+    Sized(Sized),
     Signature(Signature),
     Unresolved(Unresolved),
 }
@@ -352,6 +374,10 @@ impl Repr for TypeEntry {
             TypeEntry::FixedString(one) => {
                 pyrepr::dataclass("FixedString", &[("length", one.length.repr())])
             }
+            TypeEntry::Sized(one) => pyrepr::dataclass(
+                "Sized",
+                &[("element", one.element.repr()), ("size_bits", one.size_bits.repr())],
+            ),
             TypeEntry::Signature(one) => one.repr(),
             TypeEntry::Unresolved(one) => pyrepr::dataclass(
                 "Unresolved",
@@ -465,7 +491,7 @@ fn _named_offsets(data: &[u8]) -> Option<Vec<NamedOffset>> {
 fn _parse_struct(data: &[u8], table: &Types) -> TypeEntry {
     let refused = || TypeEntry::unresolved(TagValue::Tag(Tag::Struct), data);
     if data.len() < 17
-        || data[1] != 0x86
+        || data[1] != U32
         || data[6] != Tag::Offset as u8
         || data[15] != Tag::Name as u8
     {
@@ -520,7 +546,7 @@ fn _parse_struct(data: &[u8], table: &Types) -> TypeEntry {
 
 fn _parse_signature(data: &[u8], table: &Types) -> TypeEntry {
     let refused = || TypeEntry::unresolved(TagValue::Tag(Tag::Signature), data);
-    if data.len() != 10 || data[1] != 0x80 || data[5] != 0x73 {
+    if data.len() != 10 || data[1] != NIL || data[5] != BASIC_CALL {
         return refused();
     }
     let return_type = _type_ref(data, 2);
@@ -560,7 +586,7 @@ fn _parse_type_entry(kind: u8, data: &[u8], table: &Types) -> TypeEntry {
             Some(element) => TypeEntry::Array(Array { element }),
             None => refused(),
         },
-        Some(Tag::Pointer) if data.len() >= 2 && data[1] == 0x74 => match _type_ref(data, 2) {
+        Some(Tag::Pointer) if data.len() >= 2 && data[1] == NEAR => match _type_ref(data, 2) {
             Some(target) => TypeEntry::Pointer(Pointer { target }),
             None => refused(),
         },
@@ -589,16 +615,12 @@ fn _parse_type_entry(kind: u8, data: &[u8], table: &Types) -> TypeEntry {
                 length: from_le(slice(data, 3, 5)),
             })
         }
-        Some(Tag::FixedStringQb45)
-            if data.len() == 9 && data[1] == 0x86 && data[6..9] == [0x83, 0x80, 0x00] =>
-        {
+        Some(Tag::FixedStringQb45) if data.len() == 9 && data[1] == U32 => {
             let size_bits = from_le(slice(data, 2, 6));
-            if size_bits % 8 == 0 {
-                TypeEntry::FixedString(FixedString {
-                    length: size_bits / 8,
-                })
-            } else {
-                refused()
+            match _type_ref(data, 6) {
+                Some(CHAR) if size_bits % 8 == 0 => TypeEntry::FixedString(FixedString { length: size_bits / 8 }),
+                Some(element) => TypeEntry::Sized(Sized { element, size_bits }),
+                None => refused(),
             }
         }
         Some(Tag::Signature) => _parse_signature(data, table),
@@ -645,6 +667,7 @@ pub fn type_name(type_index: i64, types: Option<&Types>) -> Option<String> {
         // hop. Still BYREF in BASIC's own terms.
         Some(TypeEntry::Pointer(Pointer { target })) => Some(format!("BYREF {}", named(*target))),
         Some(TypeEntry::FixedString(FixedString { length })) => Some(format!("STRING * {length}")),
+        Some(TypeEntry::Sized(Sized { element, size_bits })) => Some(format!("{} BYTES OF {}", size_bits / 8, named(*element))),
         _ => None,
     }
 }
@@ -1039,6 +1062,49 @@ pub fn parse(records: &[Rc<Record>]) -> DebugInfo {
         labels,
         types,
         code_length,
+    }
+}
+
+/// `type_index` spelled out, a structure with its fields.
+fn described(type_index: i64, types: &Types) -> String {
+    let named = _fmt_type(type_index, type_name(type_index, Some(types)));
+    match types.get(&type_index) {
+        Some(TypeEntry::Struct(entry)) => {
+            let fields: Vec<String> =
+                entry.fields.iter().map(|one| format!("{} +{} {}", one.name, one.offset, described(one.type_index, types))).collect();
+            format!("{named} {{{}}}", fields.join(", "))
+        }
+        Some(TypeEntry::Array(Array { element })) => format!("ARRAY OF {}", described(*element, types)),
+        _ => named,
+    }
+}
+
+impl DebugInfo {
+    /// What a debugger sees, without addresses or type indices: one line per
+    /// procedure, parameter, local and variable, sorted. Two objects of one
+    /// source agree here whatever their code.
+    pub fn shape(&self) -> Vec<String> {
+        let types = self.types.as_ref();
+        let mut out = Vec::new();
+        for procedure in &self.procedures {
+            let signature = procedure.signature().map_or_else(
+                || "no signature".to_owned(),
+                |one| {
+                    let parameters: Vec<String> = one.params.iter().map(|&index| described(index, types)).collect();
+                    format!("({}) -> {}", parameters.join(", "), described(one.return_type, types))
+                },
+            );
+            out.push(format!("PROC {} flags {} {signature}", procedure.name, procedure.flags));
+            for local in &procedure.locals {
+                let kind = if local.is_param() { "PARAM" } else { "LOCAL" };
+                out.push(format!("{kind} {}.{}: {}", procedure.name, local.name, described(local.type_index, types)));
+            }
+        }
+        for variable in &self.variables {
+            out.push(format!("DATA {}: {}", variable.name, described(variable.type_index, types)));
+        }
+        out.sort();
+        out
     }
 }
 

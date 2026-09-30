@@ -2,6 +2,7 @@
 
 pub mod addends;
 pub mod cvinfo;
+pub mod cvwrite;
 pub mod module;
 pub mod omf;
 #[cfg(any(test, feature = "testing"))]

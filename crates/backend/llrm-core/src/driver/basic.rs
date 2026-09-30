@@ -17,7 +17,7 @@ use crate::abi::qb::HirAbi;
 use crate::backend::assemble::{self, Abi, Target};
 use crate::backend::constpool::Pool;
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, globals, isel, masm, omfwrite};
+use crate::backend::{addressvalues, codeview, globals, isel, masm, omfwrite};
 use crate::hir::model;
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::lir;
@@ -125,6 +125,7 @@ pub fn _static_frame(body: &lir::LirBody, size: i64) -> lir::LirBody {
         }
         Addr { space: Space::Segment, index: MAIN_FRAME_ID, disp: size + addr.disp, ..*addr }
     };
+    let variables = body.variables.iter().map(|one| lir::DebugVariable { addr: moved(&one.addr), ..one.clone() }).collect();
     let framed = |addr: &Option<Addr>| addr.is_some_and(|addr| addr.space == Space::Frame);
     // Through BP no longer: the data object's own address.
     let through = |register: Register| if register == Register::BP { Register::None } else { register };
@@ -154,7 +155,7 @@ pub fn _static_frame(body: &lir::LirBody, size: i64) -> lir::LirBody {
             block.with_insns(insns)
         })
         .collect();
-    body.with_blocks(blocks)
+    lir::LirBody { variables, ..body.with_blocks(blocks) }
 }
 
 /// The main body's static frame: its label, and its data object's id,
@@ -211,13 +212,14 @@ pub fn _runtime_frame(
         })
         .collect();
 
+    // B$ENRA preserves the ordinary far-Pascal parameter offsets and
+    // inserts its own header below BP, between BP and source locals.
+    let moved = |addr: &Addr| {
+        let disp = if addr.disp > 0 { addr.disp } else { addr.disp - header };
+        Addr { disp, ..*addr }
+    };
+    let variables = body.variables.iter().map(|one| lir::DebugVariable { addr: moved(&one.addr), ..one.clone() }).collect();
     let operand = |r#where: &Loc| -> Loc {
-        // B$ENRA preserves the ordinary far-Pascal parameter offsets and
-        // inserts its own header below BP, between BP and source locals.
-        let moved = |addr: &Addr| {
-            let disp = if addr.disp > 0 { addr.disp } else { addr.disp - header };
-            Addr { disp, ..*addr }
-        };
         match r#where {
             Loc::Mem(mem) if mem.addr.is_some_and(|addr| addr.space == Space::Frame) => {
                 Loc::Mem(ir::Mem { addr: Some(moved(&mem.addr.unwrap())), ..mem.clone() })
@@ -251,7 +253,7 @@ pub fn _runtime_frame(
         })
         .collect();
     Ok((
-        body.with_blocks(framed),
+        lir::LirBody { variables, ..body.with_blocks(framed) },
         IndexMap::from_iter([(serial + 2, masm::Callee::new("B$ENRA", true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
     ))
 }
@@ -358,7 +360,7 @@ pub fn _basic_listing(procedure: &masm::Procedure, number: usize) -> Result<Vec<
     }
     // The procedure's first line stands before its prologue.
     let (mut stripped, listing): (Vec<masm::Item>, &[masm::Item]) = match listing.split_first() {
-        Some((line @ masm::Item::Line(_), rest)) => (vec![line.clone()], rest),
+        Some((line @ masm::Item::Mark(_), rest)) => (vec![line.clone()], rest),
         _ => (Vec::new(), &listing),
     };
     let (enter, leave) = masm::_frame_parts(procedure);
@@ -395,52 +397,6 @@ pub fn text(module: &masm::Module) -> Result<String, String> {
     masm::text_by(module, |procedure, number| _basic_listing(procedure, number).map_err(|error| masm::Unprintable(error.to_string()))).map_err(|error| error.0)
 }
 
-/// Encode BASIC listings with their frontend-owned runtime frame shell.
-fn _basic_code(
-    segment: &mut omfwrite::Segment,
-    module: &masm::Module,
-    symbols: &mut IndexMap<String, (usize, usize)>,
-) -> Result<(), String> {
-    let unencodable = |error: omfwrite::Unencodable| error.0;
-    let mut items: Vec<omfwrite::Encoded> = Vec::new();
-    for (number, procedure) in module.procedures.iter().enumerate() {
-        items.push(omfwrite::Encoded::Label(masm::Label { name: procedure.name.clone() }));
-        for item in _basic_listing(procedure, number)? {
-            match omfwrite::_items(&item, &module.names, number) {
-                Ok(encoded) => items.extend(encoded),
-                Err(error) => return Err(format!("{}: {error}", procedure.name)),
-            }
-        }
-    }
-    let labels = omfwrite::_relaxed(&mut items).map_err(unencodable)?;
-    let mut at = 0;
-    for item in &items {
-        match item {
-            omfwrite::Encoded::Label(masm::Label { name }) => {
-                symbols.insert(name.clone(), (0, at));
-            }
-            omfwrite::Encoded::Line(line) => segment.line(*line),
-            omfwrite::Encoded::Piece(omfwrite::Piece { code, fixups }) => segment.put(code, fixups),
-            omfwrite::Encoded::Jump(omfwrite::Jump { name, label, long }) => {
-                segment.put(&omfwrite::_jump(name, labels[label], at, *long).map_err(unencodable)?.code, &[]);
-            }
-            omfwrite::Encoded::Near(omfwrite::Near { name }) if labels.contains_key(name) => {
-                let distance = labels[name] - (at as i64 + 3);
-                let Ok(distance) = i16::try_from(distance) else {
-                    return Err("'h' format requires -32768 <= number <= 32767".into());
-                };
-                segment.put(&[&[0xE8][..], &distance.to_le_bytes()].concat(), &[]);
-            }
-            omfwrite::Encoded::Near(omfwrite::Near { name }) => {
-                segment.put(&[0; 3], &[omfwrite::Fixup { relative: true, ..omfwrite::Fixup::new(1, omfwrite::OFFSET, name.clone()) }]);
-                segment.image[at] = 0xE8;
-            }
-        }
-        at = segment.image.len();
-    }
-    Ok(())
-}
-
 /// A BASIC module's object: `module`'s code after the 30h MODULE_CODE
 /// `header`, its data in BASIC's segments, and the statement table last.
 pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Result<Vec<u8>, String> {
@@ -465,11 +421,13 @@ pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Resu
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
         omfwrite::_data(&mut segments[index], index, items, &mut symbols);
     }
-    _basic_code(&mut segments[0], module, &mut symbols)?;
+    let every: Vec<usize> = (0..module.procedures.len()).collect();
+    omfwrite::_code_by(&mut segments[0], 0, module, &every, &mut symbols, _basic_listing).map_err(|error| error.to_string())?;
 
     let code = &mut segments[0];
     code.image = [header, std::mem::take(&mut code.image)].concat();
     code.lines = code.lines.iter().map(|&(line, at)| (line, at + 48)).collect();
+    code.bodies = code.bodies.iter().map(|&(mark, at)| (mark, at + 48)).collect();
     code.spans = std::iter::once([0, 48]).chain(code.spans.iter().map(|[start, end]| [start + 48, end + 48])).collect();
     if module.procedures.last().is_none_or(|last| last.name != "$QB$STAT") {
         return Err("the BASIC statement table must be the final code procedure".into());
@@ -508,6 +466,10 @@ pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Resu
         pack_into(&mut read_segment.image, fixup.at, offset as i64);
     }
     read_segment.fixups.clear();
+    if let Some(debug) = &module.debug {
+        let described = codeview::segments(debug, module, name, &segments[0], &symbols)?;
+        segments.extend(described);
+    }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let records = omfwrite::_records(module, name, &mut segments, &symbols, &externs)
         .map_err(|error| error.to_string())?;
@@ -771,6 +733,8 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     externs.extend(object.requests.iter().map(|name| (name.clone(), "near".to_owned())));
     externs.sort();
     externs.dedup();
+    let flavor = llrm_omf::cvwrite::Flavor { qb45: runtime == model::RuntimeProfile::Qb45 };
+    let debug = codeview::described(module, &names, flavor)?;
     Ok(masm::Module {
         code: object.code.clone(),
         names,
@@ -780,6 +744,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         procedures,
         private: object.private.clone(),
         requests: object.requests.clone(),
+        debug,
     })
 }
 

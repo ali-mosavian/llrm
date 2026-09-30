@@ -1046,6 +1046,7 @@ fn test_qb_inline_sin_reaches_allocated_lir_without_a_runtime_call() {
         }],
         private: BTreeSet::new(),
         requests: BTreeSet::new(),
+        debug: None,
     })
     .expect("prints");
     assert!(assembly.contains("db 0d9h,0feh"));

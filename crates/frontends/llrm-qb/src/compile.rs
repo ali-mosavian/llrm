@@ -1653,6 +1653,7 @@ pub fn assembled_by(
         procedures,
         private,
         requests: graphics,
+        debug: None,
     };
     _observe(&mut observer, "emitted-assembly", StageValue::Module(&emitted), None, None)?;
     Ok(emitted)
