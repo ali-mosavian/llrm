@@ -834,8 +834,9 @@ struct Args {
     codegen: llrm_core::driver::Options,
 }
 
-/// The code-generator stream wccq records for one C file.
-pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsupported> {
+/// The code-generator stream wccq records for one C file; with `debug`,
+/// its debug types and symbols too (-d2).
+pub fn recorded(source: &Path, includes: &[String], debug: bool) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
     let wccq = Path::new(option_env!("LLRM_WCCQ").ok_or_else(|| hir::Unsupported("llrm was built without the toolchain feature".into()))?);
     // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
@@ -851,6 +852,7 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
     // In the scratch directory, where wccq also leaves its .err file.
     let done = std::process::Command::new(&wccq)
         .args(flags)
+        .args(debug.then_some("-d2"))
         .args(searched)
         .arg(format!("-fo={}/unit.obj", scratch.path().display()))
         .arg(absolute(source))
@@ -924,7 +926,7 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            recorded(&args.source, &args.include)?
+            recorded(&args.source, &args.include, args.flags.debug)?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args
@@ -1166,7 +1168,7 @@ mod tests {
         let root = Path::new(env!("LLRM_ROOT"));
         let source = root.join("tests/fixtures/c/halve.c");
         let without_path = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
-        let recorded = super::recorded(&source, &[]).expect("wccq records halve.c");
+        let recorded = super::recorded(&source, &[], false).expect("wccq records halve.c");
         let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
     }

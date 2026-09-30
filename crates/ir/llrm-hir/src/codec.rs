@@ -145,7 +145,7 @@ plain_record!(DebugParameter, None, argument => "argument", name => "name", r#ty
 plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
     variables => "variables");
-plain_record!(DebugGlobal, None, object => "object", offset => "offset", name => "name", r#type => "type");
+plain_record!(DebugGlobal, None, function => "function", object => "object", offset => "offset", name => "name", r#type => "type");
 plain_record!(Debug, None, types => "types", functions => "functions", globals => "globals");
 plain_record!(ValueRef, Some("value"), value => "value");
 plain_record!(Constant, Some("constant"), r#type => "type", value => "value");
@@ -1301,9 +1301,10 @@ static DEBUG_FUNCTION: _Record = _Record {
 
 static DEBUG_GLOBAL: _Record = _Record {
     name: "DebugGlobal",
-    fields: &[("object", _Hint::Int, true), ("offset", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
+    fields: &[("function", OPTIONAL_INT, false), ("object", _Hint::Int, true), ("offset", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
     build: |args| {
         _object(model::DebugGlobal {
+            function: _default(args, "function", None)?,
             object: _required(args, "object")?,
             offset: _required(args, "offset")?,
             name: _required(args, "name")?,

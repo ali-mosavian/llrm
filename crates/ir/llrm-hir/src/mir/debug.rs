@@ -59,33 +59,49 @@ pub(super) fn emitted<'h>(
     let mut types = Types { of: debug.types.iter().map(|one| (one.id, one)).collect(), made: HashMap::new() };
     for global in &debug.globals {
         let Some(&object) = data.get(&global.object) else { continue };
+        let scope = match global.function {
+            Some(function) => match functions.get(&function) {
+                Some(&declaring) => Some(name(module, declaring)),
+                None => continue,
+            },
+            None => None,
+        };
         let r#type = types.node(module, global.r#type)?;
-        let global = di::Global { global: name(module, object), offset: global.offset, name: global.name.clone(), r#type, scope: None };
+        let global = di::Global { global: name(module, object), offset: global.offset, name: global.name.clone(), r#type, scope };
         di::add_global(module, &global);
     }
     for procedure in &debug.functions {
         let (Some(&global), Some(function)) = (functions.get(&procedure.function), hir.functions.iter().find(|one| one.id == procedure.function)) else { continue };
         let scope = name(module, global);
-        let parameters = procedure
+        let mut parameters = procedure
             .parameters
             .iter()
             .map(|one| Ok((one.argument, one.name.clone(), types.node(module, one.r#type)?)))
             .collect::<Emit<Vec<_>>>()?;
-        let r#type = types.node(module, procedure.r#type)?;
-        di::add_function(module, &di::Function { function: scope.clone(), module: procedure.module, name: procedure.name.clone(), r#type, parameters });
         let groups = frame_groups(&mut module.context.types, tables, function)?;
         for variable in &procedure.variables {
             let place = function.places.iter().find(|one| one.id == variable.place).ok_or_else(|| format!("no place {}", variable.place))?;
             let r#type = types.node(module, variable.r#type)?;
-            if place.storage == Storage::Local {
-                let group = groups.iter().find(|group| group.places.iter().any(|one| one.id == place.id)).ok_or("a local outside the frame")?;
-                let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start };
-                variables.insert((function.id, place.id), di::add_variable(module, &node));
-            } else if let Some(&object) = data.get(&place.symbol) {
-                let global = di::Global { global: name(module, object), offset: place.offset, name: variable.name.clone(), r#type, scope: Some(scope.clone()) };
-                di::add_global(module, &global);
+            match place.storage {
+                Storage::Local => {
+                    let group = groups.iter().find(|group| group.places.iter().any(|one| one.id == place.id)).ok_or("a local outside the frame")?;
+                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start };
+                    variables.insert((function.id, place.id), di::add_variable(module, &node));
+                }
+                // Where it was passed: its argument's cell.
+                Storage::Parameter => {
+                    let argument = function.parameters.iter().position(|&one| one == place.symbol).ok_or("a parameter's home names no parameter")?;
+                    parameters.push((argument as i64, variable.name.clone(), r#type));
+                }
+                Storage::Static | Storage::Module | Storage::Common | Storage::External => {
+                    let Some(&object) = data.get(&place.symbol) else { continue };
+                    let global = di::Global { global: name(module, object), offset: place.offset, name: variable.name.clone(), r#type, scope: Some(scope.clone()) };
+                    di::add_global(module, &global);
+                }
             }
         }
+        let r#type = types.node(module, procedure.r#type)?;
+        di::add_function(module, &di::Function { function: scope.clone(), module: procedure.module, name: procedure.name.clone(), r#type, parameters });
     }
     Ok(variables)
 }

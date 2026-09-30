@@ -40,6 +40,7 @@ use super::syntax::{FStringPart, Format};
 pub use facts::{Fact, Known};
 
 mod array_places;
+mod debug;
 mod basic;
 mod statements;
 mod assembly;
@@ -1389,7 +1390,7 @@ fn program(
                 &mut literals,
                 &mut types,
                 facts,
-                frontend.unchecked_bounds,
+                frontend,
             )?
             .compile(function)?,
         );
@@ -1421,18 +1422,20 @@ fn program(
                 &mut literals,
                 &mut types,
                 facts,
-                frontend.unchecked_bounds,
+                frontend,
             )?
             .compile(&function)?,
         );
     }
     callables.extend(templates.borrow().callables(&mut types));
+    let debug = frontend.debug.then(|| debug::described(&functions, &types));
     let program = hir::Program {
         module_name: module_name.into(),
         types: types.types,
         functions,
         callables,
         data: literals.data,
+        debug,
     };
     Ok(program)
 }
@@ -1524,6 +1527,11 @@ struct FunctionCompiler<'a> {
     /// How many `unsafe:` blocks enclose the statement compiled.
     unsafe_depth: u32,
     unchecked_bounds: bool,
+    /// `-g`: the source line of the statement being compiled, 0 for none;
+    /// and each source parameter's value and name.
+    debug: bool,
+    line: u32,
+    named_parameters: Vec<(u32, String)>,
     next_value: u32,
     next_place: u32,
     /// Numbers the hidden names the compiler binds.
@@ -1571,7 +1579,7 @@ impl<'a> FunctionCompiler<'a> {
         literals: &'a mut LiteralPool,
         types: &'a mut TypeRegistry,
         facts: Option<&'a RefCell<Vec<Fact>>>,
-        unchecked_bounds: bool,
+        frontend: &crate::Frontend,
     ) -> Result<Self, Diagnostic> {
         let mut compiler = Self {
             signature,
@@ -1595,7 +1603,10 @@ impl<'a> FunctionCompiler<'a> {
             consumers: Vec::new(),
             hidden: Vec::new(),
             unsafe_depth: 0,
-            unchecked_bounds,
+            unchecked_bounds: frontend.unchecked_bounds,
+            debug: frontend.debug,
+            line: 0,
+            named_parameters: Vec::new(),
             next_value: 1,
             next_place: 1,
             next_hidden: 1,
@@ -1674,6 +1685,7 @@ impl<'a> FunctionCompiler<'a> {
         resolved: &SignatureParameter,
         value: u32,
     ) -> Binding {
+        self.named_parameters.push((value, name.to_owned()));
         let (type_, mutable, storage) = match resolved {
             SignatureParameter::Adapter { .. } => unreachable!("an adapter binds through adapter_binding"),
             SignatureParameter::Scalar(type_name) => (
@@ -1780,6 +1792,7 @@ impl<'a> FunctionCompiler<'a> {
             calls: self.calls,
             exported: self.signature.exported,
             abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types)),
+            named_parameters: self.named_parameters,
         })
     }
 

@@ -12,6 +12,11 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
             let since = self.calls.len();
+            if self.debug {
+                // Another module's line is none of this source's.
+                let span = statement.span();
+                self.line = if span.module == 0 { span.line as u32 } else { 0 };
+            }
             match self.prepared(statement)? {
                 Some(rewritten) => self.statement(&rewritten)?,
                 None => self.statement(statement)?,

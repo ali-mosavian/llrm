@@ -49,6 +49,13 @@ pub const CURRENCY: i64 = 0x99;
 pub const FAR_STRING: i64 = 0x9C;
 /// A signed byte: QB 4.5's `STRING * n` is an array of them.
 pub const CHAR: i64 = 0x80;
+/// Measured as CodeView 4 names each: the unsigned integers, `long double`,
+/// and `void`, which is BASIC's far STRING's code.
+pub const UNSIGNED_CHAR: i64 = 0x84;
+pub const UNSIGNED_SHORT: i64 = 0x85;
+pub const UNSIGNED_LONG: i64 = 0x86;
+pub const LONG_DOUBLE: i64 = 0x8A;
+pub const VOID: i64 = FAR_STRING;
 /// QB 4.5 names a BYREF scalar by the scalar's code plus this.
 pub const QB45_BYREF: i64 = 0x20;
 
@@ -56,10 +63,13 @@ pub const QB45_BYREF: i64 = 0x20;
 pub const NIL: u8 = 0x80;
 pub const U32: u8 = 0x86;
 pub const UNPACKED: u8 = 0x69;
-/// The reach byte BC writes on every pointer, SEG or not, which CodeView
-/// shows as near.
+/// A pointer's reach, as CodeView 4 shows it. BC writes near on every
+/// pointer, SEG or not.
 pub const NEAR: u8 = 0x74;
-/// The calling convention byte BC writes on every signature.
+pub const FAR: u8 = 0x73;
+pub const HUGE: u8 = 0x5E;
+/// The calling convention byte BC writes on every signature. CodeView 4
+/// shows no difference for 0x63, 0x64, 0x74, 0x95 or 0x96.
 pub const BASIC_CALL: u8 = 0x73;
 
 /// type_index -> BASIC scalar type. STRING has two: which one a compiler
@@ -71,7 +81,13 @@ pub static PRIMITIVES: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| 
         (SINGLE, "SINGLE"),
         (DOUBLE, "DOUBLE"),
         (NEAR_STRING, "STRING"),
+        // Also C's void.
         (FAR_STRING, "STRING"),
+        (CHAR, "CHAR"),
+        (UNSIGNED_CHAR, "UNSIGNED CHAR"),
+        (UNSIGNED_SHORT, "UNSIGNED SHORT"),
+        (UNSIGNED_LONG, "UNSIGNED LONG"),
+        (LONG_DOUBLE, "LONG DOUBLE"),
     ]
     .into_iter()
     .collect()
@@ -93,8 +109,9 @@ pub static SIGILS: LazyLock<IndexMap<char, &'static str>> = LazyLock::new(|| {
 
 /// QB 4.5's own BYREF-parameter codes. Not a $$TYPES index at all; it never
 /// leaves the PRIMITIVES-sized number space.
-pub static QB45_BYREF_PRIMITIVES: LazyLock<IndexMap<i64, &'static str>> =
-    LazyLock::new(|| PRIMITIVES.iter().filter(|one| *one.0 != FAR_STRING).map(|(code, name)| (code + QB45_BYREF, *name)).collect());
+pub static QB45_BYREF_PRIMITIVES: LazyLock<IndexMap<i64, &'static str>> = LazyLock::new(|| {
+    [INTEGER, LONG, SINGLE, DOUBLE, NEAR_STRING].iter().map(|code| (code + QB45_BYREF, PRIMITIVES[code])).collect()
+});
 
 pub const BASE_TYPE_INDEX: i64 = 0x0200;
 
@@ -586,7 +603,7 @@ fn _parse_type_entry(kind: u8, data: &[u8], table: &Types) -> TypeEntry {
             Some(element) => TypeEntry::Array(Array { element }),
             None => refused(),
         },
-        Some(Tag::Pointer) if data.len() >= 2 && data[1] == NEAR => match _type_ref(data, 2) {
+        Some(Tag::Pointer) if data.len() >= 2 && [NEAR, FAR, HUGE].contains(&data[1]) => match _type_ref(data, 2) {
             Some(target) => TypeEntry::Pointer(Pointer { target }),
             None => refused(),
         },

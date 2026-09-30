@@ -624,7 +624,7 @@ pub struct Function {
 pub use llrm_mir::debuginfo::{Kind as DebugKind, Reach as DebugReach, Scalar as DebugScalar};
 
 /// A source type, as a debugger shows it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugType {
     pub id: i64,
     pub kind: DebugKind,
@@ -636,7 +636,7 @@ pub struct DebugType {
 }
 
 /// A structure's field, or a procedure's parameter by its type alone.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugMember {
     pub name: String,
     pub r#type: i64,
@@ -644,7 +644,7 @@ pub struct DebugMember {
 }
 
 /// A parameter: the function's `argument`th, hidden ones counted.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugParameter {
     pub argument: i64,
     pub name: String,
@@ -652,7 +652,7 @@ pub struct DebugParameter {
 }
 
 /// A variable: a place of the function.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugVariable {
     pub place: i64,
     pub name: String,
@@ -662,7 +662,7 @@ pub struct DebugVariable {
 /// A function as a debugger names it: its procedure type, its source
 /// parameters, and its variables; `module` the module's own code, whose
 /// variables are the module's.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugFunction {
     pub function: i64,
     pub module: bool,
@@ -672,16 +672,18 @@ pub struct DebugFunction {
     pub variables: Vec<DebugVariable>,
 }
 
-/// A variable of the module: `offset` bytes into a data object.
-#[derive(Clone, Debug, PartialEq)]
+/// A variable in data: `offset` bytes into a data object; `function` the
+/// one declaring it, None for the module.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DebugGlobal {
+    pub function: Option<i64>,
     pub object: i64,
     pub offset: i64,
     pub name: String,
     pub r#type: i64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Debug {
     pub types: Vec<DebugType>,
     pub functions: Vec<DebugFunction>,

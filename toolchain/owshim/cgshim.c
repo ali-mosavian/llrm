@@ -791,15 +791,17 @@ void DGAlign( uint align )
     emit( "- DGAlign %u", align );
 }
 
-/* ---- debug information: only the line numbers are kept ---- */
+/* ---- debug information: line numbers ---- */
 
 uint DBSrcFile( cchar_ptr name )
 {
     char q[512];
     unsigned id = Next++;
+    const char *source = FEAuxInfo( NULL, FEINF_SOURCE_NAME );
 
     quoted( q, sizeof( q ), name );
-    emit( "f%u DBSrcFile %s", id, q );
+    /* main=1: the file compiled, not one it includes. */
+    emit( "f%u DBSrcFile %s main=%d", id, q, source != NULL && strcmp( source, name ) == 0 );
     return( id );
 }
 
@@ -808,33 +810,170 @@ void DBSrcCue( uint file, uint line, uint col )
     emit( "- DBSrcCue f%u %u %u", file, line, col );
 }
 
-void DBModSym( cg_sym_handle s, cg_type t ) { (void)s; (void)t; }
-void DBLocalSym( cg_sym_handle s, cg_type t ) { (void)s; (void)t; }
-void DBTypeDef( cchar_ptr n, dbg_type t ) { (void)n; (void)t; }
-dbg_type DBScalar( cchar_ptr n, cg_type t ) { (void)n; (void)t; return( DBG_NIL_TYPE ); }
+/* ---- debug types and symbols, under -d2: a type is d<n>, and each record
+ * names the types it is made of, which come first ---- */
+
+static unsigned described( cg_sym_handle s )
+{
+    return( (unsigned)FEDbgType( s ) );
+}
+
+void DBModSym( cg_sym_handle s, cg_type t )
+{
+    unsigned y = sym( s );
+
+    (void)t;
+    emit( "- DBModSym y%u d%u", y, described( s ) );
+}
+
+void DBLocalSym( cg_sym_handle s, cg_type t )
+{
+    unsigned y = sym( s );
+
+    (void)t;
+    emit( "- DBLocalSym y%u d%u", y, described( s ) );
+}
+
+void DBTypeDef( cchar_ptr n, dbg_type t )
+{
+    char q[512];
+
+    quoted( q, sizeof( q ), n );
+    emit( "- DBTypeDef %s d%u", q, (unsigned)t );
+}
+
+dbg_type DBScalar( cchar_ptr n, cg_type t )
+{
+    char q[512];
+    unsigned id = Next++;
+
+    quoted( q, sizeof( q ), n );
+    emit( "d%u DBScalar %s %s", id, q, type( t ) );
+    return( id );
+}
+
 dbg_type DBScope( cchar_ptr n ) { (void)n; return( DBG_NIL_TYPE ); }
-dbg_name DBBegName( cchar_ptr n, dbg_type t ) { (void)n; (void)t; return( NULL ); }
-dbg_type DBForward( dbg_name n ) { (void)n; return( DBG_NIL_TYPE ); }
-dbg_type DBEndName( dbg_name n, dbg_type t ) { (void)n; (void)t; return( DBG_NIL_TYPE ); }
-dbg_type DBIntArrayCG( cg_type t, unsigned_32 hi, dbg_type b ) { (void)t; (void)hi; (void)b; return( DBG_NIL_TYPE ); }
-dbg_type DBPtr( cg_type t, dbg_type b ) { (void)t; (void)b; return( DBG_NIL_TYPE ); }
-dbg_struct DBBegNameStruct( cchar_ptr n, cg_type t, bool c ) { (void)n; (void)t; (void)c; return( NULL ); }
-dbg_type DBStructForward( dbg_struct s ) { (void)s; return( DBG_NIL_TYPE ); }
-void DBAddField( dbg_struct s, unsigned_32 o, cchar_ptr n, dbg_type t ) { (void)s; (void)o; (void)n; (void)t; }
+
+/* A tag or typedef name: the type it names comes at its end. */
+dbg_name DBBegName( cchar_ptr n, dbg_type t )
+{
+    char q[512];
+    unsigned id = Next++;
+
+    (void)t;
+    quoted( q, sizeof( q ), n );
+    emit( "d%u DBName %s", id, q );
+    return( (dbg_name)(uintptr_t)id );
+}
+
+dbg_type DBForward( dbg_name n )
+{
+    return( ID( n ) );
+}
+
+dbg_type DBEndName( dbg_name n, dbg_type t )
+{
+    emit( "- DBEndName d%u d%u", ID( n ), (unsigned)t );
+    return( ID( n ) );
+}
+
+dbg_type DBIntArrayCG( cg_type t, unsigned_32 hi, dbg_type b )
+{
+    unsigned id = Next++;
+
+    emit( "d%u DBArray %s %u d%u", id, type( t ), (unsigned)hi, (unsigned)b );
+    return( id );
+}
+
+dbg_type DBPtr( cg_type t, dbg_type b )
+{
+    unsigned id = Next++;
+
+    emit( "d%u DBPtr %s d%u", id, type( t ), (unsigned)b );
+    return( id );
+}
+
+dbg_struct DBBegNameStruct( cchar_ptr n, cg_type t, bool c )
+{
+    char q[512];
+    unsigned id = Next++;
+
+    quoted( q, sizeof( q ), n );
+    emit( "d%u DBStruct %s %s %u", id, q, c ? "struct" : "union", (unsigned)length( t ) );
+    return( (dbg_struct)(uintptr_t)id );
+}
+
+dbg_type DBStructForward( dbg_struct s )
+{
+    return( ID( s ) );
+}
+
+void DBAddField( dbg_struct s, unsigned_32 o, cchar_ptr n, dbg_type t )
+{
+    char q[512];
+
+    quoted( q, sizeof( q ), n );
+    emit( "- DBField d%u %u %s d%u", ID( s ), (unsigned)o, q, (unsigned)t );
+}
+
 void DBAddBitField( dbg_struct s, unsigned_32 o, byte st, byte l, cchar_ptr n, dbg_type t )
-{ (void)s; (void)o; (void)st; (void)l; (void)n; (void)t; }
-dbg_type DBEndStruct( dbg_struct s ) { (void)s; return( DBG_NIL_TYPE ); }
-dbg_enum DBBegEnum( cg_type t ) { (void)t; return( NULL ); }
-void DBAddConst64( dbg_enum e, cchar_ptr n, signed_64 v ) { (void)e; (void)n; (void)v; }
-dbg_type DBEndEnum( dbg_enum e ) { (void)e; return( DBG_NIL_TYPE ); }
-dbg_proc DBBegProc( cg_type t, dbg_type r ) { (void)t; (void)r; return( NULL ); }
-void DBAddParm( dbg_proc p, dbg_type t ) { (void)p; (void)t; }
-dbg_type DBEndProc( dbg_proc p ) { (void)p; return( DBG_NIL_TYPE ); }
-dbg_type DBBasedPtr( cg_type t, dbg_type b, dbg_loc l ) { (void)t; (void)b; (void)l; return( DBG_NIL_TYPE ); }
+{
+    char q[512];
+
+    quoted( q, sizeof( q ), n );
+    emit( "- DBBitField d%u %u %u %u %s d%u", ID( s ), (unsigned)o, (unsigned)st, (unsigned)l, q, (unsigned)t );
+}
+
+dbg_type DBEndStruct( dbg_struct s )
+{
+    emit( "- DBEndStruct d%u", ID( s ) );
+    return( ID( s ) );
+}
+
+dbg_enum DBBegEnum( cg_type t )
+{
+    unsigned id = Next++;
+
+    emit( "d%u DBEnum %s", id, type( t ) );
+    return( (dbg_enum)(uintptr_t)id );
+}
+
+void DBAddConst64( dbg_enum e, cchar_ptr n, signed_64 v )
+{
+    char q[512];
+
+    quoted( q, sizeof( q ), n );
+    emit( "- DBConst d%u %s %lld", ID( e ), q, wide( &v ) );
+}
+
+dbg_type DBEndEnum( dbg_enum e )
+{
+    return( ID( e ) );
+}
+
+dbg_proc DBBegProc( cg_type t, dbg_type r )
+{
+    unsigned id = Next++;
+
+    emit( "d%u DBProc %s d%u", id, type( t ), (unsigned)r );
+    return( (dbg_proc)(uintptr_t)id );
+}
+
+void DBAddParm( dbg_proc p, dbg_type t )
+{
+    emit( "- DBParm d%u d%u", ID( p ), (unsigned)t );
+}
+
+dbg_type DBEndProc( dbg_proc p )
+{
+    return( ID( p ) );
+}
+
+dbg_type DBBasedPtr( cg_type t, dbg_type b, dbg_loc l ) { (void)t; (void)b; (void)l; refuse( "a based pointer's debug type" ); return( DBG_NIL_TYPE ); }
 dbg_loc DBLocInit( void ) { return( NULL ); }
 dbg_loc DBLocSym( dbg_loc l, cg_sym_handle s ) { (void)s; return( l ); }
 dbg_loc DBLocConst( dbg_loc l, unsigned_32 v ) { (void)v; return( l ); }
 dbg_loc DBLocOp( dbg_loc l, dbg_loc_op o, unsigned n ) { (void)o; (void)n; return( l ); }
 void DBLocFini( dbg_loc l ) { (void)l; }
-void DBBegBlock( void ) { }
-void DBEndBlock( void ) { }
+void DBBegBlock( void ) { emit( "- DBBegBlock" ); }
+void DBEndBlock( void ) { emit( "- DBEndBlock" ); }

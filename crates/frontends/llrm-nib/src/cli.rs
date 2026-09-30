@@ -83,6 +83,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
+    frontend.debug = flags.debug;
     let codegen = flags.driver(flags.machine(nib::machine())?);
     Ok(Arguments { source, options: flags.legacy(), flags, entry, dump, layout, used_by, frontend, legacy, codegen })
 }
