@@ -5,12 +5,13 @@
 //! thing, named by HIR ids; MIR has no subjects, only the carriers `lower`
 //! makes.
 
-use llrm_mir::facts::{Fact, Kind};
+pub use llrm_mir::facts::{Effect, Fact, Kind};
 
 /// What a fact is stated of.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Subject {
     Function(i64),
+    Callable(i64),
     Param { function: i64, index: i64 },
     Return(i64),
     Instruction { function: i64, id: i64 },
@@ -24,6 +25,7 @@ impl Subject {
     pub fn kind(self) -> Kind {
         match self {
             Subject::Function(_) => Kind::Function,
+            Subject::Callable(_) => Kind::Callable,
             Subject::Param { .. } => Kind::Param,
             Subject::Return(_) => Kind::Return,
             Subject::Instruction { .. } => Kind::Instruction,
@@ -38,6 +40,7 @@ impl Subject {
     pub fn kind_key(kind: Kind) -> &'static str {
         match kind {
             Kind::Function => "function",
+            Kind::Callable => "callable",
             Kind::Param => "param",
             Kind::Return => "return",
             Kind::Instruction => "instruction",
@@ -49,7 +52,7 @@ impl Subject {
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Function, Kind::Param, Kind::Return, Kind::Instruction, Kind::Block, Kind::Place, Kind::Object, Kind::Program]
+        [Kind::Function, Kind::Callable, Kind::Param, Kind::Return, Kind::Instruction, Kind::Block, Kind::Place, Kind::Object, Kind::Program]
             .into_iter()
             .find(|&kind| Self::kind_key(kind) == key)
     }
@@ -57,7 +60,7 @@ impl Subject {
     /// The function a subject belongs to, and its own id in it.
     pub fn fields(self) -> (Option<i64>, Option<i64>) {
         match self {
-            Subject::Function(function) => (None, Some(function)),
+            Subject::Function(function) | Subject::Callable(function) => (None, Some(function)),
             Subject::Param { function, index } => (Some(function), Some(index)),
             Subject::Return(function) => (Some(function), None),
             Subject::Instruction { function, id } | Subject::Block { function, id } | Subject::Place { function, id } => (Some(function), Some(id)),
@@ -70,6 +73,7 @@ impl Subject {
     pub fn function(self) -> Option<i64> {
         match self {
             Subject::Function(id) => Some(id),
+            Subject::Callable(_) => None,
             other => other.fields().0,
         }
     }
@@ -78,6 +82,7 @@ impl Subject {
     pub fn of(kind: Kind, function: Option<i64>, id: Option<i64>) -> Option<Subject> {
         Some(match kind {
             Kind::Function => Subject::Function(id?),
+            Kind::Callable => Subject::Callable(id?),
             Kind::Param => Subject::Param { function: function?, index: id? },
             Kind::Return => Subject::Return(function?),
             Kind::Instruction => Subject::Instruction { function: function?, id: id? },
@@ -152,6 +157,7 @@ mod tests {
     fn every_subject_round_trips_through_its_fields() {
         let all = [
             Subject::Function(3),
+            Subject::Callable(4),
             Subject::Param { function: 1, index: 2 },
             Subject::Return(1),
             Subject::Instruction { function: 1, id: 5 },

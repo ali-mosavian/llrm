@@ -9664,17 +9664,6 @@ impl Compiler {
                 )
                 .unwrap();
             }
-            out.push_str("],\"promises\":[");
-            for (index, (parameter, bytes)) in function.promises.iter().enumerate() {
-                if index != 0 {
-                    out.push(',');
-                }
-                write!(
-                    out,
-                    "{{\"bytes\":{bytes},\"parameter\":{parameter},\"readonly\":false}}"
-                )
-                .unwrap();
-            }
             write!(
                 out,
                 "],\"result_type\":{},\"values\":[",
@@ -9788,6 +9777,19 @@ impl Compiler {
             type_json(&mut out, type_);
         }
         out.push(']');
+        // What the language promises of each pointer parameter: it is addressable for the bytes it names.
+        let mut facts = llrm_hir::facts::Builder::new("qb");
+        for function in &self.functions {
+            for &(value, bytes) in &function.promises {
+                let index = function.parameters.iter().position(|&one| one == value).expect("a promise of a parameter") as i64;
+                facts.state(llrm_hir::facts::Subject::Param { function: i64::from(function.id), index }, llrm_hir::facts::Fact::Dereferenceable(bytes as u64));
+            }
+        }
+        let facts = facts.finish();
+        if !facts.is_empty() {
+            out.push_str(",\"facts\":");
+            out.push_str(&llrm_hir::codec::facts_json(&facts));
+        }
         if self.debugging() {
             out.push_str(",\"debug\":");
             out.push_str(&llrm_hir::codec::debug_json(self.debug.built()));

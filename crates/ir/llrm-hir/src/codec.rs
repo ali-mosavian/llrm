@@ -242,7 +242,6 @@ impl _Plain for model::ProcedureAbi {
     }
 }
 plain_record!(ArgumentPromise, None, operand => "operand", bytes => "bytes");
-plain_record!(Promise, None, parameter => "parameter", bytes => "bytes", readonly => "readonly");
 // `promises` only when made, so that a function reads as it always has.
 impl _Plain for model::Function {
     fn _plain(&self) -> JSON {
@@ -261,9 +260,6 @@ impl _Plain for model::Function {
         out.insert("error_handler_local".to_owned(), self.error_handler_local._plain());
         out.insert("external_entries".to_owned(), self.external_entries._plain());
         out.insert("linkage".to_owned(), self.linkage._plain());
-        if !self.promises.is_empty() {
-            out.insert("promises".to_owned(), self.promises._plain());
-        }
         if self.symbol.is_some() {
             out.insert("symbol".to_owned(), self.symbol._plain());
         }
@@ -319,6 +315,9 @@ impl _Plain for crate::facts::Stated {
             out.insert("id".to_owned(), id._plain());
         }
         out.insert("fact".to_owned(), Json::Str(self.fact.key().to_owned()));
+        if let Some(value) = self.fact.wire_value() {
+            out.insert("value".to_owned(), value._plain());
+        }
         if self.source.is_some() {
             out.insert("source".to_owned(), self.source._plain());
         }
@@ -741,7 +740,6 @@ impl _FromMade for crate::facts::Stated {
 made_records!(
     CellWriters,
     RuntimePromises,
-    Promise,
     ArgumentPromise,
     Type,
     Place,
@@ -1161,7 +1159,6 @@ static FUNCTION: _Record = _Record {
         ("error_handler_local", _Hint::Bool, false),
         ("external_entries", INTS, false),
         ("linkage", enum_hint!(FunctionLinkage), false),
-        ("promises", _Hint::Tuple(&_Hint::Record(&PROMISE)), false),
         ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1180,20 +1177,7 @@ static FUNCTION: _Record = _Record {
             error_handler_local: _default(args, "error_handler_local", false)?,
             external_entries: _default(args, "external_entries", Vec::new())?,
             linkage: _default(args, "linkage", model::FunctionLinkage::External)?,
-            promises: _default(args, "promises", Vec::new())?,
             symbol: _default(args, "symbol", None)?,
-        })
-    },
-};
-
-static PROMISE: _Record = _Record {
-    name: "Promise",
-    fields: &[("parameter", _Hint::Int, true), ("bytes", _Hint::Int, true), ("readonly", _Hint::Bool, true)],
-    build: |args| {
-        _object(model::Promise {
-            parameter: _required(args, "parameter")?,
-            bytes: _required(args, "bytes")?,
-            readonly: _required(args, "readonly")?,
         })
     },
 };
@@ -1373,6 +1357,7 @@ static STATED_FACT: _Record = _Record {
         ("function", OPTIONAL_INT, false),
         ("id", OPTIONAL_INT, false),
         ("fact", _Hint::Str, true),
+        ("value", OPTIONAL_INT, false),
         ("source", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1381,7 +1366,8 @@ static STATED_FACT: _Record = _Record {
         let kind = crate::facts::Subject::kind_named(&key).ok_or_else(|| InvalidHIR(format!("unknown fact subject {key:?}")))?;
         let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?)
             .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
-        let fact = llrm_mir::facts::Fact::named(&name).ok_or_else(|| InvalidHIR(format!("unknown fact {name:?}")))?;
+        let value: Option<i64> = _default(args, "value", None)?;
+        let fact = llrm_mir::facts::Fact::from_wire(&name, value).ok_or_else(|| InvalidHIR(format!("{name:?} with value {value:?} is not a fact")))?;
         _object(crate::facts::Stated { subject, fact, source: _default(args, "source", None)? })
     },
 };

@@ -1915,24 +1915,46 @@ fn test_a_loop_through_a_copied_pointer_converges() {
 }
 
 /// A borrowed view's descriptor is the caller's, never written in the
-/// call: promised as LLVM's `noalias readonly dereferenceable`, for LICM to
+/// call: stated as LLVM's `noalias readonly dereferenceable`, for LICM to
 /// hoist its loads.
 #[test]
-fn test_a_borrowed_view_promises_its_descriptor() {
+fn test_a_borrowed_view_states_facts_of_its_descriptor() {
+    use llrm_mir::facts::Fact;
     let program = parsed(&fixture("matmul8.nib"));
     let multiply = function(&program, "multiply");
-    let promised = |parameter| model::Promise { parameter, bytes: 10, readonly: true };
-    assert_eq!(multiply.promises, multiply.parameters.iter().map(|&one| promised(one)).collect::<Vec<_>>());
-    let unaliased: Vec<i64> = program.modules[0]
-        .facts
-        .iter()
-        .filter(|one| one.fact == llrm_mir::facts::Fact::NoAlias)
-        .filter_map(|one| match one.subject {
-            llrm_core::hir::facts::Subject::Param { function, index } if function == multiply.id => Some(index),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(unaliased, (0..multiply.parameters.len() as i64).collect::<Vec<_>>());
+    let stated = |index: usize| -> Vec<Fact> {
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == multiply.id && at == index as i64))
+            .map(|one| one.fact)
+            .collect()
+    };
+    for index in 0..multiply.parameters.len() {
+        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10)], "parameter {index}");
+    }
+}
+
+/// A reference is not null and points at all it borrows; a shared one is
+/// read only. Not that nothing else reaches it: `bump` may write the module
+/// variable `g` it was lent, so no `noalias`.
+#[test]
+fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
+    use llrm_mir::facts::Fact;
+    let source = "struct Pt:\n    mut x: i16\n    y: i16\n\nvar g: Pt = Pt(x=1, y=2)\nvar h: Pt = Pt(x=3, y=4)\n\nfn bump(p: &mut Pt, q: &Pt) -> void:\n    g.x = 7\n    p.x += q.y\n\nfn main() -> i16:\n    bump(g, h)\n    return g.x\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "refs.nib", source));
+    let bump = function(&program, "bump");
+    let stated = |index: i64| -> Vec<Fact> {
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index))
+            .map(|one| one.fact)
+            .collect()
+    };
+    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4)]);
+    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly]);
 }
 
 /// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as

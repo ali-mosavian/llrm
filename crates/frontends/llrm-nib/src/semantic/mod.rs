@@ -646,6 +646,18 @@ impl TypeRegistry {
         self.types[(id - 1) as usize].width
     }
 
+    /// The bytes a reference to `target` reaches: all of it, where it is one
+    /// value of a known size.
+    fn referent_bytes(&self, target: BindingType) -> Option<u32> {
+        match target {
+            BindingType::Scalar(TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } | TypeName::Void) => None,
+            BindingType::Scalar(type_name) => Some(width(type_name)),
+            BindingType::Struct(id) => Some(self.width(id)),
+            BindingType::Array { element, shape } => Some(shape.len() * self.width(element.id())),
+            BindingType::Slice { .. } => None,
+        }
+    }
+
     fn pointer(&mut self, target: u32, rank: u32) -> u32 {
         if let Some(id) = self.pointers.get(&(target, rank)) {
             return *id;
@@ -1516,7 +1528,6 @@ struct FunctionCompiler<'a> {
     blocks: Vec<BlockBuilder>,
     current: u32,
     parameters: Vec<u32>,
-    promises: Vec<hir::Promise>,
     stated: llrm_core::hir::facts::Builder,
     calls: Vec<hir::CallSite>,
     scopes: Vec<BTreeMap<String, Binding>>,
@@ -1597,7 +1608,6 @@ impl<'a> FunctionCompiler<'a> {
             }],
             current: 1,
             parameters: Vec::new(),
-            promises: Vec::new(),
             stated: llrm_core::hir::facts::Builder::new("nib"),
             calls: Vec::new(),
             scopes: vec![BTreeMap::new()],
@@ -1659,12 +1669,26 @@ impl<'a> FunctionCompiler<'a> {
         for (parameter, resolved) in function.parameters.iter().zip(&signature.parameters) {
             let value = compiler.value_type(resolved.hir_type());
             compiler.parameters.push(value);
-            // A borrowed view's descriptor is the caller's, and only reseating
-            // a binding writes one: no parameter is reseated.
-            if let SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } = *resolved {
-                compiler.promises.push(hir::Promise { parameter: value, bytes: descriptor::size(rank) + 4, readonly: true });
-                let subject = llrm_core::hir::facts::Subject::Param { function: i64::from(signature.id), index: compiler.parameters.len() as i64 - 1 };
-                compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias);
+            let subject = llrm_core::hir::facts::Subject::Param { function: i64::from(signature.id), index: compiler.parameters.len() as i64 - 1 };
+            match *resolved {
+                // A borrowed view's descriptor is the caller's, and only reseating
+                // a binding writes one: no parameter is reseated.
+                SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } => {
+                    compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias).state(subject, llrm_mir::facts::Fact::ReadOnly).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(descriptor::size(rank) + 4)));
+                }
+                // A reference is made from a place, so it is not null and points at
+                // the whole of what it borrows; a shared one cannot write it. Whether
+                // nothing else reaches it is not stated: a callee may write a module
+                // variable the caller lent.
+                SignatureParameter::Borrowed { mutable, target, .. } => {
+                    if let Some(bytes) = compiler.types.referent_bytes(target) {
+                        compiler.stated.state(subject, llrm_mir::facts::Fact::NonNull).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(bytes)));
+                        if !mutable {
+                            compiler.stated.state(subject, llrm_mir::facts::Fact::ReadOnly);
+                        }
+                    }
+                }
+                _ => {}
             }
             let binding = match *resolved {
                 SignatureParameter::Adapter { basic, adapter, target, pointer } => {
@@ -1792,7 +1816,6 @@ impl<'a> FunctionCompiler<'a> {
             blocks,
             entry: 1,
             parameters: self.parameters,
-            promises: self.promises,
             facts: self.stated.finish(),
             calls: self.calls,
             exported: self.signature.exported,

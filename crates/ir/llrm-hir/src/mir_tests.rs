@@ -431,14 +431,19 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     assert!(text.contains(entry), "{text}");
 }
 
-/// A parameter's promise is its LLVM attributes, which LICM and EarlyCSE
+/// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
 /// ask; with none, a view descriptor's loads never left a loop.
 #[test]
-fn a_promise_becomes_its_parameters_attributes() {
-    let mut function = difference();
-    function.promises = vec![crate::model::Promise { parameter: 2, bytes: 10, readonly: true }];
-    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
-    assert!(text.contains("(i16 %0, i16 readonly dereferenceable(10) %1)"), "{text}");
+fn the_facts_of_a_parameter_become_its_attributes() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    let second = Subject::Param { function: 1, index: 1 };
+    facts.state(second, Fact::NoAlias).state(second, Fact::ReadOnly).state(second, Fact::Dereferenceable(10)).state(second, Fact::NoCapture).state(second, Fact::NonNull);
+    program.modules[0].facts = facts.finish();
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) nocapture nonnull %1)"), "{text}");
 }
 
 /// A string comparison compares its callee's sign with zero; it was
@@ -561,7 +566,7 @@ fn a_nowrap_promise_is_nsw() {
 /// size, locals start indeterminate, and a value-less return gives poison.
 #[test]
 fn a_languages_promises_reach_mir() {
-    use crate::model::{AliasClass, IndirectPlace, Place, Promise, Storage};
+    use crate::model::{AliasClass, IndirectPlace, Place, Storage};
     let mut boolean = Type::new(2, "bool", TypeKind::Boolean, 2);
     boolean.signed = Some(false);
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
@@ -577,7 +582,6 @@ fn a_languages_promises_reach_mir() {
     let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
     let mut function = Function::new(1, "f", 1, values, vec![Place::new(1, "t", 2, Storage::Local, 0)], vec![block], 1);
     function.parameters = vec![1];
-    function.promises = vec![Promise { parameter: 1, bytes: 0, readonly: false }];
     let mut program = program(function);
     program.zeroed_locals = false;
     program.modules[0].facts = vec![crate::facts::Stated { subject: crate::facts::Subject::Param { function: 1, index: 0 }, fact: llrm_mir::facts::Fact::NoAlias, source: None }];

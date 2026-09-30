@@ -144,20 +144,10 @@ pub struct Function {
     pub exported: bool,
     /// How it is entered and left, when not as a native function is.
     pub abi: Option<ProcedureAbi>,
-    pub promises: Vec<Promise>,
     /// What the language promises of it, as the one API states it.
     pub facts: Vec<llrm_core::hir::facts::Stated>,
     /// `-g`: each source parameter's value and name.
     pub named_parameters: Vec<(u32, String)>,
-}
-
-/// What the language promises of a pointer parameter, as LLVM's
-/// `readonly` and `dereferenceable(bytes)` state it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Promise {
-    pub parameter: u32,
-    pub bytes: u32,
-    pub readonly: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -388,16 +378,6 @@ fn function_json(out: &mut String, function: &Function) {
             out,
             ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{},\"volatile\":{}}}",
             place.offset, place.storage, place.symbol, place.type_id, place.volatile
-        )
-        .unwrap();
-    }
-    out.push_str("],\"promises\":[");
-    for (index, promise) in function.promises.iter().enumerate() {
-        comma(out, index);
-        write!(
-            out,
-            "{{\"bytes\":{},\"parameter\":{},\"readonly\":{}}}",
-            promise.bytes, promise.parameter, promise.readonly
         )
         .unwrap();
     }

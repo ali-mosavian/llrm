@@ -332,6 +332,11 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             refused.push((function.name.clone(), why));
         }
     }
+    for one in &hir.facts {
+        if let Err(why) = lower_callable_fact(&mut module, &tables, hir, one) {
+            refused.push((hir.name.clone(), why));
+        }
+    }
     // Initialized once every function its data addresses is declared: one only addressed, far and C's.
     let mut code = HashMap::new();
     for callable in hir.data.iter().flat_map(|one| &one.relocations).filter(|one| one.code).filter_map(|one| hir.callables.iter().find(|callable| callable.id == one.target)) {
@@ -670,15 +675,6 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     };
     let global = module.add_function(&function.name, ty, linkage)?;
     place_function(module, global, abi);
-    let llrm_mir::GlobalKind::Function(defined) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
-    for promise in &function.promises {
-        let at = function.parameters.iter().position(|&one| one == promise.parameter).ok_or("a promise of no parameter")?;
-        let attrs = &mut defined.parameter_attrs[at];
-        attrs.extend(promise.readonly.then(|| Attribute::Flag("readonly".to_owned())));
-        if promise.bytes > 0 {
-            attrs.push(Attribute::Int("dereferenceable".to_owned(), promise.bytes as u64));
-        }
-    }
     Ok((global, abi.0))
 }
 
@@ -698,6 +694,21 @@ fn lower_facts(module: &mut Module, global: GlobalId, function: &model::Function
         if !attrs.contains(&attribute) {
             attrs.push(attribute);
         }
+    }
+    Ok(())
+}
+
+/// A fact stated of a routine the module calls, as its declaration's
+/// attribute; a routine it never calls has none.
+fn lower_callable_fact(module: &mut Module, tables: &Tables, hir: &model::Module, stated: &Stated) -> Emit<()> {
+    let Subject::Callable(id) = stated.subject else { return Ok(()) };
+    let callable = hir.callables.iter().find(|one| one.id == id).ok_or("a fact of no callable")?;
+    let Some(&reference) = tables.callees.get(&callable.name) else { return Ok(()) };
+    let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
+    let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
+    let attribute = stated.fact.attribute();
+    if !function.attrs.contains(&attribute) {
+        function.attrs.push(attribute);
     }
     Ok(())
 }

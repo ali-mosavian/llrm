@@ -615,7 +615,6 @@ pub struct Function {
     pub error_handler_local: bool,
     pub external_entries: Vec<i64>,
     pub linkage: FunctionLinkage,
-    pub promises: Vec<Promise>,
     /// The name it links by, where not its own.
     pub symbol: Option<String>,
 }
@@ -690,16 +689,6 @@ pub struct Debug {
     pub globals: Vec<DebugGlobal>,
 }
 
-/// What the language promises of a pointer parameter, as LLVM's
-/// `readonly` and `dereferenceable(bytes)` state it. That it reaches an
-/// object no other pointer does is a stated fact, `NoAlias`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Promise {
-    pub parameter: i64,
-    pub bytes: i64,
-    pub readonly: bool,
-}
-
 impl Function {
     /// Python's seven-required-field construction with every default.
     pub fn new(
@@ -726,7 +715,6 @@ impl Function {
             error_handler_local: false,
             external_entries: Vec::new(),
             linkage: FunctionLinkage::External,
-            promises: Vec::new(),
             symbol: None,
         }
     }

@@ -183,6 +183,7 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
         let function = |id: i64| module.functions.iter().find(|one| one.id == id);
         let found = match subject {
             Subject::Function(id) | Subject::Return(id) => function(id).is_some(),
+            Subject::Callable(id) => module.callables.iter().any(|one| one.id == id),
             Subject::Param { function: id, index } => function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index)),
             Subject::Instruction { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.instructions.iter().any(|i| i.id == at))),
             Subject::Block { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.id == at)),

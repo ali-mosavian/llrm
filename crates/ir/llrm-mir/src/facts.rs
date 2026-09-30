@@ -17,6 +17,7 @@ use crate::opcode::Attribute;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Function,
+    Callable,
     Param,
     Return,
     Instruction,
@@ -57,66 +58,183 @@ impl Policy {
 }
 
 macro_rules! facts {
-    ($($variant:ident $method:ident $key:literal on [$($kind:ident),+] $policy:expr;)*) => {
+    (
+        flags { $($flag:ident $fmethod:ident $fkey:literal on [$($fkind:ident),+] $fpolicy:expr;)* }
+        valued { $($valued:ident($vty:ty) $vmethod:ident $vkey:literal on [$($vkind:ident),+] $vpolicy:expr;)* }
+        custom { $($custom:ident($cty:ty) $cmethod:ident $ckey:literal on [$($ckind:ident),+] $cpolicy:expr;)* }
+    ) => {
         /// A promise of the language, stated once per subject.
         #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
         pub enum Fact {
-            $($variant,)*
+            $($flag,)*
+            $($valued($vty),)*
+            $($custom($cty),)*
         }
 
         impl Fact {
-            /// Every fact, for tests that must name each.
-            pub const ALL: &'static [Fact] = &[$(Fact::$variant,)*];
-
-            /// The name the codec and diagnostics use.
+            /// The name the codec and diagnostics use, and, for a flag or a
+            /// valued fact, its MIR attribute's.
             pub fn key(self) -> &'static str {
-                match self { $(Fact::$variant => $key,)* }
-            }
-
-            /// The fact of a codec name.
-            pub fn named(key: &str) -> Option<Fact> {
-                match key { $($key => Some(Fact::$variant),)* _ => None }
+                match self {
+                    $(Fact::$flag => $fkey,)*
+                    $(Fact::$valued(_) => $vkey,)*
+                    $(Fact::$custom(_) => $ckey,)*
+                }
             }
 
             /// The kinds of subject it can be stated of.
             pub fn kinds(self) -> &'static [Kind] {
-                match self { $(Fact::$variant => &[$(Kind::$kind),+],)* }
+                match self {
+                    $(Fact::$flag => &[$(Kind::$fkind),+],)*
+                    $(Fact::$valued(_) => &[$(Kind::$vkind),+],)*
+                    $(Fact::$custom(_) => &[$(Kind::$ckind),+],)*
+                }
             }
 
             /// What a rewriting pass does with it.
             pub fn policy(self) -> Policy {
-                match self { $(Fact::$variant => $policy,)* }
+                match self {
+                    $(Fact::$flag => $fpolicy,)*
+                    $(Fact::$valued(_) => $vpolicy,)*
+                    $(Fact::$custom(_) => $cpolicy,)*
+                }
+            }
+
+            /// Whether the name is a fact's.
+            pub fn is_named(key: &str) -> bool {
+                [$($fkey,)* $($vkey,)* $($ckey,)*].contains(&key)
+            }
+
+            /// The fact of a flag's name.
+            pub fn flag(key: &str) -> Option<Fact> {
+                match key { $($fkey => Some(Fact::$flag),)* _ => None }
+            }
+
+            /// The fact of a valued fact's name and value.
+            pub fn valued(key: &str, value: u64) -> Option<Fact> {
+                match key { $($vkey => Some(Fact::$valued(value as $vty)),)* _ => None }
+            }
+
+            /// The value a fact carries on the wire, if it carries one.
+            pub fn wire_value(self) -> Option<i64> {
+                match self {
+                    $(Fact::$flag => None,)*
+                    $(Fact::$valued(value) => Some(value as i64),)*
+                    $(Fact::$custom(value) => Some(Wire::wire(value)),)*
+                }
+            }
+
+            /// The fact of a wire name and value; none where either is not one's.
+            pub fn from_wire(key: &str, value: Option<i64>) -> Option<Fact> {
+                match (key, value) {
+                    $(($fkey, None) => Some(Fact::$flag),)*
+                    $(($vkey, Some(value)) => Some(Fact::$valued(value as $vty)),)*
+                    $(($ckey, Some(value)) => <$cty as Wire>::unwire(value).map(Fact::$custom),)*
+                    _ => None,
+                }
+            }
+
+            /// One of each fact, for tests that must name every one.
+            pub fn examples() -> Vec<Fact> {
+                vec![$(Fact::$flag,)* $(Fact::$valued(Default::default()),)* $(Fact::$custom(Default::default()),)*]
             }
         }
 
         impl Facts {
-            $(
-                pub fn $method(&self) -> bool {
-                    self.contains(Fact::$variant)
-                }
-            )*
+            $(pub fn $fmethod(&self) -> bool {
+                self.contains(Fact::$flag)
+            })*
+            $(pub fn $vmethod(&self) -> Option<$vty> {
+                self.0.iter().find_map(|fact| if let Fact::$valued(value) = fact { Some(*value) } else { None })
+            })*
+            $(pub fn $cmethod(&self) -> Option<$cty> {
+                self.0.iter().find_map(|fact| if let Fact::$custom(value) = fact { Some(*value) } else { None })
+            })*
         }
     };
 }
 
+/// A fact's value as a number on the wire.
+pub trait Wire: Sized {
+    fn wire(self) -> i64;
+    fn unwire(value: i64) -> Option<Self>;
+}
+
+/// What a call may do to memory, as `memory(...)` states it.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Effect {
+    /// It neither reads nor writes.
+    #[default]
+    None,
+    /// It may read, not write.
+    Read,
+    /// It may write, not read.
+    Write,
+}
+
 facts! {
-    NoAlias no_alias "noalias" on [Param] Policy::DECLARED;
+    flags {
+        NoAlias no_alias "noalias" on [Param] Policy::DECLARED;
+        ReadOnly read_only "readonly" on [Param] Policy::DECLARED;
+        NoCapture no_capture "nocapture" on [Param] Policy::DECLARED;
+        NonNull non_null "nonnull" on [Param] Policy::DECLARED;
+        NoReturn no_return "noreturn" on [Function, Callable] Policy::DECLARED;
+        NoUnwind no_unwind "nounwind" on [Function, Callable] Policy::DECLARED;
+        WillReturn will_return "willreturn" on [Function, Callable] Policy::DECLARED;
+    }
+    valued {
+        Dereferenceable(u64) dereferenceable "dereferenceable" on [Param] Policy::DECLARED;
+    }
+    custom {
+        Memory(Effect) memory "memory" on [Function, Callable] Policy::DECLARED;
+    }
 }
 
 impl Fact {
     /// The MIR carrier of the fact.
     pub fn attribute(self) -> Attribute {
         match self {
-            Fact::NoAlias => Attribute::Flag("noalias".to_owned()),
+            Fact::Dereferenceable(bytes) => Attribute::Int(self.key().to_owned(), bytes),
+            Fact::Memory(effect) => Attribute::Memory(vec![(None, effect.spelled().to_owned())]),
+            _ => Attribute::Flag(self.key().to_owned()),
         }
     }
 
     /// The fact a carrier states, if it states one.
     pub fn of_attribute(attribute: &Attribute) -> Option<Fact> {
         match attribute {
-            Attribute::Flag(name) if name == "noalias" => Some(Fact::NoAlias),
+            Attribute::Flag(name) => Fact::flag(name),
+            Attribute::Int(name, value) => Fact::valued(name, *value),
+            Attribute::Memory(locations) => match locations[..] {
+                [(None, ref access)] => Effect::of_spelling(access).map(Fact::Memory),
+                _ => None,
+            },
             _ => None,
         }
+    }
+}
+
+impl Wire for Effect {
+    fn wire(self) -> i64 {
+        self as i64
+    }
+
+    fn unwire(value: i64) -> Option<Effect> {
+        [Effect::None, Effect::Read, Effect::Write].into_iter().find(|one| *one as i64 == value)
+    }
+}
+
+impl Effect {
+    fn spelled(self) -> &'static str {
+        match self {
+            Effect::None => "none",
+            Effect::Read => "read",
+            Effect::Write => "write",
+        }
+    }
+
+    fn of_spelling(access: &str) -> Option<Effect> {
+        [Effect::None, Effect::Read, Effect::Write].into_iter().find(|one| one.spelled() == access)
     }
 }
 
@@ -171,9 +289,10 @@ mod tests {
     /// Every fact reads back from its own carrier, and no carrier states two.
     #[test]
     fn every_fact_round_trips_through_its_attribute() {
-        for &fact in Fact::ALL {
+        for fact in Fact::examples() {
             assert_eq!(Fact::of_attribute(&fact.attribute()), Some(fact), "{}", fact.key());
-            assert_eq!(Fact::named(fact.key()), Some(fact));
+            assert!(Fact::is_named(fact.key()));
+            assert_eq!(Fact::from_wire(fact.key(), fact.wire_value()), Some(fact), "{} on the wire", fact.key());
             assert!(!fact.kinds().is_empty(), "{} is of no subject", fact.key());
         }
     }
