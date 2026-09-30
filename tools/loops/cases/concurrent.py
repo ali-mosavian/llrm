@@ -538,7 +538,8 @@ def cases(quick: bool = False, seed: int = 98) -> list[Case]:
     every = _all(seed)
     if not quick:
         return every
-    return [c for k, c in enumerate(every) if k % 25 == 0 or "whole" in c.name or c.name.startswith("bp")]
+    return [c for k, c in enumerate(every)
+            if k % 60 == 0 or (c.base is None and "whole" in c.name) or c.name.startswith("bp")]
 
 
 def _all(seed: int) -> list[Case]:
