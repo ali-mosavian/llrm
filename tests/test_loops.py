@@ -386,3 +386,13 @@ def test_a_struct_with_a_byte_is_not_basic():
     from cases import cross
     case = next(one for one in cross.cases() if one.tags >= {"elem:s3"})
     assert emit_bas.expressible(case) is not None
+
+
+def test_a_negative_unsigned_constant_is_written_wrapped_in_nib():
+    """A u16 counter stepping by -1 was written `i += u16(-1)`, which Nib
+    refuses; 65535 wraps to the same."""
+    import emit_nib
+    from spec import U16
+    from cases import cross
+    case = next(one for one in cross.cases() if one.tags >= {"counter:u16"})
+    assert emit_nib.Emitter(case).const(-1, U16) == "65535"
