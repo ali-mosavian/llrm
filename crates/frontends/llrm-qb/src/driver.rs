@@ -117,6 +117,8 @@ pub struct Frontend {
     /// Procedures frame themselves where the runtime needs no frame, not
     /// only where the dialect does so by default: `--own-frames`.
     pub own_frames: bool,
+    /// Errors in a module handler report their BASIC line: `--error-lines`.
+    pub error_lines: bool,
     pub includes: Vec<PathBuf>,
 }
 
@@ -138,6 +140,7 @@ impl Frontend {
             whole_program: false,
             array_merging: false,
             own_frames: false,
+            error_lines: false,
             includes: Vec::new(),
         }
     }
@@ -167,6 +170,7 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
         (frontend.whole_program, "--whole-program"),
         (frontend.array_merging, "--array-merging"),
         (frontend.own_frames, "--own-frames"),
+        (frontend.error_lines, "--error-lines"),
         (frontend.debug, "-g"),
     ] {
         if on {

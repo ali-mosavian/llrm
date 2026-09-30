@@ -167,7 +167,8 @@ pub enum Encoded {
     Piece(Piece),
     Jump(Jump),
     Near(Near),
-    Mark(masm::Mark),
+    /// A mark, and the symbol a line's defines.
+    Mark(masm::Mark, Option<String>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -202,7 +203,7 @@ impl Segment {
     /// `mark` is here.
     pub fn mark(&mut self, mark: masm::Mark) {
         match mark {
-            masm::Mark::Line(line) => self.line(line),
+            masm::Mark::Line { line, .. } => self.line(line),
             bound => self.bodies.push((bound, self.image.len())),
         }
     }
@@ -660,7 +661,7 @@ pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Near(Near { name }) => {
                         reached.insert(name);
                     }
-                    Encoded::Label(_) | Encoded::Jump(_) | Encoded::Mark(_) => {}
+                    Encoded::Label(_) | Encoded::Jump(_) | Encoded::Mark(..) => {}
                 }
             }
         }
@@ -830,7 +831,12 @@ pub fn _code_by(
             Encoded::Label(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, at));
             }
-            Encoded::Mark(mark) => segment.mark(*mark),
+            Encoded::Mark(mark, name) => {
+                segment.mark(*mark);
+                if let Some(name) = name {
+                    symbols.insert(name.clone(), (index, at));
+                }
+            }
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
             Encoded::Jump(Jump { name, label, long }) => segment.put(&_jump(name, labels[label], at, *long)?.code, &[]),
             Encoded::Near(Near { name }) if labels.contains_key(name) => {
@@ -860,7 +866,8 @@ pub fn _items(
 ) -> Result<Vec<Encoded>, Unencodable> {
     Ok(match item {
         masm::Item::Label(label) => vec![Encoded::Label(label.clone())],
-        masm::Item::Mark(mark) => vec![Encoded::Mark(*mark)],
+        masm::Item::Mark(mark @ masm::Mark::Line { index, .. }) => vec![Encoded::Mark(*mark, Some(masm::line_label(number, *index)))],
+        masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
             code.iter().map(_part).collect::<Result<Vec<_>, _>>()?.into_iter().map(Encoded::Piece).collect()
         }
@@ -973,7 +980,7 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
 
 pub fn _length(item: &Encoded) -> usize {
     match item {
-        Encoded::Label(_) | Encoded::Mark(_) => 0,
+        Encoded::Label(_) | Encoded::Mark(..) => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
         Encoded::Jump(Jump { name, long, .. }) => {
             if !long {
@@ -1060,7 +1067,9 @@ pub fn _records(
         Rc::new(omf::Record::new(omf::THEADR, _string(source))),
         Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| _string(one)).collect())),
     ];
-    if segments.iter().any(|segment| !segment.lines.is_empty()) {
+    // -g's: lines alone may be only a statement table's.
+    let debugging = module.debug.is_some();
+    if debugging {
         // CodeView 4's marker: LINK /CO reads the debug information after it.
         records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x00, 0xA1, 0x01, b'C', b'V'])));
     }
@@ -1090,7 +1099,7 @@ pub fn _records(
         }
     }
     records.extend(data);
-    for (index, segment) in segments.iter().enumerate() {
+    for (index, segment) in segments.iter().enumerate().filter(|_| debugging) {
         records.extend(_linnum(index + 1, &segment.lines)?);
     }
     records.push(Rc::new(omf::Record::new(omf::MODEND, vec![0])));

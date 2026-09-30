@@ -341,8 +341,10 @@ struct Compiler {
     data_entries: Vec<u32>,
     pending_numeric_line: Option<u16>,
     current_source_line: usize,
-    /// `-g`'s source; None, no debug information.
+    /// The source lines, and whether to describe it to a debugger.
     source: Option<DebugSource>,
+    /// Each resumable statement's expanded line, and its BASIC line number.
+    numbered_lines: BTreeMap<usize, u16>,
     debug: llrm_hir::debug::Builder,
     /// Each TYPE's debug type, by its type.
     debug_structures: BTreeMap<u32, i64>,
@@ -401,6 +403,9 @@ pub struct Options {
     /// Procedures frame themselves where the runtime needs no frame, as
     /// the dialect may by default.
     pub own_frames: bool,
+    /// Errors in code without a landing pad, as a module handler's, report
+    /// their BASIC line: a statement-table row, 4 bytes, per line.
+    pub error_lines: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -428,8 +433,13 @@ pub fn compile_with_warnings(
 /// The source `-g` describes: each expanded line's text, and its line in
 /// the main file.
 pub struct DebugSource {
+    /// Each expanded line's text, for names' spelling; empty unless `debug`.
     pub text: Vec<String>,
+    /// Each expanded line's main-file line.
     pub lines: Vec<usize>,
+    /// `-g`: debug information too, beyond the lines an error handler's
+    /// statement table needs.
+    pub debug: bool,
 }
 
 /// [`compile_with_warnings`], with debug information of `source`.
@@ -499,7 +509,7 @@ fn built_from(
     compiler.declare_procedure_shared(module)?;
     compiler.finish();
     compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
-    if compiler.source.is_some() {
+    if compiler.debugging() {
         compiler.debug.module_code(1);
     }
     compiler.module_handled = compiler.functions.iter().any(|one| one.id == 1 && one.error_handler.is_some() && !one.error_handler_local);
@@ -1391,6 +1401,7 @@ impl Compiler {
             pending_numeric_line: None,
             current_source_line: 0,
             source: None,
+            numbered_lines: BTreeMap::new(),
             debug: llrm_hir::debug::Builder::default(),
             debug_structures: BTreeMap::new(),
             load_lines: BTreeMap::new(),
@@ -2859,6 +2870,7 @@ impl Compiler {
                 // consuming it here made ERROR 53 followed by an unnumbered
                 // handler report ERL 0 through B$FERL.
                 let line = self.pending_numeric_line.unwrap_or(0);
+                self.numbered_lines.insert(self.current_source_line, line);
                 self.begin_resumable_statement(line);
             }
             match statement {
@@ -9482,6 +9494,9 @@ impl Compiler {
     }
 
     fn json(&self) -> String {
+        // A module that handles errors has a statement table, whose rows
+        // are code's lines: its instructions say theirs.
+        let lined = self.debugging() || (self.options.error_lines && self.functions.iter().any(|one| one.error_handler.is_some()));
         let mut out = String::new();
         write!(
             out,
@@ -9527,7 +9542,7 @@ impl Compiler {
                     if instruction.nowrap {
                         out.push_str(",\"nowrap\":true");
                     }
-                    let line = self.source.as_ref().and_then(|one| one.lines.get(instruction.line.wrapping_sub(1))).copied().unwrap_or(0);
+                    let line = if lined { self.main_line(instruction.line) } else { 0 };
                     if line != 0 {
                         write!(out, ",\"line\":{line}").unwrap();
                     }
@@ -9773,9 +9788,21 @@ impl Compiler {
             type_json(&mut out, type_);
         }
         out.push(']');
-        if self.source.is_some() {
+        if self.debugging() {
             out.push_str(",\"debug\":");
             out.push_str(&llrm_hir::codec::debug_json(self.debug.built()));
+        }
+        // The statement table's lines: each main-file line's BASIC number.
+        let numbers: BTreeMap<usize, u16> = self.numbered_lines.iter().map(|(&line, &number)| (self.main_line(line), number)).filter(|&(line, number)| line > 0 && number > 0).collect();
+        if self.options.error_lines && !numbers.is_empty() {
+            out.push_str(",\"line_numbers\":[");
+            for (index, (line, number)) in numbers.iter().enumerate() {
+                if index != 0 {
+                    out.push(',');
+                }
+                write!(out, "[{line},{number}]").unwrap();
+            }
+            out.push(']');
         }
         write!(
             out,

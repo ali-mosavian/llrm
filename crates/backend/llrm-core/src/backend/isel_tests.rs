@@ -2954,9 +2954,16 @@ fn test_dbg_lines_become_linnum() {
     let instructions = function.layout().iter().flat_map(|&block| function.block(block).instructions());
     let attached = instructions.filter(|&&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
     assert_eq!(attached, 3, "the fixture carries its lines");
-    let assembled = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
-    let object = crate::backend::omfwrite::written_as(&assembled, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
-    let records = llrm_omf::omf::parse(&object).expect("parses");
+    let mut assembled = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
+    let records = |assembled: &crate::backend::masm::Module| {
+        let object = crate::backend::omfwrite::written_as(assembled, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+        llrm_omf::omf::parse(&object).expect("parses")
+    };
+    // Lines alone are a BASIC statement table's, not -g.
+    assert!(!records(&assembled).iter().any(|one| one.r#type == llrm_omf::omf::LINNUM));
+    let flavor = llrm_omf::cvwrite::Flavor { qb45: false };
+    assembled.debug = Some(crate::backend::codeview::Debug { flavor, types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
+    let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == llrm_omf::omf::LINNUM).flat_map(|one| llrm_omf::omf::lines(one).1).collect();
     // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
     assert_eq!(lines, [(7, 0), (8, 9)]);

@@ -205,8 +205,9 @@ pub enum Item {
 /// `-g`: a place in the code a debugger is told of.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mark {
-    /// The code after it is this source line's.
-    Line(u32),
+    /// The code after it is this source line's: the procedure's `index`th
+    /// line, where [`line_label`] names it.
+    Line { line: u32, index: u32 },
     /// The procedure's own code starts, its prologue done: the first code
     /// of a source line.
     BodyStart,
@@ -371,7 +372,9 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
     let last = lined().filter(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Return)).last();
     // The prologue is the first line's, not the previous procedure's last.
     let mut line = first.and_then(|one| one.line);
-    let mut out: Vec<Item> = line.map(|one| Item::Mark(Mark::Line(one))).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
+    let mut lines = 0..;
+    let mut marked = |line: u32| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
+    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
@@ -391,7 +394,7 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
             };
             if one.line.is_some() && one.line != line {
                 line = one.line;
-                out.extend(line.map(|one| Item::Mark(Mark::Line(one))));
+                out.extend(line.map(&mut marked));
             }
             match what.op {
                 Operation::Move if _segment(&what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
@@ -471,6 +474,23 @@ pub fn _fallthrough_jump(block: &lir::LirBlock, following: Option<i64>) -> Optio
         return None;
     }
     Some(last)
+}
+
+/// The procedure numbered `number`'s `index`th line mark's symbol.
+pub fn line_label(number: usize, index: u32) -> String {
+    format!("L{number}_line{index}")
+}
+
+/// The procedure numbered `number`'s lines as its listing marks them: each
+/// one's symbol and source line, in order.
+pub fn line_starts(procedure: &Procedure, number: usize) -> Result<Vec<(String, u32)>, Unprintable> {
+    Ok(listing(procedure, number)?
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Mark(Mark::Line { line, index }) => Some((line_label(number, index), line)),
+            _ => None,
+        })
+        .collect())
 }
 
 pub fn label(number: usize, at: i64) -> String {

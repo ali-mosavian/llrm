@@ -2595,7 +2595,8 @@ fn erl_outside_the_handler_is_the_line_the_handler_took() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     let body = text.split("define ").find(|one| one.contains("void @__main()")).expect("the body");
-    assert!(body.contains("load i16, ptr @$QB$ERL\n"), "{body}");
+    // Lined, as a module handling errors is: `, !dbg`.
+    assert!(body.contains("load i16, ptr @$QB$ERL\n") || body.contains("load i16, ptr @$QB$ERL, !dbg"), "{body}");
 }
 
 /// DEF SEG stored to a b$seg the rich route defined in the module's own
@@ -2896,4 +2897,56 @@ fn positional_data_drops_the_markers_abi_too() {
     let path = written(&directory, "data.bas", b"READ a\nPRINT a\nEND\nDATA 1\n");
     let program = super::compile::_positional_data(&parsed_as(&path, "qb45", "qb45")).expect("lays DATA out");
     llrm_core::hir::codec::encode(&program, None).expect("encodes");
+}
+
+/// The statement table's rows of `listing`: each label and BASIC line.
+fn statement_rows(listing: &str) -> Vec<(String, u16)> {
+    let table = between(listing, "$QB$STAT proc", "$QB$STAT endp");
+    let lines: Vec<&str> = table.lines().map(str::trim).collect();
+    lines
+        .windows(2)
+        .filter_map(|pair| {
+            let label = pair[0].strip_prefix("dw offset ")?;
+            let bytes: Vec<u8> = pair[1].strip_prefix("db ")?.split(',').map(|one| u8::from_str_radix(one.trim_end_matches('h'), 16).expect("a byte")).collect();
+            Some((label.to_owned(), u16::from_le_bytes([bytes[0], bytes[1]])))
+        })
+        .collect()
+}
+
+/// The lines the outlined handler's rows state.
+fn handler_lines(program: &llrm_core::hir::model::Program) -> Vec<u16> {
+    let listing = rich_listing(program);
+    // Premise: the handler is its own procedure, assembled second.
+    assert!(listing.contains("__main$handler proc"), "{listing}");
+    statement_rows(&listing).into_iter().filter(|(label, _)| label.starts_with("L1_")).map(|(_, line)| line).collect()
+}
+
+/// Under `--error-lines`, an error in the outlined module handler (`110
+/// ERROR 7`, or its end without RESUME) reported "in line 0": the handler
+/// had only its line-0 entry row. BC reports lines 110 and 100. Off by
+/// default: the rows cost 4 bytes a line.
+#[test]
+fn an_error_in_the_outlined_handler_reports_its_line() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let raising = "10 ON ERROR GOTO 100\n20 ERROR 5\n30 END\n100 PRINT \"h\"; ERR\n110 ERROR 7\n";
+    let unresumed = "10 ON ERROR GOTO 100\n20 ERROR 5\n30 END\n100 PRINT \"h\"; ERR\n";
+    for (source, lines) in [(raising, vec![100, 110]), (unresumed, vec![100])] {
+        let path = written(&directory, "handler.bas", source.as_bytes());
+        for runtime in ["qb45", "pds71", "vbdos"] {
+            let lined = qb_driver::Frontend { error_lines: true, ..qb_driver::Frontend::new(runtime, runtime) };
+            let found = handler_lines(&qb_driver::parsed(&path, &lined, None).expect("parses"));
+            assert!(lines.iter().all(|one| found.contains(one)), "{runtime}: {found:?}");
+            assert_eq!(handler_lines(&parsed_as(&path, runtime, runtime)), [0], "{runtime}: off by default");
+        }
+    }
+}
+
+/// The same, pinned at the backend's input.
+#[test]
+fn an_outlined_handler_takes_a_row_per_line() {
+    let program = qb_driver::decoded(include_str!("fixtures/outlined_handler_lines.json")).expect("decodes");
+    // Premise: the frontend states each line's BASIC number.
+    assert!(program.modules[0].line_numbers.contains(&(5, 110)));
+    let found = handler_lines(&program);
+    assert!(found.contains(&100) && found.contains(&110), "{found:?}");
 }
