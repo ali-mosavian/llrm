@@ -30,6 +30,8 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **Refactoring one fact into one place changed its answer.** df89fc8a made liveness, regthrash and machinedce ask one `effect` per instruction — the right shape — but the shared answer carried the narrowest caller's assumption about calls. When facts merge, check each former caller's fallback, not only the common case.
 
+**A port was an unknown callee.** An OUT to a port that reaches memory was modelled as a call to an unknown function, which writes only what escaped, so a DMA write could not touch a global whose address was never taken. Nothing moved a load past it until loops were hoisted after rotation. Guard: such a port reads and writes every object, with a test.
+
 **A parameter nobody read.** `ranges::constants` took the data group, but `consts::known` reads it only when calls are also given, and they never were. Hoist passing `None` and loop motion passing the group got the same answer, which the plan took for two derivations of one fact. Guard: the parameter is gone from `constants` and the functions that only forwarded it.
 
 ## Pass order and interaction
