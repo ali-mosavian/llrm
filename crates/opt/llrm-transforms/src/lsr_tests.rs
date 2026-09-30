@@ -1187,3 +1187,32 @@ fn test_a_stride_counted_to_zero_takes_its_start_at_the_target_s_multiply() {
     assert_eq!(results(&parsed(&printed), trips), results(&before, trips), "{printed}");
     assert_eq!(counters(&printed), 1, "{printed}");
 }
+
+/// `while (a[i] != 0) i++` and the count `i` after it, over words: no
+/// counted exit, so no bound on the trips but the access's own.
+const WORDLEN: &str = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %p = getelementptr inbounds i16, ptr @a, i16 %i
+  %v = load i16, ptr %p
+  %go = icmp ne i16 %v, 0
+  br i1 %go, label %l2, label %l3
+
+l2:
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  ret i16 %i
+";
+
+/// A count read after a loop of no counted exit is its address counter
+/// halved, where an in-bounds access bounds the trips: `wordlen` kept `i`
+/// beside the byte offset, two counters to loop-corpus's one.
+#[test]
+fn test_a_count_after_a_loop_of_no_counted_exit_shares_its_address_counter() {
+    let printed = same(&program(&[("a", "i16", 2)], "i16", WORDLEN), &[&[0, 0], &[0, 7], &[0, 14], &[0, 21]]);
+    assert_eq!(counters(&printed), 1, "{printed}");
+    assert!(!printed.contains(", 0\n") || !printed.contains("sub i16 %lsr"), "a distance from a start of zero is the counter: {printed}");
+}

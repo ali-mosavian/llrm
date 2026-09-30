@@ -316,7 +316,8 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
     let alive = _alive(function, loop_, &sites);
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
-    let most = exit.as_ref().map(|exit| exit.most.clone());
+    // The most backedges: the counted exit's, or what an in-bounds access allows.
+    let most = exit.as_ref().map(|exit| exit.most.clone()).or_else(|| induction::inbounds_backedges(view, loop_));
     let fits = sites.iter().map(|site| candidates.iter().enumerate().map(|(index, one)| _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys)).collect()).collect();
     let exits = candidates.iter().map(|one| exit.as_ref().and_then(|exit| _exit_price(target, exit, one, &mut keys))).collect();
     let problem = Problem {
@@ -1358,9 +1359,14 @@ fn _realized(
     let (register, pointer) = match &fit.trip {
         Some((shift, down, inverse)) => {
             let (shift, down) = (*shift, *down);
-            let start = expander.int(context, function, &candidate.of.start);
-            let distance = if down { vec![start, register] } else { vec![register, start] };
-            let mut trip = expand::placed(context, function, Opcode::Binary(BinaryOp::Sub), int, distance, at);
+            let mut trip = if candidate.of.start.is_zero() && !down {
+                // The distance from a start of zero is the counter.
+                register
+            } else {
+                let start = expander.int(context, function, &candidate.of.start);
+                let distance = if down { vec![start, register] } else { vec![register, start] };
+                expand::placed(context, function, Opcode::Binary(BinaryOp::Sub), int, distance, at)
+            };
             if shift != 0 {
                 let by = counting::constant(context, &BigInt::from(shift), width);
                 trip = expand::placed(context, function, Opcode::Binary(BinaryOp::LShr), int, vec![trip, by], at);

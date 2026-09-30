@@ -1271,7 +1271,7 @@ fn _unit_maximum(
     promised: bool,
 ) -> Option<BigInt> {
     // Both bound the trips; keep the tighter.
-    let bounded = if inbounds { _inbounds_trips(unit, loop_, *loop_.latches.first().expect("one latch")) } else { None };
+    let bounded = if inbounds { inbounds_backedges(unit, loop_) } else { None };
     if test == IntPredicate::Ne {
         return Some((BigInt::from(1) << width) - 1).into_iter().chain(bounded).min();
     }
@@ -1329,26 +1329,27 @@ pub fn advances(unit: &Unit, loop_: &Loop) -> IndexMap<ValueId, BigInt> {
     out.into_iter().filter(|(_, step)| *step != BigInt::from(0)).collect()
 }
 
-/// The most iterations an access made every iteration allows, as LLVM's inbounds does.
+/// The most backedges a loop takes that an access made every trip allows,
+/// as LLVM's inbounds does, whatever ends the loop.
 ///
 /// Iteration i reaches `b + i*s` inside one object, and an index `w` bits
 /// wide addresses at most 2**w bytes of it, so i*s + width <= 2**w. Only
 /// an access through `inbounds` GEPs is promised that.
-fn _inbounds_trips(unit: &Unit, loop_: &Loop, latch: i64) -> Option<BigInt> {
+pub fn inbounds_backedges(unit: &Unit, loop_: &Loop) -> Option<BigInt> {
     let step = advances(unit, loop_);
     let shape = unit.shape();
+    let latch = *loop_.latches.first()?;
     loop_
         .body
         .iter()
-        // The header also runs the final, failing test: n + 1 times.
-        .filter(|at| shape.dominance.dominates(**at, latch) && **at != loop_.header)
-        .flat_map(|&at| unit.function.block(cfg::block(at)).instructions())
-        .filter_map(|&inst| MemRef::of(unit, inst))
-        .filter(|reference| reference.inbounds)
-        .filter_map(|reference| {
+        .filter(|at| shape.dominance.dominates(**at, latch))
+        .flat_map(|&at| unit.function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
+        .filter_map(|(at, inst)| Some((at, MemRef::of(unit, inst)?)))
+        .filter(|(_, reference)| reference.inbounds)
+        .filter_map(|(at, reference)| {
             let advance = step.get(&reference.base?)? * reference.scale;
-            (advance != BigInt::from(0))
-                .then(|| ((BigInt::from(1) << reference.index_bits) - reference.width) / abs(&advance) + 1)
+            // The access runs at least once a backedge, and the header once more.
+            (advance != BigInt::from(0)).then(|| ((BigInt::from(1) << reference.index_bits) - reference.width) / abs(&advance) + 1 - BigInt::from(u8::from(at == loop_.header)))
         })
         .min()
 }
