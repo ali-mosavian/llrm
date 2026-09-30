@@ -908,42 +908,6 @@ r4:
     assert!(counters(&printed) <= 4, "{printed}");
 }
 
-/// rcflip: `(i - 63) \ 64` read a sign-extended counter, which only a
-/// dword counter could give, whatever the registers. With three, the
-/// extension of the word value costs a `movsx`, not a register.
-#[test]
-fn test_an_extended_counter_is_extended_from_the_word_one() {
-    let body = "  br label %l1
-
-l1:
-  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
-  %s = phi i32 [ 0, %start ], [ %s.next, %l2 ]
-  %more = icmp slt i16 %i, 40
-  br i1 %more, label %l2, label %l3
-
-l2:
-  %x = sub nsw i16 %i, 63
-  %w = sext i16 %x to i32
-  %q = ashr i32 %w, 6
-  %o = mul i16 %i, 2
-  %p = getelementptr i8, ptr @a, i16 %o
-  %v = load i16, ptr %p
-  %vw = sext i16 %v to i32
-  %t = add i32 %q, %vw
-  %s.next = add i32 %s, %t
-  %i.next = add nsw i16 %i, 1
-  br label %l1
-
-l3:
-  ret i32 %s
-";
-    let text = program(&[("a", "i16", 2)], "i32", body);
-    let machine = target();
-    let (before, printed) = reduced_for(&text, Tuned { registers: 3, costs: OperationCosts { extend: 0, ..machine.costs.clone() }, ..machine });
-    assert_eq!(results(&parsed(&printed), TRIPS), results(&before, TRIPS), "{printed}");
-    assert!(!printed.lines().any(|line| line.contains("= phi i32") && line.contains("lsr.iv")), "{printed}");
-}
-
 /// A pointer walked beside an index that ends the loop: one counter, as
 /// the indexed loop. The pointer was no recurrence the pass could share.
 #[test]

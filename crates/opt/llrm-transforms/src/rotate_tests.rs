@@ -11,7 +11,6 @@
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::module::{Function, Module, Operand};
-use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 
 use super::Rotate;
 use crate::peel::Peel;
@@ -41,32 +40,6 @@ b2:
 b3:
   %r = add i16 %acc, %i
   ret i16 %r
-}}
-"
-    )
-}
-
-/// `%acc` tripled `%n` times, the counter read by nothing else, and the
-/// exit reading it through `leave` (`""` or an LCSSA phi).
-fn dead_counter(test: &str, leave: &str, result: &str) -> String {
-    format!(
-        "define i16 @f(i16 %x, i16 %n) {{
-b0:
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
-  %acc = phi i16 [ %x, %b0 ], [ %sum, %b2 ]
-  %go = icmp {test} i16 %i, %n
-  br i1 %go, label %b2, label %b3
-
-b2:
-  %sum = mul i16 %acc, 3
-  %next = add i16 %i, 1
-  br label %b1
-
-b3:
-{leave}  ret i16 {result}
 }}
 "
     )

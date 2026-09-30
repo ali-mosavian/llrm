@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{BlockId, Function, Instruction, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
 use llrm_support::hash::HashMap;
@@ -105,6 +105,26 @@ pub fn pressure_of(function: &Function, found: Option<&Liveness>, inside: Option
         }
     }
     peak
+}
+
+/// How many values `counted` says are live before each instruction of
+/// `block` but its phis, in order.
+pub fn pressure_points(function: &Function, found: &Liveness, block: BlockId, counted: &dyn Fn(ValueId) -> bool) -> Vec<(InstId, usize)> {
+    let mut alive = found.live_out[&id(block)].clone();
+    let mut points = Vec::new();
+    for &inst in function.block(block).instructions().iter().rev() {
+        let op = function.instruction(inst);
+        if is_phi(op) {
+            continue;
+        }
+        if let Some(one) = op.result {
+            alive.remove(&one);
+        }
+        alive.extend(reads(op));
+        points.push((inst, alive.iter().filter(|&&one| counted(one)).count()));
+    }
+    points.reverse();
+    points
 }
 
 /// The edge operands of phis whose results are actually live.
