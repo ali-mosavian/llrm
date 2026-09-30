@@ -2648,14 +2648,15 @@ mod tests {
 
     #[test]
     fn test_vbdos_string_conversion_keeps_unproved_effects() {
-        for symbol in ["B$STR4", "B$STR8"] {
+        for (symbol, cleanup) in [("B$STR4", 4), ("B$STR8", 8)] {
             let rule = one(symbol, "vbdos");
             assert_eq!(rule.inputs, Some(gp()));
             assert_eq!(rule.cleanup, None);
             assert_eq!(rule.clobbers, *EVERY);
             assert!(rule.reads == Memory::Any && rule.writes == Memory::Any);
             assert!(rule.control == Control::Unknown && rule.raises_error);
-            assert_eq!(one(symbol, "qb45").inputs, None);
+            // QB 4.5's is read from its source: rt/stringfp.asm pops the argument.
+            assert_eq!(one(symbol, "qb45").cleanup, Some(cleanup));
         }
     }
 

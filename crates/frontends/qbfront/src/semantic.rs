@@ -2279,6 +2279,7 @@ impl Compiler {
         if loop_keyword(self.dialect, &declaration.name) {
             return self.fail(format!("{} is reserved", declaration.name));
         }
+        self.refuse_keyword(&declaration.name)?;
         let key = self.declaration_key(declaration)?;
         let (source, span) = (declaration.name.clone(), declaration.span);
         if storage == "module" && declaration.shared {
@@ -2957,7 +2958,7 @@ impl Compiler {
                         name, arguments, ..
                     } = target
                     {
-                        if intrinsics::find(canonical(name), self.dialect)
+                        if self.intrinsic(name)
                             .is_some_and(|intrinsic| intrinsic.lowering == Lowering::Mid)
                         {
                             self.mid_assignment(arguments, value)?;
@@ -5491,7 +5492,7 @@ impl Compiler {
         let descriptor_result = match source {
             Expr::Name(name, _) => self.bare_function_type(name) == Some(STRING),
             Expr::Apply { name, .. } => {
-                intrinsics::find(canonical(name), self.dialect)
+                self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.result == ResultClass::String)
                     || self
                         .signatures
@@ -5672,7 +5673,7 @@ impl Compiler {
             return self.string_descriptor(operand);
         }
         if let Expr::Name(name, _) = expression {
-            if let Some(intrinsic) = intrinsics::find(canonical(name), self.dialect) {
+            if let Some(intrinsic) = self.intrinsic(name) {
                 if intrinsic.accepts(0) {
                     if let Lowering::RuntimeString(callee) = intrinsic.lowering {
                         let pointer_type = self.pointer_type(STRING);
@@ -5682,7 +5683,7 @@ impl Compiler {
                     }
                 }
             }
-            if intrinsics::find(canonical(name), self.dialect)
+            if self.intrinsic(name)
                 .is_some_and(|intrinsic| intrinsic.lowering == Lowering::CommandLine)
             {
                 let pointer_type = self.pointer_type(STRING);
@@ -5717,8 +5718,8 @@ impl Compiler {
             name, arguments, ..
         } = expression
         {
+            let intrinsic = self.intrinsic(name);
             let name = canonical(name);
-            let intrinsic = intrinsics::find(name, self.dialect);
             if let Some(intrinsic) = intrinsic {
                 if !intrinsic.accepts(arguments.len()) {
                     return self.fail(format!(
@@ -5949,13 +5950,13 @@ impl Compiler {
         // special case.
         let lvalue = match expression {
             Expr::Name(name, _)
-                if intrinsics::find(canonical(name), self.dialect).is_none()
+                if self.intrinsic(name).is_none()
                     && !self.signatures.contains_key(canonical(name)) =>
             {
                 Some(self.destination(expression)?)
             }
             Expr::Apply { name, .. }
-                if intrinsics::find(canonical(name), self.dialect).is_none()
+                if self.intrinsic(name).is_none()
                     && !self.signatures.contains_key(canonical(name))
                     && self.variables.contains_key(&self.array_key(name)) =>
             {
@@ -6055,7 +6056,7 @@ impl Compiler {
                 self.fail("string expressions are runtime-only and not attached yet")
             }
             Expr::Name(name, _) => {
-                if intrinsics::find(canonical(name), self.dialect)
+                if self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.accepts(0))
                 {
                     return self.builtin(name, &[])?.ok_or_else(|| SemanticError {
@@ -6836,10 +6837,10 @@ impl Compiler {
         name: &str,
         arguments: &[Expr],
     ) -> Result<Option<(Operand, u32)>, SemanticError> {
-        let name = canonical(name);
-        let Some(intrinsic) = intrinsics::find(name, self.dialect) else {
+        let Some(intrinsic) = self.intrinsic(name) else {
             return Ok(None);
         };
+        let name = canonical(name);
         if !intrinsic.accepts(arguments.len()) {
             return self.fail(format!(
                 "{name} expects {}",
@@ -6886,9 +6887,14 @@ impl Compiler {
             let result = self.array_bound(descriptor, dimension, upper)?;
             return Ok(Some((result, INTEGER)));
         }
-        if intrinsic.lowering == Lowering::FreeFile {
+        if let Lowering::RuntimeInteger(routine) = intrinsic.lowering {
+            let mut operands = Vec::new();
+            for argument in arguments {
+                let (operand, type_id) = self.expression(argument)?;
+                operands.push(self.convert(operand, type_id, INTEGER)?);
+            }
             let result = self.value(INTEGER);
-            self.emit_runtime_call("B$FREF", vec![result], Vec::new());
+            self.emit_runtime_call(routine, vec![result], operands);
             return Ok(Some((Operand::Value(result), INTEGER)));
         }
         if intrinsic.lowering == Lowering::HeapFree {
@@ -7387,7 +7393,7 @@ impl Compiler {
                 matches!(
                     &arguments[0],
                     Expr::Apply { name, .. }
-                        if intrinsics::find(canonical(name), self.dialect)
+                        if self.intrinsic(name)
                             .is_some_and(|intrinsic| intrinsic.result == ResultClass::String)
                 ) || matches!(&arguments[0], Expr::Literal(Literal::String(_), _))
                     || (self.place_syntax_type(&arguments[0]).is_none()
@@ -7517,13 +7523,6 @@ impl Compiler {
                 }],
             );
             return Ok(Some((Operand::Value(result), DOUBLE)));
-        }
-        if intrinsic.lowering == Lowering::Eof {
-            let (file, file_type) = self.expression(&arguments[0])?;
-            let file = self.convert(file, file_type, INTEGER)?;
-            let result = self.value(INTEGER);
-            self.emit_runtime_call("B$FEOF", vec![result], vec![file]);
-            return Ok(Some((Operand::Value(result), INTEGER)));
         }
         self.fail(format!(
             "intrinsic {name} has no semantic lowering for {:?}",
@@ -8276,7 +8275,7 @@ impl Compiler {
         match expression {
             Expr::Literal(Literal::String(_), _) => true,
             Expr::Name(name, _)
-                if intrinsics::find(canonical(name), self.dialect)
+                if self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.result == ResultClass::String) =>
             {
                 true
@@ -8284,7 +8283,7 @@ impl Compiler {
             Expr::Name(name, _) if suffix(name) == Some(TypeName::String) => true,
             Expr::Name(name, _) => self.bare_function_type(name) == Some(STRING),
             Expr::Apply { name, .. }
-                if intrinsics::find(canonical(name), self.dialect)
+                if self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.result == ResultClass::String) =>
             {
                 true
@@ -8669,11 +8668,33 @@ impl Compiler {
     fn array(&self, name: &str) -> Result<Variable, SemanticError> {
         match self.variables.get(&self.array_key(name)) {
             Some(variable) => Ok(variable.clone()),
-            None => self.fail(format!("{name} is not an array")),
+            None => {
+                self.refuse_keyword(name)?;
+                self.fail(format!("{name} is not an array"))
+            }
         }
     }
 
+    /// The intrinsic `name` names, as spelled; none for a keyword the table
+    /// lacks, so it is refused rather than read as another's.
+    fn intrinsic(&self, name: &str) -> Option<&'static intrinsics::Intrinsic> {
+        if intrinsics::unsupported(name, self.dialect) {
+            return None;
+        }
+        intrinsics::find(canonical(name), self.dialect)
+    }
+
+    /// Refuses a function keyword the table lacks: read as a variable, it
+    /// compiled silently to 0 or an empty string (#78).
+    fn refuse_keyword(&self, name: &str) -> Result<(), SemanticError> {
+        if intrinsics::unsupported(name, self.dialect) {
+            return self.fail(format!("{name} is not supported"));
+        }
+        Ok(())
+    }
+
     fn variable(&mut self, name: &str) -> Result<Variable, SemanticError> {
+        self.refuse_keyword(name)?;
         let key = self.variable_key(name);
         if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
