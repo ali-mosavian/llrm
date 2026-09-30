@@ -4,6 +4,14 @@ Source: Open Watcom v2 commit `703e1ae2f`, the commit `toolchain/owshim/build.sh
 
 Aim: the facts Open Watcom's front end gives its back end, so that every llrm frontend can state the same facts in HIR (rule 7).
 
+## Headlines
+
+- Open Watcom's front end gives its back end few language promises. The ones the back end uses to optimise harder: call class (`NO_MEMORY_READ/CHANGED`, `ABORTS`, `NORETURN`), `FE_CONSTANT` and read-only segments, `FE_VOLATILE`, exact aggregate sizes, the unroll count, signedness in the type (§1, "Facts that enable optimisation").
+- It sends no `restrict`, no pointee `const`, no address-taken for `&x`, no purity beyond `#pragma aux nomemory`, no ranges. `FE_NOALIAS` and `CG_SYM_CONSTANT` exist in the interface and the C front end never sets them.
+- Of what it does send, `llrm-c` drops the call-class bits `noreturn`, `aborts` and `nomemory`, the `__unaligned` mark, the option switches (`-oa`, `-ol`, `-ot`), and `modify` register lists; it refuses bit fields, `#pragma aux` register parameters and `__based` (§6).
+- Quick BASIC drops `published`, so a BYREF polling loop compiles to an infinite loop on the default route (§7). Nib sends no pointer promises.
+- The proposal (§8): effects on the callable, pointer promises with `nocapture`/`nonnull`, `published` as ordered access, `nowrap`/`nuw` on counters, `range`, then the rest. Carriers nothing reads today (`range`, `nonnull`, unroll, `inline`) need a reader first.
+
 ## 1. Interface inventory
 
 ### CG expression calls
@@ -2481,6 +2489,229 @@ L1_3:
 
 The load is outside the loop; the loop never reads `x` again. `--legacy` reloads: `L1_2: cmp word ptr [bx], 0` / `je L1_2`. `MIRH` never reads `published` (finding 9 below).
 
+### HIR and MIR: carriers and who reads them
+
+Prefixes here: H = `crates/ir/llrm-hir/src`, M = `crates/ir/llrm-mir/src`, A = `crates/opt/llrm-analysis/src`, T = `crates/opt/llrm-transforms/src`, B = `crates/backend/llrm-core/src`. The live pipeline is `B/driver/mod.rs:optimized:99-101` into `T/pipeline.rs:pipeline:165-195`; `M/transforms/*` is called only from tests.
+
+#### HIR fields that state a fact
+
+| Field | Line | Meaning |
+|---|---|---|
+| `Type.signed` | 168 | signedness; picks sext/zext, signed/unsigned predicates |
+| `Type.kind/width/evaluation` | 166,167,169 | representation, float format |
+| `Type.element/rank/bounds` | 170-172 | array element, dimension bounds (index range) |
+| `Type.address` | 173 | near/far/huge/code/segment pointer class |
+| `Place.storage` | 225 | local/parameter/static/module/common/external |
+| `Place.extent` | 228 | bytes of the place, overrides type width |
+| `Place.address` | 229 | placement class |
+| `Place.volatile` | 230 | ordered access |
+| `IndirectPlace.volatile` | 299 | ordered access |
+| `IndirectPlace.published` | 303 | another agent may write pointee; ordered like volatile, one read may end a loop |
+| `IndirectPlace.inbounds` | 305 | access stays inside one object |
+| `IndirectPlace.origin` | 310 | value holding object's first-byte offset; object ends in its segment |
+| `IndirectPlace.allocation` | 313 | descriptor place owning the far allocation; disjoint from every place |
+| `DescriptorPlace` | 322-324 | no volatile/inbounds field |
+| `Instruction.pure` | 471 | call is pure |
+| `Instruction.nowrap` | 474 | signed result fits its width |
+| `Instruction.inbounds` | 476 | PTR_OFFSET result stays in its object |
+| `Instruction.line` | 478 | source line |
+| `Instruction.callee` | 470 | direct callee name |
+| `Asm.memory/clobbers/inputs/outputs` | 461,459,455,457 | inline asm effects |
+| `Terminator.kind = Unreachable` | 494 | control stops |
+| `Block.cold` | 517 | frontend expects it never to run |
+| `CallAbi.cleanup/distance/float_return/order/callee` | 530-533,529 | per-call ABI |
+| `CallAbi.promises` / `ArgumentPromise.bytes` | 534 / 543 | callee writes first `bytes` before reading, reads none, keeps none |
+| `Callable.by_value/segmented/arrays/defined/symbol` | 553-558 | callee signature facts |
+| `ProcedureAbi.cleanup/distance/parameter_bytes/float_return/variadic` | 563-568 | function ABI |
+| `Function.linkage` | 617 | internal/external |
+| `Function.promises` / `Promise.{bytes,unaliased,readonly}` | 618 / 697-700 | `dereferenceable(bytes)`, `noalias`, `readonly` on a pointer parameter |
+| `Function.error_handler/_local/external_entries` | 614-616 | ON ERROR handling, RESUME entries |
+| `Function.symbol` | 620 | link name |
+| `DataObject.readonly` | 750 | constant data |
+| `DataObject.linkage` | 752 (`DataLinkage` 206-212) | internal/external/exported/private |
+| `DataObject.address/addressed/segment/align` | 755,758,760,761 | placement; `addressed=false`: only a named reference reaches it |
+| `DataRelocation.code` | 742 | target is code |
+| `AliasClass.name/parent/types` | 786-788 | TBAA class tree |
+| `Module.debug` (`Debug*` structs) | 801 (628-691) | -g types, functions, variables, globals |
+| `Module.line_numbers` / statement table | 804 / 813-826 | BASIC lines, RESUME targets |
+| `RuntimePromises.calling_back/writers/nounwind/reads_arguments` | 863,865,867,870 | runtime routines: run program code, cells written, raise no error, only read pointer args |
+| `Program.zeroed_locals/frames` | 912,913 | frame starts zeroed |
+| `Program.entries/preserved/constant_segment` | 917,920,923 | outside entry points, preserved regs, constants segment |
+| `Program.array_order/float_mode/float_semantics/target` | 907-909,906 | language modes |
+
+No HIR field exists for: noreturn, nonnull, value range, per-access alignment, trip count, EH cleanup, per-call attributes beyond `promises`/`pure`.
+
+#### MIR carriers the parser accepts
+
+| Carrier | Accepted values | Cite |
+|---|---|---|
+| Flag attributes (function, param, return, call-site) | alwaysinline builtin cold convergent dead_on_unwind hot immarg inreg minsize mustprogress naked nest noalias nobuiltin nocallback nocapture nofree noinline nomerge nonnull norecurse noreturn nosync noundef nounwind optnone optsize readnone readonly returned returns_twice signext speculatable willreturn writable writeonly zeroext | `opcode.rs:FLAG_ATTRIBUTES:277-315`; parse `parse.rs:attributes:564-567`; print `print.rs:attributes:136` |
+| Int attributes | align alignstack dereferenceable dereferenceable_or_null | `opcode.rs:INT_ATTRIBUTES:317`; `parse.rs:568-576`; `print.rs:137-138` |
+| Type attributes | byref byval elementtype inalloca sret | `opcode.rs:TYPE_ATTRIBUTES:319`; `parse.rs:577-583` |
+| `memory(loc: access,...)` | per-location access | `opcode.rs:Attribute::Memory:255`; `parse.rs:595-614` |
+| `range(iN lo, hi)` | half-open range | `opcode.rs:Attribute::Range:257`; `parse.rs:584-594` |
+| `initializes((lo,hi),...)` | bytes written before read | `opcode.rs:Attribute::Initializes:261`; `parse.rs:615-632`; verifier `verify.rs:function:93-106` |
+| String attributes `"k"="v"` | any | `opcode.rs:Attribute::Str:262`; `parse.rs:559-563` |
+| Attribute slots | `Function.attrs/parameter_attrs/return_attrs`; `CallInfo.attrs/argument_attrs/return_attrs` | `module.rs:96-98`; `opcode.rs:336-338`; call site `parse.rs:1447,1451` |
+| Instruction flags | nuw nsw exact disjoint nneg samesign inbounds nusw, fast-math (reassoc nnan ninf nsz arcp contract afn, `fast`) | `opcode.rs:Flags:196-223`; allowed per opcode `parse.rs:1229-1244,1308`; GEP `parse.rs:gep_flags:1167-1178`; print `print.rs:347` |
+| Load/store/alloca | `align`, `volatile`; alloca `address_space` | `opcode.rs:378-380`; `parse.rs:1401,1409` |
+| Global variable | `constant`, `align`, `initializer`, `address_space`, `unnamed_addr` | `module.rs:297,299,313,312`; `parse.rs:418-447` |
+| Linkage | internal private weak weak_odr linkonce linkonce_odr common extern_weak available_externally | `module.rs:LINKAGE:274-284` |
+| Function | `personality`, `calling_convention` (ccc, fastcc, coldcc, x86_stdcallcc, x86_fastcallcc, x86_intrcc, 1000=BASIC), tail/musttail/notail | `module.rs:99,101`; `opcode.rs:CONVENTIONS:343,BASIC:346,X86_INTR:352,Tail:322-328` |
+| Terminators | ret br switch invoke resume unreachable | `opcode.rs:Opcode:366-372` |
+| EH | landingpad cleanup/catch/filter | `opcode.rs:388,Clause:355` |
+| Instruction metadata | any `!kind !N`; kind is an unchecked string | `parse.rs:attachments:969-980`; print `print.rs:448-450`; `module.rs:Instruction.metadata:51` |
+| Named metadata | any `!name = !{...}` | `parse.rs:named_metadata:887-906` |
+| Metadata kinds/names actually used in code | `tbaa`, `dbg`, `var`; `llrm.named`, `llrm.writes`, `llrm.dbg.types/functions/globals` | `M/alias.rs:32`; `H/mir.rs:DEBUG_LINE:250`; `M/debuginfo.rs:VARIABLE:94,TYPES:90-92`; `H/mir.rs:95,118` |
+| Intrinsic declarations get attributes from a table | nocallback nofree nosync nounwind willreturn speculatable, `memory(...)`, param nocapture/writeonly/immarg | `intrinsics.rs:PURE:132,PORT_ATTRS:137,attributes:330-339` |
+| Refused as outside subset | undef fp128 ppc_fp128 half bfloat blockaddress indirectbr dso_local triple | `parse.rs:OUTSIDE_SUBSET:33` |
+| Verifier checks | only `initializes` legality among attributes; no check of flags, other attributes or metadata | `verify.rs:93-106` |
+| Lint (hir-mir binary only) | rejects every flag except GEP `inbounds` | `lint.rs:55-56`; caller `H/bin/hir-mir.rs:28` |
+
+Not in the parser's vocabulary as named carriers: `!llvm.loop`, `!prof`, `!range`, `!nonnull`, `!noalias`, `!alias.scope`, `!invariant.load` are accepted as unchecked strings (`parse.rs:969-980`) and read by no code (grep over `crates/` for each string finds nothing).
+
+#### HIR fact to MIR carrier
+
+| HIR fact | MIR carrier | Cite |
+|---|---|---|
+| `Place.volatile`, `IndirectPlace.volatile` | `load/store volatile` | `untyped_place:1257,1263,1268,1278`; load `1212`; store `1456-1458` |
+| `DescriptorPlace` | never volatile, no tbaa tag | `1284` |
+| `IndirectPlace.published` | dropped | no read in `mir.rs`; only `codec.rs:157,915-926`. Legacy `B/hir/lower.rs:872-906` folds it into `volatile` |
+| `IndirectPlace.inbounds` | GEP `inbounds` | `1278` -> `offset:1361-1368` |
+| `IndirectPlace.origin` | dropped | only HIR check `verify.rs:420`; `A/ranges.rs:9-11` says "the old far origin has no counterpart" |
+| `IndirectPlace.allocation` | `!tbaa` tag "allocation" | `1274-1275`; tags `Tags::new:181-194` |
+| `Place`/array/projected access | `!tbaa` tag "place"; array GEP and projected offsets always `inbounds` | `1257,1263,1268`; `element:1322,1356-1357`; `base:1302` |
+| indirect access proven inside a known `Place.extent` | `!tbaa` tag "place" | `1273,1276`; extent recorded `1482` |
+| `AliasClass` | `!tbaa` type tree; tag only for classes with a parent | `class_tags:200-221`; applied `place:1248-1249`, `tagged:1291-1294` |
+| `Type.bounds` | index minus lower bound, row stride multiply (no range attribute) | `element:1340-1354` |
+| `Instruction.nowrap` | `nsw` on add/sub/mul and on neg (sub 0,x) | `1407`, `1511` |
+| `Instruction.inbounds` (PTR_OFFSET) | GEP `inbounds` | `1546-1547` |
+| `Type.signed` | sext/zext/fptosi/fptoui and signed vs unsigned icmp; byte call args get `signext`/`zeroext` | `1342,1428,1488,1542`; `extensions:1676-1686` |
+| `Instruction.pure` | dropped | no read in `mir.rs`; only `codec.rs:173,967` |
+| `Instruction.line` | `!dbg !{i32 line}` | `line_nodes:253-262`; `lined:1132-1139`; `emit_block:1111-1123` |
+| `Instruction.asm`, `Op::Asm` | not lowered (`other => Err("HIR asm")`) | `1668` |
+| `Terminator::Unreachable` | `unreachable` | `1805` |
+| `Block.cold` | `cold` on every call in the block (call-site attr) | `emit_block:1125-1127`; `mark_cold:1014-1028` |
+| `CallAbi.cleanup/distance` | calling convention number | `convention`; calls `1588,1637,1650` |
+| `CallAbi.promises` | call-site arg attrs `nocapture writeonly initializes((0,bytes))` | `1613-1621` |
+| `ProcedureAbi.variadic` | function type `variadic` | `657-658` |
+| Callee raises no error (`RuntimePromises.nounwind`) | call instead of invoke; `nounwind` on runtime declaration | `1651`; `promised:104,111` |
+| `Function.linkage` | `internal`/external linkage | `659-662` |
+| `Function.promises.unaliased/readonly/bytes` | param `noalias`, `readonly`, `dereferenceable(bytes)` (only when bytes > 0) | `670-678` |
+| `Function.error_handler*`, `Module.line_numbers`, statement table | invoke/landingpad handling, not attributes | `H/mir/handling.rs:452-468`; `mir.rs:373,387-391` |
+| `DataObject.readonly` | `constant` global (when it has a typed layout) | `533` |
+| `DataObject.linkage` | External (External/Exported), Internal, Private | `527-531` |
+| `DataObject.align` | global `align` | `532-533` |
+| `DataObject.address=Far` | `address_space` FAR | `535` |
+| `DataObject.addressed=false` (external) | listed in `!llrm.named` of the runtime module | `runtime:56`, `promised:91-96` |
+| `DataObject.segment`, `Program.constant_segment` | dropped from MIR; `constant_segment` read by the driver | no read in `mir.rs`; `B/driver/mod.rs:61` |
+| `Program.entries` | `Program.exports.entries` (not a MIR attribute) | `B/driver/mod.rs:84`; `M/program.rs:Exports.entries:62` |
+| `Program.preserved` | no MIR carrier; read by the legacy ABI `B/abi/qb.rs:922` | not in `mir.rs` |
+| `RuntimePromises.calling_back/writers` | runtime decl `nocallback` + `!llrm.writes` node | `promised:103,110,112-118` |
+| `RuntimePromises.reads_arguments` | runtime decl `memory(argmem: read)`, pointer params `nocapture` | `promised:120-137` |
+| `Program.zeroed_locals` | `llvm.memset` of aggregate locals | `48`, `723-761`, `1163-1175` |
+| `Module.debug` | `llrm.dbg.*` named metadata, `llvm.dbg.declare` with `!var` | `H/mir/debug.rs:14`; `M/debuginfo.rs:90-94` |
+| `Callable.by_value/segmented/arrays/defined/symbol`, `Function.symbol` | dropped | not read in `mir.rs` |
+| `Type.rank`, `Place.symbol` (beyond data lookup) | dropped / lookup only | `465,741,746,1309` |
+
+#### Consumers
+
+##### Attributes, flags, metadata: carrier, reader, use
+
+| Carrier | Written by | Read by (file:function:line) | What it does |
+|---|---|---|---|
+| param `noalias` | `H/mir.rs:673` | `A/alias.rs:seeds:180-182` | makes the parameter a restrict root |
+| | | `A/memory.rs:Provenance::intersects:319-321` | disjoint restrict roots prove no overlap (reaches GVN, DSE, promote, hoist, loopmotion via `regions::may_alias` `A/regions.rs:212-222`) |
+| | | `M/alias.rs:object:78-81` | `Object::Unaliased`, distinct from every other object (llrm-mir stack only) |
+| | | `M/memory.rs:invariant:221-226` | `noalias readonly` param memory is never written (`transforms/licm.rs:105`, `earlycse.rs:95,118,139`; llrm-mir stack only) |
+| param `readonly` | `H/mir.rs:674`; `T/interprocedural.rs:426` | `M/memory.rs:through:186`, used by `A/alias.rs:_allowed:352-356` | limits what a call does through that argument |
+| | | `M/memory.rs:invariant:226` | see above |
+| param/fn `readnone`, `writeonly` | `T/interprocedural.rs:425,427` | `M/memory.rs:through:185,187` -> `A/alias.rs:_allowed:352-356`, `stated:126` | call effects |
+| param `nocapture` | `H/mir.rs:1618`, `135`; `T/interprocedural.rs:419-420` | `A/alias.rs:_borrowed:381-385` | argument does not escape |
+| | | `M/memory.rs:nocapture:84-87` -> `M/alias.rs:captured:102` | stack slot does not escape (llrm-mir stack only) |
+| call-site `writeonly` | `H/mir.rs:1618` | `M/memory.rs:through:187`, `A/alias.rs:_allowed:354-355` | callee only writes through it |
+| `initializes((0,bytes))` | `H/mir.rs:1618`; `T/interprocedural.rs:435-436` | `A/alias.rs:_fills:704-716`; `A/alias.rs:831-832` | call acts as a fill of those bytes for availability and dead stores |
+| `memory(...)` (fn and call) | intrinsics `intrinsics.rs:337`; `H/mir.rs:132`; `T/ports.rs:24`; `T/interprocedural.rs:489`; `M/transforms/functionattrs.rs:46-48` | `M/memory.rs:at:155-177`, `stated:126`, `located:144`, `inaccessible:150` | call read/write footprint |
+| | | `A/effects.rs:call_effects:38-43`, `unmodeled:46-52` | unmodeled reads/writes of a call |
+| | | `A/memory.rs:unmodeled_write:906`; `A/memoryssa.rs:132,134` | which calls define a memory state (GVN, DSE, LICM, loopmotion, promote through `Accesses`) |
+| | | `T/dead.rs:75`, `T/loopmotion.rs:93`, `T/fill.rs:455` via `M/memory.rs:only_value:115-122` | call removable when touches no memory and returns |
+| | | `B/backend/isel.rs:2368`, `911` via `M/memory.rs:of:201` | selection ordering |
+| | | `T/ports.rs:38` | skip a port call already narrowed |
+| `willreturn` | intrinsics `intrinsics.rs:132,165,186,213,249`; `T/interprocedural.rs:411` | `M/memory.rs:returns:79-81`, `call_returns:230-233` | call may be deleted if unused |
+| | | `A/interprocedural.rs:erasable:336-340`, `stated_pure:322-331` | dead pure-call removal |
+| `nounwind` | `H/mir.rs:111`; runtime; `T/interprocedural.rs:411` | `A/effects.rs:exposes_memory:83`; `A/interprocedural.rs:339` | invoke may unwind to a handler; dead-call removal |
+| | | `B/backend/ehprepare.rs:40,165` | which calls need a landing pad |
+| `nocallback` | `H/mir.rs:110`; intrinsics | `A/globalsaa.rs:calls_back:98-103` | call cannot reach program code, so tracked globals stay private |
+| `noreturn` | `B/backend/ehprepare.rs:204,222`, `bc/llrm-bc/src/runtime.rs:211`; not by `H/mir.rs` | `A/noreturn.rs:terminal_sites:103` | call ends the path; tail cut (`T/interprocedural.rs:303`), hoist (`T/hoist.rs:67`) |
+| `cold` (call site) | `H/mir.rs:1018` | `A/noreturn.rs:cold:117` | marks cold blocks. `noreturn::cold` has no non-test caller (grep); `B/backend/isel.rs:cold:793-814` uses only `unreachable` |
+| `naked` | `B/backend/ehprepare.rs:222` | `B/driver/mod.rs:framed:127` | no frame |
+| `signext` | `H/mir.rs:1685` | `B/backend/isel.rs:2288` | movsx vs movzx of a byte argument |
+| `zeroext` | `H/mir.rs:1685` | none | written, read by nothing |
+| `byval`/`byref`/`inalloca` | parser only | `B/backend/isel.rs:100-101` | refuses the function |
+| `noinline`, `optnone` | parser only | `M/transforms/inline.rs:57` | llrm-mir stack only; `T/inline.rs` reads no attribute |
+| `align(N)` param | parser only | `M/valuetracking.rs:alignment:120-124` | `T/hoist.rs:164` trap check |
+| global `align` | `H/mir.rs:532-533` | `M/valuetracking.rs:alignment:138` | same |
+| `dereferenceable(N)` param | `H/mir.rs:676` | `M/valuetracking.rs:dereferenceable:233-235` | `T/hoist.rs:163`, `M/transforms/licm.rs:104`: load may move without faulting |
+| load/store/alloca `align` | never set by lowering (`M/build.rs:190,194` write `None`) | `M/interpret.rs:434` (alloca) | nothing in the optimizer |
+| global `constant` | `H/mir.rs:533`; `T/globalopt.rs:24` | `A/memory.rs:constant_bits:745` | load folds to initializer bytes |
+| global/function linkage | `H/mir.rs:527-531,659-662` | `M/program.rs:Exports::exported:78-86`; `T/globaldce.rs:45,54-55`; `T/globalopt.rs:42`; `A/alias.rs:_summary:576`; `A/interprocedural.rs:_exact:279-280`; `T/interprocedural.rs:387`; `A/manager.rs:167` | what outside code may reach; which bodies are exact |
+| `Exports.entries` | `B/driver/mod.rs:84` | `M/program.rs:81` | root set |
+| `unnamed_addr` | parser | none (only `T/pipeline.rs:466` sets default) | |
+| global `address_space` | `H/mir.rs:535` | `A/interprocedural.rs:cannot_fault:315` | near static vs far |
+| `personality` | parser | `M/verify.rs:326,396`; `T/globaldce.rs:70`; `B/backend/ehprepare.rs:139` | invoke/landingpad legality |
+| calling convention | `H/mir.rs` via `convention` | `B/backend/isel.rs:115,121,616`; `assemble.rs:78` | ABI |
+| flag `inbounds` (GEP) | `H/mir.rs:1278,1322,1356,1546` | `A/memory.rs:835` -> `Addr.inbounds:612-613,658` | |
+| | | `A/ranges.rs:exact_offsets:530` | offset from an object's start is exact |
+| | | `A/induction.rs:_inbounds_trips:1185` | access bounds the trip count |
+| | | `T/fill.rs:303` | fill stride may not wrap |
+| | | `A/pointerfacts.rs:Offsets::relative:49` | constant offset chain (`A/interprocedural.rs:312`) |
+| flag `nsw`/`nuw` | `H/mir.rs:1407,1511` | `A/induction.rs:_promised:914-916` | recurrence does not wrap, so trip count is exact |
+| | | `M/interpret.rs:525-537,562,629` | poison on overflow (llrm-mir `instcombine.rs:105,141`; tests) |
+| | | cleared: `T/algebraic.rs:528,532,553`; `T/indvars.rs:604-611`; `M/transforms/instcombine.rs:227` | |
+| flags `exact disjoint nneg samesign` | parser only | `M/interpret.rs:546-581,635` | poison semantics; llrm-mir stack and tests only |
+| flags `nusw`, `nuw` on GEP | parser only | none | |
+| fast-math flag `nsz` | parser only | `A/floatfacts.rs:268` | zero sign insignificant in float fold (`T/floatfold.rs`) |
+| other fast-math flags | parser only | none | |
+| `volatile` load/store | `H/mir.rs:1257-1278` | `M/memory.rs:of:207`; `A/memory.rs:unmodeled_write:897`; `A/effects.rs:48`; `A/memoryssa.rs:127-129`; `A/avail.rs:74`; `T/promote.rs:147`; `A/memory.rs:745`; `T/unroll.rs:139`; `T/loopmotion.rs:91`; `A/interprocedural.rs:317`; `T/interprocedural.rs:397-398`; `M/alias.rs:99-100` | ordered, never moved/forwarded/deleted; function gets inaccessible-memory write |
+| `!tbaa` | `H/mir.rs:1293` | `A/memory.rs:typed:881-888` -> `MemRef.typed:611,680` -> `A/regions.rs:typed_apart:150-155` (name inequality only; parents ignored) -> `may_alias:219,240` | GVN, DSE, promote, loopmotion, hoist by way of `Accesses`/`regions` |
+| | | `T/promote.rs:100,315` | cell type class |
+| | | `M/alias.rs:tag:32`, `typed_apart:127-132` (parent chain honoured) | llrm-mir LICM/earlycse only |
+| `!dbg` | `H/mir.rs:1137` | `B/backend/isel.rs:395` | line table |
+| passes | | `M/edit.rs:118` new instructions carry no metadata; `clone_instruction:274` keeps it | `!tbaa`/`!dbg` dropped on rebuilt instructions |
+| `!var`, `llrm.dbg.*` | `M/debuginfo.rs` | `B/backend/isel.rs:381,1321`; `M/program.rs:114` (observed globals kept) | CodeView |
+| `!llrm.named`, `!llrm.writes` | `H/mir.rs:95,118` | `A/globalsaa.rs:promised:126-131` | tracked private cells and their writers |
+| `unreachable` | `H/mir.rs:1805` | `A/noreturn.rs:_ends_cold:136`; `B/backend/isel.rs:cold:801` | block placement |
+| `range(...)` attr | none | none | accepted, written and read by nothing |
+| `nonnull`, `dereferenceable_or_null`, `returned`, `noundef`, `speculatable`, `nofree`, `nosync`, `norecurse`, `mustprogress`, `hot`, `minsize`, `optsize`, `alwaysinline`, `immarg`, `sret`, `elementtype`, `writable`, `alignstack` | `speculatable nofree nosync immarg` by intrinsics table `intrinsics.rs:132-212` | none | grep of quoted names finds no reader |
+| `alias.rs` `Object` logic, `functionattrs`, `inline`, `ipsccp`, `licm`, `earlycse` in `M/` | | | reachable only from `M/transforms_tests.rs` |
+
+##### Written, read by nothing (live pipeline)
+
+- `zeroext`, `range`, `nonnull`, `speculatable`, `nofree`, `nosync`, `unnamed_addr`, GEP `nusw`/`nuw`, non-`nsz` fast-math flags, load/store/alloca `align`.
+- `cold` call attribute: only `noreturn::cold` reads it and that has no non-test caller.
+- HIR fields with no MIR carrier at all: `published`, `origin`, `pure`, `Asm`, `DataObject.segment`, `Callable.by_value/segmented/arrays/defined/symbol`, `Function.symbol`; `Program.preserved` (legacy `B/abi/qb.rs:922` only).
+- `exact disjoint nneg samesign`, `noinline`, `optnone`: read only by the llrm-mir stack (tests).
+
+##### Facts passes re-derive
+
+| Fact | Derived in | How |
+|---|---|---|
+| function memory effects, `nocapture`, readnone/readonly/writeonly per param, `initializes`, `willreturn`, `nounwind` | `T/interprocedural.rs:stamped:376-445` | from `alias::summaries` and body walk; called `T/interprocedural.rs:330` |
+| the same, llrm-mir stack | `M/transforms/functionattrs.rs:36-62` | |
+| noreturn body | `A/noreturn.rs:inferred:45-62`, `fixed:66-79` | greatest fixed point over direct calls; a stated `noreturn` is an input |
+| pure call | `A/interprocedural.rs:stated_pure:322-331`, `erasable:336-340` | needs stated attributes, which `stamped` supplies |
+| cannot fault | `A/interprocedural.rs:cannot_fault:306-318` | frame slot or near static global, non-volatile |
+| nonnull pointer | `A/alias.rs:nonnull:131-139`, `nonnull_by_definition:144-` | from points-to object kind (Frame/Global/External/Named); used by `T/decide.rs:101-105` |
+| pointer capture | `A/alias.rs` summaries (`captures`), `A/alias.rs:_borrowed:381` | no `nocapture` inference for locals outside `stamped` |
+| object bounds for dereferenceable | `M/valuetracking.rs:dereferenceable:222-243` (alloca size, global size, param attr); `A/ranges.rs:inside_object:77-82` (object extent) | |
+| stated alignment only | `M/valuetracking.rs:alignment:112-169` | no derived alignment |
+| integer ranges | `A/ranges.rs` (branch-scoped, counted loops, `:1-11`); `M/valuetracking.rs:sign_bits:17-64` (used by `B/backend/isel/wide.rs:28` only) | no `range` attribute input |
+| loop trip counts | `A/induction.rs` (uses `nsw/nuw` via `_promised:909-919`, inbounds via `:1175-1192`); `T/counting.rs` | no trip-count metadata input |
+| constant loads | `A/memory.rs:constant_bits:740-752` | uses global `constant` |
+| TBAA-like class | `A/memory.rs:typed:881` | reads only the leaf name |
+| port call memory | `T/ports.rs:silent:31-59` | writes `memory(inaccessiblemem: readwrite)` on call |
+| global privacy | `A/globalsaa.rs` | from escape analysis plus `!llrm.named` |
+
 ### What HIR carries and what MIR does with it
 
 | HIR field (MODEL) | MIR carrier (MIRH) | Read by |
@@ -2567,7 +2798,7 @@ Unclear, tried: (1) whether `dse` removes a full-overwrite `memset`: grep only. 
 
 ## 8. Ranked proposal
 
-One schema in HIR, read by every pass (rule 7). Each row is a fact a language states once; none names a machine (rule 5) and none is specific to one frontend (rule 6). Rank is win times how many frontends can state it, from the consumers found in `hir-mir` (§7) and what Open Watcom's back end does with the same fact (§1, "What the Open Watcom back end does with each fact").
+One schema in HIR, read by every pass (rule 7). Each row is a fact a language states once; none names a machine (rule 5) and none is specific to one frontend (rule 6). Rank is win times how many frontends can state it, from the consumers listed in §7 ("Consumers") and what Open Watcom's back end does with the same fact (§1, "What the Open Watcom back end does with each fact").
 
 Open Watcom gives its optimizer few language promises. It sends no `restrict`, no pointee `const`, no address-taken for `&x`, no `FE_NOALIAS`, no ranges and no purity beyond `nomemory`. What it does send and use: call class (`NO_MEMORY_*`, `ABORTS`, `NORETURN`), `FE_CONSTANT` and read-only segments, `FE_VOLATILE`, exact aggregate sizes, the unroll count, and signedness in the type. llrm-c already sends more than it does (`restrict`). So the list below is a superset, not a copy.
 
