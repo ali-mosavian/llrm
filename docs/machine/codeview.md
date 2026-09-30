@@ -253,6 +253,19 @@ it at any time.
 QB 4.5's `STRING * n` record, `0x78`, is an array of `size_bits` bits of
 its element, a char; `cvwrite` writes any array laid out in place with it.
 
+Our `llrm-qb -g` build (left) against BC `/Zi` (right), both stopped at the
+same line. VBDOS's CodeView 4, locals and parameters, then module variables:
+
+![BASIC locals in CodeView 4](codeview/basic-locals-cv4.png)
+![BASIC module variables in CodeView 4](codeview/basic-module-cv4.png)
+
+PDS 7.1's CodeView 3, which evaluates BASIC: arrays and TYPE fields, then
+every local and parameter of the SUB:
+
+![BASIC arrays and TYPEs in CodeView 3](codeview/basic-types-cv3.png)
+![BASIC locals in CodeView 3, first half](codeview/basic-all-a-cv3.png)
+![BASIC locals in CodeView 3, second half](codeview/basic-all-b-cv3.png)
+
 ### C and Nib (`llrm-c -g`, `llrm-nib -g`)
 
 wcc describes C's types and symbols under `-d2`; the recording shim writes
