@@ -9,8 +9,9 @@ use std::collections::HashMap;
 
 use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, signed};
 use crate::datalayout::{DataLayout, float_bits};
+use crate::facts::Facts;
 use crate::intrinsics::Intrinsic;
-use crate::module::{BlockId, Function, GlobalKind, Module, Operand, ValueId};
+use crate::module::{BlockId, Function, GlobalKind, Module, Operand, ValueDef, ValueId};
 use crate::opcode::{BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate, Opcode};
 use crate::types::{FloatKind, Type, TypeId};
 
@@ -50,6 +51,18 @@ pub fn run(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<V
     machine.call(id, arguments)
 }
 
+/// [`run`], with the function's own stated facts checked as it goes: a trap
+/// where a `noalias` parameter's memory is also reached some other way and
+/// one of the accesses writes. The oracle a stated fact is tested against.
+/// Only accesses the function makes itself, through a pointer it can trace
+/// to a parameter, a slot or a global, are compared.
+pub fn run_checked(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<Val> {
+    let mut machine = Machine::new(module, fuel)?;
+    machine.checked = true;
+    let id = module.named(name).ok_or_else(|| Trap::Unsupported(format!("no @{name}")))?;
+    machine.call(id, arguments)
+}
+
 struct Machine<'m> {
     module: &'m Module,
     layout: DataLayout,
@@ -61,6 +74,23 @@ struct Machine<'m> {
     /// NEAR_END, where a 16-bit pointer reaches them; this is their next free
     /// byte, restored when a call returns. Far objects sit above.
     near_top: u64,
+    /// Whether stated facts are checked.
+    checked: bool,
+}
+
+/// What a pointer is traced to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Root {
+    Param(u32),
+    Object(Operand),
+}
+
+/// An access a function made: through what, which bytes, and whether it wrote.
+struct Touch {
+    root: Root,
+    start: u64,
+    end: u64,
+    write: bool,
 }
 
 const NEAR_END: u64 = 0x1_0000;
@@ -73,7 +103,7 @@ impl<'m> Machine<'m> {
         };
         // Address 0 is null; nothing is allocated there.
         let end = NEAR_END as usize;
-        let mut machine = Self { module, layout, memory: vec![0; end], poison: vec![false; end], addresses: HashMap::new(), fuel, near_top: 16 };
+        let mut machine = Self { module, layout, memory: vec![0; end], poison: vec![false; end], addresses: HashMap::new(), fuel, near_top: 16, checked: false };
         for (at, global) in module.globals.iter().enumerate() {
             let (size, align) = match &global.kind {
                 GlobalKind::Variable(variable) => {
@@ -353,7 +383,33 @@ impl<'m> Machine<'m> {
         })
     }
 
+    /// Notes an access of `size` bytes at `address` through `pointer`, and
+    /// traps where it breaks a `noalias` parameter's promise with one before.
+    fn touch(&self, function: &Function, touched: &mut Vec<Touch>, pointer: Operand, address: u64, size: u64, write: bool) -> Run<()> {
+        let (base, _) = crate::valuetracking::underlying(&self.module.context, &self.layout, function, pointer);
+        let root = match base {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Argument(at) => Root::Param(at),
+                ValueDef::Instruction(inst) if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) => Root::Object(base),
+                ValueDef::Instruction(_) => return Ok(()),
+            },
+            Operand::Constant(_) => Root::Object(base),
+            Operand::Block(_) => return Ok(()),
+        };
+        let restrict = |root: Root| matches!(root, Root::Param(at) if Facts::param(function, at as usize).no_alias());
+        let new = Touch { root, start: address, end: address + size, write };
+        for old in touched.iter() {
+            let overlap = new.start < old.end && old.start < new.end;
+            if overlap && (new.write || old.write) && new.root != old.root && (restrict(new.root) || restrict(old.root)) {
+                return undefined(format!("a noalias parameter's bytes {}..{} are reached another way", new.start.max(old.start), new.end.min(old.end)));
+            }
+        }
+        touched.push(new);
+        Ok(())
+    }
+
     fn execute(&mut self, function: &'m Function, arguments: Vec<Val>) -> Run<Val> {
+        let mut touched: Vec<Touch> = Vec::new();
         let mut values: HashMap<ValueId, Val> = function.parameters().iter().copied().zip(arguments).collect();
         let mut block = function.entry().expect("a body");
         let mut came_from: Option<BlockId> = None;
@@ -479,14 +535,26 @@ impl<'m> Machine<'m> {
                         Some(Val::Ptr(address))
                     }
                     Opcode::Load { .. } => Some(match value(self, 0)? {
-                        Val::Ptr(address) => self.load(instruction.ty, address)?,
+                        Val::Ptr(address) => {
+                            if self.checked {
+                                let size = self.layout.alloc_size(self.types(), instruction.ty);
+                                self.touch(function, &mut touched, ops[0], address, size, false)?;
+                            }
+                            self.load(instruction.ty, address)?
+                        }
                         _ => return undefined("a load through poison"),
                     }),
                     Opcode::Store { .. } => {
                         let stored = value(self, 0)?;
                         let ty = function.operand_type(&self.module.context, ops[0]).expect("a value");
                         match value(self, 1)? {
-                            Val::Ptr(address) => self.store(&stored, ty, address)?,
+                            Val::Ptr(address) => {
+                                if self.checked {
+                                    let size = self.layout.alloc_size(self.types(), ty);
+                                    self.touch(function, &mut touched, ops[1], address, size, true)?;
+                                }
+                                self.store(&stored, ty, address)?
+                            }
                             _ => return undefined("a store through poison"),
                         }
                         None
