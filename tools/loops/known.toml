@@ -4569,8 +4569,8 @@ issue = "#98"
 [[short]]
 case = "conc1_s2_xt_bpn_index_n_st1_sum"
 lang = "nib"
-check = "ivs"
-configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
+check = "mir-ivs"
+configs = ["386-O2", "386-O3", "386-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
 [[short]]
@@ -11003,13 +11003,6 @@ issue = "#98"
 case = "conc2_s2_xt_bpn_index_n_st1_sum"
 lang = "nib"
 check = "invariant-loads"
-configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
-issue = "#98"
-
-[[short]]
-case = "conc2_s2_xt_bpn_index_n_st1_sum"
-lang = "nib"
-check = "ivs"
 configs = ["386-O2", "386-O3", "386-Os", "486-O2", "486-O3", "486-Os", "Core-O2", "Core-O3", "Core-Os", "P5-O2", "P5-O3", "P5-Os"]
 issue = "#98"
 
