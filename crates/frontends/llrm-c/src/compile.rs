@@ -1173,6 +1173,18 @@ mod tests {
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 
+    /// A long double global got its initializer as a double, 8 bytes, while
+    /// code loads it as 10 bytes: `gld` read 1.07e-49 and took two bytes of `after`.
+    #[test]
+    fn test_a_long_double_initializer_is_ten_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("probe.c");
+        std::fs::write(&source, "long double gld = 3.5;\nshort after = 7;\nlong double get(void) { return gld; }\n").unwrap();
+        let recorded = super::recorded(&source, &[], false).expect("wccq records probe.c");
+        let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGBytes")).collect();
+        assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
+    }
+
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));

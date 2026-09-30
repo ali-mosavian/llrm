@@ -1,0 +1,65 @@
+--- a/bld/cc/c/cgendata.c	2026-09-30 13:30:15.818998399 +0200
++++ b/bld/cc/c/cgendata.c	2026-09-30 13:30:15.829953225 +0200
+@@ -38,6 +38,41 @@
+ #include "feprotos.h"
+ #include "cgen.h"
+ 
++
++/*
++ * qbopt: `value` as the 8087's 80-bit extended real, little-endian: a 64-bit
++ * mantissa with its integer bit explicit, then sign and 15-bit exponent.
++ */
++static void ExtendedImage( double value, char *image )
++{
++    unsigned long long  bits;
++    unsigned long long  mantissa;
++    unsigned            exponent;
++    int                 i;
++
++    memcpy( &bits, &value, sizeof( bits ) );
++    exponent = (unsigned)( bits >> 52 ) & 0x7FF;
++    mantissa = ( bits & 0xFFFFFFFFFFFFFULL ) << 11;
++    if( exponent == 0x7FF ) {
++        exponent = 0x7FFF;
++        mantissa |= 1ULL << 63;
++    } else if( exponent != 0 ) {
++        exponent += 16383 - 1023;
++        mantissa |= 1ULL << 63;
++    } else if( mantissa != 0 ) {
++        exponent = 16383 - 1022;
++        while( ( mantissa >> 63 ) == 0 ) {
++            mantissa <<= 1;
++            exponent--;
++        }
++    }
++    for( i = 0; i < 8; i++ ) {
++        image[i] = (char)( mantissa >> ( 8 * i ) );
++    }
++    image[8] = (char)exponent;
++    image[9] = (char)( ( exponent >> 8 ) | ( ( bits >> 63 ) << 7 ) );
++}
++
+ #define ZEROS_BLOCK_SIZE    (8 * 1024)
+ 
+ void EmitZeros( target_size amount )
+@@ -206,7 +241,19 @@
+         break;
+     case QDT_LONG_DOUBLE:
+     case QDT_LDIMAGINARY:
+-        DGBytes( TARGET_LDOUBLE, (char *)&dq->u.long_double_value );
++        /*
++         * qbopt: a host without an 80-bit long double holds the value as a
++         * double; write the 8087's extended image of it.
++         */
++        {
++            DATA_QUAD   local_dq;
++            char        image[TARGET_LDOUBLE];
++
++            local_dq.u_long_value1 = dq->u_long_value1;
++            local_dq.u_long_value2 = dq->u_long_value2;
++            ExtendedImage( local_dq.u.double_value, image );
++            DGBytes( TARGET_LDOUBLE, image );
++        }
+         size += TARGET_LDOUBLE;
+         break;
+     case QDT_STRING:
