@@ -74,7 +74,8 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                 // Tested after a trip, the loop stays for all but its last;
                 // tested at its header before one, for every trip.
                 let tested = if block.at == one.header && !one.latches.contains(&block.at) { 0.0 } else { 1.0 };
-                let stay = count.map_or(0.9, |count| (*count as f64 - tested) / (*count as f64 + 1.0 - tested));
+                // An uncounted loop goes round nine times in ten, however many ways it has out.
+                let stay = count.map_or(0.9_f64.powf(1.0 / exiting as f64), |count| (*count as f64 - tested) / (*count as f64 + 1.0 - tested));
                 let mut parts: Vec<(i64, f64)> = inside.iter().map(|at| (*at, stay / inside.len() as f64)).collect();
                 parts.extend(outside.iter().map(|at| (*at, (1.0 - stay) / outside.len() as f64)));
                 split = Some(parts);
@@ -297,6 +298,26 @@ mod tests {
         };
         // The preheader's jump, taken nine times in ten, is all that differs.
         assert!((looped(true) - 0.9 - looped(false)).abs() < 1e-9, "{} {}", looped(true), looped(false));
+    }
+
+    /// An uncounted loop goes round as often with two exits as with one:
+    /// each exit staying nine times in ten made a loop tested twice a trip
+    /// run half as often, and Nib's `zip`, its two exits made one, read 59
+    /// instructions before and 90 after with fewer each trip.
+    #[test]
+    fn test_an_uncounted_loop_runs_as_often_whatever_its_exits() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let moved = |at| insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]);
+        let tested = |at| insn(at, Operation::Branch, "jne", vec![], vec![]);
+        let run = |blocks: Vec<LirBlock>| executed(&LirBody::new("uncounted", 1, blocks, IndexMap::default(), IndexMap::default())).expect("a loop").instructions;
+        let ret = |at| block(at, vec![insn(at, Operation::Return, "ret", vec![], vec![])], vec![]);
+        // The header, a move and a test, ten times in both.
+        let once = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![2, 4]), ret(4)]);
+        let twice = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![3, 5]), block(3, vec![tested(4)], vec![2, 5]), ret(5)]);
+        assert!((once - (1.0 + 10.0 * 2.0 + 1.0)).abs() < 1e-9, "{once}");
+        assert!((twice - (1.0 + 10.0 * 2.0 + 10.0 * 0.9_f64.sqrt() + 1.0)).abs() < 1e-9, "{twice}");
     }
 
     /// An x87 spill store was counted while its restores, unflagged, were
