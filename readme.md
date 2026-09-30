@@ -141,25 +141,26 @@ _dot proc far
     push si                         ; si and di are callee-saved
     push di
 L0_0:
-    mov di, word ptr [bp+8]         ; di = b
-    mov bx, word ptr [bp+10]        ; bx = n
-    mov cx, bx
-    neg cx                          ; [count to zero] cx = -n; the loop ends when it reaches 0
+    mov si, word ptr [bp+6]         ; [hoisted] si = a
+    mov di, word ptr [bp+8]         ; [hoisted] di = b
+    mov cx, word ptr [bp+10]        ; cx = n
+    lea ax, [ecx+ecx]               ; ax = 2n, the byte length of each array
+    mov bx, ax
+    neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
+    add si, ax                      ; [biased] a + 2n, so a[i] is at [bx+si]
+    add di, ax                      ; [biased] b + 2n
     xor eax, eax                    ; total = 0
-    or bx, bx
-    jle L0_3                        ; [loop rotation] one guard for n <= 0; the test moves to the bottom
-L0_20:
-    xor bx, bx                      ; [strength reduction] bx = byte offset of a[i] and b[i], not 2*i
-L0_5:
-    mov si, word ptr [bp+6]         ; NOT hoisted: a is invariant yet read from its slot every iteration
-    movsx edx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
-    movsx esi, word ptr [bx+di]     ; b[i]: [base+index] address form, no pointer arithmetic
-    imul edx, esi                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
-    add eax, edx                    ; total += product
-    add bx, 2                       ; offset and counter are still two induction variables:
-    inc cx                          ; NOT shared yet (#98)
-    jne L0_5                        ; [flag reuse] inc's flags end the loop: no compare
-L0_3:
+    or cx, cx
+    jle L0_6                        ; [loop rotation] one guard for n <= 0; the test moves to the bottom
+L0_21:
+L0_8:
+    movsx ecx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
+    movsx edx, word ptr [bx+di]     ; b[i]
+    imul ecx, edx                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
+    add eax, ecx                    ; total += product
+    add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
+    jne L0_8
+L0_6:
     shld edx, eax, 16               ; the long returns in DX:AX
     pop di
     pop si
@@ -182,39 +183,43 @@ fn dot(a: &[i16], b: &[i16]) -> i32:
 _dot proc far
     push bp                         ; a is the far pointer [bp+6], b [bp+10]
     mov bp, sp
-    sub sp, 4                       ; two slots for the lengths
     push si
     push di
 L0_0:
-    les si, dword ptr [bp+6]        ; es:si = a's slice: length, then data pointer
+    les bx, dword ptr [bp+6]        ; es:bx = a's slice: length, then data pointer
     lfs di, dword ptr [bp+10]       ; fs:di = b's slice
-    mov ax, word ptr es:[si]
-    mov word ptr [bp-2], ax         ; [hoisted] len(a), read once, kept in the frame
-    mov ax, word ptr fs:[di]
-    mov word ptr [bp-4], ax         ; [hoisted] len(b)
-    les si, dword ptr es:[si+4]     ; [hoisted] es:si = a's data
+    mov ax, word ptr es:[bx]        ; len(a)
+    mov cx, word ptr fs:[di]        ; len(b)
+    les si, dword ptr es:[bx+4]     ; [hoisted] es:si = a's data
     lfs di, dword ptr fs:[di+4]     ; [hoisted] fs:di = b's data
-    xor dx, dx                      ; dx = i = 0
+    cmp ax, cx
+    mov bx, cx
+    jae L0_9
+L0_8:
+    mov bx, ax
+L0_9:                               ; bx = min(len(a), len(b)): zip ends with the shorter slice,
+    lea ax, [ebx+ebx]               ; decided once, not tested in the loop
+    mov cx, ax
+    neg cx                          ; [one induction variable] cx = -2*count
+    add si, ax                      ; [biased] a's data + 2*count
+    add di, ax                      ; [biased] b's data + 2*count
     xor eax, eax                    ; total = 0
-    jmp L0_7
-L0_24:
-    cmp dx, word ptr [bp-4]         ; zip ends with the shorter slice
-    jae L0_22
-L0_11:
-    lea bx, [edx+edx]               ; bx = 2*i: the low 16 bits of a 32-bit lea
+    or bx, bx
+    je L0_29                        ; [loop rotation] no elements: skip the loop
+L0_31:
+    mov bx, cx
+L0_16:
     movsx ecx, word ptr es:[bx+si]  ; a[i]
-    movsx ebx, word ptr fs:[bx+di]  ; b[i]
-    imul ecx, ebx
+    movsx edx, word ptr fs:[bx+di]  ; b[i]
+    imul ecx, edx
     add eax, ecx                    ; total += product
-    inc dx                          ; one induction variable, i: nothing to share, and i is
-L0_7:                               ; scaled on every iteration: no strength reduction
-    cmp dx, word ptr [bp-2]         ; i < len(a): a compare against memory, twice per iteration
-    jb L0_24
-L0_22:
+    add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
+    jne L0_16                       ; zip pairs the elements: no index, no bounds check
+L0_29:
     shld edx, eax, 16               ; the long returns in DX:AX
     pop di
     pop si
-    leave
+    pop bp
     retf
 _dot endp
 ```
@@ -262,35 +267,33 @@ L1_4:
     add ax, word ptr [bx+si+14]
     dec ax                          ; ax = UBOUND(a): lower bound + count - 1
 L1_19:
-    mov bx, word ptr [si+2]         ; [hoisted] a's data segment
-    mov cx, word ptr [si+10]        ; [hoisted] a's data offset
-    mov word ptr [bp-14], cx        ; kept in the frame
-    mov es, bx                      ; es = a's segment
-    mov fs, word ptr [di+2]         ; [hoisted] fs = b's segment
-    mov di, word ptr [di+10]        ; [hoisted] di = b's offset
-    mov cx, ax
-    inc cx
-    neg cx                          ; [count to zero] cx = -(UBOUND + 1)
-    xor ebx, ebx                    ; total = 0 on the no-iteration path
+    mov es, word ptr [si+2]         ; [hoisted] es = a's data segment
+    mov si, word ptr [si+10]        ; [hoisted] si = a's data offset
+    mov fs, word ptr [di+2]         ; [hoisted] fs = b's data segment
+    mov di, word ptr [di+10]        ; [hoisted] di = b's data offset
+    lea cx, [eax+eax]               ; cx = 2 * UBOUND
+    mov bx, cx
+    neg bx
+    add bx, -2                      ; [one induction variable] bx = -2 * (UBOUND + 1)
+    add si, cx                      ; [biased] a's offset + 2 * UBOUND; the +2 is in the loop's
+    add di, cx                      ; [biased] b's offset + 2 * UBOUND; displacement
+    xor ecx, ecx                    ; total = 0 on the no-iteration path
     or ax, ax
-    jl L1_52                        ; [loop rotation] UBOUND < 0: no iterations
-L1_54:
+    jl L1_55                        ; [loop rotation] UBOUND < 0: no iterations
+L1_57:
     xor eax, eax                    ; total = 0
-    xor bx, bx                      ; [strength reduction] bx = byte offset of a(i) and b(i)
-L1_37:
-    mov si, word ptr [bp-14]        ; NOT hoisted: a's offset is read from the frame every iteration
-    movsx edx, word ptr es:[bx+si]  ; a(i), sign-extended
-    movsx esi, word ptr fs:[bx+di]  ; b(i)
-    imul edx, esi                   ; CLNG(a(i)) * b(i)
-    add eax, edx                    ; total += product
-    add bx, 2                       ; offset and counter: two induction variables,
-    inc cx                          ; NOT shared yet (#98)
-    jne L1_37                       ; [flag reuse] inc's flags end the loop
+L1_40:
+    movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
+    movsx edx, word ptr fs:[bx+di+2] ; b(i)
+    imul ecx, edx                   ; CLNG(a(i)) * b(i)
+    add eax, ecx                    ; total += product
+    add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
+    jne L1_40
+L1_58:
+    mov ecx, eax
 L1_55:
-    mov ebx, eax
-L1_52:
-    shld edx, ebx, 16               ; the long returns in DX:AX
-    mov ax, bx
+    shld edx, ecx, 16               ; the long returns in DX:AX
+    mov ax, cx
     call far ptr B$EXSA             ; the runtime takes the frame down
     retf 4                          ; and the callee pops the two arguments
 DOT endp
@@ -300,12 +303,11 @@ An array is a descriptor: its segment goes in `es` or `fs` before the loop.
 `B$ENRA` and `B$EXSA` are the runtime's frame; `--own-frames` replaces them with a
 plain one.
 
-All three accumulate the long product in `eax` with `imul`, without a runtime
-call, and hoist the array bases. C and BASIC also count to zero with a strength-reduced
-offset. What is missing is sharing the offset with the counter, and keeping `a` in a
-register: [#98](https://github.com/ali-mosavian/llrm/issues/98). Without
-`-fno-move-loop-invariants` or `-fno-strength-reduce` the loops get visibly worse
-(`-fno-...` turns one pass off and shows what it did).
+All three compile to the same loop: six instructions, one induction variable.
+Loop strength reduction ([#98](https://github.com/ali-mosavian/llrm/issues/98))
+biases each array's base by its byte length, so the counter, running from minus
+that length up to zero, is also the offset of every access, and its flags end the
+loop. The product is a 32-bit `imul` in `eax`, without a runtime call.
 
 ## Debug
 

@@ -3,6 +3,7 @@
     uv run --project tools --with pytest python -m pytest tests/test_readme.py
 """
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "target" / "release"
+BIN = Path(os.environ.get("LLRM_BIN", ROOT / "target" / "release"))
 DOT = ROOT / "examples" / "dot"
 
 CASES = [
