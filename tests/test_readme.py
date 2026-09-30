@@ -17,7 +17,7 @@ DOT = ROOT / "examples" / "dot"
 CASES = [
     ("C", [str(BIN / "llrm-c"), "dot.c", "--cpu", "486"], "_dot"),
     ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "--cpu", "486"], "_dot"),
-    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "qb45", "--runtime", "qb45", "--cpu", "486", "--whole-program"], "DOT"),
+    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "qb45", "--runtime", "qb45", "--cpu", "486", "--own-frames", "-O3", "--whole-program"], "DOT"),
 ]
 
 

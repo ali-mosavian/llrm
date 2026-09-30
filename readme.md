@@ -228,7 +228,7 @@ A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
 elements until the shorter slice ends, so there is no `n`, and no index to check.
 Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
-BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 --whole-program -S`:
+BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 --own-frames -O3 --whole-program -S`:
 
 ```basic
 DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
@@ -251,24 +251,26 @@ END FUNCTION
 ```
 
 ```asm
-DOT proc far
+DOT proc near
+    push bp                         ; --own-frames: a plain frame, not B$ENRA; near, as --whole-program
+    mov bp, sp                      ; sees every caller. a() is [bp+6], b() [bp+4]
+    sub sp, 6                       ; three slots: the saved descriptors and UBOUND(a)
+    push si
+    push di
 L1_0:
-    mov cx, 6                       ; B$ENRA builds the frame: cx = 6 bytes of locals,
-    mov bx, 0                       ; bx = 0 temporary strings
-    call far ptr B$ENRA
-    mov di, word ptr [bp+8]         ; a() descriptor: the arguments were pushed left to right
-    mov si, word ptr [bp+6]         ; b() descriptor
+    mov di, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
+    mov si, word ptr [bp+4]         ; b() descriptor
     cmp word ptr [di+2], 0          ; UBOUND(a): the bound is in the descriptor, or B$UBND asks
     jne L1_4
 L1_17:
     push di
     pushw 1                         ; B$UBND(a, 1)
-    mov word ptr [bp-12], si
-    mov word ptr [bp-14], di
+    mov word ptr [bp-2], si
+    mov word ptr [bp-4], di
     call far ptr B$UBND
-    mov di, word ptr [bp-14]
-    mov si, word ptr [bp-12]
-    mov word ptr [bp-16], ax
+    mov di, word ptr [bp-4]
+    mov si, word ptr [bp-2]
+    mov word ptr [bp-6], ax
     jmp L1_19
 L1_4:
     movzx bx, byte ptr [di+8]
@@ -277,18 +279,18 @@ L1_4:
     mov ax, word ptr [bx+di+16]
     add ax, word ptr [bx+di+14]
     dec ax                          ; ax = UBOUND(a): lower bound + count - 1
-    mov word ptr [bp-16], ax        ; kept in the frame across the next UBOUND
+    mov word ptr [bp-6], ax         ; kept in the frame across the next UBOUND
 L1_19:
     cmp word ptr [si+2], 0          ; UBOUND(b), the same way
     jne L1_24
 L1_37:
     push si
     pushw 1
-    mov word ptr [bp-12], si
-    mov word ptr [bp-14], di
+    mov word ptr [bp-2], si
+    mov word ptr [bp-4], di
     call far ptr B$UBND
-    mov di, word ptr [bp-14]
-    mov si, word ptr [bp-12]
+    mov di, word ptr [bp-4]
+    mov si, word ptr [bp-2]
     jmp L1_39
 L1_24:
     movzx bx, byte ptr [si+8]
@@ -298,10 +300,10 @@ L1_24:
     add ax, word ptr [bx+si+14]
     dec ax
 L1_39:
-    cmp word ptr [bp-16], ax        ; [inlined] Min%: no call, ax = the smaller bound
+    cmp word ptr [bp-6], ax         ; [inlined] Min%: no call, ax = the smaller bound
     jge L1_44
 L1_42:
-    mov ax, word ptr [bp-16]
+    mov ax, word ptr [bp-6]
 L1_44:
     mov es, word ptr [di+2]         ; [hoisted] es = a's data segment
     mov cx, word ptr [di+10]        ; [hoisted] a's data offset
@@ -331,17 +333,18 @@ L1_82:
 L1_79:
     shld edx, ecx, 16               ; the long returns in DX:AX
     mov ax, cx
-    call far ptr B$EXSA             ; the runtime takes the frame down
-    retf 4                          ; and the callee pops the two arguments
+    pop di
+    pop si
+    leave
+    ret 4                           ; the callee pops the two arguments
 DOT endp
 ```
 
-An array is a descriptor: its segment goes in `es` or `fs` before the loop. `Min%`
-takes its arguments `BYVAL` and the build is `--whole-program`, which is what lets
-the inliner take it; by reference it stays a call
+An array is a descriptor: its segment goes in `es` or `fs` before the loop.
+`--own-frames` replaces the runtime's `B$ENRA` and `B$EXSA` frame with a plain one.
+`Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
+lets the inliner take it; by reference it stays a call
 ([#114](https://github.com/ali-mosavian/llrm/issues/114)).
-`B$ENRA` and `B$EXSA` are the runtime's frame; `--own-frames` replaces them with a
-plain one.
 
 All three compile to the same loop: six instructions, one induction variable.
 Loop strength reduction ([#98](https://github.com/ali-mosavian/llrm/issues/98))
