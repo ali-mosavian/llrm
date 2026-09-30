@@ -271,3 +271,14 @@ def test_the_ratchet_judges_only_what_the_run_evaluated():
     entry = next(iter(known.load()[0]))
     assert entry not in known.compare(set(), set()).fixed
     assert entry in known.compare(set(), {entry}).fixed
+
+
+def test_writing_known_keeps_what_the_run_did_not_judge(tmp_path, monkeypatch):
+    """A run over one family rewrote known.toml from its own shortfalls and
+    dropped every other family's baseline."""
+    import known
+    monkeypatch.setattr(known, "PATH", tmp_path / "known.toml")
+    other, mine = ("a", "c", "486-O2", "ivs"), ("b", "c", "486-O2", "ivs")
+    known.write({other}, {})
+    known.write({mine}, {}, judged={mine})
+    assert known.load()[0] == {other, mine}

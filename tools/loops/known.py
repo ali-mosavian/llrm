@@ -55,8 +55,11 @@ def compare(short: set, judged: set) -> Ratchet:
     return Ratchet(short - scope, scope - short, issues)
 
 
-def write(short: set, issues: dict, default: str = "#98") -> None:
-    """known.toml as `short` stands, entries outside it kept."""
+def write(short: set, issues: dict, judged: set | None = None, default: str = "#98") -> None:
+    """known.toml as `short` stands; entries for checks this run did not
+    evaluate (`judged`) are kept, as are the known bugs."""
+    if judged is not None:
+        short = (load()[0] - judged) | short
     kept = PATH.read_text().split("[[short]]")[0].replace(HEADER, "").strip() if PATH.exists() else ""
     grouped: dict[tuple, set] = {}
     for case, lang, config, check in short:

@@ -514,7 +514,7 @@ def main() -> int:
     judge(cases, langs, configs, result)
     ratchet = known.compare(result.short, result.judged)
     if args.write_known:
-        known.write(result.short, ratchet.kept_issues)
+        known.write(result.short, ratchet.kept_issues, result.judged)
     report(cases, langs, configs, result, ratchet, work, time.monotonic() - started)
     if build.binaries_stamp() != stamp:
         print("the llrm binaries changed during the run: rerun")
