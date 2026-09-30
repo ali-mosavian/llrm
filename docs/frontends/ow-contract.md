@@ -1256,3 +1256,953 @@ Separate path: uses the DW* library directly (`DWDeclFile`, `DWStruct`, ...), no
 | wchar_t, imaginary, complex | described as int | cc/c/cdebug.c:242,323-325 |
 | function type | fixed TY_CODE_PTR; `...` ends param list | cc/c/cdebug.c:288-296 |
 
+## 6. Mapping onto llrm
+
+How it was read: `wccq` (Open Watcom's front end linked to `toolchain/owshim/cgshim.c`) writes the stream; `crates/frontends/llrm-c/src/hir.rs` parses it; `translate.rs` makes HIR; the driver prints MIR to `--dump DIR/01-globalopt.ll`. `recorded` passes a fixed flag set (`compile.rs:recorded`, `-mm -3 -fpi87 -fp3 -fld -j -zp1 -ei -ecc -s -zl -zq`, plus `-d2` for `-g`). The probes ran `wccq` with that line and `QBOPT_CG_STREAM`, and `llrm-c --dump` on the same file.
+
+Status: **kept** reaches MIR as a fact; **dropped** the stream carries it and `llrm-c` discards it; **never asked for** Open Watcom's front end holds it and no channel carries it (or the shim never queries it); **refused** `llrm-c` stops the compile.
+
+### Fact by fact
+
+| Fact | Open Watcom emits | cgshim.c | Lands in HIR / MIR | Status | Probe |
+|---|---|---|---|---|---|
+| volatile access | `CGVolatile` before `O_POINTS`, and `FE_VOLATILE` on the symbol (`cgen.c:PushSym:588`, `cinfo.c:FESymAttr:232-238`) | records both (`cgshim.c:CGVolatile`, `sym`:234) | `IndirectPlace.volatile` (`translate.rs:1291`) → `load volatile` | kept | volatile |
+| const object | `FE_CONSTANT` and a read-only segment (`cinfo.c:237-241`) | `attr=` in `SYM` | `hir.rs:FE_CONSTANT`; `translate.rs:205` → `constant` global | kept | const |
+| const pointee (`const T *p`) | nothing: the qualifier stays in the type (`ctype.c`, see §2 "const / volatile") | nothing to record | no `readonly` on the parameter or the load | never asked for | const |
+| restrict | discarded by Open Watcom (`FLAG_RESTRICT` parsed, unused); our `cgen.c.patch` adds `CGAttr n 3` | records `CGAttr` (`cgshim.c:609`) | `Promise{unaliased}` (`translate.rs:849`) → `noalias` | kept (ours, beyond Open Watcom) | restrict |
+| restrict + const pointee | same | same | `Promise.readonly` is always `false` (`translate.rs:851`) | never asked for | restrict |
+| noreturn, `aborts` | `FECALL_GEN_NORETURN 0x4`, `FECALL_GEN_ABORTS 0x2` in call class (`cfeinfo.c:getCallClass:505-510`) | `CALLCONV class=` (`cgshim.c:268`) | `hir.rs` reads only `HAS_VARARGS`, `REVERSE_PARMS`, `CALLER_POPS` (`hir.rs:176-181`); the call is followed by `br` | dropped | noreturn |
+| no memory read / write | `FECALL_GEN_NO_MEMORY_READ 0x100`, `NO_MEMORY_CHANGED 0x200`, only from `#pragma aux nomemory` | `class=0x380` | no `readnone`/`memory(none)` on the call; the two `sq` calls stay | dropped | nomemory |
+| `#pragma aux` parameter and return registers | `FEINF_PARM_REGS`, `FEINF_RETURN_REG` | `parms=[3:0,c0:0] ret=3:0` | `translate.rs:cleanup:450` | refused | pragma aux |
+| `#pragma aux modify [regs]` | `FEINF_SAVE_REGS` | never queried (`cgshim.c` asks only AUX_LOOKUP, PARM_REGS, RETURN_REG, CALL_CLASS, CALL_CLASS_TARGET, CALL_BYTES, SOURCE_NAME) | nothing | never asked for | modify |
+| inline byte code | `FEINF_CALL_BYTES` | `CODE y bytes= fix=` (`cgshim.c:278`) | call of `llrm.ia16.code.<hex>` (`translate.rs:1594`) | kept | inline code |
+| bit field | `CGBitMask(addr,start,width,type)` (`cgen.c:DotOperator:667`) | records | `translate.rs:1295` refuses; debug `DBBitField` keeps offset, name, type, drops start and width (`hir.rs:413`) | refused | bit fields |
+| switch | `CGSelCase` per value, `CGSelOther`, `CGSelect`; never `CGSelRange` | records all | `switch` terminator (`translate.rs:939`) | kept; ranges never sent | switch, run |
+| varargs | call class `HAS_VARARGS`; no call for `va_start` on x86-16 (`hdr/watcom/stdarg.mh:93-100` is pointer arithmetic) | `class=` | `i16 @_sum(i16, ...)` and `llvm.va_start` | kept | varargs |
+| struct copy | `CGLVAssign(dst, src, refno)`, size from `BEDefType` | `TYPE T25 size=20`, `CGLVAssign` | expanded to word loads and stores, no bulk-copy op | kept, as scalars | struct copy |
+| far pointer | `TY_LONG_POINTER` | type name | `ptr addrspace(1)` | kept | far |
+| based pointer | lowered by the front end to `O_CONVERT(off, seg)` with the symbol `.DS` (`cgen.c:EmitNodes:1510`) | `SYM name=".DS" attr=0x1042` | `translate.rs:1313` refuses; `DBBasedPtr` refused (`cgshim.c:972`) | refused | based |
+| interrupt | target class `INTERRUPT 0x8` | `target=0x20071e` | `call_target & INTERRUPT` (`hir.rs:170`) → `x86_intrcc` | kept | interrupt |
+| unaligned | `CGAttr(n, CG_SYM_UNALIGNED)` = 2 (`cgen.c:PushSym:585`) | `CGAttr n 2` | `translate.rs:1290` evaluates the inner node; no `align 1` on the load | dropped | unaligned |
+| static initialisers | `DGInteger`, `DGBytes`, `DGFEPtr`, `DGBackPtr`, zero fill | all recorded | `DataObject` bytes and relocations | kept | init |
+| address taken (`&x`) | never: `FE_ADDR_TAKEN` only for variables a pragma names (`cinfo.c:FESymAttr:231-233`) | `attr=0x0` for `x` in `g(&x)` | derived by our passes | never asked for | address |
+| constant folding, sizeof, promotions | folded before the call; operands typed by the result | values | constants in MIR | kept | folding |
+| signed overflow | `TY_INTEGER` vs `TY_UNSIGNED` | type name | `nsw` on signed ops (`translate.rs` header) | kept | folding |
+| dead code (`if (0)`) | the dead statements are still emitted | recorded | dead block `b3` stays until a pass removes it | kept | folding |
+| inline body | the back end asks `FEGenProc`, the front end then replays the callee (`cinfo.c:FEGenProc:267-275`) | not implemented, so never asked; `static sq` is emitted as a function and called | our inliner decides | never asked for | inline |
+| relax alias `-oa`, loop flags `-ol`, time vs size `-ot`/`-os` | `cg_switches`, `size` in `BEInit` (`cgen.c:DoCompile:1924`) | `INIT sw= size=` | `hir.rs:386` reads only `target` | dropped | flags |
+| `-d2` types, names, locals | §5 | `DB*` records | `Debug` types (`debug.rs`) | partly kept | debug |
+| debug: qualifiers, enum constants, block scopes, typedef names, columns | see §5 gaps | `DBConst`, `DBBegBlock`, `DBEndBlock`, `DBTypeDef` are in `IGNORED` (`hir.rs:57-69`) | nothing | dropped | debug |
+
+### Probes
+
+Each probe: the C, the stream (lines for `LastParm`, `CGTemp` omitted), and the MIR as raised. The `recorded` flag set is fixed, so `restrict` needs `-za99` and was spelled `__restrict`.
+
+#### volatile
+
+```c
+volatile int v;
+int f(void){ return v + v; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="v" base="v" pattern="_*" attr=0x826 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 2
+SYM y2 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INTEGER
+n5 CGFEName y1 TY_INTEGER
+n6 CGVolatile n5
+n7 CGUnary O_POINTS n6 TY_INTEGER
+n8 CGFEName y1 TY_INTEGER
+n9 CGVolatile n8
+n10 CGUnary O_POINTS n9 TY_INTEGER
+n11 CGBinary O_PLUS n7 n10 TY_INTEGER
+n12 CGUnary O_CONVERT n11 TY_INTEGER
+n13 CGTempName t4 TY_INTEGER
+n14 CGAssign n13 n12 TY_INTEGER
+- CGDone n14
+n15 CGTempName t4 TY_INTEGER
+n16 CGUnary O_POINTS n15 TY_INTEGER
+- CGReturn n16 TY_INTEGER
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+@_v = global [2 x i8] zeroinitializer
+define i16 @_f() addrspace(1) {
+b1:
+  %1 = load volatile i16, ptr @_v
+  %2 = load volatile i16, ptr @_v
+  %3 = add nsw i16 %1, %2
+  store i16 %3, ptr %0
+  %4 = load i16, ptr %0
+  ret i16 %4
+}
+```
+
+#### const
+
+```c
+const int k = 7;
+int g(const int *p);
+int f(const int *p, int *q){ *q = 1; return *p + k + g(p); }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="k" base="k" pattern="_*" attr=0x16 seg=3
+b1 BENewBack y1
+- DGLabel b1
+- DGInteger 7 TY_INTEGER
+SYM y2 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INTEGER
+SYM y3 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_POINTER
+SYM y4 name="q" base="q" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_POINTER
+n5 CGFEName y4 TY_POINTER
+n6 CGUnary O_POINTS n5 TY_POINTER
+n7 CGInteger 1 TY_INTEGER
+n8 CGAssign n6 n7 TY_INTEGER
+- CGDone n8
+n9 CGFEName y3 TY_POINTER
+n10 CGUnary O_POINTS n9 TY_POINTER
+n11 CGUnary O_POINTS n10 TY_INTEGER
+n12 CGFEName y1 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+n14 CGBinary O_PLUS n11 n13 TY_INTEGER
+SYM y5 name="g" base="g" pattern="_*" attr=0xf seg=1
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+n15 CGFEName y5 TY_CODE_PTR
+c16 CGInitCall n15 TY_INTEGER y5
+n17 CGFEName y3 TY_POINTER
+n18 CGUnary O_POINTS n17 TY_POINTER
+- CGAddParm c16 n18 TY_POINTER
+n19 CGCall c16
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+@_k = constant [2 x i8] c"\07\00"
+define i16 @_f(ptr %0, ptr %1) addrspace(1) {
+b1:
+  store ptr %0, ptr %2
+  store ptr %1, ptr %3
+  %5 = load ptr, ptr %3
+  store i16 1, ptr %5
+  %6 = load ptr, ptr %2
+  %7 = load i16, ptr %6
+  %8 = load i16, ptr @_k
+  %9 = add nsw i16 %7, %8
+  %10 = load ptr, ptr %2
+  %11 = call addrspace(1) i16 @_g(ptr %10)
+  %12 = add nsw i16 %9, %11
+  store i16 %12, ptr %4
+  %13 = load i16, ptr %4
+  ret i16 %13
+}
+...
+```
+
+#### restrict (`-za99`, `__restrict`)
+
+```c
+void add(int *__restrict d, const int *__restrict a, int n){ int i; for(i=0;i<n;i++) d[i]+=a[i]; }
+```
+
+Recorded stream:
+
+```
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGParmDecl y2 TY_POINTER
+- CGParmDecl y3 TY_POINTER
+- CGParmDecl y4 TY_INTEGER
+n15 CGAttr n14 3
+n23 CGAttr n22 3
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define void @_add(ptr noalias %0, ptr noalias %1, i16 %2) addrspace(1) {
+b1:
+  store ptr %0, ptr %3
+...
+```
+
+#### noreturn, `#pragma aux aborts`
+
+```c
+__declspec(noreturn) void die(int c);
+#pragma aux quit aborts
+void quit(void);
+int f(int x){ if(x) die(1); quit(); return 0; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+SYM y2 name="x" base="x" pattern="_*" attr=0x0 seg=2
+SYM y3 name="die" base="die" pattern="_*" attr=0xf seg=1
+CALLCONV y3 class=0x84 target=0x716 parms=[] ret=0:0
+c10 CGInitCall n9 TY_INTEGER y3
+SYM y4 name="quit" base="quit" pattern="_*" attr=0xf seg=1
+CALLCONV y4 class=0x82 target=0x716 parms=[] ret=0:0
+c14 CGInitCall n13 TY_INTEGER y4
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_f(i16 %0) addrspace(1) {
+b1:
+  store i16 %0, ptr %1
+  %3 = load i16, ptr %1
+  %4 = icmp ne i16 %3, 0
+  %5 = zext i1 %4 to i16
+  %6 = icmp ne i16 %5, 0
+  br i1 %6, label %b3, label %b2
+b2:
+  %7 = call addrspace(1) i16 @_quit()
+  store i16 0, ptr %2
+  %8 = load i16, ptr %2
+  ret i16 %8
+b3:
+  %9 = call addrspace(1) i16 @_die(i16 1)
+  br label %b2
+}
+declare i16 @_quit() addrspace(1)
+declare i16 @_die(i16) addrspace(1)
+```
+
+#### `#pragma aux ... nomemory`
+
+```c
+#pragma aux sq parm nomemory modify nomemory
+int sq(int x);
+int f(int a, int *p){ int r = sq(a); *p = 1; return r + sq(a); }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+SYM y3 name="p" base="p" pattern="_*" attr=0x0 seg=2
+SYM y4 name="r" base="r" pattern="_*" attr=0x0 seg=2
+SYM y5 name="sq" base="sq" pattern="_*" attr=0xf seg=1
+CALLCONV y5 class=0x380 target=0x716 parms=[] ret=0:0
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_f(i16 %0, ptr %1) addrspace(1) {
+b1:
+  store i16 %0, ptr %2
+  store ptr %1, ptr %3
+  %6 = load i16, ptr %2
+  %7 = call addrspace(1) i16 @_sq(i16 %6)
+  store i16 %7, ptr %5
+  %8 = load ptr, ptr %3
+  store i16 1, ptr %8
+  %9 = load i16, ptr %5
+  %10 = load i16, ptr %2
+  %11 = call addrspace(1) i16 @_sq(i16 %10)
+  %12 = add nsw i16 %9, %11
+  store i16 %12, ptr %4
+  %13 = load i16, ptr %4
+  ret i16 %13
+...
+```
+
+#### `#pragma aux` registers
+
+```c
+#pragma aux myfn "*_x" parm [ax] [dx] value [ax] modify [bx cx] 
+int myfn(int a,int b);
+#pragma aux getds = "mov ax, ds" value [ax];
+int getds(void);
+int f(int a,int b){ return myfn(a,b)+getds(); }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+SYM y4 name="myfn" base="myfn" pattern="*_x" attr=0xf seg=1
+CALLCONV y4 class=0x80 target=0x717 parms=[3:0,c0:0] ret=3:0
+n4 CGFEName y4 TY_CODE_PTR
+SYM y5 name="getds" base="getds" pattern="_*" attr=0xf seg=1
+CALLCONV y5 class=0x80 target=0x717 parms=[] ret=3:0
+CODE y5 bytes=8cd8 fix=-
+n12 CGFEName y5 TY_CODE_PTR
+```
+
+`llrm-c` refuses: `_f: myfn_x has a register calling convention`
+
+#### `#pragma aux modify`
+
+```c
+#pragma aux clob modify [bx cx dx]
+void clob(void);
+int f(int a){ clob(); return a; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+SYM y3 name="clob" base="clob" pattern="_*" attr=0xf seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_f(i16 %0) addrspace(1) {
+b1:
+  store i16 %0, ptr %1
+  %3 = call addrspace(1) i16 @_clob()
+  %4 = load i16, ptr %1
+  store i16 %4, ptr %2
+  %5 = load i16, ptr %2
+  ret i16 %5
+}
+declare i16 @_clob() addrspace(1)
+```
+
+#### inline byte code
+
+```c
+#pragma aux getds = "mov ax, ds" value [ax];
+int getds(void);
+int f(void){ return getds(); }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+SYM y2 name="getds" base="getds" pattern="_*" attr=0xf seg=1
+CALLCONV y2 class=0x80 target=0x717 parms=[] ret=3:0
+CODE y2 bytes=8cd8 fix=-
+n4 CGFEName y2 TY_CODE_PTR
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_f() addrspace(1) {
+b1:
+  %1 = call i32 @llrm.ia16.code.8cd8()
+  %2 = trunc i32 %1 to i16
+  store i16 %2, ptr %0
+  %3 = load i16, ptr %0
+  ret i16 %3
+}
+declare i32 @llrm.ia16.code.8cd8() nounwind
+```
+
+#### bit fields
+
+```c
+struct S { unsigned a:3; int b:5; unsigned c:8; };
+struct S s;
+int f(void){ s.a = 5; s.b = -3; return s.a + s.b + s.c; }
+```
+
+Recorded stream:
+
+```
+TYPE T25 size=2 align=1
+SYM y1 name="s" base="s" pattern="_*" attr=0x6 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 2
+SYM y2 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INTEGER
+n5 CGFEName y1 T25
+n6 CGInteger 0 TY_UNSIGNED
+n7 CGBinary O_PLUS n5 n6 TY_POINTER
+n8 CGBitMask n7 0 3 TY_UNSIGNED
+n9 CGInteger 5 TY_INTEGER
+n10 CGAssign n8 n9 TY_UNSIGNED
+- CGDone n10
+n11 CGFEName y1 T25
+```
+
+`llrm-c` refuses: `_f: CGBitMask n7 0 3 TY_UNSIGNED`
+
+#### switch
+
+```c
+int f(int x){ switch(x){ case 1: return 10; case 2: return 20; case 3: case 4: return 30; case 100: return 40; default: return 0; } }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+n10 CGFEName y2 TY_INTEGER
+n11 CGUnary O_POINTS n10 TY_INTEGER
+s12 CGSelInit
+- CGSelCase s12 l4 1
+- CGSelCase s12 l6 2
+- CGSelCase s12 l7 3
+- CGSelCase s12 l7 4
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_f(i16 %0) addrspace(1) {
+b1:
+  store i16 %0, ptr %1
+  %3 = load i16, ptr %1
+  switch i16 %3, label %b2 [
+    i16 1, label %b3
+    i16 2, label %b4
+    i16 3, label %b5
+    i16 4, label %b5
+    i16 100, label %b6
+  ]
+b2:
+  store i16 0, ptr %2
+  br label %b7
+...
+```
+
+#### switch with a run of cases
+
+```c
+int f(unsigned char c){ switch(c){ case 1: case 2: case 3: case 4: case 5: return 1; case 'a': return 2; default: return 0;} }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+SYM y2 name="c" base="c" pattern="_*" attr=0x0 seg=2
+s10 CGSelInit
+- CGSelCase s10 l4 1
+- CGSelCase s10 l4 2
+- CGSelCase s10 l4 3
+- CGSelCase s10 l4 4
+- CGSelCase s10 l4 5
+- CGSelCase s10 l6 97
+- CGSelOther s10 l7
+- CGSelect s10 n9
+```
+
+`llrm-c` refuses: ``
+
+#### varargs
+
+```c
+typedef char *va_list;
+#define va_start(ap,v) (ap = (va_list)&v + sizeof(v))
+#define va_arg(ap,t) (*(t *)((ap += sizeof(t)) - sizeof(t)))
+int sum(int n, ...){ va_list ap; int s=0; va_start(ap,n); while(n--) s+=va_arg(ap,int); return s; }
+int call(void){ return sum(2, 3, 4); }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="sum" base="sum" pattern="_*" attr=0x10007 seg=1
+CALLCONV y1 class=0xa0 target=0x716 parms=[] ret=0:0
+SYM y2 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+SYM y3 name="ap" base="ap" pattern="_*" attr=0x0 seg=2
+SYM y4 name="s" base="s" pattern="_*" attr=0x0 seg=2
+SYM y5 name="call" base="call" pattern="_*" attr=0x7 seg=1
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+- CGAddParm c39 n40 TY_INTEGER
+- CGAddParm c39 n41 TY_INTEGER
+- CGAddParm c39 n42 TY_INTEGER
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_sum(i16 %0, ...) addrspace(1) {
+b1:
+  call void @llvm.va_start.p0(ptr %4)
+  %5 = load ptr, ptr %4
+  store i16 0, ptr %3
+  %6 = getelementptr i8, ptr %5, i16 -2
+  %7 = getelementptr inbounds i8, ptr %6, i16 2
+  store ptr %7, ptr %2
+  br label %b2
+b2:
+  %8 = getelementptr i8, ptr %5, i16 -2
+  %9 = load i16, ptr %8
+...
+```
+
+#### struct copy
+
+```c
+struct B { int a[10]; };
+struct B x, y;
+struct B get(void){ return y; }
+void f(void){ x = y; x = get(); }
+```
+
+Recorded stream:
+
+```
+TYPE T25 size=20 align=1
+- CGProcDecl y3 T25
+- CGProcDecl y4 TY_INTEGER
+n17 CGLVAssign n14 n16 T25
+n21 CGCall c20
+n23 CGLVAssign n18 n22 T25
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+@_x = global [20 x i8] zeroinitializer
+@_y = global [20 x i8] zeroinitializer
+define ptr addrspace(1) @_get(ptr addrspace(1) %0) addrspace(1) {
+b1:
+  %2 = load i32, ptr @_y
+  store i32 %2, ptr %1
+  %3 = getelementptr inbounds i8, ptr @_y, i16 4
+  %4 = getelementptr inbounds i8, ptr %1, i16 4
+  %5 = load i32, ptr %3
+  store i32 %5, ptr %4
+...
+```
+
+#### far and near pointers
+
+```c
+int __far *fp;
+int __near *np;
+int f(void){ return *fp + *np; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="fp" base="fp" pattern="_*" attr=0x6 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 4
+SYM y2 name="np" base="np" pattern="_*" attr=0x6 seg=11
+b2 BENewBack y2
+- DGLabel b2
+- DGUBytes 2
+SYM y3 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INTEGER
+n6 CGFEName y1 TY_LONG_POINTER
+n7 CGUnary O_POINTS n6 TY_LONG_POINTER
+n8 CGUnary O_POINTS n7 TY_INTEGER
+n9 CGFEName y2 TY_NEAR_POINTER
+n10 CGUnary O_POINTS n9 TY_NEAR_POINTER
+n11 CGUnary O_POINTS n10 TY_INTEGER
+n12 CGBinary O_PLUS n8 n11 TY_INTEGER
+n13 CGUnary O_CONVERT n12 TY_INTEGER
+n14 CGTempName t5 TY_INTEGER
+n15 CGAssign n14 n13 TY_INTEGER
+- CGDone n15
+n16 CGTempName t5 TY_INTEGER
+n17 CGUnary O_POINTS n16 TY_INTEGER
+- CGReturn n17 TY_INTEGER
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+@_fp = global [4 x i8] zeroinitializer
+@_np = global [2 x i8] zeroinitializer
+define i16 @_f() addrspace(1) {
+b1:
+  %1 = load ptr addrspace(1), ptr @_fp
+  %2 = load i16, ptr addrspace(1) %1
+  %3 = load ptr, ptr @_np
+  %4 = load i16, ptr %3
+...
+```
+
+#### `__based` pointer
+
+```c
+int __based(__segname("_DATA")) *bp;
+int f(void){ return *bp; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="bp" base="bp" pattern="_*" attr=0x6 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 2
+SYM y2 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INTEGER
+SYM y3 name=".DS" base=".DS" pattern="_*" attr=0x1042 seg=4
+n5 CGFEName y3 TY_UINT_2
+n6 CGFEName y1 TY_NEAR_POINTER
+n7 CGUnary O_POINTS n6 TY_NEAR_POINTER
+n8 CGBinary O_CONVERT n7 n5 TY_LONG_POINTER
+n9 CGUnary O_POINTS n8 TY_INTEGER
+n10 CGUnary O_CONVERT n9 TY_INTEGER
+n11 CGTempName t4 TY_INTEGER
+n12 CGAssign n11 n10 TY_INTEGER
+- CGDone n12
+n13 CGTempName t4 TY_INTEGER
+n14 CGUnary O_POINTS n13 TY_INTEGER
+- CGReturn n14 TY_INTEGER
+```
+
+`llrm-c` refuses: `_f: .DS is neither defined nor imported`
+
+#### interrupt
+
+```c
+volatile int ticks;
+void __interrupt isr(void){ ticks++; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="ticks" base="ticks" pattern="_*" attr=0x826 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 2
+SYM y2 name="isr" base="isr" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x20071e parms=[] ret=0:0
+- CGProcDecl y2 TY_INTEGER
+n5 CGFEName y1 TY_INTEGER
+n6 CGInteger 1 TY_INTEGER
+n7 CGVolatile n5
+n8 CGPostGets O_PLUS n7 n6 TY_INTEGER
+- CGDone n8
+- CGReturn n0 TY_INTEGER
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+@_ticks = global [2 x i8] zeroinitializer
+define x86_intrcc void @_isr(ptr %0) addrspace(1) {
+b1:
+  %2 = load volatile i16, ptr @_ticks
+  %3 = add nsw i16 %2, 1
+  store volatile i16 %3, ptr @_ticks
+  ret void
+}
+```
+
+#### `__unaligned`
+
+```c
+int f(int __unaligned *p){ return *p; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+n4 CGFEName y2 TY_POINTER
+n5 CGUnary O_POINTS n4 TY_POINTER
+n6 CGAttr n5 2
+n7 CGUnary O_POINTS n6 TY_INTEGER
+n8 CGUnary O_CONVERT n7 TY_INTEGER
+n9 CGTempName t3 TY_INTEGER
+n10 CGAssign n9 n8 TY_INTEGER
+- CGDone n10
+n11 CGTempName t3 TY_INTEGER
+n12 CGUnary O_POINTS n11 TY_INTEGER
+- CGReturn n12 TY_INTEGER
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_f(ptr %0) addrspace(1) {
+b1:
+  store ptr %0, ptr %1
+  %3 = load ptr, ptr %1
+  %4 = load i16, ptr %3
+  store i16 %4, ptr %2
+  %5 = load i16, ptr %2
+  ret i16 %5
+}
+```
+
+#### static initialisers
+
+```c
+int a[4] = {1,2,3};
+char s[] = "hi";
+char *p = "hi";
+struct T { char c; int i; } t = {1, 2};
+double d = 1.5;
+int *q = &a[1];
+static int z;
+```
+
+Recorded stream:
+
+```
+TYPE T25 size=8 align=2
+SYM y1 name="z" base="z" pattern="_*" attr=0x42 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 2
+TYPE T26 size=3 align=1
+TYPE T27 size=3 align=1
+SYM y2 name="a" base="a" pattern="_*" attr=0x6 seg=4
+b2 BENewBack y2
+- DGLabel b2
+- DGInteger 1 TY_INTEGER
+- DGInteger 2 TY_INTEGER
+- DGInteger 3 TY_INTEGER
+- DGIBytes 2 0
+SYM y3 name="s" base="s" pattern="_*" attr=0x6 seg=4
+b3 BENewBack y3
+- DGLabel b3
+- DGBytes 3 686900
+SYM y4 name="p" base="p" pattern="_*" attr=0x6 seg=4
+b4 BENewBack y4
+- DGLabel b4
+b5 BENewBack y0
+- DGLabel b5
+- DGBytes 3 686900
+- DGBackPtr b5 2 0 TY_POINTER
+SYM y5 name="t" base="t" pattern="_*" attr=0x6 seg=4
+b6 BENewBack y5
+- DGLabel b6
+- DGInteger 1 TY_UINT_1
+- DGInteger 2 TY_INTEGER
+SYM y6 name="d" base="d" pattern="_*" attr=0x6 seg=4
+b7 BENewBack y6
+- DGLabel b7
+- DGBytes 8 000000000000f83f
+SYM y7 name="q" base="q" pattern="_*" attr=0x6 seg=4
+b8 BENewBack y7
+- DGLabel b8
+- DGFEPtr y2 TY_POINTER 2
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+@L_b5 = private constant [3 x i8] c"hi\00"
+@_a = global [8 x i8] c"\01\00\02\00\03\00\00\00"
+@_s = global [3 x i8] c"hi\00"
+@_p = global ptr @L_b5
+@_t = global [3 x i8] c"\01\02\00"
+@_d = global [8 x i8] c"\00\00\00\00\00\00\F8?"
+@_q = global ptr getelementptr (i8, ptr @_a, i16 2)
+@_z = internal constant [2 x i8] zeroinitializer
+```
+
+#### folding and dead code
+
+```c
+int f(int x){ int y = 3*4+1; if (0) return 99; return x*(sizeof(long)+2) + y; }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+SYM y3 name="y" base="y" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 TY_INTEGER
+n6 CGFEName y3 TY_INTEGER
+n7 CGInteger 13 TY_INTEGER
+n8 CGAssign n6 n7 TY_INTEGER
+- CGDone n8
+- CGControl O_GOTO n0 l4
+n9 CGInteger 99 TY_INTEGER
+n10 CGTempName t3 TY_INTEGER
+n11 CGAssign n10 n9 TY_INTEGER
+- CGDone n11
+- CGControl O_LABEL n0 l4
+n12 CGFEName y2 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+n14 CGInteger 6 TY_UNSIGNED
+n15 CGBinary O_TIMES n13 n14 TY_UNSIGNED
+n16 CGFEName y3 TY_INTEGER
+n17 CGUnary O_POINTS n16 TY_INTEGER
+n18 CGBinary O_PLUS n15 n17 TY_UNSIGNED
+n19 CGUnary O_CONVERT n18 TY_INTEGER
+n20 CGTempName t3 TY_INTEGER
+n21 CGAssign n20 n19 TY_INTEGER
+- CGDone n21
+- CGControl O_LABEL n0 l5
+n22 CGTempName t3 TY_INTEGER
+n23 CGUnary O_POINTS n22 TY_INTEGER
+- CGReturn n23 TY_INTEGER
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define i16 @_f(i16 %0) addrspace(1) {
+b1:
+  store i16 %0, ptr %1
+  store i16 13, ptr %3
+  br label %b2
+b2:
+  %4 = load i16, ptr %1
+  %5 = mul i16 %4, 6
+  %6 = load i16, ptr %3
+  %7 = add i16 %5, %6
+  store i16 %7, ptr %2
+  br label %b4
+b3:
+  store i16 99, ptr %2
+  br label %b2
+b4:
+  %8 = load i16, ptr %2
+  ret i16 %8
+}
+```
+
+#### inline functions
+
+```c
+static int sq(int x){ return x*x; }
+int f(int a){ return sq(a)+sq(a); }
+__inline int g(int x){ return x+1; }
+int h(int a){ return g(a); }
+```
+
+Recorded stream:
+
+```
+SYM y1 name="sq" base="sq" pattern="_*" attr=0x43 seg=1
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="x" base="x" pattern="_*" attr=0x0 seg=2
+SYM y3 name="f" base="f" pattern="_*" attr=0x7 seg=1
+- CGProcDecl y3 TY_INTEGER
+SYM y4 name="a" base="a" pattern="_*" attr=0x0 seg=2
+SYM y5 name="h" base="h" pattern="_*" attr=0x7 seg=1
+- CGProcDecl y5 TY_INTEGER
+SYM y6 name="a" base="a" pattern="_*" attr=0x0 seg=2
+SYM y7 name="g" base="g" pattern="_*" attr=0x43 seg=1
+```
+
+MIR as raised (`01-globalopt.ll`; `alloca` and `!tbaa` removed):
+
+```
+define internal i16 @_sq(i16 %0) {
+b1:
+  store i16 %0, ptr %1
+  %3 = load i16, ptr %1
+  %4 = load i16, ptr %1
+  %5 = mul nsw i16 %3, %4
+  store i16 %5, ptr %2
+  %6 = load i16, ptr %2
+...
+```
+
+#### options
+
+`-oa -ol+ -ot -ou` on `addr.c` change the first record from `INIT sw=0x808000 target=0xec size=50` to `INIT sw=0xa68000 target=0xec size=0`: `RELAX_ALIAS` and `LOOP_OPTIMIZATION` set, time rather than size. `hir.rs:386` keeps only `target`.
+
+#### address taken
+
+```c
+int g(int *p);
+int f(void){ int x = 1; int y = 2; g(&x); return x + y; }
+```
+
+```
+SYM y2 name="x" base="x" pattern="_*" attr=0x0 seg=2
+SYM y3 name="y" base="y" pattern="_*" attr=0x0 seg=2
+```
+
+`x` has its address taken and `y` has not; the attributes are equal.
+
+#### debug (`-d2`)
+
+```c
+typedef struct P { int x; unsigned f:3; const char *n; } P;
+enum E { A, B=5 };
+P g(P *p, enum E e, volatile int *v){ return *p; }
+```
+
+```
+d16 DBStruct "P" struct 6
+- DBField d16 0 "x" d6
+- DBBitField d16 2 0 3 "f" d7
+d17 DBPtr TY_POINTER d1
+- DBField d16 4 "n" d17
+d48 DBEnum TY_INTEGER
+- DBConst d48 "A" 0
+- DBConst d48 "B" 5
+d50 DBPtr TY_POINTER d6
+```
+
+`const char *` is `DBPtr` to `char` (`d1`) and `volatile int *` is `DBPtr` to `int` (`d6`): no qualifier reaches the stream.
+
+### Source against stream
+
+| Source says | Stream shows |
+|---|---|
+| `FE_ADDR_TAKEN` is set only for pragma-used variables (`cinfo.c:231-233`) | `&x` leaves `attr=0x0` |
+| `CGSelRange` is never called (`cgen.c:DoSwitch`) | a run of five cases is five `CGSelCase` |
+| `CG_SYM_UNALIGNED` goes out through `CGAttr` | `CGAttr n 2` |
+| `DGFloat` is not used | floats arrive as `DGBytes` |
+| `-d2` sets `CGSW_GEN_NO_OPTIMIZATION` (`coptions.c`) | `sw=0x6988000` has bit `0x4000000` |
+| `x86` `va_start` is a macro | no `O_VA_START`, no `CGVarargsBasePtr`; the shim refuses that call for AXP and MIPS only (`cgshim.c:617`) |
+| the stream's `modify` list is a call-site fact | absent: the shim never asks (`cgshim.c:261-278`) |
+
+No difference contradicted the source.
+
+### Findings filed
+
+Each is a fact the stream carries that `llrm-c` drops or refuses. None is fixed here; the reproducer is the probe above.
+
+| # | Finding | Reproducer |
+|---|---|---|
+| 1 | `noreturn` and `aborts` are in the call class and ignored; the call falls through to `br` | noreturn |
+| 2 | `nomemory` is in the call class and ignored | nomemory |
+| 3 | `CGAttr n 2` (`__unaligned`) is ignored; the load has no `align 1` | unaligned |
+| 4 | `INIT sw` (`-oa`, `-ol`, `-ot`) is ignored | options |
+| 5 | `CGBitMask` is refused: bit fields do not compile on the rich route | bit fields |
+| 6 | `#pragma aux` register parameters are refused | pragma aux |
+| 7 | `__based` is refused (`.DS` has no definition) | based |
+| 8 | `DBBitField` drops start and width | debug |
