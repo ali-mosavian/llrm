@@ -934,3 +934,103 @@ l3:
     let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
     assert_eq!(counters(&printed), 1, "{printed}");
 }
+
+/// `bench/c/mandel.c` as the pass meets it, over two rows: `cx`, the
+/// column's `xOffset - 512 + 24 * px`, read across the inner loop.
+const MANDEL: &str = "define i32 @f(i16 %0) {
+b1:
+  %1 = sext i16 %0 to i32
+  br label %b2
+
+b2:
+  %2 = phi i16 [ -1, %b1 ], [ %12, %b6 ]
+  %3 = phi i32 [ 0, %b1 ], [ %11, %b6 ]
+  %4 = icmp slt i16 %2, 1
+  br i1 %4, label %b4, label %b3
+
+b3:
+  %5 = phi i32 [ %3, %b2 ]
+  ret i32 %5
+
+b4:
+  %6 = sext i16 %2 to i32
+  %7 = mul nsw i32 %6, 24
+  br label %b5
+
+b5:
+  %8 = phi i16 [ -16, %b4 ], [ %24, %b9 ]
+  %9 = phi i32 [ %3, %b4 ], [ %23, %b9 ]
+  %10 = icmp slt i16 %8, 16
+  br i1 %10, label %b7, label %b6
+
+b6:
+  %11 = phi i32 [ %9, %b5 ]
+  %12 = add nsw i16 %2, 1
+  br label %b2
+
+b7:
+  %13 = sext i16 %8 to i32
+  %14 = mul nsw i32 %13, 24
+  %15 = sub nsw i32 %14, 128
+  %16 = add nsw i32 %15, %1
+  br label %b8
+
+b8:
+  %17 = phi i16 [ 0, %b7 ], [ %36, %b11 ]
+  %18 = phi i32 [ 0, %b7 ], [ %33, %b11 ]
+  %19 = phi i32 [ 0, %b7 ], [ %35, %b11 ]
+  %20 = icmp slt i16 %17, 32
+  br i1 %20, label %b10, label %b13
+
+b9:
+  %21 = phi i16 [ %37, %b12 ], [ %38, %b13 ]
+  %22 = zext i16 %21 to i32
+  %23 = add i32 %9, %22
+  %24 = add nsw i16 %8, 1
+  br label %b5
+
+b10:
+  %25 = mul nsw i32 %19, %19
+  %26 = ashr i32 %25, 8
+  %27 = mul nsw i32 %18, %18
+  %28 = ashr i32 %27, 8
+  %29 = add nsw i32 %26, %28
+  %30 = icmp sgt i32 %29, 1024
+  br i1 %30, label %b12, label %b11
+
+b11:
+  %31 = mul nsw i32 %19, %18
+  %32 = ashr i32 %31, 7
+  %33 = add nsw i32 %32, %7
+  %34 = sub nsw i32 %26, %28
+  %35 = add nsw i32 %34, %16
+  %36 = add nsw i16 %17, 1
+  br label %b8
+
+b12:
+  %37 = phi i16 [ %17, %b10 ]
+  br label %b9
+
+b13:
+  %38 = phi i16 [ %17, %b8 ]
+  br label %b9
+}
+";
+
+/// A use rebuilt from a counter is a register while it lives: `cx` built
+/// each column beside a constant counter held two across the inner loop,
+/// and mandel ran 4% more instructions than one counter that is `cx`.
+#[test]
+fn test_a_value_read_across_an_inner_loop_is_its_own_counter() {
+    let printed = same(MANDEL, &[&[0], &[5], &[-7]]);
+    let mut block = "";
+    let mut per_column = Vec::new();
+    for line in printed.lines() {
+        if let Some(label) = line.strip_suffix(':') {
+            block = label;
+        } else if block == "b7" && line.contains("%1") {
+            per_column.push(line);
+        }
+    }
+    assert!(per_column.is_empty(), "{printed}");
+}

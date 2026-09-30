@@ -203,6 +203,8 @@ struct Problem<'a> {
     /// Registers the loop needs before each of its instructions, by block,
     /// whatever is chosen.
     fixed: BTreeMap<i64, Vec<(InstId, i64)>>,
+    /// Where each site's value is live, at the points of `fixed`.
+    alive: Vec<BTreeMap<i64, Vec<bool>>>,
     capacity: i64,
     latch: i64,
     header: i64,
@@ -291,6 +293,7 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
     let live = _live_anyway(function, loop_, &users, exit.as_ref());
     let fixed = _fixed(view, loop_, &web_values, &users, exit.as_ref(), &live);
+    let alive = _alive(function, loop_, &sites);
     let calls = loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions()).any(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)));
     let capacity = if calls && target.call_registers != 0 { target.call_registers } else { target.registers };
     let mut keys = Vec::new();
@@ -307,6 +310,7 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
         exits,
         keys,
         fixed,
+        alive,
         capacity,
         latch: frequency(cfg::block(latch)),
         header: frequency(cfg::block(loop_.header)),
@@ -484,6 +488,18 @@ fn _fixed(view: &memory::Unit, loop_: &Loop, web: &BTreeSet<ValueId>, users: &Us
         .body
         .iter()
         .map(|&at| (at, liveness::pressure_points(function, &found, cfg::block(at), &counted).into_iter().map(|(inst, count)| (inst, count as i64)).collect()))
+        .collect()
+}
+
+/// Where each site's value is live in the loop, before each instruction.
+fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64, Vec<bool>>> {
+    let found = liveness::live(function);
+    sites
+        .iter()
+        .map(|site| {
+            let own = |value: ValueId| value == site.one.value;
+            loop_.body.iter().map(|&at| (at, liveness::pressure_points(function, &found, cfg::block(at), &own).into_iter().map(|(_, count)| count != 0).collect())).collect()
+        })
         .collect()
 }
 
@@ -935,6 +951,9 @@ impl Problem<'_> {
         let mut last = BTreeMap::<(usize, i64, i64), usize>::new();
         let mut address = BTreeSet::<Reg>::new();
         let mut pairs = BTreeSet::<(Reg, Reg)>::new();
+        // Values built from a counter rather than being one.
+        let mut rebuilt = Vec::<usize>::new();
+
         for (index, site) in self.sites.iter().enumerate() {
             match self.choice(set, index)? {
                 (_, Some((_, (exit, key)))) => {
@@ -942,10 +961,15 @@ impl Problem<'_> {
                     held.extend(key);
                     built.extend(key);
                 }
-                (Some((one, _, price)), None) => {
+                (Some((one, fit, price)), None) => {
                     cost += price.cost * site.frequency;
+                    let product = fit.rest.is_zero() && fit.constant == BigInt::from(0) && fit.base.is_none();
+                    if site.inside && site.one.kind == UseKind::Basic && !(product && fit.k == BigInt::from(1)) {
+                        rebuilt.push(index);
+                    }
                     if let Some((k, scaling, block)) = price.product
                         && site.inside
+                        && !(product && rebuilt.last() == Some(&index))
                     {
                         if !products.insert((one, k, block)) {
                             cost -= scaling * site.frequency;
@@ -982,12 +1006,16 @@ impl Problem<'_> {
         let steps = set.iter().filter(|&&one| self.candidates[one].of.step.known().is_none()).count() as i64;
         let new = held.iter().filter(|&&key| !self.free(&self.keys[key])).count() as i64;
         // Counters and invariants live throughout; a product the loop
-        // computes, from its block's top to its last reader.
+        // computes, from its block's top to its last reader; a value built
+        // from a counter, where it is live.
         let peak = self
             .fixed
             .iter()
             .flat_map(|(&block, points)| points.iter().enumerate().map(move |(index, (_, count))| (block, index, *count)))
-            .map(|(block, index, count)| count + last.iter().filter(|(product, read)| product.2 == block && **read >= index).count() as i64)
+            .map(|(block, index, count)| {
+                let values = rebuilt.iter().filter(|&&site| self.alive[site].get(&block).is_some_and(|alive| alive[index])).count() as i64;
+                count + last.iter().filter(|(product, read)| product.2 == block && **read >= index).count() as i64 + values
+            })
             .max()
             .unwrap_or(0);
         let registers = peak + set.len() as i64 + new + steps;
