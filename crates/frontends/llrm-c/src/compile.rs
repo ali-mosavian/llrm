@@ -364,6 +364,7 @@ pub fn assembled(
             .map(|one| one.name.clone())
             .collect(),
         requests: BTreeSet::new(),
+        debug: None,
     };
     if dump.is_some() {
         let text = masm::text(&built)?;

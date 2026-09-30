@@ -16,6 +16,7 @@ use llrm_mir::{
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
 use crate::onerror::{self, Handled};
 
+mod debug;
 mod handling;
 
 /// The layout BC's objects fix: 16-bit near pointers, 32-bit far ones
@@ -241,6 +242,8 @@ struct Tables<'h> {
     nounwind: &'h [String],
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
+    /// Each frame variable's `!var` node, by its function and place.
+    variables: HashMap<(i64, i64), MetadataId>,
 }
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
@@ -277,6 +280,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         classes: HashMap::new(),
         nounwind,
         lines: HashMap::new(),
+        variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
     match class_tags(&mut module, &hir.alias_classes) {
@@ -357,6 +361,14 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         let initializer = data_initializer(&mut module, object, sizes[&object.id], &objects, &tables.data, &code);
         let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
         variable.initializer = Some(initializer);
+    }
+    let declared: HashMap<i64, GlobalId> = functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
+    match debug::emitted(&mut module, &tables, hir, &data, &declared) {
+        Ok(variables) => tables.variables = variables,
+        Err(why) => refused.push((hir.name.clone(), why)),
+    }
+    if let Err(why) = debug::declared(&mut module, &mut tables) {
+        refused.push((hir.name.clone(), why));
     }
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
@@ -1082,6 +1094,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         }
         self.b.position(frame.unwrap_or(self.blocks[&entry.id]));
         self.allocate()?;
+        self.declare_variables();
         if let Some(handled) = handled {
             self.handle(handled, statements)?;
             self.b.br(self.blocks[&entry.id]);

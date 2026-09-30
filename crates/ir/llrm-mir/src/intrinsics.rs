@@ -33,6 +33,10 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llvm.dbg.declare`: the variable its `!var` names lives where its
+    /// argument points. No code; as a debugger may read or write the
+    /// variable at any time, the pointer is captured.
+    DbgDeclare,
     /// Inline machine code, laid down where it is called: its name carries
     /// the bytes, and each argument is a frame place whose displacement it
     /// reads at a byte offset the name gives. It answers what it leaves in
@@ -160,7 +164,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 28] = [
+const TABLE: [Spec; 29] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -243,6 +247,15 @@ const TABLE: [Spec; 28] = [
         returns: Slot::Void,
         parameters: &[(Slot::Any(0), &[])],
         attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llvm.dbg.declare",
+        intrinsic: Intrinsic::DbgDeclare,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &[])],
+        attrs: &["nounwind"],
         memory: &[(Some("argmem"), "readwrite")],
     },
     Spec {

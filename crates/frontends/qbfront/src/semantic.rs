@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod debug;
 mod merging;
 mod assignment;
 mod format_spec;
@@ -340,8 +341,9 @@ struct Compiler {
     data_entries: Vec<u32>,
     pending_numeric_line: Option<u16>,
     current_source_line: usize,
-    /// Each expanded line's main-file line; empty, no lines are written.
-    line_map: Vec<usize>,
+    /// `-g`'s source; None, no debug information.
+    source: Option<DebugSource>,
+    debug: llrm_hir::debug::Builder,
     /// The source line of each load in the function being built.
     load_lines: BTreeMap<u32, usize>,
     warnings: Vec<String>,
@@ -418,21 +420,26 @@ pub fn compile_with_warnings(
     runtime: &str,
     options: &Options,
 ) -> Result<(String, Vec<String>), SemanticError> {
-    compile_with_lines(module, module_name, dialect, runtime, options, &[])
+    compile_debugged(module, module_name, dialect, runtime, options, None)
 }
 
-/// [`compile_with_warnings`], with each instruction's main-file line from
-/// `lines`, indexed by expanded line; empty, no lines.
-pub fn compile_with_lines(
+/// The source `-g` describes: each expanded line's text, and its line in
+/// the main file.
+pub struct DebugSource {
+    pub text: Vec<String>,
+    pub lines: Vec<usize>,
+}
+
+/// [`compile_with_warnings`], with debug information of `source`.
+pub fn compile_debugged(
     module: &Module,
     module_name: &str,
     dialect: Dialect,
     runtime: &str,
     options: &Options,
-    lines: &[usize],
+    source: Option<DebugSource>,
 ) -> Result<(String, Vec<String>), SemanticError> {
-    let mut compiler = built(module, module_name, dialect, runtime, options)?;
-    compiler.line_map = lines.to_vec();
+    let mut compiler = built_from(module, module_name, dialect, runtime, options, source)?;
     // /Ah and /D address every element through the descriptor at run time.
     if options.array_merging && !options.huge_arrays && !options.checked_arrays {
         merging::applied(&mut compiler);
@@ -442,12 +449,19 @@ pub fn compile_with_lines(
 }
 
 /// Every procedure of `module` as HIR, before emission.
-fn built(
+#[cfg(test)]
+fn built(module: &Module, module_name: &str, dialect: Dialect, runtime: &str, options: &Options) -> Result<Compiler, SemanticError> {
+    built_from(module, module_name, dialect, runtime, options, None)
+}
+
+/// [`built`], describing `source` to a debugger.
+fn built_from(
     module: &Module,
     module_name: &str,
     dialect: Dialect,
     runtime: &str,
     options: &Options,
+    source: Option<DebugSource>,
 ) -> Result<Compiler, SemanticError> {
     check_private(module, dialect)?;
     if dialect.zero_based_arrays() {
@@ -468,6 +482,7 @@ fn built(
     let detached_results = detach_results(&mut module, dialect);
     let module = &module;
     let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
+    compiler.source = source;
     compiler.detached_results = detached_results;
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
@@ -482,6 +497,9 @@ fn built(
     compiler.declare_procedure_shared(module)?;
     compiler.finish();
     compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
+    if compiler.source.is_some() {
+        compiler.debug.module_code(1);
+    }
     compiler.module_handled = compiler.functions.iter().any(|one| one.id == 1 && one.error_handler.is_some() && !one.error_handler_local);
 
     compiler.module_variables = compiler.variables.clone();
@@ -588,12 +606,16 @@ fn built(
                 );
             } else if parameter.by_value {
                 let place = compiler.declare_as(&parameter.declaration, "local")?;
+                // The debugger reads the parameter as passed.
+                compiler.debug_forget(place);
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, true);
                 compiler.emit(
                     "store",
                     Vec::new(),
                     vec![Operand::Place(place), Operand::Value(value)],
                 );
             } else {
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, false);
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
@@ -639,6 +661,7 @@ fn built(
                 span: procedure.span,
             };
             let place = compiler.declare_as(&declaration, "local")?;
+            compiler.debug_forget(place);
             compiler.result_place = Some((place, result_type));
             compiler.result_name = Some(canonical(&procedure.name).into());
         }
@@ -680,6 +703,8 @@ fn built(
             },
         );
         compiler.functions.last_mut().expect("the saved function").promises = promises;
+        let result = (procedure.kind == ProcedureKind::Function).then_some(result_type);
+        compiler.debug_function(index as u32 + 2, &procedure.name, procedure.span, result);
     }
     Ok(compiler)
 }
@@ -1362,7 +1387,8 @@ impl Compiler {
             data_entries: Vec::new(),
             pending_numeric_line: None,
             current_source_line: 0,
-            line_map: Vec::new(),
+            source: None,
+            debug: llrm_hir::debug::Builder::default(),
             load_lines: BTreeMap::new(),
             warnings: Vec::new(),
         }
@@ -2247,6 +2273,7 @@ impl Compiler {
             return self.fail(format!("{} is reserved", declaration.name));
         }
         let key = self.declaration_key(declaration)?;
+        let (source, span) = (declaration.name.clone(), declaration.span);
         if storage == "module" && declaration.shared {
             self.shared_keys.insert(key.clone());
         }
@@ -2506,6 +2533,13 @@ impl Compiler {
         });
         if matches!(storage, "local" | "parameter") {
             self.data_offset += extent;
+        }
+        if array_element.is_none() {
+            if storage == "module" {
+                self.debug_global(place_symbol, place_offset, &source, span, type_id);
+            } else {
+                self.debug_variable(place, &source, span, type_id);
+            }
         }
         let descriptor_place = if array_element.is_some() {
             let descriptor_type = self.opaque_type(
@@ -9465,7 +9499,7 @@ impl Compiler {
                     if instruction.nowrap {
                         out.push_str(",\"nowrap\":true");
                     }
-                    let line = self.line_map.get(instruction.line.wrapping_sub(1)).copied().unwrap_or(0);
+                    let line = self.source.as_ref().and_then(|one| one.lines.get(instruction.line.wrapping_sub(1))).copied().unwrap_or(0);
                     if line != 0 {
                         write!(out, ",\"line\":{line}").unwrap();
                     }
@@ -9710,9 +9744,14 @@ impl Compiler {
             }
             type_json(&mut out, type_);
         }
+        out.push(']');
+        if self.source.is_some() {
+            out.push_str(",\"debug\":");
+            out.push_str(&llrm_hir::codec::debug_json(self.debug.built()));
+        }
         write!(
             out,
-            "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {

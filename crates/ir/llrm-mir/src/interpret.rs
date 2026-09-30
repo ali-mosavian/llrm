@@ -315,7 +315,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => void,
+            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare => void,
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
             Intrinsic::Code => return unsupported("inline code"),

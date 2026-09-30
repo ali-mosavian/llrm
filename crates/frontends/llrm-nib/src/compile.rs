@@ -350,6 +350,7 @@ pub fn assembled(
         procedures,
         private: BTreeSet::new(),
         requests: BTreeSet::new(),
+        debug: None,
     })
 }
 

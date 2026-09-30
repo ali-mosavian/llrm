@@ -2,6 +2,7 @@
 //! verifier and escape facts. Lowering to MIR lives in `llrm-core`.
 
 pub mod codec;
+pub mod debug;
 pub mod escape;
 pub mod mir;
 pub mod model;
