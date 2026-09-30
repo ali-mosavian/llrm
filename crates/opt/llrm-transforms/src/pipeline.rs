@@ -107,9 +107,13 @@ impl Options {
         Self { limits: Limits { max_unrolled_operations: 2 * limits.max_unrolled_operations, ..limits }, inline: inline::Threshold(250), ..Self::default() }
     }
 
-    /// -Os: no copy grows the code, and inlining takes LLVM's -Os threshold.
+    /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
+    /// threshold bounds a body's size, and what it admits, a body called
+    /// once or one whose copies cost less than the calls they remove,
+    /// shrinks the code here. A lower one would also refuse a constant-site
+    /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, ..Limits::default() }, inline: inline::Threshold(75), ..Self::default() }
+        Self { limits: Limits { grows: false, ..Limits::default() }, ..Self::default() }
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.
@@ -117,9 +121,9 @@ impl Options {
         !self.limits.grows
     }
 
-    /// -Oz: no loop is copied, and inlining takes LLVM's -Oz threshold.
+    /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
-        Self { unroll: false, peel: false, inline: inline::Threshold(25), ..Self::size() }
+        Self { unroll: false, peel: false, ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
