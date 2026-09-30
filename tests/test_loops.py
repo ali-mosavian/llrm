@@ -396,3 +396,14 @@ def test_a_negative_unsigned_constant_is_written_wrapped_in_nib():
     from cases import cross
     case = next(one for one in cross.cases() if one.tags >= {"counter:u16"})
     assert emit_nib.Emitter(case).const(-1, U16) == "65535"
+
+
+def test_every_fuzz_case_means_something():
+    """The fuzzer's draws found three generator bugs (a walk on a walk that
+    shares an array, an end pointer before its outer loop, continue past a
+    do-while's step); the whole draw must evaluate."""
+    import emit_c
+    from cases import fuzz
+    for case in fuzz.cases():
+        if not emit_c.expressible(case):
+            oracle.evaluate(case, "c")

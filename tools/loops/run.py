@@ -379,6 +379,7 @@ def main() -> int:
     parser.add_argument("--quick", action="store_true", help="the anchors, one configuration: under a minute")
     parser.add_argument("--family", action="append", help="only these families")
     parser.add_argument("--case", action="append", help="only cases whose name starts so")
+    parser.add_argument("--seed", type=int, default=families.SEED, help="the fuzz family's seed")
     parser.add_argument("--lang", action="append", choices=list(EMITTERS))
     parser.add_argument("--config", action="append", help="CPU-OPT, e.g. 486-O2")
     parser.add_argument("--dump", type=Path, default=build.ROOT / "build" / "loops", help="where everything goes")
@@ -390,7 +391,7 @@ def main() -> int:
 
     started = time.monotonic()
     stamp = build.binaries_stamp()
-    cases = families.load(args.family, quick=args.quick)
+    cases = families.load(args.family, quick=args.quick, seed=args.seed)
     if args.case:
         cases = [c for c in cases if any(c.name.startswith(p) for p in args.case)]
     langs = args.lang or list(EMITTERS)

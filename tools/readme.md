@@ -36,6 +36,8 @@ digest of every array it writes. `loops/cases/` holds the families:
   trip, condition, counter width, start, step, element and field, storage,
   2-D walk order, use of the counter (non-affine ones included), shape and a
   second counter.
+- `fuzz`: loops drawn from both at once, every dimension random; `--seed`
+  replays a draw, and each case's note holds its parameters.
 
 `loops/expect.py` derives each inner loop's bound from the spec and the target's
 tables (registers, address-form partners, segments); `loops/quality.py` reads a
