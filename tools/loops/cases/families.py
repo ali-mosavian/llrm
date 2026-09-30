@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from cases import classics, concurrent, cross, fuzz
+from cases import classics, concurrent, cross, fuzz, adversarial
 
 FAMILIES = {
     "classic": lambda quick: classics.cases(),
     "concurrent": concurrent.cases,
     "cross": cross.cases,
     "fuzz": fuzz.cases,
+    "adversarial": adversarial.cases,
 }
 SEED = fuzz.SEED
-QUICK = ("classic", "concurrent", "cross")
+QUICK = ("classic", "concurrent", "cross", "adversarial")
 
 
 def load(names: list[str] | None, quick: bool = False, seed: int = SEED) -> list:
