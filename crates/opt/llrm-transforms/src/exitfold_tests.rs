@@ -133,3 +133,72 @@ fn test_an_uncounted_exit_is_tested_once_on_its_start() {
     let check = printed.split("check:").nth(1).expect("the check block").split("\n\n").next().unwrap_or_default().to_owned();
     assert!(!check.contains("%i"), "{printed}");
 }
+
+/// `i` below `n` and below `len`, the loop reading `@g` and leaving by
+/// either exit with nothing: `store` and `crash` fill the body and the
+/// second exit's block.
+fn scanned(store: &str, crash: &str) -> String {
+    format!(
+        "@g = global [64 x i16] zeroinitializer
+
+declare void @stop() memory(none)
+
+define i16 @f(i16 %n, i16 %len) {{
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %check, label %done
+check:
+  %inside = icmp ult i16 %i, %len
+  br i1 %inside, label %body, label %bad
+body:
+  %p = getelementptr inbounds i16, ptr @g, i16 %i
+  %v = load i16, ptr %p
+{store}  %j = add nuw i16 %i, 1
+  br label %head
+done:
+  ret i16 1
+bad:
+{crash}}}
+"
+    )
+}
+
+/// Where it would leave, on the first trip, as `i` reaches `n` or `len`.
+const SCANS: &[&[i128]] = &[&[0, 5], &[3, 5], &[5, 5], &[7, 9]];
+
+/// A loop that writes nothing and carries nothing out leaves on its first
+/// trip by the exit it would have: each leaves where its count is the loop's.
+#[test]
+fn test_a_read_only_loop_leaves_on_its_first_trip() {
+    let printed = folded(&scanned("", "  ret i16 2\n"), &[&[0, 5], &[3, 5], &[5, 5], &[7, 9], &[9, 4]]);
+    for block in ["head:", "check:"] {
+        let tested = printed.split(block).nth(1).expect(block).split("\n\n").next().unwrap_or_default().to_owned();
+        assert!(!tested.contains("%i,"), "{printed}");
+    }
+}
+
+/// A loop that stores, leaving by an exit that crashes at once touching no
+/// memory, may leave there first: the stores are never seen. The bounds
+/// check comes first; the ordinary exit after it keeps its test.
+#[test]
+fn test_a_storing_loop_leaves_first_where_its_exit_crashes() {
+    let store = "  %q = getelementptr inbounds i16, ptr @g, i16 %n\n  store i16 %v, ptr %q\n";
+    let text = scanned(store, "  call void @stop()\n  unreachable\n")
+        .replace("  %more = icmp ult i16 %i, %n\n  br i1 %more, label %check, label %done", "  %inside = icmp ult i16 %i, %len\n  br i1 %inside, label %check, label %bad")
+        .replace("  %inside = icmp ult i16 %i, %len\n  br i1 %inside, label %body, label %bad", "  %more = icmp ult i16 %i, %n\n  br i1 %more, label %body, label %done");
+    let printed = folded(&text, &[&[0, 5], &[3, 5], &[4, 9]]);
+    let tested = printed.split("head:").nth(1).expect("head").split("\n\n").next().unwrap_or_default().to_owned();
+    assert!(!tested.contains("%i,"), "{printed}");
+    assert!(printed.contains("icmp ult i16 %i, %n"), "{printed}");
+}
+
+/// Stores seen after an ordinary exit keep every trip.
+#[test]
+fn test_a_storing_loop_with_an_ordinary_exit_keeps_its_trips() {
+    let store = "  %q = getelementptr inbounds i16, ptr @g, i16 %n\n  store i16 %v, ptr %q\n";
+    let printed = folded(&scanned(store, "  ret i16 2\n"), SCANS);
+    assert!(printed.contains("icmp ult i16 %i, %len"), "{printed}");
+}

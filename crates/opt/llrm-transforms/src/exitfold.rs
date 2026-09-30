@@ -18,6 +18,13 @@
 //! holds on the first: LLVM's `optimizeLoopExitWithUnknownExitCount`. The
 //! test is of the counter's start; failing it, the loop leaves on the first
 //! trip, as it did.
+//!
+//! A loop that writes nothing, or only plain stores where each exit it
+//! leaves by early crashes at once touching no memory the program sees,
+//! and whose exits carry no values out, leaves on its first trip through
+//! the exit it would have left by: each exit, in dominance order, leaves
+//! where its count is the loop's. LLVM's `predicateLoopExits`, with its
+//! traps.
 
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, AffineOperand, ExitCount, Linear};
@@ -25,12 +32,13 @@ use llrm_analysis::{cfg, guards, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Function, InstId, Operand};
+use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use num_bigint::BigInt;
 
 use crate::counting;
+use crate::expand::{self, Expander};
 
 /// How an exit's branch is decided.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,19 +61,42 @@ struct Hoisted {
 /// Every loop's exits their counts decide, folded, and those tested once
 /// hoisted; whether any was.
 pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
-    let (decided, hoisted) = {
+    let (decided, hoisted, predicated) = {
         let unit = memory::Unit::within(context, layout, function, outer);
         let facts = unit.registers();
         let loops = unit.shape().loops.clone();
         let mut decided = Vec::new();
         let mut hoisted = Vec::new();
+        let mut predicated = Vec::new();
         for loop_ in &loops {
             let exits = induction::exits(&unit, loop_, Some(&facts), false);
-            decided.extend(_decided(&unit, loop_, &exits));
-            hoisted.extend(_hoisted(&unit, loop_, &exits));
+            let folding = _decided(&unit, loop_, &exits);
+            let lifting = _hoisted(&unit, loop_, &exits);
+            // One rewrite of a loop's exits a round: each reads them as they were.
+            if folding.is_empty() && lifting.is_empty() {
+                predicated.extend(_predicated(&unit, outer, loop_, &exits));
+            }
+            decided.extend(folding);
+            hoisted.extend(lifting);
         }
-        (decided, hoisted)
+        (decided, hoisted, predicated)
     };
+    for one in &predicated {
+        let mut expander = Expander::new(one.before);
+        let loop_count = expander.least(context, function, &one.loop_count);
+        for (branch, exit, count) in &one.exits {
+            let stays_on_true = !matches!(function.instruction(*branch).operands[..], [_, Operand::Block(yes), _] if cfg::id(yes) == *exit);
+            let condition = if *count == one.loop_count {
+                counting::constant(context, &BigInt::from(u8::from(!stays_on_true)), 1)
+            } else {
+                let own = expander.least(context, function, count);
+                let predicate = if stays_on_true { IntPredicate::Ne } else { IntPredicate::Eq };
+                let bit = context.types.int(1);
+                expand::placed(context, function, Opcode::ICmp(predicate), bit, vec![own, loop_count], Position::Before(one.before))
+            };
+            _replaced(function, *branch, condition);
+        }
+    }
     for one in &hoisted {
         let stays_on_true = !matches!(function.instruction(one.branch).operands[..], [_, Operand::Block(yes), _] if cfg::id(yes) == one.exit);
         let predicate = if stays_on_true { one.predicate } else { one.predicate.inverse() };
@@ -76,14 +107,7 @@ pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Functio
         let bit = context.types.int(1);
         let test = function.create_instruction(Opcode::ICmp(predicate), bit, vec![left, one.right], Flags::default(), None);
         function.insert(test, Position::Before(one.before)).expect("a preheader's branch");
-        let replaced = function.instruction(one.branch).operands[0];
-        function.set_operand(one.branch, 0, Operand::Value(function.instruction(test).result.expect("a value")));
-        if let Operand::Value(old) = replaced
-            && function.users(old).is_empty()
-            && let llrm_mir::module::ValueDef::Instruction(inst) = function.value(old).def
-        {
-            function.erase(inst).expect("an unused compare");
-        }
+        _replaced(function, one.branch, Operand::Value(function.instruction(test).result.expect("a value")));
     }
     for &(branch, exit, way) in &decided {
         let stays_on_true = !matches!(function.instruction(branch).operands[..], [_, Operand::Block(yes), _] if cfg::id(yes) == exit);
@@ -91,7 +115,87 @@ pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Functio
         let condition = counting::constant(context, &BigInt::from(u8::from(holds)), 1);
         function.set_operand(branch, 0, condition);
     }
-    !decided.is_empty() || !hoisted.is_empty()
+    !decided.is_empty() || !hoisted.is_empty() || !predicated.is_empty()
+}
+
+/// `branch` on `condition`, its old compare gone where nothing else read it.
+fn _replaced(function: &mut Function, branch: InstId, condition: Operand) {
+    let replaced = function.instruction(branch).operands[0];
+    function.set_operand(branch, 0, condition);
+    if let Operand::Value(old) = replaced
+        && function.users(old).is_empty()
+        && let ValueDef::Instruction(inst) = function.value(old).def
+    {
+        function.erase(inst).expect("an unused compare");
+    }
+}
+
+/// A loop's exits, each leaving where its count is the loop's.
+struct Predicated {
+    before: InstId,
+    loop_count: Vec<Linear>,
+    exits: Vec<(InstId, i64, Vec<Linear>)>,
+}
+
+/// The exits of `loop_` that may leave on its first trip, where it writes
+/// nothing, or only plain stores that each of them crashing hides.
+fn _predicated(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCount]) -> Option<Predicated> {
+    let function = unit.function;
+    let loop_count = induction::backedges(exits)?;
+    let width = loop_count[0].width;
+    let header = cfg::block(loop_.header);
+    let outside = function.predecessors(header).into_iter().filter(|&one| !loop_.body.contains(&cfg::id(one))).collect::<Vec<_>>();
+    let [preheader] = outside[..] else { return None };
+    let before = function.terminator(preheader)?;
+    let innermost = |at: i64| unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len());
+    // Up to the first exit that cannot be: a later one may not take its trip.
+    let mut chosen = Vec::new();
+    for exit in exits {
+        let condition = function.instruction(exit.branch).operands.first().copied();
+        let phis = function.block(cfg::block(exit.exit)).instructions().iter().any(|&inst| function.instruction(inst).opcode == Opcode::Phi);
+        let Some(count) = exit.taken.clone().filter(|count| count.iter().all(|one| one.width == width)) else { break };
+        if !innermost(exit.block) || matches!(condition, Some(Operand::Constant(_))) || phis {
+            break;
+        }
+        chosen.push((exit.branch, exit.exit, count));
+    }
+    if chosen.is_empty() {
+        return None;
+    }
+    // Only plain stores, and only where every chosen exit crashes quietly.
+    let mut stores = false;
+    for &at in &loop_.body {
+        for &inst in function.block(cfg::block(at)).instructions() {
+            let op = function.instruction(inst);
+            let effects = llrm_mir::memory::of(unit.context, outer.callees(), function, inst);
+            match op.opcode {
+                Opcode::Store { volatile: false, .. } => stores = true,
+                Opcode::Call(_) | Opcode::Invoke(_) if effects.writes || !llrm_mir::memory::call_returns(unit.context, outer.callees(), function, inst) => return None,
+                Opcode::Load { volatile: true, .. } | Opcode::Store { .. } => return None,
+                _ => {}
+            }
+        }
+    }
+    // Stores stay unseen only up to the first exit that does not crash.
+    if stores {
+        let quiet = chosen.iter().take_while(|&&(branch, _, _)| _crashes(unit, outer, branch)).count();
+        chosen.truncate(quiet);
+    }
+    (!chosen.is_empty()).then_some(Predicated { before, loop_count, exits: chosen })
+}
+
+/// Whether one way out of `branch` crashes at once, touching no memory the
+/// program sees: calls that write none, then `unreachable`.
+fn _crashes(unit: &memory::Unit, outer: &Outer, branch: InstId) -> bool {
+    let function = unit.function;
+    function.instruction(branch).operands[1..].iter().any(|to| {
+        let Operand::Block(to) = *to else { return false };
+        let body = function.block(to).instructions();
+        body.last().is_some_and(|&last| function.instruction(last).opcode == Opcode::Unreachable)
+            && body[..body.len() - 1].iter().all(|&inst| {
+                matches!(function.instruction(inst).opcode, Opcode::Call(_)) && !llrm_mir::memory::of(unit.context, outer.callees(), function, inst).writes
+            })
+    })
 }
 
 /// The exits of `loop_` no count decides that one test before it may.
