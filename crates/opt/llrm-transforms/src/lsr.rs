@@ -796,8 +796,9 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
         UseKind::Address => {
             let native = target.forms.first()?;
             if pointer_base(&fit) {
-                // A constant or frame base is a displacement: only a value holds a register.
-                let held = fit.base.filter(|base| matches!(base, Operand::Value(value) if !frames.contains(value)));
+                // A global is a displacement beside two registers; a frame object
+                // takes BP for its own, and leaves one register for all it adds.
+                let held = fit.base.filter(|base| matches!(base, Operand::Value(_)));
                 let key = _interned(keys, (held, fit.rest.clone()));
                 price.held.push(key);
                 price.address.push(Reg::Held(key));

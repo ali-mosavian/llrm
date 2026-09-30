@@ -1250,3 +1250,77 @@ l3:
     let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2), ("c", "i16", 2)], "i16", body), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
     assert_eq!(counters(&printed), 1, "{printed}");
 }
+
+/// Three local word arrays, filled, then `a[i + 8]` of each summed into a
+/// long to a symbolic `n`: conc3's local arrays.
+const FRAME_SUM: &str = "define i32 @f(i16 %n, i16 %k) {
+start:
+  %fa = alloca [600 x i8]
+  %fb = alloca [600 x i8]
+  %fc = alloca [600 x i8]
+  br label %fill
+
+fill:
+  %g = phi i16 [ 0, %start ], [ %g.next, %fill ]
+  %go = mul nsw i16 %g, 2
+  %qa = getelementptr inbounds i8, ptr %fa, i16 %go
+  store i16 %g, ptr %qa
+  %qb = getelementptr inbounds i8, ptr %fb, i16 %go
+  store i16 %g, ptr %qb
+  %qc = getelementptr inbounds i8, ptr %fc, i16 %go
+  store i16 %g, ptr %qc
+  %g.next = add nsw i16 %g, 1
+  %gc = icmp slt i16 %g.next, 60
+  br i1 %gc, label %fill, label %l0
+
+l0:
+  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %l0 ], [ %i.next, %l2 ]
+  %s = phi i32 [ 0, %l0 ], [ %t, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %x = add nsw i16 %i, 8
+  %o = mul nsw i16 %x, 2
+  %pa = getelementptr inbounds i8, ptr %fa, i16 %o
+  %va = load i16, ptr %pa
+  %xa = sext i16 %va to i32
+  %u = add nsw i32 %s, %xa
+  %pb = getelementptr inbounds i8, ptr %fb, i16 %o
+  %vb = load i16, ptr %pb
+  %xb = sext i16 %vb to i32
+  %w = add nsw i32 %u, %xb
+  %pc = getelementptr inbounds i8, ptr %fc, i16 %o
+  %vc = load i16, ptr %pc
+  %xc = sext i16 %vc to i32
+  %t = add nsw i32 %w, %xc
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  %r = add nsw i32 %s, 1
+  ret i32 %r
+}
+";
+
+/// Frame arrays are not displacements: BP is their base and leaves one
+/// register for what they add, so each array's `array + 2n` is a register
+/// of its own, and priced so. Read as one shared base, conc3's three local
+/// arrays kept one counter and spilled three pointers reloaded each trip.
+#[test]
+fn test_frame_arrays_keep_their_own_pointers() {
+    let before = parsed(&format!("{DOS}{FRAME_SUM}"));
+    let mut after = before.clone();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr);
+    manager.run_module(&mut after, Rc::new(llrm_x86_code16::Dos::default())).unwrap();
+    let printed = printed(&after);
+    let inputs: &[&[i128]] = &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]];
+    assert_eq!(results(&parsed(&printed), inputs), results(&before, inputs), "{printed}");
+    // The fill's two, and the loop's two: an offset and a count to zero.
+    assert_eq!(counters(&printed), 4, "{printed}");
+}
