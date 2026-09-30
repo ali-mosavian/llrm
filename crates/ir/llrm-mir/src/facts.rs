@@ -11,7 +11,7 @@
 //! through [`Facts`] and never parses an attribute by name.
 
 use crate::module::Function;
-use crate::opcode::Attribute;
+use crate::opcode::{Attribute, Flags};
 
 /// The kind of thing a fact is stated of.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +62,7 @@ macro_rules! facts {
         flags { $($flag:ident $fmethod:ident $fkey:literal on [$($fkind:ident),+] $fpolicy:expr;)* }
         valued { $($valued:ident($vty:ty) $vmethod:ident $vkey:literal on [$($vkind:ident),+] $vpolicy:expr;)* }
         custom { $($custom:ident($cty:ty) $cmethod:ident $ckey:literal on [$($ckind:ident),+] $cpolicy:expr;)* }
+        bits { $($bit:ident $bmethod:ident $bkey:literal $bflag:expr, on [$($bkind:ident),+] $bpolicy:expr;)* }
     ) => {
         /// A promise of the language, stated once per subject.
         #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -69,6 +70,7 @@ macro_rules! facts {
             $($flag,)*
             $($valued($vty),)*
             $($custom($cty),)*
+            $($bit,)*
         }
 
         impl Fact {
@@ -79,6 +81,7 @@ macro_rules! facts {
                     $(Fact::$flag => $fkey,)*
                     $(Fact::$valued(_) => $vkey,)*
                     $(Fact::$custom(_) => $ckey,)*
+                    $(Fact::$bit => $bkey,)*
                 }
             }
 
@@ -88,6 +91,7 @@ macro_rules! facts {
                     $(Fact::$flag => &[$(Kind::$fkind),+],)*
                     $(Fact::$valued(_) => &[$(Kind::$vkind),+],)*
                     $(Fact::$custom(_) => &[$(Kind::$ckind),+],)*
+                    $(Fact::$bit => &[$(Kind::$bkind),+],)*
                 }
             }
 
@@ -97,12 +101,13 @@ macro_rules! facts {
                     $(Fact::$flag => $fpolicy,)*
                     $(Fact::$valued(_) => $vpolicy,)*
                     $(Fact::$custom(_) => $cpolicy,)*
+                    $(Fact::$bit => $bpolicy,)*
                 }
             }
 
             /// Whether the name is a fact's.
             pub fn is_named(key: &str) -> bool {
-                [$($fkey,)* $($vkey,)* $($ckey,)*].contains(&key)
+                [$($fkey,)* $($vkey,)* $($ckey,)* $($bkey,)*].contains(&key)
             }
 
             /// The fact of a flag's name.
@@ -119,6 +124,7 @@ macro_rules! facts {
             pub fn wire_value(self) -> Option<i64> {
                 match self {
                     $(Fact::$flag => None,)*
+                    $(Fact::$bit => None,)*
                     $(Fact::$valued(value) => Some(value as i64),)*
                     $(Fact::$custom(value) => Some(Wire::wire(value)),)*
                 }
@@ -128,15 +134,31 @@ macro_rules! facts {
             pub fn from_wire(key: &str, value: Option<i64>) -> Option<Fact> {
                 match (key, value) {
                     $(($fkey, None) => Some(Fact::$flag),)*
+                    $(($bkey, None) => Some(Fact::$bit),)*
                     $(($vkey, Some(value)) => Some(Fact::$valued(value as $vty)),)*
                     $(($ckey, Some(value)) => <$cty as Wire>::unwire(value).map(Fact::$custom),)*
                     _ => None,
                 }
             }
 
+            /// The instruction flags a fact is, none where it is an attribute.
+            pub fn flags(self) -> Flags {
+                match self {
+                    $(Fact::$bit => $bflag,)*
+                    _ => Flags::default(),
+                }
+            }
+
+            /// The facts that flags state.
+            pub fn of_flags(flags: Flags) -> Vec<Fact> {
+                let mut facts = Vec::new();
+                $(if flags.contains($bflag) { facts.push(Fact::$bit); })*
+                facts
+            }
+
             /// One of each fact, for tests that must name every one.
             pub fn examples() -> Vec<Fact> {
-                vec![$(Fact::$flag,)* $(Fact::$valued(Default::default()),)* $(Fact::$custom(Default::default()),)*]
+                vec![$(Fact::$flag,)* $(Fact::$valued(Default::default()),)* $(Fact::$custom(Default::default()),)* $(Fact::$bit,)*]
             }
         }
 
@@ -146,6 +168,9 @@ macro_rules! facts {
             })*
             $(pub fn $vmethod(&self) -> Option<$vty> {
                 self.0.iter().find_map(|fact| if let Fact::$valued(value) = fact { Some(*value) } else { None })
+            })*
+            $(pub fn $bmethod(&self) -> bool {
+                self.contains(Fact::$bit)
             })*
             $(pub fn $cmethod(&self) -> Option<$cty> {
                 self.0.iter().find_map(|fact| if let Fact::$custom(value) = fact { Some(*value) } else { None })
@@ -176,11 +201,8 @@ facts! {
     flags {
         NoAlias no_alias "noalias" on [Param] Policy::DECLARED;
         ReadOnly read_only "readonly" on [Param] Policy::DECLARED;
-        NoCapture no_capture "nocapture" on [Param] Policy::DECLARED;
         NonNull non_null "nonnull" on [Param] Policy::DECLARED;
         NoReturn no_return "noreturn" on [Function, Callable] Policy::DECLARED;
-        NoUnwind no_unwind "nounwind" on [Function, Callable] Policy::DECLARED;
-        WillReturn will_return "willreturn" on [Function, Callable] Policy::DECLARED;
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param] Policy::DECLARED;
@@ -188,15 +210,21 @@ facts! {
     custom {
         Memory(Effect) memory "memory" on [Function, Callable] Policy::DECLARED;
     }
+    bits {
+        NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction] Policy { merge: Merge::Intersect, hoist: Hoist::Keep };
+        NoUnsignedWrap no_unsigned_wrap "nuw" Flags::NUW, on [Instruction] Policy { merge: Merge::Intersect, hoist: Hoist::Keep };
+    }
 }
 
 impl Fact {
-    /// The MIR carrier of the fact.
-    pub fn attribute(self) -> Attribute {
+    /// The MIR attribute that carries the fact, none where it is an
+    /// instruction flag.
+    pub fn attribute(self) -> Option<Attribute> {
         match self {
-            Fact::Dereferenceable(bytes) => Attribute::Int(self.key().to_owned(), bytes),
-            Fact::Memory(effect) => Attribute::Memory(vec![(None, effect.spelled().to_owned())]),
-            _ => Attribute::Flag(self.key().to_owned()),
+            Fact::Dereferenceable(bytes) => Some(Attribute::Int(self.key().to_owned(), bytes)),
+            Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
+            Fact::NoSignedWrap | Fact::NoUnsignedWrap => None,
+            _ => Some(Attribute::Flag(self.key().to_owned())),
         }
     }
 
@@ -254,6 +282,11 @@ impl Facts {
         Facts(facts)
     }
 
+    /// The facts an instruction's flags state.
+    pub fn of_flags(flags: Flags) -> Facts {
+        Facts(Fact::of_flags(flags))
+    }
+
     /// Those of `function`'s `index`th parameter.
     pub fn param(function: &Function, index: usize) -> Facts {
         Facts::of(function.parameter_attrs.get(index).map(Vec::as_slice).unwrap_or_default())
@@ -290,7 +323,10 @@ mod tests {
     #[test]
     fn every_fact_round_trips_through_its_attribute() {
         for fact in Fact::examples() {
-            assert_eq!(Fact::of_attribute(&fact.attribute()), Some(fact), "{}", fact.key());
+            match fact.attribute() {
+                Some(attribute) => assert_eq!(Fact::of_attribute(&attribute), Some(fact), "{}", fact.key()),
+                None => assert!(Fact::of_flags(fact.flags()).contains(&fact), "{} is a flag", fact.key()),
+            }
             assert!(Fact::is_named(fact.key()));
             assert_eq!(Fact::from_wire(fact.key(), fact.wire_value()), Some(fact), "{} on the wire", fact.key());
             assert!(!fact.kinds().is_empty(), "{} is of no subject", fact.key());
@@ -310,7 +346,7 @@ mod tests {
     /// A declared fact survives a merge and a move.
     #[test]
     fn a_declared_fact_is_not_changed_by_merge_or_speculation() {
-        let facts = Facts::of(&[Fact::NoAlias.attribute()]);
+        let facts = Facts::of(&[Fact::NoAlias.attribute().unwrap()]);
         assert!(facts.merged(&Facts::default()).no_alias());
         assert!(facts.speculated().no_alias());
     }

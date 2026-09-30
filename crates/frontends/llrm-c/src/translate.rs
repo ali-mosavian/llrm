@@ -397,6 +397,8 @@ struct Open {
 }
 
 struct Body<'a, 't> {
+    /// The facts the language states of instructions, by instruction id.
+    stated_instructions: Vec<(i64, Fact)>,
     shared: &'a Shared<'a>,
     unit: &'a hir::Unit,
     proc: &'a hir::Proc,
@@ -555,6 +557,7 @@ impl<'a, 't> Body<'a, 't> {
             globals: HashMap::new(),
             done: HashMap::new(),
             selects: IndexMap::default(),
+            stated_instructions: Vec::new(),
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
@@ -577,6 +580,7 @@ impl<'a, 't> Body<'a, 't> {
             body.statement(one)?;
         }
         body.finish()?;
+        let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
         let body_widths: HashMap<i64, i64> = parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
         let parameter_bytes = body_widths.values().sum();
         let blocks = body
@@ -592,6 +596,9 @@ impl<'a, 't> Body<'a, 't> {
             linkage,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
         };
+        for (instruction, fact) in std::mem::take(&mut body_instruction_facts) {
+            facts.state(Subject::Instruction { function: id, id: instruction }, fact);
+        }
         for (value, fact) in stated {
             let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
             facts.state(Subject::Param { function: id, index }, fact);
@@ -679,6 +686,13 @@ impl<'a, 't> Body<'a, 't> {
         let block = &mut self.blocks[self.current];
         block.instructions.push(made);
         block.instructions.last_mut().expect("just pushed")
+    }
+
+    /// That C promises the result of instruction `id` fits its type.
+    fn state_no_wrap(&mut self, id: i64, promised: bool) {
+        if promised {
+            self.stated_instructions.push((id, Fact::NoSignedWrap));
+        }
     }
 
     /// `op` of `operands`, a value of type `ty`.
@@ -1440,7 +1454,8 @@ impl<'a, 't> Body<'a, 't> {
                 let bits = self.bits(value).ok_or_else(|| Unsupported(format!("{}: negation of a non-integer", self.name())))?;
                 let nowrap = self.wraps(type_, bits);
                 let result = self.value(ty);
-                self.instruction(Op::Neg, vec![result], vec![value_ref(value)]).nowrap = nowrap;
+                let id = self.instruction(Op::Neg, vec![result], vec![value_ref(value)]).id;
+                self.state_no_wrap(id, nowrap);
                 result
             }
             ("O_COMPLEMENT", false) => {
@@ -1563,7 +1578,8 @@ impl<'a, 't> Body<'a, 't> {
             other => return self.refuse(other.to_owned()),
         };
         let result = self.value(ty);
-        self.instruction(op, vec![result], vec![value_ref(a), value_ref(b)]).nowrap = nowrap;
+        let id = self.instruction(op, vec![result], vec![value_ref(a), value_ref(b)]).id;
+        self.state_no_wrap(id, nowrap);
         Ok(result)
     }
 

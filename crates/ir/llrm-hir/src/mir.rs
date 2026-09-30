@@ -222,6 +222,8 @@ fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMa
 }
 
 struct Tables<'h> {
+    /// The flags facts state of each instruction, by function and instruction id.
+    instruction_flags: HashMap<(i64, i64), Flags>,
     array_order: model::ArrayOrder,
     /// The module body's ON ERROR GOTO handlers, which every procedure's pad calls.
     module_handler: Option<handling::ModuleHandler>,
@@ -267,7 +269,15 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
+    let mut instruction_flags: HashMap<(i64, i64), Flags> = HashMap::new();
+    for one in &hir.facts {
+        if let Subject::Instruction { function, id } = one.subject {
+            let flags = instruction_flags.entry((function, id)).or_default();
+            flags.insert(one.fact.flags());
+        }
+    }
     let mut tables = Tables {
+        instruction_flags,
         array_order,
         module_handler: None,
         zeroed,
@@ -684,7 +694,11 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
 fn lower_facts(module: &mut Module, global: GlobalId, function: &model::Function, stated: &[Stated]) -> Emit<()> {
     let llrm_mir::GlobalKind::Function(defined) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
     for one in stated.iter().filter(|one| one.subject.function() == Some(function.id)) {
-        let attribute = one.fact.attribute();
+        // An instruction's facts are its flags, made with the instruction.
+        if matches!(one.subject, Subject::Instruction { .. }) {
+            continue;
+        }
+        let attribute = one.fact.attribute().ok_or_else(|| format!("{}: {} is an instruction flag, not of a {}", function.name, one.fact.key(), Subject::kind_key(one.subject.kind())))?;
         let attrs = match one.subject {
             Subject::Param { index, .. } => defined.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
             Subject::Function(_) => &mut defined.attrs,
@@ -706,7 +720,7 @@ fn lower_callable_fact(module: &mut Module, tables: &Tables, hir: &model::Module
     let Some(&reference) = tables.callees.get(&callable.name) else { return Ok(()) };
     let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
     let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
-    let attribute = stated.fact.attribute();
+    let attribute = stated.fact.attribute().ok_or_else(|| format!("{}: {} is an instruction flag", callable.name, stated.fact.key()))?;
     if !function.attrs.contains(&attribute) {
         function.attrs.push(attribute);
     }
@@ -1059,6 +1073,13 @@ fn mark_cold(function: &mut Function, block: BlockId) {
             function.replace_all_uses_with(from, Value::Value(to));
         }
         function.erase(inst).expect("its uses moved to the cold call");
+    }
+}
+
+impl Body<'_, '_, '_> {
+    /// The flags the language's facts give an instruction.
+    fn stated_flags(&self, instruction: &model::Instruction) -> Flags {
+        self.tables.instruction_flags.get(&(self.function.id, instruction.id)).copied().unwrap_or_default()
     }
 }
 
@@ -1438,7 +1459,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
             // A shift count is its own width; LLVM's is the shifted value's.
             let b = if matches!(op, Op::Shl | Op::Shr | Op::Sar) { self.count(b, self.b.type_of(a))? } else { b };
-            let flags = if instruction.nowrap && matches!(op, Op::Add | Op::Sub | Op::Mul) { Flags::NSW } else { Flags::default() };
+            let flags = if matches!(op, Op::Add | Op::Sub | Op::Mul) { self.stated_flags(instruction) } else { Flags::default() };
             let result = self.b.binary(binary, a, b, flags, "");
             self.define(instruction, result);
             return Ok(());
@@ -1542,7 +1563,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[0])?;
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a negated non-integer")?;
                 let zero = self.b.int(bits, 0);
-                let flags = if instruction.nowrap { Flags::NSW } else { Flags::default() };
+                let flags = self.stated_flags(instruction);
                 let result = self.b.binary(BinaryOp::Sub, zero, value, flags, "");
                 self.define(instruction, result);
             }

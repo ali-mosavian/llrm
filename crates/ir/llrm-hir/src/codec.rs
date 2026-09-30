@@ -174,9 +174,6 @@ impl _Plain for model::Instruction {
         if let Some(asm) = &self.asm {
             out.insert("asm".to_owned(), asm._plain());
         }
-        if self.nowrap {
-            out.insert("nowrap".to_owned(), self.nowrap._plain());
-        }
         if self.inbounds {
             out.insert("inbounds".to_owned(), self.inbounds._plain());
         }
@@ -988,7 +985,6 @@ static INSTRUCTION: _Record = _Record {
         ("callee", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
         ("pure", _Hint::Bool, false),
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
-        ("nowrap", _Hint::Bool, false),
         ("inbounds", _Hint::Bool, false),
         ("line", _Hint::Union(&[_Hint::Int, _Hint::NoneType]), false),
     ],
@@ -1001,7 +997,6 @@ static INSTRUCTION: _Record = _Record {
             callee: _default(args, "callee", None)?,
             pure: _default(args, "pure", false)?,
             asm: _default(args, "asm", None)?,
-            nowrap: _default(args, "nowrap", false)?,
             inbounds: _default(args, "inbounds", false)?,
             line: _default(args, "line", None)?,
         })

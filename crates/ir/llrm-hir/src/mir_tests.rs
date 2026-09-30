@@ -440,10 +440,10 @@ fn the_facts_of_a_parameter_become_its_attributes() {
     let mut program = program(difference());
     let mut facts = Builder::new("test");
     let second = Subject::Param { function: 1, index: 1 };
-    facts.state(second, Fact::NoAlias).state(second, Fact::ReadOnly).state(second, Fact::Dereferenceable(10)).state(second, Fact::NoCapture).state(second, Fact::NonNull);
+    facts.state(second, Fact::NoAlias).state(second, Fact::ReadOnly).state(second, Fact::Dereferenceable(10)).state(second, Fact::NonNull);
     program.modules[0].facts = facts.finish();
     let text = llrm_mir::print::module(&emit(&program).remove(0).module);
-    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) nocapture nonnull %1)"), "{text}");
+    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) nonnull %1)"), "{text}");
 }
 
 /// A string comparison compares its callee's sign with zero; it was
@@ -553,11 +553,15 @@ fn a_value_is_emitted_before_a_use_listed_ahead_of_it() {
 /// A FOR loop's step promises its counter fits, and the rich route dropped
 /// the promise: its add reached MIR without `nsw`.
 #[test]
-fn a_nowrap_promise_is_nsw() {
+fn a_no_signed_wrap_fact_is_nsw() {
+    use crate::facts::{Builder, Subject};
     let mut function = difference();
     function.blocks[0].instructions[0].op = Op::Add;
-    function.blocks[0].instructions[0].nowrap = true;
-    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
+    let mut program = program(function);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, llrm_mir::facts::Fact::NoSignedWrap);
+    program.modules[0].facts = facts.finish();
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
     assert!(text.contains("%2 = add nsw i16 %0, %1"), "{text}");
 }
 

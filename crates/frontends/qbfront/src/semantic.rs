@@ -9539,9 +9539,6 @@ impl Compiler {
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
                     out.push(']');
-                    if instruction.nowrap {
-                        out.push_str(",\"nowrap\":true");
-                    }
                     let line = if lined { self.main_line(instruction.line) } else { 0 };
                     if line != 0 {
                         write!(out, ",\"line\":{line}").unwrap();
@@ -9783,6 +9780,12 @@ impl Compiler {
             for &(value, bytes) in &function.promises {
                 let index = function.parameters.iter().position(|&one| one == value).expect("a promise of a parameter") as i64;
                 facts.state(llrm_hir::facts::Subject::Param { function: i64::from(function.id), index }, llrm_hir::facts::Fact::Dereferenceable(bytes as u64));
+            }
+        }
+        // What the language promises of a FOR counter's add: it does not wrap.
+        for function in &self.functions {
+            for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
+                facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
             }
         }
         let facts = facts.finish();

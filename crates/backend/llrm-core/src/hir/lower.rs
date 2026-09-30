@@ -314,7 +314,18 @@ pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
             .collect();
         let symbols = _Symbols::new(module);
         for function in &module.functions {
+            // The adds the language promises do not wrap, by instruction id.
+            let no_wrap: std::collections::HashSet<i64> = module
+                .facts
+                .iter()
+                .filter(|one| one.fact == llrm_mir::facts::Fact::NoSignedWrap)
+                .filter_map(|one| match one.subject {
+                    llrm_hir::facts::Subject::Instruction { function: owner, id } if owner == function.id => Some(id),
+                    _ => None,
+                })
+                .collect();
             out.push(_function(
+                &no_wrap,
                 &module.name,
                 &_materialized_booleans(&_taken_branches(function), &types),
                 &types,
@@ -1787,6 +1798,7 @@ impl<'a> _Scope<'a> {
 }
 
 fn _function(
+    no_wrap: &std::collections::HashSet<i64>,
     module: &str,
     function: &model::Function,
     types: &IndexMap<i64, &model::Type>,
@@ -1864,7 +1876,7 @@ fn _function(
         let mut pending_source: Vec<i64> = Vec::new();
         for instruction in &source.instructions {
             let mut made = scope.operation(instruction)?;
-            if instruction.nowrap {
+            if no_wrap.contains(&instruction.id) {
                 // The promise is the add's own, the last op; what materialized
                 // its operands comes before.
                 if let Some(op) = made.last_mut().filter(|op| op.kind == mir::Kind::Add) {

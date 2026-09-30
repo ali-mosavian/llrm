@@ -1957,6 +1957,28 @@ fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
     assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly]);
 }
 
+/// `for i in 0..n` adds one to a counter that is below `n`: it cannot wrap,
+/// signed or unsigned. Stated, `nsw` or `nuw` on that add is what makes a
+/// variable bound a counted loop; unstated, the trip count was unknown.
+#[test]
+fn test_a_range_loops_counter_does_not_wrap() {
+    use llrm_mir::facts::Fact;
+    let directory = tempfile::tempdir().unwrap();
+    let stated = |type_name: &str| -> Vec<Fact> {
+        let source = format!("fn total(n: {type_name}) -> {type_name}:\n    let mut s: {type_name} = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n");
+        let program = parsed(&written(&directory, &format!("{type_name}.nib"), &source));
+        let total = function(&program, "total");
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == total.id))
+            .map(|one| one.fact)
+            .collect()
+    };
+    assert_eq!(stated("i16"), vec![Fact::NoSignedWrap]);
+    assert_eq!(stated("u16"), vec![Fact::NoUnsignedWrap]);
+}
+
 /// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as
 /// -O2 does, an object as large.
 #[test]
