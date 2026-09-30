@@ -30,7 +30,7 @@ use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use num_traits::ToPrimitive;
@@ -39,6 +39,7 @@ use llrm_support::hash::HashMap;
 use num_bigint::BigInt;
 
 use crate::counting::{self, Seeds};
+use crate::expand::{self, Expander};
 use crate::spill::{self, Room, Traffic};
 use crate::{dead, profit, rotate};
 
@@ -614,7 +615,7 @@ fn _frames(function: &Function) -> BTreeSet<ValueId> {
 fn _built(target: &Target, key: &Key) -> i64 {
     let costs = &target.costs;
     let (pointer, sum) = key;
-    let mut cost = sum.terms.values().map(|factor| _scaling(target, &BigInt::from(_signed(factor, sum.width).magnitude().clone()))).sum::<i64>();
+    let mut cost = sum.terms.values().map(|factor| _scaling(target, &BigInt::from(expand::signed(factor, sum.width).magnitude().clone()))).sum::<i64>();
     let parts = sum.terms.len() + usize::from(sum.constant != BigInt::from(0)) + usize::from(pointer.is_some() && !sum.is_zero());
     if sum.terms.is_empty() && pointer.is_none() {
         return 0;
@@ -649,7 +650,7 @@ fn _fit(view: &memory::Unit, site: &Site, candidate: &Candidate, most: Option<&B
         return None;
     }
     if let Some(known) = &site.known {
-        let constant = known.known().unwrap_or_else(|| _signed(&known.constant, known.width));
+        let constant = known.known().unwrap_or_else(|| expand::signed(&known.constant, known.width));
         return Some(Fit { k: BigInt::from(0), base: of.pointer, rest: known.symbolic(), constant, next: false, trip: None, folded: None });
     }
     let Some(k) = of.step.over(&candidate.of.step) else { return _trip_fit(site, &of, candidate, most) };
@@ -658,7 +659,7 @@ fn _fit(view: &memory::Unit, site: &Site, candidate: &Candidate, most: Option<&B
         (Some(_), _) => return None,
         (None, pointer) => (pointer, of.start.minus(&candidate.of.start.times(&k))),
     };
-    let mut constant = rest.known().unwrap_or_else(|| _signed(&rest.constant, rest.width));
+    let mut constant = rest.known().unwrap_or_else(|| expand::signed(&rest.constant, rest.width));
     let mut rest = rest.symbolic();
     // What its reader cannot see need not be added: a multiple of the bits
     // it observes.
@@ -688,7 +689,7 @@ fn _trip_fit(site: &Site, of: &Recurrence, candidate: &Candidate, most: Option<&
         return None;
     }
     let inverse = _inverse(&(&magnitude >> shift), bits);
-    let constant = of.start.known().unwrap_or_else(|| _signed(&of.start.constant, of.start.width));
+    let constant = of.start.known().unwrap_or_else(|| expand::signed(&of.start.constant, of.start.width));
     Some(Fit { k, base: of.pointer, rest: of.start.symbolic(), constant, next: false, trip: Some((shift, step < BigInt::from(0), inverse)), folded: None })
 }
 
@@ -703,11 +704,6 @@ fn _inverse(n: &BigInt, bits: u32) -> BigInt {
         }
     }
     x
-}
-
-fn _signed(value: &BigInt, width: u32) -> BigInt {
-    let modulus = BigInt::from(1) << width;
-    if value >= &(&modulus >> 1) { value - modulus } else { value.clone() }
 }
 
 /// What `phi`, a counter, takes from `latch`.
@@ -1187,111 +1183,11 @@ impl Problem<'_> {
     }
 }
 
-/// Builds invariants before the preheader's branch, each once.
-struct Expander {
-    at: InstId,
-    made: HashMap<(Option<Operand>, Linear, TypeId), Operand>,
-}
-
-impl Expander {
-    /// `sum` as an integer of its width.
-    fn int(&mut self, context: &mut Context, function: &mut Function, sum: &Linear) -> Operand {
-        _sum(context, function, sum, Position::Before(self.at), &mut self.made)
-    }
-
-    /// `pointer + sum`, of type `ty`, or the integer sum where no pointer.
-    fn value(&mut self, context: &mut Context, function: &mut Function, pointer: Option<Operand>, sum: &Linear, ty: TypeId) -> Operand {
-        let Some(pointer) = pointer else { return self.int(context, function, sum) };
-        if sum.is_zero() {
-            return pointer;
-        }
-        let key = (Some(pointer), sum.clone(), ty);
-        if let Some(&made) = self.made.get(&key) {
-            return made;
-        }
-        let offset = self.int(context, function, sum);
-        let i8 = context.types.int(8);
-        let made = _placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![pointer, offset], Position::Before(self.at));
-        self.made.insert(key, made);
-        made
-    }
-}
-
-/// `sum` placed at `at`, reusing what `made` holds.
-fn _sum(context: &mut Context, function: &mut Function, sum: &Linear, at: Position, made: &mut HashMap<(Option<Operand>, Linear, TypeId), Operand>) -> Operand {
-    let ty = context.types.int(sum.width);
-    if let Some(&one) = made.get(&(None, sum.clone(), ty)) {
-        return one;
-    }
-    let mut total: Option<Operand> = None;
-    let mut negative = Vec::new();
-    for (&value, factor) in &sum.terms {
-        let signed = _signed(factor, sum.width);
-        let magnitude = BigInt::from(signed.magnitude().clone());
-        let alone = (None, Linear { constant: BigInt::from(0), terms: BTreeMap::from([(value, magnitude.clone())]), width: sum.width }, ty);
-        let scaled = match made.get(&alone) {
-            Some(&one) => one,
-            None => {
-                // A term is its value's low bits.
-                let bits = context.types.int_bits(function.value(value).ty).unwrap_or(sum.width);
-                let term = if bits > sum.width { _placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at) } else { Operand::Value(value) };
-                let one = _scaled(context, function, term, &magnitude, sum.width, at);
-                made.insert(alone, one);
-                one
-            }
-        };
-        if signed < BigInt::from(0) {
-            negative.push(scaled);
-        } else {
-            total = Some(match total {
-                Some(total) => _placed(context, function, Opcode::Binary(BinaryOp::Add), ty, vec![total, scaled], at),
-                None => scaled,
-            });
-        }
-    }
-    for one in negative {
-        let from = total.unwrap_or_else(|| counting::constant(context, &BigInt::from(0), sum.width));
-        total = Some(_placed(context, function, Opcode::Binary(BinaryOp::Sub), ty, vec![from, one], at));
-    }
-    let constant = _signed(&sum.constant, sum.width);
-    let result = match total {
-        None => counting::constant(context, &constant, sum.width),
-        Some(total) if constant == BigInt::from(0) => total,
-        Some(total) => {
-            let constant = counting::constant(context, &constant, sum.width);
-            _placed(context, function, Opcode::Binary(BinaryOp::Add), ty, vec![total, constant], at)
-        }
-    };
-    made.insert((None, sum.clone(), ty), result);
-    result
-}
-
-/// `value * k`, `k` positive: itself, a shift or a multiply.
-fn _scaled(context: &mut Context, function: &mut Function, value: Operand, k: &BigInt, width: u32, at: Position) -> Operand {
-    let ty = context.types.int(width);
-    if *k == BigInt::from(1) {
-        return value;
-    }
-    if (k & (k - 1)) == BigInt::from(0) {
-        let shift = counting::constant(context, &BigInt::from(k.bits() - 1), width);
-        return _placed(context, function, Opcode::Binary(BinaryOp::Shl), ty, vec![value, shift], at);
-    }
-    let by = counting::constant(context, k, width);
-    _placed(context, function, Opcode::Binary(BinaryOp::Mul), ty, vec![value, by], at)
-}
-
-fn _placed(context: &mut Context, function: &mut Function, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, at: Position) -> Operand {
-    let _ = context;
-    let inst = function.create_instruction(opcode, ty, operands, Flags::default(), None);
-    function.insert(inst, at).expect("a placed position");
-    Operand::Value(function.instruction(inst).result.expect("a value"))
-}
-
 /// `plan` carried out; the block a guarded loop is now entered at.
 fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
     let (context, function) = (&mut *unit.context, &mut *unit.function);
     let entering = function.terminator(plan.preheader).expect("a preheader's branch");
-    let mut expander = Expander { at: entering, made: HashMap::default() };
+    let mut expander = Expander::new(entering);
     let back = function.terminator(plan.latch).expect("a latch's branch");
     // Each candidate: a header phi from its start, stepped before the latch's branch.
     let mut registers = Vec::new();
@@ -1464,17 +1360,17 @@ fn _realized(
             let (shift, down) = (*shift, *down);
             let start = expander.int(context, function, &candidate.of.start);
             let distance = if down { vec![start, register] } else { vec![register, start] };
-            let mut trip = _placed(context, function, Opcode::Binary(BinaryOp::Sub), int, distance, at);
+            let mut trip = expand::placed(context, function, Opcode::Binary(BinaryOp::Sub), int, distance, at);
             if shift != 0 {
                 let by = counting::constant(context, &BigInt::from(shift), width);
-                trip = _placed(context, function, Opcode::Binary(BinaryOp::LShr), int, vec![trip, by], at);
+                trip = expand::placed(context, function, Opcode::Binary(BinaryOp::LShr), int, vec![trip, by], at);
             }
             if *inverse != BigInt::from(1) {
                 let by = counting::constant(context, inverse, width);
-                trip = _placed(context, function, Opcode::Binary(BinaryOp::Mul), int, vec![trip, by], at);
+                trip = expand::placed(context, function, Opcode::Binary(BinaryOp::Mul), int, vec![trip, by], at);
                 if shift != 0 {
                     let mask = counting::constant(context, &((BigInt::from(1) << (width - shift)) - 1), width);
-                    trip = _placed(context, function, Opcode::Binary(BinaryOp::And), int, vec![trip, mask], at);
+                    trip = expand::placed(context, function, Opcode::Binary(BinaryOp::And), int, vec![trip, mask], at);
                 }
             }
             (trip, None)
@@ -1515,11 +1411,11 @@ fn _realized(
         };
         // An index is scaled at its register's width.
         let index = if fit.trip.is_none() { candidate.of.width() } else { width };
-        let scaled = _scaled(context, function, register, &magnitude, index, at);
+        let scaled = expand::scaled(context, function, register, &magnitude, index, at);
         let made = if fit.k < BigInt::from(0) {
             let zero = counting::constant(context, &BigInt::from(0), index);
             let wide = context.types.int(index);
-            _placed(context, function, Opcode::Binary(BinaryOp::Sub), wide, vec![zero, scaled], at)
+            expand::placed(context, function, Opcode::Binary(BinaryOp::Sub), wide, vec![zero, scaled], at)
         } else {
             scaled
         };
@@ -1543,11 +1439,11 @@ fn _realized(
             let mut value = register;
             if !fit.rest.is_zero() {
                 let rest = expander.int(context, function, &fit.rest);
-                value = _placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![value, rest], at);
+                value = expand::placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![value, rest], at);
             }
             if fit.constant != BigInt::from(0) {
                 let offset = counting::constant(context, &fit.constant, width);
-                value = _placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![value, offset], at);
+                value = expand::placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![value, offset], at);
             }
             value
         }
@@ -1556,12 +1452,12 @@ fn _realized(
         (None, Some(_)) => {
             let base = expander.value(context, function, fit.base, &fit.rest, ty);
             let mut value = match scaled(context, function, products) {
-                Some(index) => _placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![base, index], at),
+                Some(index) => expand::placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![base, index], at),
                 None => base,
             };
             if fit.constant != BigInt::from(0) {
                 let offset = counting::constant(context, &fit.constant, width);
-                value = _placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![value, offset], at);
+                value = expand::placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![value, offset], at);
             }
             value
         }
@@ -1573,7 +1469,7 @@ fn _realized(
                 (None, _) => expander.int(context, function, &invariant),
                 (Some(scaled), false) => {
                     let invariant = if invariant.terms.is_empty() { counting::constant(context, &constant.constant, width) } else { expander.int(context, function, &invariant) };
-                    _placed(context, function, Opcode::Binary(BinaryOp::Add), int, vec![scaled, invariant], at)
+                    expand::placed(context, function, Opcode::Binary(BinaryOp::Add), int, vec![scaled, invariant], at)
                 }
             };
             value

@@ -13,6 +13,7 @@ pub mod dse;
 pub mod decide;
 pub mod edges;
 pub mod exitfold;
+pub mod expand;
 pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
