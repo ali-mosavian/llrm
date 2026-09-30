@@ -33,8 +33,7 @@ mod ledger;
 pub use ledger::*;
 
 /// The registers that become values, rooted.
-pub const TRACKED: [Register; 6] =
-    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+pub const TRACKED: [Register; 6] = llrm_x86_code16::GENERAL;
 
 /// One SSA variable, deliberately with no register or historical home.
 ///

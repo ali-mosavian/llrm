@@ -3,9 +3,16 @@
 
 use std::collections::BTreeSet;
 
+use iced_x86::Register;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 
 use crate::timings;
+
+/// The registers a value may be placed in.
+pub const GENERAL: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+
+/// Those a C callee keeps, as their word halves.
+pub const PRESERVED: [(Register, Register); 2] = [(Register::ESI, Register::SI), (Register::EDI, Register::DI)];
 
 /// Real-mode DOS on one CPU: its prices and registers, and the built-in
 /// description's foreign memory.
@@ -17,12 +24,11 @@ pub struct Dos {
 }
 
 impl Default for Dos {
-    /// On a 486, with the old profile's `register_capacity` and
-    /// `call_register_capacity`.
+    /// On a 486.
     fn default() -> Self {
         let costs = costs("486");
         let address_forms = address_forms(&costs, 0);
-        Self { costs, registers: 6, call_registers: 2, address_forms }
+        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms }
     }
 }
 

@@ -21,6 +21,12 @@ pub trait Machine {
     /// Of `registers`, how many survive a call.
     fn call_registers(&self) -> i64;
 
+    /// Of `registers`, how many survive a call to `callee`, named where the
+    /// call is direct: its own contract may keep more than any call does.
+    fn kept_across(&self, _callee: Option<&str>) -> i64 {
+        self.call_registers()
+    }
+
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
 

@@ -629,7 +629,8 @@ pub fn compiled(program: &model::Program, object: &Object, options: &Options) ->
 /// what the layout places kept, optimized, assembled.
 #[allow(clippy::too_many_arguments)]
 pub fn lifted(module: Module, runtime: Module, object: &Object, family: model::RuntimeProfile, segments: &SegmentLayout, options: &Options, name: &str) -> Result<Vec<u8>, String> {
-    let mut program = super::linked(vec![module], runtime, options)?;
+    let target = std::rc::Rc::new(crate::abi::qb::Calling { machine: options.cpu()?.target(), abi: object_abi(object, family) });
+    let mut program = super::linked(vec![module], runtime, target)?;
     program.segments = segments.clone();
     let placed = object.segments.iter().flat_map(|one| &one.items).filter_map(|item| match item {
         Item::Global { name, .. } => Some(name.clone()),
@@ -646,11 +647,17 @@ pub fn object(module: &Module, object: &Object, runtime: model::RuntimeProfile, 
     written_basic(&assembled(module, object, runtime, options)?, object.header.clone(), name)
 }
 
+/// The calls of the BASIC module object `object` lays out: its runtime's,
+/// and its own by their symbols.
+fn object_abi(object: &Object, runtime: model::RuntimeProfile) -> HirAbi {
+    HirAbi { runtime, objects: object.symbols.clone(), preserved: BTreeSet::new() }
+}
+
 /// `module` selected and assembled as a BASIC module: the main body first,
 /// each body framed as the runtime frames it, the statement table last, and
 /// the data where `object` lays it out.
 pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfile, options: &Options) -> Result<masm::Module, String> {
-    let abi = HirAbi { runtime, objects: object.symbols.clone(), preserved: BTreeSet::new() };
+    let abi = object_abi(object, runtime);
     let mut names = globals::names(module, &|name| abi.linked(name))?;
     // A symbol the frontend states stands as it is, BASIC's type suffix and all.
     for (at, global) in module.globals.iter().enumerate() {

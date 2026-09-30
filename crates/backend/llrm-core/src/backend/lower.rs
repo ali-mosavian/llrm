@@ -1599,12 +1599,19 @@ pub fn call_clobbers(contract: &runtime::Contract, segments: &Segments) -> BTree
     } else {
         BTreeSet::new()
     };
-    for (register, spelled) in &names {
-        if disturbed.iter().any(|named| spelled.contains(&named.value().to_lowercase())) {
-            out.insert(*register);
-        }
-    }
+    out.extend(_named_clobbers(&names, &disturbed));
     out
+}
+
+/// The registers a value may be placed in that a call under `contract` keeps.
+pub fn call_keeps(contract: &runtime::Contract) -> Vec<Register> {
+    let names = _names();
+    let clobbered = _named_clobbers(&names, &runtime::disturbs(contract));
+    target::AVAILABLE.into_iter().filter(|register| !clobbered.contains(register)).collect()
+}
+
+fn _named_clobbers(names: &IndexMap<Register, BTreeSet<String>>, disturbed: &BTreeSet<runtime::Reg>) -> BTreeSet<Register> {
+    names.iter().filter(|(_, spelled)| disturbed.iter().any(|named| spelled.contains(&named.value().to_lowercase()))).map(|(register, _)| *register).collect()
 }
 
 fn _contract(
