@@ -282,3 +282,27 @@ def test_writing_known_keeps_what_the_run_did_not_judge(tmp_path, monkeypatch):
     known.write({other}, {})
     known.write({mine}, {}, judged={mine})
     assert known.load()[0] == {other, mine}
+
+
+def test_a_fill_wraps_to_its_element():
+    """A u8 array filled from -100..99: every driver stores the byte (156
+    for -100); the oracle kept -100 and disagreed with host clang, llrm-mir
+    and DOS alike."""
+    from spec import Fill, U8
+    assert oracle.fill_value(U8, 0, Fill(seed=0, lo=-100, span=1)) == 156
+
+
+def test_zero_extending_bp_keeps_the_frame():
+    """`movzx ebp,bp` clears bp's upper half for 32-bit addressing and keeps
+    the frame; the bp check read it as bp becoming a register and flagged
+    every frame operand after it."""
+    code = bytes.fromhex(
+        "55"  # push bp
+        "8bec"  # mov bp,sp
+        "660fb7ed"  # movzx ebp,bp
+        "8b46fe"  # mov ax,[bp-2]
+        "5d"  # pop bp
+        "cb"  # retf
+    )
+    text = innerloops.procedures(_object(code, "F"))["F"]
+    assert quality.bp_problems(text) == []

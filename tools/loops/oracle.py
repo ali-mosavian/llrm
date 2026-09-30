@@ -45,12 +45,14 @@ def fill_x(k: int, seed: int) -> int:
 
 
 def fill_value(elem: Int | Float, k: int, fill: Fill, field: int = 0) -> int:
-    if fill.step:
-        return fill.lo + k * fill.step
+    """Element k's value as the element holds it: a ramp or span value
+    outside the type wraps, as every driver's store makes it."""
+    if fill.step or fill.span:
+        seed = fill.seed + 101 * field
+        value = fill.lo + (k * fill.step if fill.step else fill_x(k, seed) % fill.span)
+        return elem.wrap(value) if isinstance(elem, Int) else value
     seed = fill.seed + 101 * field
     x = fill_x(k, seed)
-    if fill.span:
-        return fill.lo + x % fill.span
     if isinstance(elem, Float):
         return x - 32760
     if elem.bits == 32:

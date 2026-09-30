@@ -255,7 +255,11 @@ def bp_problems(text: list) -> list[str]:
             restores = one.mnemonic in (ix.Mnemonic.POP, ix.Mnemonic.LEAVE) or (
                 one.mnemonic == ix.Mnemonic.MOV and one.op1_kind == ix.OpKind.REGISTER
                 and family(one.op1_register) == family(ix.Register.SP))
-            state = not restores
+            # movzx ebp,bp (a 32-bit address's clean upper half) keeps the value
+            keeps = one.mnemonic in (ix.Mnemonic.MOV, ix.Mnemonic.MOVZX) and one.op1_kind == ix.OpKind.REGISTER \
+                and family(one.op1_register) == bp
+            if not keeps:
+                state = not restores
         for nxt in innerloops._successors(one, where):
             if nxt not in seen_entry or (state and not off[nxt]):
                 seen_entry.add(nxt)
