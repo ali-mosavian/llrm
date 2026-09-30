@@ -3296,3 +3296,14 @@ fn total(values: &[i16]) -> i16:
     let offsets = hir.split("\"op\":\"ptr_offset\"").skip(1).map(|after| after.split("\"op\":").next().unwrap_or_default()).collect::<Vec<_>>();
     assert!(!offsets.is_empty() && offsets.iter().all(|fields| fields.contains("\"inbounds\":true")), "{hir}");
 }
+
+/// Nib's panics end the program: the program it writes promises that, so a
+/// loop's stores ahead of a failed bounds check need not happen first.
+#[test]
+fn the_panic_routines_are_promised_to_end_the_program() {
+    let hir = super::compile("fn main() -> i16:\n    return 0\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let promise = hir.split("\"terminating\":[").nth(1).and_then(|rest| rest.split(']').next()).unwrap_or_default().to_owned();
+    for routine in ["N$EBND", "N$EDIV", "N$ECNV", "N$ESHF", "N$EKEY"] {
+        assert!(promise.contains(&format!("\"{routine}\"")), "{hir}");
+    }
+}

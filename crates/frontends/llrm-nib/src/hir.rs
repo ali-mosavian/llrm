@@ -284,7 +284,7 @@ impl Program {
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
         out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":1,\"target\":\"i386-real-mode\"}\n",
+            "]}],\"promises\":{\"calling_back\":null,\"nounwind\":[],\"terminating\":[\"N$EBND\",\"N$ECNV\",\"N$EDIV\",\"N$EKEY\",\"N$ESHF\"],\"writers\":[]},\"runtime\":\"freestanding\",\"schema\":1,\"target\":\"i386-real-mode\"}\n",
         );
         out
     }

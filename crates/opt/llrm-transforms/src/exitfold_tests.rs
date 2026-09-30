@@ -193,6 +193,9 @@ fn test_a_storing_loop_leaves_first_where_its_exit_crashes() {
     let tested = printed.split("head:").nth(1).expect("head").split("\n\n").next().unwrap_or_default().to_owned();
     assert!(!tested.contains("%i,"), "{printed}");
     assert!(printed.contains("icmp ult i16 %i, %n"), "{printed}");
+    // The check is made once, ahead of the loop, and leaves for the crash.
+    let ahead = printed.split("head:").next().unwrap_or_default();
+    assert!(ahead.contains("br i1") && ahead.contains("label %bad"), "{printed}");
 }
 
 /// Stores seen after an ordinary exit keep every trip.

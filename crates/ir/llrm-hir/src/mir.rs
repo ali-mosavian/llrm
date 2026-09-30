@@ -119,6 +119,18 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     }
     for (module, global) in modules.iter().flat_map(|(module, _)| module.functions().filter(|(_, _, one)| one.is_declaration()).map(move |(id, _, _)| (*module, id))) {
         let Some(name) = module.global(global).name.as_deref() else { continue };
+        if promises.terminating.iter().any(|one| one == name.strip_prefix(RUNTIME).unwrap_or(name)) {
+            let Some(one) = (match out.named(name) {
+                Some(one) => Some(one),
+                None => out.declared(module, global)?,
+            }) else {
+                continue;
+            };
+            let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
+            function.attrs.push(Attribute::Flag("noreturn".to_owned()));
+            function.attrs.push(Attribute::Memory(vec![(Some("inaccessiblemem".to_owned()), "readwrite".to_owned())]));
+            continue;
+        }
         if !promises.reads_arguments.iter().any(|one| one == name.strip_prefix(RUNTIME).unwrap_or(name)) {
             continue;
         }

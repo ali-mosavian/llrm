@@ -40,7 +40,7 @@ use llrm_analysis::{cfg, guards, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use num_bigint::BigInt;
@@ -116,19 +116,34 @@ pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Functio
         }
     }
     for one in &predicated {
-        let mut expander = Expander::new(one.before);
-        let loop_count = expander.least(context, function, &one.loop_count);
+        // Each exit leaves where its count is the loop's, tested once, in the
+        // preheader, in the order the loop tests them; the loop never leaves by them.
+        let loop_count = Expander::new(function.terminator(one.preheader).expect("a preheader's branch")).least(context, function, &one.loop_count);
+        let mut current = one.preheader;
         for (branch, exit, count) in &one.exits {
-            let stays_on_true = !matches!(function.instruction(*branch).operands[..], [_, Operand::Block(yes), _] if cfg::id(yes) == *exit);
+            let terminator = function.terminator(current).expect("a block's branch");
             let condition = if *count == one.loop_count {
-                counting::constant(context, &BigInt::from(u8::from(!stays_on_true)), 1)
+                counting::constant(context, &BigInt::from(1), 1)
             } else {
-                let own = expander.least(context, function, count);
-                let predicate = if stays_on_true { IntPredicate::Ne } else { IntPredicate::Eq };
+                let own = Expander::new(terminator).least(context, function, count);
                 let bit = context.types.int(1);
-                expand::placed(context, function, Opcode::ICmp(predicate), bit, vec![own, loop_count], Position::Before(one.before))
+                expand::placed(context, function, Opcode::ICmp(IntPredicate::Eq), bit, vec![own, loop_count], Position::Before(terminator))
             };
-            _replaced(function, *branch, condition);
+            let next = function.create_block(None);
+            function.insert_block(next, Some(current)).expect("a block after the preheader");
+            let void = function.instruction(terminator).ty;
+            let onward = function.create_instruction(Opcode::Br, void, vec![Operand::Block(one.header)], Flags::default(), None);
+            function.insert(onward, Position::End(next)).expect("a new block");
+            function.erase(terminator).expect("a branch");
+            let leaving = function.create_instruction(Opcode::Br, void, vec![condition, Operand::Block(cfg::block(*exit)), Operand::Block(next)], Flags::default(), None);
+            function.insert(leaving, Position::End(current)).expect("a block");
+            for phi in crate::edges::phis(function, one.header) {
+                let operands = function.instruction(phi).operands.iter().map(|&arm| if arm == Operand::Block(current) { Operand::Block(next) } else { arm }).collect();
+                function.set_operands(phi, operands);
+            }
+            current = next;
+            let stays_on_true = !matches!(function.instruction(*branch).operands[..], [_, Operand::Block(yes), _] if cfg::id(yes) == *exit);
+            _replaced(function, *branch, counting::constant(context, &BigInt::from(u8::from(stays_on_true)), 1));
         }
     }
     for one in &hoisted {
@@ -301,7 +316,8 @@ fn _replaced(function: &mut Function, branch: InstId, condition: Operand) {
 
 /// A loop's exits, each leaving where its count is the loop's.
 struct Predicated {
-    before: InstId,
+    preheader: BlockId,
+    header: BlockId,
     loop_count: Vec<Linear>,
     exits: Vec<(InstId, i64, Vec<Linear>)>,
 }
@@ -315,7 +331,7 @@ fn _predicated(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCo
     let header = cfg::block(loop_.header);
     let outside = function.predecessors(header).into_iter().filter(|&one| !loop_.body.contains(&cfg::id(one))).collect::<Vec<_>>();
     let [preheader] = outside[..] else { return None };
-    let before = function.terminator(preheader)?;
+    function.terminator(preheader)?;
     let innermost = |at: i64| unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len());
     // Up to the first exit that cannot be: a later one may not take its trip.
     let mut chosen = Vec::new();
@@ -350,11 +366,11 @@ fn _predicated(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCo
         let quiet = chosen.iter().take_while(|&&(branch, _, _)| _crashes(unit, outer, branch)).count();
         chosen.truncate(quiet);
     }
-    (!chosen.is_empty()).then_some(Predicated { before, loop_count, exits: chosen })
+    (!chosen.is_empty()).then_some(Predicated { preheader, header, loop_count, exits: chosen })
 }
 
 /// Whether one way out of `branch` crashes at once, touching no memory the
-/// program sees: calls that write none, then `unreachable`.
+/// program sees: calls touching none it can name, then `unreachable`.
 fn _crashes(unit: &memory::Unit, outer: &Outer, branch: InstId) -> bool {
     let function = unit.function;
     function.instruction(branch).operands[1..].iter().any(|to| {
@@ -362,7 +378,7 @@ fn _crashes(unit: &memory::Unit, outer: &Outer, branch: InstId) -> bool {
         let body = function.block(to).instructions();
         body.last().is_some_and(|&last| function.instruction(last).opcode == Opcode::Unreachable)
             && body[..body.len() - 1].iter().all(|&inst| {
-                matches!(function.instruction(inst).opcode, Opcode::Call(_)) && !llrm_mir::memory::of(unit.context, outer.callees(), function, inst).writes
+                matches!(function.instruction(inst).opcode, Opcode::Call(_)) && llrm_mir::memory::accessible(unit.context, outer.callees(), function, inst) == llrm_mir::memory::Effects::NONE
             })
     })
 }

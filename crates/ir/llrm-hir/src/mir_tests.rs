@@ -749,3 +749,16 @@ fn resume_next_past_end_sub_continues_at_its_end() {
     assert!(sub.calls.iter().any(|one| one.instruction > last), "the fixture no longer has the shape");
     emits(&program);
 }
+
+/// A routine that ends the program touching only memory its caller cannot
+/// name was taken to write every cell it could: stated as `noreturn` and
+/// `inaccessiblemem`, a loop's stores ahead of its bounds check may wait
+/// for it.
+#[test]
+fn a_routine_that_ends_the_program_is_noreturn_and_touches_nothing_nameable() {
+    let promises = crate::model::RuntimePromises { terminating: vec!["B$INKY".to_owned()], ..crate::model::RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])], []) };
+    let (_, text) = promised(&promises);
+    let stated = declaration(&text, "B$INKY");
+    assert!(stated.contains("noreturn") && stated.contains("memory(inaccessiblemem: readwrite)"), "{text}");
+    assert!(!declaration(&text, "B$DSEG").contains("noreturn"), "{text}");
+}

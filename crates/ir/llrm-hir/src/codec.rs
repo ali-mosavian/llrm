@@ -339,6 +339,9 @@ impl _Plain for model::RuntimePromises {
         if !self.reads_arguments.is_empty() {
             out.insert("reads_arguments".to_owned(), self.reads_arguments._plain());
         }
+        if !self.terminating.is_empty() {
+            out.insert("terminating".to_owned(), self.terminating._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1349,6 +1352,7 @@ static RUNTIME_PROMISES: _Record = _Record {
         ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
         ("nounwind", _Hint::Tuple(&_Hint::Str), false),
         ("reads_arguments", _Hint::Tuple(&_Hint::Str), false),
+        ("terminating", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::RuntimePromises {
@@ -1356,6 +1360,7 @@ static RUNTIME_PROMISES: _Record = _Record {
             writers: _default(args, "writers", Vec::new())?,
             nounwind: _default(args, "nounwind", Vec::new())?,
             reads_arguments: _default(args, "reads_arguments", Vec::new())?,
+            terminating: _default(args, "terminating", Vec::new())?,
         })
     },
 };
