@@ -208,3 +208,66 @@ def test_c_local_arrays_fit_the_corpus_stack():
     import emit_c
     case = next(one for one in concurrent.cases() if one.name == "conc12_s1102468_xi_bln_index_n_st1_sum")
     assert emit_c.expressible(case) is not None
+
+
+def test_every_boundary_shape_is_in_the_family():
+    """A boundary walk took the name of a grid shape (the name left out its
+    counter type and trip rows) and the family kept only the first: the
+    whole-segment cases never ran."""
+    by_name = {one.name: one for one in concurrent.cases()}
+    for shape in concurrent.boundaries():
+        name = concurrent.build(shape).name
+        assert name in by_name and by_name[name].note == repr(shape), name
+
+
+def test_every_case_s_bound_derives():
+    """expect sorted stride classes whose keys mix a constant and a symbol,
+    so the run died after nineteen minutes of compiling, in its report."""
+    for case in concurrent.cases():
+        for lang in ("c", "bas", "nib"):
+            expect.want(case, lang)
+
+
+def test_a_far_array_past_64k_is_huge():
+    """Shifting a whole-segment walk by 13 made a far array of 65548 bytes,
+    which the C front end refuses: only a huge array may pass a segment."""
+    for case in concurrent.cases():
+        for array in case.arrays:
+            assert array.ptr != "far" or array.bytes <= 0x10000, (case.name, array.name)
+
+
+def test_a_case_s_quality_does_not_depend_on_its_batch(tmp_path):
+    """A case's loop was read from the batch's object, and llrm compiles a
+    loop differently beside other functions: --quick and the full run
+    disagreed on the same case, so the ratchet flapped."""
+    import run
+    import build
+    by_name = {one.name: one for one in concurrent.cases()}
+    case = by_name["conc1_s2_xi_bgf_index_n_st1_sum_cu16_whole"]
+    other = by_name["conc2_s2_xi_bgfpf_index_n_st1_sum_cu16_whole"]
+    config = build.Config("486", "-O2")
+    seen = []
+    for group in ([case], [other, case]):
+        plans, streams = run.plans_for(group, "c")
+        batch = run.Batch("c", group, config, tmp_path / str(len(group)), plans, streams, 0)
+        batch.compile()
+        result = run.Result()
+        run.measure(run.measured_from(batch, group.index(case)), result)
+        seen.append([f.row() for f in result.facts[(case.name, "c", config.tag)]])
+    assert seen[0] == seen[1]
+
+
+def test_every_quick_case_is_in_the_full_run():
+    """--quick drew metamorphic variants of its own, so it reported cases
+    the full run's known.toml never saw as new shortfalls."""
+    full = {one.name for one in concurrent.cases()}
+    assert {one.name for one in concurrent.cases(quick=True)} <= full
+
+
+def test_the_ratchet_judges_only_what_the_run_evaluated():
+    """A variant's relation check needs its base; --quick samples leave the
+    base out, and the ratchet called 48 such entries fixed."""
+    import known
+    entry = next(iter(known.load()[0]))
+    assert entry not in known.compare(set(), set()).fixed
+    assert entry in known.compare(set(), {entry}).fixed

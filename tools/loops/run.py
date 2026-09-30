@@ -12,6 +12,7 @@ known.toml, and any known.toml entry that no longer falls short.
 
 from __future__ import annotations
 
+import re
 import sys
 import json
 import time
@@ -54,6 +55,7 @@ class Result:
     facts: dict = field(default_factory=dict)  # (case, lang|ref, config) -> [Facts]
     mir_ivs: dict = field(default_factory=dict)  # (case, lang, config) -> [per inner loop], from llrm-mir --ivs
     short: set = field(default_factory=set)  # (case, lang, config, check)
+    judged: set = field(default_factory=set)  # every check the run could evaluate, same keys
     notes: list[str] = field(default_factory=list)
 
 
@@ -172,6 +174,16 @@ def isolate(batch: Batch, stage_name: str) -> list[str]:
     return out
 
 
+def measured_from(batch: Batch, k: int) -> Batch:
+    """The program case k's quality is read from: its own, so its code does
+    not depend on which cases share the batch."""
+    if len(batch.cases) == 1:
+        return batch
+    single = Batch(batch.lang, [batch.cases[k]], batch.config, batch.work / "one", batch.plans, batch.streams, k)
+    single.compile()
+    return single
+
+
 def measure(batch: Batch, result: Result) -> None:
     procedures = batch.procedures()
     found = innerloops.loops(batch.obj.read_bytes(), calls=True, procedures=procedures)
@@ -249,15 +261,18 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
                     continue  # no loop left: a string instruction, or unrolled away
                 fits = wants and all(w.fits for w in wants)
                 if fits and all(w.ivs is not None for w in wants):
+                    result.judged |= {(*key, "ivs"), (*key, "mir-ivs")}
                     if max(f.ivs for f in facts) > max(w.ivs for w in wants):
                         result.short.add((*key, "ivs"))
                     counted = result.mir_ivs.get(key)
                     if counted and max(counted) > max(w.ivs for w in wants):
                         result.short.add((*key, "mir-ivs"))
                 if fits and all(w.invariant_loads == 0 for w in wants):
+                    result.judged.add((*key, "invariant-loads"))
                     if sum(f.invariant_loads for f in facts) > 0:
                         result.short.add((*key, "invariant-loads"))
                 if len(wants) == 1 and wants[0].shape and len(facts) == 1:
+                    result.judged.add((*key, "shape"))
                     f = facts[0]
                     if not (f.ivs == 1 and f.compares == 0 and f.branch_after_step and f.overhead == 2):
                         result.short.add((*key, "shape"))
@@ -266,6 +281,7 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
                     # a reference loop that calls a helper hides its cost: not a bar
                     bars = [total(r) for r in refs if r and not any(f.calls for f in r)]
                     if bars and not any(f.calls for f in facts):
+                        result.judged |= {(*key, "size-vs-ref"), (*key, "memory-vs-ref")}
                         size, memory = total(facts)
                         if size > min(b[0] for b in bars):
                             result.short.add((*key, "size-vs-ref"))
@@ -274,6 +290,7 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
                 if case.base and case.base in by_name:
                     base = result.facts.get((case.base, lang, config.tag))
                     if base and facts:
+                        result.judged |= {(*key, "relation-ivs"), (*key, "relation-size")}
                         if max(f.ivs for f in facts) != max(f.ivs for f in base):
                             result.short.add((*key, "relation-ivs"))
                         if "same-size" in case.tags and total(facts)[0] != total(base)[0]:
@@ -347,7 +364,6 @@ def main() -> int:
     parser.add_argument("--quick", action="store_true", help="the anchors, one configuration: under a minute")
     parser.add_argument("--family", action="append", help="only these families")
     parser.add_argument("--case", action="append", help="only cases whose name starts so")
-    parser.add_argument("--seed", type=int, default=families.SEED, help="the fuzz family's seed")
     parser.add_argument("--lang", action="append", choices=list(EMITTERS))
     parser.add_argument("--config", action="append", help="CPU-OPT, e.g. 486-O2")
     parser.add_argument("--dump", type=Path, default=build.ROOT / "build" / "loops", help="where everything goes")
@@ -359,7 +375,7 @@ def main() -> int:
 
     started = time.monotonic()
     stamp = build.binaries_stamp()
-    cases = families.load(args.family, quick=args.quick, seed=args.seed)
+    cases = families.load(args.family, quick=args.quick)
     if args.case:
         cases = [c for c in cases if any(c.name.startswith(p) for p in args.case)]
     langs = args.lang or list(EMITTERS)
@@ -418,7 +434,13 @@ def main() -> int:
 
     def finish(batch: Batch) -> list:
         check_mir(batch, result)
-        measure(batch, result)
+        # quality from one program per case: a case's code must not depend
+        # on which others share its program
+        for k, case in enumerate(batch.cases):
+            try:
+                measure(measured_from(batch, k), result)
+            except build.CompileError as why:
+                result.notes.append(f"{batch.config.tag} {batch.lang} {case.name} alone: {str(why)[:200]}")
         if args.no_dos:
             return []
         try:
@@ -490,7 +512,7 @@ def main() -> int:
                 at += count
 
     judge(cases, langs, configs, result)
-    ratchet = known.compare(result.short, {c.name for c in cases}, langs, [c.tag for c in configs])
+    ratchet = known.compare(result.short, result.judged)
     if args.write_known:
         known.write(result.short, ratchet.kept_issues)
     report(cases, langs, configs, result, ratchet, work, time.monotonic() - started)
@@ -508,7 +530,7 @@ def report(cases, langs, configs, result: Result, ratchet, work: Path, seconds: 
         lines.append(f"  {lang}: {len(cases) - skipped} expressed, {skipped} not expressible")
     lines.append(f"correctness: {len(result.wrong)} wrong, {len(result.unbuilt)} not built")
     known_bugs = known.bugs()
-    tagged = lambda line: next((f" (known: {issue})" for match, issue in known_bugs if match in line), "")  # noqa: E731
+    tagged = lambda line: next((f" (known: {issue})" for match, issue in known_bugs if re.search(match, line)), "")  # noqa: E731
     lines += [f"  WRONG {one}{tagged(one)}" for one in result.wrong]
     lines += [f"  UNBUILT {one}{tagged(one)}" for one in result.unbuilt]
     lines.append(f"quality: {len(result.short)} shortfalls; {len(ratchet.new)} new, {len(ratchet.fixed)} fixed")

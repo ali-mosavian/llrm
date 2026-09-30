@@ -296,7 +296,7 @@ def _want(case: Case, loop, lang: str) -> Want:
     memory = any(isinstance(e, (Load, Deref)) for s in view.stmts for e in stmt_exprs(s))
     live = ivs + len(bases) + len(accumulators) + len(invariants) + symbolic + int(memory)
     fits = live <= REGISTERS and len(far) <= SEGMENTS and not calls
-    why = (f"{len(classes)} stride class(es) {sorted(classes)}, {len(bases)} register base(s), "
+    why = (f"{len(classes)} stride class(es) {sorted(classes, key=str)}, {len(bases)} register base(s), "
            f"{len(accumulators)} accumulator(s), {len(invariants)} invariant(s): {live} of {REGISTERS} registers"
            f"{', a call' if calls else ''}")
     # BASIC passes scalars by reference: a store may alias one, so it reloads.

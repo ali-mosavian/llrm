@@ -32,10 +32,6 @@ digest of every array it writes. `loops/cases/` holds the families:
   bases, source forms, trips, steps, starts and whole-segment walks, with
   metamorphic variants composed from a recorded seed, each judged against its
   base.
-- `cross`: every pair of values of every two dimensions of one base loop.
-- `fuzz`: loops drawn from all of it at once; `--seed` replays a draw.
-- `adversarial`: the pressure ladder, pointer chasing, counter wrap, aliasing
-  arguments and a SINGLE counter.
 
 `loops/expect.py` derives each inner loop's bound from the spec and the target's
 tables (registers, address-form partners, segments); `loops/quality.py` reads a

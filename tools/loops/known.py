@@ -40,16 +40,18 @@ def load() -> tuple[set, dict]:
 
 
 def bugs() -> list[tuple[str, str]]:
-    """(text a wrong or unbuilt line contains, its issue): known llrm bugs,
-    named in the report so a new failure stands out. They still fail the run."""
+    """(a regular expression a wrong or unbuilt line matches, its issue):
+    known llrm bugs, named in the report so a new failure stands out. They
+    still fail the run."""
     if not PATH.exists():
         return []
     return [(one["match"], one["issue"]) for one in tomllib.loads(PATH.read_text()).get("bug", [])]
 
 
-def compare(short: set, cases: set, langs: list, configs: list) -> Ratchet:
+def compare(short: set, judged: set) -> Ratchet:
+    """Against known.toml, within the checks this run evaluated."""
     entries, issues = load()
-    scope = {e for e in entries if e[0] in cases and e[1] in langs and e[2] in configs}
+    scope = entries & judged
     return Ratchet(short - scope, scope - short, issues)
 
 

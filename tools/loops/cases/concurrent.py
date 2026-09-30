@@ -90,9 +90,16 @@ def hand_ivs(shape: Shape, lang: str) -> int:
 
 def _name(shape: Shape) -> str:
     kinds = "".join(sorted({f"{w.elem.size}" for w in shape.walks}))
-    index = "".join(sorted({w.index[0][0] + (str(w.index[1]) if len(w.index) > 1 else "") for w in shape.walks}))
+    code = {"i": "i", "off": "o", "sym": "y", "rev": "r", "scale": "s", "stride": "t", "plusn": "n"}
+    index = "".join(sorted({code[w.index[0]] + (str(w.index[1]) if len(w.index) > 1 else "") for w in shape.walks}))
     bases = "".join(sorted({w.where[0] + w.ptr[0] for w in shape.walks}))
     extras = "".join("_" + "".join(str(p) for p in one) for one in shape.extras)
+    extras += (f"_c{shape.counter.name}" if shape.counter != I16 else "") + ("_whole" if shape.rows else "") + \
+        ("_outer" if shape.outer else "")
+    if any(w.start for w in shape.walks):
+        extras += "_at" + "x".join(str(w.start) for w in shape.walks)
+    if any(w.same_as is not None for w in shape.walks):
+        extras += "_on" + "x".join("-" if w.same_as is None else str(w.same_as) for w in shape.walks)
     return (f"conc{len(shape.walks)}_s{kinds}_x{index}_b{bases}_{shape.form}_{shape.trip}_st{shape.step}_{shape.use}"
             f"{'_call' if shape.call else ''}{extras}").replace("-", "m").replace("+", "p")
 
@@ -153,7 +160,9 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
     extent = max([EXTENT, *reach]) if not shape.rows else max(reach)
     for k, w in enumerate(walks):
         if owners[k] == k:
-            arrays.append(Array(f"a{k}", w.elem, (extent,), w.where, w.ptr))
+            # past a segment only a huge pointer reaches it all
+            ptr = "huge" if extent * w.elem.size > 0x10000 and w.ptr == "far" else w.ptr
+            arrays.append(Array(f"a{k}", w.elem, (extent,), w.where, ptr))
     name_of = lambda k: f"a{owners[k]}"  # noqa: E731
     pointers = shape.form in ("ptr", "end") or shape.form == "mixed"
     walked = [k for k in range(len(walks)) if shape.form in ("ptr", "end") or (shape.form == "mixed" and k % 2 == 0)]
@@ -405,7 +414,7 @@ BASES = {
 }
 
 
-def shapes(quick: bool = False) -> list[Shape]:
+def shapes() -> list[Shape]:
     out = []
     counts = range(1, 13)
     # sharing: n arrays of each size mix and base kind, indexed alike
@@ -451,8 +460,6 @@ def shapes(quick: bool = False) -> list[Shape]:
         out.append(Shape(tuple(Walk(I16, ("off", 2 * k), same_as=0 if k else None) for k in range(n))))
         out.append(Shape(_walks(n, "equal"), outer=True))
         out.append(Shape(tuple(Walk(I16, start=4 * k + 1) for k in range(n)), form="ptr"))
-    if quick:
-        out = out[::9]
     return out + boundaries()
 
 
@@ -496,7 +503,7 @@ def released_bp() -> list[Case]:
     return out
 
 
-def variants(bases: list[tuple[Shape, Case]], seed: int, per_base: int, quick: bool) -> list[Case]:
+def variants(bases: list[tuple[Shape, Case]], seed: int, per_base: int) -> list[Case]:
     """Each base with `per_base` compositions of 1..3 transformers, drawn from
     `seed` and recorded in the name, so any failure replays."""
     rng = random.Random(seed)
@@ -515,7 +522,7 @@ def variants(bases: list[tuple[Shape, Case]], seed: int, per_base: int, quick: b
             out.append(build(variant, base=base.name, relation=" + ".join(one[0] for one in extras)))
         # form independence: the same loop, per-array pointers and an end compare
         # (the end pointer walks forward, from a start the margin keeps in bounds)
-        if (shape.form == "index" and shape.step > 0 and shape.use == "sum" and not quick and shape.margin
+        if (shape.form == "index" and shape.step > 0 and shape.use == "sum" and shape.margin
                 and shape.walks[0].index[0] != "rev"):
             for form in ("ptr", "end"):
                 case = build(replace(shape, form=form), name=f"{base.name}_as_{form}", base=base.name,
@@ -525,21 +532,32 @@ def variants(bases: list[tuple[Shape, Case]], seed: int, per_base: int, quick: b
 
 
 def cases(quick: bool = False, seed: int = 98) -> list[Case]:
+    """Every case; `quick` a sample of them, so each quick case is one the
+    full run (and known.toml) also has."""
+    every = _all(seed)
+    if not quick:
+        return every
+    return [c for k, c in enumerate(every) if k % 15 == 0 or "whole" in c.name or c.name.startswith("bp")]
+
+
+def _all(seed: int) -> list[Case]:
     built = []
-    seen = set()
-    for shape in shapes(quick):
+    seen: dict[str, Shape] = {}
+    for shape in shapes():
         case = build(shape)
         if case.name in seen:
+            if seen[case.name] != shape:
+                raise ValueError(f"two shapes named {case.name}")
             continue
-        seen.add(case.name)
+        seen[case.name] = shape
         built.append((shape, case))
     # variants of the sharing bases, the loops the relations exist for
     bases = [(s, c) for s, c in built if s.form == "index" and s.use == "sum" and not s.call and s.trip == "n"]
-    step = 3 if not quick else 12
-    extra = variants(bases[::step], seed, 2 if quick else 4, quick)
+    extra = variants(bases[::3], seed, 4)
+    names = set(seen)
     for case in extra:
-        if case.name in seen:
+        if case.name in names:
             continue
-        seen.add(case.name)
+        names.add(case.name)
         built.append((None, case))
     return [case for _, case in built] + released_bp()

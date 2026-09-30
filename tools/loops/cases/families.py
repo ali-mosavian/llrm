@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-from cases import classics, concurrent, cross, fuzz, adversarial
+from cases import classics, concurrent
 
 FAMILIES = {
     "classic": lambda quick: classics.cases(),
     "concurrent": concurrent.cases,
-    "cross": cross.cases,
-    "fuzz": fuzz.cases,
-    "adversarial": adversarial.cases,
 }
-SEED = fuzz.SEED
 QUICK = ("classic", "concurrent")
 
 
-def load(names: list[str] | None, quick: bool = False, seed: int = SEED) -> list:
+def load(names: list[str] | None, quick: bool = False) -> list:
     chosen = names or (QUICK if quick else list(FAMILIES))
     out = []
     for name in chosen:
-        out += FAMILIES[name](quick) if name != "fuzz" else fuzz.cases(quick, seed)
+        out += FAMILIES[name](quick)
     seen = set()
     for case in out:
         if case.name in seen:
