@@ -154,6 +154,11 @@ def collect(jobs: list[Job], work: Path, events: Path) -> dict[str, list[int] | 
     out = {}
     for job, end in zip(jobs, ends[1:]):
         u = job.stem.upper()
+        severe = re.search(r"(\d+) Severe\s+Error", read_dos(work, f"{u}.BCO"))
+        if severe and int(severe.group(1)):
+            # LINK makes an EXE of what BC refused: never run it
+            out[job.stem] = "not built: BC: " + read_dos(work, f"{u}.BCO").strip()[-600:]
+            continue
         if not (work / f"{u}.EXE").exists():
             out[job.stem] = "not built: " + (read_dos(work, f"{u}.BCO") + read_dos(work, f"{u}.LNK")).strip()[-600:]
             continue

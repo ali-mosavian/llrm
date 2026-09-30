@@ -337,3 +337,21 @@ def test_a_walk_on_a_far_array_points_far():
     case = concurrent.build(Shape(walks, form="ptr"))
     kinds = {kind.kind for _, kind in case.locals if isinstance(kind, Ptr)}
     assert kinds == {"far"}
+
+
+def test_a_program_bc_refused_is_not_run(tmp_path):
+    """BC reported severe errors, LINK still made an EXE of what was left, and
+    it crashed: the oracle check was charged with a crash, not BC's errors."""
+    (tmp_path / "V1.EXE").write_bytes(b"MZ")
+    (tmp_path / "V1.BCO").write_text("    0 Warning Error(s)\n    3 Severe  Error(s)\n")
+    events = tmp_path / "events.txt"
+    events.write_text('{"ev":"end","reason":"exit"}\n{"ev":"end","reason":"crash","ms":1}\n')
+    got = dos.collect([dos.Job("v1", "bas", tmp_path / "V1.BAS")], tmp_path, events)["v1"]
+    assert isinstance(got, str) and got.startswith("not built")
+
+
+def test_a_long_basic_expression_is_wrapped():
+    """A line with no comma past 255 characters went to BC whole."""
+    import emit_bas
+    line = "x = " + " + ".join(f"CLNG(a{k}(i))" for k in range(40))
+    assert max(len(one) for one in emit_bas.wrapped(line).split("\r\n")) <= 255

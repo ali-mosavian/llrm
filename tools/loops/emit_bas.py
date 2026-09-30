@@ -377,14 +377,15 @@ LINE = 200  # BC refuses a line past 255 characters
 
 
 def wrapped(line: str) -> str:
-    """A long line continued with ` _` after a comma."""
+    """A long line continued with ` _`, after a comma where there is one."""
     out = []
     while len(line) > LINE:
         cut = line.rfind(", ", 0, LINE)
-        if cut < 0:
+        cut = cut + 1 if cut > 0 else line.rfind(" ", 0, LINE)
+        if cut <= 0:
             break
-        out.append(line[: cut + 1] + " _")
-        line = "    " + line[cut + 2 :]
+        out.append(line[:cut] + " _")
+        line = "    " + line[cut:].lstrip()
     return "\r\n".join([*out, line])
 
 
