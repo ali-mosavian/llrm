@@ -30,7 +30,7 @@ use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, OperationCosts};
 use llrm_mir::types::{Type, TypeId};
@@ -126,6 +126,8 @@ struct Fit {
     /// An equality with an invariant, which takes the candidate itself and
     /// the invariant less the rest, times `k`, one or minus one.
     folded: Option<Linear>,
+    /// The narrow value realized, then extended to the use's.
+    extend: Option<CastOp>,
 }
 
 /// What realizing a use from one candidate costs each time it runs, and
@@ -155,6 +157,8 @@ struct Site {
     exit: bool,
     /// Its value, where it is read as the loop leaves on a known count.
     known: Option<Linear>,
+    /// Where it reads an extension of a narrower recurrence: that one, and the extension.
+    extended: Option<(Recurrence, CastOp)>,
 }
 
 /// Where a realization is placed.
@@ -243,7 +247,14 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
             Place::End(block) | Place::Exit(block, _) => block,
         };
         let exit = exit.as_ref().is_some_and(|exit| exit.proof.compare == one.user);
-        sites.push(Site { one: one.clone(), at, frequency: frequency(block), inside, exit, known: None });
+        let extended = match view.defining(Operand::Value(one.value)) {
+            Some((_, op)) => match (&op.opcode, op.operands[0]) {
+                (Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)), Operand::Value(narrow)) => users.values.get(&narrow).map(|of| (of.clone(), *cast)),
+                _ => None,
+            },
+            None => None,
+        };
+        sites.push(Site { one: one.clone(), at, frequency: frequency(block), inside, exit, known: None, extended });
     }
     // Exit phis that read one recurrence are realized once after the loop;
     // one reading several is realized on each way out.
@@ -575,7 +586,7 @@ fn _fit(view: &memory::Unit, site: &Site, candidate: &Candidate, most: Option<&B
     }
     if let Some(known) = &site.known {
         let constant = known.known().unwrap_or_else(|| _signed(&known.constant, known.width));
-        return Some(Fit { k: BigInt::from(0), base: of.pointer, rest: known.symbolic(), constant, next: false, trip: None, folded: None });
+        return Some(Fit { k: BigInt::from(0), base: of.pointer, rest: known.symbolic(), constant, next: false, trip: None, folded: None, extend: None });
     }
     let Some(k) = of.step.over(&candidate.of.step) else { return _trip_fit(site, &of, candidate, most) };
     let (base, rest) = match (candidate.of.pointer, of.pointer) {
@@ -594,7 +605,7 @@ fn _fit(view: &memory::Unit, site: &Site, candidate: &Candidate, most: Option<&B
             constant = BigInt::from(0);
         }
     }
-    Some(Fit { k, base, rest, constant, next: false, trip: None, folded: None })
+    Some(Fit { k, base, rest, constant, next: false, trip: None, folded: None, extend: None })
 }
 
 /// After the loop, `site` from the trip the candidate has counted: its
@@ -614,7 +625,7 @@ fn _trip_fit(site: &Site, of: &Recurrence, candidate: &Candidate, most: Option<&
     }
     let inverse = _inverse(&(&magnitude >> shift), bits);
     let constant = of.start.known().unwrap_or_else(|| _signed(&of.start.constant, of.start.width));
-    Some(Fit { k, base: of.pointer, rest: of.start.symbolic(), constant, next: false, trip: Some((shift, step < BigInt::from(0), inverse)), folded: None })
+    Some(Fit { k, base: of.pointer, rest: of.start.symbolic(), constant, next: false, trip: Some((shift, step < BigInt::from(0), inverse)), folded: None, extend: None })
 }
 
 /// The inverse of odd `n` modulo `2^bits`, by Newton's iteration.
@@ -669,6 +680,22 @@ fn _interned(keys: &mut Vec<Key>, key: Key) -> usize {
 
 #[allow(clippy::too_many_arguments)]
 fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, candidate: &Candidate, latch: BlockId, most: Option<&BigInt>, keys: &mut Vec<Key>) -> Option<(Fit, Price)> {
+    // An extension of a narrower recurrence, from a candidate of that width:
+    // the narrow value, then its extension.
+    if let Some((narrow, cast)) = &site.extended
+        && candidate.of.width() == narrow.width()
+        && candidate.of.width() != site.one.of.width()
+    {
+        let mut inner = site.clone();
+        inner.one.of = narrow.clone();
+        inner.one.demanded = narrow.width();
+        inner.one.kind = UseKind::Basic;
+        (inner.extended, inner.known, inner.exit) = (None, None, false);
+        let (mut fit, mut price) = _priced(view, target, &inner, index, candidate, latch, most, keys)?;
+        fit.extend = Some(*cast);
+        price.cost += target.costs.extend;
+        return Some((fit, price));
+    }
     let mut fit = _fit(view, site, candidate, most)?;
     // The candidate plus its step, in the latch, is the step itself: a new
     // one is placed before its first reader, a counter's must be what is read.
@@ -1194,7 +1221,14 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
         } else if fit.folded.is_some() {
             register
         } else {
-            _realized(context, function, &mut expander, &mut products, site, candidate, fit, register, ty, at)
+            match fit.extend {
+                Some(cast) => {
+                    let narrow = context.types.int(fit.rest.width);
+                    let value = _realized(context, function, &mut expander, &mut products, site, candidate, fit, register, narrow, at);
+                    _placed(context, function, Opcode::Cast(cast), ty, vec![value], at)
+                }
+                None => _realized(context, function, &mut expander, &mut products, site, candidate, fit, register, ty, at),
+            }
         };
         match site.at {
             Place::Exit(_, phi) => {
