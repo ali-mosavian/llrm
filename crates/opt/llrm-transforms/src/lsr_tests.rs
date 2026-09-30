@@ -1034,3 +1034,64 @@ fn test_a_value_read_across_an_inner_loop_is_its_own_counter() {
     }
     assert!(per_column.is_empty(), "{printed}");
 }
+
+/// `tests/suite/addrm.bas`: a word array read at `i` and `i + 1`, and a
+/// dword one stored `i` at `i`.
+const ADDRM: &str = "  br label %l1
+
+l1:
+  %i = phi i16 [ 1, %start ], [ %i.next, %l2 ]
+  %t = phi i16 [ 0, %start ], [ %t.next, %l2 ]
+  %more = icmp sle i16 %i, 20
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %pa = getelementptr inbounds i16, ptr @a, i16 %i
+  store i16 %i, ptr %pa
+  %i1 = add i16 %i, 1
+  %pa1 = getelementptr inbounds i16, ptr @a, i16 %i1
+  %va = load i16, ptr %pa1
+  %s = add i16 %i, %va
+  %t.next = add i16 %t, %s
+  %w = sext i16 %i to i32
+  %pb = getelementptr inbounds i32, ptr @b, i16 %i
+  store i32 %w, ptr %pb
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  %q = getelementptr i8, ptr @b, i16 80
+  %vb = load i32, ptr %q
+  %nb = trunc i32 %vb to i16
+  %r = add i16 %t, %nb
+  ret i16 %r
+";
+
+/// An address after its counter's step reads the stepped value: addrm's
+/// `B&[ecx*4]` read the counter beside its successor, and the two lived
+/// in two registers, a copy a trip.
+#[test]
+fn test_an_address_after_the_step_reads_the_stepped_counter() {
+    let printed = same(&program(&[("a", "i16", 2), ("b", "i32", 4)], "i16", ADDRM), TRIPS);
+    let reads = |line: &str, name: &str| line.contains(&format!("{name},")) || line.ends_with(name);
+    // Each new counter, what is computed from it, and whether it has stepped.
+    let mut counters = printed
+        .lines()
+        .filter(|line| line.contains("%lsr.iv") && line.contains("= phi"))
+        .map(|line| (vec![line.split_once(" = ").expect("a phi").0.trim().to_owned()], false))
+        .collect::<Vec<_>>();
+    assert!(!counters.is_empty(), "{printed}");
+    for line in printed.lines().filter(|line| !line.contains("= phi")) {
+        let defined = line.split_once(" = ").map(|(name, _)| name.trim().to_owned());
+        for (from, stepped) in &mut counters {
+            if from.iter().any(|one| reads(line, one)) {
+                assert!(!*stepped, "a counter read after its step: {line}\n{printed}");
+                if defined.as_deref().is_some_and(|name| name.starts_with("%lsr.iv.next")) {
+                    *stepped = true;
+                } else {
+                    from.extend(defined.clone());
+                }
+            }
+        }
+    }
+}

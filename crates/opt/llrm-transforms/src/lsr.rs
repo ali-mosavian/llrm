@@ -1252,7 +1252,9 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
     // leaves, and what it carried is computed after the phis.
     let mut leaving = HashMap::<(BlockId, usize), Operand>::default();
     let mut products = HashMap::default();
-    for (site, index, fit) in &plan.uses {
+    // Steps are placed first: an address after one reads the stepped value.
+    let ordered = plan.uses.iter().filter(|(_, _, fit)| fit.next).chain(plan.uses.iter().filter(|(_, _, fit)| !fit.next));
+    for (site, index, fit) in ordered {
         let candidate = &plan.candidates[*index];
         if let Place::Exit(_, phi) = site.at
             && function.is_erased(phi)
@@ -1297,6 +1299,8 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
             steps[*index]
         } else if fit.folded.is_some() {
             register
+        } else if let Some(after) = _after_step(function, plan.latch, site, candidate, fit, steps[*index]) {
+            _realized(context, function, &mut expander, &mut products, site, candidate, &after, steps[*index], ty, at)
         } else {
             _realized(context, function, &mut expander, &mut products, site, candidate, fit, register, ty, at)
         };
@@ -1344,6 +1348,22 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
     // The guard also reaches the exit: the loop leaves through its own block again.
     crate::loopsimplify::simplified(function);
     Some(shape.first)
+}
+
+/// An address placed after its candidate's step in the latch, as a fit
+/// of the stepped value: a step less in its constant. Reading the counter
+/// there would keep it live beside its successor.
+fn _after_step(function: &Function, latch: BlockId, site: &Site, candidate: &Candidate, fit: &Fit, stepped: Operand) -> Option<Fit> {
+    let Place::Before(reader) = site.at else { return None };
+    let Operand::Value(stepped) = stepped else { return None };
+    let ValueDef::Instruction(step) = function.value(stepped).def else { return None };
+    let order = function.block(latch).instructions();
+    let (step_at, reader_at) = (order.iter().position(|&one| one == step)?, order.iter().position(|&one| one == reader)?);
+    if site.one.kind != UseKind::Address || fit.trip.is_some() || fit.k == BigInt::from(0) || step_at > reader_at {
+        return None;
+    }
+    let by = candidate.of.step.known()?;
+    Some(Fit { constant: &fit.constant - &fit.k * by, ..fit.clone() })
 }
 
 /// `site`'s value from `register`, the candidate's, placed at `at`.
@@ -1403,8 +1423,20 @@ fn _realized(
         if let Some(&made) = shared.and_then(|block| products.get(&(register, fit.k.clone(), block))) {
             return Some(made);
         }
+        // At the block's top, or after the register where the block steps it.
         let at = match shared {
-            Some(block) => Position::Before(*function.block(block).instructions().iter().find(|&&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminator")),
+            Some(block) => {
+                let order = function.block(block).instructions();
+                let defined = match register {
+                    Operand::Value(value) => match function.value(value).def {
+                        ValueDef::Instruction(def) => order.iter().position(|&one| one == def).filter(|_| function.instruction(def).opcode != Opcode::Phi),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let first = defined.map_or_else(|| order.iter().position(|&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminator"), |def| def + 1);
+                Position::Before(order[first])
+            }
             None => at,
         };
         // An index is scaled at its register's width.
