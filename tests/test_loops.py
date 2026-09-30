@@ -306,3 +306,24 @@ def test_zero_extending_bp_keeps_the_frame():
     )
     text = innerloops.procedures(_object(code, "F"))["F"]
     assert quality.bp_problems(text) == []
+
+
+def test_a_nib_case_keeps_its_symbolic_stride(tmp_path):
+    """Nib's case functions are internal and every input passed m = 2, so
+    llrm propagated the constant: the symbolic-stride case was measured as
+    a constant stride of 4 bytes."""
+    import run
+    import build
+    import mir
+    case = next(one for one in concurrent.cases() if one.name == "conc1_s2_xt_bpn_index_n_st1_sum")
+    plans, streams = run.plans_for([case], "nib")
+    batch = run.Batch("nib", [case], build.Config(), tmp_path, plans, streams, 0)
+    batch.compile()
+    _, last = mir.stages(batch.work / "stages")
+    text = last.read_text()
+    body = text[text.index(f"@{case.symbol}("):]
+    body = body[: body.index("\n}\n")]
+    header, rest = body.split("\n", 1)
+    import re
+    m = re.findall(r"(%\d+)[,)]", header)[3]  # the fourth parameter: m
+    assert re.search(re.escape(m) + r"\b", rest)

@@ -317,6 +317,13 @@ def helpers(elem, rank: int) -> list[str]:
     return fill + dig
 
 
+def opaque(literal: str, kind) -> str:
+    """`literal` as a value the compiler cannot see."""
+    if kind.bits == 32:
+        return f"{kind.name}(keep32(i32({kind.name}({literal}))))"
+    return f"{kind.name}(keep(i16({kind.name}({literal}))))"
+
+
 def driver(cases: list[Case], plans: dict) -> str:
     out, structs, used = [], {}, {}
     externs = [
@@ -362,10 +369,12 @@ def driver(cases: list[Case], plans: dict) -> str:
                     rest //= extent
                 main.append(f"    {e.gname(array)}[{', '.join(map(str, index))}] = {e.const(value, array.elem)}")
             args = [f"&{'mut ' if a.name in written_arrays(case) else ''}{e.gname(a)}" for a in case.arrays if a.where == "param"]
-            args += [e.const(value, kind) for (_, kind), value in zip(case.params, inp.args)]
+            # through the opaque keep: a case's functions are internal, so
+            # constant arguments would be propagated into its loop
+            args += [opaque(e.const(value, kind), kind) for (_, kind), value in zip(case.params, inp.args)]
             if ticks:
                 main += ["    unsafe:", "        tick_count()"]
-            main.append(f"    r = i32({case.symbol}({', '.join(args)}))")
+            main += ["    unsafe:", f"        r = i32({case.symbol}({', '.join(args)}))"]
             main.append("    print(r)")
             for name in written_arrays(case):
                 array = case.array(name)
