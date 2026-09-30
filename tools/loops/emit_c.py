@@ -224,6 +224,8 @@ class Emitter:
 
     def function(self) -> list[str]:
         case = self.case
+        if sum(a.bytes for a in case.arrays if a.where == "local") > 12000:
+            raise NotC("local arrays past three quarters of the corpus's 16K stack")
         out = [self.signature(), "{"]
         for array in case.arrays:
             if array.where == "local":

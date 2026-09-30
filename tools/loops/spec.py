@@ -446,7 +446,8 @@ def stmt_exprs(stmt: Stmt) -> list[Expr]:
 
 
 def written_arrays(case: Case) -> list[str]:
-    """Arrays the case may store to, directly or through a pointer."""
+    """Arrays the case may store to, directly or through a pointer, that the
+    caller can see: a local array's writes stay in the frame."""
     names = set()
     for one in walk(case.body):
         if isinstance(one, Assign):
@@ -454,7 +455,7 @@ def written_arrays(case: Case) -> list[str]:
                 names.add(one.place.array)
             elif isinstance(one.place, Deref):
                 names.update(pointed(case, one.place.ptr))
-    return [a.name for a in case.arrays if a.name in names]
+    return [a.name for a in case.arrays if a.name in names and a.where != "local"]
 
 
 def pointed(case: Case, expr: Expr) -> set[str]:

@@ -221,6 +221,8 @@ class Machine:
                 raise Broken(f"{case.name}: no fill for {array.name}")
             self.memory[array.name] = filled(array, fills[array.name])
         for array in case.arrays:
+            if array.where == "local":
+                self.memory[array.name] = list(self.memory[array.name])  # the frame's own copy
             if array.alias:
                 self.memory[array.name] = self.memory[array.alias]
         for name, at, value in inp.pokes:

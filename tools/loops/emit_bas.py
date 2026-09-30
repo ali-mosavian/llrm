@@ -370,7 +370,22 @@ def driver(cases: list[Case], numbers: dict, plans: dict) -> str:
     for case in cases:
         functions += Emitter(case, numbers[case.name]).function()
     lines = [*(line for _, t in types for line in t), *head, *body, *main, "END", *functions, *subs]
-    return "\r\n".join(lines) + "\r\n"
+    return "\r\n".join(wrapped(line) for line in lines) + "\r\n"
+
+
+LINE = 200  # BC refuses a line past 255 characters
+
+
+def wrapped(line: str) -> str:
+    """A long line continued with ` _` after a comma."""
+    out = []
+    while len(line) > LINE:
+        cut = line.rfind(", ", 0, LINE)
+        if cut < 0:
+            break
+        out.append(line[: cut + 1] + " _")
+        line = "    " + line[cut + 2 :]
+    return "\r\n".join([*out, line])
 
 
 def expressible(case: Case) -> str | None:

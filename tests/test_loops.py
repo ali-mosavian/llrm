@@ -170,3 +170,41 @@ def test_continue_in_a_do_while_still_steps():
     skipped the step and the loop never ended."""
     shape = Shape((Walk(I16),), form="do", extras=(("exit", "continue"),))
     assert all(isinstance(one, list) for one in _runs(shape))
+
+
+def test_a_local_array_s_writes_stay_in_the_frame():
+    """A local array is a copy of the driver's; the oracle wrote through to
+    the driver's and reported its digest changed, which host clang and every
+    compiler disagreed with."""
+    from spec import Array, Case, Input, Fill, I16, I32, For, Assign, Return, Load, c, v, add
+    a = Array("a", I16, (8,), "local")
+    body = (For("i", c(0), "<", c(8), c(1), (Assign(Load("a", (v("i"),)), c(5)),)), Return(c(0, I32)))
+    case = Case("t", "test", (), (a,), (("i", I16),), body, I32, (Input((), (("a", Fill(1)),)),))
+    assert oracle.evaluate(case, "c") == [[0]]
+
+
+def test_programs_linked_case_by_case_have_names_of_their_own():
+    """A batch that could not link was split into one program per case,
+    named from the batch's first five letters and the case's position; two
+    such batches overwrote each other's programs and reported wrong answers."""
+    import run
+    names = {run.unique("c") for _ in range(300)}
+    assert len(names) == 300 and all(len(one) == 8 for one in names)
+
+
+def test_no_basic_line_is_longer_than_bc_reads():
+    """A 12-array FUNCTION header ran past BC's 255 characters; BC refused
+    it, LINK still made an EXE, and the oracle check crashed at start."""
+    import emit_bas
+    case = next(one for one in concurrent.cases() if one.name == "conc12_s2_xi_bpn_index_n_st1_sum")
+    plans = {case.name: [0]}
+    text = emit_bas.driver([case], {case.name: 1}, plans)
+    assert max(len(line) for line in text.split("\r\n")) <= 255
+
+
+def test_c_local_arrays_fit_the_corpus_stack():
+    """Twelve local arrays of mixed sizes took an 18.6K frame on the 16K
+    stack: the program crashed on DOS while its MIR ran right."""
+    import emit_c
+    case = next(one for one in concurrent.cases() if one.name == "conc12_s1102468_xi_bln_index_n_st1_sum")
+    assert emit_c.expressible(case) is not None

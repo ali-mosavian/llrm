@@ -10,6 +10,7 @@ how the oracle is checked against BASIC's own compiler.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import json
 import shutil

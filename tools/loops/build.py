@@ -38,7 +38,7 @@ class CompileError(Exception):
     pass
 
 
-COMPILE_SECONDS = 180
+COMPILE_SECONDS = 60
 
 
 def _run(command: list[str], env: dict | None = None, cwd: Path | None = None, timeout: int = 600) -> str:

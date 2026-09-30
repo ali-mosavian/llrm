@@ -89,6 +89,14 @@ def source(lang: str, cases: list[Case], plans: dict) -> str:
     return emit_nib.driver(cases, plans)
 
 
+_programs = iter(range(10**6))
+
+
+def unique(lang: str) -> str:
+    """A DOS name no other program of the run has: 8 characters."""
+    return f"{lang[0]}X{next(_programs):06d}"
+
+
 def mir_name(lang: str, case: Case, number: int) -> str:
     if lang == "bas":
         return f'F{number}{"&" if case.ret.bits == 32 else "%"}'
@@ -393,36 +401,38 @@ def main() -> int:
         try:
             batch.compile()
         except build.CompileError:
-            # each case alone, then the batch without those that fail
-            good = []
+            # case by case: one that fails, or a batch too slow together,
+            # hides no other
+            jobs = []
             for k, case in enumerate(batch.cases):
                 single = Batch(batch.lang, [case], batch.config, batch.work / "alone", batch.plans, batch.streams, k)
+                single.stem = unique(batch.lang)
                 try:
                     single.compile()
-                    good.append(case)
                 except build.CompileError as why:
                     result.unbuilt.append(f"{batch.config.tag} {batch.lang} {case.name}: {str(why)[:300]}")
-            if not good:
-                return None
-            batch.cases = good
-            try:
-                batch.compile()
-            except build.CompileError as why:
-                result.unbuilt.append(f"{batch.config.tag} {batch.lang} {[c.name for c in good]}: {str(why)[:300]}")
-                return None
+                    continue
+                jobs += finish(single)
+            return jobs
+        return finish(batch)
+
+    def finish(batch: Batch) -> list:
         check_mir(batch, result)
         measure(batch, result)
         if args.no_dos:
-            return None
+            return []
         try:
             return [job_for(batch)]
         except build.CompileError as why:
+            if len(batch.cases) == 1:
+                result.unbuilt.append(f"{batch.config.tag} {batch.lang} {batch.cases[0].name}: {str(why)[:300]}")
+                return []
             # each case alone, so one that cannot link hides no other
             result.notes.append(f"{batch.config.tag} {batch.lang} {batch.stem}: linked case by case: {str(why)[:200]}")
         jobs = []
         for k, case in enumerate(batch.cases):
             single = Batch(batch.lang, [case], batch.config, batch.work / "alone", batch.plans, batch.streams, k)
-            single.stem = f"{batch.stem[:5]}{k:03d}"
+            single.stem = unique(batch.lang)
             try:
                 single.compile()
                 jobs.append(job_for(single))

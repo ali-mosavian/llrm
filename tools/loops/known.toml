@@ -1,0 +1,38 @@
+# What falls short today, per check (tools/loops/run.py). Remove an entry when
+# it no longer falls short; never add one without its issue.
+
+[[bug]]
+match = "is required in two registers at once"
+issue = "#99"
+
+[[bug]]
+match = "data before any label"
+issue = "#101"
+
+[[bug]]
+match = "exceeds 64k by"
+issue = "#102"
+
+[[bug]]
+match = "llrm-c did not finish"
+issue = "#104"
+
+[[bug]]
+match = "conc1_s2_xi_bgf_index"
+issue = "#100"
+
+[[bug]]
+match = "conc1_s2_xr_bpf"
+issue = "#100"
+
+[[bug]]
+match = "conc1_s2_xi_bpf_index_n_stm1"
+issue = "#100"
+
+[[bug]]
+match = "conc2_s2_xi_bgfpf"
+issue = "#100"
+
+[[bug]]
+match = "conc1_s2_xi_bpf_do"
+issue = "#100"

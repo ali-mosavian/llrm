@@ -57,7 +57,13 @@ struct Machine<'m> {
     poison: Vec<bool>,
     addresses: HashMap<GlobalId, u64>,
     fuel: u64,
+    /// Near objects (address space 0 globals and allocas) sit below
+    /// NEAR_END, where a 16-bit pointer reaches them; this is their next free
+    /// byte, restored when a call returns. Far objects sit above.
+    near_top: u64,
 }
+
+const NEAR_END: u64 = 0x1_0000;
 
 impl<'m> Machine<'m> {
     fn new(module: &'m Module, fuel: u64) -> Run<Self> {
@@ -66,7 +72,8 @@ impl<'m> Machine<'m> {
             None => DataLayout::default(),
         };
         // Address 0 is null; nothing is allocated there.
-        let mut machine = Self { module, layout, memory: vec![0; 16], poison: vec![false; 16], addresses: HashMap::new(), fuel };
+        let end = NEAR_END as usize;
+        let mut machine = Self { module, layout, memory: vec![0; end], poison: vec![false; end], addresses: HashMap::new(), fuel, near_top: 16 };
         for (at, global) in module.globals.iter().enumerate() {
             let (size, align) = match &global.kind {
                 GlobalKind::Variable(variable) => {
@@ -75,7 +82,12 @@ impl<'m> Machine<'m> {
                 }
                 GlobalKind::Function(_) => (1, 1),
             };
-            let address = machine.allocate(size, align);
+            let near = matches!(global.kind, GlobalKind::Variable(_)) && global.address_space == 0;
+            let address = match &global.kind {
+                _ if near => machine.allocate_near(size, align)?,
+                GlobalKind::Variable(_) => machine.allocate(size, align),
+                GlobalKind::Function(_) => machine.append(size),
+            };
             machine.addresses.insert(GlobalId(at as u32), address);
         }
         for (at, global) in module.globals.iter().enumerate() {
@@ -90,8 +102,28 @@ impl<'m> Machine<'m> {
         Ok(machine)
     }
 
+    fn allocate_near(&mut self, size: u64, align: u64) -> Run<u64> {
+        let start = self.near_top.next_multiple_of(align.max(1));
+        if start + size > NEAR_END {
+            return unsupported("near objects past 64K");
+        }
+        self.memory[start as usize..(start + size) as usize].fill(0);
+        self.poison[start as usize..(start + size) as usize].fill(false);
+        self.near_top = start + size;
+        Ok(start)
+    }
+
+    /// An address past everything, for what is never read: a function.
+    fn append(&mut self, size: u64) -> u64 {
+        let start = self.memory.len() as u64;
+        self.memory.resize((start + size) as usize, 0);
+        self.poison.resize((start + size) as usize, false);
+        start
+    }
+
+    /// A far object, at the start of a 64K segment of its own.
     fn allocate(&mut self, size: u64, align: u64) -> u64 {
-        let start = (self.memory.len() as u64).next_multiple_of(align.max(1));
+        let start = (self.memory.len() as u64).next_multiple_of(align.max(NEAR_END));
         self.memory.resize((start + size) as usize, 0);
         self.poison.resize((start + size) as usize, false);
         start
@@ -235,10 +267,9 @@ impl<'m> Machine<'m> {
                 None => unsupported(format!("a call to the external @{name}")),
             };
         }
-        let mark = self.memory.len();
+        let mark = self.near_top;
         let result = self.execute(function, arguments);
-        self.memory.truncate(mark);
-        self.poison.truncate(mark);
+        self.near_top = mark;
         result
     }
 
@@ -442,7 +473,7 @@ impl<'m> Machine<'m> {
                         let types = self.types();
                         let size = self.layout.alloc_size(types, *allocated) * count;
                         let align = align.unwrap_or(1).max(self.layout.align(types, *allocated));
-                        let address = self.allocate(size.max(1), align);
+                        let address = self.allocate_near(size.max(1), align)?;
                         // Fresh memory holds nothing yet.
                         (address..address + size.max(1)).for_each(|at| self.poison[at as usize] = true);
                         Some(Val::Ptr(address))
@@ -497,7 +528,10 @@ impl<'m> Machine<'m> {
             indices.push(Some(signed(*bits, *width)));
         }
         let (offset, _) = self.layout.collect_offset(types, source, &indices);
-        let address = (i128::from(base) + offset) as u128 & mask(index_bits);
+        // Only the index-width low bits move, as LLVM's GEP: a far pointer's
+        // offset wraps inside its segment.
+        let low = (i128::from(base) + offset) as u128 & mask(index_bits);
+        let address = (u128::from(base) & !mask(index_bits)) | low;
         Ok(Val::Ptr(address as u64))
     }
 }
