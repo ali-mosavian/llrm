@@ -344,6 +344,8 @@ struct Compiler {
     /// `-g`'s source; None, no debug information.
     source: Option<DebugSource>,
     debug: llrm_hir::debug::Builder,
+    /// Each TYPE's debug type, by its type.
+    debug_structures: BTreeMap<u32, i64>,
     /// The source line of each load in the function being built.
     load_lines: BTreeMap<u32, usize>,
     warnings: Vec<String>,
@@ -577,6 +579,7 @@ fn built_from(
                 promises.push((value, referenced));
             }
             if is_array {
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, true, false);
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
@@ -608,14 +611,14 @@ fn built_from(
                 let place = compiler.declare_as(&parameter.declaration, "local")?;
                 // The debugger reads the parameter as passed.
                 compiler.debug_forget(place);
-                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, true);
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, false, true);
                 compiler.emit(
                     "store",
                     Vec::new(),
                     vec![Operand::Place(place), Operand::Value(value)],
                 );
             } else {
-                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, false);
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, false, false);
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
@@ -1389,6 +1392,7 @@ impl Compiler {
             current_source_line: 0,
             source: None,
             debug: llrm_hir::debug::Builder::default(),
+            debug_structures: BTreeMap::new(),
             load_lines: BTreeMap::new(),
             warnings: Vec::new(),
         }
@@ -1647,9 +1651,10 @@ impl Compiler {
 
     fn type_declarations(&mut self, module: &Module) -> Result<(), SemanticError> {
         for statement in &module.statements {
-            let Statement::TypeDecl { name, fields, .. } = statement else {
+            let Statement::TypeDecl { name, fields, span } = statement else {
                 continue;
             };
+            let mut described = Vec::new();
             if self.udts.contains_key(canonical(name)) {
                 return self.fail(format!("duplicate TYPE {name}"));
             }
@@ -1717,9 +1722,11 @@ impl Compiler {
                 {
                     return self.fail(format!("duplicate field {name}.{}", field.name));
                 }
+                described.push((field, field_type, offset, extent));
                 offset += extent;
             }
             let type_id = self.opaque_type(name.clone(), offset);
+            self.debug_structure(type_id, name, *span, &described, offset);
             self.udts.insert(
                 canonical(name).into(),
                 Udt {
@@ -2360,6 +2367,7 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
+            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, true);
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
@@ -2430,6 +2438,7 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
+            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, true);
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
@@ -2535,11 +2544,8 @@ impl Compiler {
             self.data_offset += extent;
         }
         if array_element.is_none() {
-            if storage == "module" {
-                self.debug_global(place_symbol, place_offset, &source, span, type_id);
-            } else {
-                self.debug_variable(place, &source, span, type_id);
-            }
+            let held = if storage == "module" { debug::Held::Data(place_symbol, place_offset) } else { debug::Held::Place(place) };
+            self.debug_held(held, &source, span, type_id, false);
         }
         let descriptor_place = if array_element.is_some() {
             let descriptor_type = self.opaque_type(
@@ -2571,6 +2577,7 @@ impl Compiler {
                 storage: descriptor_storage,
                 symbol: descriptor_symbol,
             });
+            self.debug_held(debug::Held::Place(descriptor), &source, span, element, true);
             if local_descriptor {
                 self.data_offset += descriptor_extent;
             } else {
