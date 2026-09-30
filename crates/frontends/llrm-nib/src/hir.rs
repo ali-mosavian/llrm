@@ -81,6 +81,9 @@ pub struct Instruction {
     pub asm: Option<Asm>,
     /// The source line of the statement it belongs to, 0 for none.
     pub line: u32,
+    /// An address the frontend knows lies in the object its operand points
+    /// into: the borrow it indexes bounds it.
+    pub inbounds: bool,
 }
 
 /// An `asm` instruction's code and the 16-bit registers it reads and writes.
@@ -329,6 +332,9 @@ fn function_json(out: &mut String, function: &Function) {
             out.push_str("],\"pure\":false,\"results\":[");
             numbers(out, &instruction.results);
             out.push(']');
+            if instruction.inbounds {
+                out.push_str(",\"inbounds\":true");
+            }
             if instruction.line > 0 {
                 write!(out, ",\"line\":{}", instruction.line).unwrap();
             }

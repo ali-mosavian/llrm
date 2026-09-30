@@ -3277,3 +3277,22 @@ fn main() -> i16:
     let own = "fn gen(x: i16) -> iter[i16]:\n    let mut y: i16 = x\n    let r = &mut y\n    yield 1\n    r += 1\n    yield y\n\nfn main() -> i16:\n    let mut g = gen(1)\n    return 0\n";
     assert!(refused(own).contains("keeps only borrows of what its caller lent it; \"r\" borrows its own \"y\""), "{}", refused(own));
 }
+
+/// A borrow's element address is in bounds of the object it borrows: the
+/// frontend checked the index against the borrow's length, and says so.
+/// Unsaid, Nib's `zip` of two slices kept two counters where C's dot
+/// counted one to zero.
+#[test]
+fn a_borrowed_element_address_is_in_bounds() {
+    let source = "\
+fn total(values: &[i16]) -> i16:
+    let mut sum: i16 = 0
+    for value in values:
+        sum += value
+    return sum
+";
+    let hir = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message)).replace([' ', '\n'], "");
+    // Each offset's own fields run to the next instruction's `op`.
+    let offsets = hir.split("\"op\":\"ptr_offset\"").skip(1).map(|after| after.split("\"op\":").next().unwrap_or_default()).collect::<Vec<_>>();
+    assert!(!offsets.is_empty() && offsets.iter().all(|fields| fields.contains("\"inbounds\":true")), "{hir}");
+}

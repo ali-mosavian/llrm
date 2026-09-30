@@ -239,6 +239,7 @@ impl<'a> FunctionCompiler<'a> {
                 callee,
                 asm: None,
                 line,
+                inbounds: false,
             });
         id
     }
