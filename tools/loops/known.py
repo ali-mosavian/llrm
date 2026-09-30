@@ -39,6 +39,14 @@ def load() -> tuple[set, dict]:
     return entries, issues
 
 
+def bugs() -> list[tuple[str, str]]:
+    """(text a wrong or unbuilt line contains, its issue): known llrm bugs,
+    named in the report so a new failure stands out. They still fail the run."""
+    if not PATH.exists():
+        return []
+    return [(one["match"], one["issue"]) for one in tomllib.loads(PATH.read_text()).get("bug", [])]
+
+
 def compare(short: set, cases: set, langs: list, configs: list) -> Ratchet:
     entries, issues = load()
     scope = {e for e in entries if e[0] in cases and e[1] in langs and e[2] in configs}
@@ -47,11 +55,11 @@ def compare(short: set, cases: set, langs: list, configs: list) -> Ratchet:
 
 def write(short: set, issues: dict, default: str = "#98") -> None:
     """known.toml as `short` stands, entries outside it kept."""
-    entries, _ = load()
+    kept = PATH.read_text().split("[[short]]")[0].replace(HEADER, "").strip() if PATH.exists() else ""
     grouped: dict[tuple, set] = {}
     for case, lang, config, check in short:
         grouped.setdefault((case, lang, check), set()).add(config)
-    lines = [HEADER]
+    lines = [HEADER, kept, ""] if kept else [HEADER]
     for (case, lang, check), configs in sorted(grouped.items()):
         lines += ["[[short]]", f'case = "{case}"', f'lang = "{lang}"', f'check = "{check}"',
                   "configs = [" + ", ".join(f'"{c}"' for c in sorted(configs)) + "]",

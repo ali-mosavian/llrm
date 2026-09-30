@@ -225,6 +225,9 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
             if (case.name, lang) in result.skipped:
                 continue
             wants = expect.want(case, lang)
+            stated = {one[0]: one[1] for one in case.bound}
+            if lang in stated and len(wants) == 1:
+                wants = [expect.Want(stated[lang], 0, True, False, wants[0].classes, "stated in the case")]
             for config in configs:
                 facts = result.facts.get((case.name, lang, config.tag))
                 if facts is None:
@@ -352,6 +355,16 @@ def main() -> int:
     work.mkdir(parents=True, exist_ok=True)
     result = Result()
 
+    broken = set()
+    for case in cases:
+        try:
+            for lang in langs:
+                if not EMITTERS[lang].expressible(case):
+                    oracle.evaluate(case, lang)
+        except oracle.Broken as why:
+            result.wrong.append(f"the generator made a broken case: {why}")
+            broken.add(case.name)
+    cases = [c for c in cases if c.name not in broken]
     per_lang = {}
     for lang in langs:
         chosen = []
@@ -396,15 +409,28 @@ def main() -> int:
         measure(batch, result)
         if args.no_dos:
             return None
-        exe = batch.work / "P.EXE"
         try:
-            if batch.lang == "c":
-                dos.link_c(batch.obj, exe, batch.work)
-            elif batch.lang == "nib":
-                dos.link_nib(batch.obj, exe, batch.work, batch.config.opt)
+            return [job_for(batch)]
         except build.CompileError as why:
-            result.unbuilt.append(f"{batch.config.tag} {batch.lang} link: {str(why)[:300]}")
-            return None
+            # each case alone, so one that cannot link hides no other
+            result.notes.append(f"{batch.config.tag} {batch.lang} {batch.stem}: linked case by case: {str(why)[:200]}")
+        jobs = []
+        for k, case in enumerate(batch.cases):
+            single = Batch(batch.lang, [case], batch.config, batch.work / "alone", batch.plans, batch.streams, k)
+            single.stem = f"{batch.stem[:5]}{k:03d}"
+            try:
+                single.compile()
+                jobs.append(job_for(single))
+            except build.CompileError as why:
+                result.unbuilt.append(f"{batch.config.tag} {batch.lang} {case.name}: {str(why)[:300]}")
+        return jobs
+
+    def job_for(batch: Batch) -> dos.Job:
+        exe = batch.work / "P.EXE"
+        if batch.lang == "c":
+            dos.link_c(batch.obj, exe, batch.work)
+        elif batch.lang == "nib":
+            dos.link_nib(batch.obj, exe, batch.work, batch.config.opt)
         job = dos.Job(batch.stem, "obj" if batch.lang == "bas" else "exe", batch.obj if batch.lang == "bas" else exe)
         job.expected = batch.expected
         job.cases = [(c.name, len(batch.streams[c.name])) for c in batch.cases]
@@ -412,7 +438,7 @@ def main() -> int:
         return job
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        jobs += [j for j in pool.map(one, all_batches) if j]
+        jobs += [j for got in pool.map(one, all_batches) if got for j in got]
         if not args.no_refs:
             list(pool.map(lambda cfg: references(per_lang.get("c", ([],))[0], cfg, work / "refs", result), configs))
 
@@ -460,8 +486,10 @@ def report(cases, langs, configs, result: Result, ratchet, work: Path, seconds: 
         skipped = sum(1 for (c, l) in result.skipped if l == lang)
         lines.append(f"  {lang}: {len(cases) - skipped} expressed, {skipped} not expressible")
     lines.append(f"correctness: {len(result.wrong)} wrong, {len(result.unbuilt)} not built")
-    lines += [f"  WRONG {one}" for one in result.wrong]
-    lines += [f"  UNBUILT {one}" for one in result.unbuilt]
+    known_bugs = known.bugs()
+    tagged = lambda line: next((f" (known: {issue})" for match, issue in known_bugs if match in line), "")  # noqa: E731
+    lines += [f"  WRONG {one}{tagged(one)}" for one in result.wrong]
+    lines += [f"  UNBUILT {one}{tagged(one)}" for one in result.unbuilt]
     lines.append(f"quality: {len(result.short)} shortfalls; {len(ratchet.new)} new, {len(ratchet.fixed)} fixed")
     lines += [f"  NEW {' '.join(one)}" for one in sorted(ratchet.new)]
     lines += [f"  FIXED {' '.join(one)} (remove it from known.toml)" for one in sorted(ratchet.fixed)]
@@ -493,6 +521,7 @@ def details(cases, langs, configs, result: Result) -> str:
             mirs = [result.mir_ivs.get((case.name, lang, config.tag)) for lang in langs]
             out.append(f"{case.name:<28}" + "".join(cells) + f"   {[w.ivs for w in wants]} mir {mirs}")
         out += matrix(cases, langs, config, result)
+    out += causes(cases, langs, configs, result)
     out.append("\n== coverage")
     out += coverage(cases, result, langs)
     return "\n".join(out) + "\n"
@@ -529,6 +558,44 @@ def matrix(cases, langs, config, result: Result) -> list[str]:
     out.append("n   " + "".join(f"{c[:22]:>24}" for c in columns))
     for n in sorted(rows):
         out.append(f"{n:<4}" + "".join(f"{rows[n].get(c, ''):>24}" for c in columns))
+    return out
+
+
+def causes(cases, langs, configs, result: Result) -> list[str]:
+    """What falls short, commonest first: per check, then per dimension the
+    share of measured cases that fall short, and the smallest example."""
+    by_name = {c.name: c for c in cases}
+    measured: dict[str, int] = {}
+    for (name, who, config), facts in result.facts.items():
+        if who in langs and facts:
+            for tag in by_name[name].tags | {f"lang:{who}", f"config:{config}"}:
+                measured[tag] = measured.get(tag, 0) + 1
+    checks: dict[str, list] = {}
+    for one in result.short:
+        checks.setdefault(one[3], []).append(one)
+    out = ["\n== what falls short, commonest first"]
+    for check, found in sorted(checks.items(), key=lambda kv: -len(kv[1])):
+        out.append(f"\n{check}: {len(found)}")
+        counts: dict[str, int] = {}
+        for name, lang, config, _ in found:
+            for tag in by_name[name].tags | {f"lang:{lang}", f"config:{config}"}:
+                counts[tag] = counts.get(tag, 0) + 1
+        dims: dict[str, list] = {}
+        for tag, n in counts.items():
+            dim = tag.split(":")[0]
+            if dim in ("same-size",):
+                continue
+            dims.setdefault(dim, []).append((n, tag))
+        for dim, values in sorted(dims.items(), key=lambda kv: -max(n for n, _ in kv[1])):
+            cells = ", ".join(f"{t.split(':', 1)[1]} {n}/{measured.get(t, n)}" for n, t in sorted(values, reverse=True)[:12])
+            out.append(f"  {dim}: {cells}")
+        name, lang, config, _ = min(found, key=lambda one: (len(by_name[one[0]].arrays), len(by_name[one[0]].body),
+                                                             one[0], one[1], one[2]))
+        facts = result.facts.get((name, lang, config), [])
+        out.append(f"  smallest: {name} {lang} {config}: {by_name[name].note or ''}")
+        for f in facts:
+            out += [f"      {line}" for line in f.lines]
+        out.append(f"      listing and MIR: {config}/{lang}/b*/stages (listing.asm, the last NN-*.ll)")
     return out
 
 

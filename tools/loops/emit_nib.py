@@ -121,8 +121,8 @@ class Emitter:
     def array_ref(self, name: str) -> str:
         array = self.case.array(name)
         ntype(array.elem)
-        if array.ptr == "huge" or array.bytes > 65000:
-            raise NotNib("an array past 64K")
+        if array.bytes > 30000:
+            raise NotNib("a module array this large does not fit DGROUP")
         return self.gname(array) if array.where == "global" else ident(name)
 
     def unsafe(self, s) -> bool:

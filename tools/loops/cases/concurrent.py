@@ -22,8 +22,8 @@ import random
 from dataclasses import dataclass, replace
 
 from spec import (
-    I8, U8, I16, I32, F64, F80, Struct, Array, Case, Input, Fill, Const, Var, Bin, Neg, Cast, Cmp, Load, AddrOf, PtrAdd,
-    Deref, Len, Ptr, Assign, For, DoWhile, If, CallS, Return, c, v, add, sub, mul,
+    I8, U8, I16, U16, I32, F64, F80, Struct, Array, Case, Input, Fill, Const, Var, Bin, Neg, Cast, Cmp, Load, AddrOf, PtrAdd,
+    Deref, Len, Ptr, Assign, For, DoWhile, If, CallS, Return, Break, Continue, c, v, add, sub, mul,
 )
 from expect import PARTNERS
 
@@ -54,6 +54,10 @@ class Shape:
     use: str = "sum"  # sum, store, copy, mixed
     call: bool = False
     extras: tuple = ()  # metamorphic transformers, applied in order
+    counter: object = I16  # the counter's type: the index width
+    rows: tuple = ()  # trip counts, when not TRIPS
+    margin: int = 8  # every index's start, so `off` can reach -7
+    outer: bool = False  # inside a loop whose counter each walk's start takes (a + j*m)
 
     def strides(self) -> list[tuple]:
         """Per walk its byte stride per trip: (bytes,) or ("m", bytes)."""
@@ -96,9 +100,10 @@ def _name(shape: Shape) -> str:
 def build(shape: Shape, name: str | None = None, base: str | None = None, relation: str | None = None) -> Case:
     walks = shape.walks
     step = shape.step
-    params = [("n", I16), ("o", I16), ("m", I16)]
+    params = [("n", shape.counter), ("o", I16), ("m", I16)]
+    one_ = lambda k: Const(k, shape.counter)  # noqa: E731
     trip = {
-        "n": v("n"), "const": c(200), "n-k": sub(v("n"), c(3)), "n+k": add(v("n"), c(3)),
+        "n": v("n"), "const": one_(200), "n-k": sub(v("n"), one_(3)), "n+k": add(v("n"), one_(3)),
         "len": sub(Len("a0"), c(16)),
     }[shape.trip]
     extras = dict((one[0], one) for one in shape.extras)
@@ -106,20 +111,24 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
 
     def index_of(w: Walk, i) -> object:
         kind = w.index[0]
-        start = w.start + shift + 8  # every index stays at or above 0: `off` reaches -7
+        start = w.start + shift + shape.margin
         if kind == "i":
             e = i
         elif kind == "off":
             e = add(i, c(w.index[1]))
         elif kind == "sym":
             e = add(i, v("o"))
+        elif kind == "plusn":
+            e = add(i, v("n"))
         elif kind == "rev":
-            e = sub(sub(trip, c(1)), i)
+            e = sub(sub(trip, one_(1)), i)
         elif kind == "scale":
             e = mul(c(w.index[1]), i)
         else:
             e = mul(i, v("m"))
-        return add(e, c(start))
+        if shape.outer:
+            e = add(e, mul(v("k"), v("m")))
+        return add(e, Const(start, shape.counter)) if start else e
 
     # extents: the largest index any input reaches, plus room
     arrays = []
@@ -127,14 +136,19 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
     for k, w in enumerate(walks):
         kind = w.index[0]
         top = {"scale": w.index[1] if kind == "scale" else 1, "stride": 3}.get(kind, 1) * (max(TRIPS) + 3)
-        top += {"sym": 40}.get(kind, 0) + w.start + shift + 8 + 8
+        top += {"sym": 40, "plusn": max(TRIPS) + 8}.get(kind, 0) + w.start + shift + shape.margin + 8 * bool(shape.margin)
+        top += 3 * 3 if shape.outer else 0
+        if shape.rows:
+            top = max(shape.rows) + w.start + shift + shape.margin
         reach.append(top)
     owners = {}
     for k, w in enumerate(walks):
         owner = w.same_as if w.same_as is not None else k
         owners[k] = owner
+    if "store" in extras and extras["store"][1] == "apart":
+        arrays.append(Array("g", I16, (8,), "global"))
     # one extent for all: `len` takes a0's, and every walk must fit it
-    extent = max([EXTENT, *reach])
+    extent = max([EXTENT, *reach]) if not shape.rows else max(reach)
     for k, w in enumerate(walks):
         if owners[k] == k:
             arrays.append(Array(f"a{k}", w.elem, (extent,), w.where, w.ptr))
@@ -152,7 +166,9 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
             return mul(v("m"), c(step))
         return c(step)
 
-    local_types = [("i", I16), ("s", I32), ("u", I32), ("j", I32), ("q", I32), ("d", I32)]
+    pressure = extras["pressure"][1] if "pressure" in extras else 0
+    local_types = [("i", shape.counter), ("s", I32), ("u", I32), ("j", I32), ("q", I32), ("d", I32), ("k", I16),
+                   *((f"r{x}", I32) for x in range(pressure))]
     for k in walked:
         local_types.append((f"p{k}", Ptr(walks[k].elem, walks[k].ptr)))
     if shape.form == "end":
@@ -191,7 +207,8 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
             value = Cast(Bin("%", sum_of([elem_value(k) for k in reads]) if reads else v("i"), c(97, I32)), kind)
             reads = []
         else:
-            value = Cast(v("i"), kind)
+            # the end-pointer form has no counter to store
+            value = Cast(v("i"), kind) if shape.form != "end" else Cast(c(7), kind)
         uses.append(Assign(target, value))
     if shape.use == "mixed":
         writes = [k for k in range(len(walks)) if k % 2 == 0]
@@ -202,32 +219,50 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
     for k in reads:
         uses.append(Assign(v("s"), add(v("s"), elem_value(k))))
     uses = _transform(uses, shape, elem_value, len(walks))
+    for x in range(pressure):
+        # unrelated values live across every use
+        uses.insert(x * len(uses) // max(pressure, 1), Assign(v(f"r{x}"), add(v(f"r{x}"), Bin("^", v("u"), c(x + 1, I32)))))
+    if "store" in extras:
+        target = Load("g", (Bin("&", v("i"), Const(7, shape.counter)),)) if extras["store"][1] == "apart" else None
+        if target is None and walks and not isinstance(walks[0].elem, Struct) and not isinstance(walks[0].elem, type(F64)):
+            target = Load(name_of(0), (Const(3, shape.counter),))
+        if target is not None:
+            kind = I16 if extras["store"][1] == "apart" else walks[0].elem
+            uses.insert(len(uses) // 2, Assign(target, Cast(v("u"), kind)))
     steps = []
     for k in walked:
         steps.append(Assign(v(f"p{k}"), PtrAdd(v(f"p{k}"), coef(walks[k]))))
     body = ([CallS("touch")] if shape.call else []) + uses + steps
     starts = []
-    first = c(0) if step > 0 else sub(trip, c(1))
+    first = one_(0) if step > 0 else sub(trip, one_(1))
     for k in walked:
         starts.append(Assign(v(f"p{k}"), AddrOf(name_of(k), index_of(walks[k], first))))
-    head = [Assign(v("s"), c(0, I32)), Assign(v("u"), c(1, I32)), Assign(v("j"), c(0, I32)), Assign(v("q"), c(0, I32))]
+    head = [Assign(v("s"), c(0, I32)), Assign(v("u"), c(1, I32)), Assign(v("j"), c(0, I32)), Assign(v("q"), c(0, I32)),
+            Assign(v("i"), one_(0)), *(Assign(v(f"r{x}"), c(x, I32)) for x in range(pressure))]
     if shape.form == "end":
         head.append(Assign(v("e"), AddrOf(name_of(0), index_of(walks[0], trip))))
         loop = [*starts, _while_ptr(body, step)]
     elif shape.form == "do":
-        test = Cmp("<", v("i"), trip) if step > 0 else Cmp(">=", v("i"), c(0))
-        guard = Cmp(">", trip, c(0))
-        loop = [If(guard, (Assign(v("i"), first), *starts, DoWhile(tuple(body + [Assign(v("i"), add(v("i"), c(step)))]), test)))]
+        test = Cmp("<", v("i"), trip) if step > 0 else Cmp(">=", v("i"), one_(0))
+        guard = Cmp(">", trip, one_(0))
+        loop = [If(guard, (Assign(v("i"), first), *starts, DoWhile(tuple(body + [Assign(v("i"), add(v("i"), one_(step)))]), test)))]
     else:
         if step > 0:
-            loop = [*starts, For("i", c(0), "<", trip, c(step), tuple(body))]
+            loop = [*starts, For("i", one_(0), "<", trip, one_(step), tuple(body))]
         else:
-            loop = [*starts, For("i", sub(trip, c(1)), ">=", c(0), c(step), tuple(body))]
+            loop = [*starts, For("i", sub(trip, one_(1)), ">=", one_(0), one_(step), tuple(body))]
     result = add(add(v("s"), v("u")), add(v("j"), v("q")))
+    for x in range(pressure):
+        result = add(result, v(f"r{x}"))
+    if "after" in extras:
+        # the final counter, read after the exit
+        result = add(result, Cast(v("i"), I32))
+    if shape.outer:
+        loop = [For("k", c(0), "<", c(3), c(1), tuple(loop))]
     stmts = (*head, *loop, Return(result))
     locals_ = tuple(local_types)
     rows = []
-    for t in TRIPS:
+    for t in shape.rows or TRIPS:
         if shape.trip == "n-k":
             t += 3
         if shape.trip == "len":
@@ -312,6 +347,18 @@ def _transform(uses: list, shape: Shape, elem_value, arrays: int) -> list:
                 chosen = reads[one[1] % len(reads)]
                 test = Cmp("!=", Bin("&", v("i"), c(1)), c(0)) if one[2] == "half" else Cmp("==", v("i"), c(100))
                 out[out.index(chosen)] = If(test, (chosen,))
+        elif kind == "exit":
+            # a way out between the uses
+            at = rng.randrange(len(out) + 1)
+            stop = {"break": Break(), "continue": Continue(), "return": Return(v("s"))}[one[1]]
+            test = Cmp("==", Bin("&", v("i"), c(31)), c(17)) if one[1] != "continue" else \
+                Cmp("==", Bin("&", v("i"), c(3)), c(1))
+            out = out[:at] + [If(test, (stop,))] + out[at:]
+        elif kind == "callmid":
+            at = rng.randrange(len(out) + 1)
+            out = out[:at] + [CallS(one[1])] + out[at:]
+        elif kind == "invariant":
+            out.append(Assign(v("s"), add(v("s"), Cast(v("o"), I32))))
         elif kind == "both":
             # the same uses in both arms of a branch
             reads = [u for u in out if isinstance(u, Assign) and u.place == v("s")]
@@ -331,6 +378,12 @@ TRANSFORMERS = [
     lambda rng: ("cond", rng.randrange(12), rng.choice(["half", "rare"])),
     lambda rng: ("both",),
     lambda rng: ("shift", rng.choice([1, 2, 5, 13])),
+    lambda rng: ("exit", rng.choice(["break", "continue", "return"])),
+    lambda rng: ("callmid", rng.choice(["touch", "tick"])),
+    lambda rng: ("store", rng.choice(["apart", "maybe"])),
+    lambda rng: ("invariant",),
+    lambda rng: ("pressure", rng.choice([1, 2, 3, 5])),
+    lambda rng: ("after",),
 ]
 
 
@@ -382,12 +435,59 @@ def shapes(quick: bool = False) -> list[Shape]:
                 for call in (False, True):
                     walks = _walks(n, "equal", where="global" if trip == "len" else "param")
                     out.append(Shape(walks, trip=trip, step=step, call=call))
-    # start offsets: each array its own constant start
+    # start offsets: each array its own constant start, a symbolic one, both
+    # signs, overlapping walks of one array, a start from an outer loop, and
+    # pointers that begin mid-array
     for n in (2, 3, 4, 6):
         out.append(Shape(tuple(Walk(I16, start=3 * k) for k in range(n))))
         out.append(Shape(tuple(Walk(I16, start=(5 * k) % 7, where="global") for k in range(n))))
+        out.append(Shape(tuple(Walk(I16, ("plusn",) if k % 2 else ("i",)) for k in range(n))))
+        out.append(Shape(tuple(Walk(I16, ("off", 5 if k % 2 else -5)) for k in range(n))))
+        out.append(Shape(tuple(Walk(I16, ("off", 2 * k), same_as=0 if k else None) for k in range(n))))
+        out.append(Shape(_walks(n, "equal"), outer=True))
+        out.append(Shape(tuple(Walk(I16, start=4 * k + 1) for k in range(n)), form="ptr"))
     if quick:
         out = out[::9]
+    return out + boundaries()
+
+
+def boundaries() -> list[Shape]:
+    """Walks across a whole segment: stride x n just below and at 32768 and
+    65536, a counter that starts at 0 (-65536 in 16 bits), unsigned n, a
+    negative step, and far or huge arrays, where the counter form must be
+    declined or done right."""
+    whole = (0, 1, 16383, 16384, 16385, 32767, 32768)
+    far = lambda elem, where="global", index=("i",): Walk(elem, index, where, "far")  # noqa: E731
+    return [
+        Shape((far(I16),), counter=U16, rows=whole, margin=0),
+        Shape((far(I16, "param"),), counter=U16, rows=whole, margin=0),
+        Shape((far(U8),), counter=U16, rows=(0, 1, 32767, 32768, 65534, 65535), margin=0),
+        Shape((far(I16, "param", ("rev",)),), counter=U16, rows=(0, 1, 32767, 32768), margin=0),
+        Shape((far(I16, "param"),), step=-1, rows=(0, 1, 16384, 32767), margin=0),
+        Shape((far(I16), far(I16, "param")), counter=U16, rows=(0, 32767, 32768), margin=0),
+        Shape((far(I16, "param"),), form="do", counter=U16, rows=(0, 1, 32768), margin=0),
+        Shape((Walk(I32, where="global", ptr="huge"),), rows=(0, 16383, 16384, 20000), margin=0),
+        Shape((Walk(I32, where="param", ptr="huge"),), rows=(0, 16384, 20000), margin=0),
+    ]
+
+
+def released_bp() -> list[Case]:
+    """3 and 4 near arrays in a call-free loop that touches no frame slot:
+    with bp released as a seventh register (saved and restored around the
+    loop), 32-bit addressing on every CPU here pairs one counter with all the
+    bases: counter, bases, accumulator and a temporary fit 7. Then the same
+    loops with a call, and with a local array (a frame slot), where bp must
+    stay the frame."""
+    out = []
+    why = "bp released: counter + {n} bases + accumulator + temporary = {total} of 7 registers, 32-bit addressing"
+    for n in (3, 4):
+        shape = Shape(_walks(n, "equal"))
+        case = build(shape, name=f"bp{n}_released")
+        out.append(case.with_(bound=tuple((lang, 1, why.format(n=n, total=n + 3)) for lang in ("c",)),
+                              tags=case.tags | {"bp:released"}))
+        out.append(build(replace(shape, call=True), name=f"bp{n}_call").with_(tags=case.tags | {"bp:call"}))
+        framed = tuple(replace(w, where="local") if k == 0 else w for k, w in enumerate(shape.walks))
+        out.append(build(replace(shape, walks=framed), name=f"bp{n}_frame").with_(tags=case.tags | {"bp:frame"}))
     return out
 
 
@@ -409,7 +509,9 @@ def variants(bases: list[tuple[Shape, Case]], seed: int, per_base: int, quick: b
             variant = replace(shape, extras=extras)
             out.append(build(variant, base=base.name, relation=" + ".join(one[0] for one in extras)))
         # form independence: the same loop, per-array pointers and an end compare
-        if shape.form == "index" and shape.step > 0 and shape.use == "sum" and not quick:
+        # (the end pointer walks forward, from a start the margin keeps in bounds)
+        if (shape.form == "index" and shape.step > 0 and shape.use == "sum" and not quick and shape.margin
+                and shape.walks[0].index[0] != "rev"):
             for form in ("ptr", "end"):
                 case = build(replace(shape, form=form), name=f"{base.name}_as_{form}", base=base.name,
                              relation=f"form:{form}")
@@ -435,4 +537,4 @@ def cases(quick: bool = False, seed: int = 98) -> list[Case]:
             continue
         seen.add(case.name)
         built.append((None, case))
-    return [case for _, case in built]
+    return [case for _, case in built] + released_bp()

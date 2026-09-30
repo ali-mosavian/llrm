@@ -13,8 +13,28 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 | `e2e/mkgolden.py` | the suite's expected outputs, computed from what each program means |
 | `e2e/mkfixtures.py` | rebuilds `tests/fixtures/omf` with the BC toolchains |
 | `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
+| `innerloops.py` | each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or msp430) |
+| `loops/run.py` | the loop corpus: cases in C, BASIC and Nib, checked by an oracle, llrm-mir and DOSBox, measured against hand-derived bounds and reference compilers; see below |
 | `analysis/qbfootprint.py` | linked code bytes per module from two LINK maps |
 | `analysis/runtime_writes.py` | what the QuickBASIC runtime writes, read off a linked image |
+
+## The loop corpus
+
+`loops/spec.py` is the one language a case is written in. `loops/oracle.py`
+computes what it reports, in each language's semantics: C's signed overflow and
+BASIC's error 6 make an input invalid there, Nib wraps. The emitters
+(`emit_c.py`, `emit_bas.py`, `emit_nib.py`) write each case with a driver that
+fills its arrays, calls it once per valid input and reports the result and a
+digest of every array it writes. `loops/cases/` holds the families: `classic`
+(named anchors) and `concurrent` (1 to 12 arrays in one loop, with metamorphic
+variants composed from a recorded seed).
+
+`loops/expect.py` derives each inner loop's bound from the spec and the target's
+tables (registers, address-form partners, segments); `loops/quality.py` reads a
+loop's induction variables, invariant loads and exit shape from its bytes. The
+references are Open Watcom (`OW_BIN`, its `bwcc`), gcc-ia16's cc1 and as
+(`IA16_ROOT`; the 286 is its newest CPU) and LLVM 20 for msp430 (`LLVM20`), a
+mechanism check only.
 
 `toolchain/` holds what `build.rs` bootstraps: Open Watcom's `wccq`, jwasm,
 jwlink and DOSBox-X.

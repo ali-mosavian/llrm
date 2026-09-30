@@ -353,6 +353,9 @@ class Case:
     relation: str | None = None
     # per language, why it cannot be written there
     skip: tuple[tuple[str, str], ...] = ()
+    # per language, a stated induction-variable bound replacing expect.py's,
+    # with why (e.g. bp released as a seventh register)
+    bound: tuple[tuple[str, int, str], ...] = ()
     note: str = ""
 
     def array(self, name: str) -> Array:

@@ -38,8 +38,14 @@ class CompileError(Exception):
     pass
 
 
-def _run(command: list[str], env: dict | None = None, cwd: Path | None = None) -> str:
-    done = subprocess.run(command, capture_output=True, text=True, env=env, cwd=cwd, timeout=600)
+COMPILE_SECONDS = 180
+
+
+def _run(command: list[str], env: dict | None = None, cwd: Path | None = None, timeout: int = 600) -> str:
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, env=env, cwd=cwd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise CompileError(f"{Path(command[0]).name} did not finish in {timeout}s")
     if done.returncode != 0:
         raise CompileError(f"{Path(command[0]).name}: {(done.stderr or done.stdout).strip()[:2000]}")
     return done.stdout
@@ -59,7 +65,7 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
         command = [str(BIN / "llrm-nib"), str(source), "--procedure-segments", *common]
         if not config.nib_checked:
             command.append("--unchecked-bounds")
-    _run(command, env)
+    _run(command, env, timeout=COMPILE_SECONDS)
 
 
 def binaries_stamp() -> float:

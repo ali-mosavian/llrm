@@ -138,8 +138,8 @@ class Emitter:
         array = self.case.array(name)
         if array.where == "local":
             raise NotBasic("a local array")
-        if array.ptr == "huge" and array.bytes > 65535:
-            raise NotBasic("an array past 64K")
+        if array.bytes > 30000:
+            raise NotBasic("a static array this large does not fit DGROUP")
         btype(array.elem)
         return self.gname(array) if array.where == "global" else ident(name)
 
