@@ -2921,9 +2921,10 @@ fn handler_lines(program: &llrm_core::hir::model::Program) -> Vec<u16> {
     statement_rows(&listing).into_iter().filter(|(label, _)| label.starts_with("L1_")).map(|(_, line)| line).collect()
 }
 
-/// An error in the outlined module handler (`110 ERROR 7`, or its end
-/// without RESUME) reported "in line 0": the handler had only its line-0
-/// entry row. BC reports lines 110 and 100.
+/// Under `--error-lines`, an error in the outlined module handler (`110
+/// ERROR 7`, or its end without RESUME) reported "in line 0": the handler
+/// had only its line-0 entry row. BC reports lines 110 and 100. Off by
+/// default: the rows cost 4 bytes a line.
 #[test]
 fn an_error_in_the_outlined_handler_reports_its_line() {
     let directory = tempfile::tempdir().expect("creates a directory");
@@ -2932,8 +2933,10 @@ fn an_error_in_the_outlined_handler_reports_its_line() {
     for (source, lines) in [(raising, vec![100, 110]), (unresumed, vec![100])] {
         let path = written(&directory, "handler.bas", source.as_bytes());
         for runtime in ["qb45", "pds71", "vbdos"] {
-            let found = handler_lines(&parsed_as(&path, runtime, runtime));
+            let lined = qb_driver::Frontend { error_lines: true, ..qb_driver::Frontend::new(runtime, runtime) };
+            let found = handler_lines(&qb_driver::parsed(&path, &lined, None).expect("parses"));
             assert!(lines.iter().all(|one| found.contains(one)), "{runtime}: {found:?}");
+            assert_eq!(handler_lines(&parsed_as(&path, runtime, runtime)), [0], "{runtime}: off by default");
         }
     }
 }

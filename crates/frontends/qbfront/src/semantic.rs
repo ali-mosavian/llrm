@@ -403,6 +403,9 @@ pub struct Options {
     /// Procedures frame themselves where the runtime needs no frame, as
     /// the dialect may by default.
     pub own_frames: bool,
+    /// Errors in code without a landing pad, as a module handler's, report
+    /// their BASIC line: a statement-table row, 4 bytes, per line.
+    pub error_lines: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -9493,7 +9496,7 @@ impl Compiler {
     fn json(&self) -> String {
         // A module that handles errors has a statement table, whose rows
         // are code's lines: its instructions say theirs.
-        let lined = self.debugging() || self.functions.iter().any(|one| one.error_handler.is_some());
+        let lined = self.debugging() || (self.options.error_lines && self.functions.iter().any(|one| one.error_handler.is_some()));
         let mut out = String::new();
         write!(
             out,
@@ -9791,7 +9794,7 @@ impl Compiler {
         }
         // The statement table's lines: each main-file line's BASIC number.
         let numbers: BTreeMap<usize, u16> = self.numbered_lines.iter().map(|(&line, &number)| (self.main_line(line), number)).filter(|&(line, number)| line > 0 && number > 0).collect();
-        if !numbers.is_empty() {
+        if self.options.error_lines && !numbers.is_empty() {
             out.push_str(",\"line_numbers\":[");
             for (index, (line, number)) in numbers.iter().enumerate() {
                 if index != 0 {

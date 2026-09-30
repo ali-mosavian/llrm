@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--unchecked-bounds] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--own-frames] [--include DIR]... [--mir] [--dump DIR] [--legacy] [OPTIONS]
+//!         [--mbf] [--whole-program] [--array-merging] [--own-frames] [--error-lines] [--include DIR]... [--mir] [--dump DIR] [--legacy] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them;
@@ -25,7 +25,7 @@ use llrm_core::model::passes::Options;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] \
+[--huge-arrays] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] [--error-lines] \
 [--include INCLUDE] [--mir] [--dump DUMP] [--legacy] {} source",
         flags::USAGE
     )
@@ -89,6 +89,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--whole-program" => frontend.whole_program = true,
             "--array-merging" => frontend.array_merging = true,
             "--own-frames" => frontend.own_frames = true,
+            "--error-lines" => frontend.error_lines = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--mir" => mir = true,
             "--legacy" => route = compile::Route::Lowered,

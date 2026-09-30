@@ -21,6 +21,7 @@ fn main() -> ExitCode {
     let mut whole_program = false;
     let mut array_merging = false;
     let mut own_frames = false;
+    let mut error_lines = false;
     let mut syntax = false;
     let mut include_dirs = Vec::new();
     let mut dump_source = None;
@@ -70,6 +71,8 @@ fn main() -> ExitCode {
             array_merging = true;
         } else if argument == "--own-frames" {
             own_frames = true;
+        } else if argument == "--error-lines" {
+            error_lines = true;
         } else if argument == "--array-order" {
             let Some(value) = arguments.next() else {
                 eprintln!("qbfront: --array-order requires column-major or row-major");
@@ -102,7 +105,7 @@ fn main() -> ExitCode {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--unchecked-bounds] [--whole-program] [--array-merging] [--own-frames] [-g] [--include DIR] [--syntax] FILE"
+            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--unchecked-bounds] [--whole-program] [--array-merging] [--own-frames] [--error-lines] [-g] [--include DIR] [--syntax] FILE"
         );
         return ExitCode::from(2);
     };
@@ -145,6 +148,7 @@ fn main() -> ExitCode {
                     whole_program,
                     array_merging,
                     own_frames,
+                    error_lines,
                 };
                 let expanded = source.text.lines().count();
                 let debugged = Some(qbfront::semantic::DebugSource {
