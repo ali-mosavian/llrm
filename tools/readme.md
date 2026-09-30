@@ -25,9 +25,17 @@ computes what it reports, in each language's semantics: C's signed overflow and
 BASIC's error 6 make an input invalid there, Nib wraps. The emitters
 (`emit_c.py`, `emit_bas.py`, `emit_nib.py`) write each case with a driver that
 fills its arrays, calls it once per valid input and reports the result and a
-digest of every array it writes. `loops/cases/` holds the families: `classic`
-(named anchors) and `concurrent` (1 to 12 arrays in one loop, with metamorphic
-variants composed from a recorded seed).
+digest of every array it writes. `loops/cases/` holds the families:
+
+- `classic`: named anchors (dot, saxpy, memcpy, ... binary search).
+- `concurrent`: 1 to 12 arrays in one loop, by element sizes, index forms,
+  bases, source forms, trips, steps, starts and whole-segment walks, with
+  metamorphic variants composed from a recorded seed, each judged against its
+  base.
+- `cross`: every pair of values of every two dimensions of one base loop.
+- `fuzz`: loops drawn from all of it at once; `--seed` replays a draw.
+- `adversarial`: the pressure ladder, pointer chasing, counter wrap, aliasing
+  arguments and a SINGLE counter.
 
 `loops/expect.py` derives each inner loop's bound from the spec and the target's
 tables (registers, address-form partners, segments); `loops/quality.py` reads a

@@ -12,7 +12,7 @@ from __future__ import annotations
 from spec import (
     Int, Float, Struct, Ptr, Case, Array, Const, Var, Bin, Neg, Cast, Cmp, Not, Logic, Load, AddrOf, PtrAdd,
     Deref, Len, CallE, Assign, For, While, DoWhile, If, Break, Continue, Return, CallS, Fill, OPAQUE,
-    written_arrays, walk, I16, F80,
+    written_arrays, walk, I16, F80, backing,
 )
 
 
@@ -254,6 +254,8 @@ def storage(case: Case, emitter: Emitter) -> list[str]:
     """The case's arrays as the driver owns them: every one but a local's frame copy."""
     out = []
     for array in case.arrays:
+        if array.alias:
+            continue
         q = qualifier(array.ptr) if array.where != "local" else qualifier("far" if array.bytes > 30000 else "near")
         dims = "".join(f"[{one}]" for one in array.dims)
         out.append(f"{ctype(array.elem)} {q}{emitter.gname(array)}{dims};")
@@ -282,6 +284,8 @@ def helpers(case: Case, e: "Emitter") -> list[str]:
     straight code, the same arithmetic the oracle does."""
     out = []
     for array in case.arrays:
+        if array.alias:
+            continue
         g = e.gname(array)
         q = "HUGE " if array.bytes > 65535 else "FAR "
         elem = ctype(array.elem)
@@ -297,7 +301,7 @@ def helpers(case: Case, e: "Emitter") -> list[str]:
             out.append(f"        else if (span) {place} = ({t})(lo + (i32)(x % (u32)span));")
             out.append(f"        else {place} = ({t})({_full(kind)});")
         out += ["    }", "}"]
-        if array.name in written_arrays(case):
+        if any(backing(case, case.array(w)) is array or backing(case, case.array(w)) == array for w in written_arrays(case)):
             out.append(f"static i32 dig_{g}(void)\n{{")
             out.append(f"    {elem} {q}*p = ({elem} {q}*){g}; u32 k, v;")
             out.append(f"    dig = 0;\n    for (k = 0; k < {array.count}UL; k++) {{")
@@ -369,19 +373,21 @@ def driver(cases: list[Case], plans: dict, host: bool) -> str:
             inp = case.inputs[at]
             fills = dict(inp.fills)
             for array in case.arrays:
+                if array.alias:
+                    continue
                 f = fills[array.name]
                 out.append(f"    fill_{e.gname(array)}({f.seed}u, {f.lo}L, {f.span}L, {f.step}L);")
             for name, at, value in inp.pokes:
                 array = case.array(name)
                 out.append(f"    (({ctype(array.elem)} HUGE *){e.gname(array)})[{at}] = {e.const(value, array.elem)};")
-            args = [e.gname(one) for one in case.arrays if one.where == "param"]
+            args = [e.gname(backing(case, one)) for one in case.arrays if one.where == "param"]
             args += [e.const(value, kind) for (_, kind), value in zip(case.params, inp.args)]
             if ticks:
                 out.append("    tick_count();")
             out.append(f"    r = (i32){case.symbol}({', '.join(args)});")
             out.append("    report(r);")
             for name in written_arrays(case):
-                out.append(f"    report(dig_{e.gname(case.array(name))}());")
+                out.append(f"    report(dig_{e.gname(backing(case, case.array(name)))}());")
             if ticks:
                 out.append("    report((i32)tick_count());")
         out.append("}")

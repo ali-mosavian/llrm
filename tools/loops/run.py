@@ -41,6 +41,7 @@ from cases import families  # noqa: E402
 EMITTERS = {"c": emit_c, "bas": emit_bas, "nib": emit_nib}
 BATCH = {"c": 24, "bas": 16, "nib": 24}
 NEAR_BUDGET = 36000  # bytes of near arrays per program
+WORKERS = 24
 
 
 @dataclass
@@ -172,6 +173,9 @@ def measure(batch: Batch, result: Result) -> None:
     for k, case in enumerate(batch.cases):
         name = symbol(batch.lang, case, k + 1)
         result.facts[(case.name, batch.lang, batch.config.tag)] = by_name.get(name, [])
+    for name, text in innerloops.procedures(batch.obj.read_bytes(), procedures).items():
+        for problem in quality.bp_problems(text):
+            result.wrong.append(f"{batch.config.tag} {batch.lang} {name}: {problem} ({batch.obj})")
     _, last = mir.stages(batch.work / "stages")
     done = subprocess.run([str(build.BIN / "llrm-mir"), "--ivs", str(last)], capture_output=True, text=True)
     counts: dict[str, list[int]] = {}
@@ -335,6 +339,7 @@ def main() -> int:
     parser.add_argument("--quick", action="store_true", help="the anchors, one configuration: under a minute")
     parser.add_argument("--family", action="append", help="only these families")
     parser.add_argument("--case", action="append", help="only cases whose name starts so")
+    parser.add_argument("--seed", type=int, default=families.SEED, help="the fuzz family's seed")
     parser.add_argument("--lang", action="append", choices=list(EMITTERS))
     parser.add_argument("--config", action="append", help="CPU-OPT, e.g. 486-O2")
     parser.add_argument("--dump", type=Path, default=build.ROOT / "build" / "loops", help="where everything goes")
@@ -346,7 +351,7 @@ def main() -> int:
 
     started = time.monotonic()
     stamp = build.binaries_stamp()
-    cases = families.load(args.family, quick=args.quick)
+    cases = families.load(args.family, quick=args.quick, seed=args.seed)
     if args.case:
         cases = [c for c in cases if any(c.name.startswith(p) for p in args.case)]
     langs = args.lang or list(EMITTERS)
@@ -437,13 +442,19 @@ def main() -> int:
         job.what = f"{batch.config.tag} {batch.lang} on DOS"
         return job
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         jobs += [j for got in pool.map(one, all_batches) if got for j in got]
         if not args.no_refs:
             list(pool.map(lambda cfg: references(per_lang.get("c", ([],))[0], cfg, work / "refs", result), configs))
 
     if jobs:
-        runs = dos.run(jobs, work / "dos")
+        # one launch per configuration (and one for the oracle's BC checks), side by side
+        groups: dict[str, list] = {}
+        for job in jobs:
+            groups.setdefault(job.what.split(" ")[0] if job.what != "oracle vs BC" else "validate", []).append(job)
+        with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+            parts = pool.map(lambda kv: dos.run(kv[1], work / "dos" / kv[0]), groups.items())
+        runs = {k: v for part in parts for k, v in part.items()}
         for job in jobs:
             got = runs.get(job.stem)
             if isinstance(got, str):

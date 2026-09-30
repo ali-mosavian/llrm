@@ -143,7 +143,9 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
         reach.append(top)
     owners = {}
     for k, w in enumerate(walks):
-        owner = w.same_as if w.same_as is not None else k
+        owner = k
+        while walks[owner].same_as is not None:
+            owner = walks[owner].same_as
         owners[k] = owner
     if "store" in extras and extras["store"][1] == "apart":
         arrays.append(Array("g", I16, (8,), "global"))
@@ -240,8 +242,8 @@ def build(shape: Shape, name: str | None = None, base: str | None = None, relati
     head = [Assign(v("s"), c(0, I32)), Assign(v("u"), c(1, I32)), Assign(v("j"), c(0, I32)), Assign(v("q"), c(0, I32)),
             Assign(v("i"), one_(0)), *(Assign(v(f"r{x}"), c(x, I32)) for x in range(pressure))]
     if shape.form == "end":
-        head.append(Assign(v("e"), AddrOf(name_of(0), index_of(walks[0], trip))))
-        loop = [*starts, _while_ptr(body, step)]
+        end = Assign(v("e"), AddrOf(name_of(0), index_of(walks[0], trip)))
+        loop = [end, *starts, _while_ptr(body, step)]
     elif shape.form == "do":
         test = Cmp("<", v("i"), trip) if step > 0 else Cmp(">=", v("i"), one_(0))
         guard = Cmp(">", trip, one_(0))
@@ -350,8 +352,11 @@ def _transform(uses: list, shape: Shape, elem_value, arrays: int) -> list:
         elif kind == "exit":
             # a way out between the uses
             at = rng.randrange(len(out) + 1)
-            stop = {"break": Break(), "continue": Continue(), "return": Return(v("s"))}[one[1]]
-            test = Cmp("==", Bin("&", v("i"), c(31)), c(17)) if one[1] != "continue" else \
+            way = one[1]
+            if way == "continue" and shape.form in ("do", "end"):
+                way = "break"  # these forms step at the body's end, which continue would skip
+            stop = {"break": Break(), "continue": Continue(), "return": Return(v("s"))}[way]
+            test = Cmp("==", Bin("&", v("i"), c(31)), c(17)) if way != "continue" else \
                 Cmp("==", Bin("&", v("i"), c(3)), c(1))
             out = out[:at] + [If(test, (stop,))] + out[at:]
         elif kind == "callmid":

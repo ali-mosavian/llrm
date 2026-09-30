@@ -102,6 +102,8 @@ class Array:
     dims: tuple[int, ...]
     where: str = "param"
     ptr: str = "near"
+    # a parameter bound to another array's storage: the two alias
+    alias: str | None = None
 
     @property
     def count(self) -> int:
@@ -466,3 +468,8 @@ def pointed(case: Case, expr: Expr) -> set[str]:
                 if isinstance(stmt, Assign) and stmt.place == one:
                     found |= {x.array for x in exprs(stmt.value) if isinstance(x, AddrOf)}
     return found
+
+
+def backing(case: Case, array: Array) -> Array:
+    """The array whose storage `array` uses."""
+    return case.array(array.alias) if array.alias else array

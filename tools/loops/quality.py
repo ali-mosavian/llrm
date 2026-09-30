@@ -232,3 +232,42 @@ def function_loops(obj: Path, function: str, procedures: list[str] | None = None
     """Facts for each innermost loop of `function` (its public or listed name)."""
     found = innerloops.loops(obj.read_bytes(), calls=True, procedures=procedures)
     return [facts(one) for one in found if one.name.rsplit("#", 1)[0] == function]
+
+
+def bp_problems(text: list) -> list[str]:
+    """Where a procedure uses bp as a register (writes it other than as its
+    frame), bp must be the frame again before every return, and no frame
+    operand ([bp+disp], no index) may be used while it holds something else.
+    A point is off the frame if any path reaches it so."""
+    if not text or not isinstance(text[0], ix.Instruction):
+        return []
+    bp = family(ix.Register.BP)
+    where = {one.ip: at for at, one in enumerate(text)}
+    off = [False] * len(text)  # bp is not the frame on entry to the instruction
+    pending = [0]
+    seen_entry = set()
+    while pending:
+        at = pending.pop()
+        one = text[at]
+        info = _info.info(one)
+        state = off[at]
+        if bp in {family(u.register) for u in info.used_registers() if u.access in WRITES}:
+            restores = one.mnemonic in (ix.Mnemonic.POP, ix.Mnemonic.LEAVE) or (
+                one.mnemonic == ix.Mnemonic.MOV and one.op1_kind == ix.OpKind.REGISTER
+                and family(one.op1_register) == family(ix.Register.SP))
+            state = not restores
+        for nxt in innerloops._successors(one, where):
+            if nxt not in seen_entry or (state and not off[nxt]):
+                seen_entry.add(nxt)
+                off[nxt] = off[nxt] or state
+                pending.append(nxt)
+    problems = []
+    for at, one in enumerate(text):
+        if not off[at]:
+            continue
+        for used in _info.info(one).used_memory():
+            if family(used.base) == bp and used.index == ix.Register.NONE and one.mnemonic != ix.Mnemonic.LEA:
+                problems.append(f"{one.ip:04x}: a frame operand while bp is not the frame")
+        if one.flow_control == F.RETURN:
+            problems.append(f"{one.ip:04x}: returns while bp is not the frame")
+    return problems

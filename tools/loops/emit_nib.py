@@ -217,6 +217,8 @@ class Emitter:
         case = self.case
         for array in case.arrays:
             self.array_ref(array.name)
+        if any(a.alias for a in case.arrays):
+            raise NotNib("aliasing arguments: a borrow may not alias a mutable one")
         if sum(a.bytes for a in case.arrays if a.where == "local") > 2048:
             raise NotNib("local arrays past half of Nib's 4K stack")
         out = [f"fn {case.symbol}({', '.join(self.params())}) -> {ntype(case.ret)}:"]

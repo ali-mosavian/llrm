@@ -11,7 +11,7 @@ from __future__ import annotations
 from spec import (
     Int, Float, Struct, Ptr, Case, Array, Const, Var, Bin, Neg, Cast, Cmp, Not, Logic, Load, AddrOf, PtrAdd,
     Deref, Len, CallE, Assign, For, While, DoWhile, If, Break, Continue, Return, CallS, I16, I32, F32, F64,
-    written_arrays, walk,
+    written_arrays, walk, backing,
 )
 
 
@@ -254,6 +254,8 @@ class Emitter:
 def storage(case: Case, e: Emitter) -> list[str]:
     out = []
     for array in case.arrays:
+        if array.alias:
+            continue
         dims = ", ".join(f"0 TO {one - 1}" for one in array.dims)
         out.append(f"DIM SHARED {e.gname(array)}({dims}) AS {btype(array.elem)}")
     return out
@@ -343,6 +345,8 @@ def driver(cases: list[Case], numbers: dict, plans: dict) -> str:
             inp = case.inputs[at]
             fills = dict(inp.fills)
             for array in case.arrays:
+                if array.alias:
+                    continue
                 f = fills[array.name]
                 extents = ", ".join(f"{one}&" for one in array.dims)
                 main.append(f"{helper_name('FIL', array.elem, len(array.dims))} {e.gname(array)}(), {extents}, {f.seed}, {f.lo}, {f.span}, {f.step}")
@@ -353,14 +357,14 @@ def driver(cases: list[Case], numbers: dict, plans: dict) -> str:
                     index.insert(0, rest % extent)
                     rest //= extent
                 main.append(f"{e.gname(array)}({', '.join(map(str, index))}) = {e.const(value, array.elem)}")
-            args = [f"{e.gname(a)}()" for a in case.arrays if a.where == "param"]
+            args = [f"{e.gname(backing(case, a))}()" for a in case.arrays if a.where == "param"]
             args += [f"({e.const(value, kind)})" for (_, kind), value in zip(case.params, inp.args)]
             main.append(f"r = {e.fname}({', '.join(args)})")
             main.append("PRINT r")
             for name in written_arrays(case):
                 array = case.array(name)
                 extents = ", ".join(f"{one}&" for one in array.dims)
-                main.append(f"r = {helper_name('DIG', array.elem, len(array.dims))}&({e.gname(array)}(), {extents})")
+                main.append(f"r = {helper_name('DIG', array.elem, len(array.dims))}&({e.gname(backing(case, array))}(), {extents})")
                 main.append("PRINT r")
     functions = []
     for case in cases:

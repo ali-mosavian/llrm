@@ -215,9 +215,14 @@ class Machine:
         fills = dict(inp.fills)
         self.memory = {}
         for array in case.arrays:
+            if array.alias:
+                continue
             if array.name not in fills:
                 raise Broken(f"{case.name}: no fill for {array.name}")
             self.memory[array.name] = filled(array, fills[array.name])
+        for array in case.arrays:
+            if array.alias:
+                self.memory[array.name] = self.memory[array.alias]
         for name, at, value in inp.pokes:
             if isinstance(self.case.array(name).elem, Struct):
                 raise Broken("a poke into a struct array")
@@ -238,7 +243,7 @@ class Machine:
         out = [Int(32, True).wrap(result)]
         for name in written_arrays(case):
             array = case.array(name)
-            out.append(digest(array.elem, self.memory[name]))
+            out.append(digest(array.elem, self.memory[array.alias or name]))
         if any(isinstance(one, CallS) and one.name == "tick" for one in walk(case.body)):
             out.append(self.ticks)
         return out

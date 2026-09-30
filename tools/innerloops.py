@@ -417,6 +417,21 @@ def loops(data: bytes, names: list[str] | None = None, calls: bool = False,
     return out
 
 
+def procedures(data: bytes, procedures_: list[str] | None = None) -> dict[str, list]:
+    """Each procedure's reachable instructions, in address order."""
+    out: dict[str, list] = {}
+    for code in images(data, procedures_):
+        start = MODULE_CODE if code.data[:2] == b"bl" else 0
+        text = _decoded(code.data, [start, *code.publics], code.arch)
+        named = _named(code, text, None)
+        offsets = sorted(named)
+        for one in text:
+            owner = bisect.bisect_right(offsets, one.ip) - 1
+            if owner >= 0:
+                out.setdefault(named[offsets[owner]], []).append(one)
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("objects", nargs="+", type=Path)

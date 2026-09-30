@@ -126,3 +126,47 @@ def test_the_concurrent_hand_count_agrees_with_the_spec_derivation():
             if want.fits and want.ivs != concurrent.hand_ivs(shape, lang):
                 disagree.append((case.name, lang, want.ivs, concurrent.hand_ivs(shape, lang)))
     assert disagree == []
+
+
+def test_a_return_while_bp_holds_a_base_is_found():
+    """bp released as a seventh register must be the frame again at every
+    exit; an early exit that skips `pop bp` returns with a wrecked frame."""
+    code = bytes.fromhex(
+        "55"  # push bp
+        "8bee"  # mov bp,si        (bp now a base)
+        "85c0"  # test ax,ax
+        "7401"  # je out
+        "5d"  # pop bp
+        "cb"  # out: retf          (reached from je with bp still si)
+    )
+    text = innerloops.procedures(_object(code, "F"))["F"]
+    assert quality.bp_problems(text) != []
+
+
+import oracle  # noqa: E402
+from cases.concurrent import Walk, Shape  # noqa: E402
+
+
+def _runs(shape):
+    case = concurrent.build(shape)
+    return oracle.evaluate(case, "c")
+
+
+def test_a_walk_may_share_the_array_of_a_walk_that_shares_one():
+    """The fuzzer drew walk 2 onto walk 1, itself on walk 0: the array was
+    looked up under walk 1's name, which owns none, and the build crashed."""
+    walks = (Walk(I16), Walk(I16, ("off", 1), same_as=0), Walk(I16, ("off", 2), same_as=1))
+    assert all(isinstance(one, list) for one in _runs(Shape(walks)))
+
+
+def test_the_end_pointer_is_set_inside_an_outer_loop():
+    """With an outer loop the end pointer's index reads its counter, but it
+    was computed before that loop: `k is read before it is set`."""
+    assert all(isinstance(one, list) for one in _runs(Shape((Walk(I16),), form="end", outer=True)))
+
+
+def test_continue_in_a_do_while_still_steps():
+    """A do-while steps its counter at the body's end; a `continue` there
+    skipped the step and the loop never ended."""
+    shape = Shape((Walk(I16),), form="do", extras=(("exit", "continue"),))
+    assert all(isinstance(one, list) for one in _runs(shape))
