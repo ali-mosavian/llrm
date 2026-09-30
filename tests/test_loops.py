@@ -355,3 +355,13 @@ def test_a_long_basic_expression_is_wrapped():
     import emit_bas
     line = "x = " + " + ".join(f"CLNG(a{k}(i))" for k in range(40))
     assert max(len(one) for one in emit_bas.wrapped(line).split("\r\n")) <= 255
+
+
+def test_quick_leaves_the_bc_check_to_the_full_run(tmp_path):
+    """--quick took over a minute, most of it BC compiling the oracle's
+    BASIC batches in emulated DOS; it checks C against clang and stops."""
+    import run
+    from cases import classics
+    cases = classics.cases()[:2]
+    assert run.validate(cases, tmp_path, run.Result(), bc=False) == []
+    assert run.validate(cases, tmp_path, run.Result(), bc=True) != []

@@ -324,9 +324,10 @@ def configs_from(args) -> list[build.Config]:
     return [build.Config(cpu, opt) for cpu in build.CPUS for opt in build.OPTS]
 
 
-def validate(cases: list[Case], work: Path, result: Result) -> list[dos.Job]:
+def validate(cases: list[Case], work: Path, result: Result, bc: bool = True) -> list[dos.Job]:
     """The oracle against real compilers: C by the host's clang now; the
-    BASIC jobs returned run under BC in the DOS launch."""
+    BASIC jobs returned run under BC in the DOS launch (`bc` False: clang
+    only, which --quick does, as BC compiles in emulated DOS)."""
     place = work / "validate"
     place.mkdir(parents=True, exist_ok=True)
     chosen = [c for c in cases if not emit_c.expressible(c)]
@@ -343,6 +344,8 @@ def validate(cases: list[Case], work: Path, result: Result) -> list[dos.Job]:
         got = [int(x) for x in subprocess.run([str(exe)], capture_output=True, text=True).stdout.split()]
         _compare("oracle vs host clang", group, streams, got, result)
     jobs = []
+    if not bc:
+        return jobs
     chosen = [c for c in cases if not emit_bas.expressible(c)]
     plans, streams = plans_for(chosen, "bas")
     for k, group in enumerate(batches(chosen, "bas")):
@@ -417,7 +420,7 @@ def main() -> int:
                 chosen.append(case)
         per_lang[lang] = (chosen, *plans_for(chosen, lang))
 
-    jobs: list[dos.Job] = [] if args.no_validate or args.no_dos else validate(cases, work, result)
+    jobs: list[dos.Job] = [] if args.no_validate or args.no_dos else validate(cases, work, result, bc=not args.quick)
     all_batches = []
     for config in configs:
         for lang in langs:

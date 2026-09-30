@@ -27,7 +27,8 @@ spec, emitted as C, QB 4.5 and Nib.
 
 Correctness has no exceptions. A Python oracle computes what each case
 reports in each language's own semantics; each run checks it against the host's
-clang (C, in fixed-width types) and BC (BASIC). llrm's MIR as the pipeline
+clang (C, in fixed-width types) and BC (BASIC; `--quick` leaves BC to the full
+run, as it compiles in emulated DOS). llrm's MIR as the pipeline
 received it and as it left it runs in llrm-mir's interpreter; the linked
 programs run in DOSBox, each with its own time budget.
 
