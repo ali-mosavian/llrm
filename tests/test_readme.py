@@ -39,3 +39,11 @@ def test_a_readme_listing_is_what_the_compiler_prints(language, command, name, t
     blocks = re.findall(r"```asm\n(.*?)\n```", (ROOT / "readme.md").read_text(), re.S)
     shown = blocks[[one[0] for one in CASES].index(language)]
     assert _uncommented(shown) == _uncommented(_listing(command, name, tmp_path / "out.asm"))
+
+
+@pytest.mark.parametrize(("heading", "source"), [("C, `llrm-c", "dot.c"), ("Nib, `llrm-nib", "dot.nib"), ("BASIC, `llrm-qb", "dot.bas")])
+def test_a_readme_source_is_the_example_file(heading, source):
+    """The BASIC source shown was the Frontends block's, and the example kept an older source over a newer listing."""
+    text = (ROOT / "readme.md").read_text()
+    shown = re.search(r"```[a-z]*\n(.*?)\n```", text[text.index(f"\n{heading}") :], re.S).group(1)
+    assert shown.strip() == (DOT / source).read_text().replace("\r", "").strip()

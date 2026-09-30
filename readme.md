@@ -35,22 +35,15 @@ comparisons, `RETURN value`, tuples, record and array results, and string slices
 work as in any loop.
 
 ```basic
-DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
-DECLARE FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
+DIM q AS INTEGER, r AS INTEGER, parity AS STRING
+q, r = divmod(17, 5)
+FOR i IN RANGE(q)
+    parity = "even" IF i MOD 2 = 0 ELSE "odd"
+    PRINT f"{i}: {parity}"
+NEXT
 
-DIM p(9) AS INTEGER, q(7) AS INTEGER
-PRINT Dot&(p(), q())
-
-FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
-    IF x < y THEN Min% = x ELSE Min% = y
-END FUNCTION
-
-FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
-    DIM total AS LONG, i AS INTEGER
-    FOR i = 0 TO Min%(UBOUND(a), UBOUND(b))
-        total = total + CLNG(a(i)) * b(i)
-    NEXT
-    Dot& = total
+FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)
+    RETURN a \ b, a MOD b
 END FUNCTION
 ```
 
@@ -238,9 +231,19 @@ Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 --whole-program -S`:
 
 ```basic
+DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
+DECLARE FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
+
+DIM p(9) AS INTEGER, q(7) AS INTEGER
+PRINT Dot&(p(), q())
+
+FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
+    IF x < y THEN Min% = x ELSE Min% = y
+END FUNCTION
+
 FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
     DIM total AS LONG, i AS INTEGER
-    FOR i = 0 TO UBOUND(a)
+    FOR i = 0 TO Min%(UBOUND(a), UBOUND(b))
         total = total + CLNG(a(i)) * b(i)
     NEXT
     Dot& = total
