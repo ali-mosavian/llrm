@@ -2970,3 +2970,33 @@ fn test_dbg_lines_become_linnum() {
     let marker = records.iter().any(|one| one.r#type == llrm_omf::omf::COMENT && one.body.get(1) == Some(&0xA1));
     assert!(marker, "the CodeView marker");
 }
+
+/// A near global indexed by a dword the loop proves small is its scaled
+/// cell: addrm's `B&` stored through `mov di,cx; shl edi,2` a trip, where
+/// a frame or a far base took the scale.
+#[test]
+fn test_a_global_indexed_by_a_small_dword_is_the_scaled_cell() {
+    let text = "@b = internal global [64 x i32] zeroinitializer
+define void @f(i32 %i) addrspace(1) {
+entry:
+  %c = icmp slt i32 %i, 0
+  br i1 %c, label %no, label %low
+low:
+  %d = icmp sgt i32 %i, 60
+  br i1 %d, label %no, label %ok
+ok:
+  %m = shl i32 %i, 2
+  %e = getelementptr i8, ptr @b, i32 %m
+  store i32 7, ptr %e, !tbaa !1
+  ret void
+no:
+  ret void
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("b[") && line.contains("*4]")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shl")), "{got:?}");
+}

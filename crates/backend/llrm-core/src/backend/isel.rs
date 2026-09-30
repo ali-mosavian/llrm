@@ -281,8 +281,8 @@ enum Pointer {
     Frame { disp: i64, index: Option<Held>, scale: i64 },
     Based { base: Held, index: Option<Held>, scale: i64, offset: i64 },
     /// A near global's symbol, a displacement from it, and a register
-    /// holding a variable one.
-    Global { space: Space, index: i64, offset: i64, base: Option<Held> },
+    /// holding a variable one, times `scale`: a scaled one is a dword index.
+    Global { space: Space, index: i64, offset: i64, base: Option<Held>, scale: i64 },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
@@ -1253,7 +1253,7 @@ impl Selector<'_, '_, '_> {
             _ => Some(self.global(operand)?),
         };
         Ok(match pointer {
-            Some(Pointer::Global { space, index, offset, base: None }) => {
+            Some(Pointer::Global { space, index, offset, base: None, .. }) => {
                 Some(Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, offset) }) }))
             }
             _ => None,
@@ -1345,6 +1345,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Frame { index: Some(_), .. } | Pointer::Based { index: Some(_), .. } | Pointer::Far { index: Some(_), .. } => {
                 unreachable!("an indexed address is read only by accesses")
             }
+            Pointer::Global { scale, .. } if scale != 1 => unreachable!("a scaled address is read only by accesses"),
             Pointer::Frame { disp, index: None, .. } => {
                 let address = Address { through: Register::BP, disp_width: 2, ..Address::new(Some(Addr::new(Space::Frame, disp))) };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
@@ -1357,7 +1358,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { base: None, offset, .. } => {
                 semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value: offset, width: held.width, address: None })])
             }
-            Pointer::Global { space, index, offset, base } => {
+            Pointer::Global { space, index, offset, base, .. } => {
                 let symbol = Loc::Imm(Imm { value: 0, width: held.width, address: Some(Addr { index, ..Addr::new(space, offset) }) });
                 match base {
                     None => semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol]),
@@ -1428,7 +1429,7 @@ impl Selector<'_, '_, '_> {
             };
             return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset });
         }
-        Ok(Pointer::Global { space, index: i64::from(global.0), offset, base: None })
+        Ok(Pointer::Global { space, index: i64::from(global.0), offset, base: None, scale: 1 })
     }
 
     /// A GEP's indices, each a constant or `None`.
@@ -1510,8 +1511,8 @@ impl Selector<'_, '_, '_> {
         }
         // A global's symbol is the displacement of the register holding the
         // index, [index+symbol], and the address as a value their sum.
-        if let Pointer::Global { space, index, offset: start, base: None } = pointer {
-            let indexed = Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) };
+        if let Pointer::Global { space, index, offset: start, base: None, .. } = pointer {
+            let indexed = Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum), scale: 1 };
             if self.only_addressed(address) {
                 self.pointers.insert(address, indexed);
             } else {
@@ -1629,6 +1630,7 @@ impl Selector<'_, '_, '_> {
                 (Pointer::Far { selector, base: Some(wide), index: Some(wide), scale: 1, offset }, None)
             }
             Pointer::Far { selector, base: None, index: None, offset, .. } => (Pointer::Far { selector, base: None, index: Some(wide), scale, offset }, None),
+            Pointer::Global { space, index, offset, base: None, .. } => (Pointer::Global { space, index, offset, base: Some(wide), scale }, None),
             _ => return None,
         };
         self.promoted.extend(base.map(|base| base.value).into_iter().chain((!dword).then_some(wide.value)));
@@ -1800,7 +1802,8 @@ impl Selector<'_, '_, '_> {
                 scale,
                 ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
             },
-            Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
+            Pointer::Global { space, index, offset, base, scale: 1 } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
+            Pointer::Global { space, index, offset, base, scale } => Mem { disp_width: 2, index: base, scale, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Based { base, index: None, offset, .. } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
             // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
             Pointer::Based { base, index: Some(index), scale, offset } => {
@@ -2743,7 +2746,7 @@ impl Pointer {
         match self {
             Pointer::Frame { disp, index, scale } => Pointer::Frame { disp: disp + by, index, scale },
             Pointer::Based { base, index, scale, offset } => Pointer::Based { base, index, scale, offset: offset + by },
-            Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
+            Pointer::Global { space, index, offset, base, scale } => Pointer::Global { space, index, offset: offset + by, base, scale },
             Pointer::Far { selector, base, index, scale, offset } => Pointer::Far { selector, base, index, scale, offset: offset + by },
         }
     }
