@@ -32,7 +32,8 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
-use llrm_mir::target::{AddressForm, OperationCosts};
+use llrm_mir::target::{AddressForm, Machine, OperationCosts};
+use num_traits::ToPrimitive;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::HashMap;
 use num_bigint::BigInt;
@@ -55,7 +56,8 @@ impl FunctionPass for Lsr {
 }
 
 /// What the target says a loop's choice may cost.
-struct Target {
+struct Target<'a> {
+    machine: &'a dyn Machine,
     costs: OperationCosts,
     room: Room,
     forms: Vec<AddressForm>,
@@ -76,7 +78,7 @@ enum Resident {
 
 /// Each loop's counters chosen, innermost first; whether any changed.
 pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
-    let target = Target { costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms() };
+    let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms() };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
     loop {
@@ -203,7 +205,7 @@ struct Plan {
 
 /// Everything priced in one loop.
 struct Problem<'a> {
-    target: &'a Target,
+    target: &'a Target<'a>,
     candidates: Vec<Candidate>,
     sites: Vec<Site>,
     /// Each site's fit and price from each candidate.
@@ -609,9 +611,10 @@ fn _frames(function: &Function) -> BTreeSet<ValueId> {
 
 /// What building `key` before the loop costs: its scaled terms, the adds
 /// that join its parts, and an address off its pointer.
-fn _built(costs: &OperationCosts, key: &Key) -> i64 {
+fn _built(target: &Target, key: &Key) -> i64 {
+    let costs = &target.costs;
     let (pointer, sum) = key;
-    let mut cost = sum.terms.values().map(|factor| _scaling(costs, &BigInt::from(_signed(factor, sum.width).magnitude().clone()))).sum::<i64>();
+    let mut cost = sum.terms.values().map(|factor| _scaling(target, &BigInt::from(_signed(factor, sum.width).magnitude().clone()))).sum::<i64>();
     let parts = sum.terms.len() + usize::from(sum.constant != BigInt::from(0)) + usize::from(pointer.is_some() && !sum.is_zero());
     if sum.terms.is_empty() && pointer.is_none() {
         return 0;
@@ -714,7 +717,8 @@ fn _latch_arm(function: &Function, phi: ValueId, latch: BlockId) -> Option<Opera
 }
 
 /// What `k * r` costs a trip: nothing, a negation, a shift or a multiply.
-fn _scaling(costs: &OperationCosts, k: &BigInt) -> i64 {
+fn _scaling(target: &Target, k: &BigInt) -> i64 {
+    let costs = &target.costs;
     let magnitude = BigInt::from(k.magnitude().clone());
     if *k == BigInt::from(1) || *k == BigInt::from(0) {
         0
@@ -723,7 +727,8 @@ fn _scaling(costs: &OperationCosts, k: &BigInt) -> i64 {
     } else if (&magnitude & (&magnitude - 1)) == BigInt::from(0) {
         costs.shift + if *k < BigInt::from(0) { costs.add } else { 0 }
     } else {
-        costs.multiply
+        let multiply = magnitude.to_i64().map_or(costs.multiply, |factor| target.machine.multiply_by(factor));
+        multiply + if *k < BigInt::from(0) { costs.add } else { 0 }
     }
 }
 
@@ -814,7 +819,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
                     .filter(|form| form.scales.contains(&scale) && (form.index_width == width || nonnegative && form.index_width > width))
                     .map(|form| form.use_cost + if form.index_width > width { form.extension_cost } else { 0 })
                     .min();
-                let computed = _scaling(costs, &fit.k) + native.use_cost;
+                let computed = _scaling(target, &fit.k) + native.use_cost;
                 match scaled {
                     Some(cost) if cost < computed => {
                         price.cost += cost;
@@ -824,7 +829,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
                     _ => {
                         price.cost += computed;
                         price.address.push(Reg::Product(index, small(&fit.k), block));
-                        price.product = Some((small(&fit.k), _scaling(costs, &fit.k), block));
+                        price.product = Some((small(&fit.k), _scaling(target, &fit.k), block));
                     }
                 }
             }
@@ -853,9 +858,9 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             if let Some((shift, _, inverse)) = &fit.trip {
                 price.cost += costs.add + if *shift != 0 { costs.shift } else { 0 } + if *inverse != BigInt::from(1) { costs.multiply + costs.add } else { 0 };
             }
-            price.cost += _scaling(costs, &fit.k);
-            if fit.trip.is_none() && _scaling(costs, &fit.k) != 0 {
-                price.product = Some((small(&fit.k), _scaling(costs, &fit.k), block));
+            price.cost += _scaling(target, &fit.k);
+            if fit.trip.is_none() && _scaling(target, &fit.k) != 0 {
+                price.product = Some((small(&fit.k), _scaling(target, &fit.k), block));
             }
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
@@ -1060,10 +1065,10 @@ impl Problem<'_> {
         for &one in set {
             let candidate = &self.candidates[one];
             if candidate.existing.is_none() {
-                cost += (_built(costs, &(candidate.of.pointer, candidate.of.start.clone())) + _built(costs, &(None, candidate.of.step.clone()))) * self.entry;
+                cost += (_built(self.target, &(candidate.of.pointer, candidate.of.start.clone())) + _built(self.target, &(None, candidate.of.step.clone()))) * self.entry;
             }
         }
-        cost += built.iter().map(|&key| _built(costs, &self.keys[key])).sum::<i64>() * self.entry;
+        cost += built.iter().map(|&key| _built(self.target, &self.keys[key])).sum::<i64>() * self.entry;
         // Counters, their symbolic steps and new invariants live throughout;
         // a product the loop computes, from its block's top to its last
         // reader; a value built from a counter, where it is live.

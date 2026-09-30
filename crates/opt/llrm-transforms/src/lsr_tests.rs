@@ -19,7 +19,7 @@ fn target() -> Tuned {
     let costs = OperationCosts { add: 1, multiply: 13, divide: 24, shift: 2, address: 1, load: 1, store: 1, memory_update: 3, extend: 3, prefix: 1, ..OperationCosts::default() };
     let word = AddressForm { partners: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("a form") };
     let dword = AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix, costs.extend, true, None).expect("a form");
-    Tuned { costs, registers: 6, call_registers: 2, address_forms: vec![word, dword] }
+    Tuned { costs, registers: 6, call_registers: 2, address_forms: vec![word, dword], ..Tuned::default() }
 }
 
 /// `text` in the DOS layout, and it through `Lsr`, printed.
@@ -1150,4 +1150,40 @@ entry:
 fn test_a_spilled_end_is_cheaper_than_a_second_counter() {
     let printed = same(MANDEL, &[&[0], &[5], &[-7]]);
     assert_eq!(counters(&printed), 3, "{printed}");
+}
+
+/// `s += a[3 * i + 8]` over words, `n` trips: a byte stride of six.
+const STRIDE_SIX: &str = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %t = mul nsw i16 %i, 3
+  %x = add nsw i16 %t, 8
+  %p = getelementptr inbounds i16, ptr @a, i16 %x
+  %v = load i16, ptr %p
+  %s.next = add i16 %s, %v
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  ret i16 %s
+";
+
+/// A multiply by a constant costs what the target makes of it: six times
+/// `n`, a lea and an add, was priced as a multiply, and loop-corpus's
+/// `a[3*i]` kept a second counter to zero beside its stride of six.
+#[test]
+fn test_a_stride_counted_to_zero_takes_its_start_at_the_target_s_multiply() {
+    let text = program(&[("a", "i16", 2)], "i16", STRIDE_SIX);
+    let before = parsed(&format!("{DOS}{text}"));
+    let machine = Tuned { multiplies: std::collections::BTreeMap::from([(6, 3)]), ..target() };
+    let (_, printed) = reduced_for(&text, machine);
+    let trips: &[&[i128]] = &[&[-3, 5], &[0, 5], &[1, 5], &[2, -9], &[7, 3], &[18, 11]];
+    assert_eq!(results(&parsed(&printed), trips), results(&before, trips), "{printed}");
+    assert_eq!(counters(&printed), 1, "{printed}");
 }

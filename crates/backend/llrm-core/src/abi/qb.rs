@@ -954,14 +954,22 @@ impl crate::backend::assemble::Abi for HirAbi {
     }
 }
 
-/// `machine` as `abi`'s calls see it: a call keeps the registers its
-/// callee's contract leaves, the contract the backend lowers it by.
-pub struct Calling {
-    pub machine: std::rc::Rc<dyn llrm_mir::target::Machine>,
-    pub abi: HirAbi,
+/// A CPU's target as the backend lowers to it: a call keeps the registers
+/// its callee's contract leaves, and a multiply by a constant costs its
+/// cheapest chain, as `abi` and `arithmetic` lower them.
+pub struct LoweredTarget {
+    machine: std::rc::Rc<dyn llrm_mir::target::Machine>,
+    abi: HirAbi,
+    cpu: &'static crate::backend::cpu::Profile,
 }
 
-impl llrm_mir::target::Machine for Calling {
+impl LoweredTarget {
+    pub fn of(cpu: &'static crate::backend::cpu::Profile, abi: HirAbi) -> Self {
+        Self { machine: cpu.target(), abi, cpu }
+    }
+}
+
+impl llrm_mir::target::Machine for LoweredTarget {
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
         self.machine.foreign_span(selectors, offsets, width)
     }
@@ -988,6 +996,15 @@ impl llrm_mir::target::Machine for Calling {
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
         self.machine.address_forms()
+    }
+
+    fn multiply_by(&self, factor: i64) -> i64 {
+        use crate::backend::arithmetic;
+        let multiply = arithmetic::immediate_multiply(self.cpu, factor).unwrap_or_else(|_| self.machine.costs().multiply);
+        match arithmetic::cheapest_chain(factor, self.cpu) {
+            Ok(Some((_, clocks))) => clocks.min(multiply),
+            _ => multiply,
+        }
     }
 
     fn load_may_trap(&self, width: u64, align: u64) -> bool {
@@ -1681,11 +1698,23 @@ mod tests {
     #[test]
     fn test_a_call_keeps_the_registers_its_contract_leaves() {
         use llrm_mir::target::Machine;
-        let calling = |program: &model::Program| Calling { machine: std::rc::Rc::new(llrm_x86_code16::Dos::default()), abi: HirAbi::of(program).unwrap() };
+        let calling = |program: &model::Program| LoweredTarget::of(crate::backend::cpu::profile("486").unwrap(), HirAbi::of(program).unwrap());
         let qb = calling(&model::Program::new(model::Dialect::Qb45, model::RuntimeProfile::Qb45, Vec::new()));
         assert_eq!(qb.kept_across(Some(&format!("{}B$PEI2", crate::hir::mir::RUNTIME))), 1);
         assert_eq!(qb.kept_across(Some("OWN")), 0);
         let c = calling(&model::Program { preserved: vec!["si".to_owned(), "di".to_owned()], ..model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new()) });
         assert_eq!(c.kept_across(Some("_strlen")), 2);
+    }
+
+    /// A multiply by a constant costs the chain the backend emits for it
+    /// where that is cheaper: every one was priced as an `imul`.
+    #[test]
+    fn test_a_multiply_by_a_constant_costs_its_chain() {
+        use llrm_mir::target::Machine;
+        let cpu = crate::backend::cpu::profile("486").unwrap();
+        let target = LoweredTarget::of(cpu, HirAbi::of(&model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new())).unwrap());
+        let (_, chain) = crate::backend::arithmetic::cheapest_chain(6, cpu).unwrap().unwrap();
+        assert_eq!(target.multiply_by(6), chain);
+        assert!(target.multiply_by(6) < target.costs().multiply);
     }
 }

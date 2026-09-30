@@ -101,6 +101,8 @@ pub struct Tuned {
     pub registers: i64,
     pub call_registers: i64,
     pub address_forms: Vec<llrm_mir::target::AddressForm>,
+    /// What a multiply by each constant costs, where not a multiply.
+    pub multiplies: std::collections::BTreeMap<i64, i64>,
 }
 
 impl llrm_mir::target::Machine for Tuned {
@@ -122,6 +124,10 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
         if self.address_forms.is_empty() { llrm_mir::target::Neutral.address_forms() } else { self.address_forms.clone() }
+    }
+
+    fn multiply_by(&self, factor: i64) -> i64 {
+        self.multiplies.get(&factor).copied().unwrap_or(self.costs.multiply)
     }
 }
 

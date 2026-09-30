@@ -629,7 +629,7 @@ pub fn compiled(program: &model::Program, object: &Object, options: &Options) ->
 /// what the layout places kept, optimized, assembled.
 #[allow(clippy::too_many_arguments)]
 pub fn lifted(module: Module, runtime: Module, object: &Object, family: model::RuntimeProfile, segments: &SegmentLayout, options: &Options, name: &str) -> Result<Vec<u8>, String> {
-    let target = std::rc::Rc::new(crate::abi::qb::Calling { machine: options.cpu()?.target(), abi: object_abi(object, family) });
+    let target = std::rc::Rc::new(crate::abi::qb::LoweredTarget::of(options.cpu()?, object_abi(object, family)));
     let mut program = super::linked(vec![module], runtime, target)?;
     program.segments = segments.clone();
     let placed = object.segments.iter().flat_map(|one| &one.items).filter_map(|item| match item {

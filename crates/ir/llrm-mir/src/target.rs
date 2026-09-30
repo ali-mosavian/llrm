@@ -27,6 +27,12 @@ pub trait Machine {
         self.call_registers()
     }
 
+    /// What multiplying by the constant `factor`, above one, costs: a
+    /// multiply, or the shifts and adds the target makes it of.
+    fn multiply_by(&self, _factor: i64) -> i64 {
+        self.costs().multiply
+    }
+
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
 

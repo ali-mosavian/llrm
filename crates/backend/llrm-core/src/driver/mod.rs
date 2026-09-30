@@ -80,7 +80,7 @@ pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, 
     }
     let runtime = crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises)?;
     let (modules, data) = emitted.into_iter().map(|one| (one.module, one.data)).unzip();
-    let target = std::rc::Rc::new(crate::abi::qb::Calling { machine: options.cpu()?.target(), abi: crate::abi::qb::HirAbi::of(program)? });
+    let target = std::rc::Rc::new(crate::abi::qb::LoweredTarget::of(options.cpu()?, crate::abi::qb::HirAbi::of(program)?));
     let mut linked = linked(modules, runtime, target)?;
     linked.exports.entries = program.entries.iter().cloned().collect();
     Ok((linked, data))
