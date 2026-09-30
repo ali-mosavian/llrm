@@ -1095,3 +1095,49 @@ fn test_an_address_after_the_step_reads_the_stepped_counter() {
         }
     }
 }
+
+/// examples/ticker.nib's spin loop: `spins`, stepped in the body where the
+/// loop continues either way, is printed when a tick has passed.
+const TICKER: &str = "  br label %l1
+
+l1:
+  %s = phi i32 [ 0, %start ], [ %s1, %l4 ]
+  %m = phi i16 [ 0, %start ], [ %m.next, %l4 ]
+  %more = icmp ult i16 %m, 36
+  br i1 %more, label %l2, label %l5
+
+l2:
+  %s1 = add i32 %s, 1
+  %low = and i16 %m, 3
+  %c = icmp eq i16 %low, 0
+  br i1 %c, label %l3, label %l4
+
+l3:
+  call void @shown(i32 %s1, i16 %m)
+  br label %l4
+
+l4:
+  %m.next = add i16 %m, 1
+  br label %l1
+
+l5:
+  %q = load i32, ptr @b
+  %r = trunc i32 %q to i16
+  ret i16 %r
+";
+
+/// A counter's own step, read in the body, is its next value wherever the
+/// step stands: ticker's `spins` was priced an add there and a register
+/// besides, and was replaced by a counter from one, a store more.
+#[test]
+fn test_a_counter_read_at_its_own_step_is_kept() {
+    let callee = "define void @shown(i32 %s, i16 %k) {
+entry:
+  %p = getelementptr i8, ptr @b, i16 0
+  store i32 %s, ptr %p
+  ret void
+}
+";
+    let printed = same(&format!("{callee}{}", program(&[("b", "i32", 4)], "i16", TICKER)), TRIPS);
+    assert!(!printed.lines().any(|line| line.contains("%lsr.iv") && line.contains("phi i32")), "{printed}");
+}

@@ -741,7 +741,8 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
         Some(existing) => _latch_arm(view.function, existing, latch) == Some(Operand::Value(site.one.value)),
         None => true,
     };
-    if in_latch && stepped && own && site.one.kind != UseKind::Address {
+    // A counter's own step is read where it stands.
+    if (in_latch || candidate.existing.is_some()) && stepped && own && site.one.kind != UseKind::Address {
         fit.next = true;
         // A step's own flags answer its equality with zero.
         let op = view.function.instruction(site.one.user);
@@ -964,7 +965,7 @@ impl Problem<'_> {
                 (Some((one, fit, price)), None) => {
                     cost += price.cost * site.frequency;
                     let product = fit.rest.is_zero() && fit.constant == BigInt::from(0) && fit.base.is_none();
-                    if site.inside && site.one.kind == UseKind::Basic && !(product && fit.k == BigInt::from(1)) {
+                    if site.inside && site.one.kind == UseKind::Basic && !fit.next && !(product && fit.k == BigInt::from(1)) {
                         rebuilt.push(index);
                     }
                     if let Some((k, scaling, block)) = price.product
