@@ -35,15 +35,22 @@ comparisons, `RETURN value`, tuples, record and array results, and string slices
 work as in any loop.
 
 ```basic
-DIM q AS INTEGER, r AS INTEGER, parity AS STRING
-q, r = divmod(17, 5)
-FOR i IN RANGE(q)
-    parity = "even" IF i MOD 2 = 0 ELSE "odd"
-    PRINT f"{i}: {parity}"
-NEXT
+DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
+DECLARE FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
 
-FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)
-    RETURN a \ b, a MOD b
+DIM p(9) AS INTEGER, q(7) AS INTEGER
+PRINT Dot&(p(), q())
+
+FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
+    IF x < y THEN Min% = x ELSE Min% = y
+END FUNCTION
+
+FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
+    DIM total AS LONG, i AS INTEGER
+    FOR i = 0 TO Min%(UBOUND(a), UBOUND(b))
+        total = total + CLNG(a(i)) * b(i)
+    NEXT
+    Dot& = total
 END FUNCTION
 ```
 
@@ -228,7 +235,7 @@ A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
 elements until the shorter slice ends, so there is no `n`, and no index to check.
 Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
-BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 -S`:
+BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 --whole-program -S`:
 
 ```basic
 FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
@@ -243,55 +250,82 @@ END FUNCTION
 ```asm
 DOT proc far
 L1_0:
-    mov cx, 4                       ; B$ENRA builds the frame: cx = 4 bytes of locals,
+    mov cx, 6                       ; B$ENRA builds the frame: cx = 6 bytes of locals,
     mov bx, 0                       ; bx = 0 temporary strings
     call far ptr B$ENRA
-    mov si, word ptr [bp+8]         ; a() descriptor: the arguments were pushed left to right
-    mov di, word ptr [bp+6]         ; b() descriptor
-    cmp word ptr [si+2], 0          ; UBOUND(a): the bound is in the descriptor, or B$UBND asks
+    mov di, word ptr [bp+8]         ; a() descriptor: the arguments were pushed left to right
+    mov si, word ptr [bp+6]         ; b() descriptor
+    cmp word ptr [di+2], 0          ; UBOUND(a): the bound is in the descriptor, or B$UBND asks
     jne L1_4
 L1_17:
-    push si
+    push di
     pushw 1                         ; B$UBND(a, 1)
-    mov word ptr [bp-12], di
-    mov word ptr [bp-14], si
+    mov word ptr [bp-12], si
+    mov word ptr [bp-14], di
     call far ptr B$UBND
-    mov si, word ptr [bp-14]
-    mov di, word ptr [bp-12]
+    mov di, word ptr [bp-14]
+    mov si, word ptr [bp-12]
+    mov word ptr [bp-16], ax
     jmp L1_19
 L1_4:
-    movzx bx, byte ptr [si+8]
+    movzx bx, byte ptr [di+8]
     dec bx
     shl bx, 2                       ; the last dimension's entry
+    mov ax, word ptr [bx+di+16]
+    add ax, word ptr [bx+di+14]
+    dec ax                          ; ax = UBOUND(a): lower bound + count - 1
+    mov word ptr [bp-16], ax        ; kept in the frame across the next UBOUND
+L1_19:
+    cmp word ptr [si+2], 0          ; UBOUND(b), the same way
+    jne L1_24
+L1_37:
+    push si
+    pushw 1
+    mov word ptr [bp-12], si
+    mov word ptr [bp-14], di
+    call far ptr B$UBND
+    mov di, word ptr [bp-14]
+    mov si, word ptr [bp-12]
+    jmp L1_39
+L1_24:
+    movzx bx, byte ptr [si+8]
+    dec bx
+    shl bx, 2
     mov ax, word ptr [bx+si+16]
     add ax, word ptr [bx+si+14]
-    dec ax                          ; ax = UBOUND(a): lower bound + count - 1
-L1_19:
-    mov es, word ptr [si+2]         ; [hoisted] es = a's data segment
-    mov si, word ptr [si+10]        ; [hoisted] si = a's data offset
-    mov fs, word ptr [di+2]         ; [hoisted] fs = b's data segment
-    mov di, word ptr [di+10]        ; [hoisted] di = b's data offset
-    lea cx, [eax+eax]               ; cx = 2 * UBOUND
-    mov bx, cx
+    dec ax
+L1_39:
+    cmp word ptr [bp-16], ax        ; [inlined] Min%: no call, ax = the smaller bound
+    jge L1_44
+L1_42:
+    mov ax, word ptr [bp-16]
+L1_44:
+    mov es, word ptr [di+2]         ; [hoisted] es = a's data segment
+    mov cx, word ptr [di+10]        ; [hoisted] a's data offset
+    mov fs, word ptr [si+2]         ; [hoisted] fs = b's data segment
+    mov di, word ptr [si+10]        ; [hoisted] di = b's data offset
+    lea dx, [eax+eax]               ; dx = 2 * bound
+    mov bx, dx
     neg bx
-    add bx, -2                      ; [one induction variable] bx = -2 * (UBOUND + 1)
-    add si, cx                      ; [biased] a's offset + 2 * UBOUND; the +2 is in the loop's
-    add di, cx                      ; [biased] b's offset + 2 * UBOUND; displacement
+    add bx, -2                      ; [one induction variable] bx = -2 * (bound + 1)
+    mov si, cx
+    add si, dx                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
+    add di, dx                      ; [biased] b's offset + 2 * bound; displacement
     xor ecx, ecx                    ; total = 0 on the no-iteration path
     or ax, ax
-    jl L1_55                        ; [loop rotation] UBOUND < 0: no iterations
-L1_57:
+    jl L1_79                        ; [loop rotation] bound < 0: no iterations
+L1_81:
     xor eax, eax                    ; total = 0
-L1_40:
+L1_64:
     movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
     movsx edx, word ptr fs:[bx+di+2] ; b(i)
     imul ecx, edx                   ; CLNG(a(i)) * b(i)
     add eax, ecx                    ; total += product
     add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
-    jne L1_40
-L1_58:
+    jne L1_64
+L1_82:
     mov ecx, eax
-L1_55:
+L1_79:
     shld edx, ecx, 16               ; the long returns in DX:AX
     mov ax, cx
     call far ptr B$EXSA             ; the runtime takes the frame down
@@ -299,7 +333,10 @@ L1_55:
 DOT endp
 ```
 
-An array is a descriptor: its segment goes in `es` or `fs` before the loop.
+An array is a descriptor: its segment goes in `es` or `fs` before the loop. `Min%`
+takes its arguments `BYVAL` and the build is `--whole-program`, which is what lets
+the inliner take it; by reference it stays a call
+([#114](https://github.com/ali-mosavian/llrm/issues/114)).
 `B$ENRA` and `B$EXSA` are the runtime's frame; `--own-frames` replaces them with a
 plain one.
 
