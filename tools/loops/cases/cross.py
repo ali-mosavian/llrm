@@ -336,5 +336,5 @@ def cases(quick: bool = False) -> list[Case]:
                 seen.add(k)
                 out.append(Builder(k).build(name_of(k, base)))
     if quick:
-        out = out[::25]
+        out = out[::150]
     return out
