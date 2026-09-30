@@ -1,0 +1,16 @@
+--- a/bld/cc/c/cdinit.c	2026-09-30 13:30:15.818091172 +0200
++++ b/bld/cc/c/cdinit.c	2026-09-30 13:30:15.829895356 +0200
+@@ -1032,8 +1032,11 @@
+         break;
+     case TYP_LONG_DOUBLE:
+     case TYP_LDIMAGINARY:
+-//        StoreFloat( typ->decl_type, size );
+-        StoreFloat( TYP_DOUBLE, size );
++        /*
++         * qbopt: under -fld a long double is 80-bit, and code loads all 10
++         * bytes, so its initializer is stored as one too.
++         */
++        StoreFloat( CompFlags.use_long_double ? typ->decl_type : TYP_DOUBLE, size );
+         break;
+     default:
+         break;
