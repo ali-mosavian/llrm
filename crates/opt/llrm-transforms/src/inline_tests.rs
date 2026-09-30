@@ -9,7 +9,6 @@
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::interprocedural::stated_pure;
 use llrm_mir::context::GlobalId;
 use llrm_mir::interpret::{self, Val};
 use llrm_mir::module::{Linkage, Module};
@@ -25,11 +24,11 @@ fn private(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().filter(|(_, global, _)| matches!(global.linkage, Linkage::Internal | Linkage::Private)).map(|(id, _, _)| id).collect()
 }
 
-/// The bodies of `module` its stamp states pure.
-fn pure(module: &Module) -> BTreeSet<GlobalId> {
+/// `module` with each body's effects stated, as the whole-program step leaves it.
+fn stamped(module: &Module) -> Module {
     let mut stamped = module.clone();
     crate::testing::stamped(&mut stamped).unwrap();
-    stated_pure(&stamped)
+    stamped
 }
 
 fn costs(call: i64) -> OperationCosts {
@@ -38,7 +37,8 @@ fn costs(call: i64) -> OperationCosts {
 
 /// Every call in `caller` that `candidates` admits, inlined.
 fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
-    let available = candidates(module, &call_counts(module), &private(module), &pure(module), &costs(call), Threshold::default());
+    let known = stamped(module);
+    let available = candidates(&known, &call_counts(&known), &private(&known), &costs(call), Threshold::default());
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
     while expanded(context, function, &available, None).unwrap() {
@@ -142,10 +142,11 @@ b1:
 }
 "
     ));
-    let (private, pure) = (private(&module), pure(&module));
-    assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(0), Threshold::default()), IndexMap::default());
+    let module = stamped(&module);
+    let private = private(&module);
+    assert_eq!(candidates(&module, &call_counts(&module), &private, &costs(0), Threshold::default()), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
-    assert_eq!(candidates(&module, &call_counts(&module), &private, &pure, &costs(2), Threshold::default()).len(), 1);
+    assert_eq!(candidates(&module, &call_counts(&module), &private, &costs(2), Threshold::default()).len(), 1);
 }
 
 const HELPERS: &str = "define internal i16 @scale(i16 %x) {
@@ -203,21 +204,124 @@ fn test_tiny_private_leaf_inlines_at_two_call_sites_only_when_the_call_costs_mor
 }
 
 #[test]
-fn test_a_branchy_helper_called_twice_stays() {
+fn test_a_helper_called_twice_inlines_by_cost_not_by_shape() {
     let text = HELPERS.replace("%t = call i16 @scale(i16 %b)", "%t = call i16 @clamp(i16 %b)");
-    let mut module = parsed(&text);
-    inline_into(&mut module, "main", 40);
-    assert_eq!(printed(&module).matches("call i16 @clamp").count(), 2);
+    let mut dear = parsed(&text);
+    inline_into(&mut dear, "main", 1);
+    assert_eq!(printed(&dear).matches("call i16 @clamp").count(), 2);
+    let mut cheap = parsed(&text);
+    assert!(inline_into(&mut cheap, "main", 40));
+    assert_eq!(printed(&cheap).matches("call i16 @clamp").count(), 0);
+}
+
+/// A callee reading through its arguments, as BASIC's `Min%(x, y)`.
+const MIN: &str = "define i16 @min(ptr %x, ptr %y) {
+b1:
+  %a = load i16, ptr %x
+  %b = load i16, ptr %y
+  %less = icmp slt i16 %a, %b
+  br i1 %less, label %b2, label %b3
+
+b2:
+  ret i16 %a
+
+b3:
+  ret i16 %b
+}
+
+define i16 @main(i16 %p, i16 %q) {
+b1:
+  %x = alloca i16
+  %y = alloca i16
+  store i16 %p, ptr %x
+  store i16 %q, ptr %y
+  %r = call i16 @min(ptr %x, ptr %y)
+  ret i16 %r
+}
+";
+
+#[test]
+fn test_a_public_callee_reading_through_its_arguments_inlines_and_stays_defined() {
+    let original = parsed(MIN);
+    let mut module = parsed(MIN);
+    assert!(inline_into(&mut module, "main", 8), "a by-reference reader was a call in every build");
+    assert!(!printed(&module).contains("call "), "{}", printed(&module));
+    assert!(module.named("min").is_some());
+    for (p, q) in [(1, 2), (2, 1), (5, 5), (0xffff, 1)] {
+        assert_eq!(run(&module, "main", &[p, q]), run(&original, "main", &[p, q]), "{p} {q}");
+    }
 }
 
 #[test]
-fn test_public_impure_or_trapping_callees_stay() {
+fn test_a_callee_writing_through_an_argument_inlines_with_its_store() {
+    let text = "define internal void @put(ptr %p, i16 %v) {
+b1:
+  %w = add i16 %v, 1
+  store i16 %w, ptr %p
+  ret void
+}
+
+define i16 @main(i16 %a) {
+b1:
+  %cell = alloca i16
+  store i16 0, ptr %cell
+  call void @put(ptr %cell, i16 %a)
+  %r = load i16, ptr %cell
+  ret i16 %r
+}
+";
+    let original = parsed(text);
+    let mut module = parsed(text);
+    assert!(inline_into(&mut module, "main", 4));
+    assert!(!printed(&module).contains("call "), "{}", printed(&module));
+    for a in [0, 7, 0xffff] {
+        assert_eq!(run(&module, "main", &[a]), run(&original, "main", &[a]), "{a}");
+    }
+}
+
+#[test]
+fn test_a_callee_frame_cell_inlined_into_a_loop_lands_in_the_callers_entry() {
+    let text = "define internal i16 @bump(i16 %x) {
+b1:
+  %cell = alloca i16
+  store i16 %x, ptr %cell
+  %v = load i16, ptr %cell
+  %w = add i16 %v, 3
+  ret i16 %w
+}
+
+define i16 @main(i16 %n) {
+b1:
+  br label %b2
+
+b2:
+  %i = phi i16 [ 0, %b1 ], [ %next, %b2 ]
+  %next = call i16 @bump(i16 %i)
+  %go = icmp ult i16 %next, %n
+  br i1 %go, label %b2, label %b3
+
+b3:
+  ret i16 %next
+}
+";
+    let original = parsed(text);
+    let mut module = parsed(text);
+    assert!(inline_into(&mut module, "main", 4));
+    let text = printed(&module);
+    let main = text.split("define i16 @main").nth(1).unwrap();
+    assert!(main.split("b2:").next().unwrap().contains("alloca"), "a frame cell in the loop grows the stack each trip: {text}");
+    assert_eq!(main.matches("alloca").count(), 1);
+    for n in [0, 5, 300] {
+        assert_eq!(run(&module, "main", &[n]), run(&original, "main", &[n]), "{n}");
+    }
+}
+
+#[test]
+fn test_callees_a_clone_would_change_or_no_fact_answers_stay() {
     for (why, callee) in [
-        ("public", "define i16 @leaf(i16 %x) {\nb1:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n"),
-        ("stores", "@g = global i16 0\n\ndefine internal i16 @leaf(i16 %x) {\nb1:\n  store i16 %x, ptr @g\n  ret i16 %x\n}\n"),
-        ("divides", "define internal i16 @leaf(i16 %x) {\nb1:\n  %y = udiv i16 100, %x\n  ret i16 %y\n}\n"),
-        ("loops", "define internal i16 @leaf(i16 %x) {\nb1:\n  br label %b2\n\nb2:\n  %i = phi i16 [ %x, %b1 ], [ %j, %b2 ]\n  %j = add i16 %i, 1\n  %go = icmp ult i16 %j, 9\n  br i1 %go, label %b2, label %b3\n\nb3:\n  ret i16 %j\n}\n"),
-        ("floats", "define internal i16 @leaf(i16 %x) {\nb1:\n  %f = sitofp i16 %x to double\n  %y = fptosi double %f to i16\n  ret i16 %y\n}\n"),
+        ("recursive", "define internal i16 @leaf(i16 %x) {\nb1:\n  %y = call i16 @leaf(i16 %x)\n  ret i16 %y\n}\n"),
+        ("setjmp-like", "declare i16 @setjmp(ptr) returns_twice memory(none)\n\ndefine internal i16 @leaf(i16 %x) {\nb1:\n  %c = alloca i16\n  %y = call i16 @setjmp(ptr %c)\n  ret i16 %y\n}\n"),
+        ("noinline", "define internal i16 @leaf(i16 %x) noinline {\nb1:\n  ret i16 %x\n}\n"),
     ] {
         let mut module = parsed(&format!("{callee}\ndefine i16 @main(i16 %p) {{\nb1:\n  %r = call i16 @leaf(i16 %p)\n  ret i16 %r\n}}\n"));
         assert!(!inline_into(&mut module, "main", 40), "{why}");
@@ -275,7 +379,7 @@ b3:
 
 #[test]
 fn test_constant_sites_admit_only_a_call_with_a_known_actual() {
-    let module = parsed(
+    let module = stamped(&parsed(
         "define internal i16 @leaf(i16 %x) {
 b1:
   %y = add i16 %x, 37
@@ -290,14 +394,14 @@ b1:
   ret i16 %sum
 }
 ",
-    );
+    ));
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    let sites = constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(2), Threshold::default());
+    let sites = constant_sites(&module, main, &constants, &costs(2), Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[0]]);
     // Not priced above the work it clones: none.
-    assert!(constant_sites(&module, main, &constants, &private(&module), &pure(&module), &costs(1), Threshold::default()).is_empty());
+    assert!(constant_sites(&module, main, &constants, &costs(1), Threshold::default()).is_empty());
 }
 
 #[test]
@@ -307,4 +411,12 @@ fn test_call_counts_count_direct_calls_to_defined_functions() {
     assert_eq!(counts.get(&id(&module, "scale")), Some(&3));
     assert_eq!(counts.get(&id(&module, "clamp")), Some(&1));
     assert_eq!(counts.get(&id(&module, "external")), None);
+}
+
+#[test]
+fn test_a_callee_whose_effects_are_not_stated_is_not_a_candidate() {
+    let module = parsed(MIN);
+    assert!(candidates(&module, &call_counts(&module), &private(&module), &costs(8), Threshold::default()).is_empty());
+    let module = stamped(&module);
+    assert_eq!(candidates(&module, &call_counts(&module), &private(&module), &costs(8), Threshold::default()).len(), 1);
 }

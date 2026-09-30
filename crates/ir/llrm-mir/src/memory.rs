@@ -138,6 +138,13 @@ pub fn stated_at(attrs: &[Attribute], counted: impl Fn(Option<&str>) -> bool) ->
     LOCATIONS.into_iter().filter(|&one| counted(one)).map(|one| at(attrs, one)).fold(Effects::NONE, |one, other| Effects { reads: one.reads || other.reads, writes: one.writes || other.writes })
 }
 
+/// Whether `attrs` narrow what the function does to memory, anywhere:
+/// without them nothing is known.
+pub fn known(attrs: &[Attribute]) -> bool {
+    let (argmem, other) = located(attrs);
+    [stated(attrs), argmem, other, inaccessible(attrs)].iter().any(|effects| *effects != Effects::ANY)
+}
+
 /// What `attrs` allow on the memory a call's pointer arguments point to,
 /// and on every other location the module sees, as LLVM's `MemoryEffects`
 /// keeps them per location. `inaccessiblemem` is neither.

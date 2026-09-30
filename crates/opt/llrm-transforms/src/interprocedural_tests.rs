@@ -16,6 +16,11 @@ fn ids(module: &Module, names: &[&str]) -> BTreeSet<GlobalId> {
 /// The step over `module` from `roots`, the call priced `call`; each
 /// pipeline run as `(procedure, stage)`.
 fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String, String)>) {
+    stepped(module, roots, call, Threshold::default())
+}
+
+/// `step` with inlining's `threshold`.
+fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold) -> (Proved, Vec<(String, String)>) {
     let roots = ids(module, roots).into_iter().map(|id| (0, id)).collect();
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
@@ -26,7 +31,7 @@ fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String,
             &mut modules,
             &roots,
             &costs,
-            Threshold::default(),
+            threshold,
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
                 Ok(())
@@ -137,7 +142,8 @@ b:
 #[test]
 fn test_agreed_actuals_specialize_and_a_constant_return_is_carried() {
     let mut module = parsed(STORES);
-    let (_, stages) = step(&mut module, &["f"], 40);
+    // With no inlining: a callee that stores to memory is inlined otherwise.
+    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold(0));
     let text = printed(&module);
     assert!(text.contains("  store i16 5, ptr @g\n"), "{text}");
     assert!(text.contains("  %s = add i16 7, %a\n"), "{text}");

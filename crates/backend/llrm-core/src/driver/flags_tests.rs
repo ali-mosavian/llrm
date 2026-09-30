@@ -33,9 +33,9 @@ fn each_level_selects_its_pipeline() {
     assert_eq!(o3.limits, Limits { max_unrolled_operations: 400, ..Limits::default() });
     assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold(250), true, true));
     let os = pipeline(&["-Os"]);
-    assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default(), true));
+    assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold(75), true));
     let oz = pipeline(&["-Oz"]);
-    assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default(), false, false));
+    assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold(25), false, false));
     assert!(parsed(&["-O4"]).is_err());
 }
 

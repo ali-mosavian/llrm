@@ -6,10 +6,14 @@
 //! operands, and join every return back to the continuation.  The ordinary
 //! body pipeline then simplifies the result.
 //!
-//! The initial policy covered leaf procedures called once.  It also admits a
-//! straight-line private leaf at every direct call site when the target-priced
-//! call work exceeds the semantic work duplicated by cloning.  In both cases
-//! the ordinary body pipeline simplifies the result; MIR chooses from semantic
+//! A callee is a candidate when its memory effects are stated (`memory::known`)
+//! and cloning it is safe; whether it is worth it is cost: the body's priced
+//! work copied against the calls it removes, bounded by the `Threshold`.  A
+//! body that only reads or writes through its arguments or its own frame
+//! inlines like any other: the clone keeps its memory operations and the
+//! ordinary body pipeline turns the caller's argument cells into values.  A
+//! public callee is inlined at its sites and stays defined; a private one
+//! called nowhere else goes with its last site.  MIR chooses from semantic
 //! costs and never sees opcodes or registers.  The call's price is profit's
 //! `OperationCosts::call`.
 //!
@@ -21,22 +25,23 @@
 //! call fits its callee.  A candidate is a snapshot of its callee, as the old
 //! one held the body it was chosen from.  A clone keeps its original's
 //! metadata, which replaces merging the pointer and range side tables.  The
-//! old `sealed` flag is a definition; a leaf touches no memory, which
-//! replaces admitting only formal loads.  SSA is checked by the verifier
+//! old `sealed` flag is a definition; stated effects replace admitting only
+//! formal loads.  SSA is checked by the verifier
 //! after each pass, not here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use llrm_mir::context::{ConstantId, Context, GlobalId};
+use llrm_mir::callgraph::CallGraph;
+use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::edit::Position;
-use llrm_mir::memory::callee;
-use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::memory::{Callees, callee, has, known};
+use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueId};
+use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
 
-use crate::profit::OperationCosts;
+use crate::profit::{OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
 /// for none. A callee's budget, in semantic operations, scales with it.
@@ -83,57 +88,107 @@ fn body(module: &Module, id: GlobalId) -> Option<&Function> {
     module.global(id).function().filter(|function| !function.is_declaration())
 }
 
-/// Private pure leaves worth moving into their direct callers.
+/// Functions whose address is taken: named anywhere but as a callee.
+fn addressed(module: &Module) -> BTreeSet<GlobalId> {
+    let context = &module.context;
+    let mut out = BTreeSet::new();
+    let mut work = Vec::new();
+    for (_, _, function) in module.functions() {
+        for (_, inst) in function.walk() {
+            let instruction = function.instruction(inst);
+            let skip = usize::from(callee(context, function, inst).is_some());
+            let kept = instruction.operands.len() - skip;
+            work.extend(instruction.operands[..kept].iter().filter_map(|&operand| if let Operand::Constant(id) = operand { Some(id) } else { None }));
+        }
+    }
+    work.extend(module.globals.iter().filter_map(|global| if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }));
+    while let Some(id) = work.pop() {
+        match &context.get(id).kind {
+            ConstantKind::Global(global) => {
+                out.insert(*global);
+            }
+            ConstantKind::Aggregate(members) => work.extend(members),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => work.extend(operands),
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Intrinsics that name the running frame: a clone would name the caller's.
+const FRAME_INTRINSICS: [&str; 4] = ["llvm.stacksave", "llvm.stackrestore", "llvm.frameaddress", "llvm.returnaddress"];
+
+/// Whether `body` may be cloned into another function: it returns, and it
+/// has no handler, recursion, frame intrinsic or `setjmp`-like call whose
+/// meaning a clone would change.  Its effects on memory must be stated.
+fn cloneable(module: &Module, graph: &CallGraph, id: GlobalId, body: &Function) -> bool {
+    let context = &module.context;
+    if body.is_declaration() || !known(&body.attrs) || has(&body.attrs, "noinline") || graph.reaches(id, id) {
+        return false;
+    }
+    let mut returns = false;
+    for (_, inst) in body.walk() {
+        let instruction = body.instruction(inst);
+        returns |= instruction.opcode == Opcode::Ret;
+        match instruction.opcode {
+            Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => return false,
+            Opcode::Call(_) => {
+                let Some(called) = callee(context, body, inst).map(|one| module.global(one)) else { continue };
+                let name = called.name.as_deref().unwrap_or_default();
+                if FRAME_INTRINSICS.contains(&name) || called.function().is_some_and(|one| has(&one.attrs, "returns_twice")) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    returns
+}
+
+/// The priced work `body` does once, unless something in it is unpriced.
+fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
+    body.walk().filter(|&(_, inst)| semantic(body, inst)).map(|(_, inst)| operation(&module.context, body, callees, inst, costs)).sum()
+}
+
+/// Functions worth moving into their direct callers.
 ///
-/// A single-use body disappears after expansion, so it only has to fit the
-/// normal CFG budget.  A repeated body duplicates its semantic work once per
-/// additional caller.  Admit that only for a straight-line leaf, and only
-/// when the profile's total direct-call cost is greater than the duplicate
-/// work.  This lets a short arithmetic helper disappear at every site while
-/// keeping branchy or code-growing helpers out of the allocator's region.
-pub fn candidates(
-    module: &Module,
-    calls: &Counter,
-    private: &BTreeSet<GlobalId>,
-    pure: &BTreeSet<GlobalId>,
-    costs: &OperationCosts,
-    threshold: Threshold,
-) -> IndexMap<GlobalId, Candidate> {
+/// A candidate's size is bounded by the `Threshold`.  Inlining it at all
+/// `count` sites leaves the body behind when it is public or its address is
+/// taken; a private one goes with the last site, so one site costs nothing.
+/// Each copy beyond that duplicates the body's priced work, which has to
+/// stay below the calls removed.
+pub fn candidates(module: &Module, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
     let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
+    let (graph, callees, addressed) = (CallGraph::new(module), llrm_mir::memory::callees(module), addressed(module));
     let mut out = IndexMap::default();
-    for &name in private.intersection(pure) {
+    for (&name, &count) in calls {
         let Some(body) = body(module, name) else { continue };
-        let semantic = semantic_count(body);
-        let count = calls.get(&name).copied().unwrap_or(0);
-        let repeated = semantic * (count - 1);
-        let profitable = count == 1 || (_straight(body) && repeated < count * call_cost);
-        if count != 0 && semantic <= budget && profitable && _leaf(&module.context, body) {
+        if count == 0 || semantic_count(body) > budget || !cloneable(module, &graph, name, body) {
+            continue;
+        }
+        let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
+        if copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < count * call_cost) {
             out.insert(name, Candidate { body: Rc::new(body.clone()) });
         }
     }
     out
 }
 
-/// Private pure leaves worth cloning at one constant direct-call site.
+/// Functions worth cloning at one call site whose actual is a known
+/// constant.
 ///
 /// Whole-body parameter specialization needs every caller to agree.  This
 /// narrower policy instead admits a call whose known actual exposes local
 /// SCCP after the normal MIR clone.  The original body remains for dynamic
 /// callers, so no source-level calling convention or symbol changes.
-/// As with repeated-leaf inlining, the target profile must price the call
+/// As with repeated inlining, the target profile must price the call
 /// above the cloned semantic work.
-pub fn constant_sites(
-    module: &Module,
-    caller: &Function,
-    constants: &IndexMap<InstId, Vec<Option<ConstantId>>>,
-    private: &BTreeSet<GlobalId>,
-    pure: &BTreeSet<GlobalId>,
-    costs: &OperationCosts,
-    threshold: Threshold,
-) -> IndexMap<InstId, Candidate> {
+pub fn constant_sites(module: &Module, caller: &Function, constants: &IndexMap<InstId, Vec<Option<ConstantId>>>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<InstId, Candidate> {
     let call_cost = costs.call;
     let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
+    let graph = CallGraph::new(module);
     let mut out = IndexMap::default();
     for (_, at) in caller.walk() {
         let Some(name) = callee(&module.context, caller, at) else { continue };
@@ -141,45 +196,13 @@ pub fn constant_sites(
         if !known.iter().any(Option::is_some) {
             continue;
         }
-        if !private.contains(&name) || !pure.contains(&name) {
-            continue;
-        }
         let Some(body) = body(module, name) else { continue };
         let semantic = semantic_count(body);
-        if semantic < call_cost && semantic <= budget && _leaf(&module.context, body) {
+        if semantic < call_cost && semantic <= budget && cloneable(module, &graph, name, body) {
             out.insert(at, Candidate { body: Rc::new(body.clone()) });
         }
     }
     out
-}
-
-/// Whether cloning the body duplicates no control-flow structure.
-fn _straight(body: &Function) -> bool {
-    body.layout().len() == 1
-}
-
-/// Whether a body does nothing but compute its result: no call, no memory,
-/// nothing that may trap and no floating work.
-fn _leaf(context: &Context, body: &Function) -> bool {
-    if body.is_declaration() {
-        return false;
-    }
-    let floating = |operand: Operand| body.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)));
-    let mut returns = false;
-    for (_, inst) in body.walk() {
-        let instruction = body.instruction(inst);
-        let forbidden = match instruction.opcode {
-            Opcode::Call(_) | Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => true,
-            Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Alloca { .. } => true,
-            Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => true,
-            _ => false,
-        };
-        if forbidden || instruction.result.is_some_and(|value| floating(Operand::Value(value))) || instruction.operands.iter().any(|&operand| floating(operand)) {
-            return false;
-        }
-        returns |= instruction.opcode == Opcode::Ret;
-    }
-    returns
 }
 
 /// Surviving direct call counts.
@@ -274,9 +297,15 @@ fn _at(context: &Context, function: &mut Function, call: InstId, candidate: &Can
         Operand::Block(block) => Operand::Block(labels[&block]),
         Operand::Constant(_) => operand,
     };
+    // A frame cell is one per activation: it goes to the caller's entry, not
+    // into a loop that would grow the stack.
+    let first = function.entry().and_then(|entry| function.block(entry).instructions().first().copied());
     for (block, inst, made) in cloned {
         function.set_operands(made, callee.instruction(inst).operands.iter().map(|&operand| read(operand)).collect());
-        function.insert(made, Position::End(labels[&block]))?;
+        match (&callee.instruction(inst).opcode, first) {
+            (Opcode::Alloca { .. }, Some(first)) => function.insert(made, Position::Before(first))?,
+            _ => function.insert(made, Position::End(labels[&block]))?,
+        }
     }
     let mut returned = Vec::new();
     for (at, value) in &return_edges {

@@ -165,18 +165,17 @@ pub fn optimized<E: From<String>>(
     // What each body does, stated on it, is what inlining and the dead-call
     // removal below read.
     stamped_all(program, modules).map_err(E::from)?;
-    let pure: Vec<BTreeSet<GlobalId>> = program.modules.iter().map(facts::stated_pure).collect();
     let mut inline_round = 0;
     loop {
         let mut changed = false;
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs, threshold);
+            let available = inline::candidates(module, &counts, &private[at], costs, threshold);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
-                let constant = inline::constant_sites(module, caller, &constants, &private[at], &pure[at], costs, threshold);
+                let constant = inline::constant_sites(module, caller, &constants, costs, threshold);
                 let (context, function) = function_mut(module, id);
                 if !inline::expanded(context, function, &available, Some(&constant))? {
                     continue;
@@ -256,11 +255,11 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &counts, &private[at], &pure[at], costs, threshold);
+            let available = inline::candidates(module, &counts, &private[at], costs, threshold);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let current = facts::current_call_constants(&module.context, caller);
-                let constant = inline::constant_sites(module, caller, &current, &private[at], &pure[at], costs, threshold);
+                let constant = inline::constant_sites(module, caller, &current, costs, threshold);
                 let (context, function) = function_mut(module, id);
                 if !inline::expanded(context, function, &available, Some(&constant))? {
                     continue;
