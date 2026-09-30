@@ -271,3 +271,8 @@ used were measured by how CodeView 4 names a patched local:
 
 A pointer's reach byte: `0x74` near, `0x73` far, `0x5E` huge. A signature's
 calling-convention byte shows no difference, so BC's `0x73` stays.
+
+CodeView 4 on `llrm-c -g` and `llrm-nib -g`, stopped in each program:
+
+![C in CodeView 4](codeview/c-cv4.png)
+![Nib in CodeView 4](codeview/nib-cv4.png)
