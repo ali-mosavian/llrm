@@ -319,7 +319,10 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
     // The most backedges: the counted exit's, or what an in-bounds access allows.
     let most = exit.as_ref().map(|exit| exit.most.clone()).or_else(|| induction::inbounds_backedges(view, loop_));
     let fits = sites.iter().map(|site| candidates.iter().enumerate().map(|(index, one)| _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys)).collect()).collect();
-    let exits = candidates.iter().map(|one| exit.as_ref().and_then(|exit| _exit_price(target, exit, one, &mut keys))).collect();
+    let exits = candidates
+        .iter()
+        .map(|one| exit.as_ref().filter(|exit| _steps_before_test(function, &exit.proof, one)).and_then(|exit| _exit_price(target, exit, one, &mut keys)))
+        .collect();
     let problem = Problem {
         target,
         candidates,
@@ -444,6 +447,17 @@ fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
         return None;
     }
     Some(Exit { proof: proof.clone(), trips, most, guarded })
+}
+
+/// Whether `candidate`'s step is made before `proof`'s test where the test
+/// reads it: a new counter's step is put there; an existing one's stands.
+fn _steps_before_test(function: &Function, proof: &CountedLoop, candidate: &Candidate) -> bool {
+    let Some(phi) = candidate.existing.filter(|_| proof.posttested) else { return true };
+    let Some(Operand::Value(step)) = _latch_arm(function, phi, cfg::block(proof.latch)) else { return false };
+    let ValueDef::Instruction(made) = function.value(step).def else { return false };
+    let (here, there) = (function.parent(made), function.parent(proof.branch));
+    here == there && function.block(here.expect("a placed step")).instructions().iter().position(|&one| one == made) < function.block(there.expect("a placed branch")).instructions().iter().position(|&one| one == proof.branch)
+        || here != there && here.is_some_and(|step| function.parent(proof.branch).is_some_and(|test| cfg::Shape::of(function).dominance.dominates(cfg::id(step), cfg::id(test))))
 }
 
 /// Values read inside the loop by something other than a recurrence or
@@ -1308,6 +1322,10 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
     let end = expander.value(context, function, candidate.of.pointer, &end, ty);
     let tested = if proof.posttested { steps[*index] } else { registers[*index] };
     let branch = proof.branch;
+    // A test in the body, not the latch, reads a step made before it.
+    if let (true, Some(next)) = (proof.posttested, stepping[*index]) {
+        function.move_to(next, Position::Before(branch)).expect("a placed branch");
+    }
     let continues = matches!(function.instruction(branch).operands[1], Operand::Block(block) if plan.loop_.body.contains(&cfg::id(block)));
     let predicate = if continues { IntPredicate::Ne } else { IntPredicate::Eq };
     let bit = context.types.int(1);

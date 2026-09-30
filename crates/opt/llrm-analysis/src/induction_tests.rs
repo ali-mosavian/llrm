@@ -1255,3 +1255,103 @@ fn test_a_loop_tested_after_its_trips_is_counted_where_entry_proves_the_first() 
     let unproven = Parsed::new(&guarded_do("-5"));
     assert!(counted(&unproven.unit(), &unproven.only_loop(), None, false).is_empty());
 }
+
+/// `a[i + 8]` checked against the length before the loop's own test:
+/// the check is an exit of its own, counted `len - 8` where the compare
+/// reads `i + 8` rather than the counter.
+#[test]
+fn test_an_exit_testing_a_counter_plus_a_constant_is_counted() {
+    let text = "define i16 @f(i16 %n, i16 %len) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %x = add i16 %i, 8
+  %inside = icmp ult i16 %x, %len
+  br i1 %inside, label %check, label %bad
+check:
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %j = add nsw i16 %i, 1
+  br label %head
+done:
+  ret i16 %i
+bad:
+  unreachable
+}
+";
+    let parsed = Parsed::new(text);
+    let found = exits(&parsed.unit(), &parsed.only_loop(), None, false);
+    let len = Linear::of(&AffineOperand::Value(parsed.value("len"), 16), 16);
+    let eight = Linear::constant(8, 16);
+    assert_eq!(found[0].taken, Some(vec![len.minus(&eight)]), "{found:?}");
+}
+
+/// The exit compares the stepped value in the body, and the way back is a
+/// block that only jumps, split from a critical edge. Neither the header
+/// nor the latch branched, so no proof counted it.
+#[test]
+fn test_an_exit_behind_a_forwarding_latch_is_counted() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %ok = icmp sgt i16 %n, 0
+  br i1 %ok, label %pre, label %done
+pre:
+  br label %head
+head:
+  %i = phi i16 [ 0, %pre ], [ %j, %back ]
+  br label %body
+body:
+  %j = add nsw i16 %i, 1
+  %c = icmp sge i16 %j, %n
+  br i1 %c, label %after, label %back
+back:
+  br label %head
+after:
+  br label %done
+done:
+  %r = phi i16 [ 0, %entry ], [ %j, %after ]
+  ret i16 %r
+}
+";
+    let parsed = Parsed::new(text);
+    let proofs = counted(&parsed.unit(), &parsed.only_loop(), None, false);
+    let [proof] = &proofs[..] else { panic!("{proofs:?}") };
+    assert!(proof.posttested && proof.stepped && proof.entry_guarded, "{proof:?}");
+}
+
+/// A single block holds the trip and tests the stepped value: it is tested
+/// after the trip whichever block the branch sits in, and as before where it
+/// reads the phi.
+#[test]
+fn test_a_header_holding_its_whole_trip_is_tested_after_it() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %ok = icmp sgt i16 %n, 0
+  br i1 %ok, label %pre, label %done
+pre:
+  br label %head
+head:
+  %i = phi i16 [ 0, %pre ], [ %j, %back ]
+  %j = add nsw i16 %i, 1
+  %c = icmp sge i16 %j, %n
+  br i1 %c, label %after, label %back
+back:
+  br label %head
+after:
+  br label %done
+done:
+  %r = phi i16 [ 0, %entry ], [ %j, %after ]
+  ret i16 %r
+}
+";
+    let parsed = Parsed::new(text);
+    let proofs = counted(&parsed.unit(), &parsed.only_loop(), None, false);
+    let [proof] = &proofs[..] else { panic!("{proofs:?}") };
+    assert!(proof.posttested && proof.stepped, "{proof:?}");
+    // Reading the phi, the same block tests before the trip: no change there.
+    let before = Parsed::new(&text.replace("icmp sge i16 %j, %n", "icmp sge i16 %i, %n"));
+    let proofs = counted(&before.unit(), &before.only_loop(), None, false);
+    assert!(proofs.iter().all(|proof| !proof.posttested), "{proofs:?}");
+}

@@ -1364,3 +1364,16 @@ fn test_a_guarded_do_while_keeps_one_counter() {
     let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", GUARDED_DO), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
     assert_eq!(counters(&printed), 1, "{printed}");
 }
+
+/// The guarded do-while's way back split to a block that only jumps:
+/// the test in the body, the step before it.
+#[test]
+fn test_a_guarded_do_while_behind_a_forwarding_latch_keeps_one_counter() {
+    let text = GUARDED_DO
+        .replace("br i1 %c, label %l1, label %l3", "br i1 %c, label %back, label %l3")
+        .replace("l3:\n  br label %done", "back:\n  br label %l1\n\nl3:\n  br label %done")
+        .replace("[ %i.next, %l1 ]", "[ %i.next, %back ]")
+        .replace("[ %t, %l1 ]", "[ %t, %back ]");
+    let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", &text), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
+    assert_eq!(counters(&printed), 1, "{printed}");
+}

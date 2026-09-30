@@ -660,6 +660,9 @@ struct _Control {
     exit: i64,
     posttested: bool,
     stops: bool,
+    /// A header that holds its whole trip, its latch only a jump back: its
+    /// test may read the stepped value, as after a trip.
+    after: bool,
 }
 
 /// The block whose conditional branch is the loop's only exit that goes on: its header, or its latch.
@@ -672,7 +675,25 @@ fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
     let latch = *blocks.get(loop_.latches.first()?)?;
     let header = blocks[&loop_.header];
     let inside = &loop_.body;
-    let (control, entered) = if latch.succ.as_slice() == [header.at] {
+    // A latch that only jumps on, split from a critical edge, is the end of
+    // the block that branches to it: that block is tested after its trip.
+    let forwarded = (latch.succ.as_slice() == [header.at]).then(|| {
+        let only = function.block(cfg::block(latch.at)).instructions();
+        let preds = graph.iter().filter(|block| block.succ.contains(&latch.at)).collect::<Vec<_>>();
+        match (only.len(), &preds[..]) {
+            (1, [pred]) if pred.at != header.at && inside.contains(&pred.at) && pred.succ.len() == 2 && pred.succ.contains(&latch.at) => Some(*pred),
+            _ => None,
+        }
+    });
+    // The latch jumps back and only the header branches to it: the header holds the trip.
+    let header_holds_trip = latch.succ.as_slice() == [header.at]
+        && function.block(cfg::block(latch.at)).instructions().len() == 1
+        && header.succ.len() == 2
+        && header.succ.contains(&latch.at)
+        && graph.iter().filter(|block| block.succ.contains(&latch.at)).count() == 1;
+    let (control, entered) = if let Some(Some(pred)) = forwarded {
+        (pred, vec![latch.at])
+    } else if latch.succ.as_slice() == [header.at] {
         (header, header.succ.iter().copied().filter(|at| inside.contains(at)).collect::<Vec<_>>())
     } else if latch.succ.contains(&header.at) {
         (latch, vec![header.at])
@@ -706,8 +727,9 @@ fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
         preheader,
         entered: entered[0],
         exit: exits[0],
-        posttested: control.at == latch.at,
+        posttested: control.at == latch.at || matches!(forwarded, Some(Some(_))),
         stops: !elsewhere.is_empty(),
+        after: header_holds_trip,
     })
 }
 
@@ -754,7 +776,11 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
     let Some((compare, icmp)) = unit.defining(condition) else { return Vec::new() };
     let Opcode::ICmp(predicate) = icmp.opcode else { return Vec::new() };
     let continuing = if loop_.body.contains(&cfg::id(taken)) { predicate } else { predicate.inverse() };
-    _proven(unit, loop_, facts, inbounds, &shape, branch, compare, continuing)
+    let mut proven = _proven(unit, loop_, facts, inbounds, &shape, branch, compare, continuing, false);
+    if shape.after {
+        proven.extend(_proven(unit, loop_, facts, inbounds, &_Control { posttested: true, ..shape }, branch, compare, continuing, false).into_iter().filter(|proof| proof.stepped));
+    }
+    proven
 }
 
 /// Every counter whose compare `compare`, which keeps the loop going while
@@ -769,6 +795,7 @@ fn _proven(
     branch: InstId,
     compare: InstId,
     continuing: IntPredicate,
+    shifted: bool,
 ) -> Vec<CountedLoop> {
     let function = unit.function;
     let icmp = function.instruction(compare);
@@ -776,9 +803,33 @@ fn _proven(
     let latch = *loop_.latches.first().expect("_control proved one latch");
     let still = invariant(function, inside);
 
+    let basic = basics(unit, loop_);
+    let mut counters = basic.values().map(|one| (one.clone(), one.value)).collect::<Vec<_>>();
+    // A counter plus a constant, tested before a trip, counts as a counter
+    // that started that far on: `i + 8 < len` ends the loop at `len - 8`.
+    if shifted && !shape.posttested {
+        for formula in derived(unit, loop_, Some(&basic)) {
+            let AffineOperand::Const(by) = &formula.by else { continue };
+            let (Some(result), AffineOperand::Const(start), None) = (function.instruction(formula.op).result, &formula.of.start, &formula.pointer) else { continue };
+            let width = start.width;
+            let mut shift = BigInt::from(0);
+            let constant = formula.offsets.iter().all(|(term, factor)| match term {
+                AffineOperand::Const(known) => {
+                    shift += &known.n * factor;
+                    true
+                }
+                AffineOperand::Value(..) => false,
+            });
+            let same_width = unit.int_bits(Operand::Value(result)) == Some(width);
+            if by.n == BigInt::from(1) && constant && by.width == width && same_width {
+                let start = AffineOperand::constant(&start.n + shift, width);
+                counters.push((Affine { value: result, start, step: formula.of.step.clone(), header: formula.of.header }, formula.of.value));
+            }
+        }
+    }
     let mut proven = Vec::new();
-    for counter in basics(unit, loop_).values() {
-        let Some(phi) = defining(function, counter.value) else { continue };
+    for (counter, source) in &counters {
+        let Some(phi) = defining(function, *source).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi) else { continue };
         let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
         let mut tested = BTreeMap::from([(counter.value, false)]);
         if shape.posttested {
@@ -816,7 +867,7 @@ fn _proven(
         // The start as counted: itself, or the entry value it is proven to equal.
         let mut equal = start.clone();
         if count.is_none()
-            && let Some((entry, rewinds)) = _carried(unit, loop_, &start, counter.value, update, width)
+            && let Some((entry, rewinds)) = _carried(unit, loop_, &start, *source, update, width)
             && let (entered, Some(trips)) = counted_from(&entry)
             && rewinds.iter().all(|(stepped_root, offset)| {
                 let exited = &trips - BigInt::from(u8::from(shape.posttested && !stepped_root));
@@ -935,14 +986,21 @@ pub fn exits(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>
             if !shape.dominance.dominates(at, latch) {
                 return found;
             }
-            let shaped = _Control { block: at, preheader, entered, exit, posttested: at == latch, stops: false };
+            let shaped = |posttested: bool| _Control { block: at, preheader, entered, exit, posttested, stops: false, after: false };
             let stays = inside.contains(&cfg::id(taken));
             let (leaves, first) = _leaves(function, condition, stays);
             let mut counts = Vec::new();
             for compare in leaves {
                 let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { return found };
                 let continuing = if stays { predicate } else { predicate.inverse() };
-                let Some(proof) = _proven(unit, loop_, facts, inbounds, &shaped, branch, compare, continuing).into_iter().next() else { return found };
+                // Tested after the trip where it is the latch; in the body, a compare of the
+                // stepped value is tested after the step, one of the header's phi before it.
+                let tries: &[bool] = if at == latch { &[true] } else { &[false, true] };
+                let Some(proof) = tries.iter().find_map(|&posttested| {
+                    _proven(unit, loop_, facts, inbounds, &shaped(posttested), branch, compare, continuing, true).into_iter().next().filter(|proof| posttested == (at == latch) || proof.stepped == posttested)
+                }) else {
+                    return found;
+                };
                 let Some(count) = _backedges(&proof) else { return found };
                 counts.push(count);
                 found.proofs.push(proof);
