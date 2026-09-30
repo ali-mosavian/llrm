@@ -292,3 +292,55 @@ done:
     let done = checked(&format!("{}{text}", llrm_analysis::testing::DOS), &[vec![0]]);
     assert!(block(&done, "pre").iter().any(|one| one.contains("load")), "{done}");
 }
+
+/// nbody.bas hoisted twelve `POSX(k)` and `POSY(k)` loads out of a loop
+/// already short of registers: each became a stack slot, loaded and stored
+/// before the loop and reloaded in it where the global was read before.
+/// A load from a constant address leaves only while a register holds it.
+#[test]
+fn test_constant_loads_leave_a_loop_only_while_registers_hold_them() {
+    let text = "@g = global [8 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %b2 ]
+  %go = icmp slt i16 %i, 4
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %p1 = getelementptr i16, ptr @g, i16 1
+  %v1 = load i16, ptr %p1
+  %p2 = getelementptr i16, ptr @g, i16 2
+  %v2 = load i16, ptr %p2
+  %p3 = getelementptr i16, ptr @g, i16 3
+  %v3 = load i16, ptr %p3
+  %a = add i16 %s, %v1
+  %b = add i16 %a, %v2
+  %t = add i16 %b, %v3
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %s
+}
+";
+    let hoisted_on = |registers: i64| {
+        let before = parsed(text);
+        let mut after = before.clone();
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.require::<Summaries>();
+        passes.add(super::Hoist);
+        let machine = crate::testing::Tuned { registers, call_registers: 2, ..Default::default() };
+        passes.run_module(&mut after, std::rc::Rc::new(machine)).unwrap();
+        assert_eq!(results(&after, &[&[0]]), results(&before, &[&[0]]));
+        block(&printed(&after), "b2").iter().filter(|line| line.contains("load")).count()
+    };
+    // The counter and the sum hold two registers across every trip.
+    assert_eq!(hoisted_on(6), 0, "room for all three");
+    assert_eq!(hoisted_on(3), 2, "room for one");
+    assert_eq!(hoisted_on(2), 3, "room for none");
+}

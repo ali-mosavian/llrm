@@ -85,8 +85,8 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
 /// left to hold, and what reads them. Such a load costs a reload in the
 /// loop whether hoisted or not, and hoisted and spilled it also costs a
 /// load and a store before the loop. What the loop holds across its trips
-/// is what is live into its header; the target's registers say how many
-/// values fit, and none leaves it unpriced.
+/// is what is live into its header, and its phis; the target's registers
+/// say how many values fit, and none leaves it unpriced.
 fn _roomy(unit: &passes::Unit, outer: &Outer, loop_: &Loop, run: Vec<InstId>) -> Vec<InstId> {
     let registers = crate::profit::registers(outer).0;
     let function = &*unit.function;
@@ -107,7 +107,9 @@ fn _roomy(unit: &passes::Unit, outer: &Outer, loop_: &Loop, run: Vec<InstId>) ->
         return run;
     }
     let live = llrm_analysis::liveness::live(function);
-    let held = live.live_in.get(&loop_.header).map_or(0, |values| values.iter().filter(|&&value| integer(value)).count()) as i64;
+    let header = cfg::block(loop_.header);
+    let phis = function.block(header).instructions().iter().filter_map(|&inst| (function.instruction(inst).opcode == Opcode::Phi).then(|| function.instruction(inst).result).flatten());
+    let held = live.live_in.get(&loop_.header).into_iter().flatten().copied().chain(phis).filter(|&value| integer(value)).count() as i64;
     let mut room = registers - held - (crossed.len() - loads.len()) as i64;
     let mut dropped = BTreeSet::<ValueId>::new();
     for inst in loads {

@@ -24,12 +24,17 @@ fn target() -> Tuned {
 
 /// `text` in the DOS layout, and it through `Lsr`, printed.
 fn reduced(text: &str) -> (Module, String) {
+    reduced_for(text, target())
+}
+
+/// `reduced` on `machine`.
+fn reduced_for(text: &str, machine: Tuned) -> (Module, String) {
     let before = parsed(&format!("{DOS}{text}"));
     let mut after = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.add(Lsr);
-    manager.run_module(&mut after, Rc::new(target())).unwrap();
+    manager.run_module(&mut after, Rc::new(machine)).unwrap();
     let text = printed(&after);
     (before, text)
 }
@@ -755,4 +760,213 @@ fn test_a_dead_counter_of_unknown_trips_counts_to_zero_behind_a_guard() {
     }
     same(&dead_counter("slt", "  %e = phi i16 [ %i, %b1 ]\n  %r = add i16 %e, %acc\n", "%r"), DEAD);
     same(&format!("@g = global i16 0\n\n{}", dead_counter("slt", "", "%acc").replace("  %next = add", "  store i16 %i, ptr @g\n  %next = add")), DEAD);
+}
+
+/// TEXTFILL's `POKE o, ch + (o AND 15)` over `o` from 0 to 3998 by two:
+/// the low bits of a counter counted to zero from -4000 are its own, so it
+/// needs no add, and the loop keeps one counter. It kept two.
+#[test]
+fn test_a_masked_counter_counts_to_zero_without_an_add() {
+    let text = "@screen = global [4000 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %o = phi i16 [ 0, %b0 ], [ %o.next, %b2 ]
+  %go = icmp sle i16 %o, 3998
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %low = and i16 %o, 15
+  %v = trunc i16 %low to i8
+  %p = getelementptr i8, ptr @screen, i16 %o
+  store i8 %v, ptr %p
+  %o.next = add nsw i16 %o, 2
+  br label %b1
+
+b3:
+  %q = getelementptr i8, ptr @screen, i16 34
+  %r = load i8, ptr %q
+  %w = zext i8 %r to i16
+  ret i16 %w
+}
+";
+    assert!(text.contains("and i16 %o, 15"));
+    let printed = same(text, &[&[0]]);
+    assert_eq!(counters(&printed), 1, "{printed}");
+    assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
+}
+
+/// TILE stored `Y% = 64` after its loop; the value read as a loop of known
+/// count leaves is its start plus its steps, and needs no counter.
+#[test]
+fn test_a_value_read_after_a_known_count_is_a_constant() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, 20
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @a, i16 %o
+  %v = load i16, ptr %p
+  %s.next = add i16 %s, %v
+  %i.next = add i16 %i, 1
+  br label %l1
+
+l3:
+  %i.out = phi i16 [ %i, %l1 ]
+  %r = add i16 %s, %i.out
+  ret i16 %r
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
+    assert_eq!(counters(&printed), 1, "{printed}");
+    assert!(printed.contains("add i16 %s1, 20") || printed.contains(", 20\n") || printed.lines().any(|line| line.contains("%r = add") && line.contains("20")), "{printed}");
+}
+
+/// nbody's unrolled `IF other <> body`: an equality of the counter with a
+/// constant takes the counter counted to zero, the constant moved by its bias.
+#[test]
+fn test_an_equality_takes_the_bias_into_its_constant() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l4 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l4 ]
+  %more = icmp slt i16 %i, 6
+  br i1 %more, label %l2, label %l5
+
+l2:
+  %same = icmp ne i16 %i, 3
+  br i1 %same, label %l3, label %l4
+
+l3:
+  %p = getelementptr i8, ptr @a, i16 %i
+  %b = load i8, ptr %p
+  %v = zext i8 %b to i16
+  br label %l4
+
+l4:
+  %w = phi i16 [ %v, %l3 ], [ 0, %l2 ]
+  %s.next = add i16 %s, %w
+  %i.next = add i16 %i, 1
+  br label %l1
+
+l5:
+  ret i16 %s
+";
+    let printed = same(&program(&[("a", "i8", 1)], "i16", body), TRIPS);
+    assert_eq!(counters(&printed), 1, "{printed}");
+    assert!(!printed.contains("icmp ne i16 %i, 3"), "{printed}");
+}
+
+/// MATRIX: an inner loop's old addresses, dead once it is rewritten, still
+/// read the outer counter's multiple, and the outer loop kept a second
+/// counter for them.
+#[test]
+fn test_what_an_inner_loop_leaves_dead_is_no_use_of_the_outer() {
+    let body = "  br label %r1
+
+r1:
+  %r = phi i16 [ 0, %start ], [ %r.next, %r3 ]
+  %rgo = icmp slt i16 %r, 4
+  br i1 %rgo, label %c0, label %r4
+
+c0:
+  %row = mul i16 %r, 8
+  br label %c1
+
+c1:
+  %c = phi i16 [ 0, %c0 ], [ %c.next, %c2 ]
+  %cgo = icmp slt i16 %c, 8
+  br i1 %cgo, label %c2, label %r3
+
+c2:
+  %at = add i16 %row, %c
+  %o = mul i16 %at, 2
+  %p = getelementptr i8, ptr @a, i16 %o
+  %v = add i16 %r, %c
+  store i16 %v, ptr %p
+  %c.next = add i16 %c, 1
+  br label %c1
+
+r3:
+  %r.next = add i16 %r, 1
+  br label %r1
+
+r4:
+  %q = getelementptr i8, ptr @a, i16 22
+  %got = load i16, ptr %q
+  ret i16 %got
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
+    assert!(counters(&printed) <= 4, "{printed}");
+}
+
+/// rcflip: `(i - 63) \ 64` read a sign-extended counter, which only a
+/// dword counter could give, whatever the registers. With three, the
+/// extension of the word value costs a `movsx`, not a register.
+#[test]
+fn test_an_extended_counter_is_extended_from_the_word_one() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i32 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, 40
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %x = sub nsw i16 %i, 63
+  %w = sext i16 %x to i32
+  %q = ashr i32 %w, 6
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @a, i16 %o
+  %v = load i16, ptr %p
+  %vw = sext i16 %v to i32
+  %t = add i32 %q, %vw
+  %s.next = add i32 %s, %t
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  ret i32 %s
+";
+    let text = program(&[("a", "i16", 2)], "i32", body);
+    let machine = target();
+    let (before, printed) = reduced_for(&text, Tuned { registers: 3, costs: OperationCosts { extend: 0, ..machine.costs.clone() }, ..machine });
+    assert_eq!(results(&parsed(&printed), TRIPS), results(&before, TRIPS), "{printed}");
+    assert!(!printed.lines().any(|line| line.contains("= phi i32") && line.contains("lsr.iv")), "{printed}");
+}
+
+/// A pointer walked beside an index that ends the loop: one counter, as
+/// the indexed loop. The pointer was no recurrence the pass could share.
+#[test]
+fn test_a_pointer_walked_beside_an_index_shares_one_counter() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %p = phi ptr [ @a, %start ], [ %p.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, 30
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %v = load i16, ptr %p
+  %s.next = add i16 %s, %v
+  %p.next = getelementptr i8, ptr %p, i16 2
+  %i.next = add i16 %i, 1
+  br label %l1
+
+l3:
+  ret i16 %s
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
+    assert_eq!(counters(&printed), 1, "{printed}");
 }

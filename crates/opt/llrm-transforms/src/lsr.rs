@@ -1349,6 +1349,15 @@ fn _realized(
         }
         Some(made)
     };
+    // A value no candidate steps, as one read after a loop of known count, is
+    // its base and its sum.
+    if fit.k == BigInt::from(0) && fit.trip.is_none() {
+        let sum = fit.rest.plus(&constant);
+        return match site.one.of.pointer {
+            Some(_) => expander.value(context, function, fit.base, &sum, ty),
+            None => expander.int(context, function, &sum),
+        };
+    }
     match (pointer, site.one.of.pointer) {
         // A pointer candidate: itself, offset by the rest and the constant.
         (Some(_), _) => {

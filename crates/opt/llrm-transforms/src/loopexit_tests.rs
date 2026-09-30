@@ -188,3 +188,38 @@ b3:
     assert!(changed && kept == 1);
     assert!(after.ends_with("b3:\n  ret i32 100184\n}\n"), "{after}");
 }
+
+/// suite/hotlpx summed `n * k` over twenty trips, an invariant whatever
+/// computes it, and suite/arridx summed `a(i) + a(i)`, `i * 3` twice, a
+/// multiple of the counter. Both sums were evaluated only once strength
+/// reduction had made each a phi of its own.
+#[test]
+fn a_sum_of_an_invariant_product_and_a_counter_multiple_is_evaluated() {
+    for update in ["%q = add i16 %p, 0", "%three = mul i16 %i, 3\n  %q = add i16 %three, %three"] {
+        let text = format!(
+            "define i16 @f(i16 %a, i16 %k) {{
+b0:
+  %p = mul i16 %a, %k
+  br label %b1
+
+b1:
+  %i = phi i16 [ 1, %b0 ], [ %next, %b2 ]
+  %s = phi i16 [ 0, %b0 ], [ %s1, %b2 ]
+  %c = icmp sgt i16 %i, 20
+  br i1 %c, label %b3, label %b2
+
+b2:
+  {update}
+  %s1 = add i16 %s, %q
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %s
+}}
+"
+        );
+        let (after, changed, _) = evaluated_text(&text, PAIRS);
+        assert!(changed && !after.contains("ret i16 %s"), "{after}");
+    }
+}

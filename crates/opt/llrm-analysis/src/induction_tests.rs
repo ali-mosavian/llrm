@@ -1078,3 +1078,44 @@ b5:
         assert_eq!(parsed.run(&[(0, 32)], 1_000), Some(trips), "{rewind}");
     }
 }
+
+/// Mandelbrot's `cx = (long)px * 24 + x`: the sign extension of the word
+/// counter is a recurrence of its own, so no use reads the word counter to
+/// extend it. As a use it kept the word counter beside `cx`, a register
+/// and an add a trip.
+#[test]
+fn test_an_extended_counter_is_a_recurrence_not_a_use() {
+    let parsed = Parsed::new(
+        "define i32 @f(i32 %x) {
+b0:
+  br label %b1
+
+b1:
+  %px = phi i16 [ -16, %b0 ], [ %next, %b2 ]
+  %s = phi i32 [ 0, %b0 ], [ %s.next, %b2 ]
+  %go = icmp slt i16 %px, 16
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %w = sext i16 %px to i32
+  %m = mul nsw i32 %w, 24
+  %cx = add nsw i32 %m, %x
+  %s.next = add i32 %s, %cx
+  %next = add nsw i16 %px, 1
+  br label %b1
+
+b3:
+  ret i32 %s
+}
+",
+    );
+    let unit = parsed.unit();
+    let loop_ = parsed.only_loop();
+    let counters = basics(&unit, &loop_);
+    let found = users(&unit, &loop_, &counters, &derived(&unit, &loop_, Some(&counters)));
+    let extension = parsed.made("w");
+    assert!(found.web.contains(&extension), "{:?}", found.uses);
+    assert!(found.uses.iter().all(|one| one.user != extension), "{:?}", found.uses);
+    let of = &found.values[&parsed.value("w")];
+    assert_eq!((of.start.known(), of.step.known()), (Some(BigInt::from(-16)), Some(BigInt::from(1))));
+}
