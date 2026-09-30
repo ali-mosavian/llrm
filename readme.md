@@ -119,7 +119,7 @@ LONG register pairs, runtime arithmetic calls and array descriptors; see
 
 One loop in three languages: a dot product of two `int` arrays, returned as a
 `long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
-prints with `--cpu 486`. C is in the medium model.
+prints with `--cpu 486`, and the comments are added by hand. C is in the medium model.
 
 C, `llrm-c dot.c --cpu 486 -S`:
 
@@ -136,31 +136,31 @@ long dot(const int *a, const int *b, int n)
 
 ```asm
 _dot proc far
-    push bp
+    push bp                         ; a is [bp+6], b [bp+8], n [bp+10]; the caller pops them
     mov bp, sp
-    push si
+    push si                         ; si and di are callee-saved
     push di
 L0_0:
-    mov di, word ptr [bp+8]
-    mov bx, word ptr [bp+10]
+    mov di, word ptr [bp+8]         ; di = b
+    mov bx, word ptr [bp+10]        ; bx = n
     mov cx, bx
-    neg cx
-    xor eax, eax
+    neg cx                          ; cx = -n, the loop counter
+    xor eax, eax                    ; total = 0
     or bx, bx
-    jle L0_3
+    jle L0_3                        ; n <= 0: no iterations
 L0_20:
-    xor bx, bx
+    xor bx, bx                      ; bx = byte offset of a[i] and b[i]
 L0_5:
-    mov si, word ptr [bp+6]
-    movsx edx, word ptr [bx+si]
-    movsx esi, word ptr [bx+di]
-    imul edx, esi
-    add eax, edx
-    add bx, 2
-    inc cx
-    jne L0_5
+    mov si, word ptr [bp+6]         ; si = a, reloaded on every iteration
+    movsx edx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
+    movsx esi, word ptr [bx+di]     ; b[i]
+    imul edx, esi                   ; (long)a[i] * b[i], no runtime helper
+    add eax, edx                    ; total += product
+    add bx, 2                       ; the offset steps by one int
+    inc cx                          ; the counter steps up to zero
+    jne L0_5                        ; on inc's flags: no compare
 L0_3:
-    shld edx, eax, 16
+    shld edx, eax, 16               ; the long returns in DX:AX
     pop di
     pop si
     pop bp
@@ -180,38 +180,38 @@ fn dot(a: &[i16], b: &[i16]) -> i32:
 
 ```asm
 _dot proc far
-    push bp
+    push bp                         ; a is the far pointer [bp+6], b [bp+10]
     mov bp, sp
-    sub sp, 4
+    sub sp, 4                       ; two slots for the lengths
     push si
     push di
 L0_0:
-    les si, dword ptr [bp+6]
-    lfs di, dword ptr [bp+10]
+    les si, dword ptr [bp+6]        ; es:si = a's slice: length, then data pointer
+    lfs di, dword ptr [bp+10]       ; fs:di = b's slice
     mov ax, word ptr es:[si]
-    mov word ptr [bp-2], ax
+    mov word ptr [bp-2], ax         ; len(a)
     mov ax, word ptr fs:[di]
-    mov word ptr [bp-4], ax
-    les si, dword ptr es:[si+4]
-    lfs di, dword ptr fs:[di+4]
-    xor dx, dx
-    xor eax, eax
+    mov word ptr [bp-4], ax         ; len(b)
+    les si, dword ptr es:[si+4]     ; es:si = a's data
+    lfs di, dword ptr fs:[di+4]     ; fs:di = b's data
+    xor dx, dx                      ; dx = i = 0
+    xor eax, eax                    ; total = 0
     jmp L0_7
 L0_24:
-    cmp dx, word ptr [bp-4]
+    cmp dx, word ptr [bp-4]         ; zip ends with the shorter slice
     jae L0_22
 L0_11:
-    lea bx, [edx+edx]
-    movsx ecx, word ptr es:[bx+si]
-    movsx ebx, word ptr fs:[bx+di]
+    lea bx, [edx+edx]               ; bx = 2*i: the low 16 bits of a 32-bit lea
+    movsx ecx, word ptr es:[bx+si]  ; a[i]
+    movsx ebx, word ptr fs:[bx+di]  ; b[i]
     imul ecx, ebx
-    add eax, ecx
+    add eax, ecx                    ; total += product
     inc dx
 L0_7:
-    cmp dx, word ptr [bp-2]
+    cmp dx, word ptr [bp-2]         ; i < len(a)
     jb L0_24
 L0_22:
-    shld edx, eax, 16
+    shld edx, eax, 16               ; the long returns in DX:AX
     pop di
     pop si
     leave
@@ -238,41 +238,41 @@ END FUNCTION
 ```asm
 DOT proc far
 L1_0:
-    mov cx, 2
-    mov bx, 0
+    mov cx, 2                       ; B$ENRA builds the frame: cx = 2 bytes of locals,
+    mov bx, 0                       ; bx = 0 temporary strings
     call far ptr B$ENRA
-    mov si, word ptr [bp+10]
-    mov di, word ptr [bp+8]
-    mov bx, word ptr [bp+6]
-    mov bx, word ptr [bx]
-    dec bx
-    mov ax, word ptr [si+2]
-    mov cx, word ptr [si+10]
-    mov word ptr [bp-12], cx
-    mov es, ax
-    mov fs, word ptr [di+2]
-    mov di, word ptr [di+10]
+    mov si, word ptr [bp+10]        ; a() descriptor: the arguments were pushed left to right
+    mov di, word ptr [bp+8]         ; b() descriptor
+    mov bx, word ptr [bp+6]         ; n is passed by reference
+    mov bx, word ptr [bx]           ; bx = n
+    dec bx                          ; bx = n - 1
+    mov ax, word ptr [si+2]         ; a's data segment
+    mov cx, word ptr [si+10]        ; a's data offset
+    mov word ptr [bp-12], cx        ; kept in the frame
+    mov es, ax                      ; es = a's segment
+    mov fs, word ptr [di+2]         ; fs = b's segment
+    mov di, word ptr [di+10]        ; di = b's offset
     mov cx, bx
     inc cx
-    neg cx
-    xor eax, eax
+    neg cx                          ; cx = -n, the loop counter
+    xor eax, eax                    ; total = 0
     or bx, bx
-    jl L1_35
+    jl L1_35                        ; n - 1 < 0: no iterations
 L1_37:
-    xor bx, bx
+    xor bx, bx                      ; bx = byte offset of a(i) and b(i)
 L1_20:
-    mov si, word ptr [bp-12]
-    movsx edx, word ptr es:[bx+si]
-    movsx esi, word ptr fs:[bx+di]
-    imul edx, esi
-    add eax, edx
-    add bx, 2
-    inc cx
-    jne L1_20
+    mov si, word ptr [bp-12]        ; si = a's offset, reloaded on every iteration
+    movsx edx, word ptr es:[bx+si]  ; a(i), sign-extended
+    movsx esi, word ptr fs:[bx+di]  ; b(i)
+    imul edx, esi                   ; CLNG(a(i)) * b(i)
+    add eax, edx                    ; total += product
+    add bx, 2                       ; the offset steps by one INTEGER
+    inc cx                          ; the counter steps up to zero
+    jne L1_20                       ; on inc's flags: no compare
 L1_35:
-    shld edx, eax, 16
-    call far ptr B$EXSA
-    retf 6
+    shld edx, eax, 16               ; the long returns in DX:AX
+    call far ptr B$EXSA             ; the runtime takes the frame down
+    retf 6                          ; and the callee pops the three arguments
 DOT endp
 ```
 
