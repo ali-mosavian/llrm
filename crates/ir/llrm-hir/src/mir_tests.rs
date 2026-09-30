@@ -436,9 +436,9 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
 #[test]
 fn a_promise_becomes_its_parameters_attributes() {
     let mut function = difference();
-    function.promises = vec![crate::model::Promise { parameter: 2, bytes: 10, unaliased: true, readonly: true }];
+    function.promises = vec![crate::model::Promise { parameter: 2, bytes: 10, readonly: true }];
     let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
-    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) %1)"), "{text}");
+    assert!(text.contains("(i16 %0, i16 readonly dereferenceable(10) %1)"), "{text}");
 }
 
 /// A string comparison compares its callee's sign with zero; it was
@@ -577,9 +577,10 @@ fn a_languages_promises_reach_mir() {
     let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
     let mut function = Function::new(1, "f", 1, values, vec![Place::new(1, "t", 2, Storage::Local, 0)], vec![block], 1);
     function.parameters = vec![1];
-    function.promises = vec![Promise { parameter: 1, bytes: 0, unaliased: true, readonly: false }];
+    function.promises = vec![Promise { parameter: 1, bytes: 0, readonly: false }];
     let mut program = program(function);
     program.zeroed_locals = false;
+    program.modules[0].facts = vec![crate::facts::Stated { subject: crate::facts::Subject::Param { function: 1, index: 0 }, fact: llrm_mir::facts::Fact::NoAlias, source: None }];
     program.modules[0].types.extend([boolean, Type::new(3, "near", TypeKind::Pointer, 2)]);
     program.modules[0].alias_classes = vec![
         AliasClass { name: "root".to_owned(), parent: None, types: Vec::new() },

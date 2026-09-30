@@ -14,7 +14,6 @@ use llrm_mir::{
 };
 
 use crate::facts::{Stated, Subject};
-use llrm_mir::facts::Fact;
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
 use crate::onerror::{self, Handled};
 
@@ -675,9 +674,6 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     for promise in &function.promises {
         let at = function.parameters.iter().position(|&one| one == promise.parameter).ok_or("a promise of no parameter")?;
         let attrs = &mut defined.parameter_attrs[at];
-        if promise.unaliased {
-            attrs.push(Fact::NoAlias.attribute());
-        }
         attrs.extend(promise.readonly.then(|| Attribute::Flag("readonly".to_owned())));
         if promise.bytes > 0 {
             attrs.push(Attribute::Int("dereferenceable".to_owned(), promise.bytes as u64));

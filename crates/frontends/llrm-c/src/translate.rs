@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use llrm_core::hir::facts::{Builder as Facts, Subject};
+use llrm_mir::facts::Fact;
 use llrm_core::hir::model::{
     self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup, Storage, TerminatorKind, TypeKind,
 };
@@ -54,15 +56,16 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
+    let mut facts = Facts::new("c");
     for (at, proc) in unit.procs.iter().enumerate() {
-        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, proc, at as i64 + 1)?);
+        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, proc, at as i64 + 1)?);
     }
     let debug = described.map(|one| one.finish(|symbol| keys.get(&Key::Symbol(symbol)).copied()));
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
     let (types, alias_classes) = types.finished();
-    let module = h::Module { data, callables, alias_classes, debug, ..h::Module::new(1, name, types, functions) };
+    let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
     // Borland's medium model: a call keeps what its contract does not clobber;
     // the compiler's constants go in CONST.
     let preserved = llrm_core::abi::runtime::preserves(&crate::raise_hir::medium_model(String::new(), true, 0));
@@ -533,6 +536,7 @@ impl<'a, 't> Body<'a, 't> {
         types: &'t mut Types<'a>,
         callables: &'t mut IndexMap<String, h::Callable>,
         described: &'t mut Option<crate::debug::Described<'a>>,
+        facts: &mut Facts,
         proc: &'a hir::Proc,
         id: i64,
     ) -> R<h::Function> {
@@ -572,7 +576,7 @@ impl<'a, 't> Body<'a, 't> {
             },
             None => body.ty(&proc.type_)?,
         };
-        let (parameters, promises, homes, struct_homes) = body.frame()?;
+        let (parameters, unaliased, homes, struct_homes) = body.frame()?;
         for one in &proc.body {
             body.statement(one)?;
         }
@@ -590,9 +594,12 @@ impl<'a, 't> Body<'a, 't> {
             abi: Some(h::ProcedureAbi { cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
             calls: body.calls,
             linkage,
-            promises,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
         };
+        for value in unaliased {
+            let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
+            facts.state(Subject::Param { function: id, index }, Fact::NoAlias);
+        }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
         if let Some(described) = body.described.as_mut() {
@@ -815,9 +822,9 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Each parameter and auto a place; each parameter stored into its own.
     /// A scalar parameter's home is also returned, by place and parameter.
-    fn frame(&mut self) -> R<(Vec<i64>, Vec<h::Promise>, Vec<(i64, i64)>, Vec<i64>)> {
+    fn frame(&mut self) -> R<(Vec<i64>, Vec<i64>, Vec<(i64, i64)>, Vec<i64>)> {
         let mut parameters = Vec::new();
-        let mut promises = Vec::new();
+        let mut unaliased = Vec::new();
         let mut homes = Vec::new();
         let mut struct_homes = Vec::new();
         let mut stores = Vec::new();
@@ -848,7 +855,7 @@ impl<'a, 't> Body<'a, 't> {
                     self.slots.insert(format!("y{symbol}"), place);
                     // C99 6.7.3.1: what a restrict parameter reaches, nothing else in its block does.
                     if restricted(self.unit, *symbol) {
-                        promises.push(h::Promise { parameter, bytes: 0, unaliased: true, readonly: false });
+                        unaliased.push(parameter);
                     }
                 }
             }
@@ -881,7 +888,7 @@ impl<'a, 't> Body<'a, 't> {
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
-        Ok((parameters, promises, homes, struct_homes))
+        Ok((parameters, unaliased, homes, struct_homes))
     }
 
     // ---- statements ----
@@ -1788,8 +1795,7 @@ mod tests {
     fn test_restrict_parameters_are_noalias() {
         let module = raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
         let function = module.global(module.named("_add").unwrap()).function().unwrap();
-        let noalias = Attribute::Flag("noalias".to_owned());
-        assert!(function.parameter_attrs.iter().all(|one| one.contains(&noalias)), "{:?}", function.parameter_attrs);
+        assert!((0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_alias()), "{:?}", function.parameter_attrs);
     }
 
     #[test]

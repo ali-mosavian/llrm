@@ -242,7 +242,7 @@ impl _Plain for model::ProcedureAbi {
     }
 }
 plain_record!(ArgumentPromise, None, operand => "operand", bytes => "bytes");
-plain_record!(Promise, None, parameter => "parameter", bytes => "bytes", unaliased => "unaliased", readonly => "readonly");
+plain_record!(Promise, None, parameter => "parameter", bytes => "bytes", readonly => "readonly");
 // `promises` only when made, so that a function reads as it always has.
 impl _Plain for model::Function {
     fn _plain(&self) -> JSON {
@@ -576,6 +576,12 @@ fn _record(type_: &_Record, value: &JSON, where_: &str, tagged: bool) -> Result<
         }
     }
     (type_.build)(&mut args)
+}
+
+/// `facts` as the module's `facts` field holds them, for a frontend
+/// that writes its module's JSON itself.
+pub fn facts_json(facts: &[crate::facts::Stated]) -> String {
+    pyjson::dumps(&facts.to_vec()._plain(), None, Some((",", ":")), true)
 }
 
 /// `debug` as the module's `debug` field holds it, for a frontend
@@ -1182,12 +1188,11 @@ static FUNCTION: _Record = _Record {
 
 static PROMISE: _Record = _Record {
     name: "Promise",
-    fields: &[("parameter", _Hint::Int, true), ("bytes", _Hint::Int, true), ("unaliased", _Hint::Bool, true), ("readonly", _Hint::Bool, true)],
+    fields: &[("parameter", _Hint::Int, true), ("bytes", _Hint::Int, true), ("readonly", _Hint::Bool, true)],
     build: |args| {
         _object(model::Promise {
             parameter: _required(args, "parameter")?,
             bytes: _required(args, "bytes")?,
-            unaliased: _required(args, "unaliased")?,
             readonly: _required(args, "readonly")?,
         })
     },

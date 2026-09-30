@@ -691,12 +691,12 @@ pub struct Debug {
 }
 
 /// What the language promises of a pointer parameter, as LLVM's
-/// `noalias`, `readonly` and `dereferenceable(bytes)` state it.
+/// `readonly` and `dereferenceable(bytes)` state it. That it reaches an
+/// object no other pointer does is a stated fact, `NoAlias`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Promise {
     pub parameter: i64,
     pub bytes: i64,
-    pub unaliased: bool,
     pub readonly: bool,
 }
 

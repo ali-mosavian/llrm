@@ -1517,6 +1517,7 @@ struct FunctionCompiler<'a> {
     current: u32,
     parameters: Vec<u32>,
     promises: Vec<hir::Promise>,
+    stated: llrm_core::hir::facts::Builder,
     calls: Vec<hir::CallSite>,
     scopes: Vec<BTreeMap<String, Binding>>,
     loops: Vec<Loop>,
@@ -1597,6 +1598,7 @@ impl<'a> FunctionCompiler<'a> {
             current: 1,
             parameters: Vec::new(),
             promises: Vec::new(),
+            stated: llrm_core::hir::facts::Builder::new("nib"),
             calls: Vec::new(),
             scopes: vec![BTreeMap::new()],
             loops: Vec::new(),
@@ -1660,7 +1662,9 @@ impl<'a> FunctionCompiler<'a> {
             // A borrowed view's descriptor is the caller's, and only reseating
             // a binding writes one: no parameter is reseated.
             if let SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } = *resolved {
-                compiler.promises.push(hir::Promise { parameter: value, bytes: descriptor::size(rank) + 4, unaliased: true, readonly: true });
+                compiler.promises.push(hir::Promise { parameter: value, bytes: descriptor::size(rank) + 4, readonly: true });
+                let subject = llrm_core::hir::facts::Subject::Param { function: i64::from(signature.id), index: compiler.parameters.len() as i64 - 1 };
+                compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias);
             }
             let binding = match *resolved {
                 SignatureParameter::Adapter { basic, adapter, target, pointer } => {
@@ -1789,6 +1793,7 @@ impl<'a> FunctionCompiler<'a> {
             entry: 1,
             parameters: self.parameters,
             promises: self.promises,
+            facts: self.stated.finish(),
             calls: self.calls,
             exported: self.signature.exported,
             abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types)),

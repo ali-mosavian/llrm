@@ -1921,8 +1921,18 @@ fn test_a_loop_through_a_copied_pointer_converges() {
 fn test_a_borrowed_view_promises_its_descriptor() {
     let program = parsed(&fixture("matmul8.nib"));
     let multiply = function(&program, "multiply");
-    let promised = |parameter| model::Promise { parameter, bytes: 10, unaliased: true, readonly: true };
+    let promised = |parameter| model::Promise { parameter, bytes: 10, readonly: true };
     assert_eq!(multiply.promises, multiply.parameters.iter().map(|&one| promised(one)).collect::<Vec<_>>());
+    let unaliased: Vec<i64> = program.modules[0]
+        .facts
+        .iter()
+        .filter(|one| one.fact == llrm_mir::facts::Fact::NoAlias)
+        .filter_map(|one| match one.subject {
+            llrm_core::hir::facts::Subject::Param { function, index } if function == multiply.id => Some(index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(unaliased, (0..multiply.parameters.len() as i64).collect::<Vec<_>>());
 }
 
 /// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as

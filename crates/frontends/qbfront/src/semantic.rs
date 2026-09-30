@@ -9671,7 +9671,7 @@ impl Compiler {
                 }
                 write!(
                     out,
-                    "{{\"bytes\":{bytes},\"parameter\":{parameter},\"readonly\":false,\"unaliased\":false}}"
+                    "{{\"bytes\":{bytes},\"parameter\":{parameter},\"readonly\":false}}"
                 )
                 .unwrap();
             }

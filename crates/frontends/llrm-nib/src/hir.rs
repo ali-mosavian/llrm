@@ -145,17 +145,18 @@ pub struct Function {
     /// How it is entered and left, when not as a native function is.
     pub abi: Option<ProcedureAbi>,
     pub promises: Vec<Promise>,
+    /// What the language promises of it, as the one API states it.
+    pub facts: Vec<llrm_core::hir::facts::Stated>,
     /// `-g`: each source parameter's value and name.
     pub named_parameters: Vec<(u32, String)>,
 }
 
 /// What the language promises of a pointer parameter, as LLVM's
-/// `noalias`, `readonly` and `dereferenceable(bytes)` state it.
+/// `readonly` and `dereferenceable(bytes)` state it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Promise {
     pub parameter: u32,
     pub bytes: u32,
-    pub unaliased: bool,
     pub readonly: bool,
 }
 
@@ -252,6 +253,11 @@ impl Program {
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);
+        let facts: Vec<_> = self.functions.iter().flat_map(|one| one.facts.iter().cloned()).collect();
+        if !facts.is_empty() {
+            out.push_str(",\"facts\":");
+            out.push_str(&llrm_core::hir::codec::facts_json(&facts));
+        }
         if let Some(debug) = &self.debug {
             out.push_str(",\"debug\":");
             out.push_str(&llrm_core::hir::codec::debug_json(debug));
@@ -390,8 +396,8 @@ fn function_json(out: &mut String, function: &Function) {
         comma(out, index);
         write!(
             out,
-            "{{\"bytes\":{},\"parameter\":{},\"readonly\":{},\"unaliased\":{}}}",
-            promise.bytes, promise.parameter, promise.readonly, promise.unaliased
+            "{{\"bytes\":{},\"parameter\":{},\"readonly\":{}}}",
+            promise.bytes, promise.parameter, promise.readonly
         )
         .unwrap();
     }

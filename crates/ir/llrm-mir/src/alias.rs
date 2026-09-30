@@ -7,9 +7,10 @@
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
+use crate::facts::Facts;
 use crate::memory::{self, Callees};
 use crate::module::{Function, InstId, MetadataId, MetadataNode, MetadataOperand, Operand, ValueDef, ValueId};
-use crate::opcode::{Attribute, Opcode};
+use crate::opcode::Opcode;
 use crate::valuetracking::underlying;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,10 +76,7 @@ pub fn object(context: &Context, function: &Function, base: Operand) -> Option<O
     match base {
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Instruction(inst) if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) => Some(Object::Slot(value)),
-            ValueDef::Argument(at) => function.parameter_attrs[at as usize]
-                .iter()
-                .any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noalias"))
-                .then_some(Object::Unaliased),
+            ValueDef::Argument(at) => Facts::param(function, at as usize).no_alias().then_some(Object::Unaliased),
             ValueDef::Instruction(_) => None,
         },
         Operand::Constant(id) => matches!(context.get(id).kind, ConstantKind::Global(_)).then_some(Object::Global),
