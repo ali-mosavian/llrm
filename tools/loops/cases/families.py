@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from cases import classics, concurrent
+from cases import classics, concurrent, cross
 
 FAMILIES = {
     "classic": lambda quick: classics.cases(),
     "concurrent": concurrent.cases,
+    "cross": cross.cases,
 }
-QUICK = ("classic", "concurrent")
+QUICK = ("classic", "concurrent", "cross")
 
 
 def load(names: list[str] | None, quick: bool = False) -> list:

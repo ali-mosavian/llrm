@@ -32,6 +32,10 @@ digest of every array it writes. `loops/cases/` holds the families:
   bases, source forms, trips, steps, starts and whole-segment walks, with
   metamorphic variants composed from a recorded seed, each judged against its
   base.
+- `cross`: every pair of values of every two dimensions of one base loop:
+  trip, condition, counter width, start, step, element and field, storage,
+  2-D walk order, use of the counter (non-affine ones included), shape and a
+  second counter.
 
 `loops/expect.py` derives each inner loop's bound from the spec and the target's
 tables (registers, address-form partners, segments); `loops/quality.py` reads a

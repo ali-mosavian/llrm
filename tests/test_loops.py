@@ -365,3 +365,17 @@ def test_quick_leaves_the_bc_check_to_the_full_run(tmp_path):
     cases = classics.cases()[:2]
     assert run.validate(cases, tmp_path, run.Result(), bc=False) == []
     assert run.validate(cases, tmp_path, run.Result(), bc=True) != []
+
+
+def test_every_cross_case_means_something_in_every_language_it_is_written_in():
+    """cross first drew loops that ran past their array (n-1 with an unsigned
+    counter at n = 0, != past its end) or never ended (continue skipping the
+    step): the oracle calls those broken."""
+    import emit_c
+    import emit_bas
+    import emit_nib
+    from cases import cross
+    for case in cross.cases():
+        for lang, emitter in (("c", emit_c), ("bas", emit_bas), ("nib", emit_nib)):
+            if not emitter.expressible(case):
+                oracle.evaluate(case, lang)
