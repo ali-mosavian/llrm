@@ -10,7 +10,7 @@ Aim: the facts Open Watcom's front end gives its back end, so that every llrm fr
 - It sends no `restrict`, no pointee `const`, no address-taken for `&x`, no purity beyond `#pragma aux nomemory`, no ranges. `FE_NOALIAS` and `CG_SYM_CONSTANT` exist in the interface and the C front end never sets them.
 - Of what it does send, `llrm-c` drops the call-class bits `noreturn`, `aborts` and `nomemory`, the `__unaligned` mark, the option switches (`-oa`, `-ol`, `-ot`), and `modify` register lists; it refuses bit fields, `#pragma aux` register parameters and `__based` (§6).
 - Quick BASIC drops `published`, so a BYREF polling loop compiles to an infinite loop on the default route (§7). Nib sends no pointer promises.
-- The proposal (§8): effects on the callable, pointer promises with `nocapture`/`nonnull`, `published` as ordered access, `nowrap`/`nuw` on counters, `range`, then the rest. Carriers nothing reads today (`range`, `nonnull`, unroll, `inline`) need a reader first.
+- The proposal (§8): one way to state a fact (`facts.state(subject, fact)`, one declaration table, one lowering, one typed reader in `llrm-mir`); facts are droppable promises, meaning stays in IR fields (`published` is retired in favour of `volatile`). Carriers nothing reads today (`range`, `nonnull`, unroll, `inline`) need a reader before their variant lands.
 
 ## 1. Interface inventory
 
@@ -2796,28 +2796,116 @@ Emission path: `NIB/hir.rs` `json()` (:204-285), `function_json` (:287-405). Its
 Unclear, tried: (1) whether `dse` removes a full-overwrite `memset`: grep only. (2) Whether `TR/hoist.rs` consults `restrict` roots: read `AN/memory.rs:320` only; I did not trace every caller of `Provenance::intersects`. (3) QB BYREF `published` behaviour at run time: no build run (read-only task).
 
 
-## 8. Ranked proposal
+## 8. Proposal: one way to state a fact
 
-One schema in HIR, read by every pass (rule 7). Each row is a fact a language states once; none names a machine (rule 5) and none is specific to one frontend (rule 6). Rank is win times how many frontends can state it, from the consumers listed in §7 ("Consumers") and what Open Watcom's back end does with the same fact (§1, "What the Open Watcom back end does with each fact").
+Reviewed by Opus 5.5 (big-picture); its changes are in.
 
-Open Watcom gives its optimizer few language promises. It sends no `restrict`, no pointee `const`, no address-taken for `&x`, no `FE_NOALIAS`, no ranges and no purity beyond `nomemory`. What it does send and use: call class (`NO_MEMORY_*`, `ABORTS`, `NORETURN`), `FE_CONSTANT` and read-only segments, `FE_VOLATILE`, exact aggregate sizes, the unroll count, and signedness in the type. llrm-c already sends more than it does (`restrict`). So the list below is a superset, not a copy.
+### The mechanism
 
-| # | Fact | HIR carrier (one schema) | MIR carrier | Can state it | Cannot | Used by now / needed | Win |
+| Step | What | Where |
+|---|---|---|
+| State | `facts.state(subject, fact)` on `llrm_hir::facts::Builder`, built as `debug::Builder` is (`crates/ir/llrm-hir/src/debug.rs`; C, Nib and Quick BASIC already hold one). The only way a frontend writes a fact. | every frontend |
+| Declare | one table macro declares each `Fact`: variant and value type, allowed subject kinds, codec key, rewrite policy. Adding a fact is one row. | `llrm-hir` `facts.rs` |
+| Store | `Module.facts`, a list of `(Subject, Fact, Provenance)`; `Provenance` is the frontend and source line, HIR only | `model.rs`, `codec.rs` |
+| Check | the verifier checks subject kind, value type, and that every operand a fact names exists and dominates its subject | `verify.rs` |
+| Lower | one `lower(subject, fact)` by exhaustive `match`: a fact with no arm does not compile | `mir.rs`, replacing the per-field code (`MIRH:673-678,1125,1278,1407`) |
+| Read | `llrm_mir::facts`: one typed accessor per carrier. No pass parses an attribute or metadata by name, and no pass re-derives what a frontend stated (rule 7). Stated and derived facts come out of the same accessor. | `llrm-mir` (`M/memory.rs` and `M/valuetracking.rs` already read carriers there) |
+| Rewrite | each fact has a policy in the table: kept on clone, intersected on merge (CSE, GVN), dropped on speculation or hoisting if it holds only on a path. Helpers `facts::merge(a, b)` and `facts::speculated(i)` apply it, so no pass learns a fact. Today `M/edit.rs:118` gives new instructions no metadata and `clone_instruction:274` keeps all. | `llrm-mir` |
+| Prove | checked mode: the MIR interpreter traps on a violated `range`, `nonnull`, `noalias` or `readonly` under a flag, as it already does for `nsw` (`M/interpret.rs:525`). One end-to-end test per variant: an exhaustive `match` in a test names a fixture for each (source, HIR fact, MIR carrier, accessor, one optimisation). | tests |
+
+Rules of the mechanism:
+
+1. **A fact is droppable.** Removing it never changes what the program means; absence is the conservative case. Anything that changes meaning is IR proper, below.
+2. **`Subject` exists only in HIR.** After `lower`, the fact is the carrier on the MIR entity. Subject kinds: `Function`, `Param(n)`, `Return`, `Instruction(id)` (a call, an access or arithmetic; the verifier checks the op fits), `Block`, `Place`, `Object`, `Program`. A `Place` fact fans out to every access of that place in `lower`, since places do not exist in MIR.
+3. **A fact's value may name operands, subjects or a group id** (as `AliasClass` already names a group). This is how relations are stated (`Assume(cond)`, `Callees(set)`, scoped no-alias). The verifier checks the reference.
+4. **Storage is a side list while HIR is write-once.** If HIR ever gets a rewriting pass, facts move onto the entity so ids need no remapping.
+5. **A variant lands with its carrier, reader and test in one commit.** Rows below marked *later* are a roadmap, not schema.
+6. **Frontends state what the language promises** and nothing about how a pass uses it.
+
+### Not facts: IR proper
+
+These change meaning, so they are fields the verifier enforces, not droppable facts.
+
+| Item | Where it lives | Consequence |
+|---|---|---|
+| Ordered access (volatile, BYREF that another agent may write) | `volatile` on the access | `published` is retired; Quick BASIC sets `volatile`. This is the hang fix (defect 1). |
+| Returns twice (`setjmp`) | a flag on the callee | changes the control-flow graph |
+| Memory kind: port, fixed address, program | address space on the place | I/O ordering is meaning |
+| Debug types and locations | `debug::Builder` | not a promise about the program |
+
+### Debt: channels that are not this mechanism
+
+| Existing channel | Why it is debt | Replaced by |
+|---|---|---|
+| `CGAttr n 3` for `restrict` (`toolchain/owshim/patches/cgen.c.patch`, `translate.rs:522,849`) | a private code for one fact from one frontend | one `FACT` record from the patched front end; `ow_facts` decodes it to `state(Param, NoAlias)` (rows 3, 4) |
+| call-class decoding (`hir.rs:176-181`, `translate.rs:446`) | reads three bits, ignores the rest | the same `ow_facts` table, for every bit (rows 2, 5) |
+| `IGNORED` (`hir.rs:57-69`) | silently drops records | the table lists each record it handles and each it ignores, with a reason; an unlisted record is an error |
+| `Promise`, `Instruction.nowrap/inbounds/pure`, `Block.cold`, `IndirectPlace.published/inbounds`, `DataObject.readonly/align`, `Program.zeroed_locals`, `RuntimePromises` | each has its own field, codec entry and lowering | facts on the matching subject; each field goes when its last frontend has moved |
+| `H/mir.rs` dropping `pure`, `origin`, `allocation` id | a fact stated and lost | `lower` has an arm for every fact |
+
+The Open Watcom transport: the patched front end emits language terms (`restrict`, `const-pointee`, `static N`), never llrm schema names, so the patch knows nothing of HIR. The `FACT` record carries a version, and a stale build fails loudly. Facts Open Watcom already sends (call class, `FE_*`, `CGVolatile`) go through the same `ow_facts` table; `translate.rs` holds no per-fact code.
+
+### Rows (roadmap)
+
+Status: *now* the carrier and a reader exist; *reader* the carrier exists and nothing reads it; *carrier* neither exists. Rewrite: K kept on clone, I intersected on merge, S dropped if speculated.
+
+| # | Fact | Subject | HIR call | MIR carrier | Read by | Status | Rewrite |
 |---|---|---|---|---|---|---|---|
-| 1 | Ordered access: another agent may write the pointee | `IndirectPlace.published` exists; state it as `volatile` at the MIR step | `load/store volatile` | QB (BYREF), C (volatile), Nib (raw/foreign) | none | `M/memory.rs:of:207`, `A/memory.rs:unmodeled_write:897`, `T/promote.rs:147`; **written by no rich-route code** (`MIRH` ignores `published`) | correctness: the QB hang above |
-| 2 | Call effects: no memory read, no memory written, does not return, returns, raises no error | `Callable.effects` (new; today `Instruction.pure` exists and `MIRH` drops it) | `noreturn`, `memory(...)`, `readnone`, `willreturn`, `nounwind` on the declaration and the call | C (call class `ABORTS/NORETURN/NO_MEMORY_*` already in the stream; known library routines), QB (runtime contracts: `raises_error`; user SUBs by inference), Nib (panic routines; `fn` with no `&mut` by inference) | none | `A/noreturn.rs:terminal_sites:103`, `M/memory.rs:at:155-177`, `A/effects.rs:call_effects:38`, `T/dead.rs:75`, `T/loopmotion.rs:93`; Open Watcom uses the same bits for scoreboard, scheduling and invariant motion (§1 call-class table) | large: a pure call is hoisted and deduplicated; a noreturn call cuts the tail |
-| 3 | Pointer parameter promises: distinct object, read only, not kept, whole object addressable, non-null | `Promise{unaliased, readonly, bytes}` exists; add `nocapture`, `nonnull` | `noalias`, `readonly`, `nocapture`, `dereferenceable`, `nonnull` | C (`restrict`; pointee `const` needs a channel, now none), Nib (`&mut` excludes aliases; `&` is read only; both non-null and whole), QB (BYREF `dereferenceable` only) | QB `noalias` (the same variable may be passed twice), C `noalias` without `restrict` | `A/alias.rs:seeds:180`, `A/memory.rs:Provenance::intersects:319`, `T/hoist.rs:156-165`; `nonnull` is derived (`A/alias.rs:131`), not read | large for Nib and C loops over pointers; Nib sends none today |
-| 4 | Arithmetic does not wrap; index stays in the object | `Instruction.nowrap`, `inbounds` exist; add `nuw` | `nsw`, `nuw`, GEP `inbounds` | C (signed, pointer arithmetic), QB (FOR counter), Nib (range-loop counter: `i < limit` holds at the add) | C and Nib unsigned, QB `+` (wrap is defined) | `A/induction.rs:_promised:914`, `A/pointerfacts.rs:49` | large: exact trip counts for variable bounds; Nib emits none |
-| 5 | Value range of a load, parameter or result | `Place.range` / `Promise.range` (new) | `range(iN lo, hi)` | C (`_Bool`, unsigned char, enum), Nib (`bool`, `char`, enum tag), QB (boolean −1/0) | full-width integers | **no reader**: `range` is accepted and read by nothing; `A/ranges.rs` derives its own | medium once read: compare and switch folding; Open Watcom folds compares by source type (`CheckCmpRange`) |
-| 6 | Known initialised: no entry zeroing needed | `Program.zeroed_locals=false` per function | no entry stores | C (already: `translate.rs:70`), Nib (every binding has an initialiser) | QB (the language zeroes) | `MIRH:1142-1167` zero-stores when true; Nib takes the default `true` | small to medium: entry stores of every frame group |
-| 7 | Type-based and allocation-based alias classes | `AliasClass` exists; `IndirectPlace.allocation` id | `!tbaa` per class | C (types), QB (one class per array allocation), Nib (struct types) | none | `A/regions.rs:typed_apart:150`; QB's `allocation` id is collapsed to one tag at `MIRH:1274`; Nib sends none; Open Watcom sends none for C | small to medium |
-| 8 | Inline and unroll hints | `Function.inline: hint|never|always`; `Loop.unroll: n` (new) | `alwaysinline`, `noinline`; loop metadata | C (`__inline`, `#pragma unroll`, `inline_depth`) | QB, Nib (no syntax) | **no reader**: `T/inline.rs` reads no attribute; the unroller reads no metadata | small; Open Watcom's unroll count forces unrolling |
-| 9 | Cold path | `Block.cold` exists | `cold` call attribute | Nib (panic paths, already `unreachable`), QB (error paths), C (noreturn paths) | none | `A/noreturn.rs:cold:117` has no non-test caller | small (layout) |
-| 10 | Returns twice | `Callable.effects.returns_twice` | `returns_twice` | C (`setjmp`) | QB, Nib | MIR name exists, no reader; Open Watcom has `SETJMP_KLUGE` (RISC scheduler only) | correctness when locals live across `setjmp` |
-| 11 | Alignment of a place or access | `Place.align`, `IndirectPlace.align` (new) | load/store/alloca `align` | C (`__unaligned`: 1; types), Nib (≤ 2) | QB | parameter and global `align` read by `M/valuetracking.rs:alignment:120`; load `align` never set or read; Open Watcom's x86 back end ignores it too | small |
-| 12 | Debug facts the stream carries: qualifiers, bit-field start and width, enum constants, block scopes | `Debug` types (exist) | `llrm.dbg.*` | C | QB, Nib (own debug writers) | `debug.rs` (§6) | debug only |
+| 2 | Does not return | `Function`, `Instruction` | `NoReturn` | `noreturn` | `A/noreturn.rs:terminal_sites:103` | now | K I |
+| 3 | Distinct object | `Param` | `NoAlias` | `noalias` | `A/alias.rs:seeds:180`, `A/memory.rs:319` | now | K |
+| 4 | Not written, not kept, non-null, extent | `Param` | `ReadOnly`, `NoCapture`, `NonNull`, `Dereferenceable(n)` | `readonly`, `nocapture`, `nonnull`, `dereferenceable(n)` | `T/hoist.rs:156-165`; `nonnull` derived at `A/alias.rs:131` | now / reader | K |
+| 5 | Memory effect | `Function`, `Instruction` | `Memory(None \| Read \| ArgRead \| ..)` | `memory(..)`, `readnone` | `M/memory.rs:at:155`, `A/effects.rs:call_effects:38` | now | K I |
+| 6 | Raises no error; ends | `Function` | `NoUnwind`, `WillReturn` | `nounwind`, `willreturn` | `A/effects.rs:83`, `A/interprocedural.rs:336` | now | K I |
+| 7 | No wrap | `Instruction` | `NoWrap{signed, unsigned}` | `nsw`, `nuw` | `A/induction.rs:_promised:914` | now | K S |
+| 8 | Stays in its object | `Instruction` | `InBounds` | GEP `inbounds` | `A/pointerfacts.rs:49` | now | K S |
+| 9 | Value range | `Instruction`, `Param`, `Return` | `Range{lo, hi}` | `range(iN lo, hi)` | none | reader | K I S |
+| 10 | Holds after a check | `Instruction` (the branch) | `Assume(cond)` | assume or range | none | carrier | S |
+| 11 | Alias class | `Instruction` | `AliasClass(id)` | `!tbaa` | `A/regions.rs:typed_apart:150` | now | K I |
+| 12 | Immutable after init | `Object`, `Place` | `Immutable` | `constant`, `!invariant.load` | `A/memory.rs:constant_bits:745` | now | K |
+| 13 | Known initialised | `Function` | `NoEntryZeroing` | no entry stores | `MIRH:1142-1167` | now | — |
+| 14 | Alignment | `Place`, `Object`, `Instruction` | `Align(n)` | `align` | `M/valuetracking.rs:alignment:120` (parameters, globals only) | now / reader | K I |
+| 15 | Inline, unroll hints | `Function`, `Block` | `Inline(Hint)`, `Unroll(n)` | `alwaysinline`, `noinline`; loop metadata | none | reader | K |
+| 16 | Cold; likely | `Block` | `Cold`, `Weight(n)` | `cold`; `!prof` | `A/noreturn.rs:cold:117` (no non-test caller) | reader | K |
+| 17 | Loop terminates | `Block` (header) | `MustProgress` | `mustprogress` | none | reader | K |
+| 18 | Stack lifetime | `Place` | `Lifetime{start, end}` | lifetime markers | none | carrier | K |
+| 19 | Callee set; non-recursive | `Instruction`, `Function` | `Callees(set)`, `NoRecurse` | `!callees`, `norecurse` | none | carrier | K |
+| 20 | Unique ownership | `Param`, `Place` | `Owned` | `noalias` | as row 3 | now | K |
+| 21 | Floating-point freedom | `Instruction` | `Float(flags)` | fast-math flags | `A/floatfacts.rs:268` reads `nsz` only | reader | K |
 
-What the list leaves out: address-taken and escape (derived by `A/alias.rs`; Open Watcom derives it too, from `OP_LA`), sequence points (no frontend sends them, none is needed once trees are linear), switch ranges and order (the back end merges and sorts: `bldsel.c:SortNodeList`), sizeof and layout (folded before HIR).
+Rows 2, 5 and 6 replace `Instruction.pure`, `CallAbi.promises` and `RuntimePromises`; rows 3, 4 and 20 replace `Promise`. Rows 18 and 19 are the ones whose carrier must be designed first; nothing lands for them until it is.
+
+### What each frontend calls
+
+`—` means the frontend cannot state it.
+
+| # | C (from the recorded stream) | Quick BASIC | Nib | Cannot |
+|---|---|---|---|---|
+| 2 | call class `NORETURN`/`ABORTS` | — | panic routines `N$E*` | QB has no such routine; `ON ERROR` is an invoke |
+| 3 | `restrict` | — | `&mut` | QB: the same variable may be passed twice (legal) |
+| 4 | `const T *restrict` gives `ReadOnly` and `NoAlias`; `int a[static N]` gives `NonNull` and `Dereferenceable(N·size)` | BYREF: `Dereferenceable` | `&T`: `ReadOnly`, `NoCapture`, `NonNull`, `Dereferenceable`; `&mut`: the last three | C: plain `const T *` promises nothing (a callee may cast `const` away) |
+| 5 | call class `NO_MEMORY_*` | runtime contracts (`reads_arguments`); SUB/FUNCTION by the one inference pass | `fn` with no `&mut`, by the same pass | — |
+| 6 | — | runtime contracts (`raises_error`) | — | C has no such notion |
+| 7 | signed arithmetic, pointer arithmetic | `FOR` counter | range-loop counter | C/Nib unsigned, QB `+` (wrap is defined) |
+| 8 | pointer arithmetic, array indexing | arrays | array indexing | — |
+| 9 | `_Bool`, `unsigned char` loads | boolean −1/0; runtime result ranges | `bool`, `char`, enum tag | C enums (a variable may hold any value of its underlying type); full-width integers |
+| 10 | `assert`, if the library is known | after a `-fsanitize` check | after an emitted bounds or divide check | C without `assert` |
+| 11 | C type | one class per array allocation | struct type | — |
+| 12 | `const` objects, string literals | statement table | literals, `let` bindings | — |
+| 13 | locals (C does not zero) | — | every binding has an initialiser | QB: the language zeroes |
+| 14 | `__unaligned` (1), `BEDefType` alignment | data `align` 2 | structs ≤ 2 | — |
+| 15 | `__inline`, `#pragma unroll`, `inline_depth` | — | — | QB, Nib: no syntax |
+| 16 | `noreturn` paths | `ON ERROR` paths | panic paths | — |
+| 17 | — | `FOR` | range loop | C: a loop may not terminate |
+| 18 | block scope | — | scope | QB: locals live for the procedure |
+| 19 | address-taken functions | — | — | QB, Nib: no function pointers surveyed |
+| 20 | — | — | owned aggregates | C, QB |
+| 21 | `-on` (in `INIT sw`) | alternate math | — | Nib |
+
+The mechanism and the IR-proper items need no row: a frontend calls `state` for facts and sets the IR field for meaning. Rows that cannot be stated through the mechanism today:
+
+- **Rows 10 and 18** have no MIR carrier (`assume`, lifetime markers). The HIR call is defined; the row waits for the carrier.
+- **Rows 9, 15, 16, 17, 19 and 21** have carriers or none, and no reader that uses the stated fact. The fact is stated once; the reader is the work.
+- **Rows 3 and 4 for C** need the patched front end to emit the `FACT` record (the `const` qualifier and `static N` are in its type; `restrict` is already sent as `CGAttr n 3`).
 
 ### Matrix: rich metadata by frontend
 
@@ -2848,6 +2936,7 @@ What the list leaves out: address-taken and escape (derived by `A/alias.rs`; Ope
 
 ### Order of work
 
-1. Row 1 and row 4's Nib gap are defects, not additions: one line each in the HIR-to-MIR step.
-2. Rows 2 and 3 are one schema extension (`effects` on the callable, two flags on `Promise`); C already records the inputs; Nib and QB supply them from facts they hold.
-3. Readers for rows 5, 8 and 10 come before their carriers; a carrier nothing reads wins nothing (`range`, `nonnull`, unroll, `returns_twice`).
+1. Defects first, each with a fail-first test: Quick BASIC sets `volatile` where it set `published`; the `nowrap` and promise gaps in Nib.
+2. The mechanism with the facts that already have a carrier and a reader (rows 2 to 8, 11 to 14, 20): `facts::Builder`, the table macro, `lower`, `llrm_mir::facts`, the merge and speculation helpers, checked mode. Move `Promise`, `nowrap`, `inbounds`, `pure`, `cold` onto it one at a time.
+3. Replace `CGAttr n 3` with the `FACT` record and `ow_facts`; decode every call-class bit through it.
+4. Readers for rows 9, 15, 16, 17, 21, then their variants. Carriers for rows 10, 18, 19 when a reader is ready.
