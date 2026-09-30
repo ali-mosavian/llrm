@@ -1,7 +1,8 @@
 //! A finished body's executed work, estimated without a profile.
 //!
 //! `tools/quality.py`'s `_transitions` and `_frequencies`: a loop branch continues with
-//! its proved trip count, or nine times in ten; other branches split evenly. Each block's
+//! its proved trip count, or nine times in ten; other branches split evenly. A loop
+//! tested at its header tests once more than it trips. Each block's
 //! expected executions per call weigh its instructions and memory operands, so spill code
 //! the MIR estimate cannot see is counted.
 
@@ -65,7 +66,10 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             let outside: Vec<i64> = successors.iter().copied().filter(|at| !one.body.contains(at)).collect();
             if !inside.is_empty() && !outside.is_empty() {
                 let count = if block.at == one.header || one.latches.contains(&block.at) { trips.get(&one.header) } else { None };
-                let stay = count.map_or(0.9, |count| (*count as f64 - 1.0) / *count as f64);
+                // Tested after a trip, the loop stays for all but its last;
+                // tested at its header before one, for every trip.
+                let tested = if one.latches.contains(&block.at) { 1.0 } else { 0.0 };
+                let stay = count.map_or(0.9, |count| (*count as f64 - tested) / (*count as f64 + 1.0 - tested));
                 let mut parts: Vec<(i64, f64)> = inside.iter().map(|at| (*at, stay / inside.len() as f64)).collect();
                 parts.extend(outside.iter().map(|at| (*at, (1.0 - stay) / outside.len() as f64)));
                 split = Some(parts);
@@ -220,6 +224,27 @@ mod tests {
         let body = LirBody::new("folded", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
         let done = executed(&body).expect("straight-line");
         assert_eq!((done.stores, done.reloads), (1.0, 1.0));
+    }
+
+    /// A loop tested at its header runs its body as many times as its trip
+    /// count, the header once more. The estimate gave the body one trip
+    /// fewer, so each such loop read cheaper than the same loop entered at
+    /// its body: suite/ivchan's 21 trips counted as 20.
+    #[test]
+    fn test_a_loop_tested_at_its_header_runs_its_body_every_trip() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
+            block(3, vec![insn(3, Operation::Move, "mov", vec![ax], vec![bx]), insn(4, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body = LirBody::new("counted", 1, blocks, IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(2, 5)];
+        // The entry's jump, the header's six tests, five trips of two, the return.
+        assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 6.0 + 10.0 + 1.0);
     }
 
     /// An x87 spill store was counted while its restores, unflagged, were
