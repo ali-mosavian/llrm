@@ -59,8 +59,9 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
     env = dict(os.environ)
     if stages:
         env["LLRM_MIR_STAGES"] = str(stages)
-    # no unrolling or peeling: each case keeps one loop to measure, and compiles faster
-    common = [config.opt, "--cpu", config.cpu, "-fno-unroll-loops", "-fno-peel-loops", "-o", str(obj)]
+    # no unrolling or peeling: each case keeps one loop to measure, and compiles faster;
+    # no inlining: the function under test stays a call, else the driver's constants fold it
+    common = [config.opt, "--cpu", config.cpu, "-fno-unroll-loops", "-fno-peel-loops", "-fno-inline-functions", "-o", str(obj)]
     if lang == "c":
         command = [str(BIN / "llrm-c"), str(source), *common]
     elif lang == "bas":
