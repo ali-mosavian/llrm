@@ -1,0 +1,758 @@
+//! `lsr` over loops the interpreter runs before and after, over trip
+//! counts below zero, zero, one and more, on a target with a word address
+//! form of three registers and a scaled dword one.
+
+use std::collections::BTreeSet;
+use std::rc::Rc;
+
+use llrm_analysis::testing::DOS;
+use llrm_mir::module::Module;
+use llrm_mir::passes::PassManager;
+use llrm_mir::target::AddressForm;
+
+use super::Lsr;
+use crate::profit::OperationCosts;
+use crate::testing::{Tuned, parsed, printed, results};
+
+/// A 486's prices, six registers, two across a call, and its two address forms.
+fn target() -> Tuned {
+    let costs = OperationCosts { add: 1, multiply: 13, divide: 24, shift: 2, address: 1, load: 1, store: 1, memory_update: 3, extend: 3, prefix: 1, ..OperationCosts::default() };
+    let word = AddressForm { partners: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("a form") };
+    let dword = AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix, costs.extend, true, None).expect("a form");
+    Tuned { costs, registers: 6, call_registers: 2, address_forms: vec![word, dword] }
+}
+
+/// `text` in the DOS layout, and it through `Lsr`, printed.
+fn reduced(text: &str) -> (Module, String) {
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut after = before.clone();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr);
+    manager.run_module(&mut after, Rc::new(target())).unwrap();
+    let text = printed(&after);
+    (before, text)
+}
+
+/// `text` reduced, computing what it did for each of `inputs`.
+fn same(text: &str, inputs: &[&[i128]]) -> String {
+    let (before, printed) = reduced(text);
+    let after = parsed(&printed);
+    assert_eq!(results(&after, inputs), results(&before, inputs), "{printed}");
+    printed
+}
+
+/// `n` and `k` for every loop below: no trip, one, several, and the
+/// arrays' whole length.
+const TRIPS: &[&[i128]] = &[&[-3, 5], &[0, 5], &[1, 5], &[2, -9], &[7, 3], &[32, 11]];
+
+/// The counters and pointer recurrences `induction` finds in the loops
+/// outside the fills: what the loops under test step.
+fn counters(printed: &str) -> usize {
+    let mut module = parsed(printed);
+    let (layout, outer) = (llrm_analysis::testing::layout(&module), llrm_mir::passes::Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let unit = llrm_analysis::memory::Unit::within(context, &layout, function, &outer);
+    let filling = |loop_: &llrm_analysis::graph::loops::Loop| function.block(llrm_analysis::cfg::block(loop_.header)).name.as_deref().is_some_and(|name| name.starts_with("fill_"));
+    unit.shape()
+        .loops
+        .iter()
+        .filter(|loop_| !filling(loop_))
+        .map(|loop_| llrm_analysis::induction::basics(&unit, loop_).len() + llrm_analysis::induction::pointers(&unit, loop_).len())
+        .sum()
+}
+
+/// Lines of the blocks in `printed` whose instructions read `name`.
+fn readers<'a>(printed: &'a str, name: &str) -> Vec<&'a str> {
+    printed.lines().filter(|line| line.contains(&format!("{name},")) || line.ends_with(name)).collect()
+}
+
+/// `@name[j] = j * 7 - k` for `j` below 40, entered from `from`, leaving
+/// to `next`: the arrays the loops read.
+fn filled(name: &str, element: &str, bytes: u32, from: &str, next: &str) -> String {
+    let narrowed = if element == "i32" { format!("add i32 %{name}.x, 0") } else { format!("trunc i32 %{name}.x to {element}") };
+    format!(
+        "  br label %fill_{name}_1
+
+fill_{name}_1:
+  %{name}.j = phi i16 [ 0, %{from} ], [ %{name}.j1, %fill_{name}_2 ]
+  %{name}.more = icmp slt i16 %{name}.j, 40
+  br i1 %{name}.more, label %fill_{name}_2, label %{next}
+
+fill_{name}_2:
+  %{name}.v = mul i16 %{name}.j, 7
+  %{name}.w = sub i16 %{name}.v, %k
+  %{name}.x = sext i16 %{name}.w to i32
+  %{name}.t = {narrowed}
+  %{name}.o = mul i16 %{name}.j, {bytes}
+  %{name}.p = getelementptr i8, ptr @{name}, i16 %{name}.o
+  store {element} %{name}.t, ptr %{name}.p
+  %{name}.j1 = add i16 %{name}.j, 1
+  br label %fill_{name}_1
+
+{next}:
+"
+    )
+}
+
+/// A function of `n` and `k` that fills `arrays`, then runs `body` from
+/// its block `start`.
+fn program(arrays: &[(&str, &str, u32)], returns: &str, body: &str) -> String {
+    let mut text = arrays.iter().map(|(name, element, _)| format!("@{name} = global [64 x {element}] zeroinitializer\n")).collect::<String>();
+    text += &format!("\ndefine {returns} @f(i16 %n, i16 %k) {{\nentry:\n");
+    let mut from = "entry".to_owned();
+    for (index, (name, element, bytes)) in arrays.iter().enumerate() {
+        let next = arrays.get(index + 1).map_or("start".to_owned(), |(after, _, _)| format!("fill_{after}_0"));
+        text += &filled(name, element, *bytes, &from, &next);
+        from = next;
+    }
+    text + body + "}\n"
+}
+
+/// `for (i = 0; i < n; i++) s += (long)a[i] * b[i]`, as `examples/dot`.
+const DOT: &str = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2.back ]
+  %s = phi i32 [ 0, %start ], [ %s.next, %l2.back ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %o = mul nsw i16 %i, 2
+  %pa = getelementptr inbounds i8, ptr @a, i16 %o
+  %va = load i16, ptr %pa
+  %wa = sext i16 %va to i32
+  %pb = getelementptr inbounds i8, ptr @b, i16 %o
+  %vb = load i16, ptr %pb
+  %wb = sext i16 %vb to i32
+  %m = mul nsw i32 %wa, %wb
+  %s.next = add nsw i32 %s, %m
+  %i.next = add nsw i16 %i, 1
+  br label %l2.back
+
+l2.back:
+  br label %l1
+
+l3:
+  ret i32 %s
+";
+
+/// A dot product over two word arrays and a symbolic count keeps one
+/// counter, counted to zero: no multiply or compare with `n` in the loop.
+#[test]
+fn test_a_dot_product_keeps_one_counter_counted_to_zero() {
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT).replace("br label %l2.back\n\nl2.back:\n  br label %l1", "br label %l1").replace("%l2.back ]", "%l2 ]");
+    let printed = same(&text, TRIPS);
+    assert_eq!(counters(&printed), 1, "{printed}");
+    assert!(printed.contains(", 0\n") && !printed.lines().any(|line| line.contains("icmp") && line.contains("%n") && !line.contains("sle") && !line.contains("sgt")), "{printed}");
+}
+
+/// The dot product as the pass finds it after the loop passes: a latch of
+/// its own. The shape it is written for is present.
+#[test]
+fn test_the_dot_product_fixture_has_its_shape() {
+    let text = program(&[("a", "i16", 2), ("b", "i16", 2)], "i32", DOT);
+    assert!(text.contains("%o = mul nsw i16 %i, 2") && text.contains("icmp slt i16 %i, %n"), "{text}");
+    let printed = same(&text, TRIPS);
+    assert!(readers(&printed, "%n").iter().all(|line| !line.contains("icmp slt i16 %i")), "{printed}");
+}
+
+/// Arrays of bytes, words and dwords, one index: each realized from the
+/// counters chosen, which are no more than the strides.
+#[test]
+fn test_arrays_of_three_element_sizes_share_counters() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i32 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %pc = getelementptr i8, ptr @c, i16 %i
+  %vc = load i8, ptr %pc
+  %wc = sext i8 %vc to i32
+  %o2 = shl i16 %i, 1
+  %pa = getelementptr i8, ptr @a, i16 %o2
+  %va = load i16, ptr %pa
+  %wa = sext i16 %va to i32
+  %o4 = mul i16 %i, 4
+  %pl = getelementptr i8, ptr @l, i16 %o4
+  %wl = load i32, ptr %pl
+  %t = add i32 %wc, %wa
+  %u = add i32 %t, %wl
+  %s.next = add i32 %s, %u
+  %i.next = add i16 %i, 1
+  br label %l1
+
+l3:
+  ret i32 %s
+";
+    let printed = same(&program(&[("c", "i8", 1), ("a", "i16", 2), ("l", "i32", 4)], "i32", body), TRIPS);
+    assert!(counters(&printed) <= 3, "{printed}");
+}
+
+/// A counter stepping by two, and one counting down by one.
+#[test]
+fn test_steps_of_two_and_minus_one() {
+    let up = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @a, i16 %o
+  %v = load i16, ptr %p
+  %s.next = add i16 %s, %v
+  %i.next = add nsw i16 %i, 2
+  br label %l1
+
+l3:
+  %r = add i16 %s, %i
+  ret i16 %r
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", up), TRIPS);
+    // No symbolic count for a step of two: its exit keeps the counter.
+    assert!(counters(&printed) <= 2, "{printed}");
+    let down = "  %top = sub i16 %n, 1
+  br label %l1
+
+l1:
+  %i = phi i16 [ %top, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp sge i16 %i, 0
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @a, i16 %o
+  %v = load i16, ptr %p
+  %w = mul i16 %v, %i
+  %s.next = add i16 %s, %w
+  %i.next = add nsw i16 %i, -1
+  br label %l1
+
+l3:
+  ret i16 %s
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", down), &[&[-3, 5], &[0, 5], &[1, 5], &[2, -9], &[7, 3], &[33, 11]]);
+    assert!(counters(&printed) <= 2, "{printed}");
+}
+
+/// Two loops read one array; the second from one place further.
+#[test]
+fn test_two_loops_share_an_array() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %m0
+
+l2:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @a, i16 %o
+  %v = load i16, ptr %p
+  %s.next = add i16 %s, %v
+  %i.next = add i16 %i, 1
+  br label %l1
+
+m0:
+  %s.out = phi i16 [ %s, %l1 ]
+  br label %m1
+
+m1:
+  %j = phi i16 [ 1, %m0 ], [ %j.next, %m2 ]
+  %t = phi i16 [ %s.out, %m0 ], [ %t.next, %m2 ]
+  %again = icmp slt i16 %j, %n
+  br i1 %again, label %m2, label %m3
+
+m2:
+  %q = mul i16 %j, 2
+  %r = getelementptr i8, ptr @a, i16 %q
+  %w = load i16, ptr %r
+  %before = add i16 %q, -2
+  %r0 = getelementptr i8, ptr @a, i16 %before
+  %w0 = load i16, ptr %r0
+  %d = sub i16 %w, %w0
+  %t.next = add i16 %t, %d
+  %j.next = add i16 %j, 1
+  br label %m1
+
+m3:
+  ret i16 %t
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
+    assert!(counters(&printed) <= 2, "{printed}");
+}
+
+/// A dword index into a word address: the address wraps as the pointer's
+/// index does.
+#[test]
+fn test_a_dword_index() {
+    let body = "  %wide = sext i16 %n to i32
+  br label %l1
+
+l1:
+  %i = phi i32 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i32 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i32 %i, %wide
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %o = mul i32 %i, 2
+  %p = getelementptr i8, ptr @a, i32 %o
+  %v = load i16, ptr %p
+  %x = sext i16 %v to i32
+  %y = mul i32 %x, %i
+  %s.next = add i32 %s, %y
+  %i.next = add i32 %i, 1
+  br label %l1
+
+l3:
+  ret i32 %s
+";
+    same(&program(&[("a", "i16", 2)], "i32", body), TRIPS);
+}
+
+/// Walked by a pointer to an end pointer: the same count of counters as
+/// the indexed loop.
+#[test]
+fn test_a_walking_pointer_keeps_one_counter() {
+    let body = "  %bytes = mul i16 %n, 2
+  %end = getelementptr i8, ptr @a, i16 %bytes
+  %none = icmp sle i16 %n, 0
+  br i1 %none, label %l3, label %l1
+
+l1:
+  %p = phi ptr [ @a, %start ], [ %p.next, %l1 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l1 ]
+  %v = load i16, ptr %p
+  %s.next = add i16 %s, %v
+  %p.next = getelementptr i8, ptr %p, i16 2
+  %more = icmp ne ptr %p.next, %end
+  br i1 %more, label %l1, label %l2
+
+l2:
+  %s.out = phi i16 [ %s.next, %l1 ]
+  br label %l3
+
+l3:
+  %r = phi i16 [ 0, %start ], [ %s.out, %l2 ]
+  ret i16 %r
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
+    assert_eq!(counters(&printed), 1, "{printed}");
+}
+
+/// A multiply by an invariant leaves the loop, and a counter read after
+/// the loop is its value as it left.
+#[test]
+fn test_an_invariant_multiple_and_the_value_after_the_loop() {
+    let body = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %row = mul i16 %i, %k
+  %s.next = add i16 %s, %row
+  %i.next = add i16 %i, 1
+  br label %l1
+
+l3:
+  %i.out = phi i16 [ %i, %l1 ]
+  %r = mul i16 %s, %i.out
+  ret i16 %r
+";
+    let printed = same(&program(&[("a", "i16", 2)], "i16", body), TRIPS);
+    let loop_ = &printed[printed.find("l2:").unwrap_or(0)..];
+    assert!(!loop_.lines().take_while(|line| !line.starts_with("l3")).any(|line| line.contains("mul i16") && line.contains("%k")), "{printed}");
+}
+
+
+// Count-to-zero, the exit test replaced and the counters shared, as the
+// passes `lsr` replaced were tested: each shape now `lsr`'s.
+
+/// Nested loops of six trips, each with a counter and a scaled offset, the
+/// inner body reached only where the counters differ.
+fn nested(outer_stride: i64, inner_stride: i64, test: &str) -> String {
+    format!(
+        "@sum = global i16 0
+
+define i16 @f(i16 %x) {{
+b0:
+  store i16 %x, ptr @sum
+  br label %b1
+
+b1:
+  %o = phi i16 [ 0, %b0 ], [ %onext, %b6 ]
+  %oo = phi i16 [ 0, %b0 ], [ %oonext, %b6 ]
+  %ogo = icmp slt i16 %o, 6
+  br i1 %ogo, label %b2, label %b9
+
+b2:
+  br label %b3
+
+b3:
+  %in = phi i16 [ 0, %b2 ], [ %innext, %b5 ]
+  %io = phi i16 [ 0, %b2 ], [ %ionext, %b5 ]
+  %igo = icmp slt i16 %in, 6
+  br i1 %igo, label %b4, label %b6
+
+b4:
+  %same = icmp {test} i16 %in, %o
+  br i1 %same, label %b5, label %b7
+
+b7:
+  %s = load i16, ptr @sum
+  %t = add i16 %s, %io
+  store i16 %t, ptr @sum
+  br label %b5
+
+b5:
+  %innext = add i16 %in, 1
+  %ionext = add i16 %io, {inner_stride}
+  br label %b3
+
+b6:
+  %onext = add i16 %o, 1
+  %oonext = add i16 %oo, {outer_stride}
+  br label %b1
+
+b9:
+  %r = load i16, ptr @sum
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// C nbody carried `other` beside `other*4` only for `other != body`.
+#[test]
+fn test_nested_counters_compared_for_equality_keep_their_values() {
+    for (outer, inner, test) in [(4, 4, "eq"), (5, 4, "eq"), (4, 4, "slt"), (32768, 32768, "eq")] {
+        same(&nested(outer, inner, test), &[&[0], &[3]]);
+    }
+}
+
+/// Mandelbrot kept 16-bit `px` beside the 32-bit `cx`; an 8-bit coordinate
+/// stepping by 64 repeats in four trips.
+#[test]
+fn test_a_wider_recurrence_beside_the_counter() {
+    for (width, stride) in [(32, 24), (8, 64)] {
+        let text = format!(
+            "@seen = global i{width} 0
+
+define i16 @f(i{width} %x) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b2 ]
+  %c = phi i{width} [ %x, %b0 ], [ %cnext, %b2 ]
+  %go = icmp slt i16 %i, 4
+  br i1 %go, label %b2, label %b9
+
+b2:
+  store i{width} %c, ptr @seen
+  %inext = add i16 %i, 1
+  %cnext = add i{width} %c, {stride}
+  br label %b1
+
+b9:
+  %r = add i16 %i, 1
+  ret i16 %r
+}}
+"
+        );
+        same(&text, &[&[0], &[-7], &[100]]);
+    }
+}
+
+/// A dynamic counted loop with a second recurrence from `start`, read
+/// plus 100 and folded into `%acc`.
+fn symbolic(start: i64) -> String {
+    format!(
+        "define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b2 ]
+  %c = phi i16 [ {start}, %b0 ], [ %cnext, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b2 ]
+  %go = icmp ult i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %off = add i16 %c, 100
+  %twice = shl i16 %acc, 1
+  %sum = xor i16 %twice, %off
+  %inext = add i16 %i, 1
+  %cnext = add i16 %c, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}}
+"
+    )
+}
+
+const COUNTS: &[&[i128]] = &[&[0], &[1], &[7], &[300]];
+
+/// A counter and a recurrence from `start`: the loop is counted to zero in
+/// one block behind a guard where it runs no trip.
+#[test]
+fn test_a_symbolic_loop_counts_to_zero_behind_a_guard() {
+    for start in [5, 0] {
+        let printed = same(&symbolic(start), COUNTS);
+        assert!(counters(&printed) <= 2, "{printed}");
+        assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
+        let entry = printed.lines().skip_while(|line| !line.starts_with("b0:")).nth(1).into_iter().chain(printed.lines().skip_while(|line| !line.starts_with("b0:")).skip(1).take_while(|line| !line.is_empty())).collect::<Vec<_>>();
+        assert!(entry.iter().any(|line| line.contains("br i1")), "a guard:\n{printed}");
+    }
+}
+
+/// Unknown trips, and a recurrence read after the loop: its value where
+/// the guard skipped the loop is its start.
+#[test]
+fn test_a_recurrence_read_after_a_guarded_loop_keeps_its_values() {
+    same(&symbolic(0).replace("%off = add i16 %c, 100", "%off = add i16 %n, 100"), COUNTS);
+    same(&symbolic(5).replace("  ret i16 %acc", "  %after = add i16 %acc, %c\n  ret i16 %after").replace("%off = add i16 %c, 100", "%off = add i16 %n, 100"), COUNTS);
+}
+
+/// A counter indexing memory, stored or not, masked or not, or less an
+/// invariant, keeps what the loop computes.
+#[test]
+fn test_a_counter_indexing_memory() {
+    let text = "@table = global [16 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b2 ]
+  %go = icmp ult i16 %i, 9
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %i
+  store i16 %i, ptr %at
+  %got = load i16, ptr %at
+  %sum = add i16 %acc, %got
+  %inext = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+";
+    same(text, &[&[0]]);
+    let indexed = text.replace("  store i16 %i, ptr %at\n", "");
+    same(&indexed, &[&[0]]);
+    same(&indexed.replace("%at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %i", "%low = and i16 %i, 3\n  %at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %low"), &[&[0]]);
+    let text = "@table = global [16 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b2 ]
+  %go = icmp ult i16 %i, 9
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %k = sub i16 %i, -2
+  %at = getelementptr inbounds [16 x i16], ptr @table, i16 0, i16 %k
+  %got = load i16, ptr %at
+  %sum = add i16 %acc, %got
+  %inext = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+";
+    same(text, &[&[0]]);
+}
+
+/// Nothing is chosen twice: a loop `lsr` has counted is left alone, by it
+/// and by `Rotate`.
+#[test]
+fn test_a_chosen_loop_is_settled() {
+    let (_, once) = reduced(&symbolic(5));
+    let (_, twice) = reduced(&once.replace(DOS, ""));
+    assert_eq!(twice, once);
+    let mut module = parsed(&once);
+    assert_eq!(crate::testing::managed(&mut module, crate::rotate::Rotate), once);
+}
+
+/// A loop whose body is two blocks.
+#[test]
+fn test_a_body_of_two_blocks() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b3 ]
+  %acc = phi i16 [ %x, %b0 ], [ %sum, %b3 ]
+  %go = icmp slt i16 %i, 10
+  br i1 %go, label %b2, label %b4
+
+b2:
+  %k = add i16 %i, 7
+  br label %b3
+
+b3:
+  %sum = xor i16 %acc, %k
+  %inext = add i16 %i, 1
+  br label %b1
+
+b4:
+  %r = add i16 %acc, %i
+  ret i16 %r
+}
+";
+    same(text, &[&[0], &[5], &[-3]]);
+}
+
+/// A counter the loop stores beside a pointer it steps: the loop ends on
+/// its own compare until the pointer's byte offset may count to zero.
+fn pointer_beside_a_stored_counter() -> String {
+    format!(
+        "@a = internal global [8200 x i8] zeroinitializer
+
+define i16 @f(i16 %x) {{
+b0:
+  br label %b1
+
+b1:
+  %v = phi i16 [ 1, %b0 ], [ %vnext, %b2 ]
+  %p = phi ptr [ @a, %b0 ], [ %pnext, %b2 ]
+  %go = icmp ne i16 %v, 81
+  br i1 %go, label %b2, label %b3
+
+b2:
+  store i16 %v, ptr %p
+  %pnext = getelementptr i8, ptr %p, i16 100
+  %vnext = add i16 %v, 1
+  br label %b1
+
+b3:
+  %at = getelementptr i8, ptr @a, i16 500
+  %got = load i16, ptr %at
+  ret i16 %got
+}}
+"
+    )
+}
+
+/// A counter stored beside a pointer it steps, read after the loop, read
+/// in it, or only after it: what the loop computes is kept.
+#[test]
+fn test_a_pointer_beside_a_stored_counter() {
+    let text = pointer_beside_a_stored_counter();
+    same(&text, &[&[0]]);
+    same(&text.replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"), &[&[0]]);
+    same(&text.replace("  store i16 %v, ptr %p", "  %w = add i16 %v, 7\n  store i16 %w, ptr %p").replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"), &[&[0]]);
+    let printed = same(&text.replace("  store i16 %v, ptr %p", "  store i16 7, ptr %p").replace("  ret i16 %got", "  %r = add i16 %got, %v\n  ret i16 %r"), &[&[0]]);
+    assert_eq!(counters(&printed), 1, "{printed}");
+}
+
+/// The whole pipeline over a counter stored beside a pointer settles, and
+/// the loop keeps one counter where the pointer's offset counts to zero.
+/// Strength and count-to-zero once cycled on it until the pipeline gave up.
+#[test]
+fn test_the_pipeline_settles_a_pointer_beside_a_stored_counter() {
+    let mut module = parsed(&format!("{DOS}{}", pointer_beside_a_stored_counter()));
+    let before = results(&module, &[&[0]]);
+    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_code16::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
+    let after = printed(&module);
+    assert_eq!(results(&module, &[&[0]]), before, "{after}");
+}
+
+/// A word counter indexing a dword array.
+#[test]
+fn test_a_word_counter_indexing_a_dword_array() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  %a = alloca [16 x i32]
+  br label %body
+body:
+  %i = phi i16 [ 0, %entry ], [ %j, %body ]
+  %s = phi i32 [ 0, %entry ], [ %t, %body ]
+  %m = mul nsw i16 %i, 4
+  %p = getelementptr inbounds i8, ptr %a, i16 %m
+  %x = zext i16 %i to i32
+  %y = add i32 %x, %n
+  store i32 %y, ptr %p
+  %v = load i32, ptr %p
+  %t = add i32 %s, %v
+  %j = add i16 %i, 1
+  %c = icmp ult i16 %j, 16
+  br i1 %c, label %body, label %done
+done:
+  ret i32 %t
+}
+";
+    same(text, &[&[5], &[-3]]);
+}
+
+/// `%acc` tripled `%n` times, the counter read by nothing else, and the
+/// exit reading it through `leave` (`""` or an LCSSA phi).
+fn dead_counter(test: &str, leave: &str, result: &str) -> String {
+    format!(
+        "define i16 @f(i16 %x, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ %x, %b0 ], [ %sum, %b2 ]
+  %go = icmp {test} i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %sum = mul i16 %acc, 3
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+{leave}  ret i16 {result}
+}}
+"
+    )
+}
+
+const DEAD: &[&[i128]] = &[&[3, 0], &[3, 1], &[2, 7], &[-4, 300], &[5, 9]];
+
+/// C floats retained `add/cmp/jb` in its ten-trip hot path; Clang tests the
+/// count once before the loop, then ends every trip on the step. A dead
+/// counter of unknown trips counts to zero in one block behind a guard,
+/// and one leaving through an LCSSA phi leaves as its value.
+#[test]
+fn test_a_dead_counter_of_unknown_trips_counts_to_zero_behind_a_guard() {
+    for test in ["slt", "ult", "ne"] {
+        let printed = same(&dead_counter(test, "", "%acc"), DEAD);
+        assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{test}:\n{printed}");
+    }
+    same(&dead_counter("slt", "  %e = phi i16 [ %i, %b1 ]\n  %r = add i16 %e, %acc\n", "%r"), DEAD);
+    same(&format!("@g = global i16 0\n\n{}", dead_counter("slt", "", "%acc").replace("  %next = add", "  store i16 %i, ptr @g\n  %next = add")), DEAD);
+}

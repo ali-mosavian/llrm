@@ -13,8 +13,7 @@
 //! - The stage records are the manager's change log (`recorded`); `watch`
 //!   is `Applied::dump`, a file per changed step of each body.
 //! - `Where`'s segment, BC blocks and object file went with the BC
-//!   frontend; its index scales and address forms were strength's, which
-//!   prices neither here. The machine's facts are the program's target's.
+//!   frontend. The machine's facts are the program's target's.
 //! - PointerProvenance, SplitPointers and Place have no rich-MIR meaning.
 //!   Hoist's store sinking is loopmotion's pass.
 //! - `flow::optimized`'s rule that an irreducible body is not promoted is
@@ -36,8 +35,8 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    affine, algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, peel,
-    ports, promote, rotate, strength, unroll, unswitch,
+    algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
+    promote, rotate, unroll, unswitch,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -137,7 +136,7 @@ impl Options {
             "gvn" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
-            "strength" | "zeroed" => self.strength,
+            "indvars" | "lsr" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
@@ -177,20 +176,18 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(affine::Affine),
         Box::new(hoist::Hoist),
         Box::new(loopmotion::LoopMotion),
         Box::new(dse::Dse),
         Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(strength::Strength),
+        Box::new(indvars::IndVars),
         Box::new(algebraic::Algebraic),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill),
-        Box::new(indvars::CountToZero),
         Box::new(fill::Merge),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
@@ -199,16 +196,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
 /// The order, from the pipeline itself rather than beside it.
 pub fn passes() -> Vec<&'static str> {
     pipeline(&Applied::default()).iter().map(|one| one.name()).collect()
-}
-
-/// The settled round after which a pass is first admitted: strength once
-/// the scalar passes settle, counting to zero once strength has.
-fn settles_after(name: &str) -> u8 {
-    match name {
-        "strength" => 1,
-        "zeroed" => 2,
-        _ => 0,
-    }
 }
 
 /// `program` through the pipeline.
@@ -247,9 +234,18 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
+    // Each loop's counters chosen once, on the loop the passes above leave.
+    if applied.options.wanted("lsr") {
+        manager.add(lsr::Lsr);
+    }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate);
+    // A loop entered at its body runs it at least once: what it loads
+    // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
+    if applied.options.wanted("hoist") {
+        manager.add(hoist::Hoist);
+    }
     manager.run(program)
 }
 
@@ -364,16 +360,13 @@ impl Fixed {
         // body again it would change nothing, so it is skipped.
         let mut settled: Vec<Option<usize>> = vec![None; self.passes.len()];
         let mut unroll_settled = None;
-        // Passes wait by stage; each settled round admits the next.
-        let last = if self.only { 0 } else { self.passes.iter().map(|one| settles_after(one.name())).max().unwrap_or(0) };
-        let mut stage = 0;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
         let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
         for iteration in 0..limit {
             let before = run.version;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
-                if settles_after(one.name()) > stage || *settled == Some(run.version) {
+                if *settled == Some(run.version) {
                     continue;
                 }
                 let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
@@ -391,10 +384,6 @@ impl Fixed {
                 } else {
                     unroll_settled = Some(run.version);
                 }
-            }
-            if stage < last && run.version == before {
-                stage += 1;
-                continue;
             }
             if self.only || run.version == before {
                 run.settled(unit, analyses);

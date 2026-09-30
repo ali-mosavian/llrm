@@ -1529,6 +1529,303 @@ pub fn zero_terminating_control<'a>(
     Some(ZeroTerminatingControl { replacement, candidate: candidate.clone(), step, maximum: maximum.clone(), period })
 }
 
+/// Invariant values times coefficients, plus a constant, modulo `width`
+/// bits: SCEV's sum of unknowns and a constant.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Linear {
+    pub constant: BigInt,
+    pub terms: BTreeMap<ValueId, BigInt>,
+    pub width: u32,
+}
+
+impl Linear {
+    pub fn constant(n: impl Into<BigInt>, width: u32) -> Self {
+        Self { constant: masked(&n.into(), width), terms: BTreeMap::new(), width }
+    }
+
+    /// A term: a constant, or a value once.
+    pub fn of(term_: &AffineOperand, width: u32) -> Self {
+        match term_ {
+            AffineOperand::Const(known) => Self::constant(known.n.clone(), width),
+            AffineOperand::Value(value, _) => Self { constant: BigInt::from(0), terms: BTreeMap::from([(*value, BigInt::from(1))]), width },
+        }
+    }
+
+    fn normal(mut self) -> Self {
+        let width = self.width;
+        self.constant = masked(&self.constant, width);
+        self.terms = self.terms.into_iter().map(|(value, factor)| (value, masked(&factor, width))).filter(|(_, factor)| *factor != BigInt::from(0)).collect();
+        self
+    }
+
+    pub fn plus(&self, other: &Self) -> Self {
+        let mut sum = self.clone();
+        sum.constant += &other.constant;
+        for (value, factor) in &other.terms {
+            *sum.terms.entry(*value).or_insert_with(|| BigInt::from(0)) += factor;
+        }
+        sum.normal()
+    }
+
+    pub fn times(&self, by: &BigInt) -> Self {
+        Self { constant: &self.constant * by, terms: self.terms.iter().map(|(value, factor)| (*value, factor * by)).collect(), width: self.width }.normal()
+    }
+
+    pub fn minus(&self, other: &Self) -> Self {
+        self.plus(&other.times(&BigInt::from(-1)))
+    }
+
+    /// The same sum in `width` bits: its low bits where narrower.
+    pub fn truncated(&self, width: u32) -> Self {
+        Self { width, ..self.clone() }.normal()
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.terms.is_empty() && self.constant == BigInt::from(0)
+    }
+
+    /// Its value, where it has no terms, as a signed number.
+    pub fn known(&self) -> Option<BigInt> {
+        self.terms.is_empty().then(|| _as_signed(&self.constant, self.width))
+    }
+
+    /// `self * other`, where one of them is a constant.
+    pub fn product(&self, other: &Self) -> Option<Self> {
+        match (self.known(), other.known()) {
+            (Some(k), _) => Some(other.truncated(self.width).times(&k)),
+            (_, Some(k)) => Some(self.times(&k)),
+            _ => None,
+        }
+    }
+
+    /// The terms alone.
+    pub fn symbolic(&self) -> Self {
+        Self { constant: BigInt::from(0), ..self.clone() }
+    }
+
+    /// `k` with `self = k * by`, the smallest in magnitude, where there is one.
+    pub fn over(&self, by: &Self) -> Option<BigInt> {
+        if self.width != by.width || by.is_zero() {
+            return None;
+        }
+        let modulus = BigInt::from(1) << self.width;
+        let first = by.terms.iter().next().map_or((&by.constant, &self.constant), |(value, factor)| (factor, self.terms.get(value).unwrap_or(&modulus)));
+        let (divisor, dividend) = (_as_signed(first.0, self.width), _as_signed(&masked(first.1, self.width), self.width));
+        if &dividend % &divisor != BigInt::from(0) {
+            return None;
+        }
+        let k = dividend / divisor;
+        (by.times(&k) == *self).then_some(k)
+    }
+}
+
+/// A value on each trip of `header`'s loop, `pointer + start + step * trip`,
+/// in bytes where it is an address, modulo `start`'s width: SCEV's add
+/// recurrence. Every counter, and every value affine in one, is one.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Recurrence {
+    pub pointer: Option<Operand>,
+    pub start: Linear,
+    pub step: Linear,
+}
+
+impl Recurrence {
+    pub fn width(&self) -> u32 {
+        self.start.width
+    }
+
+    /// The same values in `width` bits.
+    pub fn truncated(&self, width: u32) -> Self {
+        Self { pointer: self.pointer, start: self.start.truncated(width), step: self.step.truncated(width) }
+    }
+}
+
+/// A counter as a recurrence of the trip.
+pub fn counter_recurrence(counter: &Affine) -> Recurrence {
+    let width = counter.start.width();
+    Recurrence { pointer: None, start: Linear::of(&counter.start, width), step: Linear::of(&counter.step, width) }
+}
+
+/// A derived value as a recurrence of the trip, where it is linear in the
+/// invariants: `by` times a symbolic start or step is not.
+pub fn recurrence(one: &Derived) -> Option<Recurrence> {
+    let width = one.of.start.width();
+    let (start, step) = (Linear::of(&one.of.start, width), Linear::of(&one.of.step, width));
+    let (mut start, step) = match &one.by {
+        AffineOperand::Const(by) => (start.times(&by.n), step.times(&by.n)),
+        by @ AffineOperand::Value(..) => {
+            let by = Linear::of(by, width);
+            (by.times(&start.known()?), by.times(&step.known()?))
+        }
+    };
+    for (term_, factor) in &one.offsets {
+        start = start.plus(&Linear::of(term_, width).times(factor));
+    }
+    Some(Recurrence { pointer: one.pointer, start, step })
+}
+
+/// How a use reads a recurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UseKind {
+    /// The address of a load or a store.
+    Address,
+    /// Compared with an invariant.
+    Compare,
+    /// Anything else.
+    Basic,
+}
+
+/// An operand that reads a recurrence, of an instruction that is not one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IvUse {
+    pub user: InstId,
+    pub index: usize,
+    pub value: ValueId,
+    pub of: Recurrence,
+    pub kind: UseKind,
+}
+
+/// A loop's recurrences and their uses: LLVM's IVUsers.
+#[derive(Clone, Debug, Default)]
+pub struct Users {
+    /// The counters' phis and every instruction whose value is a recurrence.
+    pub web: BTreeSet<InstId>,
+    pub values: BTreeMap<ValueId, Recurrence>,
+    /// The header phis among `values`: integer counters and pointers alike.
+    pub counters: Vec<ValueId>,
+    pub uses: Vec<IvUse>,
+}
+
+/// The bytes the constant and invariant indices of `op`, a
+/// `getelementptr`, add to its pointer, in `width` bits; None where an
+/// index is neither, or narrower than the pointer's.
+fn _gep_offset(unit: &Unit, op: &Instruction, width: u32, still: &Invariant) -> Option<Linear> {
+    let Opcode::GetElementPtr { source } = op.opcode else { return None };
+    let indices = op.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128)))).collect::<Vec<_>>();
+    let (constant, variable) = unit.layout.collect_offset(&unit.context.types, source, &indices);
+    let mut offset = Linear::constant(constant, width);
+    for (position, scale) in variable {
+        let index = op.operands[1 + position];
+        let Operand::Value(value) = index else { return None };
+        if !still.contains(value) || unit.int_bits(index)? < width {
+            return None;
+        }
+        offset = offset.plus(&Linear { constant: BigInt::from(0), terms: BTreeMap::from([(value, BigInt::from(scale))]), width }.normal());
+    }
+    Some(offset)
+}
+
+/// `pointer` as the invariant it offsets and the offset, through the
+/// `getelementptr`s over it the loop does not compute: SCEV's pointer as a
+/// base plus an add. Two addresses into one object share a base.
+pub fn rooted(unit: &Unit, pointer: Operand, width: u32, still: &Invariant) -> (Operand, Linear) {
+    let mut offset = Linear::constant(0, width);
+    let mut at = pointer;
+    while still.operand(at)
+        && let Some((_, op)) = unit.defining(at)
+        && let Some(part) = _gep_offset(unit, op, width, still)
+    {
+        offset = offset.plus(&part);
+        at = op.operands[0];
+    }
+    (at, offset)
+}
+
+/// `of` with its pointer rooted.
+fn _rooted(unit: &Unit, of: Recurrence, still: &Invariant) -> Recurrence {
+    let Some(pointer) = of.pointer else { return of };
+    let (root, offset) = rooted(unit, pointer, of.width(), still);
+    Recurrence { pointer: Some(root), start: of.start.plus(&offset), step: of.step }
+}
+
+/// The recurrences of `loop_`'s `counters` and of what `derived` computes
+/// from them, of its pointer recurrences and the addresses off them, and
+/// every read of one by something else, in or after the loop.
+pub fn users(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, derived: &[Derived]) -> Users {
+    let function = unit.function;
+    let still = invariant(function, &loop_.body);
+    let mut found = Users::default();
+    for counter in counters.values() {
+        let Some(phi) = defining(function, counter.value) else { continue };
+        found.web.insert(phi);
+        found.values.insert(counter.value, counter_recurrence(counter));
+        found.counters.push(counter.value);
+    }
+    for one in derived {
+        let (Some(result), Some(of)) = (function.instruction(one.op).result, recurrence(one)) else { continue };
+        found.web.insert(one.op);
+        found.values.insert(result, _rooted(unit, of, &still));
+    }
+    for one in pointers(unit, loop_) {
+        let (Some(space), Some(stepped)) = (unit.space(Operand::Value(one.value)), function.instruction(one.stepping).result) else { continue };
+        let width = unit.layout.pointer(space).index_bits;
+        let (root, start) = rooted(unit, one.start, width, &still);
+        let of = Recurrence { pointer: Some(root), start, step: Linear::constant(one.step.clone(), width) };
+        found.web.extend([one.phi, one.stepping]);
+        found.values.insert(stepped, Recurrence { start: of.start.plus(&of.step), ..of.clone() });
+        found.values.insert(one.value, of);
+        found.counters.push(one.value);
+    }
+    // Addresses off a pointer recurrence, to a fixed point.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (inst, block, op) in operations(function) {
+            let Some(result) = op.result else { continue };
+            if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || !matches!(op.opcode, Opcode::GetElementPtr { .. }) {
+                continue;
+            }
+            let Operand::Value(base) = op.operands[0] else { continue };
+            let Some(of) = found.values.get(&base).filter(|of| of.pointer.is_some()).cloned() else { continue };
+            let Some(offset) = _gep_offset(unit, op, of.width(), &still) else { continue };
+            found.web.insert(inst);
+            found.values.insert(result, Recurrence { start: of.start.plus(&offset), ..of });
+            changed = true;
+        }
+    }
+    for (value, of) in &found.values {
+        for one in function.users(*value) {
+            if found.web.contains(&one.user) {
+                continue;
+            }
+            let op = function.instruction(one.user);
+            let index = one.index as usize;
+            let kind = match &op.opcode {
+                Opcode::Load { .. } if index == 0 => UseKind::Address,
+                Opcode::Store { .. } if index == 1 => UseKind::Address,
+                Opcode::ICmp(_) if still.operand(op.operands[1 - index]) => UseKind::Compare,
+                _ => UseKind::Basic,
+            };
+            found.uses.push(IvUse { user: one.user, index, value: *value, of: of.clone(), kind });
+        }
+    }
+    found.uses.sort_by_key(|one| (one.user, one.index));
+    found
+}
+
+impl CountedLoop {
+    /// The most trips the loop makes: its count, its `maximum`, or every
+    /// value of a unit step's width.
+    pub fn most(&self) -> Option<BigInt> {
+        self.count.clone().or_else(|| self.maximum.clone()).or_else(|| (abs(&self.step) == BigInt::from(1)).then(|| (BigInt::from(1) << self.width()) - 1))
+    }
+
+    /// Its trips on the entered path, as a sum of invariants: where `trips`
+    /// places them.
+    pub fn trips_linear(&self) -> Option<Linear> {
+        let width = self.width();
+        if self.posttested {
+            return self.count.as_ref().map(|count| Linear::constant(count.clone(), width));
+        }
+        if let Some(count) = &self.count {
+            return (count < &(BigInt::from(1) << width)).then(|| Linear::constant(count.clone(), width));
+        }
+        let (bound, start) = (Linear::of(&self.bound, width), Linear::of(&self.start, width));
+        let (ahead, behind) = if self.step > BigInt::from(0) { (bound, start) } else { (start, bound) };
+        Some(ahead.minus(&behind).plus(&Linear::constant(u8::from(self.inclusive()), width)))
+    }
+}
+
 #[cfg(test)]
 #[path = "induction_tests.rs"]
 pub(crate) mod tests;

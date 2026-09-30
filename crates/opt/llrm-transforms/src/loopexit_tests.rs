@@ -19,9 +19,8 @@ use crate::testing::{parsed, printed, results};
 /// @f evaluated; whether anything changed.
 fn evaluate(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
-    let callees = llrm_mir::memory::callees(module);
     let (context, function) = module.function_mut("f").expect("@f");
-    evaluated(context, &layout, &callees, function, &outer).unwrap()
+    evaluated(context, &layout, function, &outer).unwrap()
 }
 
 /// `text` evaluated: its printed form, whether it changed, and how many
@@ -70,12 +69,15 @@ fn disposable_loop_becomes_its_exit_values() {
     assert!(text.ends_with("define i16 @f() {\nb0:\n  br label %b1\n\nb1:\n  br label %b3\n\nb3:\n  ret i16 6\n}\n"), "{text}");
 }
 
+/// An accumulator a store reads stays in the loop, and the read after the
+/// loop takes its constant exit value. That read kept `%s` live after the
+/// loop, and with it whatever counter computed it.
 #[test]
-fn accumulator_read_by_a_store_is_kept() {
+fn accumulator_read_by_a_store_is_kept_and_its_exit_is_constant() {
     let text = counted("  store i16 %s1, ptr @g\n");
-    let (after, changed, _) = evaluated_text(&text, &[&[]]);
-    assert!(!changed);
-    assert_eq!(after, printed(&parsed(&format!("{DOS}{text}"))));
+    let (after, changed, kept) = evaluated_text(&text, &[&[]]);
+    assert!(changed && kept == 1, "{after}");
+    assert!(after.contains("store i16 %s1, ptr @g") && after.contains("ret i16 6"), "{after}");
 }
 
 #[test]
@@ -149,13 +151,13 @@ fn a_loop_of_no_trips_is_kept() {
 }
 
 /// `s += s` is no linear sum: its exit value is not computable, and the
-/// loop computing it stays as it was.
+/// loop computing it stays; the counter's, 4, replaces its read.
 #[test]
 fn an_exit_value_used_but_not_computable_keeps_the_loop() {
     let text = counted("").replace("%s1 = add i16 %s, %i", "%s1 = add i16 %s, %s").replace("ret i16 %s", "%r = add i16 %s, %i\n  ret i16 %r");
-    let (after, changed, _) = evaluated_text(&text, &[&[]]);
-    assert!(!changed);
-    assert_eq!(after, printed(&parsed(&format!("{DOS}{text}"))));
+    let (after, changed, kept) = evaluated_text(&text, &[&[]]);
+    assert!(changed && kept == 1, "{after}");
+    assert!(after.contains("%r = add i16 %s, 4"), "{after}");
 }
 
 /// A narrow counter widened by `sext` sums as the wide recurrence ranges

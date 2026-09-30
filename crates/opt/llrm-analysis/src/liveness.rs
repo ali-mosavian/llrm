@@ -75,6 +75,11 @@ pub fn entry_values(function: &Function) -> BTreeSet<ValueId> {
 
 /// The most values live at once -- anywhere, or in `inside`.
 pub fn pressure(function: &Function, found: Option<&Liveness>, inside: Option<&BTreeSet<i64>>) -> usize {
+    pressure_of(function, found, inside, &|_| true)
+}
+
+/// `pressure`, counting only the values `counted` says.
+pub fn pressure_of(function: &Function, found: Option<&Liveness>, inside: Option<&BTreeSet<i64>>, counted: &dyn Fn(ValueId) -> bool) -> usize {
     let owned;
     let found = match found {
         Some(found) => found,
@@ -89,13 +94,14 @@ pub fn pressure(function: &Function, found: Option<&Liveness>, inside: Option<&B
             continue;
         }
         let mut alive = found.live_out[&id(block)].clone();
-        peak = peak.max(alive.len());
+        let size = |alive: &BTreeSet<ValueId>| alive.iter().filter(|&&one| counted(one)).count();
+        peak = peak.max(size(&alive));
         for op in split(function, block).1.into_iter().rev() {
             if let Some(one) = op.result {
                 alive.remove(&one);
             }
             alive.extend(reads(op));
-            peak = peak.max(alive.len());
+            peak = peak.max(size(&alive));
         }
     }
     peak
