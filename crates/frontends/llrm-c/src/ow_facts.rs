@@ -6,7 +6,7 @@
 //! of its own for any fact. A stream from a build of another version is
 //! refused, not misread.
 
-use llrm_mir::facts::Fact;
+use llrm_mir::facts::{Effect, Fact};
 
 use crate::hir::{Node, Unit, Unsupported, handle};
 
@@ -19,6 +19,29 @@ pub fn param_fact(term: &str) -> Option<Fact> {
         "restrict" => Some(Fact::NoAlias),
         _ => None,
     }
+}
+
+/// Open Watcom's call class (`cg/h/cgauxcc.h`) bits that state a fact about
+/// the routine called.
+const ABORTS: i64 = 0x2;
+const NORETURN: i64 = 0x4;
+const NO_MEMORY_READ: i64 = 0x100;
+const NO_MEMORY_CHANGED: i64 = 0x200;
+
+/// The facts a routine's call class states: it does not return, and what it
+/// does not do to memory (`#pragma aux ... nomemory`).
+pub fn of_call_class(class: i64) -> Vec<Fact> {
+    let mut facts = Vec::new();
+    if class & (ABORTS | NORETURN) != 0 {
+        facts.push(Fact::NoReturn);
+    }
+    match (class & NO_MEMORY_READ != 0, class & NO_MEMORY_CHANGED != 0) {
+        (true, true) => facts.push(Fact::Memory(Effect::None)),
+        (false, true) => facts.push(Fact::Memory(Effect::Read)),
+        (true, false) => facts.push(Fact::Memory(Effect::Write)),
+        (false, false) => {}
+    }
+    facts
 }
 
 /// A `CGFact` node's version and term, checked: `CGFact v1 n7 restrict`.
@@ -65,6 +88,16 @@ mod tests {
     }
 
     /// Restrict states `NoAlias` of the parameter it names, and of no other.
+    #[test]
+    fn a_call_class_states_noreturn_and_what_memory_a_routine_leaves_alone() {
+        assert_eq!(of_call_class(0x80), Vec::<Fact>::new());
+        assert_eq!(of_call_class(0x84), vec![Fact::NoReturn]);
+        assert_eq!(of_call_class(0x82), vec![Fact::NoReturn]);
+        assert_eq!(of_call_class(0x380), vec![Fact::Memory(Effect::None)]);
+        assert_eq!(of_call_class(0x280), vec![Fact::Memory(Effect::Read)]);
+        assert_eq!(of_call_class(0x180), vec![Fact::Memory(Effect::Write)]);
+    }
+
     #[test]
     fn restrict_states_noalias_of_the_parameter_it_names() {
         let mut unit = Unit::default();

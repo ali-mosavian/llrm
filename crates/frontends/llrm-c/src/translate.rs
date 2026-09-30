@@ -64,6 +64,13 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
+    for symbol in unit.symbols.values().filter(|one| one.proc()) {
+        if let Some(callable) = callables.iter().find(|one| one.name == symbol.object_name()) {
+            for fact in crate::ow_facts::of_call_class(symbol.call_class) {
+                facts.state(Subject::Callable(callable.id), fact);
+            }
+        }
+    }
     let (types, alias_classes) = types.finished();
     let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
     // Borland's medium model: a call keeps what its contract does not clobber;
@@ -1776,6 +1783,31 @@ mod tests {
         let node = &node[..node.find(' ').unwrap()];
         let tag = printed.lines().find(|one| one.contains(&format!("= !{{{node}, {node}, i64 0}}"))).unwrap();
         tag[..tag.find(' ').unwrap()].to_owned()
+    }
+
+    /// The attributes of the function `@name`, declared or defined.
+    fn attributes(module: &Module, name: &str) -> Vec<llrm_mir::Attribute> {
+        module.global(module.named(name).unwrap()).function().unwrap().attrs.clone()
+    }
+
+    /// `__declspec(noreturn)` and `#pragma aux ... aborts` are in the call
+    /// class; the compile dropped them, and the call fell through to the
+    /// code after it.
+    #[test]
+    fn test_noreturn_and_aborts_are_stated_of_the_callee() {
+        let module = raised("tests/test_noreturn_and_aborts_are_stated_of_the_callee.cgs");
+        let noreturn = llrm_mir::Attribute::Flag("noreturn".to_owned());
+        assert!(attributes(&module, "_die").contains(&noreturn));
+        assert!(attributes(&module, "_quit").contains(&noreturn));
+        assert!(!attributes(&module, "_f").contains(&noreturn));
+    }
+
+    /// `#pragma aux ... parm nomemory modify nomemory` is a routine that
+    /// touches no memory; the compile dropped it and kept both calls.
+    #[test]
+    fn test_nomemory_is_stated_of_the_callee() {
+        let module = raised("tests/test_nomemory_is_stated_of_the_callee.cgs");
+        assert_eq!(attributes(&module, "_sq"), vec![llrm_mir::Attribute::Memory(vec![(None, "none".to_owned())])]);
     }
 
     /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
