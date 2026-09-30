@@ -2819,6 +2819,33 @@ Open Watcom gives its optimizer few language promises. It sends no `restrict`, n
 
 What the list leaves out: address-taken and escape (derived by `A/alias.rs`; Open Watcom derives it too, from `OP_LA`), sequence points (no frontend sends them, none is needed once trees are linear), switch ranges and order (the back end merges and sorts: `bldsel.c:SortNodeList`), sizeof and layout (folded before HIR).
 
+### Matrix: rich metadata by frontend
+
+✔ reaches MIR or the back end. ◐ the frontend knows it and it is not emitted or is lost on the way. ✘ the language cannot state it. — not applicable. Open Watcom is the reference: what its C front end sends its own back end.
+
+| Fact | Open Watcom C | `llrm-c` | Quick BASIC | Nib |
+|---|---|---|---|---|
+| Ordered access (volatile / `published`) | ✔ `CGVolatile`, `FE_VOLATILE` | ✔ `volatile` | ◐ `published` in HIR, dropped before MIR (hang) | ◐ not emitted for foreign memory |
+| `noreturn` / `aborts` | ✔ call class | ◐ in the stream, dropped | ✘ | ◐ panics end in `unreachable`; callee not marked |
+| No memory read / written (pure) | ✔ `#pragma aux nomemory` only | ◐ in the stream, dropped | ✔ runtime routines; ◐ user SUBs | ◐ `fn` without `&mut`, not emitted |
+| Raises no error (`nounwind`) | — | — | ✔ runtime contracts | — |
+| Distinct object (`noalias`) | ✘ (`restrict` parsed, discarded) | ✔ `restrict` via our patch | ✘ same variable may pass twice | ◐ `&mut` excludes aliases, not emitted |
+| Read-only pointee (`readonly`) | ✘ type bit only | ◐ never asked for | ✘ | ◐ `&T`, not emitted |
+| Whole object addressable (`dereferenceable`) | ✘ | ◐ bytes 0 | ✔ BYREF | ◐ slices only |
+| Not kept (`nocapture`) | ✘ | ◐ passes derive it | ◐ passes derive it | ◐ borrows, not emitted |
+| Non-null | ✘ | ◐ | ✘ | ◐ no `null` in safe code |
+| No signed wrap (`nsw`) | ◐ signedness in type | ✔ | ✔ FOR counter only | ◐ range loop, not emitted |
+| Pointer stays in object (`inbounds`) | ✘ | ✔ | ✔ arrays | ◐ array indexing only |
+| Value range (`range`) | ✘ (source type only) | ◐ `_Bool`, `unsigned char`, enum | ◐ boolean −1/0 | ◐ `bool`, `char`, enum tag |
+| Read-only data | ✔ `FE_CONSTANT`, ROM segment | ✔ `constant` | ✔ statement table | ✔ literals |
+| Type-based alias classes | ✘ | ✔ by C type | ◐ one shared tag for all arrays | ✘ none |
+| Known initialised (no entry zeroing) | — | ✔ | ✘ language zeroes | ◐ default zeroes anyway |
+| Alignment | ✔ `BEDefType`, `CG_SYM_UNALIGNED` | ◐ `__unaligned` dropped | ✔ data `align` 2 | ✘ |
+| Unroll / inline hints | ✔ unroll count | ◐ never asked for | — | — |
+| Trip count facts (bounds evaluated once) | ✘ back end derives | ◐ | ◐ needs `nsw` on the add | ◐ needs `nsw` on the add |
+| Cold paths | ✘ | ✘ | ✘ | ◐ `unreachable` blocks only |
+| Returns twice (`setjmp`) | ✔ `SETJMP_KLUGE`, RISC scheduler only | ✘ | — | — |
+
 ### Order of work
 
 1. Row 1 and row 4's Nib gap are defects, not additions: one line each in the HIR-to-MIR step.
