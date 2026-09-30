@@ -68,7 +68,7 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
-        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal);
+        let run = _roomy(unit, &outer, one, _invariant_run(unit, &outer, one, into, &accesses, &terminal));
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
         }
@@ -79,6 +79,55 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
         changed = true;
     }
     changed
+}
+
+/// `run` less the loads from constant addresses the loop has no register
+/// left to hold, and what reads them. Such a load costs a reload in the
+/// loop whether hoisted or not, and hoisted and spilled it also costs a
+/// load and a store before the loop. What the loop holds across its trips
+/// is what is live into its header; the target's registers say how many
+/// values fit, and none leaves it unpriced.
+fn _roomy(unit: &passes::Unit, outer: &Outer, loop_: &Loop, run: Vec<InstId>) -> Vec<InstId> {
+    let registers = crate::profit::registers(outer).0;
+    let function = &*unit.function;
+    let integer = |value: ValueId| matches!(unit.context.types.get(function.value(value).ty), llrm_mir::types::Type::Int(bits) if *bits > 1 && *bits <= 32) || matches!(unit.context.types.get(function.value(value).ty), llrm_mir::types::Type::Pointer(_));
+    let constant = |operand: Operand| match operand {
+        Operand::Constant(_) => true,
+        Operand::Value(value) => matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }) && function.instruction(def).operands.iter().all(|one| matches!(one, Operand::Constant(_)))),
+        Operand::Block(_) => false,
+    };
+    let crossed = _crossed_values(function, &run);
+    let loads = run
+        .iter()
+        .copied()
+        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. }) && constant(function.instruction(inst).operands[0]))
+        .filter(|&inst| function.instruction(inst).result.is_some_and(|value| integer(value) && crossed.contains(&value)))
+        .collect::<Vec<_>>();
+    if registers == 0 || loads.is_empty() {
+        return run;
+    }
+    let live = llrm_analysis::liveness::live(function);
+    let held = live.live_in.get(&loop_.header).map_or(0, |values| values.iter().filter(|&&value| integer(value)).count()) as i64;
+    let mut room = registers - held - (crossed.len() - loads.len()) as i64;
+    let mut dropped = BTreeSet::<ValueId>::new();
+    for inst in loads {
+        if room > 0 {
+            room -= 1;
+        } else {
+            dropped.extend(function.instruction(inst).result);
+        }
+    }
+    // What reads a dropped load stays with it.
+    let mut kept = Vec::new();
+    for inst in run {
+        let op = function.instruction(inst);
+        if op.operands.iter().any(|one| matches!(one, Operand::Value(value) if dropped.contains(value))) || op.result.is_some_and(|value| dropped.contains(&value)) {
+            dropped.extend(op.result);
+        } else {
+            kept.push(inst);
+        }
+    }
+    kept
 }
 
 /// The one block entering `loop_` from outside it.

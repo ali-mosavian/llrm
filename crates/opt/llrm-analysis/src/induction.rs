@@ -494,6 +494,8 @@ fn _composed(
             match operation.opcode {
                 Opcode::Cast(CastOp::SExt | CastOp::ZExt) if at != loop_.header => {
                     if let Some(extended) = _extended(unit, loop_, inst, &forms, facts) {
+                        let width = extended.0.start.width();
+                        out.insert(inst, Derived { op: inst, of: extended.0.clone(), by: AffineOperand::constant(1, width), offsets: Vec::new(), pointer: None });
                         forms.insert(result, extended);
                         changed = true;
                     }
@@ -1683,6 +1685,24 @@ pub struct IvUse {
     pub value: ValueId,
     pub of: Recurrence,
     pub kind: UseKind,
+    /// The low bits of the value the user observes.
+    pub demanded: u32,
+}
+
+/// The low bits of operand `index` that `op` observes: an `and` with a
+/// mask of low ones, or a `trunc`, reads fewer than all.
+pub fn demanded(unit: &Unit, op: &Instruction, index: usize) -> Option<u32> {
+    let width = unit.int_bits(op.operands[index])?;
+    let low = match op.opcode {
+        Opcode::Binary(BinaryOp::And) => {
+            let mask = unit.int_constant(op.operands[1 - index])?;
+            let ones = mask.trailing_ones();
+            (mask >> ones == 0).then_some(ones)?
+        }
+        Opcode::Cast(CastOp::Trunc) => unit.int_bits(Operand::Value(op.result?))?,
+        _ => width,
+    };
+    Some(low.min(width))
 }
 
 /// A loop's recurrences and their uses: LLVM's IVUsers.
@@ -1796,7 +1816,8 @@ pub fn users(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, de
                 Opcode::ICmp(_) if still.operand(op.operands[1 - index]) => UseKind::Compare,
                 _ => UseKind::Basic,
             };
-            found.uses.push(IvUse { user: one.user, index, value: *value, of: of.clone(), kind });
+            let demanded = demanded(unit, op, index).unwrap_or(of.width());
+            found.uses.push(IvUse { user: one.user, index, value: *value, of: of.clone(), kind, demanded });
         }
     }
     found.uses.sort_by_key(|one| (one.user, one.index));

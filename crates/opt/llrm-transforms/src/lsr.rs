@@ -124,6 +124,9 @@ struct Fit {
     /// times `inverse`, the inverse of its step's odd part modulo the bits
     /// left. `k` then multiplies the trip.
     trip: Option<(u32, bool, BigInt)>,
+    /// An equality with an invariant, which takes the candidate itself and
+    /// the invariant less the rest, times `k`, one or minus one.
+    folded: Option<Linear>,
 }
 
 /// What realizing a use from one candidate costs each time it runs, and
@@ -183,6 +186,9 @@ struct Plan {
     uses: Vec<(Site, usize, Fit)>,
     /// The candidate whose last value ends the loop, and that value.
     exit: Option<(Exit, usize)>,
+    /// Where each candidate scaled in the loop is made, once: the block
+    /// dominating its uses.
+    products: BTreeMap<(usize, BigInt), BlockId>,
 }
 
 /// Everything priced in one loop.
@@ -313,6 +319,10 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
         after
     );
     if llrm_support::debug::enabled("lsr") {
+        for (at, site) in problem.sites.iter().enumerate() {
+            let op = function.instruction(site.one.user);
+            llrm_support::debug!("lsr", "  site {at}: {:?} operand {} of {:?} {:?}, {:?} + {:?}*t, x{}", site.one.kind, site.one.index, op.opcode, op.result, site.one.of.start, site.one.of.step.known(), site.frequency);
+        }
         for (index, one) in problem.candidates.iter().enumerate() {
             let alone = BTreeSet::from([index]);
             let sites = (0..problem.sites.len()).map(|at| problem.fits[at][index].as_ref().map(|(_, price)| price.cost)).collect::<Vec<_>>();
@@ -327,15 +337,69 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
     let kept = chosen.iter().copied().collect::<Vec<_>>();
     let renumber = |index: usize| kept.iter().position(|&one| one == index).expect("a chosen candidate");
     let Problem { candidates, exit: exit_proof, .. } = problem;
+    let uses = uses.into_iter().map(|(site, index, fit)| (site, renumber(index), fit)).collect::<Vec<_>>();
+    let guarded = exit.is_some() && exit_proof.as_ref().is_some_and(|one| one.guarded);
+    let products = _products(function, loop_, &uses, guarded);
     Some(Plan {
         loop_: loop_.clone(),
         preheader,
         header: cfg::block(loop_.header),
         latch: cfg::block(latch),
         candidates: kept.iter().map(|&index| candidates[index].clone()).collect(),
-        uses: uses.into_iter().map(|(site, index, fit)| (site, renumber(index), fit)).collect(),
+        uses,
         exit: exit.and_then(|index| Some((exit_proof?, renumber(index)))),
+        products,
     })
+}
+
+/// For each candidate scaled in the loop, the block its product is made
+/// in: the nearest dominating every use of it, the body's first block
+/// where that is the header of a loop to be entered at its body.
+fn _products(function: &Function, loop_: &Loop, uses: &[(Site, usize, Fit)], guarded: bool) -> BTreeMap<(usize, BigInt), BlockId> {
+    let dominance = cfg::Dominance::of(function);
+    let mut blocks = BTreeMap::<(usize, BigInt), Vec<i64>>::new();
+    for (site, index, fit) in uses {
+        if !site.inside || fit.trip.is_some() || fit.next || fit.k == BigInt::from(0) || fit.k == BigInt::from(1) {
+            continue;
+        }
+        let block = match site.at {
+            Place::Before(inst) => function.parent(inst),
+            Place::End(block) => Some(block),
+            Place::Exit(..) => None,
+        };
+        blocks.entry((*index, fit.k.clone())).or_default().extend(block.map(cfg::id));
+    }
+    let ancestors = |mut at: i64| {
+        let mut chain = vec![at];
+        while let Some(up) = dominance.immediate(at) {
+            chain.push(up);
+            at = up;
+        }
+        chain
+    };
+    blocks
+        .into_iter()
+        .filter_map(|(key, at)| {
+            let mut common = ancestors(*at.first()?);
+            for &one in &at[1..] {
+                let theirs = ancestors(one);
+                common.retain(|block| theirs.contains(block));
+            }
+            let mut block = *common.first()?;
+            if !loop_.body.contains(&block) {
+                return None;
+            }
+            if guarded && block == loop_.header {
+                let inside = function.successors(cfg::block(block)).into_iter().filter(|&one| loop_.body.contains(&cfg::id(one))).collect::<Vec<_>>();
+                let [first] = inside[..] else { return None };
+                if !at.iter().all(|&one| dominance.dominates(cfg::id(first), one)) {
+                    return None;
+                }
+                block = cfg::id(first);
+            }
+            Some((key, cfg::block(block)))
+        })
+        .collect()
 }
 
 /// Where a use's realization goes, and whether that is inside the loop:
@@ -558,8 +622,18 @@ fn _fit(view: &memory::Unit, site: &Site, candidate: &Candidate, most: Option<&B
         (Some(_), _) => return None,
         (None, pointer) => (pointer, of.start.minus(&candidate.of.start.times(&k))),
     };
-    let constant = rest.known().unwrap_or_else(|| _signed(&rest.constant, rest.width));
-    Some(Fit { k, base, rest: rest.symbolic(), constant, next: false, trip: None })
+    let mut constant = rest.known().unwrap_or_else(|| _signed(&rest.constant, rest.width));
+    let mut rest = rest.symbolic();
+    // What its reader cannot see need not be added: a multiple of the bits
+    // it observes.
+    let seen = BigInt::from(1) << site.one.demanded.min(rest.width);
+    if base.is_none() && site.one.demanded < rest.width {
+        rest.terms.retain(|_, factor| &*factor % &seen != BigInt::from(0));
+        if &constant % &seen == BigInt::from(0) {
+            constant = BigInt::from(0);
+        }
+    }
+    Some(Fit { k, base, rest, constant, next: false, trip: None, folded: None })
 }
 
 /// After the loop, `site` from the trip the candidate has counted: its
@@ -579,7 +653,7 @@ fn _trip_fit(site: &Site, of: &Recurrence, candidate: &Candidate, most: Option<&
     }
     let inverse = _inverse(&(&magnitude >> shift), bits);
     let constant = of.start.known().unwrap_or_else(|| _signed(&of.start.constant, of.start.width));
-    Some(Fit { k, base: of.pointer, rest: of.start.symbolic(), constant, next: false, trip: Some((shift, step < BigInt::from(0), inverse)) })
+    Some(Fit { k, base: of.pointer, rest: of.start.symbolic(), constant, next: false, trip: Some((shift, step < BigInt::from(0), inverse)), folded: None })
 }
 
 /// The inverse of odd `n` modulo `2^bits`, by Newton's iteration.
@@ -649,7 +723,10 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
     };
     if in_latch && stepped && own && site.one.kind != UseKind::Address {
         fit.next = true;
-        let cost = if site.exit { target.costs.add } else { 0 };
+        // A step's own flags answer its equality with zero.
+        let op = view.function.instruction(site.one.user);
+        let zero = matches!(op.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)) && view.int_constant(op.operands[1 - site.one.index]) == Some(0);
+        let cost = if site.one.kind == UseKind::Compare && !zero { target.costs.add } else { 0 };
         let mut held = Vec::new();
         if site.one.kind == UseKind::Compare
             && let Operand::Value(other) = view.function.instruction(site.one.user).operands[1 - site.one.index]
@@ -716,6 +793,26 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
                 }
             }
         }
+        UseKind::Compare if fit.trip.is_none() && fit.base.is_none() && candidate.of.pointer.is_none() && (fit.k == BigInt::from(1) || fit.k == BigInt::from(-1)) && {
+            let op = view.function.instruction(site.one.user);
+            matches!(op.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne))
+        } =>
+        {
+            // `k * r + rest == w` is `r == k * (w - rest)`: the invariant absorbs the rest.
+            let op = view.function.instruction(site.one.user);
+            let other = op.operands[1 - site.one.index];
+            let width = fit.rest.width;
+            let invariant = match view.int_constant(other) {
+                Some(bits) => Linear::constant(BigInt::from(bits), width),
+                None => Linear::of(&induction::term(view, other)?, width),
+            };
+            let folded = invariant.minus(&fit.rest).minus(&Linear::constant(fit.constant.clone(), width)).times(&fit.k);
+            if !folded.terms.is_empty() {
+                price.held.push(_interned(keys, (None, folded.clone())));
+            }
+            price.cost += costs.add;
+            fit.folded = Some(folded);
+        }
         UseKind::Compare | UseKind::Basic => {
             if let Some((shift, _, inverse)) = &fit.trip {
                 price.cost += costs.add + if *shift != 0 { costs.shift } else { 0 } + if *inverse != BigInt::from(1) { costs.multiply + costs.add } else { 0 };
@@ -733,10 +830,8 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             } else if fit.constant != BigInt::from(0) || fit.base.is_some() {
                 price.cost += costs.add;
             }
-            if site.exit {
-                price.cost += costs.add;
-            }
             if site.one.kind == UseKind::Compare {
+                price.cost += costs.add;
                 let op = view.function.instruction(site.one.user);
                 if let Operand::Value(other) = op.operands[1 - site.one.index] {
                     let width = view.int_bits(Operand::Value(other)).unwrap_or(fit.rest.width);
@@ -834,8 +929,8 @@ impl Problem<'_> {
                 }
                 (Some((one, _, price)), None) => {
                     cost += price.cost * site.frequency;
-                    if let Some((k, scaling, block)) = price.product
-                        && !products.insert((one, k, block))
+                    if let Some((k, scaling, _)) = price.product
+                        && !products.insert((one, k, 0))
                     {
                         cost -= scaling * site.frequency;
                     }
@@ -1135,8 +1230,11 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
                 }
             }
             steps[*index]
+        } else if fit.folded.is_some() {
+            register
         } else {
-            _realized(context, function, &mut expander, &mut products, site, candidate, fit, register, ty, at)
+            let home = plan.products.get(&(*index, fit.k.clone())).copied();
+            _realized(context, function, &mut expander, &mut products, home, site, candidate, fit, register, ty, at)
         };
         match site.at {
             Place::Exit(_, phi) => {
@@ -1146,6 +1244,10 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
                 function.erase(phi).expect("its uses were replaced");
             }
             _ => function.set_operand(site.one.user, site.one.index, value),
+        }
+        if let Some(folded) = &fit.folded {
+            let other = expander.int(context, function, folded);
+            function.set_operand(site.one.user, 1 - site.one.index, other);
         }
     }
     let (exit, index) = plan.exit.as_ref()?;
@@ -1187,6 +1289,7 @@ fn _realized(
     function: &mut Function,
     expander: &mut Expander,
     products: &mut HashMap<(Operand, BigInt, BlockId), Operand>,
+    home: Option<BlockId>,
     site: &Site,
     candidate: &Candidate,
     fit: &Fit,
@@ -1221,11 +1324,13 @@ fn _realized(
         }
         None => (register, candidate.of.pointer),
     };
-    // A product in the loop is made once in its block, at its top.
+    // A product in the loop is made once, at the top of the block that
+    // dominates its uses, or of its use's own block.
     let shared = match (&fit.trip, site.at) {
+        (Some(_), _) | (_, Place::Exit(..)) => None,
+        (None, _) if home.is_some() => home,
         (None, Place::Before(inst)) => function.parent(inst),
         (None, Place::End(block)) => Some(block),
-        _ => None,
     };
     let scaled = |context: &mut Context, function: &mut Function, products: &mut HashMap<(Operand, BigInt, BlockId), Operand>| -> Option<Operand> {
         if fit.k == BigInt::from(0) {
