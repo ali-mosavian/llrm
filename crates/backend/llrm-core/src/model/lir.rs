@@ -47,6 +47,8 @@ pub struct Insn {
     pub volatile: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
+    /// The source line of the MIR instruction it was selected from (`!dbg`).
+    pub line: Option<u32>,
 }
 
 impl Insn {
@@ -82,6 +84,7 @@ impl Insn {
             rematerialized: false,
             volatile: false,
             reads_complete: false,
+            line: None,
         }
     }
 

@@ -239,6 +239,25 @@ struct Tables<'h> {
     conventions: HashMap<String, u32>,
     /// The runtime routines that raise no error.
     nounwind: &'h [String],
+    /// Each source line's `!dbg` node, `!{i32 line}`.
+    lines: HashMap<i64, MetadataId>,
+}
+
+/// The `!dbg` metadata kind: the source line an instruction came from.
+pub const DEBUG_LINE: &str = "dbg";
+
+/// A `!{i32 line}` node for each line `hir`'s instructions name.
+fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, MetadataId> {
+    let i32 = module.context.types.int(32);
+    let mut nodes = HashMap::new();
+    for line in hir.functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).filter_map(|one| one.line) {
+        nodes.entry(line).or_insert_with(|| {
+            let operand = MetadataOperand::Constant(module.context.int(i32, i128::from(line)));
+            module.metadata.push(MetadataNode { distinct: false, operands: vec![operand] });
+            MetadataId(module.metadata.len() as u32 - 1)
+        });
+    }
+    nodes
 }
 
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
@@ -257,7 +276,9 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         tags: Tags::new(&mut module),
         classes: HashMap::new(),
         nounwind,
+        lines: HashMap::new(),
     };
+    tables.lines = line_nodes(&mut module, hir);
     match class_tags(&mut module, &hir.alias_classes) {
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -1074,18 +1095,35 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn emit_block(&mut self, block: &model::Block) -> Emit<()> {
         self.b.position(self.blocks[&block.id]);
         self.enter_block(block.id);
+        let mut line = None;
         for instruction in &block.instructions {
+            let first = self.b.function.instruction_count();
             self.instruction(instruction)?;
+            line = instruction.line.or(line);
+            self.lined(first, line);
         }
         // RESUME label ended the block itself.
         let current = self.b.current().expect("a placed block");
         if self.b.function.terminator(current).is_none() {
+            let first = self.b.function.instruction_count();
             self.terminator(&block.terminator)?;
+            self.lined(first, line);
         }
         if block.cold {
             mark_cold(self.b.function, self.blocks[&block.id]);
         }
         Ok(())
+    }
+
+    /// Each instruction made since the `first`th, `line`'s: `!dbg`.
+    fn lined(&mut self, first: usize, line: Option<i64>) {
+        let Some(&node) = line.and_then(|line| self.tables.lines.get(&line)) else { return };
+        for at in first..self.b.function.instruction_count() {
+            let inst = llrm_mir::InstId(at as u32);
+            if !self.b.function.instruction(inst).metadata.iter().any(|(kind, _)| kind == DEBUG_LINE) {
+                self.b.function.annotate(inst, DEBUG_LINE, node);
+            }
+        }
     }
 
     /// An alloca for each group of local places that overlap, each zeroed

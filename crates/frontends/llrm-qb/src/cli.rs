@@ -9,8 +9,8 @@
 //!
 //! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them;
 //! `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow` (all
-//! three: `undefined`) are BC's /D checks. `--legacy`
-//! compiles through the old MIR.
+//! three: `undefined`) are BC's /D checks, and `-g` its /Zi line numbers.
+//! `--legacy` compiles through the old MIR.
 
 use std::path::PathBuf;
 
@@ -105,6 +105,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     }
     frontend.checked_arrays = flags.sanitize.bounds;
     frontend.checked_division = flags.sanitize.integer_divide_by_zero;
+    frontend.debug = flags.debug;
     frontend.checked_overflow = flags.sanitize.signed_integer_overflow;
     let codegen = flags.driver(flags.machine(llrm_core::abi::machine::BASIC.clone())?);
     Ok(Arguments { source, frontend, dump_hir, mir, options: flags.legacy(), flags, dump, route, codegen })

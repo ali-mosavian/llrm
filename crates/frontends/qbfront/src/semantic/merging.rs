@@ -543,6 +543,7 @@ fn merged(compiler: &mut Compiler, group: &[Identity], survey: &Survey) {
                 callee: None,
                 tag,
                 nowrap: false,
+                line: block.instructions[position].line,
             });
         }
         for block in &mut function.blocks {

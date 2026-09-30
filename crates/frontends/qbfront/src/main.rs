@@ -13,6 +13,7 @@ fn main() -> ExitCode {
     let mut huge_arrays = false;
     let mut checked_arrays = false;
     let mut checked_division = false;
+    let mut debug = false;
     let mut checked_overflow = false;
     let mut unchecked_bounds = false;
     let mut mbf = false;
@@ -51,6 +52,8 @@ fn main() -> ExitCode {
             huge_arrays = true;
         } else if argument == "--checked-arrays" {
             checked_arrays = true;
+        } else if argument == "-g" {
+            debug = true;
         } else if argument == "--checked-division" {
             checked_division = true;
         } else if argument == "--checked-overflow" {
@@ -99,7 +102,7 @@ fn main() -> ExitCode {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--unchecked-bounds] [--whole-program] [--array-merging] [--own-frames] [--include DIR] [--syntax] FILE"
+            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--unchecked-bounds] [--whole-program] [--array-merging] [--own-frames] [-g] [--include DIR] [--syntax] FILE"
         );
         return ExitCode::from(2);
     };
@@ -143,7 +146,10 @@ fn main() -> ExitCode {
                     array_merging,
                     own_frames,
                 };
-                match qbfront::semantic::compile_with_warnings(&module, name, dialect, &runtime, &options) {
+                let lines: Vec<usize> = (1..=if debug { source.text.lines().count() } else { 0 })
+                    .map(|expanded| source.location(expanded).map_or(0, |one| one.main_line))
+                    .collect();
+                match qbfront::semantic::compile_with_lines(&module, name, dialect, &runtime, &options, &lines) {
                     Ok((hir, warnings)) => {
                         for warning in warnings {
                             eprintln!("{input}: {warning}");

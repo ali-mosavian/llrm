@@ -10,7 +10,7 @@ use crate::abi::machine::Machine;
 use crate::model::passes;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,11 +126,13 @@ pub struct Flags {
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
     pub sanitize: Sanitize,
+    /// `-g`: CodeView debug information.
+    pub debug: bool,
 }
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false, sanitize: Sanitize::default() }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false }
     }
 }
 
@@ -154,6 +156,8 @@ impl Flags {
         match flag {
             "-o" | "--output" => self.output = Some(PathBuf::from(value("-o/--output")?)),
             "-S" => self.assembly = true,
+            "-g" => self.debug = true,
+            "-g0" => self.debug = false,
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "--cpu" => self.cpu = Some(value("--cpu")?),

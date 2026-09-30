@@ -173,6 +173,12 @@ impl Function {
         &self.values[id.0 as usize]
     }
 
+    /// How many instructions were ever made, erased ones too: the next is
+    /// `InstId(count)`.
+    pub fn instruction_count(&self) -> usize {
+        self.instructions.len()
+    }
+
     pub fn instruction(&self, id: InstId) -> &Instruction {
         &self.instructions[id.0 as usize]
     }

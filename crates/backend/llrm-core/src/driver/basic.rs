@@ -356,6 +356,11 @@ pub fn _basic_listing(procedure: &masm::Procedure, number: usize) -> Result<Vec<
     if !runtime_frame && !module_body {
         return Ok(listing);
     }
+    // The procedure's first line stands before its prologue.
+    let (mut stripped, listing): (Vec<masm::Item>, &[masm::Item]) = match listing.split_first() {
+        Some((line @ masm::Item::Line(_), rest)) => (vec![line.clone()], rest),
+        _ => (Vec::new(), &listing),
+    };
     let (enter, leave) = masm::_frame_parts(procedure);
     let same = |items: &[masm::Item], semantics: &[Semantics]| {
         items.len() == semantics.len()
@@ -365,7 +370,6 @@ pub fn _basic_listing(procedure: &masm::Procedure, number: usize) -> Result<Vec<
         return Err(format!("{}: native frame prefix changed shape", procedure.name).into());
     }
     let listing = &listing[enter.len()..];
-    let mut stripped: Vec<masm::Item> = Vec::new();
     let mut at = 0;
     while at < listing.len() {
         let after = at + leave.len();
@@ -415,6 +419,7 @@ fn _basic_code(
             omfwrite::Encoded::Label(masm::Label { name }) => {
                 symbols.insert(name.clone(), (0, at));
             }
+            omfwrite::Encoded::Line(line) => segment.line(*line),
             omfwrite::Encoded::Piece(omfwrite::Piece { code, fixups }) => segment.put(code, fixups),
             omfwrite::Encoded::Jump(omfwrite::Jump { name, label, long }) => {
                 segment.put(&omfwrite::_jump(name, labels[label], at, *long).map_err(unencodable)?.code, &[]);
@@ -464,6 +469,7 @@ pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Resu
 
     let code = &mut segments[0];
     code.image = [header, std::mem::take(&mut code.image)].concat();
+    code.lines = code.lines.iter().map(|&(line, at)| (line, at + 48)).collect();
     code.spans = std::iter::once([0, 48]).chain(code.spans.iter().map(|[start, end]| [start + 48, end + 48])).collect();
     if module.procedures.last().is_none_or(|last| last.name != "$QB$STAT") {
         return Err("the BASIC statement table must be the final code procedure".into());

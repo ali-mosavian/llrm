@@ -197,6 +197,8 @@ pub enum Item {
     Label(Label),
     Callee(Callee),
     Semantics(Semantics),
+    /// The code after it is this source line's.
+    Line(u32),
 }
 
 fn reg(register: Register) -> Loc {
@@ -349,8 +351,10 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
     let (enter, leave) = _frame_parts(procedure);
-    let mut out: Vec<Item> = enter.into_iter().map(Item::Semantics).collect();
     let blocks = &procedure.body.blocks;
+    // The prologue is the first line's, not the previous procedure's last.
+    let mut line = blocks.iter().flat_map(|block| &block.insns).find_map(|one| one.line);
+    let mut out: Vec<Item> = line.map(Item::Line).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
@@ -362,6 +366,10 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
             let Some(what) = &one.what else {
                 return Err(Unprintable(format!("{} at {}: an instruction with no semantics", procedure.name, one.at)));
             };
+            if one.line.is_some() && one.line != line {
+                line = one.line;
+                out.extend(line.map(Item::Line));
+            }
             match what.op {
                 Operation::Move if _segment(&what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
                     // x86 has no immediate move into a segment register; the stack holds it for one instruction.
@@ -456,6 +464,7 @@ fn _procedure_of(procedure: &Procedure, items: Vec<Item>, names: &IndexMap<(Spac
     for item in items {
         match item {
             Item::Label(Label { name }) => out.push(format!("{name}:")),
+            Item::Line(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }

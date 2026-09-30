@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 pub struct SourceLocation {
     pub path: PathBuf,
     pub line: usize,
+    /// The main file's line: its own, or that of the $INCLUDE bringing it in.
+    pub main_line: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,7 +34,7 @@ pub fn load_with_map(path: &Path, include_dirs: &[PathBuf]) -> Result<LoadedSour
         text: String::new(),
         locations: Vec::new(),
     };
-    expand(path, include_dirs, &mut Vec::new(), &mut loaded)?;
+    expand(path, include_dirs, &mut Vec::new(), &mut loaded, None)?;
     Ok(loaded)
 }
 
@@ -41,6 +43,7 @@ fn expand(
     include_dirs: &[PathBuf],
     active: &mut Vec<PathBuf>,
     loaded: &mut LoadedSource,
+    main_line: Option<usize>,
 ) -> Result<(), String> {
     let canonical = path
         .canonicalize()
@@ -59,13 +62,14 @@ fn expand(
                 .ok_or_else(|| {
                     format!("{}: included file {name:?} was not found", path.display())
                 })?;
-            expand(&found, include_dirs, active, loaded)?;
+            expand(&found, include_dirs, active, loaded, main_line.or(Some(index + 1)))?;
         } else {
             loaded.text.push_str(line);
             loaded.text.push('\n');
             loaded.locations.push(SourceLocation {
                 path: path.to_path_buf(),
                 line: index + 1,
+                main_line: main_line.unwrap_or(index + 1),
             });
         }
     }
