@@ -38,7 +38,7 @@ class CompileError(Exception):
     pass
 
 
-COMPILE_SECONDS = 60
+COMPILE_SECONDS = 10
 
 
 def _run(command: list[str], env: dict | None = None, cwd: Path | None = None, timeout: int = 600) -> str:
@@ -59,7 +59,8 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
     env = dict(os.environ)
     if stages:
         env["LLRM_MIR_STAGES"] = str(stages)
-    common = [config.opt, "--cpu", config.cpu, "-o", str(obj)]
+    # no unrolling or peeling: each case keeps one loop to measure, and compiles faster
+    common = [config.opt, "--cpu", config.cpu, "-fno-unroll-loops", "-fno-peel-loops", "-o", str(obj)]
     if lang == "c":
         command = [str(BIN / "llrm-c"), str(source), *common]
     elif lang == "bas":
