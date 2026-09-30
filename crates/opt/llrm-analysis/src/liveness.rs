@@ -107,9 +107,9 @@ pub fn pressure_of(function: &Function, found: Option<&Liveness>, inside: Option
     peak
 }
 
-/// How many values `counted` says are live before each instruction of
-/// `block` but its phis, in order.
-pub fn pressure_points(function: &Function, found: &Liveness, block: BlockId, counted: &dyn Fn(ValueId) -> bool) -> Vec<(InstId, usize)> {
+/// The values live before each instruction of `block` but its phis, and
+/// those live across it, in order.
+pub fn live_points(function: &Function, found: &Liveness, block: BlockId) -> Vec<(InstId, BTreeSet<ValueId>, BTreeSet<ValueId>)> {
     let mut alive = found.live_out[&id(block)].clone();
     let mut points = Vec::new();
     for &inst in function.block(block).instructions().iter().rev() {
@@ -120,11 +120,18 @@ pub fn pressure_points(function: &Function, found: &Liveness, block: BlockId, co
         if let Some(one) = op.result {
             alive.remove(&one);
         }
+        let across = alive.clone();
         alive.extend(reads(op));
-        points.push((inst, alive.iter().filter(|&&one| counted(one)).count()));
+        points.push((inst, alive.clone(), across));
     }
     points.reverse();
     points
+}
+
+/// How many values `counted` says are live before each instruction of
+/// `block` but its phis, in order.
+pub fn pressure_points(function: &Function, found: &Liveness, block: BlockId, counted: &dyn Fn(ValueId) -> bool) -> Vec<(InstId, usize)> {
+    live_points(function, found, block).into_iter().map(|(inst, before, _)| (inst, before.iter().filter(|&&one| counted(one)).count())).collect()
 }
 
 /// The edge operands of phis whose results are actually live.

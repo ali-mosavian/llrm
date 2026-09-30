@@ -42,7 +42,7 @@ impl FunctionPass for IndVars {
         let outer = std::rc::Rc::clone(analyses.outer());
         let evaluated = crate::loopexit::evaluated(unit.context, unit.layout, unit.function, &outer).unwrap_or_else(|error| panic!("indvars: {error}"));
         let sunk = crate::exitsink::sunk(unit.function);
-        let rewound = rewound(unit.context, unit.layout, unit.function, analyses, crate::profit::registers(&outer).0, &crate::profit::costs(&outer));
+        let rewound = rewound(unit.context, unit.layout, unit.function, analyses, crate::profit::registers(&outer).registers, &crate::profit::costs(&outer));
         let dead = (sunk || rewound) && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated {
             PreservedAnalyses::none()

@@ -38,6 +38,7 @@ use llrm_support::hash::HashMap;
 use num_bigint::BigInt;
 
 use crate::counting::{self, Seeds};
+use crate::spill::{self, Room, Traffic};
 use crate::{dead, profit, rotate};
 
 pub struct Lsr;
@@ -56,15 +57,26 @@ impl FunctionPass for Lsr {
 /// What the target says a loop's choice may cost.
 struct Target {
     costs: OperationCosts,
-    registers: i64,
-    call_registers: i64,
+    room: Room,
     forms: Vec<AddressForm>,
+}
+
+/// What may take a register in a loop: a value it has, or one a choice
+/// adds -- a counter, an invariant, a symbolic step, a product, a value
+/// built from a counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Resident {
+    Value(ValueId),
+    Counter(usize),
+    Held(usize),
+    Step(usize),
+    Product(usize, i64, i64),
+    Rebuilt(usize),
 }
 
 /// Each loop's counters chosen, innermost first; whether any changed.
 pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
-    let (registers, call_registers) = profit::registers(outer);
-    let target = Target { costs: profit::costs(outer), registers, call_registers, forms: outer.target().address_forms() };
+    let target = Target { costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms() };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
     loop {
@@ -75,7 +87,7 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            _plan(&view, &loop_, &target)
+            _plan(&view, outer, &loop_, &target)
         };
         let Some(plan) = plan else { continue };
         if let Some(first) = _applied(unit, &plan) {
@@ -200,12 +212,13 @@ struct Problem<'a> {
     /// The exit's price from each candidate, testing its last value.
     exits: Vec<Option<(i64, Option<usize>)>>,
     keys: Vec<Key>,
-    /// Registers the loop needs before each of its instructions, by block,
-    /// whatever is chosen.
-    fixed: BTreeMap<i64, Vec<(InstId, i64)>>,
+    /// What the loop keeps in registers before each of its instructions,
+    /// and across each call, by block, whatever is chosen.
+    fixed: BTreeMap<i64, Vec<spill::Site>>,
+    /// The spill traffic of what `fixed` keeps.
+    traffic: BTreeMap<ValueId, Traffic>,
     /// Where each site's value is live, at the points of `fixed`.
     alive: Vec<BTreeMap<i64, Vec<bool>>>,
-    capacity: i64,
     latch: i64,
     header: i64,
     /// How often the preheader runs, where starts and invariants are built.
@@ -225,7 +238,7 @@ fn _preheader(function: &Function, loop_: &Loop) -> Option<BlockId> {
     }
 }
 
-fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
+fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
@@ -292,10 +305,12 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
     let candidates = _candidates(view, target, &users, &sites, exit.as_ref());
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
     let live = _live_anyway(function, loop_, &users, exit.as_ref());
-    let fixed = _fixed(view, loop_, &web_values, &users, exit.as_ref(), &live);
+    let cells = spill::cells(function);
+    let fixed = _fixed(view, outer, loop_, target.room, &cells, &web_values, &users, exit.as_ref(), &live);
+    // The web's reads are the uses the choice replaces; each use adds its own back.
+    let kept = |inst: InstId| !users.web.contains(&inst);
+    let traffic = spill::traffic(function, &frequencies, &cells, &target.costs, &kept, &|value| spill::words(view.context, view.layout, function, value));
     let alive = _alive(function, loop_, &sites);
-    let calls = loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions()).any(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)));
-    let capacity = if calls && target.call_registers != 0 { target.call_registers } else { target.registers };
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
     let most = exit.as_ref().map(|exit| exit.most.clone());
@@ -310,8 +325,8 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
         exits,
         keys,
         fixed,
+        traffic,
         alive,
-        capacity,
         latch: frequency(cfg::block(latch)),
         header: frequency(cfg::block(loop_.header)),
         entry: frequency(preheader),
@@ -324,13 +339,11 @@ fn _plan(view: &memory::Unit, loop_: &Loop, target: &Target) -> Option<Plan> {
     let after = chosen.as_ref().and_then(|chosen| problem.total(chosen));
     llrm_support::debug!(
         "lsr",
-        "loop b{}: {} uses, {} candidates, exit {}, fixed {:?} of {}; {:?} costs {:?}, {:?} costs {:?}",
+        "loop b{}: {} uses, {} candidates, exit {}; {:?} costs {:?}, {:?} costs {:?}",
         loop_.header,
         problem.sites.len(),
         problem.candidates.len(),
         problem.exit.as_ref().map_or("none".to_owned(), |exit| format!("{:?} trips", exit.trips)),
-        problem.fixed,
-        problem.capacity,
         current,
         before,
         chosen,
@@ -469,26 +482,26 @@ fn _symbols(users: &Users, exit: Option<&Exit>) -> BTreeSet<ValueId> {
     symbols
 }
 
-/// The most integer registers the loop needs besides its counters and the
-/// invariants only its recurrences read.
-fn _fixed(view: &memory::Unit, loop_: &Loop, web: &BTreeSet<ValueId>, users: &Users, exit: Option<&Exit>, live: &BTreeSet<ValueId>) -> BTreeMap<i64, Vec<(InstId, i64)>> {
+/// What the loop keeps in registers besides its counters and the
+/// invariants only its recurrences read, at each instruction.
+#[allow(clippy::too_many_arguments)]
+fn _fixed(
+    view: &memory::Unit,
+    outer: &Outer,
+    loop_: &Loop,
+    room: Room,
+    cells: &BTreeMap<ValueId, ValueId>,
+    web: &BTreeSet<ValueId>,
+    users: &Users,
+    exit: Option<&Exit>,
+    live: &BTreeSet<ValueId>,
+) -> BTreeMap<i64, Vec<spill::Site>> {
     let function = view.function;
     let symbols = _symbols(users, exit);
-    let types = &view.context.types;
-    let counted = |value: ValueId| {
-        let integer = match types.get(function.value(value).ty) {
-            Type::Int(bits) => *bits > 1,
-            Type::Pointer(_) => true,
-            _ => false,
-        };
-        integer && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value))
-    };
+    let counted = |value: ValueId| spill::integer(view.context, function, value) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
     let found = liveness::live(function);
-    loop_
-        .body
-        .iter()
-        .map(|&at| (at, liveness::pressure_points(function, &found, cfg::block(at), &counted).into_iter().map(|(inst, count)| (inst, count as i64)).collect()))
-        .collect()
+    let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
+    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, cells, &counted))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.
@@ -498,7 +511,7 @@ fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64
         .iter()
         .map(|site| {
             let own = |value: ValueId| value == site.one.value;
-            loop_.body.iter().map(|&at| (at, liveness::pressure_points(function, &found, cfg::block(at), &own).into_iter().map(|(_, count)| count != 0).collect())).collect()
+            loop_.body.iter().map(|&at| (at, liveness::live_points(function, &found, cfg::block(at)).into_iter().map(|(_, before, _)| before.iter().any(|&one| own(one))).collect())).collect()
         })
         .collect()
 }
@@ -900,6 +913,38 @@ fn _end(exit: &Exit, candidate: &Candidate) -> Linear {
 }
 
 impl Problem<'_> {
+    /// What holds invariant `key`: the loop's own value where it names one,
+    /// else a new register.
+    fn resident(&self, key: usize) -> Resident {
+        let named = match &self.keys[key] {
+            (None, sum) if sum.constant == BigInt::from(0) && sum.terms.len() == 1 => sum.terms.iter().find(|(_, factor)| **factor == BigInt::from(1)).map(|(value, _)| *value),
+            (Some(Operand::Value(value)), sum) if sum.is_zero() => Some(*value),
+            _ => None,
+        };
+        match named {
+            Some(value) if self.free(&self.keys[key]) => Resident::Value(value),
+            _ => Resident::Held(key),
+        }
+    }
+
+    /// What keeping `one` in memory costs, read as `reads` says.
+    fn spill_price(&self, one: Resident, reads: &BTreeMap<Resident, i64>) -> i64 {
+        let read = reads.get(&one).copied().unwrap_or(0);
+        let traffic = match one {
+            Resident::Value(value) => {
+                let kept = self.traffic.get(&value).copied().unwrap_or_default();
+                Traffic { loads: kept.loads + read, ..kept }
+            }
+            // Stepped in place each trip; a new one's start stored on entry.
+            Resident::Counter(at) => Traffic { stores: if self.candidates[at].existing.is_none() { self.entry } else { 0 }, updates: self.latch, loads: read, rebuild: None },
+            Resident::Held(_) => Traffic { stores: self.entry, loads: read, ..Traffic::default() },
+            Resident::Step(_) => Traffic { stores: self.entry, loads: self.latch, ..Traffic::default() },
+            Resident::Product(..) => Traffic { stores: read, loads: read, ..Traffic::default() },
+            Resident::Rebuilt(at) => Traffic { stores: self.sites[at].frequency, loads: self.sites[at].frequency, ..Traffic::default() },
+        };
+        traffic.price(&self.target.costs)
+    }
+
     /// Each site's cheapest fit among `set`; the exit's candidate where
     /// testing its last value is cheaper than keeping its compare.
     #[allow(clippy::type_complexity)]
@@ -954,16 +999,30 @@ impl Problem<'_> {
         let mut pairs = BTreeSet::<(Reg, Reg)>::new();
         // Values built from a counter rather than being one.
         let mut rebuilt = Vec::<usize>::new();
+        // How often each counter and invariant is read a trip.
+        let mut reads = BTreeMap::<Resident, i64>::new();
 
         for (index, site) in self.sites.iter().enumerate() {
             match self.choice(set, index)? {
-                (_, Some((_, (exit, key)))) => {
+                (_, Some((one, (exit, key)))) => {
                     cost += exit * site.frequency;
+                    *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
+                    if let Some(key) = key {
+                        *reads.entry(self.resident(key)).or_default() += site.frequency;
+                    }
                     held.extend(key);
                     built.extend(key);
                 }
                 (Some((one, fit, price)), None) => {
                     cost += price.cost * site.frequency;
+                    if site.inside {
+                        if fit.k != BigInt::from(0) {
+                            *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
+                        }
+                        for &key in &price.held {
+                            *reads.entry(self.resident(key)).or_default() += site.frequency;
+                        }
+                    }
                     let product = fit.rest.is_zero() && fit.constant == BigInt::from(0) && fit.base.is_none();
                     if site.inside && site.one.kind == UseKind::Basic && !fit.next && !(product && fit.k == BigInt::from(1)) {
                         rebuilt.push(index);
@@ -980,9 +1039,10 @@ impl Problem<'_> {
                             _ => None,
                         };
                         let points = self.fixed.get(&block);
-                        let at = points.and_then(|points| points.iter().position(|(inst, _)| Some(*inst) == reader)).unwrap_or_else(|| points.map_or(0, |points| points.len().saturating_sub(1)));
+                        let at = points.and_then(|points| points.iter().position(|point| Some(point.inst) == reader)).unwrap_or_else(|| points.map_or(0, |points| points.len().saturating_sub(1)));
                         let slot = last.entry((one, k, block)).or_insert(at);
                         *slot = (*slot).max(at);
+                        *reads.entry(Resident::Product(one, k, block)).or_default() += site.frequency;
                     }
                     built.extend(price.held.iter().copied());
                     if site.inside {
@@ -1004,24 +1064,32 @@ impl Problem<'_> {
             }
         }
         cost += built.iter().map(|&key| _built(costs, &self.keys[key])).sum::<i64>() * self.entry;
-        let steps = set.iter().filter(|&&one| self.candidates[one].of.step.known().is_none()).count() as i64;
-        let new = held.iter().filter(|&&key| !self.free(&self.keys[key])).count() as i64;
-        // Counters and invariants live throughout; a product the loop
-        // computes, from its block's top to its last reader; a value built
-        // from a counter, where it is live.
-        let peak = self
-            .fixed
+        // Counters, their symbolic steps and new invariants live throughout;
+        // a product the loop computes, from its block's top to its last
+        // reader; a value built from a counter, where it is live.
+        let throughout = set
             .iter()
-            .flat_map(|(&block, points)| points.iter().enumerate().map(move |(index, (_, count))| (block, index, *count)))
-            .map(|(block, index, count)| {
-                let values = rebuilt.iter().filter(|&&site| self.alive[site].get(&block).is_some_and(|alive| alive[index])).count() as i64;
-                count + last.iter().filter(|(product, read)| product.2 == block && **read >= index).count() as i64 + values
+            .map(|&one| Resident::Counter(one))
+            .chain(set.iter().filter(|&&one| self.candidates[one].of.step.known().is_none()).map(|&one| Resident::Step(one)))
+            .chain(held.iter().filter(|&&key| !self.free(&self.keys[key])).map(|&key| Resident::Held(key)))
+            .collect::<Vec<_>>();
+        let points = self.fixed.iter().flat_map(|(&block, sites)| {
+            let (throughout, last, rebuilt) = (&throughout, &last, &rebuilt);
+            sites.iter().enumerate().flat_map(move |(index, site)| {
+                let added = throughout
+                    .iter()
+                    .copied()
+                    .chain(last.iter().filter(|(product, read)| product.2 == block && **read >= index).map(|(&(one, k, block), _)| Resident::Product(one, k, block)))
+                    .chain(rebuilt.iter().filter(|&&at| self.alive[at].get(&block).is_some_and(|alive| alive[index])).map(|&at| Resident::Rebuilt(at)))
+                    .collect::<Vec<_>>();
+                std::iter::once(&site.before).chain(&site.across).map(move |point| spill::Point {
+                    registers: point.registers,
+                    residents: point.residents.iter().map(|&value| Resident::Value(value)).chain(added.iter().copied()).collect(),
+                })
             })
-            .max()
-            .unwrap_or(0);
-        let registers = peak + set.len() as i64 + new + steps;
-        if self.capacity != 0 && registers > self.capacity {
-            cost += (registers - self.capacity) * (costs.memory_update + costs.load) * self.header;
+        });
+        if self.target.room.priced() {
+            cost += spill::spilled(points, |one| self.spill_price(one, &reads));
         }
         if let Some(native) = self.target.forms.first()
             && let Some(limit) = native.address_registers()

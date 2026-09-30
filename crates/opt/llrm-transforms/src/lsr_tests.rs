@@ -1141,3 +1141,13 @@ entry:
     let printed = same(&format!("{callee}{}", program(&[("b", "i32", 4)], "i16", TICKER)), TRIPS);
     assert!(!printed.lines().any(|line| line.contains("%lsr.iv") && line.contains("phi i32")), "{printed}");
 }
+
+/// Past the target's registers an end compared with is spilled for a load,
+/// a counter for a memory update a trip: mandel's column kept a second
+/// counter counted to zero in memory over comparing `cx` with its end,
+/// where every register over the target's was priced as a counter.
+#[test]
+fn test_a_spilled_end_is_cheaper_than_a_second_counter() {
+    let printed = same(MANDEL, &[&[0], &[5], &[-7]]);
+    assert_eq!(counters(&printed), 3, "{printed}");
+}

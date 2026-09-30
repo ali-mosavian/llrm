@@ -40,6 +40,7 @@ pub mod ports;
 pub mod profit;
 pub mod promote;
 pub mod rotate;
+pub mod spill;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
