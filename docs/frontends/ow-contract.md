@@ -546,6 +546,233 @@ What the FE tells the BE that permits harder optimisation, and what it is used f
 
 Facts the FE does NOT give the BE (grep: no producer in bld/cc): restrict/no-alias (`FE_NOALIAS`), function purity beyond the two pragma flags, pointee constness, `FE_ADDR_TAKEN` for plain C `&x`, `FE_ONESEG`, `FE_COMMON`, loop trip counts, branch probabilities (only `-ob` global switch), value ranges.
 
+### What the Open Watcom back end does with each fact
+
+Paths in this subsection: `c/`, `intel/`, `risc/`, `h/` are under `cg/`; `cc/` is `cc/c/`.
+
+#### Symbol attributes (`FEAttr`)
+
+| fact | consumed at | what it enables | C FE | cite |
+|---|---|---|---|---|
+| FE_STATIC | `if( attr & FE_STATIC )` picks a global memory operand; otherwise a stack temp | autos (attr 0) become N_TEMP: register-allocatable, USE_ADDRESS tracked. Statics become N_MEMORY. | yes (SC_STATIC, SC_NONE, SC_EXTERN) | c/makeaddr.c:MakeAddrName:565 |
+| FE_GLOBAL, FE_VISIBLE | `FEAttr & (FE_VISIBLE\|FE_GLOBAL)` with `_IsntModel(RELAX_ALIAS)` forces USE_MEMORY\|USE_ADDRESS | Without -oa every global/file-static is pinned to memory. With -oa they may be enregistered. | FE_GLOBAL yes; FE_VISIBLE only on SC_STATIC | c/dataflo.c:CheckGlobals:189-194; cc/cinfo.c:FESymAttr:217 |
+| FE_GLOBAL, FE_VISIBLE | `(attr & (FE_GLOBAL\|FE_VISIBLE))==0 && RELAX_ALIAS` sets CST_OK_ACROSS_CALLS | A memory name that is neither global nor visible may stay in a register across calls. C never produces such an N_MEMORY name (statics are FE_VISIBLE), so this fires only for FE_CONSTANT in C. | no (see note) | c/conflict.c:AddConflictNode:92 |
+| FE_VISIBLE | `have_call`: only `FEAttr & FE_VISIBLE` CG_FE memory is set VU_VARIANT | Loop-invariant hoisting of non-visible memory across a call. Same C caveat. | partial | c/loopopts.c:MarkInvariants:610 |
+| FE_VISIBLE | `_IsModel(FORTRAN_ALIASING)`: `(attr & FE_VISIBLE)==0` returns MB_FALSE | A call cannot touch a non-visible name. Fortran only. | no | c/redefby.c:VisibleToCall:275-278 |
+| FE_CONSTANT | `attr & FE_CONSTANT` sets VAR_CONSTANT | Name is never redefined. `NameIsConstant` makes `ReDefinedBy` return MB_FALSE for any instruction or call: CSE, copy propagation, scheduling across calls/stores, scoreboard reuse. | yes (`const`, not volatile) | c/makeaddr.c:MakeAddrName:578; c/redefby.c:NameIsConstant:246-259,ReDefinedBy:373 |
+| FE_CONSTANT | `NameIsConstant(op)` skips `_SetLoopUsage(VU_VARIANT)` | Loads of const memory stay loop-invariant across calls and pointer stores (hoisted). | yes | c/loopopts.c:MarkInvariants:600,606 |
+| FE_CONSTANT | `NameIsConstant(conf->name)` clears need_store | No store-back of a register-cached const. | yes | c/loadstor.c:280 |
+| FE_CONSTANT | `attr & FE_CONSTANT` sets OK_ACROSS_CALLS | Const memory value kept in a register across calls. | yes | c/conflict.c:AddConflictNode:92 |
+| FE_CONSTANT (via segment) | `AskNameIsROM` fallback in `NameIsConstant` | Any name in a ROM segment counts as constant even without FE_CONSTANT (string literals in SEG_CONST are BACK\|INIT\|ROM). See section 6. | yes | c/redefby.c:NameIsConstant:261 |
+| FE_VOLATILE | `attr & FE_VOLATILE` sets VAR_VOLATILE\|NEEDS_MEMORY\|USE_MEMORY (static and auto) | Restricts only. Name never enregistered, never CSE'd, never deleted, never invariant. | yes (`volatile`, pragma-used, try-block vars) | c/makeaddr.c:MakeAddrName:572,596; cc/cinfo.c:FESymAttr:232-238 |
+| FE_VOLATILE consumers | `VAR_VOLATILE` tests: ZapsTheOp returns MB_TRUE; CSE skips; InsDead keeps; scoreboard class SC_N_VOLATILE; loops skip | as above | - | c/redefby.c:ZapsTheOp:151-163; c/cse.c:ReCalcAddrTaken:94,DoArithOps:986; c/insdead.c:InitVisitedTemps:58,VolatileIns:156; c/scinfo.c:ScoreInfo:318,325; c/loopopts.c:MarkInvariants:525,532; c/regalloc.c:323 |
+| FE_MEMORY | `attr & FE_MEMORY` sets NEEDS_MEMORY\|USE_MEMORY | Restricts only. `AddOne` returns NULL for USE_MEMORY names so no conflict node, no register. | yes, only with volatile/pragma/try | c/makeaddr.c:MakeAddrName:567,587; c/conflict.c:AddOne:105 |
+| FE_ADDR_TAKEN | `attr & FE_ADDR_TAKEN` sets USE_ADDRESS on a local | Marks a local as reachable by pointer stores and calls. | only for pragma-used symbols (SYM_USED_IN_PRAGMA) | c/makeaddr.c:MakeAddrName:590; cc/cinfo.c:FESymAttr:232 |
+| FE_ADDR_TAKEN | `ReCalcAddrTaken` clears USE_ADDRESS on every temp that lacks FE_ADDR_TAKEN, then `FindReferences` re-derives it from OP_LA | After copy propagation removes an address load, the temp becomes register-allocatable again. The BE derives USE_ADDRESS itself from OP_LA (`Use(name, USE_ADDRESS)`), so the FE bit is only needed for pragma-visible addresses. | see left | c/cse.c:ReCalcAddrTaken:97-101; c/varusage.c:SearchDefUse:387-391 |
+| USE_ADDRESS (derived) | tested in alias rules: a pointer store zaps a temp only `if( op->v.usage & USE_ADDRESS )`; `ScoreStomp`; tail recursion bails if any temp has it; loops set VU_VARIANT | Non-address-taken locals are immune to pointer stores and calls: they live in registers across both. | derived in BE | c/redefby.c:ZapsTemp:128,ZapsIndexed:189,VisibleToCall:296; c/scinfo.c:ScoreStomp:94; c/trecurse.c:ScaryOperand:288; c/loopopts.c:MarkInvariants:571,595 |
+| FE_NOALIAS | no test anywhere; only printed by the API echo | nothing | no | c/cg.c:334 (echo only; grep of c/ intel/ h/ risc/ finds no other use) |
+| FE_UNIQUE | `attr & FE_UNIQUE` sets label status UNIQUE | Restricts: UniqueLabel blocks aliasing two function labels; one pad byte added. No speedup. | only with -ou | c/optask.c:AskForLabel:109; c/optlbl.c:UniqueLabel:143; c/optmain.c:161 |
+| FE_INTERNAL | public/export decision only | none | yes (local statics) | intel/c/x86omf.c:1390; intel/c/x86owl.c:383 |
+| FE_ONESEG | `attr & FE_ONESEG` in NamePtrType: returns TY_POINTER instead of TY_HUGE_POINTER for names in private segments | 16-bit: avoids segment arithmetic on pointers into that object. | no | intel/c/x86segs.c:NamePtrType:259 |
+| FE_NAKED | `(attr & FE_NAKED)==0` around prolog/epilog; object.c emits only pragma calls | no prolog/epilog generated | yes | intel/c/x86proc.c:975,1005,1215; c/object.c:137 |
+| FE_IMPORT | data emit skipped; call through import | emission only | yes | c/dg.c:208,541,552,1246; intel/c/x86enc2.c:392,402 |
+| FE_VARARGS | no reader in bld/cg | nothing | yes | grep found none |
+| FE_UNALIGNED | sets VAR_UNALIGNED; header says "no longer used" | nothing: VAR_UNALIGNED has no reader | no | c/makeaddr.c:MakeAddrName:575; h/name.h:80 |
+| FE_PROC, FE_COMMON, FE_COMPILER, FE_THREAD_DATA, FE_DLLIMPORT, FE_DLLEXPORT | symbol classification for object emission, TLS, import thunks | no optimisation | partly | intel/c/x86omf.c:2415-2423,2541-2546; intel/386/c/386tls.c:193 |
+| FE_UNINITIALIZED | not defined in this tree's cg.h | - | - | h/cg.h (fe_attr list) |
+
+#### Call-class bits
+
+Mapping path on x86: `x86reg.c` turns cclass into ROUTINE_* attrs; `x86call.c:BGCall` turns those into per-call `call_flags`.
+
+| fact | consumed at | what it enables | C FE | cite |
+|---|---|---|---|---|
+| FECALL_GEN_NO_MEMORY_CHANGED -> CALL_WRITES_NO_MEMORY | `cclass & NO_MEMORY_CHANGED` -> ROUTINE_MODIFIES_NO_MEMORY -> call flag | Call is not a store: scoreboard keeps memory values (`MemChanged(..., (flags & WRITES_NO)==0)`); `VisibleToCall(modifies)` returns MB_FALSE; loop `MemChangedInLoop` stays false so loads hoist across the call; no reload/store around it (`savcode.h`); `BLK_CONTAINS_CALL` not set when both flags present. | only `#pragma aux ... modify nomemory` | intel/c/x86reg.c:110; intel/c/x86call.c:BGCall:199-203; c/scblock.c:DoScore:190-191; c/redefby.c:VisibleToCall:272-274; c/loopopts.c:MarkInvariants:546-548; c/loadstor.c:CheckRefs:99-100; c/varusage.c:SearchDefUse:377-378; h/savcode.h:165,173; cc/cpragx86.c:925 |
+| FECALL_GEN_NO_MEMORY_READ -> CALL_READS_NO_MEMORY | `cclass & NO_MEMORY_READ` -> ROUTINE_READS_NO_MEMORY -> flag | Stores need not be flushed before the call; scheduler may move stores across it (`InsOrderDependant` skips the visibility test); no store-before-call in save code. | only `#pragma aux ... parm nomemory` | intel/c/x86reg.c:113; intel/c/x86call.c:BGCall:206; c/inssched.c:InsOrderDependant:440; c/varusage.c:377; h/savcode.h:174; cc/cpragx86.c:821 |
+| FECALL_GEN_ABORTS | -> ROUTINE_NEVER_RETURNS_ABORTS | Caller: implies CALL_WRITES_NO_MEMORY; call emitted as `JMP` (no return address); `OC_NORET` marker follows. Callee: no return address on stack, no saved-register pushes, no epilog. No block-graph pruning after the call was found (no ABORTS/NORETURN test in c/). | yes (`#pragma aux aborts`, FLAG_ABORTS) | intel/c/x86reg.c:88; intel/c/x86call.c:BGCall:199,209; intel/c/x86enc2.c:GenCall:388-395,412; intel/c/x86proc.c:returnAddressStackSize:914, GenProlog:1068, 1216; cc/cfeinfo.c:getCallClass:505 |
+| FECALL_GEN_NORETURN | -> ROUTINE_NEVER_RETURNS_NORETURN | Same as ABORTS for the caller side except the call stays a CALL. `OC_NORET` is a transfer instruction: peephole drops code after it (`IsolatedCode`), merges identical tails (`ComTail(NoRetList)`). | yes (`__declspec(noreturn)`) | intel/c/x86call.c:BGCall:199,212; intel/c/x86enc2.c:GenCall:412,GenCallIndirect:451; c/optins.c:307,378; c/optcom.c:TransformJumps:96; cc/cfeinfo.c:getCallClass:508 |
+| FECALL_GEN_MAKE_CALL_INLINE | `call_inline` test | No call node is built: pragma byte sequence emitted in line, no call zap, no arg spill. Symbol is not emitted as a function. | yes (IsInLineFunc) | c/tree.c:2323; intel/c/x86omf.c:3394; cc/cfeinfo.c:getCallClass:515 |
+| FECALL_GEN_PARMS_BY_ADDRESS | parm tree copied to a temp and its address passed | FORTRAN by-reference; nothing for C | no | c/tree.c:2336 |
+| FECALL_GEN_SETJMP_KLUGE | `CALL_IS_SETJMP` in RISC only | AXP scheduler refuses to move registers past setjmp. Not implemented on x86. | no (C flags locals FE_VOLATILE via SYM_TRY_VOLATILE instead) | risc/axp/c/axpreg.c:102; c/redefby.c:VisibleToCall:296-305 (`#if AXP`); cc/cinfo.c:FESymAttr:235 |
+| FECALL_GEN_HAS_VARARGS | only read in PPC | nothing on x86/386 | yes | risc/ppc/c/ppcreg.c:132 |
+| FECALL_GEN_CALLER_POPS | clears ROUTINE_REMOVES_PARMS -> no CALL_POPS_PARMS; explicit `ADD SP` after the call | A caller-pops call with no OC_ATTR_POP can be turned into a tail `JMP` (`RetAftrCall`); callee-pops calls cannot. Also stack depth tracking. | yes (varargs, `__cdecl`) | intel/c/x86reg.c:85; intel/c/x86call.c:BGCall:193,268; c/optpush.c:RetAftrCall:60-62,69; intel/c/x86proc.c:1149 |
+| FECALL_GEN_REVERSE_PARMS | argument order reversed | ABI only | `#pragma aux reverse` | c/tree.c:872 |
+| FECALL_GEN_DLL_EXPORT | emission | none | yes | intel/c/x86omf.c:3453 |
+
+Call-flag gate: an `OP_CALL` lacking either NO_MEMORY flag (i.e. unless both are present) makes `SearchDefUse` call `UseDefGlobals`, i.e. every global is treated as used and defined (c/varusage.c:SearchDefUse:375-380).
+
+#### Register lists
+
+| fact | consumed at | what it enables | C FE | cite |
+|---|---|---|---|---|
+| SAVE_REGS (callee preserves) | `state->modify = FULL minus *pregs`; `CallZap` = modify (+ parm regs + return reg + full-register widening unless MODIFY_EXACT) -> `call_ins->zap` | Registers outside zap survive the call: liveness, allocation and the scoreboard treat only the zap set as killed. Precise `modify [..]` lists on pragma functions keep more values in registers. `FECALL_X86_MODIFY_EXACT` drops the widening. | yes: list from the aux (`inf->save`); no code found that derives it from callee bodies | intel/c/x86reg.c:64-68,CallZap:259-270; c/bldcall.c:AssgnParms:887; c/scblock.c:DoScore:186-192; c/regalloc.c:787,853; c/liveinfo.c:FlowConflicts:300; cc/cfeinfo.c:1174-1188,381 |
+| SAVE_REGS / modify for the routine being compiled | `MustSaveRegs` = FULL minus `CurrProc->state.modify` minus return/parm regs | Registers the routine declares it may clobber are not pushed/popped; allocator charges push+pop cost only for registers in must_save. | yes | intel/c/x86reg.c:MustSaveRegs:278-296; c/regalloc.c:CountRegMoves:553; intel/c/x86regsv.c:110 |
+| SAVE_REGS -> SP | `!HW_Ovlap(*pregs, StackReg())` | Calls that modify SP force arguments to be computed before pushing (`MakeSPSafe`). | yes | c/tree.c:FunctionModifiesSP:2220 |
+| PARM_REGS | copied into `state->parm.table`; `ParmReg` hands out registers by type class | Arguments in registers: no store/load through the stack; `#pragma aux parm [..]` picks exact registers. | yes (`inf->parms`, `DefaultVarParms` for varargs) | intel/c/x86reg.c:167-178; intel/c/x86parm.c:ParmReg:53; cc/cfeinfo.c:1195-1213 |
+| RETURN_REG / STRETURN_REG | `FECALL_X86_SPECIAL_RETURN` picks the pragma register | Result returned in any register set, e.g. a pair, without moves. | yes | intel/c/x86reg.c:187,199 |
+| FEINF_CALL_BYTES | non-NULL -> inline byte sequence, call treated as in-line | see MAKE_CALL_INLINE; also keeps FE_NAKED bodies to pragma calls | yes | c/tree.c:2321; c/object.c:143 |
+| FECALL_X86_FAR_CALL etc. | far/near call, `RETF` | ABI; `AssgnParms` far flags | yes | c/bldcall.c:449 |
+| FEINF_CODE_LABEL_ALIGNMENT | `AlignArray` from FE; `OptForSize>0` returns 1 | Loop/proc label alignment (16 on 486+, time mode only) | yes: `{2,1,1}`, `[1]=TARGET_INT` when OptSize==0 | intel/c/x86enc2.c:134-142; cc/cfeinfo.c:1112-1119 |
+
+#### Volatile, unaligned, alignment, aggregate size
+
+| fact | consumed at | what it enables | C FE | cite |
+|---|---|---|---|---|
+| CGVolatile (TF_VOLATILE) | TF_VOLATILE -> FL_VOLATILE on the address node -> X_VOLATILE on the index operand | Volatile dereference (through pointer) is never CSE'd, scheduled around, deleted or hoisted. Restricts. | yes (OPFLAG_VOLATILE; also float ops when `op_switch_used`) | c/tree.c:1592-1594; c/addrfold.c:167; c/redefby.c:ZapsTheOp:159,IsVolatile:397; cc/cgen.c:588,633,641,908,1311 |
+| CGAttr(CG_SYM_VOLATILE) | same as CGVolatile | same | - | c/tree.c:TGAttr:1297 |
+| CGAttr(CG_SYM_CONSTANT) | sets TF_CONSTANT | nothing: TF_CONSTANT is never read. FL_CONSTANT (-> X_CONSTANT) is never set anywhere, X_CONSTANT is never read. | no | c/tree.c:TGAttr:1300; h/tree.h:45; c/addrfold.c:170 |
+| CGAttr(CG_SYM_UNALIGNED) | `alignment = 1` -> `X_ALIGNED_1` / `m.alignment` | x86: nothing reads it. RISC: `rscver.c` decides unaligned load/store sequences from it. | yes (OPFLAG_UNALIGNED, packed) | c/tree.c:TGAttr:1303; c/addrfold.c:173-191; risc/c/rscver.c:148-164 |
+| CGAlign | sets `u1.t.alignment` | same as UNALIGNED (RISC only) | no | c/tree.c:TGAlign:1317 |
+| BEDefType align | `TypeDef` keeps `align` only `#if _TARGET_RISC` (x86: `(void)align`); `ParmAlignment` returns 1 on x86 | x86: aggregate alignment has no effect on code. RISC: alignment of tree nodes of user types. | yes (`BEDefType(dtype, align, size)`) | c/types.c:TypeDef:205-212; intel/c/x86parm.c:ParmAlignment:45; c/tree.c:1582-1587; cc/cgen.c:1995 |
+| BEDefType size | `TypeClass` -> `MapStruct(length)`: length 1/2/4 becomes U1/U2/U4 | A 1/2/4-byte struct local is a scalar temp (register candidate, single mov). Other sizes are XX: memory only, moved by `rep movs` or mov runs (`OptForSize>50` changes the choice). | yes | c/typemap.c:TypeClass:87-108; intel/386/c/386ptype.c:MapStruct:105-119; intel/c/x86split.c:280-290 |
+
+#### Unroll count and signedness
+
+| fact | consumed at | what it enables | C FE | cite |
+|---|---|---|---|---|
+| BEUnrollCount / `#pragma unroll(n)` | `UnrollValue` stored in the block started by the next label; `Head->unroll_count` read by `UnrollCount` | n>0 forces unrolling of that loop even without -ol+ (`CGSW_GEN_LOOP_UNROLLING` is only tested when count==0). Still needs -ol (TransLoops runs only under LOOP_OPTIMIZATION) and no -od. n=255 from the pragma means "max". | yes (cgen.c:1629-1631) | c/bldins.c:BGGenCtrl:382,BGUnrollCount:470; c/unroll.c:UnrollCount:301-303,UnRoll:1127; c/generate.c:PreOptimize:164-184; cc/cgen.c:GenOptimizedCode:1629; cc/cpragma.c:1437-1455 |
+| Auto unroll (count 0) | `LOOP_UNROLLING` set (-ol+) and `OptForSize==0` and no switch in loop body; uses BLK_ITERATIONS_KNOWN | Unroll small counted loops fully or by a divisor of the trip count. | - | c/unroll.c:UnrollCount:303-320 |
+| cg_type signed vs unsigned (I4 vs U4) | compare ops carry signed/unsigned via type class; `CheckCmpRange` folds compares of a narrow-source value against out-of-range constants using the original type; `a % 2^k` folded with a sign fix for signed types | Range-based compare folding. No "signed overflow is undefined" assumption found: `CalcFinalValue` computes trip counts from constants and rejects "wraps or exits immediately"; `DangerousTypeChange` refuses to swap induction vars of different signedness unless pointer-like; `ConstOverflowsType` bails on overflow. | yes | c/treefold.c:CheckCmpRange:112,1425-1441,1036-1056; c/loopopts.c:CalcFinalValue:2728-2753,DangerousTypeChange:2840-2854,ConstOverflowsType:2857-2934 |
+| Pointer arithmetic type | `PointerOk` (PT, CP, U2 indexed temp) | induction-variable replacement allowed across signedness for pointers | yes | c/loopopts.c:PointerOk:2814-2832 |
+
+#### Segment placement
+
+| fact | consumed at | what it enables | C FE | cite |
+|---|---|---|---|---|
+| seg_attr ROM on a segment | `AskNameIsROM(sym,class)` -> `seg_is_rom` -> `rec->rom` from `seg->attr & ROM` | Names in ROM segments are constant for all alias queries (`NameIsConstant`, section 1). | SEG_CONST = BACK\|INIT\|ROM, SEG_CONST2 = INIT\|ROM | c/redefby.c:NameIsConstant:261; intel/c/x86omf.c:askNameIsROM:3438-3441,rec->rom:853-854; cc/cinfo.c:634-635 |
+| const data goes to SEG_CONST2 | `SymSegId`: FE_CONSTANT and not `CompFlags.rent` -> SEG_CONST2 | makes const globals ROM; with `rent` (-zr) they stay in SEG_DATA but keep FE_CONSTANT | yes | cc/cinfo.c:SymSegId:290-296 |
+| BACK segments | BE may place its own data (jump tables, FP constants) | - | yes | cc/cinfo.c:634 |
+| CGSW_GEN_* ROM/ROMable | no switch for ROM code; nothing found | - | - | grep of cgswitch.h |
+
+#### Switch lowering
+
+| fact | consumed at | what it enables | C FE | cite |
+|---|---|---|---|---|
+| Case list (value, label), any order | `SortNodeList` sorts twice (signed, unsigned); `MergeListEntries` joins consecutive values with the same label into ranges | Dense and clustered cases collapse to ranges before costing. | `CGSelCase` per case, unsorted, no ranges, default via `CGSelOther` | c/bldsel.c:SortNodeList:140,MergeListEntries:165-190; cc/cgen.c:DoSwitch:963-969 |
+| Choice of method | `BGSelect` computes ScanCost, JumpCost, DistinctIfCost (binary search) for signed and unsigned orderings and takes the cheapest (`cost <= best`) | jump table, scan table (`repne scas`), or binary if-tree | C uses `CGSelect` = all three allowed. `CGSelectRestricted`/`CG_SWITCH_*` never passed | c/bldsel.c:BGSelect:574-640; h/cg.h:CG_SWITCH_*; cc/cgen.c:969 |
+| Cost model | JumpCost needs `num_cases>=MIN_JUMPS(4)` and `range>=4`; ScanCost needs `>=MIN_SVALUES(7)` (or 5 for 4-byte); `Balance(size,time)` blends by `OptForSize` with a floor of 25 | -os favours tables/scan (smaller); -ot favours binary search/table by time. | uses OptSize 0/50/100 | intel/c/x86sel.c:58-59,109-121,126-190 |
+| Switch expression | `node + 0` temp inserted so a volatile selector is read once | correctness | - | c/bldsel.c:BGSelect:650-660 |
+| Case frequency / profile | no input exists in the API | nothing | no | h/cg.h, c/bldsel.c |
+
+#### Generic switches
+
+| switch | consumed at | what it changes | cite |
+|---|---|---|---|
+| NO_OPTIMIZATION | `_IsModel(NO_OPTIMIZATION)` | `PreOptimize` and `PostOptimize` skip every optimisation pass; per-statement code generation (`BlockByBlock`); no FEMessage for peephole flush; peephole `optins/optrel/optcom` skip; frame uses `base_adjust=0`; all FE-named memory gets USE_MEMORY | c/generate.c:PreOptimize:152,PostOptimize:219,236,282,Generate:663; c/namelist.c:398; c/optins.c:152,287-379; c/optrel.c:135; c/trecurse.c:431; intel/c/x86proc.c:1073 |
+| LOOP_OPTIMIZATION (-ol) | gate in PreOptimize | `TransLoops`, `LoopInvariant`, `CommonInvariant`, `IndVars` (strength reduction), `ReConstFold`, `LoopEnregister`; `SplitVars` later; UnRoll | c/generate.c:PreOptimize:160-196,Generate:726 |
+| LOOP_UNROLLING (-ol+) | `UnrollCount` when no pragma | automatic unrolling | c/unroll.c:303 |
+| INS_SCHEDULING (-or) | gate on `Schedule()` | instruction scheduling, then a second `PeepOpt` | c/generate.c:PostOptimize:287 |
+| RELAX_ALIAS (-oa) | see "Alias" below | pointer stores stop killing globals and locals without an address; globals may be enregistered | c/conflict.c:92,165; c/redefby.c:ZapsMemory:90-93,ZapsIndexed:208-210; c/scinfo.c:ScoreStomp:88; c/dataflo.c:189; intel/c/i87sched.c:CheckTemp:621 |
+| FORTRAN_ALIASING | alias rules | pointer derefs get a base from the pointer variable (`TNFindBase`), calls only touch visible names, extra NOPs record by-ref arg modification. C never sets it. | c/redefby.c:86,204,275; c/tree.c:1434,1501; c/bldcall.c:635; c/loopopts.c:560,593; c/inssched.c:364; c/generate.c:397; c/breakrtn.c:86 |
+| NULL_DEREF_OK (-oz) | clears two folds | when NOT set: `PropNullInfo` uses a dereference as proof the pointer is non-null (folds later `p==0`); `&object != 0` folds to true | c/nullprop.c:492-494; c/treefold.c:1437-1446 |
+| FP_UNSTABLE_OPTIMIZATION (-on) | | `x/c` -> `x*(1/c)` for any c (else only powers of 2), CSE of reciprocals | c/cse.c:OkToInvert:758; c/treefold.c:908 |
+| FPU_ROUNDING_OMIT / INLINE | | omit or inline the FP rounding-mode save/restore around float-to-int | intel/c/i87exp.c:449-475 |
+| I_MATH_INLINE (-om) | | inline 8087 math (sin, sqrt..) | intel/c/i87exp.c:890,901; intel/c/i87opt.c:373; c/loopopts.c:721 |
+| SUPER_OPTIMAL (-oh) | | extra scoreboard tracking of register halves, deeper move counting in register allocation (slow) | c/scinfo.c:161,213,247; c/regalloc.c:532,539 |
+| FLOW_REG_SAVES (-ok) | | push/pop of callee-saved registers placed on the flow (dominator) path, not always in prolog/epilog | c/flowsave.c:FlowSave:307; intel/c/x86proc.c:708-712 |
+| BRANCH_PREDICTION (-ob) | gate in `SortBlocks`; also off if `OptForSize>50` | lays out blocks for static branch prediction | c/object.c:SortBlocks:810-814 |
+| NO_CALL_RET_TRANSFORM | | disables call+ret -> jmp (tail call) | c/optpush.c:RetAftrCall:52 |
+| MEMORY_LOW_FAILS | | when set, `ChkMemLimit` returns false (no peephole-queue flush under memory pressure); -oo clears it so the queue may be flushed. `AddCacheRegs` returns unless it is set. | c/memlimit.c:80; intel/c/x86proc.c:AddCacheRegs:863 |
+| MICROSOFT_COMPATIBLE, POSITION_INDEPENDANT, DLL_RESIDENT_CODE | | code shape/ABI, RISC splitting | risc/axp/c/axpsplit.c:673; intel/c/x86proc.c:69 |
+| DBG_LOCALS (-d2) | | disables the `a % 2^k` rewrite (keeps temps visible) | c/treefold.c:1036 |
+
+#### Options to switches
+
+| option | sets |
+|---|---|
+| -ox | clears NO_OPTIMIZATION; BRANCH_PREDICTION, I_MATH_INLINE, LOOP_OPTIMIZATION, INS_SCHEDULING; FE inlining (threshold 20); no stack check. Not -oa, -oh, -ok, -on, -oz, -ol+. |
+| -od | NO_OPTIMIZATION |
+| -ot / -os / default | OptSize 0 / 100 / 50, passed to `BEInit` as `OptForSize` (-ot and -os also clear NO_OPTIMIZATION) |
+| -oa | RELAX_ALIAS |
+| -ob | BRANCH_PREDICTION |
+| -oh | SUPER_OPTIMAL |
+| -ok | FLOW_REG_SAVES |
+| -ol / -ol+ | LOOP_OPTIMIZATION / plus LOOP_UNROLLING |
+| -on | FP_UNSTABLE_OPTIMIZATION |
+| -oo | clears MEMORY_LOW_FAILS |
+| -or | INS_SCHEDULING |
+| -oz | NULL_DEREF_OK |
+| -ou | FE sets FE_UNIQUE on functions |
+| default (no -o) | GenSwitches starts as MEMORY_LOW_FAILS only (cmdlnx86.c:74); -d1/-d2 variants set NO_OPTIMIZATION (coptions.c:524,528,541). Whether plain default runs the optimiser: not traced. |
+
+Cites: cc/coptions.c:444-478,683-725; cc/cgen.c:1924 (`BEInit(GenSwitches, TargetSwitches, OptSize, ...)`); c/intrface.c:BEInitCg:129.
+
+#### Size against time
+
+| threshold | consumed at | effect |
+|---|---|---|
+| >0 | c/unroll.c:UnrollCount:305; c/loopopts.c:2392; intel/c/x86ldstr.c:362; intel/c/x86enc2.c:138 | no auto unroll, no small-loop unroll, no Pentium load/store pairing pass, no code alignment |
+| >=50 / >50 | c/inssched.c:261; c/cse.c:625; c/encode.c:64,82; c/optrel.c:263; c/object.c:814; intel/c/x86mul.c:45; intel/c/x86split.c:284; intel/c/x86ldstr.c:431; intel/c/i87opt.c:503,513; intel/c/x86proc.c:496,630,634,799,865; intel/i86/c/i86opseg.c:119 | prefer short encodings, MUL over shift/add, `leave`, no hoisting out of switches, no label alignment, no branch-layout, no EBP freeing |
+| <50 / <25 | c/optpull.c:143; c/optcom.c:245; c/loopopts.c:3524 | clone code into jump targets, allow jump transformations, loop inversion when pre-header precedes |
+| ==100 | intel/c/x86enc.c:1606 | stack touch uses push/pop |
+
+#### Back-end passes and what each needs
+
+Order from `PreOptimize`/`PostOptimize`/`Generate` (c/generate.c:152-300,640-740).
+
+| pass | where | inputs from the FE |
+|---|---|---|
+| Move/address constant propagation (`MakeMovAddrConsts`, `KillMovAddrConsts`) | c/addrcnst.c:43 | none |
+| `PushPostOps` (untangle `*p++`) | c/optimize.c:351 | none |
+| `DeadTemps`, `InsDead` | c/optimize.c:209; c/insdead.c:378 | VAR_VOLATILE, USE_ADDRESS (insdead.c:58) |
+| `CommonSex`: copy/constant propagation, CSE, `LoadAddr`, reciprocal, invariant exprs | c/cse.c:1587 (loop: `ReCalcAddrTaken`, `DoPropagateMoves`, `PropagateExprs`) | alias rules (`ReDefinedBy`): FE_CONSTANT/ROM, USE_ADDRESS, VAR_VOLATILE, call flags, RELAX_ALIAS, FP_UNSTABLE |
+| `SetOnCondition` (setcc) | intel/c/386setcc.c:191 | none |
+| `BlockTrim`, `AxeDeadCode` | c/blktrim.c:493; c/optimize.c:274 | none |
+| Loop invariant motion (`LoopInvariant`, `CommonInvariant`) | c/loopopts.c:3251,965 | FE_CONSTANT, FE_VISIBLE, call flags, USE_ADDRESS, volatile, RELAX_ALIAS indirectly via ZapMemory |
+| Induction variables / strength reduction / loop inversion (`IndVars`, `TransLoops`, `Induction`) | c/loopopts.c:3696,3703,3676 | type class signedness, constants, OptForSize |
+| Unrolling (`UnRoll`) | c/unroll.c:1093 | BEUnrollCount, LOOP_UNROLLING, OptForSize |
+| Loop register caching (`LoopEnregister`, `LoopRegInvariant`) | c/loopopts.c:3265,3258 | alias rules; RELAX_ALIAS for memory names |
+| `MulToShiftAdd` | c/multiply.c:232 | OptForSize (x86mul.c cost) |
+| `PropNullInfo` | c/nullprop.c:483 | NULL_DEREF_OK off |
+| Tail recursion | c/trecurse.c:410 (generate.c:713) | no USE_ADDRESS temps; not BlockByBlock |
+| `SplitVars` | c/splitvar.c (generate.c:726) | LOOP_OPTIMIZATION |
+| `ConstToTemp`/`MemConstTemp` (constant caching; file header says purpose unknown) | c/cachecon.c:168,200 | none seen |
+| `AddCacheRegs` (386: ESP frame, frees EBP) | intel/c/x86proc.c:857-899 | MEMORY_LOW_FAILS set, OptForSize<=50, no FLOATING_DS/SS, not Windows, `lex_level==0` |
+| Register allocation | c/regalloc.c; conflicts c/conflict.c | zap sets, must-save, USE_MEMORY/NEEDS_MEMORY, parm/return regs, SUPER_OPTIMAL |
+| Load/store placement (`LdStAlloc`, `LdStCompress`) | intel/c/x86ldstr.c:405,647; c/loadstor.c | call flags, NameIsConstant, USE_ADDRESS |
+| Scoreboard (`Score`): redundant load/move elimination | c/scmain.c:267; c/scblock.c:DoScore:130 | `ScoreStomp` alias rule (RELAX_ALIAS, USE_ADDRESS), call zap, WRITES_NO_MEMORY, SC_N_VOLATILE |
+| `Conditions` (drop redundant compares) | c/condcode.c:348 | none |
+| Scheduler | c/inssched.c:1067 | INS_SCHEDULING, call flags, `ReDefinedBy`, FORTRAN_ALIASING |
+| Peephole (`PeepOpt`, plus `optins/optcom/optpull/optrel` on the object queue): jump threading, tail merge, code cloning, call+ret->jmp | c/peepopt.c:710; c/optcom.c; c/optpull.c; c/optpush.c:46 | OptForSize, NO_CALL_RET_TRANSFORM, CALLER_POPS, UNIQUE labels |
+| Flow-based register save placement | c/flowsave.c:289 | FLOW_REG_SAVES, dominator info |
+| FP optimisation (`FPExpand`, `FPOptimize`, 87 scheduling) | intel/c/i87opt.c:812; intel/c/i87sched.c:621 | RELAX_ALIAS, I_MATH_INLINE, ROUNDING, FP_UNSTABLE |
+| Tree folding (`ConstFold`) | c/treefold.c | type signedness, FP_UNSTABLE, NULL_DEREF_OK |
+| Switch lowering | c/bldsel.c:574; intel/c/x86sel.c | CGSelCase list, OptForSize |
+| Operand overlap (`overlap.c`) | c/overlap.c:99 | not alias analysis: decides whether a result operand overlaps an operand inside one instruction (register allocation/peephole). No FE input. |
+| Alias analysis proper | c/redefby.c (`ReDefinedBy`, `ZapsMemory`, `ZapsTemp`, `ZapsIndexed`, `VisibleToCall`) | see "Alias rules" below |
+
+#### Alias rules (c/redefby.c), summarised
+
+| query | answer | needs |
+|---|---|---|
+| store through pointer with no known base vs N_MEMORY name | kills it if `USE_ADDRESS`; else kills it unless RELAX_ALIAS (Fortran: never) | -oa to spare globals; USE_ADDRESS (derived) |
+| store through pointer vs N_TEMP | kills only if temp is `USE_ADDRESS` | BE-derived |
+| store through pointer with a fake base (`&a+i`) vs another named object | distinct symbol -> no kill | `TNFindBase` (tree.c:1470-1510); for C only bases from `&object` arithmetic (pointer variables need FORTRAN_ALIASING) |
+| store to name vs same name | `TempsOverlap` byte-range test | BEDefType size, offsets |
+| call vs N_MEMORY | kills unless WRITES_NO_MEMORY; Fortran also spares non-visible | call class |
+| call vs N_TEMP | kills only if `USE_ADDRESS` | BE-derived |
+| anything vs FE_CONSTANT / ROM name | never | FE_CONSTANT or ROM segment |
+| anything vs volatile | always | FE_VOLATILE / CGVolatile |
+
+#### Accepted by the back end, never sent by the C front end
+
+| fact | status in BE | what supplying it would enable | grep evidence |
+|---|---|---|---|
+| FE_NOALIAS | defined; no reader | would allow skipping `USE_ADDRESS`-style kills for that name; needs a new reader | cc: no match; cg: only c/cg.c:334 echo |
+| CG_SYM_CONSTANT (CGAttr) | sets TF_CONSTANT, which nothing reads; FL_CONSTANT never set | would mark a dereference (e.g. `const T *p; *p`) as invariant via X_CONSTANT; needs readers for X_CONSTANT in `ReDefinedBy`/loops | cc: no CG_SYM_CONSTANT; cg: tree.h:45, tree.c:1301, addrfold.c:170 |
+| FE_ONESEG | used for 16-bit pointer type | cheaper pointers to objects known to fit one segment | cc: no match |
+| FE_ADDR_TAKEN (general) | used (USE_ADDRESS seed, ReCalcAddrTaken) | C sets it only for pragma symbols; `SYM_ADDR_TAKEN` exists in cc but is not forwarded. BE re-derives from OP_LA, so little lost | cc/cinfo.c:232 only |
+| FE_COMMON, FE_COMPILER | emission | COMDAT/inline-function dedup | cc: no match |
+| FE_VISIBLE on non-static, FE_GLOBAL absence | see section 1 | `conflict.c:92` and `loopopts.c:610` "not visible" cases never hit in C | cc/cinfo.c:FESymAttr |
+| FORTRAN_ALIASING | full alias model | pointer/parameter bases (`restrict`-like); C has `FLAG_RESTRICT` parsed (ctype.c:238-240) but nothing is emitted | cc: no CGSW_GEN_FORTRAN_ALIASING |
+| FECALL_GEN_NO_MEMORY_READ / CHANGED | used | only via `#pragma aux nomemory`; no inference from function bodies, no `__attribute__((pure/const))` | cc/cpragx86.c:821,925 |
+| FECALL_GEN_PARMS_BY_ADDRESS, SETJMP_KLUGE | used (Fortran / RISC) | - | cc: no match |
+| CGSelRange, CGSelectRestricted, CG_SWITCH_* | used | range cases from GNU `case a ... b`, or forcing a method | cc/cgen.c:963-969 uses only CGSelCase |
+| CGAlign | used on RISC | - | cc: no match |
+| FEINF_SAVE_REGS from callee analysis | list comes from aux declaration | per-callee real clobber sets (interprocedural register allocation) | cc/cfeinfo.c:1174 |
+| Case frequency, branch probabilities, hot/cold | no API | - | h/cg.h |
+| Signed-overflow-undefined (no-wrap) flag | no API; BE never assumes it | would let `IndVars`/`CalcFinalValue` drop wrap guards and widen trip-count analysis | c/loopopts.c:2728-2753 |
+
 ### Surprises in the CG calls
 
 1. Many API calls are never used: no `CGIndex`, `CGWarp`, `CGSelRange`, `CGBigGoto`, `CGTrash`, `CGType`, `CGDuplicate`, `CGCallback`, `CGPatchNode`, `CGLVPreGets`, `BEAliasType`. Array indexing is explicit `O_TIMES` by element size plus `O_PLUS` (cgen.c:717,720).
@@ -1271,8 +1498,8 @@ Status: **kept** reaches MIR as a fact; **dropped** the stream carries it and `l
 | const pointee (`const T *p`) | nothing: the qualifier stays in the type (`ctype.c`, see §2 "const / volatile") | nothing to record | no `readonly` on the parameter or the load | never asked for | const |
 | restrict | discarded by Open Watcom (`FLAG_RESTRICT` parsed, unused); our `cgen.c.patch` adds `CGAttr n 3` | records `CGAttr` (`cgshim.c:609`) | `Promise{unaliased}` (`translate.rs:849`) → `noalias` | kept (ours, beyond Open Watcom) | restrict |
 | restrict + const pointee | same | same | `Promise.readonly` is always `false` (`translate.rs:851`) | never asked for | restrict |
-| noreturn, `aborts` | `FECALL_GEN_NORETURN 0x4`, `FECALL_GEN_ABORTS 0x2` in call class (`cfeinfo.c:getCallClass:505-510`) | `CALLCONV class=` (`cgshim.c:268`) | `hir.rs` reads only `HAS_VARARGS`, `REVERSE_PARMS`, `CALLER_POPS` (`hir.rs:176-181`); the call is followed by `br` | dropped | noreturn |
-| no memory read / write | `FECALL_GEN_NO_MEMORY_READ 0x100`, `NO_MEMORY_CHANGED 0x200`, only from `#pragma aux nomemory` | `class=0x380` | no `readnone`/`memory(none)` on the call; the two `sq` calls stay | dropped | nomemory |
+| noreturn, `aborts` | `FECALL_GEN_NORETURN 0x4`, `FECALL_GEN_ABORTS 0x2` in call class (`cfeinfo.c:getCallClass:505-510`) | `CALLCONV class=` (`cgshim.c:268`) | `hir.rs` reads only `HAS_VARARGS`, `REVERSE_PARMS`, `CALLER_POPS` (`hir.rs:176-181`). HIR has no noreturn field (`llrm-hir/src/model.rs`); MIR has the `noreturn` attribute and `A/noreturn.rs:terminal_sites:103` reads it. The call is followed by `br` | dropped | noreturn |
+| no memory read / write | `FECALL_GEN_NO_MEMORY_READ 0x100`, `NO_MEMORY_CHANGED 0x200`, only from `#pragma aux nomemory` | `class=0x380` | `hir.rs` ignores it. HIR has `Instruction.pure` (`model.rs:471`) and `H/mir.rs` drops it; MIR `memory(none)` / `readnone` on a call is read by `M/memory.rs:at:155-177`. The two `sq` calls stay | dropped | nomemory |
 | `#pragma aux` parameter and return registers | `FEINF_PARM_REGS`, `FEINF_RETURN_REG` | `parms=[3:0,c0:0] ret=3:0` | `translate.rs:cleanup:450` | refused | pragma aux |
 | `#pragma aux modify [regs]` | `FEINF_SAVE_REGS` | never queried (`cgshim.c` asks only AUX_LOOKUP, PARM_REGS, RETURN_REG, CALL_CLASS, CALL_CLASS_TARGET, CALL_BYTES, SOURCE_NAME) | nothing | never asked for | modify |
 | inline byte code | `FEINF_CALL_BYTES` | `CODE y bytes= fix=` (`cgshim.c:278`) | call of `llrm.ia16.code.<hex>` (`translate.rs:1594`) | kept | inline code |
@@ -2206,3 +2433,163 @@ Each is a fact the stream carries that `llrm-c` drops or refuses. None is fixed 
 | 6 | `#pragma aux` register parameters are refused | pragma aux |
 | 7 | `__based` is refused (`.DS` has no definition) | based |
 | 8 | `DBBitField` drops start and width | debug |
+| 9 | Quick BASIC: `IndirectPlace.published` is not read by the rich route; a BYREF polling loop hangs (§7) | `poll.bas` in §7 |
+| 10 | Nib: `&mut` and `&` parameters carry no `Promise` (§7) | `ref.nib` in §7 |
+| 11 | Nib: the range-loop increment has no `nowrap` (survey, §7) | any `for i in a..b` with variable bounds |
+| 12 | Quick BASIC: every dynamic array shares one `allocation` tag (`MIRH:1274`) | two far arrays in one loop |
+
+## 7. What the other frontends know and do not emit
+
+Rust paths in this section: `MODEL` = `crates/ir/llrm-hir/src/model.rs`, `MIRH` = `crates/ir/llrm-hir/src/mir.rs`, `SEM` = `crates/frontends/qbfront/src/semantic.rs`, `NIB` = `crates/frontends/llrm-nib/src`, `AN` = `crates/opt/llrm-analysis/src`, `TR` = `crates/opt/llrm-transforms/src`, `MIR` = `crates/ir/llrm-mir/src`. Both frontends default to the rich route (`crates/backend/llrm-core/src/driver/mod.rs:77,100`).
+
+Two claims were checked by running. QuickBASIC drops `published` (below). A Nib `&mut`/`&` pair carries no promises: in `03-hir.json` of
+
+```
+struct Pt:
+    mut x: i16
+    y: i16
+
+fn bump(p: &mut Pt, q: &Pt, n: i16) -> void:
+    for i in 0..n:
+        p.x += q.y
+```
+
+`bump` has `promises: None`.
+
+### Quick BASIC drops `published`: a hang
+
+```basic
+DECLARE SUB WaitFor (x AS INTEGER)
+DIM k AS INTEGER
+WaitFor k
+SUB WaitFor (x AS INTEGER)
+  DO WHILE x = 0
+  LOOP
+END SUB
+```
+
+HIR: the load in `WAITFOR` has `"published":true,"volatile":false`. Default route:
+
+```
+    mov bx, word ptr [bp+6]
+    cmp word ptr [bx], 0
+    sete al
+L1_3:
+    or al, al
+    jne L1_3
+```
+
+The load is outside the loop; the loop never reads `x` again. `--legacy` reloads: `L1_2: cmp word ptr [bx], 0` / `je L1_2`. `MIRH` never reads `published` (finding 9 below).
+
+### What HIR carries and what MIR does with it
+
+| HIR field (MODEL) | MIR carrier (MIRH) | Read by |
+|---|---|---|
+| `Function.promises[].unaliased` (:699) | param `noalias` (MIRH:673) | `AN/alias.rs:175-184` seeds a restrict root; `AN/memory.rs:320` separates two provenances only when BOTH carry restrict roots (a `noalias` vs a plain pointer proves nothing, TR/transform.rs:876-877). `MIR/memory.rs:219-226` `invariant` (noalias+readonly) feeds MIR's own licm/earlycse only. |
+| `.readonly` (:700) | param `readonly` (MIRH:674) | `MIR/memory.rs:186` call effects; `invariant` above. |
+| `.bytes` (:697) | param `dereferenceable(n)` (MIRH:676) | `MIR/valuetracking.rs:222-243` -> `TR/hoist.rs:156-165` `_may_fault` (speculating a load out of a loop). |
+| `Instruction.nowrap` (:474) | `nsw` on add/sub/mul/neg (MIRH:1407,1511) | `AN/induction.rs:909-919` `_promised`: unit-step trip-count maximum for non-constant bounds. No `nuw` field exists. |
+| `IndirectPlace.inbounds` (:305) | GEP `inbounds` on the place offset (MIRH:1278,1367) | `AN/pointerfacts.rs:49` (`relative` sees through only inbounds GEPs); `AN/memory.rs:835`. |
+| `Instruction.inbounds` (:476, PTR_OFFSET) | GEP `inbounds` (MIRH:1546) | same |
+| array `ArrayElement`/`ProjectedPlace` | GEP `inbounds` over the declared array type, always (MIRH:1356) | same |
+| `IndirectPlace.allocation` (:313) | one shared `!tbaa` tag "allocation" if `Some` (MIRH:1274-1276); the place id is dropped | `AN/memory.rs:880-887` `typed`, `AN/regions.rs:148-153` `typed_apart` (different tag names are apart) |
+| `IndirectPlace.origin` (:310) | none | `AN/memory.rs:26-28` says `origin` is "not carried" |
+| `IndirectPlace.published` (:303) | none in the rich route (grep `published` in MIRH and MIRH/handling.rs: no hit). Old route: `volatile: *volatile \|\| *published` (crates/backend/llrm-core/src/hir/lower.rs:905) | - |
+| `Instruction.pure` (:471) | none (grep `.pure` in llrm-hir/src: only codec/model) | - |
+| `Block.cold` (:517) | `cold` attr on calls of the block (MIRH:1014-1026,1125) | `AN/noreturn.rs:112-125` `cold`; a block ending in `unreachable` is cold without it |
+| `AliasClass` (:785) | `!tbaa` type nodes (MIRH:197-217) | `AN/regions.rs:148` |
+| `Program.zeroed_locals` (:912) | zero store / memset per frame group (MIRH:48,1142-1167) | - |
+| `DataObject.readonly/align/addressed` (:750-761) | `constant`, `align` (MIRH:532-533), named-cells (MIRH:53-58) | `MIR/valuetracking.rs:112-140` `alignment`; `TR/hoist.rs:165` |
+| `RuntimePromises.nounwind` (:867) | `nounwind` on runtime decls; call vs `invoke` choice (MIRH:1651, handling.rs:452-465) | `TR/interprocedural.rs:368-400` |
+| `RuntimePromises.reads_arguments` (:870) | `memory(argmem: read)` + param `nocapture` (MIRH:122-137) | `MIR/memory.rs:86-94`; `AN/alias.rs:379-385` |
+| `ArgumentPromise` on a `CallAbi` (:541) | call-site `nocapture writeonly initializes((0,n))` (MIRH:1614-1620) | `AN/alias.rs:379`, `MIR/memory.rs:187,197` |
+
+MIR attributes that exist but have no consumer found: `range` (`MIR/opcode.rs:257`; grep `Attribute::Range` in crates/opt and MIR/transforms: parse/print only), `nonnull` (attribute name at `MIR/opcode.rs:297`; `AN/alias.rs:131-153` derives non-null from the object kind and says "Incoming pointers remain nullable"), `noundef`. No `llvm.assume` intrinsic (grep `assume` in `MIR/intrinsics.rs`: none). Param `align` is read (`MIR/valuetracking.rs:121`) but no HIR field sets it.
+
+### Quick BASIC
+
+Emission path: `SEM` `json()` (:9496-9810) writes HIR JSON; `llrm-qb/src/driver.rs:decoded` (:247-265) adds `addressed=false` for runtime cells, `entries`, `promises.nounwind`.
+
+| # | Fact | (a) Known | (b) Emitted today | (c) Not emitted: carrier, win |
+|---|---|---|---|---|
+| 1 | Differently named variables do not alias | Each module variable and each STATIC is its own zero-filled internal `DataObject` (SEM:2518-2530, 2633-2646); locals get distinct place offsets, grouped into one alloca only when bytes overlap (MIRH:690 `frame_groups`). memory-model.md "Logical storage objects" says the classification exists. | Yes, implicitly: distinct MIR globals/allocas. | Nothing needed. |
+| 2 | Differently named arrays do not alias | Static arrays: own data object (SEM:2518). Dynamic far arrays: own allocation (crates/frontends/qbfront/src/semantic/shapes.rs:11-13 "B$DDIM puts a far array's data at offset 0 of its own segment"). | HIR `IndirectPlace.allocation = Some(descriptor place)` for far-array elements (SEM:10324-10330). MIRH:1274 maps any `Some` to one shared tag "allocation", so array A and array B share a tag. Only "allocation vs place" is separated. | Carrier: proposed, one `!tbaa` sibling type per allocation id in `Tags` (MIRH:175-194), consumed by `typed_apart` (`AN/regions.rs:148`). Win: medium. Loops copying one dynamic array into another (`a(i) = b(i)`) currently reload/store as may-alias; `gvn`/`dse`/`hoist` would treat them apart. |
+| 3 | BYREF parameters | BYREF is the default; BYVAL, SEG, array params kept per callable (`Callable.by_value/segmented/arrays`, SEM json :9697-9740; signature tuple SEM:134-140). Passing the same variable twice is legal QB. | `dereferenceable(width)` for BYREF scalars/UDTs, `14+4` for array descriptors, none for BYVAL/SEG (SEM:575-590, json :9668-9676). `noalias:false`, `readonly:false` always (SEM:9674). | `noalias` must stay off: QB allows `CALL f(x, x)`. Carrier that would be valid: call-site `noalias`-style facts at calls whose arguments are provably distinct variables (proposed, call-site param attr on the `call`; `AN/alias.rs:379` reads call-site attrs for nocapture only). Win: small to medium; the optimizer infers `readonly`/`nocapture` by itself for defined procedures (`TR/interprocedural.rs:368-440`). |
+| 4 | BYREF pointee may change asynchronously | Every BYREF scalar access is `published: true` (SEM:4698, 6099); abi.md "Ordinary BYREF": the VBDOS IN_KEYSTROKE loop hangs if the load is reused. | Yes in HIR (`IndirectPlace.published`). Rich route drops it (table 1 above): the BYREF load becomes a plain load. | **Possible miscompile in the default route**, not a missed optimisation. Carrier: `volatile` load (existing; MIRH:1278 passes `one.volatile`), set `volatile: published` there, or frontend sets `volatile`. Win: correctness. I did not build the IN_KEYSTROKE case to confirm the hang; what I checked is the absence of any read of `published` in the rich emitter. |
+| 5 | SHARED | Module variables are visible to a procedure only if declared SHARED at module level or by the procedure's own SHARED statement (SEM:518-540, 2061-2070, 2199-2215). | Only as visibility: the procedure refers to the module data object (`Storage::Module`, symbol). No "not address-taken" flag. | Carrier: existing `GlobalVariable` linkage internal (emitted, SEM:2643) plus GlobalsAA capture analysis (`AN/globalsaa.rs`; `AN/memory.rs:17` "A global is `captured` unless GlobalsAA tracks it"). The only escape is passing it BYREF. Win: small; already derived. |
+| 6 | STATIC | `STATIC` changes lifetime, not scope (SEM:2034-2041 comment, 2055-2060); own zero-filled internal object (SEM:2518-2530). | Yes: internal data object, `align` 2 for word elements (SEM:2515-2517). | none |
+| 7 | COMMON | Not modelled. generated-parser.md:74 "nor model FAR/HUGE/COMMON"; legacy-removal-matrix.md:57 lists COMMON storage as remaining work; grep `Common` in qbfront/src finds no statement node. HIR has `Storage::Common` (MODEL:202) but qbfront never emits it (grep `"common"` in qbfront/src: none). | No | Unknown-to-frontend. Nothing to carry until parsed. |
+| 8 | Pure functions / cannot modify globals | No notion in the language; DEF FN and FUNCTION may write SHARED/BYREF. abi.md "Audited file and string calls": "exact cleanup does not imply purity". | `pure:false` on every instruction (SEM:9539). | Carrier: function `memory(...)`/`readnone`/`nounwind`/`willreturn`, inferred by `TR/interprocedural.rs:368-440` (and `MIR/transforms/functionattrs.rs`, which skips call cycles, :30-33). Win: already obtained for defined procedures; recursion cycles and external `DECLARE`d procedures get nothing. Small. |
+| 9 | FOR trip count | `end` and `step` are evaluated once into `$forEnd`/`$forStep` temporaries (SEM:4244-4257); test is per iteration, both directions, on the loaded step (SEM:4270-4318). The body may assign the counter (it is the user's variable, SEM:4225-4232), so the count is not an invariant of the loop. | Integer increment carries `nowrap` -> `nsw` (SEM:4342-4344; MIRH:1407). Bounds and step reach MIR as stores to temporaries. | Trip count itself: not emitted and not sound to state in general (counter writable). Derived after mem2reg/`promote` by `AN/induction.rs` when bounds are constant; `nsw` gives the unit-step maximum for variable bounds (`AN/induction.rs:808-816`). Win of an explicit count: small. SINGLE/DOUBLE counters get no flag (correct). |
+| 10 | Integer overflow | Default: wraps (plain `add`, SEM:8147; `nowrap` only on FOR). `-fsanitize=signed-integer-overflow` emits a check and error 6 for INTEGER `+ - *` and LONG `+ -` (SEM:8140-8148, `overflow_checked` :8216-8237; cli.rs:107-110). FOR raises Overflow rather than wrapping (comment SEM:117) but no check is emitted for it. | `nowrap` on the FOR add only. | With checks on, the checked op could use `llvm.sadd.with.overflow` (intrinsic exists, `MIR/intrinsics.rs:168-173`) and a cold error block instead of xor/and/lt on the wrapped sum. Win: medium under `-fsanitize`, none by default. Without checks no `nsw` is valid (wrap is the compatible behaviour, docs/semantics/integer-overflow-policy.md). |
+| 11 | Array bounds / OPTION BASE | Static bounds are constants in `Type.bounds` (SEM:10340-10350 `type_json`); `OPTION BASE` read once per module (SEM:1647-1662) and applied at :2337, :6001. Dynamic arrays: crates/frontends/qbfront/src/semantic/shapes.rs:1-12 proves constant counts/lower bounds where all allocations agree. | Bounds go in HIR `Type.bounds`; MIRH:1310-1356 linearises with `lower` subtracted and GEP `inbounds`. Dynamic: `origin` and `allocation` on the element pointer (SEM:10324-10336). Unchecked by default; `-fsanitize=bounds` routes every element through B$HARY (SEM:4713-4717). | `origin` not carried to MIR (see table 1). Carrier: existing `inbounds` GEP keeps "stays in object"; the origin (non-negative offset from the array start) would be proposed as `!range` on the offset value or an `nuw` on the scaled index. Win: small to medium for dynamic-array loops (hoisting descriptor loads needs the origin; `AN/pointerfacts.rs:49` only follows inbounds GEPs). Index range "0 <= i-lower < count" is not stated; the optimizer can only use it if a check exists. |
+| 12 | Which calls raise errors | Runtime contracts carry `raises_error` (crates/frontends/llrm-qbruntime/src/lib.rs:253); QB checks are opt-in (`-fsanitize`). ON ERROR makes each raising call reachable from the handler. | `promises.nounwind` = contracts with `raises_error == false` (driver.rs:262). A call not in the list is an `invoke` to a pad only when the function or module has a handler (MIRH:1651, handling.rs:452-465). Error paths are `cold` blocks ending `unreachable` (SEM:8158-8165, 9257-9261; MIRH:1125). | Runtime `Control::Never` (B$ERR_xx etc.) is not stated `noreturn` (grep `noreturn` in MIRH: none); the `unreachable` terminator already cuts the path. Memory effects of contracts (`reads`/`writes: Memory`, qbruntime lib.rs:255) are not mapped to `memory(...)` (grep `Memory::` in MIRH: none); only `nocallback` + `!llrm.writes` for named cells are (MIRH:108-119). Win: medium for runtime-call-heavy loops (string ops): a call known to write only `Own` memory no longer clobbers all memory in `gvn`/`hoist`. `reads_arguments` is empty for QB (driver.rs:260 passes `RuntimePromises::of`, which sets it `Vec::new()`, MODEL:877-890). |
+| 13 | String descriptors | Dynamic STRING is a 4-byte near descriptor owned by the runtime; expressions produce temporaries; `B$FLEN` may consume a temporary (memory-model.md "Procedure calls and frames"). | Opaque bytes + runtime calls (docs/frontends/qb/readme.md "Measured string boundaries": "Runtime calls remain visible and effectful"). | Carrier: `memory(argmem: read)` + `nocapture` on read-only routines (`B$FLEN`, `B$SCMP`) via `RuntimePromises.reads_arguments` (existing carrier, unset). Win: small to medium: `LEN`/compare in loops could be CSE'd/hoisted. Caveat from the doc: `B$FLEN` consumes temporaries, so it is not read-only for temporaries; not safe to state globally. |
+| 14 | Uninitialised = zero | Locals start zeroed by `B$ENRA`; with own frames the frontend stores zero itself (SEM:1483-1485, `zero_locals` :1568-1596). Module/STATIC data is zero-filled (SEM:2524, 2640; "BASIC startup clears BC_DATA", docs/frontends/qb/readme.md). | `Program.zeroed_locals` defaults true (codec.rs:1391), so MIRH:1142-1167 zero-stores each frame group or memsets it; data objects get `zeroinitializer` (MIRH:data_initializer: all-zero bytes -> `ConstantKind::Zero`). | Carried. Win of the existing carrier: `mem2reg`/`promote` turn reads-before-write into `0`. |
+
+### Nib
+
+Emission path: `NIB/hir.rs` `json()` (:204-285), `function_json` (:287-405). Its `Instruction` has no `nowrap`, `inbounds`, `pure` or `cold` (hir.rs:75-85, 104-110); JSON writes `"pure":false` (hir.rs:329). Program JSON has no `zeroed_locals` key (hir.rs:284), so codec default `true` applies (codec.rs:1391).
+
+| # | Fact | (a) Known | (b) Emitted today | (c) Not emitted: carrier, win |
+|---|---|---|---|---|
+| 1 | `&mut T` excludes aliases | Language: "While an exclusive borrow exists, no other borrow may access the same value. While shared borrows exist, the value may not be mutated or moved" (docs/frontends/nib/language-spec.md §8). Enforced per call: same owner twice with either mutable is an error (NIB/semantic/calls.rs:248-258); no owner written while a borrow binding is in scope (semantic/borrows.rs:1-4). Raw pointers "carry no ... aliasing guarantee" (spec §8). | Only for borrowed SLICE/VIEW params, and only on the 8-byte view descriptor: `Promise{unaliased:true, readonly:true, bytes: descriptor+4}` (semantic/mod.rs:1663, comment :1661-1662 "only reseating a binding writes one"). `&mut T`/`&T` for scalars and structs (`SignatureParameter::Borrowed`, mod.rs:876-880): no promise. Owned aggregate params (callee gets its own copy, calls.rs:238-243): no promise. | Carrier: existing param `noalias` (+`readonly` for `&T`, `dereferenceable(sizeof T)`) via `Promise`, for every borrowed and owned-aggregate param. Payload of a `&mut [T]`: `noalias` on the far data pointer is not expressible (the param points at the view, payload is behind a load); proposed: `!noalias`/scope metadata on the payload load, or passing the payload pointer as the parameter. Win: large for loops over `&mut [T]` plus a `&T` (`translate(points, delta)` reloads `delta.x` per iteration today): `AN/memory.rs:320` needs restrict roots on both pointers, so emit on all borrowed params at once. Drop it for functions with `unsafe` blocks that take raw pointers (spec §8 gives no guarantee there); I did not find a frontend flag that says so. |
+| 2 | Borrows are non-owning, scoped | References cannot be stored, returned or outlive the local (docs/frontends/nib/readme.md; borrows.rs:1-4 `roots`). | - | Gives `nocapture` for borrowed params, except references kept in tuples/enums/generator items (references.rs:1-3, "`&T` inside a tuple, an enum payload or a generator's item is a far pointer"). Carrier: param `nocapture` (existing; `AN/alias.rs:379-385`). Win: small; `TR/interprocedural.rs:419-425` infers it for defined functions. |
+| 3 | Nonnull references | No `null` in safe code (spec §3 "There is no `null`"); `0` is null only in `unsafe` raw pointers (spec §8). | No | Carrier: param `nonnull` (existing name, `MIR/opcode.rs:297`). Consumer only via `AN/alias.rs:136-153`, which derives it from object kind and ignores the attribute. Win: small (only matters if code compares a reference to null, which safe Nib cannot write). |
+| 4 | Dereferenceable | Reference points at a whole `T`/view; size known (`descriptor::size(rank)+4` for slices, mod.rs:1663; struct width from `types.width`). | `bytes` only for slice descriptors (mod.rs:1663). | Carrier: `Promise.bytes` -> `dereferenceable(n)` (MIRH:676) for `&T`/`&mut T`/owned struct params. Consumer `TR/hoist.rs:156-165`. Win: medium: loads of struct fields through a reference can be hoisted out of loops that may run zero times. |
+| 5 | Alignment | Structs at most 2-byte aligned on the 16-bit target (docs/frontends/nib/readme.md "Struct fields stay in source order, with at most two-byte alignment"); array descriptors are 16-bit words (docs/frontends/nib/readme.md). | No: `NIB/hir.rs:39-46` `DataObject` has no `align`; MIRH:1147 `alloca` has none; no param `align`. | Carrier: `DataObject.align` -> global `align` (MIRH:532); proposed: alloca align and param `align` from a HIR field (none exists). Consumer `MIR/valuetracking.rs:112-140` -> `Machine::load_may_trap` in `TR/hoist.rs:165`. Win: small (a word load at an odd offset only traps at offset FFFFh). |
+| 6 | Ranges of fixed-width integers | `Type.width/signed` in HIR; `bool` is 0/1; `char` is a byte; enums have a tag (spec §3, §5). Exhaustive `match` has an `unreachable` default (semantic/matching.rs:66-68). | Widths become MIR `iN` (MIRH:value_type). No range. | Carrier: existing `range(iN lo, hi)` param/return attr (`MIR/opcode.rs:257`) and proposed `!range` on loads of `bool`/`char`/enum tag; **no consumer exists** (grep). Win: small today; medium once `AN/ranges.rs` reads it (zero-extend and mask elision on byte values, tag switches). |
+| 7 | Array bounds | Fixed arrays: dims are constants, row-major, zero-based (docs/frontends/nib/readme.md "Fixed arrays have a zero lower bound"). Constant index checked at compile time (semantic/checks.rs:47-53). Runtime index: explicit unsigned compare + branch + `N$EBND` call + `unreachable`, unless `unsafe` or `--unchecked-bounds` (checks.rs:13-16, 54-62, 85-94). Views: dims loaded from the descriptor (checks.rs:13-23). | `Type.bounds` (hir.rs:12); element access `ArrayElement` (fixed arrays in place) or `IndirectPlace{inbounds:true}` (pointer form, semantic/mod.rs:1042, set whether or not a check ran). The indexing `ptr_offset` (indexing.rs:`indexed_pointer`) has no `inbounds`, so the GEP that adds the index is plain (MIRH:1546 reads `Instruction.inbounds`, Nib cannot set it). | Carrier: `Instruction.inbounds` on `ptr_offset` (HIR field exists, MODEL:476; Nib's HIR writer has no key); `nuw` on the `mul index, width` (no HIR field: proposed `nowrap`-style `nuw`). Win: medium for slice loops: `AN/pointerfacts.rs:49` follows only inbounds GEPs, so element addresses cannot be related to the slice base. The check itself is "the optimizer's to fold" (checks.rs:5-7); the facts that let it fold (loop range `i < len`) are in the `lt` compare. |
+| 8 | Range loop trip count | `for i in a..b` evaluates both bounds once, immutable `i` of the bounds' type, exactly `b-a` iterations (docs/frontends/nib/readme.md "Its immutable induction variable"). Emitted as `$range_i` counter and `$range_limit_i` places (semantic/loops.rs:444-445), test `lt`/`below`, then `add i,1` (loops.rs:533). | Nothing on the add: `i < limit` holds there, so `i+1` cannot wrap in either signedness. | Carrier: `nowrap` -> `nsw` (HIR field exists, Nib writer lacks it) and proposed `nuw` for unsigned counters. Consumer `AN/induction.rs:909-919`. Win: large for variable bounds: without a flag the unit-step maximum `_unit_maximum` (`induction.rs:810-815`) has no `promised` and is not derived, so peeling/unrolling/loop-deletion and bounds-check folding lose the count. Constant bounds are already counted (:772-783). |
+| 9 | Integer overflow | Two's complement, wraps to the width; division by zero and `min // -1` panic; shifts at or past the width panic; float-to-int out of range panics (spec §3, §Conversions). Shift/convert checks emitted (operators.rs:541, checks.rs:70-82); division relies on the #DE handler `N$EDIV` (runtime/start.asm:84), no compare emitted (division.rs). | No `nowrap` anywhere (wrap is the defined behaviour). | Nothing valid to add except the range-loop increment (row 8) and post-check index scaling (row 7). |
+| 10 | No-return | There is no `!` type (grep "never/diverg/noreturn" in NIB and docs/frontends/nib/language-spec.md: none). The compiler knows `panic` never returns (checks.rs:84). | Each panic is a call to `N$E*` followed by an `unreachable` terminator (checks.rs:85-94). No `cold` field in Nib's `Block` (hir.rs:104-110). | Nothing needed: `AN/noreturn.rs:105-125` treats blocks ending in `unreachable` as cold. `noreturn` on the `N$E*` declarations (proposed: runtime promise, none in `RuntimePromises`) would additionally cut code after calls in functions compiled separately. Win: small. |
+| 11 | Purity of `fn` | Language has none: `fn` may take `&mut`, call `unsafe` foreign code, print. No attribute in spec (grep `pure` in docs/frontends/nib/language-spec.md: none). Nib knows which `fn` take no `&mut` and no global writes only by analysis. | `pure:false` (hir.rs:329); no function-level attribute field in Nib's `Function` (hir.rs:135-152). | Carrier: function `memory(...)`/`readnone`/`nounwind`, inferred by `TR/interprocedural.rs:368-440`. Win: already obtained for defined functions. Small. |
+| 12 | Known-initialised | Every binding needs an initialiser: `Statement::Bind { value: Expr }` is not optional (syntax.rs:468-474). Frames are not zeroed at runtime (freestanding start, runtime/start.asm:38 comment about stale memory). | `zeroed_locals` left at default `true`: MIRH:1142-1167 zero-stores every scalar frame group and memsets every aggregate before the real initialiser. | Carrier: `Program.zeroed_locals = false` (existing HIR field, codec.rs:360-362). Win: small to medium: one dead store per local, one `memset` call per struct/array local on every call; whether `dse` removes the memset when the literal overwrites it all I could not tell (grep `memset` in `TR/dse.rs`: no hit). |
+| 13 | TBAA / type classes | Nib values are typed structs/scalars; no type punning in safe code. | No `alias_classes` (grep in NIB: none). All place accesses get the single "place" tag. | Carrier: `AliasClass` (MODEL:785) -> `!tbaa`. Win: small; most Nib memory is distinct objects, and pointer-based accesses are `&T` of one type. |
+| 14 | Read-only data | Literals are read-only module objects (docs/frontends/nib/readme.md "String literals are read-only module objects", "Decimal floating literals are stored once in read-only module data"). | `DataObject.readonly` -> `constant` global (hir.rs:39-46, semantic/mod.rs:137,167,180; MIRH:533). | Carried. |
+
+### Gaps ranked by expected win (from the survey)
+
+| Rank | Gap | Frontend | HIR field | Where it pays |
+|---|---|---|---|---|
+| 1 | `nowrap` on the range-loop `add` | Nib | `Instruction.nowrap` (exists; Nib writer lacks it) | `AN/induction.rs` trip counts with variable bounds |
+| 2 | `noalias`/`readonly`/`dereferenceable` for all borrowed and owned-aggregate params | Nib | `Promise` (exists) | `AN/memory.rs:320`, `TR/hoist.rs` |
+| 3 | `published` dropped in the rich route | QB | `IndirectPlace.published` (exists) | correctness of BYREF polling loops |
+| 4 | `inbounds`/`nuw` on indexing `ptr_offset` | Nib | `Instruction.inbounds` (exists); `nuw` proposed | `AN/pointerfacts.rs:49` |
+| 5 | per-allocation `!tbaa` type | QB | `IndirectPlace.allocation` id (exists, dropped at MIRH:1274) | `AN/regions.rs:148` |
+| 6 | runtime contract memory effects as `memory(...)`; `reads_arguments` | QB | `RuntimePromises` (exists) | call clobber scope in `gvn`/`hoist` |
+| 7 | `zeroed_locals=false` | Nib | `Program.zeroed_locals` (exists) | entry stores |
+| 8 | `with.overflow` for `-fsanitize` checks | QB | none (MIR intrinsic exists) | checked builds only |
+| 9 | `range` on narrow loads | Nib | none; consumer missing | after `AN/ranges.rs` reads it |
+
+Unclear, tried: (1) whether `dse` removes a full-overwrite `memset`: grep only. (2) Whether `TR/hoist.rs` consults `restrict` roots: read `AN/memory.rs:320` only; I did not trace every caller of `Provenance::intersects`. (3) QB BYREF `published` behaviour at run time: no build run (read-only task).
+
+
+## 8. Ranked proposal
+
+One schema in HIR, read by every pass (rule 7). Each row is a fact a language states once; none names a machine (rule 5) and none is specific to one frontend (rule 6). Rank is win times how many frontends can state it, from the consumers found in `hir-mir` (§7) and what Open Watcom's back end does with the same fact (§1, "What the Open Watcom back end does with each fact").
+
+Open Watcom gives its optimizer few language promises. It sends no `restrict`, no pointee `const`, no address-taken for `&x`, no `FE_NOALIAS`, no ranges and no purity beyond `nomemory`. What it does send and use: call class (`NO_MEMORY_*`, `ABORTS`, `NORETURN`), `FE_CONSTANT` and read-only segments, `FE_VOLATILE`, exact aggregate sizes, the unroll count, and signedness in the type. llrm-c already sends more than it does (`restrict`). So the list below is a superset, not a copy.
+
+| # | Fact | HIR carrier (one schema) | MIR carrier | Can state it | Cannot | Used by now / needed | Win |
+|---|---|---|---|---|---|---|---|
+| 1 | Ordered access: another agent may write the pointee | `IndirectPlace.published` exists; state it as `volatile` at the MIR step | `load/store volatile` | QB (BYREF), C (volatile), Nib (raw/foreign) | none | `M/memory.rs:of:207`, `A/memory.rs:unmodeled_write:897`, `T/promote.rs:147`; **written by no rich-route code** (`MIRH` ignores `published`) | correctness: the QB hang above |
+| 2 | Call effects: no memory read, no memory written, does not return, returns, raises no error | `Callable.effects` (new; today `Instruction.pure` exists and `MIRH` drops it) | `noreturn`, `memory(...)`, `readnone`, `willreturn`, `nounwind` on the declaration and the call | C (call class `ABORTS/NORETURN/NO_MEMORY_*` already in the stream; known library routines), QB (runtime contracts: `raises_error`; user SUBs by inference), Nib (panic routines; `fn` with no `&mut` by inference) | none | `A/noreturn.rs:terminal_sites:103`, `M/memory.rs:at:155-177`, `A/effects.rs:call_effects:38`, `T/dead.rs:75`, `T/loopmotion.rs:93`; Open Watcom uses the same bits for scoreboard, scheduling and invariant motion (§1 call-class table) | large: a pure call is hoisted and deduplicated; a noreturn call cuts the tail |
+| 3 | Pointer parameter promises: distinct object, read only, not kept, whole object addressable, non-null | `Promise{unaliased, readonly, bytes}` exists; add `nocapture`, `nonnull` | `noalias`, `readonly`, `nocapture`, `dereferenceable`, `nonnull` | C (`restrict`; pointee `const` needs a channel, now none), Nib (`&mut` excludes aliases; `&` is read only; both non-null and whole), QB (BYREF `dereferenceable` only) | QB `noalias` (the same variable may be passed twice), C `noalias` without `restrict` | `A/alias.rs:seeds:180`, `A/memory.rs:Provenance::intersects:319`, `T/hoist.rs:156-165`; `nonnull` is derived (`A/alias.rs:131`), not read | large for Nib and C loops over pointers; Nib sends none today |
+| 4 | Arithmetic does not wrap; index stays in the object | `Instruction.nowrap`, `inbounds` exist; add `nuw` | `nsw`, `nuw`, GEP `inbounds` | C (signed, pointer arithmetic), QB (FOR counter), Nib (range-loop counter: `i < limit` holds at the add) | C and Nib unsigned, QB `+` (wrap is defined) | `A/induction.rs:_promised:914`, `A/pointerfacts.rs:49` | large: exact trip counts for variable bounds; Nib emits none |
+| 5 | Value range of a load, parameter or result | `Place.range` / `Promise.range` (new) | `range(iN lo, hi)` | C (`_Bool`, unsigned char, enum), Nib (`bool`, `char`, enum tag), QB (boolean −1/0) | full-width integers | **no reader**: `range` is accepted and read by nothing; `A/ranges.rs` derives its own | medium once read: compare and switch folding; Open Watcom folds compares by source type (`CheckCmpRange`) |
+| 6 | Known initialised: no entry zeroing needed | `Program.zeroed_locals=false` per function | no entry stores | C (already: `translate.rs:70`), Nib (every binding has an initialiser) | QB (the language zeroes) | `MIRH:1142-1167` zero-stores when true; Nib takes the default `true` | small to medium: entry stores of every frame group |
+| 7 | Type-based and allocation-based alias classes | `AliasClass` exists; `IndirectPlace.allocation` id | `!tbaa` per class | C (types), QB (one class per array allocation), Nib (struct types) | none | `A/regions.rs:typed_apart:150`; QB's `allocation` id is collapsed to one tag at `MIRH:1274`; Nib sends none; Open Watcom sends none for C | small to medium |
+| 8 | Inline and unroll hints | `Function.inline: hint|never|always`; `Loop.unroll: n` (new) | `alwaysinline`, `noinline`; loop metadata | C (`__inline`, `#pragma unroll`, `inline_depth`) | QB, Nib (no syntax) | **no reader**: `T/inline.rs` reads no attribute; the unroller reads no metadata | small; Open Watcom's unroll count forces unrolling |
+| 9 | Cold path | `Block.cold` exists | `cold` call attribute | Nib (panic paths, already `unreachable`), QB (error paths), C (noreturn paths) | none | `A/noreturn.rs:cold:117` has no non-test caller | small (layout) |
+| 10 | Returns twice | `Callable.effects.returns_twice` | `returns_twice` | C (`setjmp`) | QB, Nib | MIR name exists, no reader; Open Watcom has `SETJMP_KLUGE` (RISC scheduler only) | correctness when locals live across `setjmp` |
+| 11 | Alignment of a place or access | `Place.align`, `IndirectPlace.align` (new) | load/store/alloca `align` | C (`__unaligned`: 1; types), Nib (≤ 2) | QB | parameter and global `align` read by `M/valuetracking.rs:alignment:120`; load `align` never set or read; Open Watcom's x86 back end ignores it too | small |
+| 12 | Debug facts the stream carries: qualifiers, bit-field start and width, enum constants, block scopes | `Debug` types (exist) | `llrm.dbg.*` | C | QB, Nib (own debug writers) | `debug.rs` (§6) | debug only |
+
+What the list leaves out: address-taken and escape (derived by `A/alias.rs`; Open Watcom derives it too, from `OP_LA`), sequence points (no frontend sends them, none is needed once trees are linear), switch ranges and order (the back end merges and sorts: `bldsel.c:SortNodeList`), sizeof and layout (folded before HIR).
+
+### Order of work
+
+1. Row 1 and row 4's Nib gap are defects, not additions: one line each in the HIR-to-MIR step.
+2. Rows 2 and 3 are one schema extension (`effects` on the callable, two flags on `Promise`); C already records the inputs; Nib and QB supply them from facts they hold.
+3. Readers for rows 5, 8 and 10 come before their carriers; a carrier nothing reads wins nothing (`range`, `nonnull`, unroll, `returns_twice`).
