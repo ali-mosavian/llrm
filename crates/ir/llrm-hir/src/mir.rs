@@ -13,6 +13,8 @@ use llrm_mir::{
     Function, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Opcode, Operand as Value, Position, Type, TypeId, Types,
 };
 
+use crate::facts::{Stated, Subject};
+use llrm_mir::facts::Fact;
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
 use crate::onerror::{self, Handled};
 
@@ -308,6 +310,9 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     for function in &hir.functions {
         match declare(&mut module, &tables, function) {
             Ok((global, convention)) => {
+                if let Err(why) = lower_facts(&mut module, global, function, &hir.facts) {
+                    refused.push((function.name.clone(), why));
+                }
                 let reference = module.reference(global);
                 tables.callees.insert(function.name.clone(), reference);
                 tables.conventions.insert(function.name.clone(), convention);
@@ -670,13 +675,35 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     for promise in &function.promises {
         let at = function.parameters.iter().position(|&one| one == promise.parameter).ok_or("a promise of no parameter")?;
         let attrs = &mut defined.parameter_attrs[at];
-        attrs.extend(promise.unaliased.then(|| Attribute::Flag("noalias".to_owned())));
+        if promise.unaliased {
+            attrs.push(Fact::NoAlias.attribute());
+        }
         attrs.extend(promise.readonly.then(|| Attribute::Flag("readonly".to_owned())));
         if promise.bytes > 0 {
             attrs.push(Attribute::Int("dereferenceable".to_owned(), promise.bytes as u64));
         }
     }
     Ok((global, abi.0))
+}
+
+/// The facts stated of `function` and its parts, as their MIR carriers. The
+/// one place a stated fact becomes MIR: a subject kind with no lowering here
+/// is refused, not dropped.
+fn lower_facts(module: &mut Module, global: GlobalId, function: &model::Function, stated: &[Stated]) -> Emit<()> {
+    let llrm_mir::GlobalKind::Function(defined) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
+    for one in stated.iter().filter(|one| one.subject.function() == Some(function.id)) {
+        let attribute = one.fact.attribute();
+        let attrs = match one.subject {
+            Subject::Param { index, .. } => defined.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
+            Subject::Function(_) => &mut defined.attrs,
+            Subject::Return(_) => &mut defined.return_attrs,
+            other => return Err(format!("{}: a fact of a {} has no lowering yet", function.name, Subject::kind_key(other.kind()))),
+        };
+        if !attrs.contains(&attribute) {
+            attrs.push(attribute);
+        }
+    }
+    Ok(())
 }
 
 /// Local places that overlap, since they share their bytes: one alloca.

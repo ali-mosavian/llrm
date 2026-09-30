@@ -797,6 +797,8 @@ pub struct Module {
     pub data: Vec<DataObject>,
     pub callables: Vec<Callable>,
     pub alias_classes: Vec<AliasClass>,
+    /// What the language promises, as the frontend stated it.
+    pub facts: Vec<crate::facts::Stated>,
     /// `-g`: what a debugger names and how it reads it.
     pub debug: Option<Debug>,
     /// Each source line's BASIC line number, where a statement table
@@ -806,7 +808,7 @@ pub struct Module {
 
 impl Module {
     pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
-        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), debug: None, line_numbers: Vec::new() }
+        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), facts: Vec::new(), debug: None, line_numbers: Vec::new() }
     }
 
     /// The rows of the statement table, in source order; none without one.

@@ -171,6 +171,32 @@ fn _operand_type(
     }
 }
 
+/// Each stated fact is of a subject kind it may be stated of, and of a
+/// subject the module has.
+fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
+    use crate::facts::Subject;
+    for stated in &module.facts {
+        let (fact, subject) = (stated.fact, stated.subject);
+        if !fact.kinds().contains(&subject.kind()) {
+            invalid!("{}: {} is not stated of a {}", module.name, fact.key(), Subject::kind_key(subject.kind()));
+        }
+        let function = |id: i64| module.functions.iter().find(|one| one.id == id);
+        let found = match subject {
+            Subject::Function(id) | Subject::Return(id) => function(id).is_some(),
+            Subject::Param { function: id, index } => function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index)),
+            Subject::Instruction { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.instructions.iter().any(|i| i.id == at))),
+            Subject::Block { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.id == at)),
+            Subject::Place { function: id, id: at } => function(id).is_some_and(|one| one.places.iter().any(|place| place.id == at)),
+            Subject::Object(id) => module.data.iter().any(|one| one.id == id),
+            Subject::Program => true,
+        };
+        if !found {
+            invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));
+        }
+    }
+    Ok(())
+}
+
 pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
     if program.schema != model::SCHEMA_VERSION {
         invalid!("unsupported HIR schema {}", program.schema);
@@ -259,6 +285,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
             function_ids.insert(function.id);
             _function(module, function, &types)?;
         }
+        _facts(module)?;
     }
     Ok(())
 }

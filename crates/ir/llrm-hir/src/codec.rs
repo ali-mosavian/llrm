@@ -306,6 +306,25 @@ impl _Plain for model::DataObject {
     }
 }
 plain_record!(AliasClass, None, name => "name", parent => "parent", types => "types");
+// A stated fact as flat fields: the subject's kind, its function and its id.
+impl _Plain for crate::facts::Stated {
+    fn _plain(&self) -> JSON {
+        let (function, id) = self.subject.fields();
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("subject".to_owned(), Json::Str(crate::facts::Subject::kind_key(self.subject.kind()).to_owned()));
+        if let Some(function) = function {
+            out.insert("function".to_owned(), function._plain());
+        }
+        if let Some(id) = id {
+            out.insert("id".to_owned(), id._plain());
+        }
+        out.insert("fact".to_owned(), Json::Str(self.fact.key().to_owned()));
+        if self.source.is_some() {
+            out.insert("source".to_owned(), self.source._plain());
+        }
+        Json::Dict(out)
+    }
+}
 // `alias_classes` only when made, so that a module reads as it always has.
 impl _Plain for model::Module {
     fn _plain(&self) -> JSON {
@@ -318,6 +337,9 @@ impl _Plain for model::Module {
         out.insert("callables".to_owned(), self.callables._plain());
         if !self.alias_classes.is_empty() {
             out.insert("alias_classes".to_owned(), self.alias_classes._plain());
+        }
+        if !self.facts.is_empty() {
+            out.insert("facts".to_owned(), self.facts._plain());
         }
         if self.debug.is_some() {
             out.insert("debug".to_owned(), self.debug._plain());
@@ -699,6 +721,15 @@ macro_rules! made_records {
             }
         )*
     };
+}
+
+impl _FromMade for crate::facts::Stated {
+    fn from_made(made: _Made) -> Result<Self, InvalidHIR> {
+        match made {
+            _Made::Object(one) => Ok(*one.downcast::<crate::facts::Stated>().expect("the hinted record")),
+            _ => unreachable!("a record hint makes an object"),
+        }
+    }
 }
 
 made_records!(
@@ -1222,6 +1253,7 @@ static MODULE: _Record = _Record {
         ("data", _Hint::Tuple(&_Hint::Record(&DATA_OBJECT)), false),
         ("callables", _Hint::Tuple(&_Hint::Record(&CALLABLE)), false),
         ("alias_classes", _Hint::Tuple(&_Hint::Record(&ALIAS_CLASS)), false),
+        ("facts", _Hint::Tuple(&_Hint::Record(&STATED_FACT)), false),
         ("debug", _Hint::Union(&[_Hint::Record(&DEBUG), _Hint::NoneType]), false),
         ("line_numbers", _Hint::Tuple(&_Hint::Tuple(&_Hint::Int)), false),
     ],
@@ -1234,6 +1266,7 @@ static MODULE: _Record = _Record {
             data: _default(args, "data", Vec::new())?,
             callables: _default(args, "callables", Vec::new())?,
             alias_classes: _default(args, "alias_classes", Vec::new())?,
+            facts: _default(args, "facts", Vec::new())?,
             debug: _default(args, "debug", None)?,
             line_numbers: _default(args, "line_numbers", Vec::new())?,
         })
@@ -1326,6 +1359,26 @@ static DEBUG: _Record = _Record {
         ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
     ],
     build: |args| _object(model::Debug { types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? }),
+};
+
+static STATED_FACT: _Record = _Record {
+    name: "StatedFact",
+    fields: &[
+        ("subject", _Hint::Str, true),
+        ("function", OPTIONAL_INT, false),
+        ("id", OPTIONAL_INT, false),
+        ("fact", _Hint::Str, true),
+        ("source", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
+    ],
+    build: |args| {
+        let key: String = _required(args, "subject")?;
+        let name: String = _required(args, "fact")?;
+        let kind = crate::facts::Subject::kind_named(&key).ok_or_else(|| InvalidHIR(format!("unknown fact subject {key:?}")))?;
+        let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?)
+            .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
+        let fact = llrm_mir::facts::Fact::named(&name).ok_or_else(|| InvalidHIR(format!("unknown fact {name:?}")))?;
+        _object(crate::facts::Stated { subject, fact, source: _default(args, "source", None)? })
+    },
 };
 
 static ALIAS_CLASS: _Record = _Record {

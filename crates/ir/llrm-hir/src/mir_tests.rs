@@ -749,3 +749,54 @@ fn resume_next_past_end_sub_continues_at_its_end() {
     assert!(sub.calls.iter().any(|one| one.instruction > last), "the fixture no longer has the shape");
     emits(&program);
 }
+
+/// A stated fact becomes its carrier on what it is stated of, and nowhere
+/// else; `noalias` is spelled only by `llrm_mir::facts`.
+#[test]
+fn a_stated_fact_becomes_its_carrier() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 1 }, Fact::NoAlias);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("(i16 %0, i16 noalias %1)"), "{text}");
+}
+
+/// A fact of a kind it is not stated of was lowered to whatever the subject
+/// was; the verifier refuses it, as it does a subject the module lacks.
+#[test]
+fn a_fact_of_the_wrong_subject_is_refused() {
+    use crate::facts::{Builder, Stated, Subject};
+    use llrm_mir::facts::Fact;
+    let refusal = |subject| {
+        let mut program = program(difference());
+        program.modules[0].facts = vec![Stated { subject, fact: Fact::NoAlias, source: None }];
+        crate::verify::verify(&program).unwrap_err().0
+    };
+    assert!(refusal(Subject::Function(1)).contains("noalias is not stated of a function"));
+    assert!(refusal(Subject::Param { function: 1, index: 2 }).contains("noalias is stated of a param the module lacks"));
+    assert!(refusal(Subject::Param { function: 9, index: 0 }).contains("the module lacks"));
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 0 }, Fact::NoAlias);
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).is_ok());
+}
+
+/// Stated facts cross the wire and come back the same, source and all.
+#[test]
+fn stated_facts_survive_the_codec() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("c");
+    facts.state_at(Subject::Param { function: 1, index: 0 }, Fact::NoAlias, 12);
+    program.modules[0].facts = facts.finish();
+    let text = crate::codec::encode(&program, None).unwrap();
+    assert!(text.contains("\"facts\":[{\"fact\":\"noalias\",\"function\":1,\"id\":0,\"source\":\"c:12\",\"subject\":\"param\"}]"), "{text}");
+    assert_eq!(crate::codec::decode(&text).unwrap().modules[0].facts, program.modules[0].facts);
+}
