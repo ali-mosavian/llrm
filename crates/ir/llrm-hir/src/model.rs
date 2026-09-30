@@ -620,6 +620,74 @@ pub struct Function {
     pub symbol: Option<String>,
 }
 
+/// The debug vocabulary, as MIR's metadata spells it.
+pub use llrm_mir::debuginfo::{Kind as DebugKind, Reach as DebugReach, Scalar as DebugScalar};
+
+/// A source type, as a debugger shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugType {
+    pub id: i64,
+    pub kind: DebugKind,
+    pub name: String,
+    pub target: Option<i64>,
+    pub size: i64,
+    pub reach: DebugReach,
+    pub members: Vec<DebugMember>,
+}
+
+/// A structure's field, or a procedure's parameter by its type alone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugMember {
+    pub name: String,
+    pub r#type: i64,
+    pub offset: i64,
+}
+
+/// A parameter: the function's `argument`th, hidden ones counted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugParameter {
+    pub argument: i64,
+    pub name: String,
+    pub r#type: i64,
+}
+
+/// A variable: a place of the function.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugVariable {
+    pub place: i64,
+    pub name: String,
+    pub r#type: i64,
+}
+
+/// A function as a debugger names it: its procedure type, its source
+/// parameters, and its variables; `module` the module's own code, whose
+/// variables are the module's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugFunction {
+    pub function: i64,
+    pub module: bool,
+    pub name: String,
+    pub r#type: i64,
+    pub parameters: Vec<DebugParameter>,
+    pub variables: Vec<DebugVariable>,
+}
+
+/// A variable of the module: `offset` bytes into a data object.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugGlobal {
+    pub object: i64,
+    pub offset: i64,
+    pub name: String,
+    pub r#type: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Debug {
+    pub types: Vec<DebugType>,
+    pub functions: Vec<DebugFunction>,
+    pub globals: Vec<DebugGlobal>,
+}
+
 /// What the language promises of a pointer parameter, as LLVM's
 /// `noalias`, `readonly` and `dereferenceable(bytes)` state it.
 #[derive(Clone, Debug, PartialEq)]
@@ -727,11 +795,13 @@ pub struct Module {
     pub data: Vec<DataObject>,
     pub callables: Vec<Callable>,
     pub alias_classes: Vec<AliasClass>,
+    /// `-g`: what a debugger names and how it reads it.
+    pub debug: Option<Debug>,
 }
 
 impl Module {
     pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
-        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new() }
+        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), debug: None }
     }
 
     /// The rows of the statement table, in source order; none without one.

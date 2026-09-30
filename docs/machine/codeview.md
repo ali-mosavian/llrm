@@ -239,3 +239,16 @@ this into the documented format: `NBxx` trailer, a subsection directory
 `S_LPROC16`/`S_BPREL16`/`S_LDATA16` records with full lexical-scope linkage,
 and a `sstGlobalTypes` table using the real numbered LF_ leaves. QB 4.5
 doesn't ship CVPACK, so this path only exists for VBDOS and PDS.
+
+## Writing it (`-g`)
+
+`llrm-qb -g` writes this layout; `crates/target/llrm-omf/src/cvwrite.rs`
+inverts the reader. A frontend describes its types, procedures and
+variables in HIR through `llrm_hir::debug::Builder`. `llrm_mir::debuginfo`
+carries them through MIR, a frame variable as an `llvm.dbg.declare` of its
+alloca. `backend/codeview.rs` adds each procedure's place and frame offsets
+and encodes. Under `-g` a named variable keeps its memory: a debugger reads
+it at any time.
+
+QB 4.5's `STRING * n` record, `0x78`, is an array of `size_bits` bits of
+its element, a char; `cvwrite` writes any array laid out in place with it.

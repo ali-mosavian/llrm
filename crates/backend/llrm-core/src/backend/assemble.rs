@@ -108,6 +108,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
         .map(|(name, &far)| (name.clone(), if far { "far" } else { "near" }.to_owned()))
         .collect();
     externs.sort();
+    let debug = crate::backend::codeview::described(module, &names, llrm_omf::cvwrite::Flavor::default())?;
     Ok(masm::Module {
         code: code.to_owned(),
         names,
@@ -117,6 +118,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
         procedures,
         private: BTreeSet::new(),
         requests: BTreeSet::new(),
+        debug,
     })
 }
 

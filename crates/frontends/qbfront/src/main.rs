@@ -146,10 +146,12 @@ fn main() -> ExitCode {
                     array_merging,
                     own_frames,
                 };
-                let lines: Vec<usize> = (1..=if debug { source.text.lines().count() } else { 0 })
-                    .map(|expanded| source.location(expanded).map_or(0, |one| one.main_line))
-                    .collect();
-                match qbfront::semantic::compile_with_lines(&module, name, dialect, &runtime, &options, &lines) {
+                let expanded = source.text.lines().count();
+                let debugged = debug.then(|| qbfront::semantic::DebugSource {
+                    text: source.text.lines().map(str::to_owned).collect(),
+                    lines: (1..=expanded).map(|line| source.location(line).map_or(0, |one| one.main_line)).collect(),
+                });
+                match qbfront::semantic::compile_debugged(&module, name, dialect, &runtime, &options, debugged) {
                     Ok((hir, warnings)) => {
                         for warning in warnings {
                             eprintln!("{input}: {warning}");

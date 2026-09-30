@@ -167,7 +167,7 @@ pub enum Encoded {
     Piece(Piece),
     Jump(Jump),
     Near(Near),
-    Line(u32),
+    Mark(masm::Mark),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,6 +181,8 @@ pub struct Segment {
     pub fixups: Vec<Fixup>,
     /// (source line, offset) of each line's first code, in order.
     pub lines: Vec<(u32, usize)>,
+    /// Each procedure body's bounds, in order.
+    pub bodies: Vec<(masm::Mark, usize)>,
 }
 
 impl Segment {
@@ -193,6 +195,15 @@ impl Segment {
             spans: Vec::new(),
             fixups: Vec::new(),
             lines: Vec::new(),
+            bodies: Vec::new(),
+        }
+    }
+
+    /// `mark` is here.
+    pub fn mark(&mut self, mark: masm::Mark) {
+        match mark {
+            masm::Mark::Line(line) => self.line(line),
+            bound => self.bodies.push((bound, self.image.len())),
         }
     }
 
@@ -649,7 +660,7 @@ pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Near(Near { name }) => {
                         reached.insert(name);
                     }
-                    Encoded::Label(_) | Encoded::Jump(_) | Encoded::Line(_) => {}
+                    Encoded::Label(_) | Encoded::Jump(_) | Encoded::Mark(_) => {}
                 }
             }
         }
@@ -745,6 +756,13 @@ pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Re
     for (index, group) in groups.iter().enumerate() {
         _code(&mut segments[index], index, module, group, &mut symbols)?;
     }
+    if let Some(debug) = &module.debug {
+        if groups.len() != 1 {
+            return Err(Unencodable("-g with a code segment per procedure".into()).into());
+        }
+        let described = super::codeview::segments(debug, module, source, &segments[0], &symbols).map_err(Unencodable)?;
+        segments.extend(described);
+    }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let records = _records(module, source, &mut segments, &symbols, &externs)?;
     Ok(records.iter().flat_map(|record| record.emit()).collect())
@@ -782,11 +800,23 @@ pub fn _code(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
 ) -> Result<(), Error> {
+    _code_by(segment, index, module, group, symbols, |procedure, number| masm::listing(procedure, number).map_err(|error| error.0))
+}
+
+/// [`_code`], each procedure's items as `listed` gives them.
+pub fn _code_by(
+    segment: &mut Segment,
+    index: usize,
+    module: &masm::Module,
+    group: &[usize],
+    symbols: &mut IndexMap<String, (usize, usize)>,
+    listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
+) -> Result<(), Error> {
     let mut items: Vec<Encoded> = Vec::new();
     for &number in group {
         let procedure = &module.procedures[number];
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
-        for item in masm::listing(procedure, number)? {
+        for item in listed(procedure, number).map_err(Unencodable)? {
             match _items(&item, &module.names, number) {
                 Ok(encoded) => items.extend(encoded),
                 Err(error) => return Err(Unencodable(format!("{}: {error}", procedure.name)).into()),
@@ -800,13 +830,14 @@ pub fn _code(
             Encoded::Label(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, at));
             }
-            Encoded::Line(line) => segment.line(*line),
+            Encoded::Mark(mark) => segment.mark(*mark),
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
             Encoded::Jump(Jump { name, label, long }) => segment.put(&_jump(name, labels[label], at, *long)?.code, &[]),
             Encoded::Near(Near { name }) if labels.contains_key(name) => {
                 let distance = labels[name] - (at as i64 + 3);
-                let distance = i16::try_from(distance)
-                    .unwrap_or_else(|_| panic!("struct.error: 'h' format requires -32768 <= number <= 32767"));
+                let Ok(distance) = i16::try_from(distance) else {
+                    return Err(Unencodable(format!("a near call to {name} {distance} bytes away")).into());
+                };
                 segment.put(&[&[0xE8][..], &distance.to_le_bytes()].concat(), &[]);
             }
             Encoded::Near(Near { name }) if module.procedures.iter().any(|one| &one.name == name) => {
@@ -829,7 +860,7 @@ pub fn _items(
 ) -> Result<Vec<Encoded>, Unencodable> {
     Ok(match item {
         masm::Item::Label(label) => vec![Encoded::Label(label.clone())],
-        masm::Item::Line(line) => vec![Encoded::Line(*line)],
+        masm::Item::Mark(mark) => vec![Encoded::Mark(*mark)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
             code.iter().map(_part).collect::<Result<Vec<_>, _>>()?.into_iter().map(Encoded::Piece).collect()
         }
@@ -942,7 +973,7 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
 
 pub fn _length(item: &Encoded) -> usize {
     match item {
-        Encoded::Label(_) | Encoded::Line(_) => 0,
+        Encoded::Label(_) | Encoded::Mark(_) => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
         Encoded::Jump(Jump { name, long, .. }) => {
             if !long {
@@ -1331,6 +1362,7 @@ mod tests {
             )],
             private: BTreeSet::new(),
             requests: BTreeSet::new(),
+            debug: None,
         };
         assert_eq!(
             masm::text(&built).unwrap(),
@@ -1417,6 +1449,7 @@ mod tests {
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
             requests: BTreeSet::new(),
+            debug: None,
         };
         assert_eq!(
             masm::text(&rich).unwrap(),
