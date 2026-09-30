@@ -167,6 +167,7 @@ pub enum Encoded {
     Piece(Piece),
     Jump(Jump),
     Near(Near),
+    Line(u32),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,6 +179,8 @@ pub struct Segment {
     /// [start, end) holding data
     pub spans: Vec<[usize; 2]>,
     pub fixups: Vec<Fixup>,
+    /// (source line, offset) of each line's first code, in order.
+    pub lines: Vec<(u32, usize)>,
 }
 
 impl Segment {
@@ -189,6 +192,19 @@ impl Segment {
             image: Vec::new(),
             spans: Vec::new(),
             fixups: Vec::new(),
+            lines: Vec::new(),
+        }
+    }
+
+    /// Code at the current offset is `line`'s: the last line named at an
+    /// offset wins, as the one before it has no code.
+    pub fn line(&mut self, line: u32) {
+        let at = self.image.len();
+        if self.lines.last().is_some_and(|&(_, last)| last == at) {
+            self.lines.pop();
+        }
+        if self.lines.last().is_none_or(|&(last, _)| last != line) {
+            self.lines.push((line, at));
         }
     }
 
@@ -633,7 +649,7 @@ pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Near(Near { name }) => {
                         reached.insert(name);
                     }
-                    Encoded::Label(_) | Encoded::Jump(_) => {}
+                    Encoded::Label(_) | Encoded::Jump(_) | Encoded::Line(_) => {}
                 }
             }
         }
@@ -784,6 +800,7 @@ pub fn _code(
             Encoded::Label(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, at));
             }
+            Encoded::Line(line) => segment.line(*line),
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
             Encoded::Jump(Jump { name, label, long }) => segment.put(&_jump(name, labels[label], at, *long)?.code, &[]),
             Encoded::Near(Near { name }) if labels.contains_key(name) => {
@@ -812,6 +829,7 @@ pub fn _items(
 ) -> Result<Vec<Encoded>, Unencodable> {
     Ok(match item {
         masm::Item::Label(label) => vec![Encoded::Label(label.clone())],
+        masm::Item::Line(line) => vec![Encoded::Line(*line)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
             code.iter().map(_part).collect::<Result<Vec<_>, _>>()?.into_iter().map(Encoded::Piece).collect()
         }
@@ -924,7 +942,7 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
 
 pub fn _length(item: &Encoded) -> usize {
     match item {
-        Encoded::Label(_) => 0,
+        Encoded::Label(_) | Encoded::Line(_) => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
         Encoded::Jump(Jump { name, long, .. }) => {
             if !long {
@@ -1011,6 +1029,10 @@ pub fn _records(
         Rc::new(omf::Record::new(omf::THEADR, _string(source))),
         Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| _string(one)).collect())),
     ];
+    if segments.iter().any(|segment| !segment.lines.is_empty()) {
+        // CodeView 4's marker: LINK /CO reads the debug information after it.
+        records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x00, 0xA1, 0x01, b'C', b'V'])));
+    }
     records.extend(segdefs);
     records.push(grpdef);
     if !order.is_empty() {
@@ -1037,8 +1059,31 @@ pub fn _records(
         }
     }
     records.extend(data);
+    for (index, segment) in segments.iter().enumerate() {
+        records.extend(_linnum(index + 1, &segment.lines)?);
+    }
     records.push(Rc::new(omf::Record::new(omf::MODEND, vec![0])));
     Ok(records)
+}
+
+/// Segment `index`'s LINNUM records: no base group, then (line, offset) pairs.
+pub fn _linnum(index: usize, lines: &[(u32, usize)]) -> Result<Vec<Rc<omf::Record>>, Error> {
+    let mut head = vec![0];
+    head.extend(omf::as_index(index as i64)?);
+    lines
+        .chunks(CHUNK / 4)
+        .map(|chunk| {
+            let mut body = head.clone();
+            for &(line, at) in chunk {
+                let (Ok(line), Ok(at)) = (u16::try_from(line), u16::try_from(at)) else {
+                    return Err(Unencodable(format!("line {line} at {at:#x} does not fit LINNUM")).into());
+                };
+                body.extend(line.to_le_bytes());
+                body.extend(at.to_le_bytes());
+            }
+            Ok(Rc::new(omf::Record::new(omf::LINNUM, body)))
+        })
+        .collect()
 }
 
 /// `segments[index - 1]` is Python's `segment`; the whole list is passed so

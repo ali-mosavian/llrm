@@ -169,6 +169,9 @@ impl _Plain for model::Instruction {
         if self.inbounds {
             out.insert("inbounds".to_owned(), self.inbounds._plain());
         }
+        if let Some(line) = self.line {
+            out.insert("line".to_owned(), line._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -920,6 +923,7 @@ static INSTRUCTION: _Record = _Record {
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
         ("nowrap", _Hint::Bool, false),
         ("inbounds", _Hint::Bool, false),
+        ("line", _Hint::Union(&[_Hint::Int, _Hint::NoneType]), false),
     ],
     build: |args| {
         _object(model::Instruction {
@@ -932,6 +936,7 @@ static INSTRUCTION: _Record = _Record {
             asm: _default(args, "asm", None)?,
             nowrap: _default(args, "nowrap", false)?,
             inbounds: _default(args, "inbounds", false)?,
+            line: _default(args, "line", None)?,
         })
     },
 };

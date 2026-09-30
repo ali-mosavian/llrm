@@ -115,6 +115,8 @@ struct Instruction {
     tag: Option<Tag>,
     /// The signed result fits its width: FOR raises Overflow, never wraps.
     nowrap: bool,
+    /// The expanded source line of the statement it belongs to; 0 for none.
+    line: usize,
 }
 
 struct CallAbi {
@@ -338,6 +340,8 @@ struct Compiler {
     data_entries: Vec<u32>,
     pending_numeric_line: Option<u16>,
     current_source_line: usize,
+    /// Each expanded line's main-file line; empty, no lines are written.
+    line_map: Vec<usize>,
     /// The source line of each load in the function being built.
     load_lines: BTreeMap<u32, usize>,
     warnings: Vec<String>,
@@ -414,7 +418,21 @@ pub fn compile_with_warnings(
     runtime: &str,
     options: &Options,
 ) -> Result<(String, Vec<String>), SemanticError> {
+    compile_with_lines(module, module_name, dialect, runtime, options, &[])
+}
+
+/// [`compile_with_warnings`], with each instruction's main-file line from
+/// `lines`, indexed by expanded line; empty, no lines.
+pub fn compile_with_lines(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    options: &Options,
+    lines: &[usize],
+) -> Result<(String, Vec<String>), SemanticError> {
     let mut compiler = built(module, module_name, dialect, runtime, options)?;
+    compiler.line_map = lines.to_vec();
     // /Ah and /D address every element through the descriptor at run time.
     if options.array_merging && !options.huge_arrays && !options.checked_arrays {
         merging::applied(&mut compiler);
@@ -499,6 +517,7 @@ fn built(
             "local"
         };
         compiler.position = source_position(procedure.span);
+        compiler.current_source_line = procedure.span.line;
         let mut parameters = Vec::new();
         let mut parameter_bytes = 0;
         // A reference parameter names a whole object: a descriptor of rank
@@ -1343,6 +1362,7 @@ impl Compiler {
             data_entries: Vec::new(),
             pending_numeric_line: None,
             current_source_line: 0,
+            line_map: Vec::new(),
             load_lines: BTreeMap::new(),
             warnings: Vec::new(),
         }
@@ -1530,7 +1550,7 @@ impl Compiler {
             .map(|(target, type_id)| {
                 let id = self.next_instruction;
                 self.next_instruction += 1;
-                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None, nowrap: false }
+                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None, nowrap: false, line: 0 }
             })
             .collect();
         let entry = self.blocks.iter_mut().find(|block| block.id == 1).expect("an entry block");
@@ -9037,6 +9057,7 @@ impl Compiler {
                 callee: None,
                 tag: None,
                 nowrap: false,
+                line: self.current_source_line,
             });
     }
 
@@ -9096,6 +9117,7 @@ impl Compiler {
                 callee: Some("B$SCMP".into()),
                 tag: None,
                 nowrap: false,
+                line: self.current_source_line,
             });
         self.invalidate_descriptor_cache();
     }
@@ -9139,6 +9161,7 @@ impl Compiler {
                 callee: Some(callee.into()),
                 tag: None,
                 nowrap: false,
+                line: self.current_source_line,
             });
         self.invalidate_descriptor_cache();
     }
@@ -9441,6 +9464,10 @@ impl Compiler {
                     out.push(']');
                     if instruction.nowrap {
                         out.push_str(",\"nowrap\":true");
+                    }
+                    let line = self.line_map.get(instruction.line.wrapping_sub(1)).copied().unwrap_or(0);
+                    if line != 0 {
+                        write!(out, ",\"line\":{line}").unwrap();
                     }
                     out.push('}');
                 }

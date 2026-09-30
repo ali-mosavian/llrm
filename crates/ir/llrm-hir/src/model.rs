@@ -474,13 +474,15 @@ pub struct Instruction {
     pub nowrap: bool,
     /// A PTR_OFFSET's result stays inside its pointer's object.
     pub inbounds: bool,
+    /// The source line of the statement it belongs to, where known.
+    pub line: Option<i64>,
 }
 
 impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false, inbounds: false }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false, inbounds: false, line: None }
     }
 }
 

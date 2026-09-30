@@ -1246,6 +1246,14 @@ pub fn code_offsets(record: &Record, seg: i64) -> Vec<usize> {
     }
 }
 
+/// A LINNUM record's segment index and (line, offset) pairs.
+pub fn lines(record: &Record) -> (i64, Vec<(u16, u16)>) {
+    let (_group, at) = _index(&record.body, 0);
+    let (segment, at) = _index(&record.body, at);
+    let pair = |one: &[u8]| (u16::from_le_bytes([one[0], one[1]]), u16::from_le_bytes([one[2], one[3]]));
+    (segment, record.body[at..].chunks_exact(4).map(pair).collect())
+}
+
 /// A copy of `record` with 16-bit fields replaced. Unchanged records are not copied.
 pub fn patched(record: &Rc<Record>, values: &IndexMap<usize, i64>) -> Rc<Record> {
     if values.is_empty() {

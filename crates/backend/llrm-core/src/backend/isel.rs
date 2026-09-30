@@ -368,7 +368,38 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         variadic: None,
     };
     let body = selector.body(name, &convention)?;
+    let body = lined(module, function, &selector.ats, body);
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
+}
+
+/// `body` with each instruction's source line: that of the MIR instruction
+/// its `at` was selected from, as its `!dbg` names it.
+fn lined(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>, body: LirBody) -> LirBody {
+    let mut lines: IndexMap<i64, u32> = IndexMap::default();
+    for (&inst, &at) in ats {
+        let line = function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "dbg").and_then(|&(_, node)| match module.metadata[node.0 as usize].operands.first() {
+            Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
+                llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
+                _ => None,
+            },
+            _ => None,
+        });
+        if let Some(line) = line {
+            lines.insert(at, line);
+        }
+    }
+    if lines.is_empty() {
+        return body;
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| block.with_insns(block.insns.iter().map(|one| match lines.get(&one.at) {
+            Some(&line) if one.line.is_none() => Arc::new(Insn { line: Some(line), ..(**one).clone() }),
+            _ => Arc::clone(one),
+        }).collect()))
+        .collect();
+    body.with_blocks(blocks)
 }
 
 struct Selector<'m, 'c, 'p> {

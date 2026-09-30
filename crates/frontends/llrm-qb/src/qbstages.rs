@@ -313,6 +313,7 @@ fn _emitted_asm(program: &model::Program, module: &masm::Module, pretty: bool) -
         for item in llrm_core::driver::basic::_basic_listing(procedure, number)? {
             match &item {
                 masm::Item::Label(masm::Label { name }) => lines.push(format!("{name}:")),
+                masm::Item::Line(_) => {}
                 masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
                     lines.extend(masm::_code(code).into_iter().map(|line| format!("    {line}")));
                 }

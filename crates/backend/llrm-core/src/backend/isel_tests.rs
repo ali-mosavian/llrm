@@ -2943,3 +2943,23 @@ fn test_a_reload_pushed_is_pushed_from_memory() {
     });
     assert!(!reloaded_then_pushed, "{body:#?}");
 }
+
+/// `-g`: each instruction's `!dbg` line reaches the object's LINNUM, at the
+/// offset of the first code selected from it.
+#[test]
+fn test_dbg_lines_become_linnum() {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {\n  %s = sub i16 %a, %b, !dbg !0\n  %t = add i16 %s, 3, !dbg !1\n  ret i16 %t, !dbg !1\n}\n!0 = !{i32 7}\n!1 = !{i32 8}\n";
+    let module = parsed(text);
+    let (_, _, function) = module.functions().next().expect("f");
+    let instructions = function.layout().iter().flat_map(|&block| function.block(block).instructions());
+    let attached = instructions.filter(|&&one| function.instruction(one).metadata.iter().any(|(kind, _)| kind == "dbg")).count();
+    assert_eq!(attached, 3, "the fixture carries its lines");
+    let assembled = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
+    let object = crate::backend::omfwrite::written_as(&assembled, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    let records = llrm_omf::omf::parse(&object).expect("parses");
+    let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == llrm_omf::omf::LINNUM).flat_map(|one| llrm_omf::omf::lines(one).1).collect();
+    // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
+    assert_eq!(lines, [(7, 0), (8, 9)]);
+    let marker = records.iter().any(|one| one.r#type == llrm_omf::omf::COMENT && one.body.get(1) == Some(&0xA1));
+    assert!(marker, "the CodeView marker");
+}
