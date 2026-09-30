@@ -144,21 +144,21 @@ L0_0:
     mov di, word ptr [bp+8]         ; di = b
     mov bx, word ptr [bp+10]        ; bx = n
     mov cx, bx
-    neg cx                          ; cx = -n, the loop counter
+    neg cx                          ; [count to zero] cx = -n; the loop ends when it reaches 0
     xor eax, eax                    ; total = 0
     or bx, bx
-    jle L0_3                        ; n <= 0: no iterations
+    jle L0_3                        ; [loop rotation] one guard for n <= 0; the test moves to the bottom
 L0_20:
-    xor bx, bx                      ; bx = byte offset of a[i] and b[i]
+    xor bx, bx                      ; [strength reduction] bx = byte offset of a[i] and b[i], not 2*i
 L0_5:
-    mov si, word ptr [bp+6]         ; si = a, reloaded on every iteration
+    mov si, word ptr [bp+6]         ; NOT hoisted: a is invariant yet read from its slot every iteration
     movsx edx, word ptr [bx+si]     ; a[i], sign-extended to 32 bits
-    movsx esi, word ptr [bx+di]     ; b[i]
-    imul edx, esi                   ; (long)a[i] * b[i], no runtime helper
+    movsx esi, word ptr [bx+di]     ; b[i]: [base+index] address form, no pointer arithmetic
+    imul edx, esi                   ; (long)a[i] * b[i]: a 32-bit multiply, no runtime helper
     add eax, edx                    ; total += product
-    add bx, 2                       ; the offset steps by one int
-    inc cx                          ; the counter steps up to zero
-    jne L0_5                        ; on inc's flags: no compare
+    add bx, 2                       ; offset and counter are still two induction variables:
+    inc cx                          ; NOT shared yet (#98)
+    jne L0_5                        ; [flag reuse] inc's flags end the loop: no compare
 L0_3:
     shld edx, eax, 16               ; the long returns in DX:AX
     pop di
@@ -189,11 +189,11 @@ L0_0:
     les si, dword ptr [bp+6]        ; es:si = a's slice: length, then data pointer
     lfs di, dword ptr [bp+10]       ; fs:di = b's slice
     mov ax, word ptr es:[si]
-    mov word ptr [bp-2], ax         ; len(a)
+    mov word ptr [bp-2], ax         ; [hoisted] len(a), read once, kept in the frame
     mov ax, word ptr fs:[di]
-    mov word ptr [bp-4], ax         ; len(b)
-    les si, dword ptr es:[si+4]     ; es:si = a's data
-    lfs di, dword ptr fs:[di+4]     ; fs:di = b's data
+    mov word ptr [bp-4], ax         ; [hoisted] len(b)
+    les si, dword ptr es:[si+4]     ; [hoisted] es:si = a's data
+    lfs di, dword ptr fs:[di+4]     ; [hoisted] fs:di = b's data
     xor dx, dx                      ; dx = i = 0
     xor eax, eax                    ; total = 0
     jmp L0_7
@@ -206,9 +206,9 @@ L0_11:
     movsx ebx, word ptr fs:[bx+di]  ; b[i]
     imul ecx, ebx
     add eax, ecx                    ; total += product
-    inc dx
-L0_7:
-    cmp dx, word ptr [bp-2]         ; i < len(a)
+    inc dx                          ; one induction variable, i: nothing to share, and i is
+L0_7:                               ; scaled on every iteration: no strength reduction
+    cmp dx, word ptr [bp-2]         ; i < len(a): a compare against memory, twice per iteration
     jb L0_24
 L0_22:
     shld edx, eax, 16               ; the long returns in DX:AX
@@ -226,9 +226,9 @@ Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 -S`:
 
 ```basic
-FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER, n AS INTEGER)
+FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
     DIM total AS LONG, i AS INTEGER
-    FOR i = 0 TO n - 1
+    FOR i = 0 TO UBOUND(a)
         total = total + CLNG(a(i)) * b(i)
     NEXT
     Dot& = total
@@ -238,41 +238,61 @@ END FUNCTION
 ```asm
 DOT proc far
 L1_0:
-    mov cx, 2                       ; B$ENRA builds the frame: cx = 2 bytes of locals,
+    mov cx, 4                       ; B$ENRA builds the frame: cx = 4 bytes of locals,
     mov bx, 0                       ; bx = 0 temporary strings
     call far ptr B$ENRA
-    mov si, word ptr [bp+10]        ; a() descriptor: the arguments were pushed left to right
-    mov di, word ptr [bp+8]         ; b() descriptor
-    mov bx, word ptr [bp+6]         ; n is passed by reference
-    mov bx, word ptr [bx]           ; bx = n
-    dec bx                          ; bx = n - 1
-    mov ax, word ptr [si+2]         ; a's data segment
-    mov cx, word ptr [si+10]        ; a's data offset
-    mov word ptr [bp-12], cx        ; kept in the frame
-    mov es, ax                      ; es = a's segment
-    mov fs, word ptr [di+2]         ; fs = b's segment
-    mov di, word ptr [di+10]        ; di = b's offset
-    mov cx, bx
+    mov si, word ptr [bp+8]         ; a() descriptor: the arguments were pushed left to right
+    mov di, word ptr [bp+6]         ; b() descriptor
+    cmp word ptr [si+2], 0          ; UBOUND(a): the bound is in the descriptor, or B$UBND asks
+    jne L1_4
+L1_17:
+    push si
+    pushw 1                         ; B$UBND(a, 1)
+    mov word ptr [bp-12], di
+    mov word ptr [bp-14], si
+    call far ptr B$UBND
+    mov si, word ptr [bp-14]
+    mov di, word ptr [bp-12]
+    jmp L1_19
+L1_4:
+    movzx bx, byte ptr [si+8]
+    dec bx
+    shl bx, 2                       ; the last dimension's entry
+    mov ax, word ptr [bx+si+16]
+    add ax, word ptr [bx+si+14]
+    dec ax                          ; ax = UBOUND(a): lower bound + count - 1
+L1_19:
+    mov bx, word ptr [si+2]         ; [hoisted] a's data segment
+    mov cx, word ptr [si+10]        ; [hoisted] a's data offset
+    mov word ptr [bp-14], cx        ; kept in the frame
+    mov es, bx                      ; es = a's segment
+    mov fs, word ptr [di+2]         ; [hoisted] fs = b's segment
+    mov di, word ptr [di+10]        ; [hoisted] di = b's offset
+    mov cx, ax
     inc cx
-    neg cx                          ; cx = -n, the loop counter
+    neg cx                          ; [count to zero] cx = -(UBOUND + 1)
+    xor ebx, ebx                    ; total = 0 on the no-iteration path
+    or ax, ax
+    jl L1_52                        ; [loop rotation] UBOUND < 0: no iterations
+L1_54:
     xor eax, eax                    ; total = 0
-    or bx, bx
-    jl L1_35                        ; n - 1 < 0: no iterations
+    xor bx, bx                      ; [strength reduction] bx = byte offset of a(i) and b(i)
 L1_37:
-    xor bx, bx                      ; bx = byte offset of a(i) and b(i)
-L1_20:
-    mov si, word ptr [bp-12]        ; si = a's offset, reloaded on every iteration
+    mov si, word ptr [bp-14]        ; NOT hoisted: a's offset is read from the frame every iteration
     movsx edx, word ptr es:[bx+si]  ; a(i), sign-extended
     movsx esi, word ptr fs:[bx+di]  ; b(i)
     imul edx, esi                   ; CLNG(a(i)) * b(i)
     add eax, edx                    ; total += product
-    add bx, 2                       ; the offset steps by one INTEGER
-    inc cx                          ; the counter steps up to zero
-    jne L1_20                       ; on inc's flags: no compare
-L1_35:
-    shld edx, eax, 16               ; the long returns in DX:AX
+    add bx, 2                       ; offset and counter: two induction variables,
+    inc cx                          ; NOT shared yet (#98)
+    jne L1_37                       ; [flag reuse] inc's flags end the loop
+L1_55:
+    mov ebx, eax
+L1_52:
+    shld edx, ebx, 16               ; the long returns in DX:AX
+    mov ax, bx
     call far ptr B$EXSA             ; the runtime takes the frame down
-    retf 6                          ; and the callee pops the three arguments
+    retf 4                          ; and the callee pops the two arguments
 DOT endp
 ```
 
@@ -281,7 +301,11 @@ An array is a descriptor: its segment goes in `es` or `fs` before the loop.
 plain one.
 
 All three accumulate the long product in `eax` with `imul`, without a runtime
-call. C and BASIC count the index from `-n` up to zero.
+call, and hoist the array bases. C and BASIC also count to zero with a strength-reduced
+offset. What is missing is sharing the offset with the counter, and keeping `a` in a
+register: [#98](https://github.com/ali-mosavian/llrm/issues/98). Without
+`-fno-move-loop-invariants` or `-fno-strength-reduce` the loops get visibly worse
+(`-fno-...` turns one pass off and shows what it did).
 
 ## Debug
 
