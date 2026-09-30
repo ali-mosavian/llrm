@@ -1877,14 +1877,17 @@ pub fn tested(body: &LirBody) -> LirBody {
             .map(|(index, _)| index)
             .collect();
         let at = |position: isize| work[usize::try_from(position).expect("a non-negative position")];
-        let mut test_at = work.len() as isize - 2;
+        // A two-way branch may end in a jump to its other side.
+        let jumps = work.last().is_some_and(|&last| insns[last].what.as_ref().is_some_and(|what| what.op == Operation::Jump));
+        let branch_at = work.len() as isize - 1 - isize::from(jumps);
+        let mut test_at = branch_at - 1;
         while test_at >= 0 && _moves(&insns[at(test_at)], None) {
             test_at -= 1;
         }
         let Some(register) = (test_at >= 0).then(|| _zero_tested(&insns[at(test_at)])).flatten() else {
             continue;
         };
-        let branch = &insns[*work.last().expect("a test has a branch")];
+        let branch = &insns[at(branch_at)];
         if !branch.what.as_ref().is_some_and(|what| {
             what.op == Operation::Branch && what.name.as_deref().is_some_and(|name| peep::SET_ZERO_JCC.contains(name))
         }) || !live[&block.at].is_disjoint(&_DIFFERING)

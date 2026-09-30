@@ -1269,6 +1269,26 @@ fn test_zero_compare_before_its_branch_is_or() {
     }
 }
 
+/// A loop counted up to zero kept `add bx,2; cmp bx,0; jne` where its
+/// branch was followed by a jump to the exit: the add's flags were the test.
+#[test]
+fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
+    let bx = rl(Register::BX, 2);
+    let step = insn(0, Some((0, 3)), Some(sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), im(2, 2)])), vec![], vec![]);
+    let compare = insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![]);
+    let branch = insn(6, Some((6, 8)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
+    let jump = insn(8, Some((8, 10)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(10))), vec![], vec![]);
+    let ax = rl(Register::AX, 2);
+    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
+    let blocks = vec![
+        block(0, vec![Arc::new(step), Arc::new(compare), Arc::new(branch), Arc::new(jump)], vec![0, 10]),
+        block(10, vec![Arc::new(flags), Arc::new(exit)], vec![]),
+    ];
+    let names = tested(&body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    assert_eq!(names, ["add", "", "jne", "jmp"]);
+}
+
 #[test]
 fn test_register_round_trip_through_memory_is_one_instruction() {
     // `mov bx,[bp-4]; add bx,1; mov [bp-4],bx` where bcc writes `add word ptr [bp-4],1`.
