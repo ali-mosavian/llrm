@@ -1335,9 +1335,15 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
     let end = expander.value(context, function, candidate.of.pointer, &end, ty);
     let tested = if proof.posttested { steps[*index] } else { registers[*index] };
     let branch = proof.branch;
-    // A test in the body, not the latch, reads a step made before it.
+    // A test in the body, not the latch, reads a step made before it; a step
+    // already ahead of the branch stays, where its readers need it.
     if let (true, Some(next)) = (proof.posttested, stepping[*index]) {
-        function.move_to(next, Position::Before(branch)).expect("a placed branch");
+        let block = function.parent(branch).expect("a placed branch");
+        let order = function.block(block).instructions();
+        let ahead = function.parent(next) == Some(block) && order.iter().position(|&one| one == next) < order.iter().position(|&one| one == branch);
+        if !ahead {
+            function.move_to(next, Position::Before(branch)).expect("a placed branch");
+        }
     }
     let continues = matches!(function.instruction(branch).operands[1], Operand::Block(block) if plan.loop_.body.contains(&cfg::id(block)));
     let predicate = if continues { IntPredicate::Ne } else { IntPredicate::Eq };

@@ -1504,3 +1504,122 @@ fn on_core(text: &str) -> String {
     manager.run_module(&mut module, Rc::new(machine)).unwrap();
     printed(&module)
 }
+
+/// A decreasing loop over six arrays at symbolic strides, as a fuzz case
+/// (`rnd98_0367`): `199 - i` read the stepped value of a new counter before
+/// the step that defines it, and the pass's output failed verification.
+const DOWN_WITH_STRIDES: &str = "@a1 = global [8060 x i8] zeroinitializer\n@a2 = global [1612 x i8] zeroinitializer\n\ndeclare i16 @_lcopy(ptr addrspace(1), ptr addrspace(1), i16) addrspace(1)\n\ndefine i32 @f(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2, ptr addrspace(1) nocapture readonly %3, ptr nocapture readonly %4, ptr addrspace(1) nocapture readonly %5, ptr addrspace(1) nocapture readonly %6, i16 %7, i16 %8, i16 %9) addrspace(1) {
+b1:
+  %10 = alloca [8060 x i8]
+  %11 = addrspacecast ptr @a1 to ptr addrspace(1)
+  %12 = addrspacecast ptr %10 to ptr addrspace(1)
+  %13 = call addrspace(1) i16 @_lcopy(ptr addrspace(1) %12, ptr addrspace(1) %11, i16 8060)
+  br label %b2
+
+b2:
+  %14 = phi i16 [ 0, %b1 ], [ %83, %b6 ]
+  %15 = icmp slt i16 %14, 3
+  br i1 %15, label %b4, label %b3
+
+b3:
+  ret i32 1
+
+b4:
+  %16 = mul nsw i16 %14, %9
+  br label %b5
+
+b5:
+  %17 = phi i16 [ 199, %b4 ], [ %81, %b5 ]
+  %18 = mul nsw i16 %17, %9
+  %19 = add nsw i16 %18, %16
+  %20 = add nsw i16 %19, 10
+  %21 = mul nsw i16 %20, 10
+  %22 = getelementptr inbounds i8, ptr %10, i16 %21
+  %23 = getelementptr inbounds i8, ptr %22, i16 0
+  %24 = load i16, ptr %23
+  %25 = sext i16 %24 to i32
+  %26 = mul nsw i16 3, %17
+  %27 = add nsw i16 %26, %16
+  %28 = add nsw i16 %27, 10
+  %29 = mul nsw i16 %28, 2
+  %30 = getelementptr inbounds i8, ptr @a2, i16 %29
+  %31 = load i16, ptr %30
+  %32 = sext i16 %31 to i32
+  %33 = add nsw i32 %25, %32
+  %34 = add nsw i16 %17, %16
+  %35 = add nsw i16 %34, 13
+  %36 = mul nsw i16 %35, 2
+  %37 = getelementptr inbounds i8, ptr addrspace(1) %1, i16 %36
+  %38 = load i16, ptr addrspace(1) %37
+  %39 = sext i16 %38 to i32
+  %40 = add nsw i32 %33, %39
+  %41 = add nsw i16 %17, %7
+  %42 = add nsw i16 %41, %16
+  %43 = add nsw i16 %42, 15
+  %44 = mul nsw i16 %43, 4
+  %45 = getelementptr inbounds i8, ptr addrspace(1) %2, i16 %44
+  %46 = load i32, ptr addrspace(1) %45
+  %47 = add nsw i32 %40, %46
+  %48 = add nsw i16 %27, 15
+  %49 = mul nsw i16 %48, 2
+  %50 = getelementptr inbounds i8, ptr addrspace(1) %3, i16 %49
+  %51 = load i16, ptr addrspace(1) %50
+  %52 = sext i16 %51 to i32
+  %53 = add nsw i32 %47, %52
+  %54 = add nsw i16 %17, %8
+  %55 = add nsw i16 %54, %16
+  %56 = add nsw i16 %55, 11
+  %57 = mul nsw i16 %56, 4
+  %58 = getelementptr inbounds i8, ptr %4, i16 %57
+  %59 = load i32, ptr %58
+  %60 = add nsw i32 %53, %59
+  %61 = sub nsw i16 199, %17
+  %62 = add nsw i16 %61, %16
+  %63 = add nsw i16 %62, 13
+  %64 = getelementptr inbounds i8, ptr addrspace(1) %5, i16 %63
+  %65 = load i8, ptr addrspace(1) %64
+  %66 = zext i8 %65 to i32
+  %67 = add nsw i32 %60, %66
+  %68 = add nsw i16 %55, 13
+  %69 = mul nsw i16 %68, 2
+  %70 = getelementptr inbounds i8, ptr addrspace(1) %6, i16 %69
+  %71 = load i16, ptr addrspace(1) %70
+  %72 = sext i16 %71 to i32
+  %73 = add nsw i32 %67, %72
+  %74 = srem i32 %73, 97
+  %75 = trunc i32 %74 to i16
+  %76 = add nsw i16 %17, -6
+  %77 = add nsw i16 %76, %16
+  %78 = add nsw i16 %77, 15
+  %79 = mul nsw i16 %78, 2
+  %80 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 %79
+  store i16 %75, ptr addrspace(1) %80
+  %81 = add nsw i16 %17, -1
+  %82 = icmp sge i16 %81, 0
+  br i1 %82, label %b5, label %b6
+
+b6:
+  %83 = add nsw i16 %14, 1
+  br label %b2
+}
+";
+
+/// `text` through `Lsr` on a P5, as the rich route prices it.
+fn on_p5(text: &str) -> String {
+    let costs = llrm_x86_code16::target::costs("P5");
+    let machine = llrm_x86_code16::Dos { address_forms: llrm_x86_code16::target::address_forms(&costs, 0), costs, ..llrm_x86_code16::Dos::default() };
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr);
+    manager.run_module(&mut module, Rc::new(machine)).unwrap();
+    printed(&module)
+}
+
+/// Verification after the pass is the assertion: a use of a stepped value
+/// is dominated by the step.
+#[test]
+fn test_a_step_stays_ahead_of_the_readers_of_its_value() {
+    let printed = on_p5(DOWN_WITH_STRIDES);
+    assert!(printed.contains("lsr.iv.next"), "{printed}");
+}
