@@ -84,15 +84,48 @@ fn is_bp(register: Register) -> bool {
     register != Register::None && ir::root(register) == ir::root(Register::BP)
 }
 
+/// The word slot `mem` names, when it is exactly one.
+fn word_slot(mem: &Mem) -> Option<i64> {
+    slot(mem).filter(|_| mem.width == WORD)
+}
+
 /// How one instruction reaches the frame.
 #[derive(Default)]
 struct Touch {
     reads: BTreeSet<i64>,
     writes: BTreeSet<i64>,
+    /// Frame bytes it reaches other than as exactly one word, which no
+    /// register can stand for: a dword store, a far pointer load.
+    wide: Vec<Reach>,
     /// A frame access that is no word slot, or a use of BP itself.
     other: bool,
     /// Something that needs BP to be the frame pointer while it runs.
     traps: bool,
+}
+
+/// Frame bytes `[from, to)` one access reads or writes.
+struct Reach {
+    from: i64,
+    to: i64,
+    read: bool,
+    written: bool,
+}
+
+impl Touch {
+    /// Whether an access that is not exactly word slot `at` reads it, or writes it.
+    fn reaches(&self, at: i64, writing: bool) -> bool {
+        self.wide.iter().any(|one| one.from < at + i64::from(WORD) && at < one.to && if writing { one.written } else { one.read })
+    }
+
+    /// Whether this reads word slot `at` in whole or in part.
+    fn reads_slot(&self, at: i64) -> bool {
+        self.reads.contains(&at) || self.reaches(at, false)
+    }
+
+    /// Whether this writes word slot `at` in whole or in part.
+    fn writes_slot(&self, at: i64) -> bool {
+        self.writes.contains(&at) || self.reaches(at, true)
+    }
 }
 
 fn touch(one: &Insn) -> Touch {
@@ -138,7 +171,12 @@ fn touch(one: &Insn) -> Touch {
                         Some(at) => {
                             out.reads.insert(at);
                         }
-                        None => out.other = true,
+                        None => {
+                            out.other = true;
+                            if let Some(at) = slot(mem).filter(|_| what.op != Operation::Address) {
+                                out.wide.push(Reach { from: at, to: at + i64::from(mem.width), read: !written || !moves, written });
+                            }
+                        }
                     }
                 }
             }
@@ -157,7 +195,7 @@ fn live_in(body: &LirBody, at: i64) -> BTreeSet<i64> {
         .map(|block| {
             let seen = block.insns.iter().find_map(|one| {
                 let touched = touch(one);
-                if touched.reads.contains(&at) {
+                if touched.reads_slot(at) {
                     Some(true)
                 } else {
                     touched.writes.contains(&at).then_some(false)
@@ -314,10 +352,10 @@ fn rewritten(one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
         return Arc::clone(one);
     };
     let swap = |place: &Loc| match place {
-        Loc::Mem(mem) => slot(mem).and_then(|at| homes.get(&at)).cloned().unwrap_or_else(|| place.clone()),
+        Loc::Mem(mem) => word_slot(mem).and_then(|at| homes.get(&at)).cloned().unwrap_or_else(|| place.clone()),
         other => other.clone(),
     };
-    if !what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(mem) if slot(mem).is_some_and(|at| homes.contains_key(&at)))) {
+    if !what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(mem) if word_slot(mem).is_some_and(|at| homes.contains_key(&at)))) {
         return Arc::clone(one);
     }
     let what = Semantics {
@@ -332,6 +370,9 @@ fn rewritten(one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
 /// or a far-pointer load takes only memory.
 fn registrable(one: &Arc<Insn>, at: i64) -> bool {
     let touched = touch(one);
+    if touched.reaches(at, false) || touched.reaches(at, true) {
+        return false;
+    }
     if !touched.reads.contains(&at) && !touched.writes.contains(&at) {
         return true;
     }
@@ -343,7 +384,7 @@ fn registrable(one: &Arc<Insn>, at: i64) -> bool {
 /// register is freed goes, one kept becomes a register move.
 fn saving(one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
     let touched = touch(one);
-    let (reads, writes) = (touched.reads.contains(&at), touched.writes.contains(&at));
+    let (reads, writes) = (touched.reads_slot(at), touched.writes_slot(at));
     if !reads && !writes {
         return 0;
     }
@@ -394,7 +435,7 @@ fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering:
     }
     let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
     let kept = match from.as_ref()? {
-        Source::Slot(at) if spills.contains(at) => !insns().any(|insn| touch(insn).writes.contains(at)),
+        Source::Slot(at) if spills.contains(at) => !insns().any(|insn| touch(insn).writes_slot(*at)),
         Source::Slot(at) => insns().all(|insn| spares(insn, *at)),
         Source::Constant(_) => true,
     };
@@ -551,7 +592,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
             .collect::<Vec<_>>();
         ranked.sort_by_key(|(saved, at)| (std::cmp::Reverse(*saved), *at));
         let (entered, left) = (entries.len() as i64, exits.len() as i64);
-        let written = |at: i64| insns().any(|insn| touch(insn).writes.contains(&at));
+        let written = |at: i64| insns().any(|insn| touch(insn).writes_slot(at));
         let stored = |at: i64| written(at) && { let live = live_in(body, at); exits.iter().any(|to| live.contains(to)) };
         // BP takes the last slot when the rest fill every free register.
         let bp = !other && !traps && ranked.len() == registers.len() + 1 && !stored(ranked.last().expect("a slot").1);

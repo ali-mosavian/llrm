@@ -25,13 +25,12 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;
 
-/// Maximum queue visits before the remaining values are spilled.
+/// Most queue visits an allocation may take: more means it does not converge, a bug.
 pub const BUDGET: usize = 200_000;
 
-/// How long a range may be and still count as a reload.
-pub const RELOAD: i64 = 4 * ranges::PER_INSN;
-
-/// A value reached emission with no register. Always a bug here.
+/// A value has no register, or no register it may take is free of values that
+/// cannot be spilled: the body asks for more registers at one point than the
+/// machine has, or names a register no value can be in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Unplaced(pub String);
 
@@ -62,7 +61,6 @@ impl std::error::Error for Spilled {}
 pub enum Error {
     Unplaced(Unplaced),
     Spilled(Spilled),
-    Impossible(constrain::Impossible),
     Refused(Refused),
     /// `ValueError`, or a call into a module not yet ported.
     Value(String),
@@ -73,7 +71,6 @@ impl fmt::Display for Error {
         match self {
             Self::Unplaced(one) => one.fmt(formatter),
             Self::Spilled(one) => one.fmt(formatter),
-            Self::Impossible(one) => one.fmt(formatter),
             Self::Refused(one) => one.fmt(formatter),
             Self::Value(one) => formatter.write_str(one),
         }
@@ -88,7 +85,6 @@ impl Error {
         let (module, kind) = match self {
             Self::Unplaced(_) => ("qbopt.backend.allocate", "Unplaced"),
             Self::Spilled(_) => ("qbopt.backend.allocate", "Spilled"),
-            Self::Impossible(_) => ("qbopt.backend.constrain", "Impossible"),
             Self::Refused(_) => ("qbopt.backend.frame", "Refused"),
             Self::Value(_) => ("builtins", "ValueError"),
         };
@@ -105,12 +101,6 @@ impl From<Unplaced> for Error {
 impl From<Spilled> for Error {
     fn from(one: Spilled) -> Self {
         Self::Spilled(one)
-    }
-}
-
-impl From<constrain::Impossible> for Error {
-    fn from(one: constrain::Impossible) -> Self {
-        Self::Impossible(one)
     }
 }
 
@@ -766,15 +756,10 @@ impl Facts {
     fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
         let index = ranges::indexed(body);
         let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
-        // A reload or rematerialization of a spilled value gains nothing from
-        // a spill, however far a parallel copy stretches it. Any other
-        // product is unspillable only while it is short.
-        let reloaded = _reloaded(body);
+        // A spiller product lives for one use: a spill gains nothing.
         for one in unspillable {
             if let Some(interval) = live.get_mut(one) {
-                if reloaded.contains(one) || interval.size() <= RELOAD {
-                    interval.weight = INF;
-                }
+                interval.weight = INF;
             }
         }
         for one in protected {
@@ -785,17 +770,6 @@ impl Facts {
         let masks = _masks(body, &index, segments);
         Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments), hints: _copy_hints(body) }
     }
-}
-
-/// The values only a reload or a rematerialization defines.
-fn _reloaded(body: &LirBody) -> BTreeSet<u32> {
-    let mut pure: BTreeSet<u32> = BTreeSet::new();
-    let mut other: BTreeSet<u32> = BTreeSet::new();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        let into = if one.spill_reload || one.rematerialized { &mut pure } else { &mut other };
-        into.extend(one.defines.iter().copied());
-    }
-    pure.difference(&other).copied().collect()
 }
 
 /// The values whose register a rewrite made them share with another, lose
@@ -838,6 +812,9 @@ fn _allocated(
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
     let mut facts = Facts::of(&body, profile, segments, &unspillable, protected);
+    if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments) {
+        return Err(Unplaced(why).into());
+    }
     // Every value this allocation has known: a new one is numbered above them.
     let mut floor = splitkit::_next_value(&body);
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
@@ -1080,11 +1057,36 @@ fn _allocated(
                 stage.insert(value, Stage::Done);
                 continue;
             }
-            if let Some(register) = fixed.get(&value) {
-                return Err(Unplaced(format!("value#{value} cannot be placed in fixed {}", register.repr())).into());
-            }
-            if mine.weight == INF {
-                return Err(Unplaced(format!("value#{value} cannot be spilled and no register is free for it")).into());
+            // A value that cannot be spilled takes a register by force.
+            if fixed.contains_key(&value) || unspillable.contains(&value) {
+                let hard = |other: u32| fixed.contains_key(&other) || unspillable.contains(&other);
+                let Some((got, victims)) = _forced(&mine, &order, &union, &facts.live, &facts.masks, &hard, width) else {
+                    for register in &order {
+                        let holders: Vec<(u32, bool)> = union
+                            .get(&_whole(*register))
+                            .into_iter()
+                            .flatten()
+                            .filter(|other| facts.live.get(*other).is_some_and(|found| found.overlaps(&mine)))
+                            .map(|other| (*other, hard(*other)))
+                            .collect();
+                        llrm_support::debug!("regalloc", "{}: value#{value} {:?} {}: clobbered {}, held by {holders:?}", body.name, mine.segments, register.repr(), _clobbered(&mine, *register, &facts.masks, width));
+                    }
+                    // `unallocatable` refused every body that could land here.
+                    unreachable!("{}: value#{value} cannot be spilled and no register it may take is free of values that cannot be", body.name);
+                };
+                LAST_RESORTS.with(|count| count.set(count.get() + 1));
+                llrm_support::debug!("regalloc", "{}: last resort for value#{value}: {} evicts {victims:?}", body.name, got.repr());
+                for one in victims {
+                    union.get_mut(&_whole(got)).expect("a victim is in the register it was taken from").retain(|other| *other != one);
+                    r#where.shift_remove(&one);
+                    stage.insert(one, Stage::Spill);
+                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    *waiting.entry(one).or_insert(0) += 1;
+                }
+                r#where.insert(value, got);
+                union.entry(_whole(got)).or_default().push(value);
+                stage.insert(value, Stage::Done);
+                continue;
             }
             cost += mine.weight;
             stage.insert(value, Stage::Done);
@@ -1132,7 +1134,7 @@ fn _allocated(
         floor = floor.max(splitkit::_next_value(&body));
         facts = Facts::of(&body, profile, segments, &unspillable, protected);
         placing = None;
-        for (one, register) in constrain::required(&body)? {
+        for (one, register) in constrain::required(&body) {
             fixed.entry(one).or_insert(register);
         }
         wanted = _wanted(&facts.hints, &fixed);
@@ -1230,25 +1232,6 @@ fn _recolored_hints(
             }
         }
     }
-}
-
-/// Allocate one evaluated retention plan, or discard that plan.
-fn _assigned_plan(
-    body: &LirBody,
-    pinned: &IndexMap<u32, Register>,
-    reloads: &BTreeSet<u32>,
-    retained: &BTreeSet<u32>,
-    cpu: &Profile,
-    segments: &Segments,
-) -> Result<(Assignment, BTreeSet<u32>), Error> {
-    if !retained.is_empty() {
-        match allocate(body, Some(pinned), Some(reloads), Some(retained), None, cpu.into(), segments) {
-            Ok(got) => return Ok((got, retained.clone())),
-            Err(Error::Unplaced(_)) => {}
-            Err(other) => return Err(other),
-        }
-    }
-    Ok((allocate(body, Some(pinned), Some(reloads), None, None, cpu.into(), segments)?, BTreeSet::new()))
 }
 
 /// Every value that wants a register, dead definitions included.
@@ -1450,6 +1433,54 @@ fn _evict(
     best.map(|(_bill, register, victims)| (register, victims))
 }
 
+/// The last resort for a value that cannot be spilled: the register of its
+/// class whose holders it overlaps cost least to evict, and those holders.
+/// A holder that cannot be spilled either (`hard`) rules its register out; a
+/// protected holder may be evicted, and a trial that loses it is dropped;
+/// when every register is ruled out, one point of the body asks for more
+/// registers than the machine has.
+fn _forced(
+    one: &Interval,
+    order: &[Register],
+    union: &IndexMap<Register, Vec<u32>>,
+    live: &IndexMap<u32, Interval>,
+    masks: &Masks,
+    hard: &dyn Fn(u32) -> bool,
+    width: u32,
+) -> Option<(Register, Vec<u32>)> {
+    let mut best: Option<(f64, Register, Vec<u32>)> = None;
+    for register in order {
+        if _clobbered(one, *register, masks, width) {
+            continue;
+        }
+        let victims: Vec<u32> = union
+            .get(&_whole(*register))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|other| live.get(other).is_some_and(|found| found.overlaps(one)))
+            .collect();
+        if victims.iter().any(|other| hard(*other)) {
+            continue;
+        }
+        let bill: f64 = victims.iter().map(|other| live[other].weight).sum();
+        if best.as_ref().is_none_or(|found| bill < found.0) {
+            best = Some((bill, *register, victims));
+        }
+    }
+    best.map(|(_bill, register, victims)| (register, victims))
+}
+
+thread_local! {
+    static LAST_RESORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread's allocations had to evict by force: a value
+/// that cannot be spilled found no register by any other means.
+pub fn last_resorts() -> usize {
+    LAST_RESORTS.with(std::cell::Cell::get)
+}
+
 /// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and `VirtRegMap`.
 pub struct Coloring<'a> {
     pub union: &'a mut IndexMap<Register, Vec<u32>>,
@@ -1556,6 +1587,55 @@ impl Coloring<'_> {
     }
 }
 
+/// Why no allocation of `body` can exist, if so: a value no register may hold,
+/// two values required in one register where both are live, or more values
+/// that cannot be spilled live at one point than there are registers. Checked
+/// once, before allocation, which then has no refusal of its own.
+fn unallocatable(facts: &Facts, fixed: &IndexMap<u32, Register>, unspillable: &BTreeSet<u32>, segments: &Segments) -> Option<String> {
+    if let Some((value, _)) = facts.confined.iter().find(|(_, class)| target::order(Some(*class), segments).is_empty()) {
+        return Some(format!("value#{value} may be in no register"));
+    }
+    let mut by_register: IndexMap<Register, Vec<u32>> = IndexMap::default();
+    for (value, register) in fixed {
+        by_register.entry(_whole(*register)).or_default().push(*value);
+    }
+    for (register, values) in &by_register {
+        for (at, first) in values.iter().enumerate() {
+            for second in &values[at + 1..] {
+                if let (Some(one), Some(other)) = (facts.live.get(first), facts.live.get(second)) {
+                    if one.overlaps(other) {
+                        return Some(format!("value#{first} and value#{second} are both required in {} and both live", register.repr()));
+                    }
+                }
+            }
+        }
+    }
+    // The busiest point among the values that cannot be spilled.
+    let mut edges: Vec<(i64, i64)> = Vec::new();
+    let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
+    let in_general = |value: &u32| match (fixed.get(value), facts.confined.get(value)) {
+        (Some(register), _) => general.contains(&_whole(*register)),
+        (None, Some(class)) => class.iter().any(|one| general.contains(&_whole(*one))),
+        (None, None) => true,
+    };
+    let hard: BTreeSet<u32> = fixed.keys().chain(unspillable).copied().collect();
+    for value in hard.iter().filter(|value| in_general(value)) {
+        for segment in facts.live.get(value).map_or(&[][..], |one| &one.segments[..]) {
+            edges.extend([(segment.start, 1), (segment.end, -1)]);
+        }
+    }
+    edges.sort_unstable();
+    let (mut now, mut busiest) = (0, 0);
+    for (_, change) in edges {
+        now += change;
+        busiest = busiest.max(now);
+    }
+    if busiest > target::AVAILABLE.len() as i64 {
+        return Some(format!("{busiest} values that cannot be spilled are live at one point, and the machine has {} registers", target::AVAILABLE.len()));
+    }
+    None
+}
+
 /// Assign, then rewrite. LLVM's two halves, in one phase.
 pub struct RegAlloc {
     pub pinned: IndexMap<u32, Register>,
@@ -1587,7 +1667,8 @@ impl RegAlloc {
         // find it holding one of its values.
         let segments = self.segments.clone();
         let data_free = !datagroup::names_data_segment(&body, &segments);
-        let mut body = explicit_selectors(&body, Some(&self.pinned), &segments);
+        let mut body = constrain::distinct_roles(&body, self.pinned.keys().copied().max().map_or(0, |one| one + 1));
+        body = explicit_selectors(&body, Some(&self.pinned), &segments);
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
         body = narrowed_body;
         self.pinned = narrower;
@@ -1622,7 +1703,7 @@ impl RegAlloc {
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });
-        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned))?;
+        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned));
         body = constrained_body;
         let clash: BTreeSet<u32> = fixed
             .keys()
@@ -1639,20 +1720,21 @@ impl RegAlloc {
             body.blocks.iter().flat_map(|block| &block.insns).filter(|one| _unread_move(one)).map(ranges::key).collect();
         body = spiller::_remove_abandoned(&body, &abandoned);
         self.pinned = prefer.clone();
-        self.pinned.extend(constrain::required(&body)?);
+        self.pinned.extend(constrain::required(&body));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
         let start = frame.borrow().saved();
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
         let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
             let mut pins = prefer.clone();
-            pins.extend(constrain::required(candidate)?);
+            pins.extend(constrain::required(candidate));
+            let before = last_resorts();
             let (got, out, spilled) =
                 rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
-            Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved() })
+            Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
         let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
-        llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}", body.name, best.out.insns().len(), best.spilled.len(), best.cost);
+        llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}, {} forced", body.name, best.out.insns().len(), best.spilled.len(), best.cost, best.forced);
         let spilled = best.spilled.clone();
         if !spilled.is_empty() {
             // Other shapes of the same body, which the base allocation's spills
@@ -1692,11 +1774,11 @@ impl RegAlloc {
                     frame.borrow_mut().restore(&start);
                     let trial = match run(&candidate, &unspillable, &protected, splitting) {
                         Ok(trial) => trial,
-                        Err(Error::Unplaced(_)) => continue,
                         Err(other) => return Err(other),
                     };
-                    llrm_support::debug!("regalloc", "  trial: {} spilled, cost {}", trial.spilled.len(), trial.cost);
+                    llrm_support::debug!("regalloc", "  trial: {} spilled, cost {}, {} forced", trial.spilled.len(), trial.cost, trial.forced);
                     if kept.is_disjoint(&trial.spilled) && trial.cost < best.cost {
+                        llrm_support::debug!("regalloc", "  kept the trial");
                         best = trial;
                     }
                 }
@@ -1714,6 +1796,8 @@ struct Outcome {
     out: LirBody,
     spilled: BTreeSet<u32>,
     slots: (IndexMap<frames::SlotKey, i64>, IndexMap<i64, i64>),
+    /// How many values it took a register for by force.
+    forced: usize,
 }
 
 /// What a body costs to run: its instructions and memory operands, each
@@ -2292,6 +2376,7 @@ mod tests {
 
     use super::*;
     use crate::analysis::intervals::Segment;
+    use crate::backend::regalloc_input::{before_regalloc, through};
     use crate::backend::{cpu, parcopy, select, verify};
     use crate::model::ir::Imm;
 
@@ -2744,7 +2829,7 @@ mod tests {
     fn test_conflicting_hard_register_assignments_are_unplaceable_not_spills() {
         let body = _one_block(vec![_mov(1, 1, 0), _mov(2, 2, 2), _shl(1, 2, 4)]);
         let message = unplaced(allocated(&body, Some(&pins(&[(1, Register::DX), (2, Register::DX)]))));
-        assert!(message.contains("value#2 cannot be placed"), "{message}");
+        assert!(message.contains("both required in"), "{message}");
     }
 
     #[test]
@@ -2803,26 +2888,6 @@ mod tests {
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
     }
 
-    /// Every spiller product was made unspillable whatever its length (#127):
-    /// league.nib's `main` held a long load-modify-store value no register
-    /// could take, and was refused. Only a reload or a rematerialization,
-    /// which a spill cannot shorten, is unspillable when long.
-    #[test]
-    fn test_a_long_product_that_is_not_a_reload_stays_spillable() {
-        let cell = |base: u32| Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
-        let remat = Insn { rematerialized: true, .._mov(2, 6, 2) };
-        let mut insns = vec![_mov(1, 5, 0), remat];
-        insns.extend((10..20u32).map(|one| _mov(one, 1, 4 + 2 * i64::from(one))));
-        insns.extend([_load(100, 30, cell(1), vec![1]), _load(102, 31, cell(2), vec![2])]);
-        let body = _one_block(insns);
-        let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
-        let made = BTreeSet::from([1, 2]);
-        let facts = Facts::of(&body, profile, &target::BUILT_IN, &made, &BTreeSet::new());
-        assert!(facts.live[&1].size() > RELOAD && facts.live[&2].size() > RELOAD, "premise: both are long: {:?} {:?}", facts.live[&1], facts.live[&2]);
-        assert!(facts.live[&1].weight < INF, "a long product that does real work can be spilled");
-        assert_eq!(facts.live[&2].weight, INF, "a long rematerialization cannot");
-    }
-
     /// A failed recoloring must leave every holder where it was.
     #[test]
     fn test_a_recoloring_that_fails_restores_every_holder() {
@@ -2867,7 +2932,7 @@ mod tests {
         let pinned: IndexMap<u32, Register> = (1..7).zip(target::AVAILABLE).collect();
         let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN);
         let message = unplaced(got);
-        assert!(message.contains("value#7 cannot be spilled"), "{message}");
+        assert!(message.contains("7 values that cannot be spilled are live at one point"), "{message}");
     }
 
     // ----------------------------------------- tests/test_allocation_hints.py
@@ -3087,26 +3152,6 @@ mod tests {
         assert_eq!(found[&2], *target::WORD_BASES);
     }
 
-    #[test]
-    fn test_unallocatable_retention_plan_falls_back_to_ordinary_spilling() {
-        let mut insns: Vec<Insn> =
-            [1u32, 2, 3].iter().zip(1..).map(|(value, at)| _frame_load(at, *value, -2 * i64::from(*value))).collect();
-        for value in [1u32, 2, 3] {
-            let cell = Mem {
-                index: Some(Held { value, width: 2 }),
-                ..Mem::new(Some(Addr::new(Space::Literal, i64::from(value))), 2)
-            };
-            insns.push(_load(3 + i64::from(value), 10 + value, cell, vec![value]));
-        }
-        let body = body_of("retention-fallback", 0, insns);
-
-        let (result, retained) =
-            _assigned_plan(&body, &IndexMap::default(), &values(&[2]), &values(&[1, 3]), cpu::profile("386").expect("386"), &target::BUILT_IN)
-                .expect("allocates");
-
-        assert_eq!(retained, BTreeSet::new());
-        assert!(!result.spilled.contains(&2));
-    }
 
     #[test]
     fn test_repeated_acyclic_stable_address_base_is_a_retention_candidate() {
@@ -3179,7 +3224,7 @@ mod tests {
             Insn::new(0, Some((0, 3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![1], vec![]);
         call.delivers = vec![(Held { value: 1, width: 2 }, Register::AX)];
         let (narrow, pinned) = narrowed(&body_of("dead result", 0, vec![call]), &pins(&[(1, Register::EAX)]));
-        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned)).expect("constrains");
+        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned));
         let insns = lowered.insns();
         assert_eq!(insns.len(), 1);
         assert!(insns[0].defines.is_empty());
@@ -3287,56 +3332,21 @@ mod tests {
             BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX])
         );
     }
-    /// The body `walks10.ll` (ten pointer walks, `-O2 --cpu 386`) has when it
-    /// reaches the register allocator, and the phase itself.
-    fn before_regalloc() -> (LirBody, Box<dyn crate::model::passes::LIRTransform>) {
-        use crate::abi::runtime::{EVERY, Reg as Hard};
-        use crate::backend::constpool::Pool;
-        use crate::backend::{frame, isel};
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir/walks10.ll");
-        let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
-        let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
-        let abi = crate::abi::qb::HirAbi {
-            runtime: crate::hir::model::RuntimeProfile::Freestanding,
-            objects: Default::default(),
-            preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
-        };
-        let cpu = cpu::profile("386").unwrap();
-        let pool = Rc::new(RefCell::new(Pool::new(0)));
-        let name = "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum";
-        let selected = isel::selected(&module, name, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
-        let mut made = frame::of(&selected.body, Some(&selected.calls), "", None).unwrap();
-        made.floor = made.floor.min(-selected.depth);
-        let shared = Rc::new(RefCell::new(made));
-        let pinned = selected.body.pins.clone();
-        let mut body = selected.body;
-        let phases =
-            crate::flow::machine(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN).unwrap();
-        for mut phase in phases {
-            if phase.class_name() == "RegAlloc" {
-                return (body, phase);
-            }
-            body = phase.transform(body).unwrap();
-        }
-        panic!("no RegAlloc phase");
-    }
-
     /// Ten arrays walked by pointer: the loop preheader's parallel copy keeps
     /// a rematerialized `lea` live across the whole group, longer than a
     /// reload's range, so it was spillable; spilling it made the same `lea`
     /// again, a new value every pass, and compilation did not finish (#104).
     #[test]
     fn test_a_reload_stretched_by_a_parallel_copy_is_not_spilled_again() {
-        let (body, mut phase) = before_regalloc();
+        let (body, phases) = before_regalloc("walks10.ll", "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum", "386");
         let longest = body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
         assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");
 
         let before = splitkit::_next_value(&body);
-        let after = phase.transform(body).expect("allocates");
+        let after = through(body, phases).expect("allocates");
         let made = splitkit::_next_value(&after) - before;
         assert!(made < 1000, "{made} values made for ten walks");
     }
 
 }
+
