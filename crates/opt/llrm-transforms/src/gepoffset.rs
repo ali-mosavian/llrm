@@ -14,10 +14,12 @@
 //! `sext`. The width is the address space's, from the datalayout.
 //!
 //! The constant `gep` is free where isel folds it, so a split is kept when
-//! the instructions it makes cost no more than those it leaves unread
-//! (`profit::operation`): `i + 8` read by two addresses is split in both for
-//! nothing, `(i + 8) * 2` for a multiply. Neither new `gep` is `inbounds`:
-//! the constant may take the first outside the object.
+//! it frees something and the instructions it makes cost no more than those
+//! it frees (`profit::operation`): `i + 8` read by two addresses is split in
+//! both and the add goes, `(i + 8) * 2` costs a multiply for an add and a
+//! multiply. A sum an add or a compare also reads stays: the address would
+//! read `i` where it read the sum, one register more. Neither new `gep` is
+//! `inbounds`: the constant may take the first outside the object.
 //!
 //! It runs last, after `hoist`: a hoisted constant `gep` would be a register
 //! held across the loop instead of a displacement.
@@ -226,7 +228,7 @@ pub fn separated(unit: &mut passes::Unit, analyses: &Analyses) -> bool {
         let made = price(&mut splitter.created.iter().copied());
         let saved = price(&mut dying.iter().copied());
         let created = splitter.created.clone();
-        if !matches!((made, saved), (Some(made), Some(saved)) if made <= saved) {
+        if !matches!((made, saved), (Some(made), Some(saved)) if saved > 0 && made <= saved) {
             for one in created.into_iter().rev() {
                 unit.function.erase(one).expect("nothing reads a rejected split");
             }
@@ -251,7 +253,8 @@ pub fn separated(unit: &mut passes::Unit, analyses: &Analyses) -> bool {
     changed
 }
 
-/// The instructions of `cone` nothing but `gep` and each other read.
+/// The instructions of `cone` nothing but addresses and each other read: the
+/// others' indices split the same way, so a sum read only by addresses dies.
 fn _dying(function: &Function, cone: &[InstId], gep: InstId) -> Vec<InstId> {
     let mut dying = BTreeSet::<InstId>::new();
     let mut grew = true;
@@ -259,7 +262,7 @@ fn _dying(function: &Function, cone: &[InstId], gep: InstId) -> Vec<InstId> {
         grew = false;
         for &inst in cone {
             let Some(result) = function.instruction(inst).result else { continue };
-            if !dying.contains(&inst) && function.users(result).iter().all(|one| one.user == gep || dying.contains(&one.user)) {
+            if !dying.contains(&inst) && function.users(result).iter().all(|one| one.user == gep || dying.contains(&one.user) || matches!(function.instruction(one.user).opcode, Opcode::GetElementPtr { .. })) {
                 dying.insert(inst);
                 grew = true;
             }

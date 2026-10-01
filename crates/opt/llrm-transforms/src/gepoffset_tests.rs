@@ -49,8 +49,7 @@ b0:
     assert!(!after.contains("add i16 %i, 8"), "{after}");
 }
 
-/// `i + 8` read by two addresses and by an add: each address takes the 16
-/// bytes, and the sum stays for the add.
+/// `i + 8` read by two addresses: each takes the 16 bytes, and the sum goes.
 #[test]
 fn test_an_add_with_a_second_reader_is_a_displacement_in_each_address() {
     let (_, after) = checked(
@@ -62,14 +61,13 @@ b0:
   %a = ptrtoint ptr %p to i16
   %b = ptrtoint ptr %q to i16
   %c = add i16 %a, %b
-  %d = add i16 %c, %t
-  ret i16 %d
+  ret i16 %c
 }
 ",
         INPUTS,
     );
     assert!(after.contains("getelementptr i8, ptr @g, i16 16") && after.contains("getelementptr i8, ptr @h, i16 16"), "{after}");
-    assert!(after.contains("add i16 %i, 8"), "{after}");
+    assert!(!after.contains("add i16 %i, 8"), "{after}");
 }
 
 /// The `i8` inputs on which `x + 3` does not wrap under `flags`: a wrap
