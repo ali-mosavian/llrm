@@ -178,3 +178,17 @@ fn test_c_parity_fixtures_agree_on_both_routes() {
         assert_eq!(value, expected[&name].as_i64(), "{name} {route}");
     }
 }
+
+/// Ten arrays, near and far, summed over one counter on a P5: loop strength
+/// reduction kept four products live beside the counter and the allocator
+/// found "value cannot be spilled and no register is free", where main built
+/// it. A far access takes a register for its selector that the pass did not
+/// count (three loop-corpus cases of `conc10`/`conc11`).
+#[test]
+fn test_a_loop_over_ten_arrays_builds_on_a_p5() {
+    let scratch = tempfile::tempdir().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c"));
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/tenarrays.c");
+    let done = Command::new(bin).args([source.to_str().unwrap(), "--cpu", "P5", "-O2", "-o", "tenarrays.obj"]).current_dir(scratch.path()).output().unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+}

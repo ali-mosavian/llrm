@@ -14,7 +14,7 @@ fn risk(text: &str, capacity: i64) -> Option<i64> {
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     let costs = OperationCosts { load: 10, store: 10, ..OperationCosts::default() };
-    let room = crate::spill::Room { registers: capacity, across_call: capacity };
+    let room = crate::spill::Room { registers: capacity, across_call: capacity, ..Default::default() };
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
     spill_risk(&module.context, &layout, function, &costs, room, &|_| capacity, None, &llrm_analysis::liveness::live(function))
 }

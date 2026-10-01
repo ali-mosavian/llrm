@@ -21,6 +21,12 @@ pub trait Machine {
     /// Of `registers`, how many survive a call.
     fn call_registers(&self) -> i64;
 
+    /// Registers an access through a pointer wider than its offset takes
+    /// besides the ones it names: the selector on its way to a segment register.
+    fn far_access_registers(&self) -> i64 {
+        0
+    }
+
     /// Of `registers`, how many survive a call to `callee`, named where the
     /// call is direct: its own contract may keep more than any call does.
     fn kept_across(&self, _callee: Option<&str>) -> i64 {

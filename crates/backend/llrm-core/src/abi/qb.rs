@@ -986,6 +986,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.call_registers()
     }
 
+    fn far_access_registers(&self) -> i64 {
+        self.machine.far_access_registers()
+    }
+
     fn kept_across(&self, callee: Option<&str>) -> i64 {
         use crate::backend::assemble::Abi;
         match callee.map(|name| self.abi.contract(name, false, 0)) {

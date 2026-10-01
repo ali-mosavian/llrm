@@ -28,11 +28,13 @@ use llrm_mir::types::Type;
 pub struct Room {
     pub registers: i64,
     pub across_call: i64,
+    /// What an access through a far pointer takes besides its operands.
+    pub far_access: i64,
 }
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
-        Room { registers: outer.target().registers(), across_call: outer.target().call_registers() }
+        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers() }
     }
 
     pub fn priced(&self) -> bool {
@@ -94,6 +96,20 @@ pub fn calls(function: &Function, inst: InstId) -> bool {
 /// call is direct.
 pub fn kept_across(outer: &Outer, context: &Context, function: &Function, inst: InstId) -> i64 {
     outer.kept_across(llrm_mir::memory::callee(context, function, inst))
+}
+
+/// The registers `inst` takes beyond the values live: a far access's.
+pub fn transient(context: &Context, layout: &DataLayout, function: &Function, inst: InstId, room: Room) -> i64 {
+    let op = function.instruction(inst);
+    let address = match op.opcode {
+        Opcode::Load { .. } => op.operands.first(),
+        Opcode::Store { .. } => op.operands.get(1),
+        _ => None,
+    };
+    match address {
+        Some(Operand::Value(value)) if words(context, layout, function, *value) > 1 => room.far_access,
+        _ => 0,
+    }
 }
 
 /// Whether `value` takes an integer register: floating values do not, nor
@@ -264,6 +280,7 @@ pub fn sites(
     block: BlockId,
     room: Room,
     across: &dyn Fn(InstId) -> i64,
+    transient: &dyn Fn(InstId) -> i64,
     cells: &BTreeMap<ValueId, ValueId>,
     counted: &dyn Fn(ValueId) -> bool,
 ) -> Vec<Site> {
@@ -272,7 +289,7 @@ pub fn sites(
         .into_iter()
         .map(|(inst, before, past)| Site {
             inst,
-            before: Point { registers: room.registers, residents: residents(before) },
+            before: Point { registers: room.registers - transient(inst), residents: residents(before) },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
         })
         .collect()

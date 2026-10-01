@@ -100,6 +100,7 @@ pub struct Tuned {
     pub costs: crate::profit::OperationCosts,
     pub registers: i64,
     pub call_registers: i64,
+    pub far_access: i64,
     pub address_forms: Vec<llrm_mir::target::AddressForm>,
     /// What a multiply by each constant costs, where not a multiply.
     pub multiplies: std::collections::BTreeMap<i64, i64>,
@@ -120,6 +121,10 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn call_registers(&self) -> i64 {
         self.call_registers
+    }
+
+    fn far_access_registers(&self) -> i64 {
+        self.far_access
     }
 
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {

@@ -21,14 +21,19 @@ pub struct Dos {
     pub registers: i64,
     pub call_registers: i64,
     pub address_forms: Vec<AddressForm>,
+    /// Registers a far access takes for its selector.
+    pub far_access: i64,
 }
+
+/// A far access loads its selector through a general register.
+pub const FAR_ACCESS: i64 = 1;
 
 impl Default for Dos {
     /// On a 486.
     fn default() -> Self {
         let costs = costs("486");
         let address_forms = address_forms(&costs, 0);
-        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms }
+        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms, far_access: FAR_ACCESS }
     }
 }
 
@@ -40,7 +45,7 @@ impl Dos {
         let cost = |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
         let costs = operations(cost, prefix);
         let address_forms = address_forms(&costs, address_stall);
-        Self { costs, registers, call_registers, address_forms }
+        Self { costs, registers, call_registers, address_forms, far_access: FAR_ACCESS }
     }
 }
 
@@ -60,6 +65,10 @@ impl Machine for Dos {
 
     fn call_registers(&self) -> i64 {
         self.call_registers
+    }
+
+    fn far_access_registers(&self) -> i64 {
+        self.far_access
     }
 
     fn address_forms(&self) -> Vec<AddressForm> {

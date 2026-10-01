@@ -523,7 +523,8 @@ fn _fixed(
     let counted = |value: ValueId| spill::integer(view.context, function, value) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
     let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
-    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, cells, &counted))).collect()
+    let transient = |inst: InstId| spill::transient(view.context, view.layout, function, inst, room);
+    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.

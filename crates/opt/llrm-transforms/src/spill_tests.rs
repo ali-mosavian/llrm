@@ -139,10 +139,32 @@ entry:
     let function = function(&module);
     let found = liveness::live(function);
     let cells = cells(function);
-    let room = Room { registers: 3, across_call: 1 };
+    let room = Room { registers: 3, across_call: 1, ..Room::default() };
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &cells, &integer)).flat_map(super::Site::points).collect::<Vec<_>>();
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_| 0, &cells, &integer)).flat_map(super::Site::points).collect::<Vec<_>>();
     let prices = traffic(function, &looped(function), &cells, &costs(), &|_| true, &|_| 1);
     // Each of `a` and `b` is stored once and loaded once.
     assert_eq!(spilled(points, |one| prices.get(&one).map_or(0, |one| one.price(&costs()))), 2);
+}
+
+/// A load through a far pointer takes the register its selector passes
+/// through: one fewer holds values there, which no point counted, so a loop
+/// with four products and a counter live across ten such loads was planned
+/// to fit and could not be allocated.
+#[test]
+fn test_a_far_access_takes_a_register_of_its_own() {
+    let module = module("define i16 @f(ptr addrspace(1) %far, ptr %near) {
+entry:
+  %a = load i16, ptr addrspace(1) %far
+  %b = load i16, ptr %near
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+");
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let room = Room { registers: 6, across_call: 2, far_access: 1 };
+    let loads = function.layout().iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect::<Vec<_>>();
+    let taken = loads.iter().map(|&inst| super::transient(&module.context, &layout, function, inst, room)).collect::<Vec<_>>();
+    assert_eq!(taken, [1, 0]);
 }

@@ -222,5 +222,5 @@ fn test_unswitch_reoptimization_preserves_mir_target_costs() {
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2, ..Default::default() })).unwrap();
     let seen = seen.borrow();
     assert!(!seen.is_empty());
-    assert!(seen.iter().all(|one| *one == (costs.clone(), crate::spill::Room { registers: 5, across_call: 2 })), "{seen:?}");
+    assert!(seen.iter().all(|one| *one == (costs.clone(), crate::spill::Room { registers: 5, across_call: 2, ..Default::default() })), "{seen:?}");
 }

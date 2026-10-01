@@ -172,7 +172,7 @@ pub fn spill_risk(
     let cells = spill::cells(function);
     let traffic = spill::traffic(function, &frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
     let counted = |value: ValueId| spill::integer(context, function, value);
-    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &cells, &counted)).flat_map(spill::Site::points);
+    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst| spill::transient(context, layout, function, inst, room), &cells, &counted)).flat_map(spill::Site::points);
     Some(spill::spilled(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
 }
 
