@@ -11,7 +11,7 @@ mod shapes;
 mod tags;
 
 use crate::dialect::Dialect;
-use crate::generated_parser::{EACH, TUPLE};
+use crate::generated_parser::{EACH, ON_SELECTOR, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter,
@@ -6886,6 +6886,16 @@ impl Compiler {
         name: &str,
         arguments: &[Expr],
     ) -> Result<Option<(Operand, u32)>, SemanticError> {
+        if name == ON_SELECTOR {
+            let (value, type_id) = self.expression(&arguments[0])?;
+            let value = self.convert(value, type_id, INTEGER)?;
+            let number = |value: i64| Operand::Constant(INTEGER, Number::Integer(value));
+            let low = self.computed("lt", BOOLEAN, vec![value.clone(), number(0)]);
+            self.raise_if(low, 5)?;
+            let high = self.computed("gt", BOOLEAN, vec![value.clone(), number(255)]);
+            self.raise_if(high, 5)?;
+            return Ok(Some((value, INTEGER)));
+        }
         let Some(intrinsic) = self.intrinsic(name) else {
             return Ok(None);
         };

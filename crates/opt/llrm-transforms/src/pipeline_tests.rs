@@ -266,3 +266,43 @@ b3:
     let body = after.split("b2:").nth(1).unwrap_or("");
     assert!(!body.split("\n\n").next().unwrap_or("").contains("store i16"), "{after}");
 }
+
+/// Inline assembly has effects: of the same block called twice in a loop, with
+/// its result unused or the same input, none is merged, hoisted or deleted.
+#[test]
+fn the_pipeline_keeps_every_inline_assembly_block_where_it_is() {
+    let block = "llrm.ia16.asm.cd1a.ax.cx.flags.n";
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}declare i16 @{block}(i16)
+declare void @llrm.ia16.asm.fa.-.-.-.n()
+
+define i16 @main(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b2 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  call void @llrm.ia16.asm.fa.-.-.-.n()
+  call void @llrm.ia16.asm.fa.-.-.-.n()
+  %t = call i16 @{block}(i16 0)
+  %u = call i16 @{block}(i16 0)
+  %j = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    let text = llrm_mir::print::module(&module);
+    let body = &text[text.find("b2:").expect("the loop")..];
+    let body = &body[..body.find("br label").expect("its latch")];
+    assert_eq!(body.matches("call void @llrm.ia16.asm.fa").count(), 2, "{text}");
+    assert_eq!(body.matches(&format!("@{block}(")).count(), 2, "{text}");
+}

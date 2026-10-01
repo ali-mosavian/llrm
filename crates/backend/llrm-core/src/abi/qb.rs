@@ -967,10 +967,16 @@ pub fn registers(name: &str) -> Option<Registers> {
 
 impl crate::backend::assemble::Abi for HirAbi {
     fn registers(&self, callee: &str) -> Option<Registers> {
+        if let Some(block) = asm_call(callee) {
+            return block.ok().map(|(_, registers)| registers);
+        }
         registers(callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee))
     }
 
     fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
+        if let Some(block) = asm_call(callee) {
+            return block.map(|(contract, _)| contract).map_err(|error| error.0);
+        }
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
         _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)

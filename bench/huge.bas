@@ -1,7 +1,7 @@
 ' A huge array -- over 64K, so /AH, so every element goes through the
-' runtime. Not in suite/ because only QuickBASIC 4.5 accepts this form:
-' PDS refuses the REDIM with a math overflow, and the matrix compiles
-' every suite program on every configuration.
+' runtime. n is a LONG: 40000 in an INTEGER is a Math overflow in BC and in
+' llrm. Not in suite/: PDS refuses the REDIM with a math overflow, and the
+' matrix compiles every suite program on every configuration.
 '
 '   BC /O /AH HUGE.BAS, HUGE.OBJ;
 DEFINT A-Z

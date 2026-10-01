@@ -308,6 +308,10 @@ fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
 /// becomes `$TUPLE(a, b) = $TUPLE(b, a)`. No source name can spell it.
 pub const TUPLE: &str = "$TUPLE";
 
+/// ON n GOTO|GOSUB's selector: `n` rounded to INTEGER, ERROR 5 raised by the
+/// ON statement itself where it is outside 0..255, so RESUME retries the ON.
+pub const ON_SELECTOR: &str = "$ON";
+
 /// Where the first comma outside parentheses stands in `tokens`.
 fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
     let mut depth = 0usize;
@@ -1517,7 +1521,7 @@ fn synthesize_statement(
         };
         state.statements.push(Statement::Select {
             selector: Expr::Apply {
-                name: "CINT".into(),
+                name: ON_SELECTOR.into(),
                 arguments: vec![selector.clone()],
                 span,
             },
@@ -2129,7 +2133,7 @@ fn synthesize_statement(
 }
 
 /// `ON n GOTO|GOSUB l1, l2, ...` as the SELECT CASE it means: the n-th label,
-/// nothing when n is 0 or past the list, and error 5 outside 0..=255.
+/// nothing when n is 0 or past the list.
 fn on_branch_arms(
     gosub: bool,
     labels: Vec<(String, Span)>,
@@ -2153,15 +2157,6 @@ fn on_branch_arms(
             (vec![CaseItem::Value(number(index as i64 + 1))], vec![jump])
         })
         .collect::<Vec<_>>();
-    let illegal = Statement::Runtime {
-        name: "ERROR".into(),
-        arguments: vec![number(5)],
-        span,
-    };
-    arms.push((
-        vec![CaseItem::Relation(Binary::Less, number(0)), CaseItem::Relation(Binary::Greater, number(255))],
-        vec![illegal],
-    ));
     arms
 }
 
@@ -3472,7 +3467,7 @@ mod tests {
             let parsed = module(source, Dialect::QuickBasic45);
             let Statement::Select { arms, .. } = &parsed.statements[0] else { panic!("{source}: {:?}", parsed.statements[0]) };
             let jumps = arms[..3].iter().map(|(_, body)| &body[0]).collect::<Vec<_>>();
-            assert_eq!(arms.len(), 4, "{source}: three labels and the out-of-range error");
+            assert_eq!(arms.len(), 3, "{source}: one arm a label");
             for (one, label) in jumps.iter().zip(["ONE", "TWO", "THREE"]) {
                 match one {
                     Statement::Goto(target, _) if !gosub => assert_eq!(target, label),

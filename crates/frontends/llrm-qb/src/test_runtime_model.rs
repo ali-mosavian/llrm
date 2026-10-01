@@ -162,3 +162,15 @@ fn on_goto_and_on_gosub_pick_the_nth_label() {
 fn a_print_item_before_else_prints_the_right_branch() {
     assert_eq!(printed("DEFINT A-Z\nr = 0\nIF r = 0 THEN PRINT r ELSE PRINT 7\nr = 1\nIF r = 0 THEN PRINT r ELSE PRINT 7\n"), " 0 \n 7 \n");
 }
+
+/// ON n outside 0..255 is ERROR 5 raised by the ON itself (tests/suite/onrange.bas
+/// pins that RESUME then retries the ON, as BC does): the selector is the range
+/// check, so no statement of its own follows it.
+#[test]
+fn on_goto_out_of_range_raises_error_5() {
+    let source = "DEFINT A-Z\nx = 300\nON x GOTO a, b\nPRINT \"fell\"\nEND\na: PRINT \"a\"\nb: PRINT \"b\"\n";
+    let program = program(source, "vbdos");
+    let executed = execute::run(&program, "__main", &[]).expect("runs");
+    assert_ne!(executed.panic, None, "{}", executed.output);
+    assert!(!executed.output.contains("fell"), "{}", executed.output);
+}

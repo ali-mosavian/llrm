@@ -197,12 +197,16 @@ pub fn target(module: &Module, layout: &DataLayout, id: ConstantId) -> Result<(G
     }
 }
 
-/// The address a constant is, where it names no global: null, and a constant
-/// offset from it.
+/// The address a constant is, where it names no global: null, an integer
+/// made a pointer, and a constant offset from either.
 pub fn absolute(module: &Module, layout: &DataLayout, id: ConstantId) -> Option<i64> {
     let context = &module.context;
     match &context.get(id).kind {
         ConstantKind::Null | ConstantKind::Zero => Some(0),
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(*value).kind {
+            ConstantKind::Int(bits) => Some(llrm_mir::context::signed(bits, context.types.int_bits(context.get(*value).ty)?) as i64),
+            _ => None,
+        },
         ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
             Some(absolute(module, layout, operands[0])? + constant_offset(module, layout, *source, &operands[1..]).ok()?)
         }

@@ -286,6 +286,8 @@ enum Pointer {
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
+    /// A near address no global owns, a constant: `[disp16]`.
+    Absolute { offset: i64 },
 }
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
@@ -349,8 +351,6 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         stand_ins: IndexMap::default(),
         current: None,
         far_globals: IndexMap::default(),
-        zeroes: IndexMap::default(),
-        making_at: None,
         materialized: Vec::new(),
         edges: IndexMap::default(),
         chains: IndexMap::default(),
@@ -498,10 +498,6 @@ struct Selector<'m, 'c, 'p> {
     current: Option<BlockId>,
     /// Each far global's offset and selector, where a block made them.
     far_globals: IndexMap<(BlockId, GlobalId), (Held, Held)>,
-    /// The zero an address no global owns is a displacement from, made once per block.
-    zeroes: IndexMap<BlockId, Held>,
-    /// Where a phi's input is being made, before selection reaches its block.
-    making_at: Option<i64>,
     /// What `global` made for the instruction being selected, placed before it.
     materialized: Vec<Arc<Insn>>,
     /// The LIR blocks each MIR edge leaves from: a switch's cases leave
@@ -944,13 +940,8 @@ impl Selector<'_, '_, '_> {
                 }
                 let at = self.ats[&function.terminator(from).expect("a terminator")];
                 let mut made = Vec::new();
-                self.making_at = Some(at);
-                let held = self.phi_input(value, instruction.ty, at, &mut made);
-                self.making_at = None;
-                let Some(held) = held? else { continue };
-                let mut materialized = std::mem::take(&mut self.materialized);
-                materialized.extend(made);
-                self.pending.entry(from).or_default().extend(materialized);
+                let Some(held) = self.phi_input(value, instruction.ty, at, &mut made)? else { continue };
+                self.pending.entry(from).or_default().extend(made);
                 self.phi_inputs.insert((inst, from), held.value);
             }
         }
@@ -1165,13 +1156,10 @@ impl Selector<'_, '_, '_> {
             insns.push(insn(at, Semantics { target: Some(target), ..semantics(Operation::Branch, code, vec![], vec![]) }));
             Ok(())
         };
-        let start = insns.len();
         branched(self, a, target, &mut insns)?;
-        insns.splice(start..start, std::mem::take(&mut self.materialized));
         blocks.push(LirBlock { succ: vec![target, other], phis, ..LirBlock::new(from, insns) });
         let mut tail = Vec::new();
         branched(self, b, taken, &mut tail)?;
-        tail.splice(0..0, std::mem::take(&mut self.materialized));
         blocks.push(LirBlock { succ: vec![taken, otherwise], ..LirBlock::new(second, tail) });
         Ok(())
     }
@@ -1373,7 +1361,7 @@ impl Selector<'_, '_, '_> {
                 let step = Loc::Imm(Imm { value: offset, width: held.width, address: None });
                 semantics(Operation::Binary, "add", vec![Loc::Held(held)], vec![Loc::Held(base), step])
             }
-            Pointer::Far { base: None, offset, .. } => {
+            Pointer::Far { base: None, offset, .. } | Pointer::Absolute { offset } => {
                 semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value: offset, width: held.width, address: None })])
             }
             Pointer::Global { space, index, offset, base } => {
@@ -1428,32 +1416,9 @@ impl Selector<'_, '_, '_> {
     /// instruction being selected.
     fn global(&mut self, operand: Operand) -> Result<Pointer, Unselected> {
         let Operand::Constant(id) = operand else { unreachable!("a constant") };
-        // An address no global owns is a displacement from zero: the zero a
-        // register holds, made once in each block, and a far one's selector.
-        if let Some(offset) = crate::backend::globals::absolute(self.module, &self.layout, id) {
-            let zero = match (self.current, self.making_at) {
-                (Some(block), _) => match self.zeroes.get(&block) {
-                    Some(&zero) => zero,
-                    None => {
-                        let zero = self.fresh_held(2);
-                        let at = self.ats[&self.function.block(block).instructions()[0]];
-                        self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(zero)], vec![Loc::Imm(Imm { value: 0, width: 2, address: None })])));
-                        self.zeroes.insert(block, zero);
-                        zero
-                    }
-                },
-                // A phi's input, made at the end of its predecessor.
-                (None, Some(at)) => {
-                    let zero = self.fresh_held(2);
-                    self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(zero)], vec![Loc::Imm(Imm { value: 0, width: 2, address: None })])));
-                    zero
-                }
-                (None, None) => return refuse("an address of no global outside a block"),
-            };
-            return Ok(match self.is_far(self.module.context.get(id).ty) {
-                true => Pointer::Far { selector: zero, base: None, index: None, scale: 1, offset },
-                false => Pointer::Based { base: zero, index: None, scale: 1, offset },
-            });
+        // An address no global owns, near: its number, read as a direct address.
+        if let Some(offset) = crate::backend::globals::absolute(self.module, &self.layout, id).filter(|_| !self.is_far(self.module.context.get(id).ty)) {
+            return Ok(Pointer::Absolute { offset });
         }
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id).map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
@@ -1558,6 +1523,17 @@ impl Selector<'_, '_, '_> {
         // index, [index+symbol], and the address as a value their sum.
         if let Pointer::Global { space, index, offset: start, base: None } = pointer {
             let indexed = Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) };
+            if self.only_addressed(address) {
+                self.pointers.insert(address, indexed);
+            } else {
+                let held = Held { value: self.value(address), width };
+                out.push(insn(at, self.address(indexed, held)));
+            }
+            return Ok(());
+        }
+        // A constant address plus the sum: the sum is the base.
+        if let Pointer::Absolute { offset: start } = pointer {
+            let indexed = Pointer::Based { base: sum, index: None, scale: 1, offset: start + offset as i64 };
             if self.only_addressed(address) {
                 self.pointers.insert(address, indexed);
             } else {
@@ -1847,6 +1823,7 @@ impl Selector<'_, '_, '_> {
                 ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
             },
             Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
+            Pointer::Absolute { offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset & 0xFFFF)), width) },
             Pointer::Based { base, index: None, offset, .. } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
             // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
             Pointer::Based { base, index: Some(index), scale, offset } => {
@@ -2265,15 +2242,7 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, semantics(Operation::Nothing, "pushf", vec![], vec![])));
         }
         // The arguments the ABI passes in registers are the call's last.
-        let asm = match callee {
-            Callee::Inline(..) => crate::abi::qb::asm_call(&name),
-            _ => None,
-        };
-        let (asm_contract, registers) = match asm {
-            Some(Ok((contract, registers))) => (Some(contract), registers),
-            Some(Err(error)) => return refuse(format!("@{name}: {}", error.0)),
-            None => (None, self.abi.registers(&name).unwrap_or_default()),
-        };
+        let registers = self.abi.registers(&name).unwrap_or_default();
         let Some(stacked) = arguments.len().checked_sub(registers.arguments.len()) else {
             return refuse(format!("@{name} takes {} arguments in registers", registers.arguments.len()));
         };
@@ -2360,7 +2329,8 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
         let contract = match callee {
-            Callee::Inline(..) => asm_contract.unwrap_or_else(|| crate::abi::runtime::inline_code(&name)),
+            Callee::Inline(..) if Intrinsic::named(&name) == Some(Intrinsic::Asm) => self.abi.contract(&name, pops, pushed).map_err(Unselected)?,
+            Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
             _ => self.abi.contract(&name, pops, pushed).map_err(Unselected)?,
         };
         let mut delivers = Vec::new();
@@ -2667,8 +2637,7 @@ impl Selector<'_, '_, '_> {
         Ok(Test::One(condition_code(predicate)))
     }
 
-    /// Far pointers compared: equal when offset and selector are, as their
-    /// words xor-ed and or-ed (a null second needs only the or); ordered by
+    /// Far pointers compared: equal when offset and selector are; ordered by
     /// offset alone, which is a far pointer's index (`p1:32:16:16:16`).
     fn far_compare(&mut self, predicate: IntPredicate, a: Operand, b: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Test, Unselected> {
         let (a_offset, a_selector) = self.far(a, at, out)?;
@@ -2677,27 +2646,36 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![Loc::Held(a_offset), Loc::Held(b_offset)])));
             return Ok(Test::One(condition_code(predicate)));
         }
-        let null = self.constant(b, 4) == Some(0);
-        let b_words = if null { None } else { Some(self.far(b, at, out)?) };
+        let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+        let second = match self.constant(b, 4) {
+            Some(bits) => [word(bits & 0xFFFF), word((bits >> 16) & 0xFFFF)],
+            None => {
+                let (offset, selector) = self.far(b, at, out)?;
+                [Loc::Held(offset), Loc::Held(selector)]
+            }
+        };
+        Ok(self.words_equal([Loc::Held(a_offset), Loc::Held(a_selector)], second, predicate, at, out))
+    }
+
+    /// Two word pairs compared for equality: or-ed against zero, else each
+    /// pair xor-ed and the two or-ed.
+    fn words_equal(&mut self, a: [Loc; 2], b: [Loc; 2], predicate: IntPredicate, at: i64, out: &mut Vec<Arc<Insn>>) -> Test {
         let mut word_op = |selector: &mut Self, name: &str, sources: Vec<Loc>| {
             let into = selector.fresh_held(2);
             let operation = if name == "mov" { Operation::Move } else { Operation::Binary };
             out.push(insn(at, semantics(operation, name, vec![Loc::Held(into)], sources)));
             Loc::Held(into)
         };
-        let low = word_op(self, "mov", vec![Loc::Held(a_offset)]);
-        match b_words {
-            None => {
-                word_op(self, "or", vec![low, Loc::Held(a_selector)]);
-            }
-            Some((b_offset, b_selector)) => {
-                let low = word_op(self, "xor", vec![low, Loc::Held(b_offset)]);
-                let high = word_op(self, "mov", vec![Loc::Held(a_selector)]);
-                let high = word_op(self, "xor", vec![high, Loc::Held(b_selector)]);
-                word_op(self, "or", vec![low, high]);
-            }
+        let low = word_op(self, "mov", vec![a[0].clone()]);
+        if b.iter().all(|one| matches!(one, Loc::Imm(Imm { value: 0, .. }))) {
+            word_op(self, "or", vec![low, a[1].clone()]);
+        } else {
+            let low = word_op(self, "xor", vec![low, b[0].clone()]);
+            let high = word_op(self, "mov", vec![a[1].clone()]);
+            let high = word_op(self, "xor", vec![high, b[1].clone()]);
+            word_op(self, "or", vec![low, high]);
         }
-        Ok(Test::One(condition_code(predicate)))
+        Test::One(condition_code(predicate))
     }
 
     /// Equality of a dword joined from two words, against a constant or
@@ -2717,22 +2695,7 @@ impl Selector<'_, '_, '_> {
             Some(bits) => [word(bits & 0xFFFF), word((bits >> 16) & 0xFFFF)],
             None => words(self, b)?,
         };
-        let mut word_op = |selector: &mut Self, name: &str, sources: Vec<Loc>| {
-            let into = selector.fresh_held(2);
-            let operation = if name == "mov" { Operation::Move } else { Operation::Binary };
-            out.push(insn(at, semantics(operation, name, vec![Loc::Held(into)], sources)));
-            Loc::Held(into)
-        };
-        let low = word_op(self, "mov", vec![a[0].clone()]);
-        if b.iter().all(|one| matches!(one, Loc::Imm(Imm { value: 0, .. }))) {
-            word_op(self, "or", vec![low, a[1].clone()]);
-        } else {
-            let low = word_op(self, "xor", vec![low, b[0].clone()]);
-            let high = word_op(self, "mov", vec![a[1].clone()]);
-            let high = word_op(self, "xor", vec![high, b[1].clone()]);
-            word_op(self, "or", vec![low, high]);
-        }
-        Some(Test::One(condition_code(predicate)))
+        Some(self.words_equal(a, b, predicate, at, out))
     }
 
     /// Whether the flags `value`'s call leaves are still those the compare
@@ -2843,6 +2806,7 @@ impl Pointer {
             Pointer::Based { base, index, scale, offset } => Pointer::Based { base, index, scale, offset: offset + by },
             Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
             Pointer::Far { selector, base, index, scale, offset } => Pointer::Far { selector, base, index, scale, offset: offset + by },
+            Pointer::Absolute { offset } => Pointer::Absolute { offset: offset + by },
         }
     }
 }

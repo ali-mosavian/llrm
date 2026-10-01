@@ -2971,20 +2971,19 @@ fn test_dbg_lines_become_linnum() {
     assert!(marker, "the CodeView marker");
 }
 
-/// The optimizer left `getelementptr i8, ptr null, ...` (a drop of a null
-/// vec, its guard not folded) and isel refused it as "an address of no
-/// global: Null": examples/entries.nib and tally.nib did not compile.
+/// The optimizer left `getelementptr i8, ptr null, ...` and isel refused it as
+/// "an address of no global: Null": examples/entries.nib and tally.nib did not
+/// compile. A constant address is a direct address, `[disp16]`; a variable
+/// index from it is the register.
 #[test]
-fn test_an_address_of_no_global_is_a_displacement_from_zero() {
+fn test_an_address_of_no_global_is_a_direct_address() {
     let constant = "define i16 @f() addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 -4\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
+    let number = "define i16 @f() addrspace(1) {\n  %v = load i16, ptr inttoptr (i16 1132 to ptr)\n  ret i16 %v\n}\n";
     let variable = "define i16 @f(i16 %i) addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 %i\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
-    let far = "define i16 @f(i16 %i) addrspace(1) {\n  %p = getelementptr i8, ptr addrspace(1) null, i16 %i\n  %v = load i16, ptr addrspace(1) %p\n  ret i16 %v\n}\n";
-    for text in [constant, variable, far] {
-        assert!(text.contains("getelementptr i8, ptr null") || text.contains("ptr addrspace(1) null, i16"), "the shape that was refused");
-    }
-    assert_eq!(listing(constant, "f"), ["L0_0:", "mov bx, 0", "mov ax, word ptr [bx-4]", "retf"]);
-    assert_eq!(listing(variable, "f"), ["push bp", "mov bp, sp", "push si", "L0_0:", "mov bx, word ptr [bp+6]", "mov si, 0", "mov ax, word ptr [bx+si]", "pop si", "pop bp", "retf"]);
-    assert_eq!(listing(far, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "pushw 0", "pop es", "mov ax, word ptr es:[bx]", "pop bp", "retf"]);
+    assert!(constant.contains("getelementptr i8, ptr null") && number.contains("inttoptr (i16 1132") && variable.contains("ptr null, i16 %i"), "the shape that was refused");
+    assert_eq!(listing(constant, "f"), ["L0_0:", "mov ax, word ptr [65532]", "retf"]);
+    assert_eq!(listing(number, "f"), ["L0_0:", "mov ax, word ptr [1132]", "retf"]);
+    assert_eq!(listing(variable, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "mov ax, word ptr [bx]", "pop bp", "retf"]);
 }
 
 /// `icmp` of far pointers was refused as "a ptr addrspace(1) value":
@@ -3044,30 +3043,5 @@ b:
 ";
     assert!(text.contains("getelementptr i8, ptr null") && text.contains("phi ptr [ %g"), "the shape that was refused");
     let got = listing(text, "f");
-    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "xor ax, ax", "add ax, -4", "L0_3:", "pop bp", "retf"]);
-}
-
-/// Two compares feeding one branch are selected apart from their block, and
-/// the zero an address of no global needs was queued for the next block: used
-/// before it was defined.
-#[test]
-fn test_a_merged_branch_defines_the_zero_its_compares_use() {
-    let text = "define i16 @f(ptr %p, ptr %q) addrspace(1) {
-entry:
-  %a = icmp ugt ptr %p, getelementptr (i8, ptr null, i16 16)
-  %b = icmp ult ptr %q, getelementptr (i8, ptr null, i16 32)
-  %c = and i1 %a, %b
-  br i1 %c, label %x, label %y
-x:
-  ret i16 1
-y:
-  ret i16 2
-}
-";
-    assert!(text.contains("getelementptr (i8, ptr null"), "the shape that was refused");
-    let got = listing(text, "f");
-    assert_eq!(
-        got,
-        ["push bp", "mov bp, sp", "L0_0:", "mov cx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "xor bx, bx", "mov dx, bx", "add dx, 16", "cmp cx, dx", "ja L0_6", "L0_5:", "mov ax, 2", "pop bp", "retf", "L0_6:", "add bx, 32", "cmp ax, bx", "jae L0_5", "L0_4:", "mov ax, 1", "pop bp", "retf"]
-    );
+    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "mov ax, -4", "L0_3:", "pop bp", "retf"]);
 }
