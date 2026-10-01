@@ -133,6 +133,9 @@ struct Relocation {
     far: bool,
 }
 
+/// What one segment holds of a huge object: the 8086's 64K.
+const HUGE_SEGMENT: usize = 0x1_0000;
+
 /// A labelled data object: its bytes, the addresses in them, and where it goes.
 struct Object {
     key: Key,
@@ -152,6 +155,7 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     let mut out: Vec<Object> = Vec::new();
     for segment in unit.segments.values().filter(|one| one.attr & 0x1 == 0) {
         let first = out.len();
+        let continues = out.last().is_some_and(|one| one.bytes.len() % HUGE_SEGMENT == 0 && !one.bytes.is_empty());
         let mut align = None;
         for (call, args) in &segment.items {
             let args: Vec<&str> = args.0.iter().map(String::as_str).collect();
@@ -168,7 +172,10 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                 align = Some(number(to)? as u64);
                 continue;
             }
-            let Some(object) = out[first..].last_mut() else { return refuse(format!("{} data before any label", segment.name)) };
+            // A huge object runs on into further segments, which hold no label: each full
+            // 64K of it, and the rest in the last.
+            let found = if continues && out.len() == first { out.last_mut() } else { out[first..].last_mut() };
+            let Some(object) = found else { return refuse(format!("{} data before any label", segment.name)) };
             let pointer = |object: &mut Object, target: Key, offset: &str, far: bool| -> R<()> {
                 object.relocations.push(Relocation { at: object.bytes.len(), target, offset: number(offset)?, far });
                 object.bytes.extend(std::iter::repeat_n(0, if far { 4 } else { 2 }));

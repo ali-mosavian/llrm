@@ -205,3 +205,11 @@ fn test_a_64k_far_array_after_an_odd_sized_far_segment_links() {
     let done = linked_fixture("farsegments", "_get");
     assert!(done.is_ok(), "{}", done.unwrap_err());
 }
+
+/// A `__huge` global past 64K stopped llrm-c: "a14_DATA data before any
+/// label", the second segment of its 80000 bytes (#101).
+#[test]
+fn test_a_huge_global_past_64k_compiles_and_links_across_two_segments() {
+    let done = linked_fixture("hugeglobal", "_first");
+    assert!(done.is_ok(), "{}", done.unwrap_err());
+}

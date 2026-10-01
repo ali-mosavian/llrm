@@ -3,12 +3,8 @@
 # shortfalls.txt.
 
 [[bug]]
-match = "data before any label"
+match = "conc1_s4_xi_b[gp]h_index_n_st1_sum_whole|conc1_s1_xi_bgf_index_n_st1_sum_callmidtick_shift13_dead10_cu16|Unable to run program"
 issue = "#101"
-
-[[bug]]
-match = "exceeds 64k by"
-issue = "#102"
 
 [[bug]]
 match = "llrm-c did not finish"
