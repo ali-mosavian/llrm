@@ -2,23 +2,34 @@
 # Relink Open Watcom's 16-bit C front end against cgshim.c instead of its
 # code generator, as wccq in the directory given (default toolchain/owshim/bin).
 #
-# Run by build.rs. OWROOT is an Open Watcom tree, cloned at OW_COMMIT and
-# bootstrapped here if absent.
+# Run by build.rs. OWROOT is an Open Watcom tree: the user's own when set,
+# else one cached per commit (ow-commit) under ~/.cache/llrm, cloned and
+# bootstrapped once, whole or not at all (cache.sh).
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OW_COMMIT=703e1ae2f9a621dda2d28fb39b12d0d6d2788af6
-OWROOT="${OWROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/llrm/open-watcom-v2}"
-if [ ! -d "$OWROOT/.git" ]; then
-    git clone -q --filter=blob:none https://github.com/open-watcom/open-watcom-v2.git "$OWROOT"
-    git -C "$OWROOT" checkout -q "$OW_COMMIT"
-fi
-if [ ! -x "$OWROOT/build/binbuild/wmake" ] || [ ! -f "$OWROOT/bld/cc/i86/binbuild/ccheck.obj" ]; then
+. "$HERE/../cache.sh"
+OW_COMMIT=$(cat "$HERE/ow-commit")
+ow_tree() {
+    git clone -q --filter=blob:none https://github.com/open-watcom/open-watcom-v2.git "$1"
+    git -C "$1" checkout -q "$OW_COMMIT"
+    ( set +u; cd "$1" && . ./setvars.sh && ./build.sh boot )
+}
+if [ -z "${OWROOT:-}" ]; then
+    OWROOT="${XDG_CACHE_HOME:-$HOME/.cache}/llrm/open-watcom-v2-$OW_COMMIT"
+    cached "$OWROOT" ow_tree
+elif [ ! -x "$OWROOT/build/binbuild/wmake" ] || [ ! -f "$OWROOT/bld/cc/i86/binbuild/ccheck.obj" ]; then
     ( set +u; cd "$OWROOT" && . ./setvars.sh && ./build.sh boot )
 fi
 CC_OBJ="$OWROOT/bld/cc/i86/binbuild"
 OUT="${1:-$HERE/bin}"
 mkdir -p "$OUT"
+STAMP=$("$HERE/hash.sh")
+if [ -x "$OUT/wccq" ] && [ "$(cat "$OUT/stamp" 2>/dev/null)" = "$STAMP" ]; then
+    echo "$OUT/wccq"
+    exit 0
+fi
+rm -f "$OUT/stamp"
 
 # cc's own compile line from a forced dry run, so every object here sees the
 # host configuration and include path the front end was built with.
@@ -53,4 +64,5 @@ done
     "$OWROOT/bld/cfloat/binbuild/cf.lib" \
     "$OWROOT/bld/dwarf/dw/binbuild/dwarfw.lib" \
     "$OWROOT/bld/watcom/binbuild/clibext.lib" )
+echo "$STAMP" >"$OUT/stamp"
 echo "$OUT/wccq"

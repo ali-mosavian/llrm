@@ -19,7 +19,7 @@ fn toolchain() {
 
 #[cfg(unix)]
 fn toolchain() {
-    for input in ["../../../toolchain/owshim/build.sh", "../../../toolchain/owshim/cgshim.c", "../../../toolchain/owshim/cc-objects.txt", "../../../toolchain/owshim/patches"] {
+    for input in ["../../../toolchain/cache.sh", "../../../toolchain/owshim/build.sh", "../../../toolchain/owshim/hash.sh", "../../../toolchain/owshim/ow-commit", "../../../toolchain/owshim/cgshim.c", "../../../toolchain/owshim/cc-objects.txt", "../../../toolchain/owshim/patches"] {
         println!("cargo:rerun-if-changed={input}");
     }
     println!("cargo:rerun-if-env-changed=OWROOT");
