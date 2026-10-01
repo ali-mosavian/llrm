@@ -59,6 +59,13 @@ impl FunctionCompiler<'_> {
         self.conflict(holders, error);
     }
 
+    /// Notes the drop of `owner` here, refused with `error` if what borrows
+    /// it is used later, as a later drop uses its own owner.
+    pub(super) fn drop_borrowed(&mut self, owner: BorrowKey, error: Diagnostic) {
+        let holders = self.holders(owner, &[], false, None);
+        self.conflict(holders, error);
+    }
+
     fn conflict(&mut self, holders: BTreeSet<BorrowKey>, error: Diagnostic) {
         if !holders.is_empty() {
             let at = self.current_block_mut().instructions.len();
@@ -94,7 +101,7 @@ impl FunctionCompiler<'_> {
                     }
                     continue;
                 }
-                if instruction.operands.iter().any(reads) {
+                if instruction.operands.iter().any(reads) && !self.makes_owned(instruction) {
                     held.extend(instruction.results.iter().filter(|one| pointers.contains(one)).map(|one| BorrowKey::Value(*one)));
                 }
             }
@@ -102,6 +109,19 @@ impl FunctionCompiler<'_> {
                 return held;
             }
         }
+    }
+
+    /// Whether `instruction` is a call whose result is a new value the
+    /// caller owns, a copy, which borrows nothing it was given.
+    fn makes_owned(&self, instruction: &hir::Instruction) -> bool {
+        let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == "call") else {
+            return false;
+        };
+        let result = match self.builtin_ids.get(callee) {
+            Some((_, result)) => Some(*result),
+            None => self.signatures.values().find(|one| one.name == callee).map(|one| one.result),
+        };
+        result.is_some_and(ownership::needs_drop)
     }
 
     /// Whether an instruction from `at` in `block` on, or one a path from

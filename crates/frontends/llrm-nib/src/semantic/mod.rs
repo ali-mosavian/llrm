@@ -1626,6 +1626,8 @@ struct FunctionCompiler<'a> {
     reseatable: BTreeSet<u32>,
     /// The module variables this function lends to the calls it makes.
     lends: Vec<modref::Lend>,
+    /// The statement being compiled, where a scope it ends drops its owners.
+    statement_span: Span,
     /// Changes to borrowed owners, refused if a holder is used after one.
     conflicts: Vec<liveness::Conflict>,
     /// Module variables borrowed across a call, lent to it if the holder is
@@ -1702,6 +1704,7 @@ impl<'a> FunctionCompiler<'a> {
             parameter_lives: BTreeMap::new(),
             reseatable: BTreeSet::new(),
             lends: Vec::new(),
+            statement_span: Span::new(0, 0, 0),
             conflicts: Vec::new(),
             across: Vec::new(),
             references: Vec::new(),
