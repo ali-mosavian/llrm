@@ -611,7 +611,11 @@ cg_name CGVolatile( cg_name a )
  * refuses a version it does not know. */
 #define FACT_VERSION    1
 #define FACT_BASE       0x100
-static const char *FactTerms[] = { NULL, "restrict" };
+static const char *FactTerms[] = {
+#define QBFACT( term, code ) [(code) - FACT_BASE] = #term,
+#include "qbfacts.def"
+#undef QBFACT
+};
 
 cg_name CGAttr( cg_name a, cg_sym_attr attr )
 {

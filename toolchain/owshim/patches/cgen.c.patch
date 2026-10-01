@@ -1,30 +1,35 @@
 --- a/bld/cc/c/cgen.c
 +++ b/bld/cc/c/cgen.c
-@@ -42,6 +42,9 @@
+@@ -42,6 +42,14 @@
  #include "feprotos.h"
  #include "cgen.h"
  #include "cfeinfo.h"
 +/* qbopt: facts the language states, as terms for the recording shim's
-+ * `CGFact` record; the shim's table of terms is indexed from here. */
-+#define QBFACT_RESTRICT ((cg_sym_attr)0x101)
++ * `CGFact` record; qbfacts.def lists them, with the code each travels as. */
++enum {
++#define QBFACT( term, code ) QBFACT_##term = code,
++#include "qbfacts.def"
++#undef QBFACT
++    QBFACT_END
++};
  #ifdef __SEH__
  #include "tryblock.h"
  #endif
-@@ -581,6 +584,18 @@
+@@ -581,6 +589,18 @@
      } else {
          name = CGFEName( (CGSYM_HANDLE)node->u2.sym_handle, dtype );
      }
 +    /*
 +     * qbopt: the original code generator never received C99 restrict --
 +     * FLAG_RESTRICT was parsed and then discarded.  The fact is passed to
-+     * the recording shim as a term of the language (QBFACT_RESTRICT), which
++     * the recording shim as a term of the language (QBFACT_restrict), which
 +     * it writes as `CGFact`; a stock Open Watcom code generator never sees
 +     * this stream.
 +     */
 +    SKIP_TYPEDEFS( typ );
 +    if( (typ->decl_type == TYP_POINTER && (typ->u.p.decl_flags & FLAG_RESTRICT))
 +      || (sym.mods & FLAG_RESTRICT) ) {
-+        name = CGAttr( name, QBFACT_RESTRICT );
++        name = CGAttr( name, (cg_sym_attr)QBFACT_restrict );
 +    }
      if( node->flags & OPFLAG_UNALIGNED ) {
          name = CGAttr( name, CG_SYM_UNALIGNED );

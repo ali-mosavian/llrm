@@ -1322,7 +1322,7 @@ impl<'a> _Raise<'a> {
                     other => self.unsupported(format!("volatile access through {}", other.repr())),
                 };
             }
-            ("CGFact", [_, inner, "restrict"]) => {
+            ("CGFact", [_, inner, term]) if crate::ow_facts::param_fact(term) == Some(llrm_mir::facts::Fact::NoAlias) => {
                 let got = self.eval(inner)?;
                 let root = |kind: &str, n: i64| Identity::Tuple(vec![Identity::Str(kind.to_owned()), Identity::Int(n)]);
                 let root = match &got {

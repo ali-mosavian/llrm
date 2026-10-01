@@ -13,6 +13,14 @@ use crate::hir::{Node, Unit, Unsupported, handle};
 /// The version of the `CGFact` record the shim writes.
 pub const VERSION: &str = "v1";
 
+/// The terms the patched front end and the shim can state: the one list
+/// they read, `toolchain/owshim/qbfacts.def`.
+const TERMS: &str = include_str!("../../../../toolchain/owshim/qbfacts.def");
+
+pub fn terms() -> Vec<&'static str> {
+    TERMS.lines().filter_map(|line| line.strip_prefix("QBFACT(")).filter_map(|rest| rest.split(',').next()).map(str::trim).collect()
+}
+
 /// The fact a term of the language states of a parameter.
 pub fn param_fact(term: &str) -> Option<Fact> {
     match term {
@@ -85,6 +93,16 @@ mod tests {
         assert!(check(&node(&["v1", "n7", "restrict"])).is_ok());
         assert!(check(&node(&["v2", "n7", "restrict"])).unwrap_err().0.contains("rebuild wccq"));
         assert!(check(&node(&["v1", "n7", "noreturn"])).unwrap_err().0.contains("no table here knows"));
+    }
+
+    /// A term added to the list the front end and shim read, and not here,
+    /// would be refused as unknown only when a program used it.
+    #[test]
+    fn every_term_the_front_end_can_state_has_a_fact() {
+        assert_eq!(terms(), vec!["restrict"]);
+        for term in terms() {
+            assert!(param_fact(term).is_some(), "{term}");
+        }
     }
 
     /// Restrict states `NoAlias` of the parameter it names, and of no other.
