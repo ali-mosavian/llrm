@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y build-essential
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
       - uses: Swatinem/rust-cache@v2
       # The Open Watcom tree, keyed on its commit: an exact hit or a rebuild,
       # never an older tree (toolchain/cache.sh).
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y build-essential
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.98.1
       - uses: Swatinem/rust-cache@v2
       - id: openwatcom
         run: echo "commit=$(cat toolchain/owshim/ow-commit)" >> "$GITHUB_OUTPUT"
