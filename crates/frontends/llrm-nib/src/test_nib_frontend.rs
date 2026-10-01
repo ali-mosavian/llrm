@@ -2036,7 +2036,7 @@ fn test_the_level_reaches_the_rich_route() {
 
 /// `dst: &mut P` and `src: &P` are stated noalias, so `src.y` is loaded
 /// once, before the loop. Unstated, the loop reloaded it after every store
-/// to `dst.x`; the legacy lowering dropped the fact even once stated.
+/// to `dst.x`.
 #[test]
 fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
     use llrm_mir::facts::Fact;
@@ -2062,5 +2062,4 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
     let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
-    assert_eq!(looped(&listing(&program, "main", &O2())), 1, "legacy");
 }

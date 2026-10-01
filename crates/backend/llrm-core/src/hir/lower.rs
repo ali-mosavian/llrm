@@ -324,19 +324,8 @@ pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
                     _ => None,
                 })
                 .collect();
-            // The parameters nothing else reaches while the function runs.
-            let unaliased: std::collections::HashSet<i64> = module
-                .facts
-                .iter()
-                .filter(|one| one.fact == llrm_mir::facts::Fact::NoAlias)
-                .filter_map(|one| match one.subject {
-                    llrm_hir::facts::Subject::Param { function: owner, index } if owner == function.id => Some(index),
-                    _ => None,
-                })
-                .collect();
             out.push(_function(
                 &no_wrap,
-                &unaliased,
                 &module.name,
                 &_materialized_booleans(&_taken_branches(function), &types),
                 &types,
@@ -542,20 +531,9 @@ struct _Scope<'a> {
     places: IndexMap<i64, &'a model::Place>,
     pieces: _Pieces,
     parameter_numbers: IndexMap<i64, i64>,
-    unaliased: &'a std::collections::HashSet<i64>,
     next_frame_offset: i64,
     at: i64,
     next_value: i64,
-}
-
-impl _Scope<'_> {
-    /// What parameter `number` points at: its own object, and a restrict
-    /// root when the frontend states nothing else reaches it.
-    fn parameter_provenance(&self, number: i64) -> Provenance {
-        let object = MemoryObject { identity: Some(Identity::Int(number)), ..MemoryObject::new(MemoryKind::Parameter) };
-        let restrict = if self.unaliased.contains(&number) { BTreeSet::from([Identity::Int(number)]) } else { BTreeSet::new() };
-        Provenance { restrict, ..Provenance::one(object) }
-    }
 }
 
 fn value_width(type_: &model::Type) -> u32 {
@@ -916,7 +894,12 @@ impl<'a> _Scope<'a> {
                 };
                 let pointer_type = self.value_types[base];
                 let parameter = self.parameter_numbers.get(base).copied();
-                let provenance = parameter.map(|parameter| self.parameter_provenance(parameter));
+                let provenance = parameter.map(|parameter| {
+                    Provenance::one(MemoryObject {
+                        identity: Some(Identity::Int(parameter)),
+                        ..MemoryObject::new(MemoryKind::Parameter)
+                    })
+                });
                 // Inside it, the access reaches that allocation alone.
                 let provenance = match allocation {
                     Some(symbol) => Some(Provenance::one(crate::analysis::regions::allocation(&symbol))),
@@ -1816,7 +1799,6 @@ impl<'a> _Scope<'a> {
 
 fn _function(
     no_wrap: &std::collections::HashSet<i64>,
-    unaliased: &std::collections::HashSet<i64>,
     module: &str,
     function: &model::Function,
     types: &IndexMap<i64, &model::Type>,
@@ -1877,7 +1859,6 @@ fn _function(
         places,
         pieces: _pieces(function),
         parameter_numbers,
-        unaliased,
         next_frame_offset,
         at: 0,
         next_value,
@@ -2122,7 +2103,15 @@ fn _function(
         .parameter_numbers
         .iter()
         .filter(|(value, _)| scope.value_types[*value].kind == model::TypeKind::Pointer)
-        .map(|(value, number)| (scope.values[value], scope.parameter_provenance(*number)))
+        .map(|(value, number)| {
+            (
+                scope.values[value],
+                Provenance::one(MemoryObject {
+                    identity: Some(Identity::Int(*number)),
+                    ..MemoryObject::new(MemoryKind::Parameter)
+                }),
+            )
+        })
         .collect();
     let body = mir::MirBody {
         sealed: true,
