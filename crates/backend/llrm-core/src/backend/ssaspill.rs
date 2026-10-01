@@ -339,7 +339,13 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     if result.stored.is_empty() {
         return Ok(body.clone());
     }
-    let spilled = written(body, &result.edits, &result.across, &result.stored, &remakes, frame)?;
+    // A loop's back edge reloads before the latch branches: a block on that edge would run on every trip.
+    let graph = ranges::_graph(&body.blocks);
+    let back: BTreeSet<(i64, i64)> = crate::analysis::loops::loops(&graph, Some(body.entry))
+        .iter()
+        .flat_map(|found| found.latches.iter().map(move |latch| (*latch, found.header)))
+        .collect();
+    let spilled = written(body, &result.edits, &result.across, &back, &result.stored, &remakes, frame)?;
     Ok(ssarepair::repaired(&spilled, &result.stored))
 }
 
@@ -631,6 +637,7 @@ fn written(
     body: &LirBody,
     edits: &IndexMap<i64, Edits>,
     across: &IndexMap<(i64, i64), Vec<u32>>,
+    back: &BTreeSet<(i64, i64)>,
     stored: &BTreeSet<u32>,
     remakes: &IndexMap<u32, Arc<Insn>>,
     frame: &mut Frame,
@@ -652,7 +659,7 @@ fn written(
     let mut single: IndexMap<i64, Vec<u32>> = IndexMap::default();
     for ((from, to), values) in across {
         let source = body.blocks.iter().find(|block| block.at == *from).expect("a predecessor");
-        if source.succ.len() == 1 && !source.insns.is_empty() {
+        if (source.succ.len() == 1 || back.contains(&(*from, *to)) || std::env::var_os("SSA_NO_BRIDGE").is_some()) && !source.insns.is_empty() {
             single.entry(*from).or_default().extend(values.iter().copied());
         } else {
             let at = next_at;
@@ -669,6 +676,7 @@ fn written(
             jump.op = beside.op.clone();
             insns.push(Arc::new(jump));
             bridges.push(LirBlock { succ: vec![*to], ..LirBlock::new(at, insns) });
+            llrm_support::debug!("ssaspill", "{}: bridge {at:#x} on {from:#x} -> {to:#x} back {}", body.name, back.contains(&(*from, *to)));
             retarget.insert((*from, *to), at);
         }
     }
