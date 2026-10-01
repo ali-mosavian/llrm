@@ -317,9 +317,11 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
     // A value a loop's back edge must reload each trip is not worth holding at its header.
     let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
+    // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
+    let room = loop_room(body, &flow, &machine, &skip);
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
     let remakes = remakable(body, &all);
-    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped);
+    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room);
     for _ in 0..3 {
         let mut more = false;
         for ((from, to), values) in &result.across {
@@ -332,7 +334,7 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         if !more {
             break;
         }
-        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped);
+        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room);
     }
     if result.stored.is_empty() {
         return Ok(body.clone());
@@ -400,6 +402,7 @@ fn simulated(
     remakes: &IndexMap<u32, Arc<Insn>>,
     order: &[i64],
     dropped: &IndexMap<i64, BTreeSet<u32>>,
+    room: &IndexMap<i64, usize>,
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
@@ -432,14 +435,23 @@ fn simulated(
         let mut held: BTreeSet<u32> = BTreeSet::new();
         // Entering a loop, what is read only after it does not wait in a register.
         let header = ends.len() < preds.get(at).map_or(0, Vec::len);
-        let limit = if header { EXIT } else { FAR };
+        // A loop that fits its registers with them keeps what it does not read; one that does not, makes room.
+        let through = candidates.iter().filter(|(_, near, _)| *near >= EXIT && *near < FAR).count();
+        let mut spare = match (header, room.get(at)) {
+            (true, Some(peak)) if *peak > k => k.saturating_sub(peak - through.min(*peak)),
+            _ => usize::MAX,
+        };
         for (tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
-            if *near < limit && (*tier < 2 || block.arrives().contains(value)) {
+            let far = header && *near >= EXIT;
+            if *near < FAR && (!far || spare > 0) && (*tier < 2 || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
                 if machine.fits(&next, &BTreeSet::new(), k) {
                     held = next;
+                    if far && spare != usize::MAX {
+                        spare -= 1;
+                    }
                 }
             }
         }
@@ -559,6 +571,35 @@ fn simulated(
         }
     }
     Simulated { edits, across, stored }
+}
+
+/// For each loop header, the most values live at once inside the loop.
+fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet<u32>) -> IndexMap<i64, usize> {
+    let k = machine.general.len();
+    let wanted = |value: &u32| machine.registered(*value) && !skip.contains(value);
+    let mut most: IndexMap<i64, usize> = IndexMap::default();
+    for block in &body.blocks {
+        let mut live: BTreeSet<u32> = flow.live_out[&block.at].iter().copied().filter(|value| wanted(value)).collect();
+        let mut peak = live.len();
+        for one in block.insns.iter().rev() {
+            peak = peak.max(live.len());
+            for value in &one.defines {
+                live.remove(value);
+            }
+            live.extend(one.uses.iter().copied().filter(|value| wanted(value)));
+            peak = peak.max(live.len());
+        }
+        most.insert(block.at, peak);
+    }
+    let graph = ranges::_graph(&body.blocks);
+    crate::analysis::loops::loops(&graph, Some(body.entry))
+        .into_iter()
+        .map(|found| {
+            let busiest = found.body.iter().filter_map(|at| most.get(at)).copied().max().unwrap_or(0);
+            llrm_support::debug!("ssaspill", "{}: loop at {:#x} peaks at {busiest}", body.name, found.header);
+            (found.header, busiest)
+        })
+        .collect()
 }
 
 fn reverse_postorder(body: &LirBody) -> Vec<i64> {
