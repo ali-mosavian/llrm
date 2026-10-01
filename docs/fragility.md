@@ -38,6 +38,18 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **A fact only the frontend knows stayed unsaid.** Nib reloaded a slice's length each trip because an element store might alias its descriptor, which kept every bounds check from being counted. The descriptor is `noalias readonly` and its panic routines end the program; the frontend says both, and `hoist` and `exitfold` read them. Guard: a test each for the load leaving the loop and the crashing exit tested ahead of it.
 
+**A wrapper dropped a fact the trait defaulted.** `LoweredTarget` forwards each `Machine` method by hand; a new method with a default silently answered 0 through it, so the far-access registers never reached the pass and nothing failed. Guard: the wrapper forwards every method; a new one gets a test through the real target.
+
+**The pass counted registers the access needs.** A far access and an indexed one read their base, index and selector back from spilled cells, so a loop that "fit" could not be allocated: nine- to eleven-array loops failed to build on P5 and Core. A measured constant (1, then 2, then 3) crept; the access's own address components replaced it. Guard: `tests/toolchain.rs` builds the nine-, ten- and eleven-array loops.
+
+**A copy sunk to an exit some iteration bypasses.** `copysink` moved a result copy to the loop exit, which the iteration that skipped the inner loop also reaches, so a register nothing had set overwrote the carried value (main passed by luck). Guard: the copy's block must lie on every path to the leaving block, with a test.
+
+**A new counter's step was moved back below its readers.** The exit test moved the step to just before the branch after the uses had been placed ahead of it, and a use read the stepped value before its definition. Guard: the step moves only if it sits after the branch.
+
+**An unspillable range was refused by a rule for spillable ones.** The allocator's eviction stage and cascade rule stopped a two-instruction reload confined to the index registers from taking one, and the build failed where main's did not. Guard: it evicts at any stage and past a spillable cascade (LLVM's urgent eviction), with a build test.
+
+**A far pointer was compared for the exit.** The pass tested an exit on a far pointer, which the selector has no compare for: 147 corpus builds failed. Guard: a pointer wider than its offset never tests the exit, with a test.
+
 **A parameter nobody read.** `ranges::constants` took the data group, but `consts::known` reads it only when calls are also given, and they never were. Hoist passing `None` and loop motion passing the group got the same answer, which the plan took for two derivations of one fact. Guard: the parameter is gone from `constants` and the functions that only forwarded it.
 
 ## Pass order and interaction
