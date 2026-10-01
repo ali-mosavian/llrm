@@ -50,7 +50,7 @@ fn vbdos(modules: Vec<Module>) -> Program {
 }
 
 fn indirect(base: i64, offset: i64, r#type: i64) -> model::Operand {
-    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, inbounds: false, origin: None, allocation: None })
+    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, origin: None, allocation: None })
 }
 
 fn lowered_insns(name: &str, body: &mir::MirBody) -> usize {
@@ -107,8 +107,8 @@ fn kinds(operations: &[&mir::Op]) -> Vec<mir::Kind> {
 fn test_hir_json_is_deterministic_strict_and_replayable() {
     let text = encode(&program(), None).unwrap();
     assert_eq!(text, encode(&decode(&text).unwrap(), None).unwrap());
-    assert!(text.contains("\"schema\":3"));
-    let error = decode(&text.replace("\"schema\":3", "\"register\":\"eax\",\"schema\":3")).unwrap_err();
+    assert!(text.contains("\"schema\":4"));
+    let error = decode(&text.replace("\"schema\":4", "\"register\":\"eax\",\"schema\":4")).unwrap_err();
     assert!(error.0.contains("unknown fields"), "{error}");
     let error = decode(&text.replace("\"op\":\"add\"", "\"op\":\"adc\"")).unwrap_err();
     assert!(error.0.contains("unknown Op"), "{error}");
@@ -317,7 +317,7 @@ fn test_canonical_mir_dump_keeps_call_identity() {
     let void = Type::new(0, "void", TypeKind::Void, 0);
     let call_instruction = Instruction { callee: Some("TWICE&".to_owned()), ..instruction(1, Op::Call, &[], vec![]) };
     let block = returning(1, vec![call_instruction]);
-    let call = CallAbi { instruction: 1, order: vec![], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Pointer, promises: Vec::new() };
+    let call = CallAbi { instruction: 1, order: vec![], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Pointer };
     let function = Function { calls: vec![call], ..Function::new(1, "caller", 0, vec![], vec![], vec![block], 1) };
     let source = vbdos(vec![Module::new(1, "calls", vec![void], vec![function])]);
     assert!(mir_text(&lower(&source).unwrap()[0]).contains("call TWICE&()"));
@@ -409,7 +409,6 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
             distance: CallDistance::Far,
             callee: Some(1),
             float_return: FloatReturn::Pointer,
-            promises: Vec::new(),
         }],
         ..Function::new(1, "CALLER", 0, values(&[(1, 2)]), vec![], vec![returning(1, vec![read_call])], 1)
     };
