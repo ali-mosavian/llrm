@@ -11,11 +11,11 @@ mod shapes;
 mod tags;
 
 use crate::dialect::Dialect;
-use crate::generated_parser::{EACH, TUPLE};
+use crate::generated_parser::{EACH, ON_SELECTOR, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter,
-    PrintSeparator,
+    PrintKind, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 use tags::{Passing, Shape, Slot, Tag};
@@ -3282,12 +3282,20 @@ impl Compiler {
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
                 Statement::Print {
-                    file, using, items, ..
+                    kind, file, using, items, ..
                 } => {
+                    if *kind == PrintKind::Lprint {
+                        self.emit_runtime_call("B$LPRT", Vec::new(), Vec::new());
+                    }
                     if let Some(file) = file {
                         let (file, file_type) = self.expression(file)?;
                         let file = self.convert(file, file_type, INTEGER)?;
                         self.emit_runtime_call("B$CHOU", Vec::new(), vec![file]);
+                    }
+                    // WRITE's preamble tells the runtime to write its items as
+                    // WRITE does; a bare WRITE is only a new line.
+                    if *kind == PrintKind::Write && !items.is_empty() {
+                        self.emit_runtime_call("B$WRIT", Vec::new(), Vec::new());
                     }
                     if let Some(format) = using {
                         let format = self.string_descriptor(format)?;
@@ -3317,6 +3325,8 @@ impl Compiler {
                             }
                         }
                         let term = match item.separator {
+                            // WRITE's commas are the runtime's: its items go as with `;`.
+                            PrintSeparator::Comma if *kind == PrintKind::Write => 'S',
                             PrintSeparator::Comma => 'C',
                             PrintSeparator::Semicolon => 'S',
                             PrintSeparator::End => 'E',
@@ -6757,6 +6767,16 @@ impl Compiler {
         name: &str,
         arguments: &[Expr],
     ) -> Result<Option<(Operand, u32)>, SemanticError> {
+        if name == ON_SELECTOR {
+            let (value, type_id) = self.expression(&arguments[0])?;
+            let value = self.convert(value, type_id, INTEGER)?;
+            let number = |value: i64| Operand::Constant(INTEGER, Number::Integer(value));
+            let low = self.computed("lt", BOOLEAN, vec![value.clone(), number(0)]);
+            self.raise_if(low, 5)?;
+            let high = self.computed("gt", BOOLEAN, vec![value.clone(), number(255)]);
+            self.raise_if(high, 5)?;
+            return Ok(Some((value, INTEGER)));
+        }
         let Some(intrinsic) = self.intrinsic(name) else {
             return Ok(None);
         };
@@ -9427,6 +9447,7 @@ impl Compiler {
     }
 
     fn json(&self) -> String {
+        let mut facts = llrm_hir::facts::Builder::new("qb");
         // A module that handles errors has a statement table, whose rows
         // are code's lines: its instructions say theirs.
         let lined = self.debugging() || (self.options.error_lines && self.functions.iter().any(|one| one.error_handler.is_some()));
@@ -9468,6 +9489,9 @@ impl Compiler {
                             out.push(',');
                         }
                         operand_json(&mut out, operand, function);
+                        if matches!(operand, Operand::Indirect { inbounds: true, .. }) {
+                            facts.state(llrm_hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(instruction.id), operand: operand_index as i64 }, llrm_hir::facts::Fact::InBounds);
+                        }
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
@@ -9533,16 +9557,6 @@ impl Compiler {
                     write!(out, "{number}").unwrap();
                 }
                 out.push(']');
-                if !call.fills.is_empty() {
-                    out.push_str(",\"promises\":[");
-                    for (index, (operand, bytes)) in call.fills.iter().enumerate() {
-                        if index != 0 {
-                            out.push(',');
-                        }
-                        write!(out, "{{\"bytes\":{bytes},\"operand\":{operand}}}").unwrap();
-                    }
-                    out.push(']');
-                }
                 out.push('}');
             }
             out.push_str("],\"entry\":1,\"error_handler\":");
@@ -9666,9 +9680,6 @@ impl Compiler {
                 out.push(',');
             }
             out.push('{');
-            if object.align > 1 {
-                write!(out, "\"align\":{},", object.align).unwrap();
-            }
             out.push_str("\"bytes\":[");
             for (byte_index, byte) in object.bytes.iter().enumerate() {
                 if byte_index != 0 {
@@ -9708,7 +9719,6 @@ impl Compiler {
         }
         out.push(']');
         // What the language promises of each pointer parameter: it is addressable for the bytes it names.
-        let mut facts = llrm_hir::facts::Builder::new("qb");
         for function in &self.functions {
             for &(value, bytes) in &function.promises {
                 let index = function.parameters.iter().position(|&one| one == value).expect("a promise of a parameter") as i64;
@@ -9720,6 +9730,20 @@ impl Compiler {
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
                 facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
             }
+        }
+        // A call that fills a fixed-length destination: the callee writes its first
+        // bytes before reading any, reads none and keeps no copy of the pointer.
+        for function in &self.functions {
+            for call in &function.calls {
+                for &(operand, bytes) in &call.fills {
+                    let argument = llrm_hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(call.instruction), operand: operand as i64 };
+                    facts.state(argument, llrm_hir::facts::Fact::NoCapture).state(argument, llrm_hir::facts::Fact::WriteOnly).state(argument, llrm_hir::facts::Fact::Initializes(bytes as u64));
+                }
+            }
+        }
+        // How a word-sized object is placed: on a word.
+        for object in self.data.iter().filter(|object| object.align > 1) {
+            facts.state(llrm_hir::facts::Subject::Object(i64::from(object.id)), llrm_hir::facts::Fact::Align(u64::from(object.align)));
         }
         let facts = facts.finish();
         if !facts.is_empty() {
@@ -9744,7 +9768,7 @@ impl Compiler {
         }
         write!(
             out,
-            "}}],\"runtime\":\"{}\",\"schema\":2,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":4,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -10265,7 +10289,7 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             } else {
                 out.push('{');
             }
-            write!(out, "\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
+            write!(out, "\"base\":{base},\"offset\":{offset},").unwrap();
             if let Some(origin) = function.origins.get(base).filter(|_| *inbounds) {
                 write!(out, "\"origin\":{origin},").unwrap();
             }

@@ -43,7 +43,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::context::ConstantKind;
+use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
@@ -619,6 +619,22 @@ pub fn _operand(unit: &Unit, one: Operand, known: &IndexMap<ValueId, Known>, _he
     }
 }
 
+/// A constant pointer as the global it names, if any, and its offset: null,
+/// an integer made a pointer, a global. Two with one global compare by offset.
+fn _address(unit: &Unit, operand: Operand) -> Option<(Option<llrm_mir::context::GlobalId>, u128)> {
+    let Operand::Constant(id) = operand else { return None };
+    let context = unit.context;
+    match &context.get(id).kind {
+        ConstantKind::Null | ConstantKind::Zero => Some((None, 0)),
+        ConstantKind::Global(global) => Some((Some(*global), 0)),
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(*value).kind {
+            ConstantKind::Int(bits) => Some((None, bits)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The integer value this instruction defines.
 pub fn _defined(unit: &Unit, inst: InstId) -> Option<ValueId> {
     let result = unit.function.instruction(inst).result?;
@@ -639,6 +655,12 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     }
     if op.opcode == Opcode::Cast(CastOp::Trunc) {
         return _read(_operand(unit, op.operands[0], known, here).as_ref(), width);
+    }
+    if let Opcode::ICmp(predicate @ (IntPredicate::Eq | IntPredicate::Ne)) = op.opcode
+        && let (Some(left), Some(right)) = (_address(unit, op.operands[0]), _address(unit, op.operands[1]))
+        && left.0 == right.0
+    {
+        return Some(Known::new(u8::from((left.1 == right.1) == (predicate == IntPredicate::Eq)), 1));
     }
     if let Opcode::ICmp(predicate) = op.opcode {
         let (left, right) = (_operand(unit, op.operands[0], known, here)?, _operand(unit, op.operands[1], known, here)?);

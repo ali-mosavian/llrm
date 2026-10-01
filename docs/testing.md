@@ -17,6 +17,16 @@ tests must not feed raised MIR directly to its layout/allocator and call that th
 production path. Current integration tests go through MIR optimization, lowering,
 LIR allocation, and object writing.
 
+## Every program compiles
+
+`tests/test_programs_compile.py` compiles every program `tools/sizes.py` builds
+(the suite, bench and examples) at -O2 with the release binaries, about ten
+seconds. A program that fails and is not in `tools/sizes-known.txt` fails the
+test, and so does a listed one that compiles: the list may only shrink. It is
+skipped, loudly, when `target/release` has no binaries.
+
+    uv run --no-project --with pytest --with iced-x86 python -m pytest tests/test_programs_compile.py -rs
+
 ## The loop corpus
 
 `tools/loops` judges loop code: every case is one loop program in a neutral

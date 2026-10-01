@@ -40,8 +40,12 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     let mut callables: IndexMap<String, h::Callable> = IndexMap::default();
     let mut data = Vec::new();
+    let mut facts = Facts::new("c");
     for object in &objects {
         data.push(data_object(unit, object, keys[&object.key], &keys, &mut callables)?);
+        if let Some(align) = object.align {
+            facts.state(Subject::Object(keys[&object.key]), Fact::Align(align));
+        }
     }
     for symbol in imports {
         let id = keys[&Key::Symbol(symbol.id)];
@@ -56,7 +60,6 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
-    let mut facts = Facts::new("c");
     for (at, proc) in unit.procs.iter().enumerate() {
         functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, proc, at as i64 + 1)?);
     }
@@ -225,7 +228,6 @@ fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i
         linkage,
         address: address(space(unit, object.key)),
         segment: Some(object.segment.clone()),
-        align: object.align.map(|one| one as i64),
         ..h::DataObject::new(id, &object.name, object.bytes.iter().map(|&one| i64::from(one)).collect())
     })
 }
@@ -605,6 +607,14 @@ impl<'a, 't> Body<'a, 't> {
         }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
+        // Every address C computes through a pointer stays inside the object it points into.
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            for (index, operand) in instruction.operands.iter().enumerate() {
+                if matches!(operand, h::Operand::IndirectPlace(_)) {
+                    facts.state(Subject::Operand { function: id, instruction: instruction.id, operand: index as i64 }, Fact::InBounds);
+                }
+            }
+        }
         if let Some(described) = body.described.as_mut() {
             // A parameter as its home: where the function keeps it.
             for &(symbol, handle) in &proc.debug {
@@ -1381,7 +1391,8 @@ impl<'a, 't> Body<'a, 't> {
         }
         let at = self.int(2, by);
         let result = self.value(self.type_of(pointer));
-        self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).inbounds = true;
+        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).id;
+        self.stated_instructions.push((id, Fact::InBounds));
         result
     }
 
@@ -1473,10 +1484,44 @@ impl<'a, 't> Body<'a, 't> {
         signed(&self.unit.canonical_type(type_)) && bits >= 16
     }
 
+    /// The index of a pointer add scaled to bytes, `index * size`: the
+    /// compiler's multiply, not an `int` product, so C promises nothing signed
+    /// of it (`a[i]` with `i` past 16383 of a far word array is valid where the
+    /// byte offset passes 32767). An unsigned index promises the offset fits the
+    /// 64K segment an object lives in: the product does not wrap unsigned.
+    /// Stated here, where the scale is made, from the index's C type.
+    fn scaled(&mut self, node: &str) -> R<()> {
+        let tree = self.unit.nodes[&hir::handle(node)].clone();
+        let [op, left, right, type_] = &tree.args[..] else { return Ok(()) };
+        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(&self.unit.canonical_type(type_)) {
+            return Ok(());
+        }
+        let constant = |this: &Self, node: &String| this.unit.nodes[&hir::handle(node)].call == "CGInteger";
+        let (index, size) = match (constant(self, left), constant(self, right)) {
+            (false, true) => (left, right),
+            (true, false) => (right, left),
+            _ => return Ok(()),
+        };
+        let unsigned = !signed(&self.unit.canonical_type(&self.type_of_node(index)));
+        let (a, b) = (self.value_as(index, type_)?, self.value_as(size, type_)?);
+        let ty = self.ty(type_)?;
+        let result = self.value(ty);
+        let (a, b) = if index == left { (a, b) } else { (b, a) };
+        let id = self.instruction(Op::Mul, vec![result], vec![value_ref(a), value_ref(b)]).id;
+        if unsigned {
+            self.stated_instructions.push((id, Fact::NoUnsignedWrap));
+        }
+        self.done.insert(hir::handle(node), Got::Value(result));
+        Ok(())
+    }
+
     fn binary(&mut self, cg_op: &str, left: &str, right: &str, type_: &str) -> R<i64> {
         let canonical = self.unit.canonical_type(type_);
         if matches!(cg_op, "O_PLUS" | "O_MINUS") && !is_float(&canonical) {
             let a_got = self.eval(left)?;
+            if pointers(&canonical) {
+                self.scaled(right)?;
+            }
             let b_got = self.eval(right)?;
             let (a, b) = (self.scalar(a_got)?, self.scalar(b_got)?);
             // Pointer arithmetic: the pointer moved, or two pointers' distance.
@@ -1532,7 +1577,8 @@ impl<'a, 't> Body<'a, 't> {
         let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
         let ty = self.type_of(pointer);
         let result = self.value(ty);
-        self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).inbounds = true;
+        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).id;
+        self.stated_instructions.push((id, Fact::InBounds));
         Ok(result)
     }
 
@@ -1606,7 +1652,7 @@ impl<'a, 't> Body<'a, 't> {
         let instruction = self.instruction(Op::Call, results, operands);
         instruction.callee = callee.map(str::to_owned);
         let id = instruction.id;
-        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register, promises: Vec::new() });
+        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
     }
 
     /// Inline code as a call of `llrm.ia16.code`, each frame place it names
@@ -1766,7 +1812,7 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
 
 /// An access through `base`, `offset` bytes in, as `ty`.
 fn indirect(base: i64, offset: i64, ty: i64, volatile: bool) -> h::IndirectPlace {
-    h::IndirectPlace { base, offset, r#type: ty, volatile, published: false, inbounds: true, origin: None, allocation: None }
+    h::IndirectPlace { base, offset, r#type: ty, volatile, origin: None, allocation: None }
 }
 
 #[cfg(test)]
@@ -1871,6 +1917,36 @@ mod tests {
         assert!(text.lines().filter(|one| one.contains("getelementptr")).all(|one| one.contains("getelementptr inbounds")), "{text}");
         let char = tag(&llrm_mir::print::module(&module), "omnipotent char");
         assert!(text.lines().filter(|one| one.contains("load i8")).all(|one| one.ends_with(&format!("!tbaa {char}"))), "{text}");
+    }
+
+    /// `a[i]` with an unsigned `i` was scaled by `mul nsw i16 %i, 2`, poison
+    /// for i >= 16384 though the access of a far word array is valid (#100).
+    /// C promises nothing signed of the multiply that scales an index to bytes; of
+    /// an unsigned index, that it does not wrap unsigned.
+    #[test]
+    fn test_the_multiply_scaling_an_index_states_no_wrap() {
+        let module = raised("unsignedindex.cgs");
+        let text = defined(&module, "_sum");
+        let scales: Vec<&str> = text.lines().filter(|one| one.contains(" = mul ")).collect();
+        assert!(!scales.is_empty(), "the shape that was stated nsw: {text}");
+        assert!(scales.iter().all(|one| !one.contains("nsw") && one.contains("mul nuw i16")), "{scales:#?}");
+    }
+
+    /// The scaling multiply's flag follows the index's C type, however the index
+    /// arrives: an unsigned one through a conversion (`(unsigned)c`) or a sum
+    /// (`u + 1`) is `nuw`; a signed one carries none (#150).
+    #[test]
+    fn test_the_scale_of_an_index_follows_the_indexs_type() {
+        let module = raised("scaledindex.cgs");
+        let scale = |name: &str| {
+            let text = defined(&module, name);
+            let muls: Vec<String> = text.lines().filter(|one| one.contains(" = mul ")).map(str::to_owned).collect();
+            assert_eq!(muls.len(), 1, "{name}: {text}");
+            muls[0].clone()
+        };
+        assert!(scale("_through_a_char").contains("mul nuw i16"), "{}", scale("_through_a_char"));
+        assert!(scale("_through_a_sum").contains("mul nuw i16"), "{}", scale("_through_a_sum"));
+        assert!(!scale("_through_a_signed").contains("nsw") && !scale("_through_a_signed").contains("nuw"), "{}", scale("_through_a_signed"));
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.

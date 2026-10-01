@@ -2268,6 +2268,16 @@ writes_cells = { qb45 = ["b$seg"] }
 
 # Routines described only by how a typed source call reaches them.
 
+# `void B$LPRT(void)` and `void B$WRIT(void)`: QB45 rt/iolpt.asm and
+# rt/prnval.asm, FAR, no arguments.
+["B$LPRT".call]
+pushed = 0
+audit = "statement"
+
+["B$WRIT".call]
+pushed = 0
+audit = "statement"
+
 ["B$BEEP".call]
 pushed = 0
 audit = "statement"

@@ -3,10 +3,6 @@
 # shortfalls.txt.
 
 [[bug]]
-match = "is required in two registers at once"
-issue = "#99"
-
-[[bug]]
 match = "data before any label"
 issue = "#101"
 
@@ -17,18 +13,6 @@ issue = "#102"
 [[bug]]
 match = "llrm-c did not finish"
 issue = "#104"
-
-[[bug]]
-match = 'MIR .*conc\d+_s2_\S*_whole'
-issue = "#100"
-
-[[bug]]
-match = "need a temporary"
-issue = "#106"
-
-[[bug]]
-match = "name='les'"
-issue = "#107"
 
 [[bug]]
 match = 'c on DOS.*conc1[02]_s2_xi_bgnlnpfpn_index_n_st1_sum_as_end'

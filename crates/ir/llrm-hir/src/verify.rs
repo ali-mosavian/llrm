@@ -185,6 +185,15 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
             Subject::Callable(id) => module.callables.iter().any(|one| one.id == id),
             Subject::Param { function: id, index } => function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index)),
             Subject::Instruction { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.instructions.iter().any(|i| i.id == at))),
+            Subject::Operand { function: id, instruction, operand } => function(id).is_some_and(|one| {
+                one.blocks.iter().flat_map(|block| &block.instructions).any(|i| {
+                    i.id == instruction
+                        && (0..i.operands.len() as i64).contains(&operand)
+                        // What a callee does with a pointer is stated of a call's argument.
+                        && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
+                })
+            }),
+            Subject::Object(id) => module.data.iter().any(|one| one.id == id),
         };
         if !found {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));

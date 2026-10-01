@@ -9,7 +9,7 @@ use std::fmt;
 
 use llrm_support::pyrepr::{self, Repr};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// A Python `StrEnum`: members, their values, `str()` and `repr()`.
 macro_rules! str_enum {
@@ -297,12 +297,6 @@ pub struct IndirectPlace {
     pub offset: i64,
     pub r#type: i64,
     pub volatile: bool,
-    /// Another agent may write the pointee at any time, as a BYREF argument
-    /// an interrupt handler owns: ordered like `volatile`, but a loop that
-    /// ends without the value may read it once.
-    pub published: bool,
-    /// The language promises the access stays inside one object.
-    pub inbounds: bool,
     /// The value holding the offset of that object's first byte, where the
     /// frontend knows it: the pointer's offset plus `offset` is then that
     /// value plus a non-negative offset inside the object, and the object
@@ -470,8 +464,6 @@ pub struct Instruction {
     pub callee: Option<String>,
     pub pure: bool,
     pub asm: Option<Asm>,
-    /// A PTR_OFFSET's result stays inside its pointer's object.
-    pub inbounds: bool,
     /// The source line of the statement it belongs to, where known.
     pub line: Option<i64>,
 }
@@ -480,7 +472,7 @@ impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None, inbounds: false, line: None }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, line: None }
     }
 }
 
@@ -529,16 +521,6 @@ pub struct CallAbi {
     pub distance: CallDistance,
     pub callee: Option<i64>,
     pub float_return: FloatReturn,
-    pub promises: Vec<ArgumentPromise>,
-}
-
-/// What the language promises of a call's pointer operand: the callee
-/// writes its first `bytes` before reading any, reads none and keeps no
-/// copy. LLVM's call-site `nocapture writeonly initializes((0, bytes))`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ArgumentPromise {
-    pub operand: i64,
-    pub bytes: i64,
 }
 
 /// One resolved language procedure symbol; calls refer to its stable id.
@@ -742,9 +724,8 @@ pub struct DataObject {
     // False when no code takes its address, this module's or another's: only
     // a reference naming it reaches it.
     pub addressed: bool,
-    // The segment the frontend places it in, and its alignment in bytes.
+    // The segment the frontend places it in. Its alignment is a stated fact.
     pub segment: Option<String>,
-    pub align: Option<i64>,
 }
 
 impl DataObject {
@@ -759,7 +740,6 @@ impl DataObject {
             address: AddressKind::Near,
             addressed: true,
             segment: None,
-            align: None,
         }
     }
 }

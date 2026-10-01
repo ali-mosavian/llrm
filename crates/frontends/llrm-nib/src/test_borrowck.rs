@@ -640,3 +640,27 @@ fn main() -> i16:
     // With no drop to read it, the borrow ends at its last use.
     assert_eq!(output(&source.replace("fn G.drop(self: &mut G) -> void:\n    print(self.r)\n\n", "")), "");
 }
+
+#[test]
+fn an_escaping_generator_lends_its_arguments_as_a_call_does() {
+    // #137: its frame was built as a struct literal, which stored nothing,
+    // so `keep` kept the `&inner` that `stash` pushed, after `inner` ended.
+    let source = "\
+fn stash(out: &mut vec[&i16], x: &i16) -> iter[i16]:
+    out.push(x)
+    yield 1
+
+fn main() -> i16:
+    let mut keep: vec[&i16] = []
+    if true:
+        let inner: i16 = 7
+        let it = stash(keep, inner)
+        for v in it:
+            print(v)
+    print(keep.len)
+    return 0
+";
+    assert_eq!(refused_at(source), "9: \"keep\" would outlive \"inner\", which it borrows");
+    let outer = source.replace("    if true:\n        let inner: i16 = 7\n        let it = stash(keep, inner)\n        for v in it:\n            print(v)\n", "    let inner: i16 = 7\n    let it = stash(keep, inner)\n    for v in it:\n        print(v)\n");
+    assert_eq!(output(&outer), "1\n1\n");
+}

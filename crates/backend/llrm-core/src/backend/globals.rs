@@ -3,7 +3,7 @@
 //! address in it.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::{CastOp, ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalId, GlobalKind, Module, Type};
+use llrm_mir::{CastOp, ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalId, GlobalKind, Module, Type, TypeId};
 
 use crate::backend::masm::{Datum, Label, Pointer};
 use crate::model::ir::Space;
@@ -190,23 +190,46 @@ pub fn target(module: &Module, layout: &DataLayout, id: ConstantId) -> Result<(G
         ConstantKind::Global(global) => Ok((*global, 0)),
         ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
             let (global, base) = target(module, layout, operands[0])?;
-            let indices: Vec<Option<i128>> = operands[1..]
-                .iter()
-                .map(|&one| match context.get(one).kind {
-                    ConstantKind::Int(bits) => {
-                        let width = context.types.int_bits(context.get(one).ty).unwrap_or(64);
-                        Some(llrm_mir::context::signed(bits, width))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let (offset, variable) = layout.collect_offset(&context.types, *source, &indices);
-            if !variable.is_empty() {
-                return Err("a constant address with no constant offset".to_owned());
-            }
-            Ok((global, base + offset as i64))
+            Ok((global, base + constant_offset(module, layout, *source, &operands[1..])?))
         }
         ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => target(module, layout, *value),
         _ => Err("an address of no global".to_owned()),
     }
+}
+
+/// The address a constant is, where it names no global: null, an integer
+/// made a pointer, and a constant offset from either.
+pub fn absolute(module: &Module, layout: &DataLayout, id: ConstantId) -> Option<i64> {
+    let context = &module.context;
+    match &context.get(id).kind {
+        ConstantKind::Null | ConstantKind::Zero => Some(0),
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(*value).kind {
+            ConstantKind::Int(bits) => Some(llrm_mir::context::signed(bits, context.types.int_bits(context.get(*value).ty)?) as i64),
+            _ => None,
+        },
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
+            Some(absolute(module, layout, operands[0])? + constant_offset(module, layout, *source, &operands[1..]).ok()?)
+        }
+        _ => None,
+    }
+}
+
+/// What a constant GEP's `indices` into `source` add.
+fn constant_offset(module: &Module, layout: &DataLayout, source: TypeId, indices: &[ConstantId]) -> Result<i64, String> {
+    let context = &module.context;
+    let indices: Vec<Option<i128>> = indices
+        .iter()
+        .map(|&one| match context.get(one).kind {
+            ConstantKind::Int(bits) => {
+                let width = context.types.int_bits(context.get(one).ty).unwrap_or(64);
+                Some(llrm_mir::context::signed(bits, width))
+            }
+            _ => None,
+        })
+        .collect();
+    let (offset, variable) = layout.collect_offset(&context.types, source, &indices);
+    if !variable.is_empty() {
+        return Err("a constant address with no constant offset".to_owned());
+    }
+    Ok(offset as i64)
 }

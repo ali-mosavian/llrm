@@ -74,6 +74,15 @@ pub enum FileMode {
     Binary,
 }
 
+/// Which statement prints: PRINT, LPRINT to the printer, or WRITE, whose items
+/// the runtime separates with commas and quotes strings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrintKind {
+    Print,
+    Lprint,
+    Write,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrintSeparator {
     Comma,
@@ -356,6 +365,7 @@ pub enum Statement {
         span: Span,
     },
     Print {
+        kind: PrintKind,
         file: Option<Expr>,
         using: Option<Expr>,
         items: Vec<PrintItem>,
