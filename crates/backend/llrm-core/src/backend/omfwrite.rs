@@ -742,7 +742,7 @@ pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Re
     let mut named: IndexMap<String, Segment> = IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", "DATA", true))]);
     for (name, _items) in &module.data {
         if !named.contains_key(name) {
-            let private = module.private.contains(name);
+            let private = module.selector_addressed(name);
             let klass = CLASSES.get(name.as_str()).copied().unwrap_or(if private { "FAR_DATA" } else { "DATA" });
             named.insert(name.clone(), Segment::new(name, klass, !private));
         }
@@ -1027,10 +1027,7 @@ pub fn _records(
     for segment in segments.iter() {
         let (klass, name) = (lname(&segment.klass), lname(&segment.name));
         let size = segment.image.len();
-        // A far data segment is reached by its selector alone, so its first byte is
-        // offset 0: paragraph aligned, as the linker then places it there. A 64K object
-        // starting later would overflow its frame.
-        let alignment = if segment.klass == "FAR_DATA" { PARAGRAPH } else { ACBP };
+        let alignment = if module.selector_addressed(&segment.name) { PARAGRAPH } else { ACBP };
         let acbp = alignment | if size == 0x10000 { 2 } else { 0 };
         let mut body = vec![acbp];
         body.extend(((size & 0xFFFF) as u16).to_le_bytes());
