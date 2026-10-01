@@ -2033,3 +2033,28 @@ fn test_the_level_reaches_the_rich_route() {
     };
     assert!(object("-Os") < object("-O2"));
 }
+
+/// `dst: &mut P` and `src: &P` are stated noalias, and lowering gives each
+/// its own restrict root: `src.y` is loaded once, before the loop. Lowering
+/// dropped the fact, so the loop reloaded `src.y` after every store to `dst.x`.
+#[test]
+fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
+    use llrm_mir::facts::Fact;
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "bump.nib", source));
+    let bump = function(&program, "bump");
+    let unaliased = |index: i64| program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index));
+    assert!(unaliased(0) && unaliased(1), "the premise: both are stated noalias");
+    let assembly = listing(&program, "main", &O2());
+    let body = between(&assembly, "_bump proc far\n", "_bump endp");
+    // The loop runs from the label its backward jump names to that jump.
+    let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+    let (head, end) = jump
+        .captures_iter(body)
+        .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+        .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+        .expect("a loop");
+    let looped = between(&body[..end], &format!("{head}:\n"), "\0");
+    assert_eq!(looped.matches("ptr").count(), 1, "{looped}");
+}
