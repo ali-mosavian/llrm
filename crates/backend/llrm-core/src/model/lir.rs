@@ -354,6 +354,14 @@ impl BlockOdds {
     pub fn probability(&self, from: i64, to: i64) -> Option<f64> {
         self.taken.get(&(from, to)).map(|one| f64::from(*one) / Self::CERTAIN)
     }
+
+    /// `from`'s edge to `old`, made to go through `new`: the edge it replaces
+    /// keeps its odds, and stays recorded so that undoing the split finds them.
+    pub fn redirected(&mut self, from: i64, old: i64, new: i64) {
+        if let Some(one) = self.taken.get(&(from, old)).copied() {
+            self.taken.insert((from, new), one);
+        }
+    }
 }
 
 impl LirBody {
