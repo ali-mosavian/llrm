@@ -61,6 +61,8 @@ struct Type {
 
 #[derive(Clone)]
 struct Variable {
+    /// A BYREF pointee or a variable declared VOLATILE: another agent may write it.
+    volatile: bool,
     place: u32,
     type_id: u32,
     element: Option<u32>,
@@ -89,7 +91,7 @@ enum Operand {
         type_id: u32,
         // A BYREF pointee: an interrupt handler may write it while a loop
         // waits on it (VBDOS IN_KEYSTROKE).
-        published: bool,
+        volatile: bool,
         // An array element: QB promises it stays inside its array.
         inbounds: bool,
     },
@@ -97,7 +99,7 @@ enum Operand {
 
 enum ProjectionBase {
     Place(u32, Vec<Operand>),
-    // Base, published, inbounds.
+    // Base, volatile, inbounds.
     Indirect(u32, bool, bool),
 }
 
@@ -206,6 +208,8 @@ struct Block {
 
 #[derive(Clone)]
 struct Place {
+    /// Declared VOLATILE: every access is ordered.
+    volatile: bool,
     id: u32,
     name: String,
     type_id: u32,
@@ -588,11 +592,15 @@ fn built_from(
             if referenced > 0 {
                 promises.push((value, referenced));
             }
+            if is_array && parameter.declaration.volatile {
+                return compiler.fail(format!("{}: VOLATILE is not supported on an array parameter", parameter.declaration.name));
+            }
             if is_array {
                 compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, true, false);
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
+                        volatile: false,
                         place: 0,
                         type_id: parameter_type,
                         element: Some(parameter_type),
@@ -632,6 +640,7 @@ fn built_from(
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
+                        volatile: parameter.declaration.volatile,
                         place: 0,
                         type_id: parameter_type,
                         element: None,
@@ -671,6 +680,7 @@ fn built_from(
                 fixed_length: None,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span: procedure.span,
             };
             let place = compiler.declare_as(&declaration, "local")?;
@@ -798,6 +808,7 @@ fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, Typ
                     fixed_length: None,
                     shared: false,
                     dynamic: array,
+                    volatile: false,
                     span,
                 },
                 by_value: false,
@@ -2167,6 +2178,7 @@ impl Compiler {
                 fixed_length,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span,
             },
             storage,
@@ -2368,9 +2380,13 @@ impl Compiler {
                     },
                 )
             };
+            if declaration.volatile {
+                return self.fail(format!("{}: VOLATILE is not supported on a dynamic array", declaration.name));
+            }
             let descriptor_place = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2395,6 +2411,7 @@ impl Compiler {
             self.variables.insert(
                 key.clone(),
                 Variable {
+                    volatile: false,
                     place: 0,
                     type_id: element,
                     element: Some(element),
@@ -2439,9 +2456,13 @@ impl Compiler {
                     },
                 )
             };
+            if declaration.volatile {
+                return self.fail(format!("{}: VOLATILE is not supported on a dynamic array", declaration.name));
+            }
             let descriptor_place = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2463,6 +2484,7 @@ impl Compiler {
             self.variables.insert(
                 key.clone(),
                 Variable {
+                    volatile: false,
                     place: 0,
                     type_id: element,
                     element: Some(element),
@@ -2544,6 +2566,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: declaration.name.clone(),
             type_id,
@@ -2581,6 +2604,7 @@ impl Compiler {
             let descriptor = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2608,9 +2632,15 @@ impl Compiler {
         } else {
             None
         };
+        if declaration.volatile {
+            if let Some(one) = self.places.iter_mut().find(|one| one.id == place) {
+                one.volatile = true;
+            }
+        }
         self.variables.insert(
             key,
             Variable {
+                volatile: declaration.volatile,
                 place,
                 type_id,
                 element: array_element,
@@ -3405,6 +3435,7 @@ impl Compiler {
                         let place = self.next_place;
                         self.next_place += 1;
                         self.places.push(Place {
+                volatile: false,
                             id: place,
                             name: format!("$input{symbol}"),
                             type_id: BYTE,
@@ -3848,7 +3879,7 @@ impl Compiler {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
-                                    published: false,
+                                    volatile: false,
                                     inbounds: false,
                                 },
                                 value,
@@ -4600,14 +4631,14 @@ impl Compiler {
             Operand::Indirect {
                 base,
                 offset: at,
-                published,
+                volatile,
                 inbounds,
                 ..
             } => Ok(Operand::Indirect {
                 base: *base,
                 offset: at + offset,
                 type_id,
-                published: *published,
+                volatile: *volatile,
                 inbounds: *inbounds,
             }),
             Operand::Value(_) | Operand::Constant(_, _) => {
@@ -4695,7 +4726,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        published: true,
+                        volatile: variable.volatile,
                         inbounds: false,
                     }
                 } else {
@@ -4724,7 +4755,7 @@ impl Compiler {
                             base: pointer,
                             offset: 0,
                             type_id: element,
-                            published: false,
+                            volatile: false,
                             inbounds: true,
                         },
                         element,
@@ -4753,7 +4784,7 @@ impl Compiler {
                         base: pointer,
                         offset: 0,
                         type_id: element,
-                        published: false,
+                        volatile: false,
                         inbounds: true,
                     },
                     element,
@@ -4768,11 +4799,11 @@ impl Compiler {
                         offset,
                         type_id,
                     },
-                    ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
+                    ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                         base,
                         offset,
                         type_id,
-                        published,
+                        volatile,
                         inbounds,
                     },
                 };
@@ -4795,7 +4826,7 @@ impl Compiler {
                 let variable = self.variable(name)?;
                 let base = variable
                     .indirect
-                    .map(|base| ProjectionBase::Indirect(base, true, false))
+                    .map(|base| ProjectionBase::Indirect(base, variable.volatile, false))
                     .unwrap_or_else(|| ProjectionBase::Place(variable.place, Vec::new()));
                 Ok((base, 0, variable.type_id))
             }
@@ -4885,11 +4916,11 @@ impl Compiler {
                 offset,
                 type_id: array_type,
             },
-            ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
+            ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                 base,
                 offset,
                 type_id: array_type,
-                published,
+                volatile,
                 inbounds,
             },
         };
@@ -5242,7 +5273,7 @@ impl Compiler {
                 base: at,
                 offset: 16,
                 type_id: INTEGER,
-                published: false,
+                volatile: false,
                 inbounds: false,
             }],
         );
@@ -5255,7 +5286,7 @@ impl Compiler {
                     base: at,
                     offset: 14,
                     type_id: INTEGER,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -5320,7 +5351,7 @@ impl Compiler {
                 base: descriptor,
                 offset,
                 type_id,
-                published: false,
+                volatile: false,
                 inbounds: false,
             }],
         );
@@ -5437,6 +5468,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: "$fslSegment".into(),
             type_id: INTEGER,
@@ -5620,6 +5652,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$ds{symbol}"),
             type_id: INTEGER,
@@ -6096,7 +6129,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        published: true,
+                        volatile: variable.volatile,
                         inbounds: false,
                     }
                 } else {
@@ -6504,6 +6537,7 @@ impl Compiler {
             fixed_length,
             shared: false,
             dynamic: true,
+            volatile: false,
             span,
         })?;
         let (_, index) = self.hidden(INTEGER)?;
@@ -6543,6 +6577,7 @@ impl Compiler {
                 fixed_length,
                 shared: false,
                 dynamic: true,
+                volatile: false,
                 span,
             },
             self.implicit_storage,
@@ -6616,6 +6651,7 @@ impl Compiler {
                 fixed_length: None,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span,
             },
             self.implicit_storage,
@@ -6788,6 +6824,7 @@ impl Compiler {
         self.variables.insert(
             name.clone(),
             Variable {
+                volatile: false,
                 place,
                 type_id,
                 element: None,
@@ -6953,7 +6990,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -6993,7 +7030,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7378,7 +7415,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7507,7 +7544,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7530,7 +7567,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: DOUBLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7836,7 +7873,7 @@ impl Compiler {
                         base,
                         offset,
                         type_id,
-                        published,
+                        volatile,
                         inbounds,
                     } => {
                         let pointer_type = self
@@ -7850,7 +7887,7 @@ impl Compiler {
                             base,
                             offset,
                             type_id,
-                            published,
+                            volatile,
                             inbounds,
                         };
                         if self.width(pointer_type) == 4 {
@@ -8722,6 +8759,7 @@ impl Compiler {
             fixed_length: None,
             shared: false,
             dynamic: false,
+            volatile: false,
             span: crate::syntax::Span {
                 line: 0,
                 start: 0,
@@ -8840,6 +8878,7 @@ impl Compiler {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id,
             name: format!("{prefix}{id}"),
             type_id,
@@ -8864,6 +8903,7 @@ impl Compiler {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id,
             name: format!("$stringArg{id}"),
             type_id: STRING,
@@ -8906,6 +8946,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: "b$seg".into(),
             type_id: INTEGER,
@@ -8965,6 +9006,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$float{symbol}"),
             type_id,
@@ -9092,6 +9134,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$string{payload_symbol}$descriptor"),
             type_id: STRING,
@@ -9104,6 +9147,7 @@ impl Compiler {
         let payload = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: payload,
             name: format!("$string{payload_symbol}$payload"),
             type_id: payload_type,
@@ -9656,8 +9700,8 @@ impl Compiler {
                 string(&mut out, &place.name);
                 write!(
                     out,
-                    ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
-                    place.offset, place.storage, place.symbol, place.type_id
+                    ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{},\"volatile\":{}}}",
+                    place.offset, place.storage, place.symbol, place.type_id, place.volatile
                 )
                 .unwrap();
             }
@@ -10324,7 +10368,7 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             base,
             offset,
             type_id,
-            published,
+            volatile,
             inbounds,
         } => {
             if let Some(place) = function.allocations.get(base).filter(|_| *inbounds) {
@@ -10336,7 +10380,7 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             if let Some(origin) = function.origins.get(base).filter(|_| *inbounds) {
                 write!(out, "\"origin\":{origin},").unwrap();
             }
-            write!(out, "\"published\":{published},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
+            write!(out, "\"volatile\":{volatile},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
         }
     }
 }

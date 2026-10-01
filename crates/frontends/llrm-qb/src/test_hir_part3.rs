@@ -1187,11 +1187,12 @@ fn test_qb_string_comparison_abi_site_survives_alias_annotation() {
 
 /// IN_KEYSTROKE held a released key forever after GVN kept its first read.
 ///
-/// A BYREF pointee is published storage: an interrupt or another runtime
-/// callback may change it without an ordinary source store.  Both the guard
-/// and the back-edge condition must therefore remain observable loads.
+/// A BYREF pointee declared `VOLATILE` may be changed by an interrupt or
+/// another runtime callback without a source store in the function.  Both
+/// the guard and the back-edge condition must therefore remain observable
+/// loads.
 #[test]
-fn test_byref_loop_condition_reloads_the_published_pointee() {
+fn test_a_volatile_byref_loop_condition_reloads_the_pointee() {
     let source = parsed_as(&fixture("byreflp.bas"), "vbdos", "vbdos");
     let (_, function) = function_named(&source, "WAITKEY");
     let semantic = lower(&source).unwrap().into_iter().find(|one| one.name.ends_with("WAITKEY")).expect("WAITKEY");
@@ -1209,9 +1210,10 @@ fn test_byref_loop_condition_reloads_the_published_pointee() {
 }
 
 /// Every iteration of a counted loop reloaded its BYREF arguments, as if the
-/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times.
+/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times. A
+/// BYREF not declared `VOLATILE` is read once and is not ordered.
 #[test]
-fn test_a_counted_loop_reads_a_published_pointee_once() {
+fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(
         &directory,
@@ -1224,10 +1226,10 @@ fn test_a_counted_loop_reads_a_published_pointee_once() {
     let optimized = optimized(&source, function, &semantic);
     let natural = loops::loops(&optimized.body.blocks, Some(optimized.body.entry));
     let inside: BTreeSet<i64> = natural.iter().flat_map(|one| one.body.iter().copied()).collect();
-    let published = |one: &mir::Op| one.kind == Kind::Load && one.loads.iter().any(|reference| reference.published);
+    let ordered = |one: &mir::Op| one.kind == Kind::Load && (one.volatile || one.loads.iter().any(|reference| reference.volatile || reference.published));
 
-    assert!(ops(&optimized.body).into_iter().any(published));
-    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(published)));
+    assert!(!ops(&optimized.body).into_iter().any(ordered));
+    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(|one| one.kind == Kind::Load)));
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.

@@ -26,11 +26,13 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
+    let (tokens, volatile_at) = without_volatile(lex(source, dialect).map_err(ParseError::from)?);
     let (tokens, private_at) = without_private(for_in(augmented(tuple_assignment(
-        returned(lex(source, dialect).map_err(ParseError::from)?, dialect),
+        returned(tokens, dialect),
         dialect,
     ))));
     let mut state = ParseState::new(tokens);
+    state.volatile_at = volatile_at;
     state.python_expressions = dialect.python_expressions();
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
@@ -494,6 +496,49 @@ fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
     (kept, marked)
 }
 
+/// `ID AS VOLATILE TYPE` and `ID(...) AS VOLATILE TYPE`, in DIM and in a
+/// parameter list: the grammar parses the declaration without the word, so
+/// VOLATILE leaves the stream and its declaration's identifier is recorded
+/// by line and start. `BYREF` before a parameter, the default said aloud, goes
+/// too.
+fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>) {
+    let is = |token: Option<&Token>, name: &str| token.is_some_and(|token| matches!(&token.kind, TokenKind::Reserved(id) if *id == named(name)));
+    let mut kept: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut marked = BTreeSet::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let word = |name: &str| matches!(&token.kind, TokenKind::Identifier(word) if word == name);
+        if word("BYREF") && (is(kept.last(), "tkLParen") || is(kept.last(), "tkComma")) && matches!(tokens.get(index + 1).map(|next| &next.kind), Some(TokenKind::Identifier(_))) {
+            continue;
+        }
+        // `AS VOLATILE` and then a type; `AS VOLATILE` alone is a type of that name.
+        let types = |next: Option<&Token>| next.is_some_and(|next| matches!(next.kind, TokenKind::Identifier(_)) || matches!(next.kind, TokenKind::Reserved(id) if id != named("tkNewLine") && id != named("tkColon") && id != named("tkComma") && id != named("tkRParen")));
+        if word("VOLATILE") && is(kept.last(), "tkAS") && types(tokens.get(index + 1)) {
+            // The identifier this declares: before the dimensions, if it has them.
+            let mut at = kept.len() - 1;
+            if is(at.checked_sub(1).and_then(|one| kept.get(one)), "tkRParen") {
+                let mut depth = 0;
+                while at > 0 {
+                    at -= 1;
+                    if is(kept.get(at), "tkRParen") {
+                        depth += 1;
+                    } else if is(kept.get(at), "tkLParen") {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(Token { kind: TokenKind::Identifier(_), span }) = at.checked_sub(1).and_then(|one| kept.get(one)) {
+                marked.insert((span.line, span.start));
+                continue;
+            }
+        }
+        kept.push(token.clone());
+    }
+    (kept, marked)
+}
+
 fn statement(engine: &ParserEngine, state: &mut ParseState) -> ParseResult {
     if let Some(Token {
         kind: TokenKind::Integer(value, None),
@@ -880,6 +925,7 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
         fixed_length,
         shared: state.declaration_shared,
         dynamic: state.dynamic_arrays,
+        volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
         span: Span {
             line: token.span.line,
             start: token.span.start,
@@ -1268,6 +1314,7 @@ fn parameter(state: &mut ParseState) -> ParseResult {
             fixed_length: None,
             shared: false,
             dynamic: false,
+            volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
             span: Span {
                 line: token.span.line,
                 start: token.span.start,
@@ -2314,6 +2361,7 @@ fn type_declaration_fields(state: &mut ParseState) -> Option<Vec<Declaration>> {
             fixed_length,
             shared: false,
             dynamic: false,
+            volatile: false,
             span: token.span,
         });
         if !at_named(state, "tkNewLine") {
