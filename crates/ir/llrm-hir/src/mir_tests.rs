@@ -827,7 +827,7 @@ fn a_program_of_the_old_schema_is_refused_by_its_version() {
 /// refused for.
 #[test]
 fn old_json_is_refused_by_its_schema() {
-    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":3", "\"promises\":[],\"schema\":1");
+    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":4", "\"promises\":[],\"schema\":1");
     assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
 }
 
@@ -867,11 +867,36 @@ fn facts_of_a_call_argument_are_its_call_site_attributes() {
     assert!(text.contains("@llrm.qb.B$FILL(i16 nocapture writeonly initializes((0, 4)) %0)"), "{text}");
 }
 
-/// A fact of an argument the call lacks is refused.
+/// A fact of an operand the instruction lacks is refused.
 #[test]
-fn a_fact_of_an_argument_the_call_lacks_is_refused() {
+fn a_fact_of_an_operand_the_instruction_lacks_is_refused() {
     use crate::facts::{Stated, Subject};
     let mut program = program(difference());
     program.modules[0].facts = vec![Stated { subject: Subject::Operand { function: 1, instruction: 1, operand: 0 }, fact: llrm_mir::facts::Fact::NoCapture, source: None }];
-    assert!(crate::verify::verify(&program).unwrap_err().0.contains("argument the module lacks"));
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("operand the module lacks"));
+}
+
+/// An access through a pointer is inbounds when the language says of that
+/// operand that it is; the next access, of the same place, is not.
+#[test]
+fn inbounds_is_a_fact_of_an_operand() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::IndirectPlace;
+    use llrm_mir::facts::Fact;
+    let at = || Operand::IndirectPlace(IndirectPlace { base: 1, offset: 2, r#type: 1, volatile: false, origin: None, allocation: None });
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }];
+    let loads = vec![Instruction::new(1, Op::Load, vec![2], vec![at()]), Instruction::new(2, Op::Load, vec![3], vec![at()])];
+    let block = Block::new(1, loads, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(3, "near", TypeKind::Pointer, 2));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Operand { function: 1, instruction: 1, operand: 0 }, Fact::InBounds);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert_eq!(text.matches("getelementptr inbounds i8, ptr %0, i16 2").count(), 1, "{text}");
+    assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
 }
