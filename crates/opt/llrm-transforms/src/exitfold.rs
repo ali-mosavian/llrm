@@ -35,7 +35,7 @@
 //! traps.
 
 use llrm_analysis::graph::loops::Loop;
-use llrm_analysis::induction::{self, AffineOperand, ExitCount, Linear};
+use llrm_analysis::induction::{self, AffineOperand, ExitCount, Scev};
 use llrm_analysis::{cfg, guards, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -174,9 +174,9 @@ struct Merged {
     first: InstId,
     exit: i64,
     counter: ValueId,
-    start: Linear,
+    start: Scev,
     step: BigInt,
-    counts: Vec<Linear>,
+    counts: Vec<Scev>,
     others: Vec<(InstId, i64)>,
 }
 
@@ -218,7 +218,7 @@ fn _merged(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCount]
         first: first.branch,
         exit: first.exit,
         counter: proof.counter.value,
-        start: Linear::of(&proof.start, width),
+        start: Scev::of(&proof.start, width),
         step: proof.step.clone(),
         counts,
         others,
@@ -318,8 +318,8 @@ fn _replaced(function: &mut Function, branch: InstId, condition: Operand) {
 struct Predicated {
     preheader: BlockId,
     header: BlockId,
-    loop_count: Vec<Linear>,
-    exits: Vec<(InstId, i64, Vec<Linear>)>,
+    loop_count: Vec<Scev>,
+    exits: Vec<(InstId, i64, Vec<Scev>)>,
 }
 
 /// The exits of `loop_` that may leave on its first trip, where it writes
@@ -396,7 +396,7 @@ fn _hoisted(unit: &memory::Unit, loop_: &Loop, exits: &[ExitCount]) -> Vec<Hoist
     let still = induction::invariant(function, &loop_.body);
     let most = induction::most_backedges(exits);
     let mut found = Vec::new();
-    let mut earlier: Vec<Linear> = Vec::new();
+    let mut earlier: Vec<Scev> = Vec::new();
     for exit in exits {
         if let Some(taken) = &exit.taken {
             earlier.extend(taken.iter().cloned());
@@ -424,10 +424,10 @@ fn _hoisted(unit: &memory::Unit, loop_: &Loop, exits: &[ExitCount]) -> Vec<Hoist
         }
         let affine = &counters[&counter];
         let (Some(width), Some(right_term)) = (unit.int_bits(Operand::Value(counter)), induction::term(unit, right)) else { continue };
-        let step = Linear::of(&affine.step, width);
+        let step = Scev::of(&affine.step, width);
         let Some(by) = step.known().filter(|by| by.magnitude() == &num_bigint::BigUint::from(1_u8)) else { continue };
-        let start = Linear::of(&affine.start, width);
-        let bound = Linear::of(&right_term, width);
+        let start = Scev::of(&affine.start, width);
+        let bound = Scev::of(&right_term, width);
         let signed = matches!(predicate, IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge);
         let rising = by > BigInt::from(0);
         let no_wrap = match (signed, rising) {
@@ -436,12 +436,12 @@ fn _hoisted(unit: &memory::Unit, loop_: &Loop, exits: &[ExitCount]) -> Vec<Hoist
             (false, true) => IntPredicate::Ule,
             (false, false) => IntPredicate::Uge,
         };
-        let holds_up_to = |trips: &Linear| {
+        let holds_up_to = |trips: &Scev| {
             let last = start.plus(&trips.times(&by));
             guards::holds(unit, latch, predicate, &last, &bound) && guards::holds(unit, exit.block, no_wrap, &start, &last)
         };
         // An earlier exit leaving on the loop's last trip spares the later ones it.
-        let invariant = most.iter().filter(|one| one.width == width).any(|trips| holds_up_to(trips) || (earlier.contains(trips) && holds_up_to(&trips.minus(&Linear::constant(1, width)))));
+        let invariant = most.iter().filter(|one| one.width == width).any(|trips| holds_up_to(trips) || (earlier.contains(trips) && holds_up_to(&trips.minus(&Scev::constant(1, width)))));
         if invariant {
             found.push(Hoisted { branch: exit.branch, exit: exit.exit, predicate, left: affine.start.clone(), right, before });
         }
@@ -455,7 +455,7 @@ fn _decided(unit: &memory::Unit, loop_: &Loop, exits: &[ExitCount]) -> Vec<(Inst
     // Only an exit of this loop and no inner one decides this loop's trips.
     let innermost = |at: i64| unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len());
     let mut decided = Vec::new();
-    let mut earlier: Vec<Vec<Linear>> = Vec::new();
+    let mut earlier: Vec<Vec<Scev>> = Vec::new();
     for (index, exit) in exits.iter().enumerate() {
         let Some(taken) = &exit.taken else { continue };
         let condition = function.instruction(exit.branch).operands.first().copied();
@@ -482,7 +482,7 @@ fn _decided(unit: &memory::Unit, loop_: &Loop, exits: &[ExitCount]) -> Vec<(Inst
 }
 
 /// Whether `most` is below `count` as unsigned numbers on entry to `header`'s loop.
-fn _below(unit: &memory::Unit, header: i64, most: &Linear, count: &Linear) -> bool {
+fn _below(unit: &memory::Unit, header: i64, most: &Scev, count: &Scev) -> bool {
     if most.width != count.width {
         return false;
     }

@@ -291,9 +291,10 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop) -> Option<_Found> {
 
     let facts = unit.registers();
     let Operand::Value(address) = pointer else { return None };
-    let formula = induction::derived(unit, loop_, Some(&counters)).into_iter().find(|one| one.pointer.is_some() && function.instruction(one.op).result == Some(address))?;
-    let width = formula.of.start.width();
-    let stride = induction::_signed(&formula.by, &facts, width)? * induction::_signed(&formula.of.step, &facts, width)?;
+    let walk = induction::recurrences(unit, loop_, &counters);
+    let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
+    let width = formula.width();
+    let stride = formula.step.known()?;
     if stride != bytes || proof.width() != width || unit.layout.pointer(unit.space(pointer)?).index_bits != width {
         return None;
     }

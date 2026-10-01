@@ -23,6 +23,7 @@ pub mod fold;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
+pub mod gepoffset;
 pub mod gvn;
 pub mod hoist;
 pub mod indvars;
