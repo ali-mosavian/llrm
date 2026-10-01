@@ -23,11 +23,13 @@ DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
 
-def programs(bins: Path) -> list[tuple[str, list[str]]]:
+def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-c", "llrm-nib"))
-    out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
-    if not DEMOS.is_dir():
-        sys.exit(f"{DEMOS} is missing: set QBDEMOS, or the demos cannot be counted")
+    out = []
+    if demos:
+        if not DEMOS.is_dir():
+            sys.exit(f"{DEMOS} is missing: set QBDEMOS, or the demos cannot be counted")
+        out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for pattern, tool in (("tests/suite/*.bas", qb), ("bench/*.bas", qb), ("bench/general/*.BAS", qb), ("bench/parity/*.bas", qb), ("bench/c/*.c", cc), ("bench/general/*.c", cc), ("bench/parity/*.c", cc), ("examples/*.nib", nib)):
         out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, file]) for file in sorted(glob.glob(str(ROOT / pattern)))]
     return out
@@ -43,9 +45,9 @@ def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
         return Path(obj).stat().st_size, sum(i for i, _ in found), sum(m for _, m in found)
 
 
-def table(bins: Path, level: str) -> dict:
+def table(bins: Path, level: str, demos: bool = True) -> dict:
     with ThreadPoolExecutor(8) as pool:
-        listed = programs(bins)
+        listed = programs(bins, demos)
         return dict(zip((name for name, _ in listed), pool.map(lambda one: measure(one[1], level), listed)))
 
 
@@ -72,4 +74,5 @@ def main() -> None:
     sys.exit(status)
 
 
-main()
+if __name__ == "__main__":
+    main()
