@@ -2034,3 +2034,12 @@ fn test_the_level_reaches_the_rich_route() {
     };
     assert!(object("-Os") < object("-O2"));
 }
+
+/// examples/league.nib's `main` was refused after #127 made every spiller
+/// product unspillable: "value#23 cannot be spilled and no register is free".
+#[test]
+fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
+    let program = parsed(&fixture("league.nib"));
+    let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
+    assert!(result.is_ok(), "{:?}", result.err());
+}

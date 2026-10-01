@@ -28,6 +28,9 @@ use crate::support::pyrepr::Repr;
 /// Maximum queue visits before the remaining values are spilled.
 pub const BUDGET: usize = 200_000;
 
+/// How long a range may be and still count as a reload.
+pub const RELOAD: i64 = 4 * ranges::PER_INSN;
+
 /// A value reached emission with no register. Always a bug here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Unplaced(pub String);
@@ -763,9 +766,15 @@ impl Facts {
     fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
         let index = ranges::indexed(body);
         let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
+        // A reload or rematerialization of a spilled value gains nothing from
+        // a spill, however far a parallel copy stretches it. Any other
+        // product is unspillable only while it is short.
+        let reloaded = _reloaded(body);
         for one in unspillable {
             if let Some(interval) = live.get_mut(one) {
-                interval.weight = INF;
+                if reloaded.contains(one) || interval.size() <= RELOAD {
+                    interval.weight = INF;
+                }
             }
         }
         for one in protected {
@@ -776,6 +785,17 @@ impl Facts {
         let masks = _masks(body, &index, segments);
         Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments), hints: _copy_hints(body) }
     }
+}
+
+/// The values only a reload or a rematerialization defines.
+fn _reloaded(body: &LirBody) -> BTreeSet<u32> {
+    let mut pure: BTreeSet<u32> = BTreeSet::new();
+    let mut other: BTreeSet<u32> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let into = if one.spill_reload || one.rematerialized { &mut pure } else { &mut other };
+        into.extend(one.defines.iter().copied());
+    }
+    pure.difference(&other).copied().collect()
 }
 
 /// The values whose register a rewrite made them share with another, lose
@@ -2786,6 +2806,26 @@ mod tests {
         let union = IndexMap::from_iter([(_whole(Register::AX), vec![1])]);
         let placed = IndexMap::from_iter([(1, Register::AX)]);
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
+    }
+
+    /// Every spiller product was made unspillable whatever its length (#127):
+    /// league.nib's `main` held a long load-modify-store value no register
+    /// could take, and was refused. Only a reload or a rematerialization,
+    /// which a spill cannot shorten, is unspillable when long.
+    #[test]
+    fn test_a_long_product_that_is_not_a_reload_stays_spillable() {
+        let cell = |base: u32| Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
+        let remat = Insn { rematerialized: true, .._mov(2, 6, 2) };
+        let mut insns = vec![_mov(1, 5, 0), remat];
+        insns.extend((10..20u32).map(|one| _mov(one, 1, 4 + 2 * i64::from(one))));
+        insns.extend([_load(100, 30, cell(1), vec![1]), _load(102, 31, cell(2), vec![2])]);
+        let body = _one_block(insns);
+        let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
+        let made = BTreeSet::from([1, 2]);
+        let facts = Facts::of(&body, profile, &target::BUILT_IN, &made, &BTreeSet::new());
+        assert!(facts.live[&1].size() > RELOAD && facts.live[&2].size() > RELOAD, "premise: both are long: {:?} {:?}", facts.live[&1], facts.live[&2]);
+        assert!(facts.live[&1].weight < INF, "a long product that does real work can be spilled");
+        assert_eq!(facts.live[&2].weight, INF, "a long rematerialization cannot");
     }
 
     /// A failed recoloring must leave every holder where it was.
