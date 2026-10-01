@@ -177,3 +177,67 @@ fn test_a_double_is_laid_down_in_x87_extended_form() {
     assert_eq!(extended(0.0), [0; 10]);
     assert_eq!(extended(f64::from_bits(1)), [0, 0, 0, 0, 0, 0, 0, 0x80, 0xCD, 0x3B]);
 }
+
+fn dominance_problems(text: &str) -> Vec<String> {
+    crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}"))).into_iter().filter(|one| one.contains("dominate")).collect()
+}
+
+/// A value used in a branch arm that does not contain its definition, in
+/// the join after it, or before it in the same block, is not dominated; the
+/// verifier that runs after every pass must say so.
+#[test]
+fn a_use_not_dominated_by_its_definition_is_reported() {
+    let diamond = |join: &str| {
+        format!(
+            "define i16 @f(i1 %c, i16 %x) {{
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = add i16 %x, 1
+  br label %j
+r:
+  br label %j
+j:
+{join}
+}}
+"
+        )
+    };
+    assert_eq!(dominance_problems(&diamond("  ret i16 %x")), Vec::<String>::new());
+    assert_eq!(dominance_problems(&diamond("  ret i16 %a")).len(), 1, "a definition in one arm does not reach the join");
+    assert_eq!(dominance_problems(&diamond("  %p = phi i16 [ %a, %l ], [ %x, %r ]\n  ret i16 %p")), Vec::<String>::new());
+    assert_eq!(dominance_problems(&diamond("  %p = phi i16 [ %x, %l ], [ %a, %r ]\n  ret i16 %p")).len(), 1, "a phi input must dominate its own edge");
+}
+
+/// Within a block a use before the definition, and a use of the value
+/// itself, are not dominated.
+#[test]
+fn a_use_before_its_definition_in_one_block_is_reported() {
+    let before = "define i16 @f(i16 %x) {
+b0:
+  %b = add i16 %a, 1
+  %a = add i16 %x, 1
+  ret i16 %b
+}
+";
+    assert_eq!(dominance_problems(before).len(), 1);
+}
+
+/// A module its frontend made with a use its definition does not dominate
+/// was reported as the first pass's doing ("after mem2reg: ..."), sending
+/// the search to the wrong crate; it is reported before any pass runs.
+#[test]
+fn a_module_made_wrong_is_reported_before_the_first_pass() {
+    let mut module = parse::module(
+        "define i16 @f(i16 %x) {
+b0:
+  %b = add i16 %a, 1
+  %a = add i16 %x, 1
+  ret i16 %b
+}
+",
+    )
+    .expect("parses");
+    let error = crate::transforms::optimized_with(&mut module, &["instcombine"]).unwrap_err();
+    assert!(error.starts_with("before the first pass:") && error.contains("dominate"), "{error}");
+}

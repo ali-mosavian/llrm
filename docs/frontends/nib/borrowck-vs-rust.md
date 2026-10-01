@@ -13,7 +13,7 @@ Rust: `compiler/rustc_borrowck/src` of rust-lang/rust (shallow clone). Nib: `cra
 | Shared XOR mutable | `lib.rs: access_place`, `check_access_for_conflict`; E0499/E0502; `tests/ui/borrowck/borrowck-closures-mut-and-imm` | `liveness.rs`: a change (`change_borrowed`) or a shared borrow beside a `&mut` (`share_borrowed`) is refused if a holder is used later; one lend check for calls, struct literals, variants and generator state (`borrows.rs: lent`, `lent_to_fields`, `check_disjoint`) |
 | Referent outlives reference | region inference, `nll.rs: compute_regions`, `region_infer/mod.rs`; E0597 | roots are bindings with a `Life` (module, lent, frame, scope); `Life::may_hold` is the one rule, asked by `store_borrow` for every store |
 | Moves, use after move | `lib.rs: check_if_path_or_subpath_is_moved`; E0382/E0505 | `moves.rs` (moved set per HIR block, flows along edges); a move or a drop of a borrowed owner is a change (`check_movable`, `drop_borrowed`) |
-| Partial moves, disjoint fields | `places_conflict.rs: place_components_conflict`; `tests/ui/borrowck/borrowck-field-sensitivity.rs` | borrows: place paths (`Root::overlaps`, prefix test); moves: whole owner, a field never moves (#135) |
+| Partial moves, disjoint fields | `places_conflict.rs: place_components_conflict`; `tests/ui/borrowck/borrowck-field-sensitivity.rs` | borrows: place paths (`Root::overlaps`, prefix test); moves: field paths (`moves.rs`, `ownership.rs: field_move`), never out of a struct with a `drop` (E0509) nor of a field holding one (#135) |
 | Reborrows | `prefixes.rs`, supporting prefixes | `borrows.rs: roots` extends an exact root by each field; an element or a call's result is somewhere below its path |
 | Two-phase borrows | `borrow_set.rs: TwoPhaseActivation`; `tests/ui/borrowck/two-phase-*` | not needed: `v.push(v.len)` is accepted because args evaluate before the `&mut` (probe k) |
 | Branches, loops (flow sensitivity) | liveness over MIR (`type_check/liveness`), `polonius/` | moves: `moves.rs: flow_moves`; borrows: `liveness.rs`, last use of a holder, or a pointer derived from one, along each HIR path |
@@ -123,7 +123,7 @@ Lambda captures are late-bound: `let f = |x| x + a; a = 50; f(1)` gives `51` (a 
 | `f(s.a, s.b)` with `&mut` params (n2) | `borrow of "s" aliases a mutable argument` | accepted | accepted (#128) |
 | `for x in &self.items: self.count += 1` (e9) | `"self" is borrowed here` | accepted | accepted (#128) |
 
-Cause: borrow = binding in scope, rooted at the whole owner name. Still over-strict: moving one field out (#135).
+Cause: borrow = binding in scope, rooted at the whole owner name. Moving one field out: #135.
 
 ## 3. Why, and the general fix
 
@@ -148,4 +148,4 @@ One owner per fact: the checker states each in HIR through `facts.state(...)` (#
 
 ## Issues
 
-#120 shadowed parameter · #121 owned parameter returned · #122 write through `&T` field · #123 vec of refs push · #124 module variable lent · #131 drop reads a freed borrow — all closed. Open: #135 partial moves.
+#120 shadowed parameter · #121 owned parameter returned · #122 write through `&T` field · #123 vec of refs push · #124 module variable lent · #131 drop reads a freed borrow — all closed. #135 partial moves — closed.

@@ -17,10 +17,23 @@ pub(super) enum Origin {
     /// A field of a generator's frame, which is one of its body's locals:
     /// moving the value nulls it too.
     Frame(hir::Operand),
+    /// A field of an owner, which moving nulls, alone (#135).
+    Field(FieldMove, hir::Operand),
     /// A borrow, field, or element: it cannot move.
     Borrowed,
     /// A literal: static, so a move copies it and nothing drops it.
     Static,
+}
+
+/// A move of a field out of the owner a path names: the owner is then
+/// partly moved, its other fields still its own.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FieldMove {
+    owner: moves::Owner,
+    name: String,
+    path: Vec<String>,
+    /// Why it cannot move, when it cannot.
+    refusal: Option<String>,
 }
 
 /// What to do with each owning value an aggregate or vec holds.
@@ -111,10 +124,15 @@ impl FunctionCompiler<'_> {
                     vec![hir::Operand::Place(place), null],
                     None,
                 );
-                self.moved().insert((false, place));
+                self.moved().insert(((false, place), Vec::new()));
                 Ok(())
             }
             Some(Origin::Frame(place)) => {
+                self.emit("store", Vec::new(), vec![place, null], None);
+                Ok(())
+            }
+            Some(Origin::Field(moving, place)) => {
+                self.move_field(&moving, span)?;
                 self.emit("store", Vec::new(), vec![place, null], None);
                 Ok(())
             }
@@ -363,6 +381,11 @@ impl FunctionCompiler<'_> {
                 return Ok(());
             }
         }
+        if let Some(moving) = self.field_move(expression) {
+            self.move_field(&moving, span)?;
+            stores.extend(self.zero_stores(source, self.types.copy_units(ElementType::Struct(source.struct_id))));
+            return Ok(());
+        }
         let owned_local = match expression {
             Expr::Name(name, _) => {
                 let storage = self.binding(name, span)?.storage.clone();
@@ -378,10 +401,60 @@ impl FunctionCompiler<'_> {
         };
         if let Some(owner) = moves::owner(&storage) {
             self.check_movable(owner, span)?;
-            self.moved().insert(owner);
+            self.moved().insert((owner, Vec::new()));
             self.set_live(owner, false);
         }
         stores.extend(self.zero_stores(source, self.types.copy_units(ElementType::Struct(source.struct_id))));
+        Ok(())
+    }
+
+    /// The move `place` would make, when it is a field of an owner this
+    /// function owns: a field of a struct with a `drop` cannot move, as the
+    /// `drop` sees the whole, nor one that holds such a type, which has no
+    /// null to leave.
+    pub(super) fn field_move(&self, place: &Expr) -> Option<FieldMove> {
+        let (owner, name, path) = self.projected(place)?;
+        let binding = self.visible(&name)?;
+        if !self.owns(&binding.storage) {
+            return None;
+        }
+        let BindingType::Struct(mut id) = binding.type_ else {
+            return None;
+        };
+        let mut refusal = None;
+        let mut element = ElementType::Struct(id);
+        for field in &path {
+            let layout = self.types.structure(id)?;
+            if self.types.dropped.contains_key(&id) {
+                refusal.get_or_insert(format!("cannot move a field out of {}, which has a drop", layout.name));
+            }
+            let found = layout.fields.get(field)?;
+            if found.shape.is_some() {
+                return None;
+            }
+            element = found.type_;
+            if let ElementType::Struct(next) = element {
+                id = next;
+            }
+        }
+        if self.holds_user_drop(element) {
+            refusal.get_or_insert(format!("\"{name}.{}\" holds a type with a drop: move all of {name:?}", path.join(".")));
+        }
+        Some(FieldMove { owner, name, path, refusal })
+    }
+
+    /// Moves `moving`'s field out of its owner, which is then partly moved.
+    fn move_field(&mut self, moving: &FieldMove, span: Span) -> Result<(), Diagnostic> {
+        if let Some(refusal) = &moving.refusal {
+            return Err(Diagnostic::new(span, refusal.clone()));
+        }
+        let key = match moving.owner {
+            (false, place) => borrows::BorrowKey::Place(place),
+            (true, value) => borrows::BorrowKey::Value(value),
+        };
+        let error = Diagnostic::new(span, format!("{:?} is borrowed here, so it cannot be moved", moving.name));
+        self.change_borrowed(key, &moving.path, None, error)?;
+        self.moved().insert((moving.owner, moving.path.clone()));
         Ok(())
     }
 
