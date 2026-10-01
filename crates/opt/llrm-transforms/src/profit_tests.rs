@@ -72,7 +72,7 @@ fn work(text: &str, trips: &[(&str, i64)]) -> Option<i64> {
     let latch = |name: &str| cfg::id(*f.layout().iter().find(|&&one| f.block(one).name.as_deref() == Some(name)).expect("a block"));
     let trips = trips.iter().map(|&(name, count)| (latch(name), count)).collect::<IndexMap<_, _>>();
     let callees = llrm_mir::memory::callees(&module);
-    weighted(&module.context, f, &callees, &OperationCosts::default(), Some(&trips))
+    weighted(&module.context, &llrm_mir::datalayout::DataLayout::default(), f, &callees, &OperationCosts::default(), Some(&trips))
 }
 
 /// Three priced instructions in a loop body of one block, one before and one after.
@@ -107,7 +107,7 @@ fn a_loop_induction_counts_is_weighted_by_its_count() {
         let unit = llrm_analysis::memory::Unit::of(&module, &layout, function(&module));
         let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit, None, None, None));
         let callees = llrm_mir::memory::callees(&module);
-        (trips.len(), weighted(&module.context, function(&module), &callees, &OperationCosts::default(), Some(&trips)))
+        (trips.len(), weighted(&module.context, &layout, function(&module), &callees, &OperationCosts::default(), Some(&trips)))
     };
     assert_eq!(trips(&COUNTED.replace("icmp ult i16 %next, %n", "icmp ult i16 %next, 3")), (1, Some(1 + 4 * 3 + 1)));
     assert_eq!(trips(COUNTED), (0, Some(1 + 4 * 10 + 1)));
@@ -169,7 +169,7 @@ b0:
 ";
     let module = module(text);
     let callees = llrm_mir::memory::callees(&module);
-    assert_eq!(r#static(&module.context, function(&module), &callees, &OperationCosts::default()), None);
+    assert_eq!(r#static(&module.context, &llrm_mir::datalayout::DataLayout::default(), function(&module), &callees, &OperationCosts::default()), None);
     assert_eq!(work(text, &[]), None);
 }
 
@@ -192,7 +192,7 @@ b0:
     let f = function(&module);
     let callees = llrm_mir::memory::callees(&module);
     let costs = OperationCosts { fill: 5, fill_cell: 2, float_load: 7, float_store: 11, ..OperationCosts::default() };
-    let prices = f.walk().map(|(_, one)| operation(&module.context, f, &callees, one, &costs)).collect::<Vec<_>>();
+    let prices = f.walk().map(|(_, one)| operation(&module.context, &llrm_mir::datalayout::DataLayout::default(), f, &callees, one, &costs)).collect::<Vec<_>>();
     assert_eq!(prices, [Some(5 + 6 * 2), Some(5 + UNKNOWN_TRIPS * 2), Some(7), Some(11), Some(1)]);
 }
 
@@ -226,4 +226,22 @@ b0:
 ";
     // The address is rebuilt at its one use for 1, not stored and reloaded for 20.
     assert_eq!(risk(text, 1), Some(1));
+}
+
+/// A GEP in a space whose index outruns its offset steps the selector: it is
+/// priced as `carry`, not as the address it is for a far pointer. Free, a loop
+/// over a huge array would look as cheap as one over a far one.
+#[test]
+fn test_a_displacement_that_carries_into_the_selector_costs_the_carry() {
+    let layout = llrm_mir::datalayout::DataLayout::parse("e-p:16:16-p1:32:16:16:16-p3:32:16:16:32").expect("a layout");
+    let price = |space: u32| {
+        let text = format!("define void @f(ptr addrspace({space}) %p, i16 %i) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  ret void\n}}\n");
+        let module = module(&text);
+        let f = function(&module);
+        let costs = OperationCosts { address: 2, carry: 9, ..OperationCosts::default() };
+        let callees = llrm_mir::memory::callees(&module);
+        f.walk().map(|(_, one)| operation(&module.context, &layout, f, &callees, one, &costs)).collect::<Vec<_>>()
+    };
+    assert_eq!(price(1)[0], Some(2));
+    assert_eq!(price(3)[0], Some(9));
 }
