@@ -715,3 +715,59 @@ fn main() -> i16:
     assert_eq!(crate::test_language::output_without_leaks(nested), "x\ny\n");
     assert_eq!(refused_at(&nested.replace("    print(p.t)\n", "    print(p.q.s)\n")), "14: \"p.q\" was moved; copy it with .copy() to keep using it");
 }
+
+#[test]
+fn a_field_with_a_drop_moves_out_and_is_dropped_only_where_it_stayed() {
+    // A field holding a type with a `drop` could not move out: it has no
+    // null to leave. Now what surely moved is not dropped at all, and what
+    // moved on one path only is dropped under a flag.
+    let source = "\
+struct R:
+    n: i16
+
+fn R.drop(self: &mut R) -> void:
+    print(f\"drop {self.n}\")
+
+struct P:
+    mut a: R
+    b: R
+
+fn take(r: R) -> void:
+    print(r.n)
+
+fn refill(c: bool) -> void:
+    let mut p = P(a=R(n=7), b=R(n=8))
+    take(p.a)
+    p.a = R(n=9)
+    if c:
+        take(p.a)
+
+fn always() -> void:
+    let p = P(a=R(n=1), b=R(n=2))
+    take(p.a)
+    print(p.b.n)
+
+fn maybe(c: bool) -> void:
+    let p = P(a=R(n=3), b=R(n=4))
+    if c:
+        take(p.a)
+
+fn main() -> i16:
+    always()
+    maybe(true)
+    maybe(false)
+    refill(false)
+    refill(true)
+    let mut i: i16 = 0
+    while i < 2:
+        let q = P(a=R(n=5), b=R(n=6))
+        if i == 0:
+            take(q.a)
+        i += 1
+    return 0
+";
+    assert_eq!(
+        crate::test_language::output_without_leaks(source),
+        "1\ndrop 1\n2\ndrop 2\n3\ndrop 3\ndrop 4\ndrop 3\ndrop 4\n7\ndrop 7\ndrop 9\ndrop 8\n7\ndrop 7\n9\ndrop 9\ndrop 8\n5\ndrop 5\ndrop 6\ndrop 5\ndrop 6\n"
+    );
+}
