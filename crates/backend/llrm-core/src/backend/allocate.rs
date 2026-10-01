@@ -146,8 +146,17 @@ pub fn live(body: &LirBody) -> (Live, Live) {
         })
         .collect();
     let mut exposed: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
+    // A phi's argument is read at the end of the predecessor it comes from.
+    let mut handed: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = BTreeSet::new();
+        for phi in &block.phis {
+            for (from, value) in &phi.incoming {
+                handed.entry(*from).or_default().insert(*value);
+            }
+        }
+    }
+    for block in &body.blocks {
+        let mut alive: BTreeSet<u32> = handed.get(&block.at).cloned().unwrap_or_default();
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
             let first = _group_start(block, index as usize);
@@ -232,7 +241,16 @@ pub fn live(body: &LirBody) -> (Live, Live) {
             .collect()
     };
     let live_in: Live = body.blocks.iter().zip(&into).map(|(block, set)| (block.at, values(set))).collect();
-    let live_out: Live = body.blocks.iter().zip(&out).map(|(block, set)| (block.at, values(set))).collect();
+    let live_out: Live = body
+        .blocks
+        .iter()
+        .zip(&out)
+        .map(|(block, set)| {
+            let mut leaving = values(set);
+            leaving.extend(handed.get(&block.at).into_iter().flatten().copied());
+            (block.at, leaving)
+        })
+        .collect();
     (live_in, live_out)
 }
 
@@ -2891,6 +2909,27 @@ mod tests {
         let union = IndexMap::from_iter([(_whole(Register::AX), vec![1])]);
         let placed = IndexMap::from_iter([(1, Register::AX)]);
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
+    }
+
+    /// A phi's argument is read at the end of the predecessor it names: a value
+    /// only a phi reads was live nowhere, and a next-use analysis saw it dead.
+    #[test]
+    fn test_a_phi_argument_is_live_out_of_its_predecessor() {
+        let define = Insn::new(
+            0,
+            Some((0, 2)),
+            Some(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(5, 2)])),
+            vec![1],
+            vec![],
+        );
+        let mut first = block(0, vec![define]);
+        first.succ = vec![0x10];
+        let mut second = block(0x10, vec![]);
+        second.phis = vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)] }];
+        let body = LirBody::new("phi", 0, vec![first, second], IndexMap::default(), IndexMap::default());
+        let (live_in, live_out) = live(&body);
+        assert!(live_out[&0].contains(&1), "the argument leaves its predecessor: {live_out:?}");
+        assert!(!live_in[&0x10].contains(&1) && !live_in[&0x10].contains(&2));
     }
 
     /// A failed recoloring must leave every holder where it was.
