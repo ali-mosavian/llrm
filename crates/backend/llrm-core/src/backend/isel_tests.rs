@@ -3136,3 +3136,25 @@ b:
     let got = listing(text, "f");
     assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "mov ax, -4", "L0_3:", "pop bp", "retf"]);
 }
+
+/// `(double)long_double` was rounded through a dword (fstp dword) whatever
+/// the target: a long double narrowed to double lost 29 bits (#103). A
+/// narrowing rounds to the target's width.
+#[test]
+fn test_a_narrowing_float_rounds_to_its_targets_width() {
+    let text = "define double @f(x86_fp80 %x) addrspace(1) {\n  %d = fptrunc x86_fp80 %x to double\n  ret double %d\n}\ndefine float @g(double %x) addrspace(1) {\n  %d = fptrunc double %x to float\n  ret float %d\n}\n";
+    assert!(text.contains("fptrunc x86_fp80"), "the shape that was rounded to a float");
+    assert!(listing(text, "f").contains(&"fstp qword ptr [bp-8]".to_owned()), "{:?}", listing(text, "f"));
+    assert!(listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
+}
+
+/// A long double is compared from a register: fcom has no 10-byte memory
+/// operand, and `fcomp tbyte ptr` could not be encoded (#103).
+#[test]
+fn test_an_extended_float_is_never_fcoms_memory_operand() {
+    let text = "@g = global x86_fp80 zeroinitializer\ndefine i16 @f(x86_fp80 %x) addrspace(1) {\n  %y = load x86_fp80, ptr @g\n  %c = fcmp ogt x86_fp80 %x, %y\n  %r = zext i1 %c to i16\n  ret i16 %r\n}\n";
+    assert!(text.contains("fcmp ogt x86_fp80"), "the shape that was refused");
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("fld tbyte")) && got.iter().any(|line| line.starts_with("fcom")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("fcom") && line.contains("tbyte")), "{got:?}");
+}

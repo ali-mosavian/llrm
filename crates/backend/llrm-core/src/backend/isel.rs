@@ -2088,10 +2088,12 @@ impl Selector<'_, '_, '_> {
                 self.values.insert(result, held.value);
             }
             CastOp::FPTrunc => {
+                // Rounded to the narrower format's width: a float's 4 bytes, a double's 8.
+                let size = self.size(to)? as u32;
                 let held = self.float(operand, at, out)?;
-                let cell = self.float_stored(held, "fstp", 4, at, out);
+                let cell = self.float_stored(held, "fstp", size, at, out);
                 let into = Held { value: self.value(result), width: FLOAT };
-                self.float_loaded(into, "fld", cell, 4, false, at, out);
+                self.float_loaded(into, "fld", cell, size, false, at, out);
             }
             CastOp::SIToFP => {
                 let mut held = self.held(operand, from, at, out)?;

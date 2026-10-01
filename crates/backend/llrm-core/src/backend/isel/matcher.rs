@@ -315,10 +315,11 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Whether `value` is what the float comparison compares second, as
-    /// its row in FLOAT_CONDITIONS orders the operands.
+    /// its row in FLOAT_CONDITIONS orders the operands, and a cell fcom can
+    /// read: a float's 4 bytes or a double's 8, not an extended's 10.
     fn is_compared_second(&self, m: &Match, value: Operand) -> bool {
         let Opcode::FCmp(predicate) = *self.opcode(m) else { return false };
-        float_conditions(predicate).is_some_and(|(swapped, _)| m.ops[usize::from(!swapped)] == value)
+        float_conditions(predicate).is_some_and(|(swapped, _)| m.ops[usize::from(!swapped)] == value) && matches!(self.size(self.type_of(value)), Ok(4 | 8))
     }
 
     fn is_lrint(&self, _: &Match, call: Operand) -> bool {
