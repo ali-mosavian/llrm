@@ -1573,11 +1573,13 @@ struct FunctionCompiler<'a> {
     aggregate_temporaries: Vec<StructView>,
     lambdas: Vec<lambdas::Lambda>,
     /// The owners each reference or view binding borrows, by its value.
-    borrowed_from: BTreeMap<borrows::BorrowKey, BTreeSet<String>>,
+    borrowed_from: BTreeMap<borrows::BorrowKey, BTreeSet<borrows::Root>>,
+    /// How long each parameter's binding lives, as a root.
+    parameter_lives: BTreeMap<borrows::BorrowKey, borrows::Life>,
     /// Views bound with `let mut`, which an assignment reseats.
     reseatable: BTreeSet<u32>,
     /// The named sequences `for` loops are walking, outermost first.
-    iterated: Vec<String>,
+    iterated: Vec<borrows::BorrowKey>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -1639,6 +1641,7 @@ impl<'a> FunctionCompiler<'a> {
             aggregate_temporaries: Vec::new(),
             lambdas: Vec::new(),
             borrowed_from: BTreeMap::new(),
+            parameter_lives: BTreeMap::new(),
             reseatable: BTreeSet::new(),
             iterated: Vec::new(),
         };
@@ -1696,6 +1699,13 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 _ => compiler.parameter_binding(&parameter.name, resolved, value),
             };
+            let life = match resolved {
+                SignatureParameter::Borrowed { .. } | SignatureParameter::Adapter { .. } => borrows::Life::Lent,
+                _ => borrows::Life::Frame,
+            };
+            if let Some(owner) = borrows::identity(&binding.storage) {
+                compiler.parameter_lives.insert(owner, life);
+            }
             compiler.scopes.last_mut().expect("scope").insert(parameter.name.clone(), binding);
         }
         // physicalize stores the result through it, as the ABI says.

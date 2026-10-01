@@ -173,8 +173,8 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<(), Diagnostic> {
         // The sequence a loop walks is borrowed until the loop ends; an iterator it consumes is not.
-        let walked = borrows::expression_owner(iterable).filter(|_| !self.loop_consumes(iterable)).map(str::to_owned);
-        self.iterated.extend(walked.clone());
+        let walked = borrows::expression_owner(iterable).filter(|_| !self.loop_consumes(iterable)).and_then(|owner| self.named_root(owner));
+        self.iterated.extend(walked.as_ref().map(|root| root.owner));
         let result = self.for_walk(mode, name, iterable, body, span);
         if walked.is_some() {
             self.iterated.pop();

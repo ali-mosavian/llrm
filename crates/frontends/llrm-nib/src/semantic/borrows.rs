@@ -1,14 +1,14 @@
 //! Borrows (section 8). Each reference or view binding records the owners it
-//! borrows from, its roots. A returned borrow must root in parameters, a
-//! reassigned one must not outlive its roots, and no owner is written while a
+//! borrows from, its roots: bindings, by the storage the compiler gave each,
+//! never by spelling. A returned borrow must root in a borrowed parameter, a
+//! stored one must not outlive its roots, and no owner is written while a
 //! binding in scope borrows it.
 
 use super::*;
 use crate::syntax::Pattern;
 
-/// The value a reference or view binding is known by.
 /// What holds a borrow: a reference's or view's value, or a struct's place
-/// that keeps a view.
+/// that keeps a view. Also a binding's identity, as a root.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum BorrowKey {
     Value(u32),
@@ -23,14 +23,69 @@ fn borrow_key(storage: &Storage) -> Option<BorrowKey> {
     }
 }
 
+/// The binding `storage` is, as an owner.
+pub(super) fn identity(storage: &Storage) -> Option<BorrowKey> {
+    match storage {
+        Storage::Parameter(value) => Some(BorrowKey::Value(*value)),
+        _ => borrow_key(storage),
+    }
+}
+
+/// How long a root lives, longest first.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum Life {
+    Module,
+    /// What the caller lent: a borrowed parameter's referent.
+    Lent,
+    /// An owned parameter, dropped as the frame ends.
+    Frame,
+    /// A local, by the depth of its scope.
+    Scope(usize),
+}
+
+/// An owner a borrow borrows from.
+#[derive(Clone, Debug)]
+pub(super) struct Root {
+    pub(super) owner: BorrowKey,
+    pub(super) name: String,
+    pub(super) life: Life,
+}
+
+impl Root {
+    /// Whether a borrow of it may outlive the frame: only what the caller lent.
+    pub(super) fn outlives_frame(&self) -> bool {
+        self.life == Life::Lent
+    }
+}
+
+impl PartialEq for Root {
+    fn eq(&self, other: &Self) -> bool {
+        self.owner == other.owner
+    }
+}
+
+impl Eq for Root {}
+
+impl PartialOrd for Root {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Root {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.owner.cmp(&other.owner)
+    }
+}
+
 impl FunctionCompiler<'_> {
     /// The owners a borrow of `expression` borrows from, by name.
-    pub(super) fn roots(&self, expression: &Expr) -> BTreeSet<String> {
+    pub(super) fn roots(&self, expression: &Expr) -> BTreeSet<Root> {
         match expression {
-            Expr::Name(name, _) => match self.visible(name) {
-                Some(binding) => match borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key)) {
+            Expr::Name(name, _) => match self.resolve(name) {
+                Some((depth, binding)) => match borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key)) {
                     Some(roots) => roots.clone(),
-                    None => BTreeSet::from([name.clone()]),
+                    None => self.root(name, depth, binding).into_iter().collect(),
                 },
                 None => BTreeSet::new(),
             },
@@ -63,6 +118,39 @@ impl FunctionCompiler<'_> {
         }
     }
 
+    /// The innermost binding of `name` outside the hidden scopes, with the
+    /// depth of its scope.
+    fn resolve(&self, name: &str) -> Option<(usize, &Binding)> {
+        self.scopes
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(index, _)| !self.hidden.iter().any(|range| range.contains(index)))
+            .find_map(|(index, scope)| Some((index, scope.get(name)?)))
+    }
+
+    /// `binding`, named `name` in the scope at `depth`, as a root.
+    fn root(&self, name: &str, depth: usize, binding: &Binding) -> Option<Root> {
+        // An element of an array borrows the array.
+        let owner = match binding.storage {
+            Storage::ArrayView { place, .. } => BorrowKey::Place(place),
+            _ => identity(&binding.storage)?,
+        };
+        let module = matches!(owner, BorrowKey::Place(place) if self.places.iter().any(|one| one.id == place && one.storage == "module"));
+        let life = match self.parameter_lives.get(&owner) {
+            _ if module => Life::Module,
+            Some(life) => *life,
+            None => Life::Scope(depth),
+        };
+        Some(Root { owner, name: name.to_owned(), life })
+    }
+
+    /// The binding `name` names here, as a root.
+    pub(super) fn named_root(&self, name: &str) -> Option<Root> {
+        let (depth, binding) = self.resolve(name)?;
+        self.root(name, depth, binding)
+    }
+
     /// Whether `member`, a field of `base`, borrows only what a caller lent:
     /// a kept view, or a frame's field that holds a borrow, which the frame
     /// keeps only of what its caller lent it (escaping.rs).
@@ -77,7 +165,7 @@ impl FunctionCompiler<'_> {
     }
 
     /// A call's result borrows from every argument it borrowed (section 8).
-    fn call_roots(&self, expression: &Expr) -> BTreeSet<String> {
+    fn call_roots(&self, expression: &Expr) -> BTreeSet<Root> {
         let call = self.method_as_call(expression).unwrap_or_else(|| expression.clone());
         let Expr::Call { name, arguments, .. } = &call else {
             return BTreeSet::new();
@@ -95,7 +183,7 @@ impl FunctionCompiler<'_> {
 
     /// The owners the references inside `expression`, a value of `element`,
     /// borrow from: a reference's roots, and those of each reference field.
-    fn value_roots(&self, expression: &Expr, element: ElementType) -> BTreeSet<String> {
+    fn value_roots(&self, expression: &Expr, element: ElementType) -> BTreeSet<Root> {
         if !self.holds_reference(element) {
             return BTreeSet::new();
         }
@@ -246,16 +334,15 @@ impl FunctionCompiler<'_> {
             (None, Some(struct_id)) => self.value_roots(expression, ElementType::Struct(struct_id)),
             (None, None) => self.value_roots(expression, ElementType::Scalar(self.signature.result)),
         };
-        let is_parameter = |name: &String| self.signature.formals.iter().any(|(one, _)| one == name);
-        match roots.iter().find(|one| !is_parameter(one)) {
-            Some(local) => Err(Diagnostic::new(span, format!("a returned borrow of {local:?} would dangle; only a parameter's can be returned"))),
+        match roots.iter().find(|one| !one.outlives_frame()) {
+            Some(local) => Err(Diagnostic::new(span, format!("a returned borrow of {:?} would dangle; only a borrowed parameter's can be returned", local.name))),
             None => Ok(()),
         }
     }
 
     /// Errs when a binding in scope, other than `owner` itself, borrows `owner`.
     pub(super) fn check_unborrowed(&self, owner: &str, span: Span) -> Result<(), Diagnostic> {
-        if self.is_borrowed(owner) {
+        if self.resolve(owner).and_then(|(_, binding)| identity(&binding.storage)).is_some_and(|key| self.is_borrowed(key)) {
             return Err(Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed")));
         }
         Ok(())
@@ -263,23 +350,27 @@ impl FunctionCompiler<'_> {
 
     /// Errs when the binding that is `owner`, about to move, is borrowed.
     pub(super) fn check_movable(&self, owner: moves::Owner, span: Span) -> Result<(), Diagnostic> {
+        let key = match owner {
+            (false, place) => BorrowKey::Place(place),
+            (true, value) => BorrowKey::Value(value),
+        };
         let name = self.scopes.iter().rev().flat_map(|scope| scope.iter()).find(|(_, one)| moves::owner(&one.storage) == Some(owner));
         match name {
-            Some((name, _)) if self.is_borrowed(name) => {
+            Some((name, _)) if self.is_borrowed(key) => {
                 Err(Diagnostic::new(span, format!("{name:?} is borrowed here, so it cannot be moved")))
             }
             _ => Ok(()),
         }
     }
 
-    fn is_borrowed(&self, owner: &str) -> bool {
-        let borrowed = self.scopes.iter().flat_map(|scope| scope.iter()).any(|(name, binding)| {
-            name != owner
+    fn is_borrowed(&self, owner: BorrowKey) -> bool {
+        let borrowed = self.scopes.iter().flat_map(|scope| scope.values()).any(|binding| {
+            identity(&binding.storage) != Some(owner)
                 && borrow_key(&binding.storage)
                     .and_then(|key| self.borrowed_from.get(&key))
-                    .is_some_and(|roots| roots.contains(owner))
+                    .is_some_and(|roots| roots.iter().any(|root| root.owner == owner))
         });
-        borrowed || self.iterated.iter().any(|one| one == owner)
+        borrowed || self.iterated.contains(&owner)
     }
 
     /// Errs unless each field `place` writes through was declared `mut`
@@ -303,29 +394,14 @@ impl FunctionCompiler<'_> {
 
     /// Errs when a borrow rooted in `roots` is stored where `target` holds
     /// it: `target` must not outlive any of them.
-    pub(super) fn check_outlives(&self, target: &str, roots: &BTreeSet<String>, span: Span) -> Result<(), Diagnostic> {
-        let Some(target_depth) = self.lifetime_depth(target) else {
+    pub(super) fn check_outlives(&self, target: &str, roots: &BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
+        let Some(target) = self.named_root(target) else {
             return Ok(());
         };
-        for root in roots {
-            if self.lifetime_depth(root).is_some_and(|one| one > target_depth) {
-                return Err(Diagnostic::new(span, format!("{target:?} would outlive {root:?}, which it borrows")));
-            }
+        match roots.iter().find(|root| root.life > target.life) {
+            Some(root) => Err(Diagnostic::new(span, format!("{:?} would outlive {:?}, which it borrows", target.name, root.name))),
+            None => Ok(()),
         }
-        Ok(())
-    }
-
-    /// How deeply `name`'s owner is scoped: a module variable outlives
-    /// everything, and a parameter the body's locals, though both are in its
-    /// first scope.
-    fn lifetime_depth(&self, name: &str) -> Option<i64> {
-        let depth = self.scopes.iter().rposition(|scope| scope.contains_key(name))?;
-        let parameter = depth == BODY && self.signature.formals.iter().any(|(one, _)| one == name);
-        Some(match depth {
-            0 => -2,
-            _ if parameter => -1,
-            _ => depth as i64,
-        })
     }
 
     /// Errs when assigning `value`, of `element`, through `target` would

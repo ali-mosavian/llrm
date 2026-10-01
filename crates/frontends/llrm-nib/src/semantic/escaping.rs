@@ -442,12 +442,12 @@ impl FunctionCompiler<'_> {
         if !self.holds_reference(element) && !matches!(element, ElementType::Struct(id) if self.types.kept_views.contains_key(&id)) {
             return Ok(());
         }
-        let own = |root: &String| {
-            !borrowed.iter().any(|(lent, _)| lent == root)
-                && fields.iter().any(|field| &field.name == root && self.frame_of(field.element).is_none() && !self.holds_reference(field.element))
+        let own = |root: &borrows::Root| {
+            !borrowed.iter().any(|(lent, _)| *lent == root.name)
+                && fields.iter().any(|field| field.name == root.name && self.frame_of(field.element).is_none() && !self.holds_reference(field.element))
         };
         match self.roots(source).iter().find(|root| own(root)) {
-            Some(root) => Err(Diagnostic::new(span, format!("a generator that escapes keeps only borrows of what its caller lent it; {name:?} borrows its own {root:?}"))),
+            Some(root) => Err(Diagnostic::new(span, format!("a generator that escapes keeps only borrows of what its caller lent it; {name:?} borrows its own {:?}", root.name))),
             None => Ok(()),
         }
     }
