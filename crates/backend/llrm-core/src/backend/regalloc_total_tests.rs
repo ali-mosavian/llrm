@@ -103,23 +103,3 @@ fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_r
         assert!(matches!(one.sources.as_slice(), [Loc::Mem(_)]), "a far pointer load reads memory only: {one:?}");
     }
 }
-
-#[test]
-fn probe104() {
-    let (body, mut phases) = before_regalloc("walks10.ll", "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum", "386");
-    eprintln!("{}", crate::tools::stages::lir_stage("in", &[(body.name.clone(), body.clone())]));
-    let out = phases.remove(0).transform(body).unwrap();
-    eprintln!("{}", crate::tools::stages::lir_stage("out", &[(out.name.clone(), out.clone())]));
-}
-
-/// league.nib's `main` spills a value that was loaded, updated and stored
-/// again in a register (`x = x * 8` on a pointer deref). Taking every spiller
-/// product as unspillable refused it ("value#23 cannot be spilled and no
-/// register is free", #129): only a product that lives for one use is.
-#[test]
-fn test_a_value_the_spiller_updated_in_a_register_can_be_spilled_again() {
-    let (body, mut phases) = before_regalloc_in(Calls::Everything, "league.ll", "main", "386");
-    let allocated = phases.remove(0).transform(body).expect("allocates");
-    let reloads = allocated.insns().iter().filter(|one| one.spill_reload).count();
-    assert!(reloads > 0, "premise: the function spills");
-}

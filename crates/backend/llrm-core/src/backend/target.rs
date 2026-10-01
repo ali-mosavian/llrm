@@ -184,12 +184,13 @@ pub fn exchangeable(one: &Loc, other: &Loc) -> bool {
     exchanged(one) && exchanged(other) && !(matches!(one, Loc::Mem(_)) && matches!(other, Loc::Mem(_)))
 }
 
-/// The width `push` carries this place at: a register of a word or more, or
-/// a frame cell, which owns at least a word.
+/// The width `push` carries this place at: a register of a word or more, a
+/// memory cell of a word or more, or a frame cell, which owns at least a word.
 pub fn pushed_width(place: &Loc) -> Option<u32> {
     match place {
         Loc::Reg(reg) if reg.width >= 2 => Some(reg.width),
-        Loc::Mem(cell) if matches!(cell.width, 1 | 2 | 4) => Some(cell.width.max(2)),
+        Loc::Mem(cell) if matches!(cell.width, 2 | 4) => Some(cell.width),
+        Loc::Mem(cell) if cell.width == 1 && cell.in_frame() => Some(2),
         _ => None,
     }
 }

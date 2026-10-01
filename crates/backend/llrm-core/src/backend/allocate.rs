@@ -25,7 +25,7 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;
 
-/// Maximum queue visits before the remaining values are spilled.
+/// Most queue visits an allocation may take: more means it does not converge, a bug.
 pub const BUDGET: usize = 200_000;
 
 /// A value reached emission with no register. Always a bug here.
@@ -1052,11 +1052,25 @@ fn _allocated(
                 stage.insert(value, Stage::Done);
                 continue;
             }
-            if let Some(register) = fixed.get(&value) {
-                return Err(Unplaced(format!("value#{value} cannot be placed in fixed {}", register.repr())).into());
-            }
-            if mine.weight == INF {
-                return Err(Unplaced(format!("value#{value} cannot be spilled and no register is free for it")).into());
+            // A value that cannot be spilled takes a register by force.
+            if fixed.contains_key(&value) || unspillable.contains(&value) {
+                let hard = |other: u32| fixed.contains_key(&other) || unspillable.contains(&other);
+                let Some((got, victims)) = _forced(&mine, &order, &union, &facts.live, &facts.masks, &hard, width) else {
+                    return Err(Unplaced(format!("value#{value} cannot be spilled and every register it may take is held by one that cannot be either")).into());
+                };
+                LAST_RESORTS.with(|count| count.set(count.get() + 1));
+                llrm_support::debug!("regalloc", "{}: last resort for value#{value}: {} evicts {victims:?}", body.name, got.repr());
+                for one in victims {
+                    union.get_mut(&_whole(got)).expect("a victim is in the register it was taken from").retain(|other| *other != one);
+                    r#where.shift_remove(&one);
+                    stage.insert(one, Stage::Spill);
+                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    *waiting.entry(one).or_insert(0) += 1;
+                }
+                r#where.insert(value, got);
+                union.entry(_whole(got)).or_default().push(value);
+                stage.insert(value, Stage::Done);
+                continue;
             }
             cost += mine.weight;
             stage.insert(value, Stage::Done);
@@ -1423,6 +1437,53 @@ fn _evict(
 }
 
 /// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and `VirtRegMap`.
+/// The last resort for a value that cannot be spilled: the register of its
+/// class whose holders it overlaps cost least to evict, and those holders.
+/// A holder that cannot be spilled either (`hard`) rules its register out;
+/// when every register is ruled out, one point of the body asks for more
+/// registers than the machine has.
+fn _forced(
+    one: &Interval,
+    order: &[Register],
+    union: &IndexMap<Register, Vec<u32>>,
+    live: &IndexMap<u32, Interval>,
+    masks: &Masks,
+    hard: &dyn Fn(u32) -> bool,
+    width: u32,
+) -> Option<(Register, Vec<u32>)> {
+    let mut best: Option<(f64, Register, Vec<u32>)> = None;
+    for register in order {
+        if _clobbered(one, *register, masks, width) {
+            continue;
+        }
+        let victims: Vec<u32> = union
+            .get(&_whole(*register))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|other| live.get(other).is_some_and(|found| found.overlaps(one)))
+            .collect();
+        if victims.iter().any(|other| hard(*other)) {
+            continue;
+        }
+        let bill: f64 = victims.iter().map(|other| live[other].weight).sum();
+        if best.as_ref().is_none_or(|found| bill < found.0) {
+            best = Some((bill, *register, victims));
+        }
+    }
+    best.map(|(_bill, register, victims)| (register, victims))
+}
+
+thread_local! {
+    static LAST_RESORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread's allocations had to evict by force: a value
+/// that cannot be spilled found no register by any other means.
+pub fn last_resorts() -> usize {
+    LAST_RESORTS.with(std::cell::Cell::get)
+}
+
 pub struct Coloring<'a> {
     pub union: &'a mut IndexMap<Register, Vec<u32>>,
     pub r#where: &'a mut IndexMap<u32, Register>,
@@ -1594,6 +1655,7 @@ impl RegAlloc {
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });
+        body = constrain::distinct_roles(&body);
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned));
         body = constrained_body;
         let clash: BTreeSet<u32> = fixed
@@ -1664,7 +1726,6 @@ impl RegAlloc {
                     frame.borrow_mut().restore(&start);
                     let trial = match run(&candidate, &unspillable, &protected, splitting) {
                         Ok(trial) => trial,
-                        Err(Error::Unplaced(_)) => continue,
                         Err(other) => return Err(other),
                     };
                     llrm_support::debug!("regalloc", "  trial: {} spilled, cost {}", trial.spilled.len(), trial.cost);

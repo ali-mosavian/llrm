@@ -74,3 +74,5 @@ mod pricing_tests;
 pub mod regalloc_input;
 #[cfg(test)]
 mod regalloc_total_tests;
+#[cfg(test)]
+mod regalloc_fuzz_tests;

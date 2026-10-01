@@ -274,6 +274,57 @@ fn _disturbs(one: &Insn, value: u32, kept: &Held, root: Register, pins: &IndexMa
         || one.requires.iter().any(|(held, register)| held.value != kept.value && in_root(register))
 }
 
+/// `body` with no value in both the base and the index of one address.
+///
+/// Word addressing takes a base from one set of registers and an index from
+/// another, so one value in both roles needs two registers at once: the
+/// index reads a copy.
+pub fn distinct_roles(body: &LirBody) -> LirBody {
+    let twice = |cell: &Mem| matches!((cell.base, cell.index), (Some(base), Some(index)) if base.value == index.value && base.width == 2 && index.width == 2);
+    if !body.insns().iter().filter_map(|one| one.what.as_ref()).any(|what| what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(cell) if twice(cell)))) {
+        return body.clone();
+    }
+    let mut fresh = _next_value(body);
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = Vec::new();
+        for one in &block.insns {
+            let Some(what) = &one.what else {
+                insns.push(Arc::clone(one));
+                continue;
+            };
+            let mut copies: IndexMap<u32, u32> = IndexMap::default();
+            let mut separate = |place: &Loc| -> Loc {
+                let Loc::Mem(cell) = place else { return place.clone() };
+                if !twice(cell) {
+                    return place.clone();
+                }
+                let index = cell.index.expect("twice names an index");
+                let copy = *copies.entry(index.value).or_insert_with(|| {
+                    fresh += 1;
+                    fresh - 1
+                });
+                Loc::Mem(Mem { index: Some(Held { value: copy, width: index.width }), ..cell.clone() })
+            };
+            let (dests, sources): (Vec<Loc>, Vec<Loc>) =
+                (what.dests.iter().map(&mut separate).collect(), what.sources.iter().map(&mut separate).collect());
+            if copies.is_empty() {
+                insns.push(Arc::clone(one));
+                continue;
+            }
+            for (value, copy) in &copies {
+                insns.push(_move(one, Held { value: *copy, width: 2 }, Loc::Held(Held { value: *value, width: 2 })));
+            }
+            let mut made = (**one).clone();
+            made.what = Some(Semantics { dests, sources, ..what.clone() });
+            made.uses.extend(copies.values().copied());
+            insns.push(Arc::new(made));
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    body.with_blocks(blocks)
+}
+
 /// Where each value the body's instructions require has to live.
 pub fn required(body: &LirBody) -> IndexMap<u32, Register> {
     let mut out: IndexMap<u32, Register> = IndexMap::default();
