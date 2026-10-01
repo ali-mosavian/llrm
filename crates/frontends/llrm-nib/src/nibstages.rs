@@ -156,7 +156,7 @@ mod tests {
         assert!(syntax.contains("Struct {\n            name: \"body\""));
         assert!(syntax.contains("ForRange {"));
         let Json::Dict(document) = pyjson::loads(&read("03-hir.json")).expect("JSON") else { panic!("an object") };
-        assert_eq!(document.get("schema"), Some(&Json::Int(1)));
+        assert_eq!(document.get("schema"), Some(&Json::Int(2)));
         let source_mir = read("04-nbody-nbody-source-mir.txt");
         let optimized_mir = read("05-nbody-nbody-optimized-mir.txt");
         let physical_mir = read("06-nbody-nbody-physical-mir.txt");
