@@ -344,7 +344,7 @@ pub fn _rebuilt(
 }
 
 /// The exceptions `_through_lir` names as a body it cannot place.
-const CAUGHT: [&str; 7] = ["Unlowered", "Unraisable", "Refused", "Spilled", "Unplaced", "Simultaneous", "Tangled"];
+const CAUGHT: [&str; 6] = ["Unlowered", "Unraisable", "Refused", "Spilled", "Unplaced", "Simultaneous"];
 
 /// Every body lowered, placed and written, or why one could not be.
 ///

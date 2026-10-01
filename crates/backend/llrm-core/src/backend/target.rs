@@ -173,6 +173,35 @@ pub fn _on_the_stack(what: &Semantics) -> bool {
         || what.name.as_deref().unwrap_or("").starts_with('f')
 }
 
+/// Whether `xchg` takes these two operands: a general register or a memory
+/// cell each, not both memory, and no segment register.
+pub fn exchangeable(one: &Loc, other: &Loc) -> bool {
+    let exchanged = |place: &Loc| match place {
+        Loc::Reg(reg) => !SEGMENTS.contains(&reg.register),
+        Loc::Mem(_) => true,
+        _ => false,
+    };
+    exchanged(one) && exchanged(other) && !(matches!(one, Loc::Mem(_)) && matches!(other, Loc::Mem(_)))
+}
+
+/// The width `push` carries this place at: a register of a word or more, or
+/// a frame cell, which owns at least a word.
+pub fn pushed_width(place: &Loc) -> Option<u32> {
+    match place {
+        Loc::Reg(reg) if reg.width >= 2 => Some(reg.width),
+        Loc::Mem(cell) if matches!(cell.width, 1 | 2 | 4) => Some(cell.width.max(2)),
+        _ => None,
+    }
+}
+
+/// The width `pop` fills this place at: what `push` carries, but not `cs`.
+pub fn popped_width(place: &Loc) -> Option<u32> {
+    match place {
+        Loc::Reg(reg) if reg.register == Register::CS => None,
+        other => pushed_width(other),
+    }
+}
+
 /// The register a two-address instruction reads and writes as one.
 ///
 /// `add ax,[c]` is one register at two moments; x86 says so by naming the
