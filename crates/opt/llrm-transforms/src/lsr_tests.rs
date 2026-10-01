@@ -1719,3 +1719,30 @@ fn test_addresses_need_a_base_register_and_an_index_register() {
     let apart = [pair(0, 1), pair(2, 3)];
     assert_eq!(super::_misplaced(&registers(&apart), &apart.iter().cloned().collect(), 1, 2), 1);
 }
+
+/// A counter already counted to zero whose value is summed: one recurrence,
+/// tested for zero, read as itself.
+const ZEROED: &str = "  br label %l1
+
+l1:
+  %i = phi i16 [ -8, %start ], [ %i.next, %l1 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l1 ]
+  %s.next = add i16 %s, %i
+  %i.next = add nsw i16 %i, 1
+  %done = icmp ne i16 %i.next, 0
+  br i1 %done, label %l1, label %l3
+
+l3:
+  ret i16 %s.next
+";
+
+/// The loop as it stands is a candidate, priced as every other: where it is
+/// the cheapest the pass emits nothing, as LLVM's LSR leaves a loop it cannot
+/// improve.
+#[test]
+fn test_a_loop_the_pass_cannot_improve_is_left_as_it_is() {
+    let text = program(&[("a", "i16", 2)], "i16", ZEROED);
+    let (before, printed) = reduced(&text);
+    let loop_of = |text: &str| text.split("\nl1:").nth(1).and_then(|rest| rest.split("\n\n").next()).unwrap_or_default().to_owned();
+    assert_eq!(loop_of(&printed), loop_of(&crate::testing::printed(&before)), "{printed}");
+}
