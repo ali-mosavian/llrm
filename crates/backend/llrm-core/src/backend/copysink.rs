@@ -99,6 +99,27 @@ fn _between(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, copy_at: i
     Some(forward.intersection(&backward).copied().collect())
 }
 
+/// Whether every path from the loop's header to `leaving` runs the block
+/// `copy_at`: an iteration that skips it must not be handed its copy.
+fn _runs_on_every_path(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, header: i64, copy_at: i64, leaving: i64) -> bool {
+    if header == copy_at || leaving == copy_at {
+        return true;
+    }
+    let mut seen = BTreeSet::from([header]);
+    let mut queue = vec![header];
+    while let Some(at) = queue.pop() {
+        if at == leaving {
+            return false;
+        }
+        for &to in &at_of[&at].succ {
+            if inside.contains(&to) && to != copy_at && seen.insert(to) {
+                queue.push(to);
+            }
+        }
+    }
+    true
+}
+
 /// Per loop block, the lanes live on entry along paths that stay in the loop.
 ///
 /// The exit is left out: a lane only the exit reads is what the sunk copy is
@@ -188,6 +209,11 @@ pub fn sunk(body: &LirBody) -> LirBody {
                     .collect();
                 let rest_of_block = block.with_insns(block.insns[index + 1..].to_vec());
                 if !written.is_disjoint(&_backwards(&rest_of_block, after, &universe)) {
+                    continue;
+                }
+                // A loop left from its header is left before any copy ran on the
+                // way in; left from elsewhere, an iteration may bypass the copy.
+                if source_at != found_loop.header && !_runs_on_every_path(&at_of, &inside, found_loop.header, block.at, source_at) {
                     continue;
                 }
                 let Some(rest) = _between(&at_of, &inside, block.at, source_at) else {
@@ -415,5 +441,27 @@ mod tests {
             IndexMap::default(),
         );
         assert_eq!(_pushed(&sunk(&body), &[0, 0x10, 0x10, 0x10]), vec![0, 1, 2]);
+    }
+    #[test]
+    fn test_a_copy_on_one_path_through_a_loop_stays_off_the_exit() {
+        // A guarded inner loop's result copy ran on the iteration that entered the
+        // inner loop; sunk to the outer exit it also ran on the iteration that
+        // skipped it, copying a register nothing had set over the carried value.
+        use Register::{AX, BX, CX, DI, DX};
+        let body = LirBody::new(
+            "f",
+            1,
+            vec![
+                block(1, vec![_jump(1, 3)], vec![3]),
+                block(3, vec![_compare(3, AX, BX), _branch(4, "jle", 8)], vec![5, 8]),
+                block(5, vec![_move(5, DI, DX), _jump(6, 8)], vec![8]),
+                block(8, vec![_compare(8, CX, BX), _branch(9, "jl", 3)], vec![3, 12]),
+                block(12, vec![_return(12)], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let copies = _copies(&sunk(&body));
+        assert!(copies[&5] == vec![r(DI)] && copies[&12].is_empty(), "{copies:?}");
     }
 }
