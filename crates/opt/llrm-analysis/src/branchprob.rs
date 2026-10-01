@@ -3,13 +3,14 @@
 //! profile says otherwise.
 //!
 //! Each block with more than one successor takes the first heuristic that
-//! applies, in LLVM's order, then Ball and Larus's call and return
-//! heuristics, which GCC's `predict.def` also uses:
+//! applies, in LLVM's order, then GCC's call and return heuristics (from
+//! Ball and Larus; LLVM has neither):
 //! - a successor every path of which ends in `unreachable`, a `noreturn`
 //!   or a `cold` call (`noreturn::cold`) is all but never taken;
 //! - in a loop, staying in it is taken 124 times to every 4 exits;
 //! - `p == q` on pointers fails (20:12), as does `x == 0`, `x == -1` and
-//!   `x < 0` on integers, and `x == y` on floats; `isnan` is all but never;
+//!   `x < 0` on integers but truth values, and `x == y` on floats; `isnan`
+//!   is all but never;
 //! - a successor that calls, where the other does not, is not taken (67%);
 //! - a successor that returns, where the other does not, is not taken (66%).
 //!
@@ -20,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::module::{BlockId, Function, Operand, ValueDef};
-use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantKind, Context};
 
@@ -171,11 +172,16 @@ fn compared(context: &Context, function: &Function, block: BlockId) -> Option<(H
                 _ => None,
             };
             // The compared value on the left: `0 == x` reads as `x == 0`.
-            let (predicate, value) = match (constant(left), constant(right)) {
-                (_, Some(value)) => (predicate, value),
-                (Some(value), None) => (predicate.swapped(), value),
+            let (predicate, value, compared) = match (constant(left), constant(right)) {
+                (_, Some(value)) => (predicate, value, left),
+                (Some(value), None) => (predicate.swapped(), value, right),
                 _ => return None,
             };
+            // A truth value is no quantity: BASIC's `IF a AND b` tests its
+            // 0/-1 against 0, which says nothing of how often it holds.
+            if truth(function, *compared, 4) {
+                return None;
+            }
             let likely = match (predicate, value) {
                 (IntPredicate::Eq, 0 | -1) => false,
                 (IntPredicate::Ne, 0 | -1) => true,
@@ -196,24 +202,53 @@ fn compared(context: &Context, function: &Function, block: BlockId) -> Option<(H
     }
 }
 
+/// Whether `operand` is provably 0 or all ones, or 0 or 1: a compare, one
+/// widened, or bitwise logic of those, `depth` operations deep.
+fn truth(function: &Function, operand: Operand, depth: u32) -> bool {
+    let Operand::Value(value) = operand else { return false };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+    let instruction = function.instruction(inst);
+    match &instruction.opcode {
+        Opcode::ICmp(_) | Opcode::FCmp(_) => true,
+        Opcode::Cast(CastOp::SExt | CastOp::ZExt) => instruction.operands.first().is_some_and(|one| truth(function, *one, depth)),
+        Opcode::Binary(BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) if depth > 0 => {
+            instruction.operands.iter().all(|one| truth(function, *one, depth - 1))
+        }
+        _ => false,
+    }
+}
+
+/// A natural loop as `propagated` reads it.
+pub struct Cycle<'a> {
+    pub header: i64,
+    pub latches: &'a BTreeSet<i64>,
+    pub body: &'a BTreeSet<i64>,
+}
+
 /// Each block's frequency, the entry's 1, loops scaled by their back edges.
 fn frequencies(function: &Function, shape: &Shape, odds: &Odds) -> BTreeMap<i64, f64> {
     let order = reverse_postorder(function);
+    let cycles: Vec<Cycle> = shape.loops.iter().map(|one| Cycle { header: one.header, latches: &one.latches, body: &one.body }).collect();
+    let predecessors = |at: i64| function.predecessors(cfg::block(at)).into_iter().map(id).collect::<Vec<_>>();
+    propagated(&order, &predecessors, &cycles, &|from, to| odds.probability(from, to).unwrap_or(0.0))
+}
+
+/// Frequencies over any CFG: `order` its reachable blocks in reverse
+/// postorder, the entry first; `cycles` its natural loops, innermost first;
+/// `edge` each edge's probability.
+pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, cycles: &[Cycle], edge: &dyn Fn(i64, i64) -> f64) -> BTreeMap<i64, f64> {
     // `to` is a loop header and `from` is in its loop.
-    let backward = |from: i64, to: i64| shape.loops.iter().any(|one| one.header == to && one.body.contains(&from));
-    let edge = |from: i64, to: i64| odds.probability(from, to).unwrap_or(0.0);
+    let backward = |from: i64, to: i64| cycles.iter().any(|one| one.header == to && one.body.contains(&from));
     // Innermost first: an inner header's scale is known when its outer loop is weighed.
     let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
-    for found in &shape.loops {
+    for found in cycles {
         let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
         for &at in order.iter().filter(|at| found.body.contains(at)) {
             let entering: f64 = if at == found.header {
                 1.0
             } else {
-                function
-                    .predecessors(cfg::block(at))
+                predecessors(at)
                     .into_iter()
-                    .map(id)
                     .filter(|from| found.body.contains(from) && !backward(*from, at))
                     .map(|from| mass.get(&from).copied().unwrap_or(0.0) * edge(from, at))
                     .sum()
@@ -225,14 +260,12 @@ fn frequencies(function: &Function, shape: &Shape, odds: &Odds) -> BTreeMap<i64,
         scale.insert(found.header, (1.0 / (1.0 - back.min(1.0 - 1.0 / LOOP_SCALE))).min(LOOP_SCALE));
     }
     let mut frequency: BTreeMap<i64, f64> = BTreeMap::new();
-    for &at in &order {
-        let entering: f64 = if Some(at) == function.entry().map(id) {
+    for (index, &at) in order.iter().enumerate() {
+        let entering: f64 = if index == 0 {
             1.0
         } else {
-            function
-                .predecessors(cfg::block(at))
+            predecessors(at)
                 .into_iter()
-                .map(id)
                 .filter(|from| !backward(*from, at))
                 .map(|from| frequency.get(&from).copied().unwrap_or(0.0) * edge(from, at))
                 .sum()
@@ -242,26 +275,30 @@ fn frequencies(function: &Function, shape: &Shape, odds: &Odds) -> BTreeMap<i64,
     frequency
 }
 
-/// `function`'s reachable blocks, each before its successors but back edges.
-fn reverse_postorder(function: &Function) -> Vec<i64> {
-    let Some(entry) = function.entry() else { return Vec::new() };
-    let mut seen = BTreeSet::new();
+/// Blocks in reverse postorder from `entry`, by `successors`.
+pub fn reverse_postorder_of(entry: i64, successors: &dyn Fn(i64) -> Vec<i64>) -> Vec<i64> {
+    let mut seen = BTreeSet::from([entry]);
     let mut post = Vec::new();
     let mut stack = vec![(entry, 0usize)];
-    seen.insert(entry);
     while let Some((block, next)) = stack.pop() {
-        let successors = function.successors(block);
-        if let Some(&to) = successors.get(next) {
+        let all = successors(block);
+        if let Some(&to) = all.get(next) {
             stack.push((block, next + 1));
             if seen.insert(to) {
                 stack.push((to, 0));
             }
         } else {
-            post.push(id(block));
+            post.push(block);
         }
     }
     post.reverse();
     post
+}
+
+/// `function`'s reachable blocks, each before its successors but back edges.
+fn reverse_postorder(function: &Function) -> Vec<i64> {
+    let Some(entry) = function.entry() else { return Vec::new() };
+    reverse_postorder_of(id(entry), &|at| function.successors(cfg::block(at)).into_iter().map(id).collect())
 }
 
 #[cfg(test)]

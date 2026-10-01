@@ -187,3 +187,67 @@ join:
     assert!(close(odds.probability(at("entry"), at("a")), 0.5));
     assert!(close(odds.frequency.get(&at("join")).copied(), 1.0));
 }
+
+/// BASIC's `IF x = 159 AND y = 99`: truth values are 0 and -1, so the AND
+/// is an i16 and the branch tests it against 0. The zero heuristic read
+/// that as "nonzero, likely": a rare AND of equalities taken 20 times in 32.
+/// A truth value is no quantity; LLVM, whose branches read the i1, never
+/// asks.
+#[test]
+fn test_a_basic_truth_value_is_not_a_zero_compare() {
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %x, i16 %y) {
+entry:
+  %a = icmp eq i16 %x, 159
+  %sa = sext i1 %a to i16
+  %b = icmp eq i16 %y, 99
+  %sb = sext i1 %b to i16
+  %both = and i16 %sa, %sb
+  %c = icmp ne i16 %both, 0
+  br i1 %c, label %rare, label %common
+rare:
+  br label %join
+common:
+  br label %join
+join:
+  %r = phi i16 [ 255, %rare ], [ %x, %common ]
+  ret i16 %r
+}
+",
+    );
+    assert_ne!(odds.by.get(&at("entry")), Some(&Heuristic::Zero));
+    assert!(odds.probability(at("entry"), at("rare")).is_some_and(|rare| rare <= 0.5));
+}
+
+/// Nested loops multiply: the inner header runs 32 times per pass of an
+/// outer one that runs 32 times, and the inner exit lands in the outer loop.
+#[test]
+fn test_a_nested_loop_runs_32_times_32() {
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %n) {
+entry:
+  br label %outer
+outer:
+  %i = phi i16 [ 0, %entry ], [ %i2, %latch ]
+  br label %inner
+inner:
+  %j = phi i16 [ 0, %outer ], [ %j2, %inner ]
+  %j2 = add i16 %j, 1
+  %c = icmp slt i16 %j2, %n
+  br i1 %c, label %inner, label %latch
+latch:
+  %i2 = add i16 %i, 1
+  %d = icmp slt i16 %i2, %n
+  br i1 %d, label %outer, label %out
+out:
+  ret i16 %i2
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("inner")), Some(&Heuristic::Loop));
+    assert_eq!(odds.by.get(&at("latch")), Some(&Heuristic::Loop));
+    assert!(close(odds.frequency.get(&at("outer")).copied(), 32.0));
+    assert!(close(odds.frequency.get(&at("latch")).copied(), 32.0));
+    assert!(close(odds.frequency.get(&at("inner")).copied(), 1024.0));
+    assert!(close(odds.frequency.get(&at("out")).copied(), 1.0));
+}
