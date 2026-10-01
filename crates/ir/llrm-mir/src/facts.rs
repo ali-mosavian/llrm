@@ -185,7 +185,7 @@ impl Fact {
     /// instruction flag.
     pub fn attribute(self) -> Option<Attribute> {
         match self {
-            Fact::Dereferenceable(bytes) => Some(Attribute::Int(self.key().to_owned(), bytes)),
+            Fact::Dereferenceable(value) | Fact::Align(value) => Some(Attribute::Int(self.key().to_owned(), value)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds => None,
@@ -199,7 +199,7 @@ impl Fact {
             Attribute::Flag(name) => Fact::flag(name),
             Attribute::Int(name, value) => Fact::valued(name, *value),
             Attribute::Initializes(ranges) => match ranges[..] {
-                [(0, bytes)] if bytes > 0 => Some(Fact::Initializes(bytes as u64)),
+                [(0, bytes)] => Some(Fact::Initializes(bytes as u64)),
                 _ => None,
             },
             Attribute::Memory(locations) => match locations[..] {
