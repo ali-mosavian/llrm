@@ -1,7 +1,7 @@
 //! Guards proven by the branches over a block.
 
 use super::{guards, holds};
-use crate::induction::{AffineOperand, Linear};
+use crate::induction::{AffineOperand, Scev};
 use crate::induction::tests::Parsed;
 use llrm_mir::opcode::IntPredicate;
 
@@ -22,7 +22,7 @@ done:
 fn test_a_branch_proves_its_compare_where_its_edge_alone_leads() {
     let parsed = Parsed::new(GUARDED);
     let unit = parsed.unit();
-    let (n, len) = (Linear::of(&AffineOperand::Value(parsed.value("n"), 16), 16), Linear::of(&AffineOperand::Value(parsed.value("len"), 16), 16));
+    let (n, len) = (Scev::of(&AffineOperand::Value(parsed.value("n"), 16), 16), Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16));
     let at = |name: &str| block_named(&parsed, name);
     assert!(holds(&unit, at("loop"), IntPredicate::Ult, &n, &len));
     assert!(holds(&unit, at("loop"), IntPredicate::Ule, &n, &len));

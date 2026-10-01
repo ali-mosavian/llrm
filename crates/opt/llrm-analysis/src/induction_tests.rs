@@ -334,8 +334,8 @@ fn test_a_multiply_of_another_value_is_not_derived() {
     assert!(!other.basics().is_empty());
     assert_eq!(other.recurrence("m"), None);
     let counter = stepped("add i16 %i, 1", "mul i16 %i, 2");
-    let x = Linear::unknown(counter.value("x"), 16);
-    assert_eq!(counter.recurrence("m"), Some(Recurrence { pointer: None, start: x.times(&BigInt::from(2)), step: Linear::constant(2, 16) }));
+    let x = Scev::unknown(counter.value("x"), 16);
+    assert_eq!(counter.recurrence("m"), Some(Recurrence { pointer: None, start: x.times(&BigInt::from(2)), step: Scev::constant(2, 16) }));
 }
 
 #[test]
@@ -410,8 +410,8 @@ b2:
 }}
 "
         ));
-        let x = Linear::unknown(parsed.value("x"), 16);
-        let expected = Recurrence { pointer: None, start: x.times(&BigInt::from(expected)), step: Linear::constant(expected, 16) };
+        let x = Scev::unknown(parsed.value("x"), 16);
+        let expected = Recurrence { pointer: None, start: x.times(&BigInt::from(expected)), step: Scev::constant(expected, 16) };
         assert_eq!(parsed.recurrence("address"), Some(expected), "{factor}");
     }
 }
@@ -437,9 +437,9 @@ b2:
 }}
 "
         ));
-        let x = Linear::unknown(parsed.value("x"), 16);
-        let start = x.times(&BigInt::from(by)).plus(&Linear::constant(6 * offset, 16));
-        let carried = Recurrence { pointer: Some(Operand::Value(parsed.value("base"))), start, step: Linear::constant(by, 16) };
+        let x = Scev::unknown(parsed.value("x"), 16);
+        let start = x.times(&BigInt::from(by)).plus(&Scev::constant(6 * offset, 16));
+        let carried = Recurrence { pointer: Some(Operand::Value(parsed.value("base"))), start, step: Scev::constant(by, 16) };
         assert_eq!(parsed.recurrence("p"), Some(carried));
     }
 }
@@ -466,8 +466,8 @@ b2:
 }
 ",
     );
-    let (base, x) = (Operand::Value(parsed.value("base")), Linear::unknown(parsed.value("x"), 16));
-    let at = |scale: i64, bytes: i64| Recurrence { pointer: Some(base), start: x.times(&BigInt::from(scale)).plus(&Linear::constant(bytes, 16)), step: Linear::constant(scale, 16) };
+    let (base, x) = (Operand::Value(parsed.value("base")), Scev::unknown(parsed.value("x"), 16));
+    let at = |scale: i64, bytes: i64| Recurrence { pointer: Some(base), start: x.times(&BigInt::from(scale)).plus(&Scev::constant(bytes, 16)), step: Scev::constant(scale, 16) };
     assert_eq!(parsed.recurrence("p"), Some(at(4, 2)));
     // Off an address of the counter: one recurrence off `%base`.
     assert_eq!(parsed.recurrence("q"), Some(at(6, 2)));
@@ -510,7 +510,7 @@ fn test_a_shift_recurrence_requires_a_constant_count() {
     for (shift, expected) in [("shl i16 %i, %x", None), ("shl i16 3, %i", None), ("shl i16 %i, 3", Some(8)), ("shl i16 %i, 16", None)] {
         let parsed = stepped("add i16 %i, 1", shift);
         let step = parsed.recurrence("m").map(|of| of.step);
-        assert_eq!(step, expected.map(|by| Linear::constant(by, 16)), "{shift}");
+        assert_eq!(step, expected.map(|by| Scev::constant(by, 16)), "{shift}");
     }
 }
 
@@ -844,7 +844,7 @@ fn test_an_extension_of_a_counter_that_cannot_wrap_is_a_wide_recurrence() {
     ] {
         let parsed = extended(cast, start, bound);
         let wide = parsed.recurrence("wide").map(|of| (of.start, of.step));
-        let expected = wide_start.map(|n| (Linear::constant(n, 16), Linear::constant(1, 16)));
+        let expected = wide_start.map(|n| (Scev::constant(n, 16), Scev::constant(1, 16)));
         assert_eq!(wide, expected, "{cast} {start} {bound}");
         assert_eq!(parsed.recurrence("m").is_some(), expected.is_some(), "{cast} {start} {bound}");
     }
@@ -874,7 +874,7 @@ b3:
 "
         ));
         let quotient = parsed.recurrence("q");
-        assert_eq!(quotient.map(|of| of.step), expected.map(|n| Linear::constant(n, 16)), "{step} {divisor}");
+        assert_eq!(quotient.map(|of| of.step), expected.map(|n| Scev::constant(n, 16)), "{step} {divisor}");
     }
 }
 
@@ -1128,7 +1128,7 @@ fn test_every_exit_is_counted_and_the_loop_takes_the_least() {
     let taken = found.iter().map(|one| one.taken.clone()).collect::<Vec<_>>();
     assert_eq!(
         taken,
-        [Some(vec![Linear::of(&AffineOperand::Value(la, 16), 16)]), Some(vec![Linear::of(&AffineOperand::Value(lb, 16), 16)])],
+        [Some(vec![Scev::of(&AffineOperand::Value(la, 16), 16)]), Some(vec![Scev::of(&AffineOperand::Value(lb, 16), 16)])],
         "{found:?}"
     );
     assert_eq!(backedges(&found).map(|least| least.len()), Some(2));
@@ -1156,7 +1156,7 @@ done:
     let parsed = Parsed::new(text);
     let found = exits(&parsed.unit(), &parsed.only_loop(), None, false);
     let taken = found[0].taken.clone().expect("counted");
-    assert_eq!(taken.iter().filter_map(Linear::known).min(), Some(BigInt::from(6)), "{found:?}");
+    assert_eq!(taken.iter().filter_map(Scev::known).min(), Some(BigInt::from(6)), "{found:?}");
     let either = Parsed::new(&text.replace("and i1", "or i1"));
     assert_eq!(exits(&either.unit(), &either.only_loop(), None, false)[0].taken, None);
 }
@@ -1223,7 +1223,7 @@ fn test_a_loop_tested_after_its_trips_is_counted_where_entry_proves_the_first() 
     let proofs = counted(&proven.unit(), &proven.only_loop(), None, false);
     let [proof] = &proofs[..] else { panic!("{proofs:?}") };
     assert!(proof.posttested && proof.entry_guarded && proof.count.is_none(), "{proof:?}");
-    let n = Linear::of(&AffineOperand::Value(proven.value("n"), 16), 16);
+    let n = Scev::of(&AffineOperand::Value(proven.value("n"), 16), 16);
     assert_eq!(proof.trips_linear(), Some(n));
     // Entered where `n > -5`, the first test is not proved: no count.
     let unproven = Parsed::new(&guarded_do("-5"));
@@ -1257,8 +1257,8 @@ bad:
 ";
     let parsed = Parsed::new(text);
     let found = exits(&parsed.unit(), &parsed.only_loop(), None, false);
-    let len = Linear::of(&AffineOperand::Value(parsed.value("len"), 16), 16);
-    let eight = Linear::constant(8, 16);
+    let len = Scev::of(&AffineOperand::Value(parsed.value("len"), 16), 16);
+    let eight = Scev::constant(8, 16);
     assert_eq!(found[0].taken, Some(vec![len.minus(&eight)]), "{found:?}");
 }
 
@@ -1338,7 +1338,7 @@ fn recurrences_of(parsed: &Parsed) -> std::collections::BTreeMap<ValueId, Recurr
 }
 
 /// `sum` at the values `env` gives its unknowns, modulo its width.
-fn evaluated(sum: &Linear, env: &dyn Fn(ValueId) -> BigInt) -> BigInt {
+fn evaluated(sum: &Scev, env: &dyn Fn(ValueId) -> BigInt) -> BigInt {
     let mut total = sum.constant.clone();
     for (product, factor) in &sum.terms {
         total += product.values().iter().fold(factor.clone(), |so_far, value| so_far * env(*value));
@@ -1394,16 +1394,16 @@ fn test_generated_recurrences_match_the_interpreter() {
     assert!(affine - found <= REFUSED_BASELINE, "refusals grew");
 }
 
-fn random_sum(rng: &mut crate::generated::Rng, width: u32) -> Linear {
-    let mut sum = Linear::constant(rng.word(), width);
+fn random_sum(rng: &mut crate::generated::Rng, width: u32) -> Scev {
+    let mut sum = Scev::constant(rng.word(), width);
     for _ in 0..rng.below(4) {
-        sum = sum.plus(&Linear::of(&AffineOperand::Value(ValueId(rng.below(4) as u32), width), width).times(&BigInt::from(rng.word() as i16)));
+        sum = sum.plus(&Scev::of(&AffineOperand::Value(ValueId(rng.below(4) as u32), width), width).times(&BigInt::from(rng.word() as i16)));
     }
     sum
 }
 
 /// `one * other`, where the form defines it.
-fn product_of(one: &Linear, other: &Linear) -> Option<Linear> {
+fn product_of(one: &Scev, other: &Scev) -> Option<Scev> {
     one.product(other).into()
 }
 
@@ -1420,7 +1420,7 @@ fn test_form_obeys_the_ring_laws() {
         let mut rng = Rng::new(seed);
         let width = [16, 32][rng.below(2) as usize];
         let (x, y, z) = (random_sum(&mut rng, width), random_sum(&mut rng, width), random_sum(&mut rng, width));
-        let (zero, one) = (Linear::constant(0, width), Linear::constant(1, width));
+        let (zero, one) = (Scev::constant(0, width), Scev::constant(1, width));
         assert_eq!(x.plus(&y), y.plus(&x), "seed {seed}");
         assert_eq!(x.plus(&y).plus(&z), x.plus(&y.plus(&z)), "seed {seed}");
         assert_eq!(x.plus(&zero), x, "seed {seed}");
@@ -1430,7 +1430,7 @@ fn test_form_obeys_the_ring_laws() {
         assert_eq!(x.plus(&y).truncated(narrow), x.truncated(narrow).plus(&y.truncated(narrow)), "seed {seed}");
         let k = BigInt::from(rng.word() as i16);
         assert_eq!(x.plus(&y).times(&k), x.times(&k).plus(&y.times(&k)), "seed {seed}");
-        let constant = Linear::constant(k.clone(), width);
+        let constant = Scev::constant(k.clone(), width);
         if let (Some(a), Some(b)) = (product_of(&x, &constant), product_of(&constant, &x)) {
             assert_eq!(a, b, "seed {seed}");
             assert_eq!(a, x.times(&k), "seed {seed}");
@@ -1473,11 +1473,11 @@ b2:
     (parsed, of)
 }
 
-fn unknown_of(parsed: &Parsed, name: &str) -> Linear {
-    Linear::unknown(parsed.value(name), 16)
+fn unknown_of(parsed: &Parsed, name: &str) -> Scev {
+    Scev::unknown(parsed.value(name), 16)
 }
 
-fn product(of: &[Linear]) -> Linear {
+fn product(of: &[Scev]) -> Scev {
     of.iter().skip(1).fold(of[0].clone(), |so_far, next| so_far.product(next).expect("within the cap"))
 }
 

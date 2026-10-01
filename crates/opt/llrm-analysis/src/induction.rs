@@ -4,7 +4,7 @@
 //! InductionDescriptor's view of a counter. A width is in bits.
 //!
 //! `Recurrence` is any such value as `pointer + start + step * trip`, with
-//! invariant symbols (`Linear`); `users` is what reads a loop's recurrences,
+//! invariant symbols (`Scev`); `users` is what reads a loop's recurrences,
 //! as LLVM's IVUsers.
 //!
 //! A compare is the `icmp` a conditional `br` reads; a step is an `add` or
@@ -501,7 +501,7 @@ fn _proven(
 /// would continue: `start test bound`, where the loop is entered.
 fn _entered(unit: &Unit, shape: &_Control, start: &AffineOperand, bound: &AffineOperand, test: IntPredicate, width: u32) -> bool {
     let Some(preheader) = shape.preheader else { return false };
-    crate::guards::holds(unit, preheader, test, &Linear::of(start, width), &Linear::of(bound, width))
+    crate::guards::holds(unit, preheader, test, &Scev::of(start, width), &Scev::of(bound, width))
 }
 
 /// Where a loop leaves, and after how many trips: an exiting block, and
@@ -514,7 +514,7 @@ pub struct ExitCount {
     /// The backedges taken before it leaves: the least of these. A branch
     /// leaving as soon as any of its compares fails takes the least of
     /// theirs; one leaving only when all fail, their one count.
-    pub taken: Option<Vec<Linear>>,
+    pub taken: Option<Vec<Scev>>,
     /// The proofs its compares were counted by.
     pub proofs: Vec<CountedLoop>,
 }
@@ -621,21 +621,21 @@ fn _leaves(function: &Function, condition: ValueId, stays: bool) -> (Vec<InstId>
 
 /// The backedges a proof's loop takes before it leaves at the proof's
 /// branch: its trips, one fewer where tested after them.
-fn _backedges(proof: &CountedLoop) -> Option<Linear> {
+fn _backedges(proof: &CountedLoop) -> Option<Scev> {
     let width = proof.width();
     if let Some(count) = &proof.count {
-        return Some(Linear::constant(count - u8::from(proof.posttested), width));
+        return Some(Scev::constant(count - u8::from(proof.posttested), width));
     }
     if proof.posttested {
         return None;
     }
     let (ahead, behind) = if proof.step > BigInt::from(0) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
-    Some(Linear::of(ahead, width).minus(&Linear::of(behind, width)).plus(&Linear::constant(u8::from(proof.inclusive()), width)))
+    Some(Scev::of(ahead, width).minus(&Scev::of(behind, width)).plus(&Scev::constant(u8::from(proof.inclusive()), width)))
 }
 
 /// The backedges a loop takes: the least of every exit's, where each is
 /// counted and the latch follows them all. LLVM's exact backedge-taken count.
-pub fn backedges(exits: &[ExitCount]) -> Option<Vec<Linear>> {
+pub fn backedges(exits: &[ExitCount]) -> Option<Vec<Scev>> {
     let mut least = Vec::new();
     for one in exits {
         least.extend(one.taken.clone()?);
@@ -645,7 +645,7 @@ pub fn backedges(exits: &[ExitCount]) -> Option<Vec<Linear>> {
 
 /// The most backedges a loop takes: the least of the counted exits'.
 /// LLVM's symbolic maximum.
-pub fn most_backedges(exits: &[ExitCount]) -> Vec<Linear> {
+pub fn most_backedges(exits: &[ExitCount]) -> Vec<Scev> {
     exits.iter().filter_map(|one| one.taken.clone()).flatten().collect()
 }
 
@@ -1335,7 +1335,7 @@ pub fn zero_terminating_control<'a>(
 }
 
 /// A product of unknowns, each as often as it is multiplied in: `a*b*b` is
-/// `[a, b, b]`. Sorted, never empty (the empty product is `Linear`'s
+/// `[a, b, b]`. Sorted, never empty (the empty product is `Scev`'s
 /// constant), so equal products compare equal.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Monomial(Vec<ValueId>);
@@ -1376,13 +1376,13 @@ const MOST_DEGREE: usize = 4;
 /// equal forms whatever order built them. Truncation commutes with add and
 /// mul; an extension does not, so an extended value is an unknown of its own.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct Linear {
+pub struct Scev {
     pub constant: BigInt,
     pub terms: BTreeMap<Monomial, BigInt>,
     pub width: u32,
 }
 
-impl Linear {
+impl Scev {
     pub fn constant(n: impl Into<BigInt>, width: u32) -> Self {
         Self { constant: masked(&n.into(), width), terms: BTreeMap::new(), width }
     }
@@ -1499,8 +1499,8 @@ impl Linear {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Recurrence {
     pub pointer: Option<Operand>,
-    pub start: Linear,
-    pub step: Linear,
+    pub start: Scev,
+    pub step: Scev,
 }
 
 impl Recurrence {
@@ -1524,12 +1524,12 @@ impl Recurrence {
     }
 
     /// `{a,+,b} + c = {a+c,+,b}`.
-    fn offset(&self, by: &Linear) -> Self {
+    fn offset(&self, by: &Scev) -> Self {
         Self { start: self.start.plus(by), ..self.clone() }
     }
 
     /// `{a,+,b} * m = {a*m,+,b*m}`, `m` invariant: a product of recurrences is no recurrence of one step.
-    fn scaled(&self, by: &Linear) -> Option<Self> {
+    fn scaled(&self, by: &Scev) -> Option<Self> {
         Some(Self { pointer: None, start: self.start.product(by)?, step: self.step.product(by)? })
     }
 }
@@ -1537,7 +1537,7 @@ impl Recurrence {
 /// A counter as a recurrence of the trip.
 pub fn counter_recurrence(counter: &Affine) -> Recurrence {
     let width = counter.start.width();
-    Recurrence { pointer: None, start: Linear::of(&counter.start, width), step: Linear::of(&counter.step, width) }
+    Recurrence { pointer: None, start: Scev::of(&counter.start, width), step: Scev::of(&counter.step, width) }
 }
 
 /// How a use reads a recurrence.
@@ -1593,18 +1593,18 @@ pub struct Users {
 /// The bytes the constant and invariant indices of `op`, a
 /// `getelementptr`, add to its pointer, in `width` bits; None where an
 /// index is neither, or narrower than the pointer's.
-fn _gep_offset(unit: &Unit, op: &Instruction, width: u32, still: &Invariant) -> Option<Linear> {
+fn _gep_offset(unit: &Unit, op: &Instruction, width: u32, still: &Invariant) -> Option<Scev> {
     let Opcode::GetElementPtr { source } = op.opcode else { return None };
     let indices = op.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128)))).collect::<Vec<_>>();
     let (constant, variable) = unit.layout.collect_offset(&unit.context.types, source, &indices);
-    let mut offset = Linear::constant(constant, width);
+    let mut offset = Scev::constant(constant, width);
     for (position, scale) in variable {
         let index = op.operands[1 + position];
         let Operand::Value(value) = index else { return None };
         if !still.contains(value) || unit.int_bits(index)? < width {
             return None;
         }
-        offset = offset.plus(&Linear::unknown(value, width).times(&BigInt::from(scale)));
+        offset = offset.plus(&Scev::unknown(value, width).times(&BigInt::from(scale)));
     }
     Some(offset)
 }
@@ -1612,8 +1612,8 @@ fn _gep_offset(unit: &Unit, op: &Instruction, width: u32, still: &Invariant) -> 
 /// `pointer` as the invariant it offsets and the offset, through the
 /// `getelementptr`s over it the loop does not compute: SCEV's pointer as a
 /// base plus an add. Two addresses into one object share a base.
-pub fn rooted(unit: &Unit, pointer: Operand, width: u32, still: &Invariant) -> (Operand, Linear) {
-    let mut offset = Linear::constant(0, width);
+pub fn rooted(unit: &Unit, pointer: Operand, width: u32, still: &Invariant) -> (Operand, Scev) {
+    let mut offset = Scev::constant(0, width);
     let mut at = pointer;
     while still.operand(at)
         && let Some((_, op)) = unit.defining(at)
@@ -1657,7 +1657,7 @@ fn _recurrences(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>,
         let (Some(space), Some(stepped)) = (unit.space(Operand::Value(one.value)), function.instruction(one.stepping).result) else { continue };
         let width = unit.layout.pointer(space).index_bits;
         let (root, start) = rooted(unit, one.start, width, &walk.still);
-        let of = Recurrence { pointer: Some(root), start, step: Linear::constant(one.step.clone(), width) };
+        let of = Recurrence { pointer: Some(root), start, step: Scev::constant(one.step.clone(), width) };
         found.web.extend([one.phi, one.stepping]);
         found.values.insert(stepped, Recurrence { start: of.start.plus(&of.step), ..of.clone() });
         found.values.insert(one.value, of);
@@ -1698,17 +1698,17 @@ impl Walk<'_> {
     }
 
     /// `operand` as an invariant: a number, or an unknown the loop does not define.
-    fn invariant(&self, operand: Operand, width: u32) -> Option<Linear> {
+    fn invariant(&self, operand: Operand, width: u32) -> Option<Scev> {
         if self.unit.int_bits(operand)? != width {
             return None;
         }
         match operand {
             Operand::Value(value) if self.still.contains(value) => Some(match self.facts.get(&value).filter(|fact| fact.width >= width) {
-                Some(fact) => Linear::constant(fact.n.clone(), width),
-                None => Linear::unknown(value, width),
+                Some(fact) => Scev::constant(fact.n.clone(), width),
+                None => Scev::unknown(value, width),
             }),
             Operand::Value(_) => None,
-            _ => Some(Linear::constant(self.unit.int_constant(operand)?, width)),
+            _ => Some(Scev::constant(self.unit.int_constant(operand)?, width)),
         }
     }
 
@@ -1730,7 +1730,7 @@ impl Walk<'_> {
                     (BinaryOp::Mul, Some(x), None, _, Some(c)) | (BinaryOp::Mul, None, Some(x), Some(c), _) => x.scaled(&c),
                     (BinaryOp::Shl, Some(x), _, _, Some(count)) => {
                         let count = count.known().filter(|count| *count >= BigInt::from(0) && *count < BigInt::from(width))?;
-                        x.scaled(&Linear::constant(BigInt::from(1) << usize::try_from(count).ok()?, width))
+                        x.scaled(&Scev::constant(BigInt::from(1) << usize::try_from(count).ok()?, width))
                     }
                     _ => None,
                 }
@@ -1780,7 +1780,7 @@ impl Walk<'_> {
         if initial < low || initial >= high || final_value < low || final_value >= high {
             return None;
         }
-        Some(Recurrence { pointer: None, start: Linear::constant(initial, wide), step: Linear::constant(stride, wide) })
+        Some(Recurrence { pointer: None, start: Scev::constant(initial, wide), step: Scev::constant(stride, wide) })
     }
 
     /// Exact signed division of a non-wrapping counter is another recurrence.
@@ -1808,8 +1808,8 @@ impl Walk<'_> {
         }
         Some(Recurrence {
             pointer: None,
-            start: Linear::constant(floor_div(&start, &denominator), width),
-            step: Linear::constant(floor_div(&step, &denominator), width),
+            start: Scev::constant(floor_div(&start, &denominator), width),
+            step: Scev::constant(floor_div(&step, &denominator), width),
         })
     }
 
@@ -1842,7 +1842,7 @@ impl Walk<'_> {
         let mut of = match op.operands[0] {
             base if self.still.operand(base) => {
                 let (root, start) = rooted(unit, base, width, &self.still);
-                Recurrence { pointer: Some(root), start, step: Linear::constant(0, width) }
+                Recurrence { pointer: Some(root), start, step: Scev::constant(0, width) }
             }
             Operand::Value(base) => {
                 carried = true;
@@ -1855,13 +1855,13 @@ impl Walk<'_> {
             let part = match self.rec(found, index, width) {
                 Some(index) => {
                     carried = true;
-                    index.scaled(&Linear::constant(scale, width))?
+                    index.scaled(&Scev::constant(scale, width))?
                 }
-                None => Recurrence { pointer: None, start: self.invariant(index, width)?.times(&scale), step: Linear::constant(0, width) },
+                None => Recurrence { pointer: None, start: self.invariant(index, width)?.times(&scale), step: Scev::constant(0, width) },
             };
             of = Recurrence { pointer: of.pointer, start: of.start.plus(&part.start), step: of.step.plus(&part.step) };
         }
-        carried.then(|| of.offset(&Linear::constant(constant, width)))
+        carried.then(|| of.offset(&Scev::constant(constant, width)))
     }
 }
 
@@ -1904,17 +1904,17 @@ impl CountedLoop {
 
     /// Its trips on the entered path, as a sum of invariants: where `trips`
     /// places them.
-    pub fn trips_linear(&self) -> Option<Linear> {
+    pub fn trips_linear(&self) -> Option<Scev> {
         let width = self.width();
         if self.posttested && !self.entry_guarded {
-            return self.count.as_ref().map(|count| Linear::constant(count.clone(), width));
+            return self.count.as_ref().map(|count| Scev::constant(count.clone(), width));
         }
         if let Some(count) = &self.count {
-            return (count < &(BigInt::from(1) << width)).then(|| Linear::constant(count.clone(), width));
+            return (count < &(BigInt::from(1) << width)).then(|| Scev::constant(count.clone(), width));
         }
-        let (bound, start) = (Linear::of(&self.bound, width), Linear::of(&self.start, width));
+        let (bound, start) = (Scev::of(&self.bound, width), Scev::of(&self.start, width));
         let (ahead, behind) = if self.step > BigInt::from(0) { (bound, start) } else { (start, bound) };
-        Some(ahead.minus(&behind).plus(&Linear::constant(u8::from(self.inclusive()), width)))
+        Some(ahead.minus(&behind).plus(&Scev::constant(u8::from(self.inclusive()), width)))
     }
 }
 

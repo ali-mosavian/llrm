@@ -1,7 +1,7 @@
 //! `Expander` against the interpreter, on the loops `llrm_analysis::generated` makes.
 
 use llrm_analysis::generated::{Inputs, Rng, case, observed, seeds};
-use llrm_analysis::induction::{self, Linear};
+use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::memory::Unit;
 use llrm_analysis::testing::layout;
 use llrm_mir::edit::Position;
@@ -11,7 +11,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use super::{Expander, placed};
 
 /// Every affine value of a generated loop with its form, by tracked index.
-fn forms(text: &llrm_analysis::generated::Case) -> Vec<(usize, Linear, Linear)> {
+fn forms(text: &llrm_analysis::generated::Case) -> Vec<(usize, Scev, Scev)> {
     let module = text.module();
     let layout = layout(&module);
     let function = llrm_analysis::testing::function(&module, "f");

@@ -4,7 +4,7 @@
 loop passes. It is `crates/opt/llrm-transforms/src/lsr.rs`.
 
 Every read of a counter, or of a value affine in one, is one recurrence:
-`pointer + start + step * trip`. `start` and `step` are one form, `Linear`: a
+`pointer + start + step * trip`. `start` and `step` are one form, `Scev`: a
 polynomial in invariant unknowns modulo the width, as SCEV's n-ary add and
 mul. A term is a coefficient times a monomial (`m*w*x`), so `i*m`, `(i+k)*m`
 and `i*m*w` are recurrences whatever their start. Equal values are equal

@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::graph::loops::Loop;
-use llrm_analysis::induction::{self, CountedLoop, IvUse, Linear, Recurrence, UseKind, Users};
+use llrm_analysis::induction::{self, CountedLoop, IvUse, Scev, Recurrence, UseKind, Users};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
@@ -113,7 +113,7 @@ struct Candidate {
 }
 
 /// An invariant a realization keeps in a register: a pointer plus a sum.
-type Key = (Option<Operand>, Linear);
+type Key = (Option<Operand>, Scev);
 
 /// A register an address reads.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -129,7 +129,7 @@ enum Reg {
 struct Fit {
     k: BigInt,
     base: Option<Operand>,
-    rest: Linear,
+    rest: Scev,
     constant: BigInt,
     /// The candidate's stepped value, read in the latch.
     next: bool,
@@ -140,7 +140,7 @@ struct Fit {
     trip: Option<(u32, bool, BigInt)>,
     /// An equality with an invariant, which takes the candidate itself and
     /// the invariant less the rest, times `k`, one or minus one.
-    folded: Option<Linear>,
+    folded: Option<Scev>,
 }
 
 /// What realizing a use from one candidate costs each time it runs, and
@@ -169,7 +169,7 @@ struct Site {
     /// The counted exit's compare, which may test a candidate's last value instead.
     exit: bool,
     /// Its value, where it is read as the loop leaves on a known count.
-    known: Option<Linear>,
+    known: Option<Scev>,
 }
 
 /// Where a realization is placed.
@@ -185,7 +185,7 @@ enum Place {
 #[derive(Clone, Debug)]
 struct Exit {
     proof: CountedLoop,
-    trips: Linear,
+    trips: Scev,
     most: BigInt,
     /// A symbolic count needs a guard, and the loop entered at its body.
     guarded: bool,
@@ -566,7 +566,7 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
     for &counter in &users.counters {
         add(&mut found, users.values[&counter].clone(), pointer_type(counter), Some(counter));
     }
-    let mut steps = BTreeSet::<Linear>::new();
+    let mut steps = BTreeSet::<Scev>::new();
     for site in sites {
         let of = _normal(view, &site.one);
         steps.insert(of.step.clone());
@@ -577,13 +577,13 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
         if terms.len() <= _SPLIT_TERMS {
             for mask in 0..1_usize << terms.len() {
                 let part = terms.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).map(|(_, (value, factor))| ((*value).clone(), (*factor).clone())).collect();
-                let symbolic = Linear { constant: BigInt::from(0), terms: part, width: of.width() };
+                let symbolic = Scev { constant: BigInt::from(0), terms: part, width: of.width() };
                 add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None);
-                add(&mut found, Recurrence { start: symbolic.plus(&Linear::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None);
+                add(&mut found, Recurrence { start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None);
             }
         } else {
-            add(&mut found, Recurrence { start: Linear::constant(0, of.width()), ..bare.clone() }, None, None);
-            add(&mut found, Recurrence { start: Linear::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None);
+            add(&mut found, Recurrence { start: Scev::constant(0, of.width()), ..bare.clone() }, None, None);
+            add(&mut found, Recurrence { start: Scev::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None);
         }
         match of.pointer {
             Some(_) => {
@@ -607,9 +607,9 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
                 if &bytes % scale != BigInt::from(0) {
                     continue;
                 }
-                let step = Linear::constant(&bytes / scale, width);
+                let step = Scev::constant(&bytes / scale, width);
                 steps.insert(step.clone());
-                add(&mut found, Recurrence { pointer: None, start: Linear::constant(0, width), step }, None, None);
+                add(&mut found, Recurrence { pointer: None, start: Scev::constant(0, width), step }, None, None);
             }
         }
     }
@@ -819,7 +819,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             && let Operand::Value(other) = view.function.instruction(site.one.user).operands[1 - site.one.index]
         {
             let width = view.int_bits(Operand::Value(other)).unwrap_or(fit.rest.width);
-            held.push(_interned(keys, (None, Linear::of(&induction::AffineOperand::Value(other, width), width))));
+            held.push(_interned(keys, (None, Scev::of(&induction::AffineOperand::Value(other, width), width))));
         }
         return Some((fit, Price { cost, held, address: Vec::new(), wide: false, product: None }));
     }
@@ -903,10 +903,10 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             let other = op.operands[1 - site.one.index];
             let width = fit.rest.width;
             let invariant = match view.int_constant(other) {
-                Some(bits) => Linear::constant(BigInt::from(bits), width),
-                None => Linear::of(&induction::term(view, other)?, width),
+                Some(bits) => Scev::constant(BigInt::from(bits), width),
+                None => Scev::of(&induction::term(view, other)?, width),
             };
-            let folded = invariant.minus(&fit.rest).minus(&Linear::constant(fit.constant.clone(), width)).times(&fit.k);
+            let folded = invariant.minus(&fit.rest).minus(&Scev::constant(fit.constant.clone(), width)).times(&fit.k);
             if !folded.terms.is_empty() {
                 price.held.push(_interned(keys, (None, folded.clone())));
             }
@@ -924,7 +924,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
             if symbolic {
-                let whole = fit.rest.plus(&Linear::constant(fit.constant.clone(), fit.rest.width));
+                let whole = fit.rest.plus(&Scev::constant(fit.constant.clone(), fit.rest.width));
                 price.held.push(_interned(keys, (if pointer { None } else { fit.base }, whole)));
                 price.cost += costs.add;
             } else if fit.constant != BigInt::from(0) || fit.base.is_some() {
@@ -935,7 +935,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
                 let op = view.function.instruction(site.one.user);
                 if let Operand::Value(other) = op.operands[1 - site.one.index] {
                     let width = view.int_bits(Operand::Value(other)).unwrap_or(fit.rest.width);
-                    price.held.push(_interned(keys, (None, Linear::of(&induction::AffineOperand::Value(other, width), width))));
+                    price.held.push(_interned(keys, (None, Scev::of(&induction::AffineOperand::Value(other, width), width))));
                 }
             }
         }
@@ -983,7 +983,7 @@ fn _exit_price(target: &Target, exit: &Exit, candidate: &Candidate, keys: &mut V
 }
 
 /// `candidate`'s value as the loop leaves: its start plus its step each trip.
-fn _end(exit: &Exit, candidate: &Candidate) -> Linear {
+fn _end(exit: &Exit, candidate: &Candidate) -> Scev {
     let trips = exit.trips.truncated(candidate.of.width());
     candidate.of.start.plus(&trips.product(&candidate.of.step).expect("a constant step"))
 }
@@ -1444,7 +1444,7 @@ fn _realized(
     let int = context.types.int(width);
     let i8 = context.types.int(8);
     let magnitude = BigInt::from(fit.k.magnitude().clone());
-    let constant = Linear::constant(fit.constant.clone(), width);
+    let constant = Scev::constant(fit.constant.clone(), width);
     let (register, pointer) = match &fit.trip {
         Some((shift, down, inverse)) => {
             let (shift, down) = (*shift, *down);
