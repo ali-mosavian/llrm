@@ -221,8 +221,8 @@ pub fn separated(unit: &mut passes::Unit, analyses: &Analyses) -> bool {
             continue;
         }
         let dying = _dying(splitter.function, &splitter.cone, gep);
-        let (function, context) = (&*splitter.function, &*splitter.context);
-        let price = |list: &mut dyn Iterator<Item = InstId>| list.map(|one| profit::operation(context, function, callees, one, &costs)).sum::<Option<i64>>();
+        let (function, context, layout) = (&*splitter.function, &*splitter.context, unit.layout);
+        let price = |list: &mut dyn Iterator<Item = InstId>| list.map(|one| profit::operation(context, layout, function, callees, one, &costs)).sum::<Option<i64>>();
         let made = price(&mut splitter.created.iter().copied());
         let saved = price(&mut dying.iter().copied());
         let created = splitter.created.clone();
