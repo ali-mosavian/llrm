@@ -32,7 +32,7 @@ use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::types::Type;
+use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 use num_traits::ToPrimitive;
 
@@ -56,10 +56,14 @@ fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }
 
-/// Whether the pointer `value` is in a space whose displacement carries into
-/// its selector (`DataLayout::carries`).
-pub fn carries(context: &Context, layout: &DataLayout, function: &Function, value: ValueId) -> bool {
-    matches!(context.types.get(function.value(value).ty), Type::Pointer(space) if layout.carries(*space))
+/// What a `getelementptr` producing `ty` costs: the address's own price, or
+/// the carry into the selector where its space's displacement has one
+/// (`DataLayout::carries`). The one place the advance's price is stated.
+pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, costs: &OperationCosts) -> i64 {
+    match context.types.get(ty) {
+        Type::Pointer(space) if layout.carries(*space) => costs.carry,
+        _ => costs.address,
+    }
 }
 
 /// Target price for semantic work, or None when it cannot be priced.
@@ -75,9 +79,8 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
-        // A displacement in a space whose index outruns its offset carries into the selector.
-        Opcode::GetElementPtr { .. } if instruction.result.is_some_and(|result| carries(context, layout, function, result)) => costs.carry,
-        Opcode::Alloca { .. } | Opcode::GetElementPtr { .. } => costs.address,
+        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs),
+        Opcode::Alloca { .. } => costs.address,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
         Opcode::Binary(BinaryOp::FDiv) => costs.float_divide,
