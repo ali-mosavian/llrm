@@ -226,6 +226,8 @@ struct Problem<'a> {
     header: i64,
     /// How often the preheader runs, where starts and invariants are built.
     entry: i64,
+    /// How often each block runs a trip.
+    frequencies: BTreeMap<i64, i64>,
     /// Values the loop holds anyway: a key of one alone is no new register.
     live: BTreeSet<ValueId>,
     /// Frame objects: their addresses are the frame's register and a displacement.
@@ -339,6 +341,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         latch: frequency(cfg::block(latch)),
         header: frequency(cfg::block(loop_.header)),
         entry: frequency(preheader),
+        frequencies: frequencies.clone(),
         live,
         frames: _frames(view.function),
         views: _views(view),
@@ -842,10 +845,18 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
                 // narrower one, zero-extended, must not go negative, and
                 // pays its extension each time it changes.
                 let width = i64::from(candidate.of.width()) / 8;
+                // A dword index is truncated to the word the address adds: the
+                // selector scales it only where its range keeps it in one.
+                let bounded = width < 4
+                    || most.zip(candidate.of.step.known()).is_some_and(|(most, step)| {
+                        let magnitude = |one: &BigInt| BigInt::from(one.magnitude().clone());
+                        let start = candidate.of.start.known().map_or(BigInt::from(0), |start| magnitude(&start));
+                        (most * magnitude(&step) + start) * BigInt::from(scale.unsigned_abs()) <= BigInt::from(i16::MAX)
+                    });
                 let scaled = target
                     .forms
                     .iter()
-                    .filter(|form| form.scales.contains(&scale) && (form.index_width == width || nonnegative && form.index_width > width))
+                    .filter(|form| form.scales.contains(&scale) && (form.index_width == width && bounded || nonnegative && form.index_width > width))
                     .map(|form| form.use_cost + if form.index_width > width { form.extension_cost } else { 0 })
                     .min();
                 let computed = _scaling(target, &fit.k) + native.use_cost;
@@ -985,7 +996,12 @@ impl Problem<'_> {
             Resident::Counter(at) => Traffic { stores: if self.candidates[at].existing.is_none() { self.entry } else { 0 }, updates: self.latch, loads: read, rebuild: None },
             Resident::Held(_) => Traffic { stores: self.entry, loads: read, ..Traffic::default() },
             Resident::Step(_) => Traffic { stores: self.entry, loads: self.latch, ..Traffic::default() },
-            Resident::Product(..) => Traffic { stores: read, loads: read, ..Traffic::default() },
+            // The code a spilled product becomes: its register copy stored, the
+            // multiply or shift made in the cell, and each reader's load.
+            Resident::Product(_, _, block) => {
+                let made = self.frequencies.get(&block).copied().unwrap_or(1);
+                Traffic { stores: made, updates: made, loads: read, rebuild: None }
+            }
             Resident::Rebuilt(at) => Traffic { stores: self.sites[at].frequency, loads: self.sites[at].frequency, ..Traffic::default() },
         };
         traffic.price(&self.target.costs)
