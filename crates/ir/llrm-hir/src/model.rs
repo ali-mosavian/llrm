@@ -9,7 +9,7 @@ use std::fmt;
 
 use llrm_support::pyrepr::{self, Repr};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// A Python `StrEnum`: members, their values, `str()` and `repr()`.
 macro_rules! str_enum {

@@ -274,7 +274,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 37] = [
+pub const FLAG_ATTRIBUTES: [&str; 38] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -308,6 +308,7 @@ pub const FLAG_ATTRIBUTES: [&str; 37] = [
     "returns_twice",
     "signext",
     "speculatable",
+    "threeway",
     "willreturn",
     "writable",
     "writeonly",

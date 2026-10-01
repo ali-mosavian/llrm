@@ -917,6 +917,14 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let name = if tables.callables.contains_key(callee) { callee.to_owned() } else { format!("{RUNTIME}{callee}") };
         let global = module.add_function(&name, ty, Linkage::External)?;
         place_function(module, global, abi);
+        // A string comparison's callee answers a three-way compare: its
+        // result's sign says which is greater, not how often.
+        if three_way(instruction.op).is_some()
+            && let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind
+            && let Some(attribute) = llrm_mir::facts::Fact::ThreeWayCompare.attribute()
+        {
+            function.attrs.push(attribute);
+        }
         let reference = module.reference(global);
         tables.callees.insert(callee.to_owned(), reference);
         tables.conventions.insert(callee.to_owned(), abi.0);
