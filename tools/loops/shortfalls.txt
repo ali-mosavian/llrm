@@ -3045,7 +3045,7 @@ conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_as_end c relation-ivs #98 386-O2 386-O3 38
 conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_as_end c relation-size #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_as_ptr c relation-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_as_ptr c relation-size #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_dead6 nib relation-size #134 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os P5-O2 P5-O3 P5-Os Core-O2
+conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_dead6 nib relation-size #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os P5-O2 P5-O3 P5-Os Core-O2
 conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_dead9_counteraffine_permute645 c relation-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_dead9_counteraffine_permute645 nib relation-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os P5-O2 P5-O3 P5-Os Core-O2
 conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_permute260 nib relation-size #98 386-O2 386-O3 386-Os P5-O2 P5-O3 P5-Os
