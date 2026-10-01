@@ -2063,3 +2063,12 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
 }
+
+/// examples/league.nib's `main` was refused after #127 made every spiller
+/// product unspillable: "value#23 cannot be spilled and no register is free".
+#[test]
+fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
+    let program = parsed(&fixture("league.nib"));
+    let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
+    assert!(result.is_ok(), "{:?}", result.err());
+}
