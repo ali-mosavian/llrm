@@ -194,7 +194,7 @@ fn question_mark_returns_the_failure_and_nested_patterns_cover_every_error() {
 }
 
 /// What `main` prints, having checked every heap buffer was dropped.
-fn output_without_leaks(source: &str) -> String {
+pub(crate) fn output_without_leaks(source: &str) -> String {
     let hir = super::compile(source, "t").unwrap_or_else(|error| {
         panic!(
             "{}:{}: {}",
@@ -233,16 +233,20 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "xyz!?\nxyz!\n");
+    // A field of a borrowed struct cannot move; of an owned one it can (#135).
     let borrowed = "\
 struct Named:
     name: string
 
+fn take(n: &Named) -> void:
+    let taken = n.name
+
 fn main() -> i16:
     let n = Named(name=\"a\" + \"b\")
-    let taken = n.name
+    take(n)
     return 0
 ";
-    assert!(refused(borrowed).contains("cannot move"));
+    assert!(refused(borrowed).contains("cannot move"), "{}", refused(borrowed));
 }
 
 #[test]
