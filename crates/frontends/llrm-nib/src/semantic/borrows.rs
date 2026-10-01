@@ -398,6 +398,29 @@ impl FunctionCompiler<'_> {
     }
 
     /// Errs when a binding in scope, other than `owner` itself, borrows `owner`.
+    /// Whether `binding` may change what it borrows: a `&mut`, or a value
+    /// holding one.
+    fn may_change(&self, binding: &Binding) -> bool {
+        match (&binding.storage, binding.type_) {
+            (Storage::Reference(_) | Storage::Slice(_), _) if binding.mutable && !self.owns(&binding.storage) => true,
+            (_, BindingType::Scalar(type_name)) => self.holds_reference_where(ElementType::Scalar(type_name), true),
+            (_, BindingType::Struct(id)) => self.holds_reference_where(ElementType::Struct(id), true),
+            _ => false,
+        }
+    }
+
+    /// Notes a shared borrow of `place`, refused if a `&mut` borrow that
+    /// may change it is used later.
+    pub(super) fn check_shareable(&mut self, place: &Expr, span: Span) -> Result<(), Diagnostic> {
+        let Some((owner, path)) = owner_path(place) else {
+            return Ok(());
+        };
+        if let Some(key) = self.resolve(owner).and_then(|(_, binding)| identity(&binding.storage)) {
+            self.share_borrowed(key, &path, Diagnostic::new(span, format!("{owner:?} is mutably borrowed here, so it cannot be borrowed")));
+        }
+        Ok(())
+    }
+
     /// Notes a change to `place`, refused if a borrow of it, or of a place
     /// holding or held by it, is used later.
     pub(super) fn check_unborrowed(&mut self, place: &Expr, span: Span) -> Result<(), Diagnostic> {
@@ -427,12 +450,13 @@ impl FunctionCompiler<'_> {
     }
 
     /// The bindings in scope, other than `owner` itself, that borrow
-    /// `path` in it, or a place holding or held by it.
-    pub(super) fn holders(&self, owner: BorrowKey, path: &[String]) -> BTreeSet<BorrowKey> {
+    /// `path` in it, or a place holding or held by it; only those that may
+    /// change it when `exclusive`.
+    pub(super) fn holders(&self, owner: BorrowKey, path: &[String], exclusive: bool) -> BTreeSet<BorrowKey> {
         let borrows = |roots: Option<&BTreeSet<Root>>| roots.is_some_and(|roots| roots.iter().any(|root| root.overlaps(owner, path)));
         let mut holders = BTreeSet::new();
         for binding in self.scopes.iter().flat_map(|scope| scope.values()) {
-            if identity(&binding.storage) == Some(owner) {
+            if identity(&binding.storage) == Some(owner) || exclusive && !self.may_change(binding) {
                 continue;
             }
             let lent = borrow_key(&binding.storage).filter(|key| borrows(self.borrowed_from.get(key)));

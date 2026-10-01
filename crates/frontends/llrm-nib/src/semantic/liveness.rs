@@ -22,9 +22,16 @@ impl FunctionCompiler<'_> {
         if self.iterated.iter().any(|root| root.overlaps(owner, path)) {
             return Err(error);
         }
-        let holders = self.holders(owner, path);
+        let holders = self.holders(owner, path, false);
         self.conflict(holders, error);
         Ok(())
+    }
+
+    /// Notes a shared borrow of `path` in `owner` here, refused with `error`
+    /// if a `&mut` borrow of it, which may change it, is used later.
+    pub(super) fn share_borrowed(&mut self, owner: BorrowKey, path: &[String], error: Diagnostic) {
+        let holders = self.holders(owner, path, true);
+        self.conflict(holders, error);
     }
 
     fn conflict(&mut self, holders: BTreeSet<BorrowKey>, error: Diagnostic) {

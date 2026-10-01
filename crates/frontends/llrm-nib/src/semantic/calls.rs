@@ -274,6 +274,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         if *mutable {
             self.check_unborrowed(operand, *span)?;
+        } else {
+            self.check_shareable(operand, *span)?;
         }
         if *mutable {
             self.place_writable(operand, *span)?;

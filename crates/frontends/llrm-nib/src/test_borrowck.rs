@@ -376,3 +376,30 @@ fn main() -> i16:
 ";
     assert_eq!(refused_at(returned), "11: \"p\" is borrowed here, so it cannot be changed");
 }
+
+#[test]
+fn nothing_borrows_what_a_live_mut_borrow_may_change() {
+    // Only a change checked the borrows of what it changed: `&v[0]` beside a
+    // live `a = &mut v` passed, and `a.push` moved the buffer `r` points into.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let a = &mut v
+    let r = &v[0]
+    a.push(3)
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "4: \"v\" is mutably borrowed here, so it cannot be borrowed");
+    let walked = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let a = &mut v
+    for x in &v:
+        a.push(x)
+    return 0
+";
+    assert_eq!(refused_at(walked), "4: \"v\" is mutably borrowed here, so it cannot be borrowed");
+    let ended = source.replace("    let r = &v[0]\n    a.push(3)\n", "    a.push(3)\n    let r = &v[0]\n");
+    assert_eq!(output(&ended), "1\n");
+}
