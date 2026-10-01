@@ -28,7 +28,7 @@ use llrm_mir::types::Type;
 pub struct Room {
     pub registers: i64,
     pub across_call: i64,
-    /// What an access through a far pointer takes besides its operands.
+    /// What an access through a far pointer takes besides its address: its selector.
     pub far_access: i64,
 }
 
@@ -98,7 +98,10 @@ pub fn kept_across(outer: &Outer, context: &Context, function: &Function, inst: 
     outer.kept_across(llrm_mir::memory::callee(context, function, inst))
 }
 
-/// The registers `inst` takes beyond the values live: a far access's.
+/// The registers `inst` needs for its address beyond the values live: a
+/// spilled operand is read back into one. They are the runtime pointer it
+/// is an offset from, each variable index, and for a far pointer the
+/// selector. A symbol or frame object is a displacement.
 pub fn transient(context: &Context, layout: &DataLayout, function: &Function, inst: InstId, room: Room) -> i64 {
     let op = function.instruction(inst);
     let address = match op.opcode {
@@ -106,10 +109,38 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
         Opcode::Store { .. } => op.operands.get(1),
         _ => None,
     };
-    match address {
-        Some(Operand::Value(value)) if words(context, layout, function, *value) > 1 => room.far_access,
-        _ => 0,
+    let Some(Operand::Value(pointer)) = address else { return 0 };
+    let defined = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => Some(function.instruction(def)),
+            _ => None,
+        },
+        _ => None,
+    };
+    // The access's own `getelementptr` names its variable indices; what it
+    // is an offset from is one register, however it was made.
+    let mut components = 0;
+    let mut base = Operand::Value(*pointer);
+    if let Some(op) = defined(base)
+        && let (Opcode::GetElementPtr { .. }, [from, indices @ ..]) = (&op.opcode, &op.operands[..])
+    {
+        components += indices.iter().filter(|index| matches!(index, Operand::Value(_))).count() as i64;
+        base = *from;
     }
+    // A constant displacement from a symbol or frame object needs none.
+    let symbolic = loop {
+        match base {
+            Operand::Value(_) => match defined(base).map(|op| (&op.opcode, &op.operands[..])) {
+                Some((Opcode::GetElementPtr { .. }, [from, indices @ ..])) if indices.iter().all(|index| matches!(index, Operand::Constant(_))) => base = *from,
+                Some((Opcode::Cast(CastOp::AddrSpaceCast), [from])) => base = *from,
+                Some((Opcode::Alloca { .. }, _)) => break true,
+                _ => break false,
+            },
+            _ => break true,
+        }
+    };
+    components += i64::from(!symbolic);
+    components + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
 }
 
 /// Whether `value` takes an integer register: floating values do not, nor

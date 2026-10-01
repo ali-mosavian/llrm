@@ -166,5 +166,5 @@ entry:
     let room = Room { registers: 6, across_call: 2, far_access: 1 };
     let loads = function.layout().iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect::<Vec<_>>();
     let taken = loads.iter().map(|&inst| super::transient(&module.context, &layout, function, inst, room)).collect::<Vec<_>>();
-    assert_eq!(taken, [1, 0]);
+    assert_eq!(taken, [2, 1]);
 }

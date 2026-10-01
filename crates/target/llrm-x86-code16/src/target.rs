@@ -21,14 +21,13 @@ pub struct Dos {
     pub registers: i64,
     pub call_registers: i64,
     pub address_forms: Vec<AddressForm>,
-    /// Registers a far access takes besides the values live.
+    /// Registers a far access takes for its selector.
     pub far_access: i64,
 }
 
-/// Registers a far access takes besides the values live. Measured, not
-/// derived: with fewer the allocator failed loops of nine arrays (two) and
-/// eleven (three).
-pub const FAR_ACCESS: i64 = 3;
+/// A far access sets a segment register from its selector, through a
+/// general register.
+pub const FAR_ACCESS: i64 = 1;
 
 impl Default for Dos {
     /// On a 486.
