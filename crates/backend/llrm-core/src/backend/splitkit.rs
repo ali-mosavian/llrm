@@ -307,7 +307,7 @@ pub type Moved = IndexMap<i64, Vec<usize>>;
 /// `carved`, and where it moved every instruction, for regions planned
 /// on `body` still to be carved.
 pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) -> Option<(LirBody, Moved)> {
-    let region = region.snapped(body).trimmed(body, value);
+    let region = region.trimmed(body, value).snapped(body);
     let referenced = body.blocks.iter().any(|block| {
         region.spans.get(&block.at).is_some_and(|ranges| {
             ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value)))
@@ -1407,5 +1407,17 @@ mod tests {
             "nothing was cut"
         );
         assert_eq!(_run(&body)[&5], 10);
+    }
+
+    /// Trimming after snapping ended the preheader's piece inside its phi
+    /// copy group, so the copy back was dropped: the loop's first trip read
+    /// an unwritten slot (rnd98_0142).
+    #[test]
+    fn test_a_piece_ending_inside_a_copy_group_still_copies_back() {
+        let grouped = |one: Arc<Insn>| Arc::new(Insn { group: Some(1), ..(*one).clone() });
+        let mut counting = _counting_loop();
+        counting.blocks[0] = block(0, vec![move_imm(0, 8, 3), grouped(move_imm(1, 4, 0)), grouped(move_imm(2, 6, 7)), jump(3, 0x10)], &[0x10]);
+        let body = carved(&counting, 4, 9, 2, &region(&counting, &[0, 0x20])).expect("cut");
+        assert_eq!(_run(&body).get(&5), Some(&10));
     }
 }
