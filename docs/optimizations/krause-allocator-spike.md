@@ -42,6 +42,16 @@ small and optimized code is short; `huge.bas` and real programs may differ.
 Doubt this number before trusting it (rule 2): it is the CFG only, and the
 DP table is driven by live variables per bag, not by treewidth alone.
 
+## Measured: greedy does spill
+
+`LLRM_DEBUG=regalloc`, same suite (84 allocations, from the `best` line):
+52 spill nothing, 32 spill 1 to 37 values. `_bench_matmul` (9 spilled, cost
+7153, 540 insns), `_tile_sum` (4) and `_bench_mandel` (6) also log "last
+resort" evictions. Any gap is therefore in the 32, and the oracle's first
+targets are those: `_lruUse`, `_bench_mandel`, `_bench_matmul`, `_tile_sum`,
+`_r_point_leaf`, `_sum_three`. Greedy's spill count is not a gap: an
+optimum may spill as many.
+
 ## Where it would plug in
 
 `RegAlloc::transform` picks the cheapest of several candidate bodies, each
