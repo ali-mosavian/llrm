@@ -1,11 +1,10 @@
 //! A finished body's executed work, estimated without a profile.
 //!
-//! `tools/quality.py`'s `_transitions` and `_frequencies`: a loop branch continues with
-//! its proved trip count, or nine times in ten; other branches split evenly. A loop
-//! tested at its header tests once more than it trips. Each block's
-//! expected executions per call weigh its instructions and memory operands, so spill code
-//! the MIR estimate cannot see is counted.
+//! Each block's expected executions per call (`analysis::frequency`: the
+//! branch heuristics, a loop's proven trips) weigh its instructions and memory
+//! operands, so spill code the MIR estimate cannot see is counted.
 
+use crate::analysis::frequency::Frequency;
 use crate::analysis::loops;
 use crate::model::ir::{Addr, Loc, Space};
 use crate::model::lir::{Insn, LirBody};
@@ -41,91 +40,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     if !loops::irreducible(&graph, Some(body.entry)).is_empty() {
         return None;
     }
-    let natural = loops::loops(&graph, Some(body.entry));
-    let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
-    let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let size = body.blocks.len();
-    let successors_of: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect();
-    // f = entry + P^T f, solved directly.
-    let mut matrix = vec![vec![0.0f64; size]; size];
-    for (at, row) in matrix.iter_mut().enumerate() {
-        row[at] = 1.0;
-    }
-    let mut right = vec![0.0f64; size];
-    right[*position.get(&body.entry)?] = 1.0;
-    for block in &body.blocks {
-        let successors: Vec<i64> = block.succ.iter().copied().filter(|at| position.contains_key(at)).collect();
-        if successors.is_empty() {
-            continue;
-        }
-        let mut split: Option<Vec<(i64, f64)>> = None;
-        for one in &natural {
-            if !one.body.contains(&block.at) {
-                continue;
-            }
-            let inside: Vec<i64> = successors.iter().copied().filter(|at| one.body.contains(at)).collect();
-            let outside: Vec<i64> = successors.iter().copied().filter(|at| !one.body.contains(at)).collect();
-            if !inside.is_empty() && !outside.is_empty() {
-                // A proven count holds where the loop's one exit is tested,
-                // whichever block that is: a split edge may make the way back
-                // a block of its own.
-                let exiting = one.body.iter().filter(|&&at| successors_of.get(&at).is_some_and(|succ| succ.iter().any(|to| !one.body.contains(to)))).count();
-                let count = if exiting == 1 || block.at == one.header || one.latches.contains(&block.at) { trips.get(&one.header) } else { None };
-                // Tested after a trip, the loop stays for all but its last;
-                // tested at its header before one, for every trip.
-                let tested = if block.at == one.header && !one.latches.contains(&block.at) { 0.0 } else { 1.0 };
-                // An uncounted loop goes round nine times in ten, however many ways it has out.
-                let stay = count.map_or(0.9_f64.powf(1.0 / exiting as f64), |count| (*count as f64 - tested) / (*count as f64 + 1.0 - tested));
-                let mut parts: Vec<(i64, f64)> = inside.iter().map(|at| (*at, stay / inside.len() as f64)).collect();
-                parts.extend(outside.iter().map(|at| (*at, (1.0 - stay) / outside.len() as f64)));
-                split = Some(parts);
-                break;
-            }
-        }
-        if split.is_none() && successors.len() == 2 {
-            // A block that only falls into a loop enters it as its header does.
-            let entered = |at: i64, header: i64| at == header || successors_of.get(&at).is_some_and(|succ| succ == &[header]);
-            let guarded: Vec<(&loops::Loop, i64)> = natural
-                .iter()
-                .filter_map(|one| {
-                    let into = successors.iter().copied().find(|&at| entered(at, one.header) && (at == one.header || !one.body.contains(&at)))?;
-                    successors.iter().all(|at| *at == into || !one.body.contains(at)).then_some((one, into))
-                })
-                .collect();
-            if let [(_, into)] = guarded.as_slice() {
-                split = Some(successors.iter().map(|at| (*at, if at == into { 0.9 } else { 0.1 })).collect());
-            }
-        }
-        let split = split.unwrap_or_else(|| successors.iter().map(|at| (*at, 1.0 / successors.len() as f64)).collect());
-        let column = position[&block.at];
-        for (to, probability) in split {
-            matrix[position[&to]][column] -= probability;
-        }
-    }
-    for column in 0..size {
-        let pivot = (column..size).max_by(|one, other| matrix[*one][column].abs().total_cmp(&matrix[*other][column].abs()))?;
-        if matrix[pivot][column].abs() < 1e-12 {
-            return None;
-        }
-        matrix.swap(column, pivot);
-        right.swap(column, pivot);
-        let scale = matrix[column][column];
-        for value in &mut matrix[column] {
-            *value /= scale;
-        }
-        right[column] /= scale;
-        let pivoted = matrix[column].clone();
-        for row in 0..size {
-            let factor = matrix[row][column];
-            if row == column || factor.abs() < 1e-15 {
-                continue;
-            }
-            for (value, by) in matrix[row].iter_mut().zip(&pivoted) {
-                *value -= factor * by;
-            }
-            right[row] -= factor * right[column];
-        }
-    }
+    let frequency = Frequency::of(body);
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
     let slots: IndexSet<Addr> = body
         .blocks
@@ -142,8 +57,8 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
         one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| slots.contains(&addr)))))
     };
     let mut out = Executed::default();
-    for (block, frequency) in body.blocks.iter().zip(&right) {
-        let frequency = frequency.max(0.0);
+    for block in &body.blocks {
+        let frequency = frequency.block(block.at);
         for one in block.insns.iter().filter(|one| crate::backend::masm::prints(one)) {
             out.instructions += frequency;
             // A remat may be built as a reload; it counts as a remat.
@@ -296,28 +211,41 @@ mod tests {
             blocks.push(block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]));
             executed(&LirBody::new("guarded", 1, blocks, IndexMap::default(), IndexMap::default())).expect("a loop").instructions
         };
-        // The preheader's jump, taken nine times in ten, is all that differs.
-        assert!((looped(true) - 0.9 - looped(false)).abs() < 1e-9, "{} {}", looped(true), looped(false));
+        // The preheader's jump, taken as often as the guard takes it (half, with no odds), is all that differs.
+        assert!((looped(true) - 0.5 - looped(false)).abs() < 1e-9, "{} {}", looped(true), looped(false));
     }
 
-    /// An uncounted loop goes round as often with two exits as with one:
-    /// each exit staying nine times in ten made a loop tested twice a trip
-    /// run half as often, and Nib's `zip`, its two exits made one, read 59
-    /// instructions before and 90 after with fewer each trip.
+    /// An uncounted loop goes round as often as its exits' odds say: each exit
+    /// a branch isel gave the loop heuristic's 31 in 32 to stay, so one
+    /// tested twice a trip runs (1 / (1 - (31/32)^2)) times, where the
+    /// instrument once gave every uncounted loop ten, whatever its exits.
     #[test]
-    fn test_an_uncounted_loop_runs_as_often_whatever_its_exits() {
+    fn test_an_uncounted_loop_runs_as_often_as_its_exits_odds_say() {
         let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
         let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
         let moved = |at| insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]);
         let tested = |at| insn(at, Operation::Branch, "jne", vec![], vec![]);
-        let run = |blocks: Vec<LirBlock>| executed(&LirBody::new("uncounted", 1, blocks, IndexMap::default(), IndexMap::default())).expect("a loop").instructions;
+        let stay = 124.0 / 128.0;
+        let run = |blocks: Vec<LirBlock>, edges: &[(i64, i64, f64)]| {
+            let mut body = LirBody::new("uncounted", 1, blocks, IndexMap::default(), IndexMap::default());
+            for &(from, to, probability) in edges {
+                body.odds.taken.insert((from, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
+            }
+            executed(&body).expect("a loop").instructions
+        };
         let ret = |at| block(at, vec![insn(at, Operation::Return, "ret", vec![], vec![])], vec![]);
-        // The header, a move and a test, ten times in both.
-        let once = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![2, 4]), ret(4)]);
-        let twice = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![3, 5]), block(3, vec![tested(4)], vec![2, 5]), ret(5)]);
-        assert!((once - (1.0 + 10.0 * 2.0 + 1.0)).abs() < 1e-9, "{once}");
-        assert!((twice - (1.0 + 10.0 * 2.0 + 10.0 * 0.9_f64.sqrt() + 1.0)).abs() < 1e-9, "{twice}");
+        // The header, a move and a test: 32 times, and the return once.
+        let once = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![2, 4]), ret(4)], &[(2, 2, stay), (2, 4, 1.0 - stay)]);
+        assert!((once - (1.0 + 32.0 * 2.0 + 1.0)).abs() < 0.01, "{once}");
+        // A second exit tested in the same trip.
+        let twice = run(
+            vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![3, 5]), block(3, vec![tested(4)], vec![2, 5]), ret(5)],
+            &[(2, 3, stay), (2, 5, 1.0 - stay), (3, 2, stay), (3, 5, 1.0 - stay)],
+        );
+        let header = 1.0 / (1.0 - stay * stay);
+        let want = 1.0 + header * 2.0 + header * stay + 1.0;
+        assert!((twice - want).abs() < 0.01, "{twice} {want}");
     }
 
     /// An x87 spill store was counted while its restores, unflagged, were

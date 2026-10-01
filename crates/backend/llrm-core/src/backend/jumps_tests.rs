@@ -462,8 +462,9 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
 /// Unpriced tail sharing grew C sieve from 54 to 55 instructions.
 #[test]
 fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
+    // The loop's exit test stays in 31 times in 32, as isel's heuristic odds say.
     let shaped = |entry: Vec<Arc<Insn>>, looped: Vec<Arc<Insn>>| {
-        body(
+        let mut shaped = body(
             "f",
             1,
             vec![
@@ -472,7 +473,11 @@ fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
                 block(20, vec![_jump(20, 10)], vec![10]),
                 block(30, vec![_return(30)], vec![]),
             ],
-        )
+        );
+        for (to, probability) in [(20, 124.0 / 128.0), (30, 4.0 / 128.0)] {
+            shaped.odds.taken.insert((10, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
+        }
+        shaped
     };
 
     let before = shaped(

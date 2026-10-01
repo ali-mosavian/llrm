@@ -72,8 +72,10 @@ pub const LIKELY: f64 = 0.8;
 /// LLVM's cap on how many times a loop header runs per entry.
 const LOOP_SCALE: f64 = 4096.0;
 
-/// `function`'s odds. `declarations` are its module's globals.
-pub fn estimated(context: &Context, declarations: &Declarations, function: &Function, shape: &Shape) -> Odds {
+/// `function`'s odds. `declarations` are its module's globals; `trips` each
+/// loop's header and the trips induction proves it, which stand in for the
+/// heuristic's 31 in 32.
+pub fn estimated(context: &Context, declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>) -> Odds {
     let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
     let cold = noreturn::cold(context, declarations, function, &terminal);
     let mut odds = Odds::default();
@@ -94,7 +96,7 @@ pub fn estimated(context: &Context, declarations: &Declarations, function: &Func
             }
         }
     }
-    odds.frequency = frequencies(function, shape, &odds);
+    odds.frequency = frequencies(function, shape, &odds, trips);
     odds
 }
 
@@ -262,20 +264,47 @@ pub struct Cycle<'a> {
     pub header: i64,
     pub latches: &'a BTreeSet<i64>,
     pub body: &'a BTreeSet<i64>,
+    /// The trips induction proves, in place of the heuristic's odds.
+    pub trips: Option<i64>,
 }
 
 /// Each block's frequency, the entry's 1, loops scaled by their back edges.
-fn frequencies(function: &Function, shape: &Shape, odds: &Odds) -> BTreeMap<i64, f64> {
+fn frequencies(function: &Function, shape: &Shape, odds: &Odds, trips: &BTreeMap<i64, i64>) -> BTreeMap<i64, f64> {
     let order = reverse_postorder(function);
-    let cycles: Vec<Cycle> = shape.loops.iter().map(|one| Cycle { header: one.header, latches: &one.latches, body: &one.body }).collect();
+    let cycles: Vec<Cycle> = shape.loops.iter().map(|one| Cycle { header: one.header, latches: &one.latches, body: &one.body, trips: trips.get(&one.header).copied() }).collect();
     let predecessors = |at: i64| function.predecessors(cfg::block(at)).into_iter().map(id).collect::<Vec<_>>();
-    propagated(&order, &predecessors, &cycles, &|from, to| odds.probability(from, to).unwrap_or(0.0))
+    let successors = |at: i64| function.successors(cfg::block(at)).into_iter().map(id).collect::<Vec<_>>();
+    propagated(&order, &predecessors, &successors, &cycles, &|from, to| odds.probability(from, to).unwrap_or(0.0))
 }
 
 /// Frequencies over any CFG: `order` its reachable blocks in reverse
 /// postorder, the entry first; `cycles` its natural loops, innermost first;
-/// `edge` each edge's probability.
-pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, cycles: &[Cycle], edge: &dyn Fn(i64, i64) -> f64) -> BTreeMap<i64, f64> {
+/// `edge` each edge's probability. A loop with proven `trips` stays in as
+/// many times as they say: its exit test, where the loop has one exit or
+/// where it is tested at the header or a latch, takes `1 / (trips + 1 - tested)`
+/// out, `tested` being 1 when the test follows a trip and 0 when it precedes
+/// one. Only here, so that MIR and LIR estimates agree.
+pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, successors: &dyn Fn(i64) -> Vec<i64>, cycles: &[Cycle], given: &dyn Fn(i64, i64) -> f64) -> BTreeMap<i64, f64> {
+    let counted = |from: i64, to: i64| -> Option<f64> {
+        let next = successors(from);
+        for one in cycles.iter().filter(|one| one.body.contains(&from)) {
+            let inside = next.iter().filter(|at| one.body.contains(at)).count();
+            let outside = next.len() - inside;
+            if inside == 0 || outside == 0 {
+                continue;
+            }
+            let trips = one.trips?;
+            let exiting = one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count();
+            if exiting != 1 && from != one.header && !one.latches.contains(&from) {
+                return None;
+            }
+            let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
+            let stay = (trips as f64 - tested) / (trips as f64 + 1.0 - tested);
+            return Some(if one.body.contains(&to) { stay / inside as f64 } else { (1.0 - stay) / outside as f64 });
+        }
+        None
+    };
+    let edge = |from: i64, to: i64| counted(from, to).unwrap_or_else(|| given(from, to));
     // `to` is a loop header and `from` is in its loop.
     let backward = |from: i64, to: i64| cycles.iter().any(|one| one.header == to && one.body.contains(&from));
     // Innermost first: an inner header's scale is known when its outer loop is weighed.

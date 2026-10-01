@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::analysis::intervals::{depths, level};
+use crate::analysis::frequency::Frequency;
 use crate::analysis::regions;
 use crate::backend::allocate::{Live, live};
 use crate::backend::constpool::{self, Pool};
@@ -694,7 +694,7 @@ fn _allocnos(
             held.entry(bundle).or_default().extend(floats(set).intersection(&chosen).copied());
         }
     }
-    let deep = depths(body);
+    let busy = Frequency::of(body);
     let mut allocnos = Allocnos {
         segments: Vec::new(),
         parent: Vec::new(),
@@ -712,7 +712,7 @@ fn _allocnos(
     };
     for block in &body.blocks {
         let at = block.at;
-        let weight = level(deep.get(&at).copied().unwrap_or(0));
+        let weight = busy.block(at);
         let cut = _terminators(block);
         let steps = _steps(block, cut);
         let (entering, leaving) = (floats(&live_in[&at]), floats(&live_out[&at]));
@@ -829,8 +829,8 @@ fn _allocnos(
 impl Plan<'_> {
     /// IRA's cost of each allocno: its register form against its memory form.
     fn priced(&mut self, cpu: &Profile) {
-        let deep = depths(self.body);
-        let weight = |at: i64| level(deep.get(&at).copied().unwrap_or(0));
+        let busy = Frequency::of(self.body);
+        let weight = |at: i64| busy.block(at);
         let (load, store) = (_price(cpu, "x87_load"), _price(cpu, "x87_store"));
         let mut costs: IndexMap<usize, f64> = IndexMap::default();
         for (index, segment) in self.allocnos.segments.iter().enumerate() {
