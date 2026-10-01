@@ -628,7 +628,18 @@ pub fn derived(unit: &Unit, loop_: &Loop, found: Option<&IndexMap<ValueId, Affin
         }
         direct.insert(inst, Derived { op: inst, of: found[counter].clone(), by: _multiplier(shift, by), offsets: Vec::new(), pointer: None });
     }
-    for (inst, formula) in _composed(unit, loop_, found, &facts, &still) {
+    // A counter times an invariant is a recurrence stepping by it, `{0,+,m}`:
+    // counted as one, the sums, scales and addresses off it compose as off any.
+    let mut counters = found.clone();
+    for formula in direct.values() {
+        let (Some(result), AffineOperand::Value(by, width)) = (unit.function.instruction(formula.op).result, &formula.by) else { continue };
+        let (AffineOperand::Const(start), AffineOperand::Const(step)) = (&formula.of.start, &formula.of.step) else { continue };
+        if start.n != BigInt::from(0) || step.n != BigInt::from(1) || !formula.offsets.is_empty() || !still.contains(*by) {
+            continue;
+        }
+        counters.insert(result, Affine { value: result, start: AffineOperand::constant(0, *width), step: AffineOperand::Value(*by, *width), header: formula.of.header });
+    }
+    for (inst, formula) in _composed(unit, loop_, &counters, &facts, &still) {
         direct.insert(inst, formula);
     }
     for formula in _quotients(unit, loop_, found, &facts) {

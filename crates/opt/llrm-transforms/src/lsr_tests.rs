@@ -1623,3 +1623,39 @@ fn test_a_step_stays_ahead_of_the_readers_of_its_value() {
     let printed = on_p5(DOWN_WITH_STRIDES);
     assert!(printed.contains("lsr.iv.next"), "{printed}");
 }
+
+/// `s += a[k * i + 8]` over words, `n` trips: a symbolic byte stride of `2k`.
+const STRIDE_SYMBOLIC: &str = "  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l2 ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %t = mul nsw i16 %i, %k
+  %x = add nsw i16 %t, 8
+  %p = getelementptr inbounds i16, ptr @a, i16 %x
+  %v = load i16, ptr %p
+  %s.next = add i16 %s, %v
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  ret i16 %s
+";
+
+/// A product by an invariant, plus a constant, scaled by the element size, is
+/// an address recurrence stepping by a symbolic `2k`: walked as one, with the
+/// constant a displacement. The product was no recurrence a `gep` could be
+/// derived from, so loop-corpus's `a[i*m + 8]` kept an element index and an
+/// `add` the target scaled with a `lea` each trip, where main walked a pointer.
+#[test]
+fn test_an_address_off_a_product_by_an_invariant_is_walked_by_it() {
+    let text = program(&[("a", "i16", 2)], "i16", STRIDE_SYMBOLIC);
+    let printed = same(&text, &[&[0, 2], &[1, 2], &[5, 3], &[9, 4], &[5, -1]]);
+    let body = printed.split("\nl2:").nth(1).and_then(|rest| rest.split("\nl3:").next()).unwrap_or_default();
+    assert!(!body.contains("add nsw"), "{printed}");
+    assert!(body.contains("i16 16"), "{printed}");
+}
