@@ -13,6 +13,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 | `e2e/mkgolden.py` | the suite's expected outputs, computed from what each program means |
 | `e2e/mkfixtures.py` | rebuilds `tests/fixtures/omf` with the BC toolchains |
 | `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
+| `sizes.py BASE [NEW] [-O2 -Os ...]` | object bytes and the backend's expected instructions and memory operands of every test, bench, example and demo program, two builds side by side |
 | `innerloops.py` | each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or msp430) |
 | `loops/run.py` | the loop corpus: cases in C, BASIC and Nib, checked by an oracle, llrm-mir and DOSBox, measured against hand-derived bounds and reference compilers; see below |
 | `analysis/qbfootprint.py` | linked code bytes per module from two LINK maps |
@@ -48,6 +49,10 @@ loop's induction variables, invariant loads and exit shape from its bytes. The
 references are Open Watcom (`OW_BIN`, its `bwcc`), gcc-ia16's cc1 and as
 (`IA16_ROOT`; the 286 is its newest CPU) and LLVM 20 for msp430 (`LLVM20`), a
 mechanism check only.
+
+`run.py` compiles without inlining, so a loop is measured where its case put it;
+`--inline` lets the compiler inline the functions under test and judges
+correctness only.
 
 `toolchain/` holds what `build.rs` bootstraps: Open Watcom's `wccq`, jwasm,
 jwlink and DOSBox-X.
