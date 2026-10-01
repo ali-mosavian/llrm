@@ -381,6 +381,7 @@ impl<'m> Machine<'m> {
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
             Intrinsic::Code => return unsupported("inline code"),
+            Intrinsic::Asm => return unsupported("inline assembly"),
         })
     }
 
