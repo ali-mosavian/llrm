@@ -2034,9 +2034,9 @@ fn test_the_level_reaches_the_rich_route() {
     assert!(object("-Os") < object("-O2"));
 }
 
-/// `dst: &mut P` and `src: &P` are stated noalias, and lowering gives each
-/// its own restrict root: `src.y` is loaded once, before the loop. Lowering
-/// dropped the fact, so the loop reloaded `src.y` after every store to `dst.x`.
+/// `dst: &mut P` and `src: &P` are stated noalias, so `src.y` is loaded
+/// once, before the loop. Unstated, the loop reloaded it after every store
+/// to `dst.x`; the legacy lowering dropped the fact even once stated.
 #[test]
 fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
     use llrm_mir::facts::Fact;
@@ -2046,15 +2046,21 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     let bump = function(&program, "bump");
     let unaliased = |index: i64| program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index));
     assert!(unaliased(0) && unaliased(1), "the premise: both are stated noalias");
-    let assembly = listing(&program, "main", &O2());
-    let body = between(&assembly, "_bump proc far\n", "_bump endp");
-    // The loop runs from the label its backward jump names to that jump.
-    let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
-    let (head, end) = jump
-        .captures_iter(body)
-        .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
-        .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
-        .expect("a loop");
-    let looped = between(&body[..end], &format!("{head}:\n"), "\0");
-    assert_eq!(looped.matches("ptr").count(), 1, "{looped}");
+    // The memory operands of `bump`'s loop: from the label its backward
+    // jump names to that jump.
+    let looped = |assembly: &str| -> usize {
+        let body = between(assembly, "_bump proc far\n", "_bump endp");
+        let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+        let (head, end) = jump
+            .captures_iter(body)
+            .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+            .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+            .expect("a loop");
+        between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
+    };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
+    assert_eq!(looped(&listing(&program, "main", &O2())), 1, "legacy");
 }
