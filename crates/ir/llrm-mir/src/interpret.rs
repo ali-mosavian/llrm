@@ -55,7 +55,8 @@ pub fn run(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<V
 /// where a `noalias` parameter's memory is also reached some other way and
 /// one of the accesses writes. The oracle a stated fact is tested against.
 /// Only accesses the function makes itself, through a pointer it can trace
-/// to a parameter, a slot or a global, are compared.
+/// to a parameter, a slot or a global (also through a stack slot written
+/// once), are compared.
 pub fn run_checked(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<Val> {
     let mut machine = Machine::new(module, fuel)?;
     machine.checked = true;
@@ -383,19 +384,40 @@ impl<'m> Machine<'m> {
         })
     }
 
+    /// What `pointer` is traced to: a parameter, a slot or a global, through
+    /// GEPs and casts, and through a stack slot written once with a pointer
+    /// that traces to one (an unoptimized body keeps its parameters there).
+    fn root_of(&self, function: &Function, pointer: Operand, depth: u32) -> Option<Root> {
+        let (base, _) = crate::valuetracking::underlying(&self.module.context, &self.layout, function, pointer);
+        match base {
+            Operand::Value(value) => match function.value(value).def {
+                ValueDef::Argument(at) => Some(Root::Param(at)),
+                ValueDef::Instruction(inst) if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) => Some(Root::Object(base)),
+                ValueDef::Instruction(inst) => {
+                    let load = function.instruction(inst);
+                    let Opcode::Load { .. } = load.opcode else { return None };
+                    let (slot, _) = crate::valuetracking::underlying(&self.module.context, &self.layout, function, load.operands[0]);
+                    let Operand::Value(slot_value) = slot else { return None };
+                    let ValueDef::Instruction(slot_inst) = function.value(slot_value).def else { return None };
+                    if depth == 0 || !matches!(function.instruction(slot_inst).opcode, Opcode::Alloca { .. }) {
+                        return None;
+                    }
+                    let mut stored = function.walk().map(|(_, one)| function.instruction(one)).filter(|one| matches!(one.opcode, Opcode::Store { .. })).filter(|one| {
+                        crate::valuetracking::underlying(&self.module.context, &self.layout, function, one.operands[1]).0 == slot
+                    });
+                    let (Some(only), None) = (stored.next(), stored.next()) else { return None };
+                    self.root_of(function, only.operands[0], depth - 1)
+                }
+            },
+            Operand::Constant(_) => Some(Root::Object(base)),
+            Operand::Block(_) => None,
+        }
+    }
+
     /// Notes an access of `size` bytes at `address` through `pointer`, and
     /// traps where it breaks a `noalias` parameter's promise with one before.
     fn touch(&self, function: &Function, touched: &mut Vec<Touch>, pointer: Operand, address: u64, size: u64, write: bool) -> Run<()> {
-        let (base, _) = crate::valuetracking::underlying(&self.module.context, &self.layout, function, pointer);
-        let root = match base {
-            Operand::Value(value) => match function.value(value).def {
-                ValueDef::Argument(at) => Root::Param(at),
-                ValueDef::Instruction(inst) if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) => Root::Object(base),
-                ValueDef::Instruction(_) => return Ok(()),
-            },
-            Operand::Constant(_) => Root::Object(base),
-            Operand::Block(_) => return Ok(()),
-        };
+        let Some(root) = self.root_of(function, pointer, 4) else { return Ok(()) };
         let restrict = |root: Root| matches!(root, Root::Param(at) if Facts::param(function, at as usize).no_alias());
         let new = Touch { root, start: address, end: address + size, write };
         for old in touched.iter() {

@@ -1826,6 +1826,24 @@ mod tests {
         assert_eq!(attributes(&module, "_sq"), vec![llrm_mir::Attribute::Memory(vec![(None, "none".to_owned())])]);
     }
 
+    /// The facts C states of `add` hold when it runs: called on three arrays it
+    /// runs, and called with one array as two of its restrict parameters it is
+    /// the caller that broke restrict, which the checked interpreter reports.
+    #[test]
+    fn test_a_restrict_call_on_one_array_is_reported_by_the_checked_run() {
+        use llrm_mir::interpret::{Trap, run_checked};
+        let text = format!(
+            "{}\n@one = global [8 x i16] zeroinitializer\n@two = global [8 x i16] zeroinitializer\n@three = global [8 x i16] zeroinitializer\n\
+             define void @apart() {{\n  call addrspace(1) void @_add(ptr @one, ptr @two, ptr @three)\n  ret void\n}}\n\
+             define void @same() {{\n  call addrspace(1) void @_add(ptr @one, ptr @one, ptr @three)\n  ret void\n}}\n",
+            llrm_mir::print::module(&raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs"))
+        );
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+        assert!(run_checked(&module, "apart", Vec::new(), 10_000).is_ok(), "{:?}", run_checked(&module, "apart", Vec::new(), 10_000));
+        let trapped = run_checked(&module, "same", Vec::new(), 10_000).unwrap_err();
+        assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("noalias parameter")), "{trapped:?}");
+    }
+
     /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
     #[test]
     fn test_restrict_parameters_are_noalias() {
