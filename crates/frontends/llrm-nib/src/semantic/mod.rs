@@ -208,6 +208,8 @@ struct TypeRegistry {
     generator_states: BTreeMap<String, escaping::GeneratorState>,
     /// Each escaping generator's state, by its struct's id.
     frames: BTreeMap<u32, escaping::Frame>,
+    /// Counts down the owners of what generator frames' fields hold.
+    next_lent_root: u32,
     /// Structs laid out as a view's descriptor, as a generator's state keeps
     /// a borrowed `&[T]`: by id, the view's element and rank.
     kept_views: BTreeMap<u32, (ElementType, u8)>,
@@ -322,6 +324,7 @@ impl TypeRegistry {
             foreign_functions: BTreeMap::new(),
             generator_states: BTreeMap::new(),
             frames: BTreeMap::new(),
+            next_lent_root: u32::MAX / 2,
             kept_views: BTreeMap::new(),
             writable_views: BTreeSet::new(),
             statics: BTreeMap::new(),
@@ -1633,6 +1636,8 @@ struct FunctionCompiler<'a> {
     reseatable: BTreeSet<u32>,
     /// The module variables this function lends to the calls it makes.
     lends: Vec<modref::Lend>,
+    /// The statement being compiled, where a scope it ends drops its owners.
+    statement_span: Span,
     /// Changes to borrowed owners, refused if a holder is used after one.
     conflicts: Vec<liveness::Conflict>,
     /// Module variables borrowed across a call, lent to it if the holder is
@@ -1709,6 +1714,7 @@ impl<'a> FunctionCompiler<'a> {
             parameter_lives: BTreeMap::new(),
             reseatable: BTreeSet::new(),
             lends: Vec::new(),
+            statement_span: Span::new(0, 0, 0),
             conflicts: Vec::new(),
             across: Vec::new(),
             references: Vec::new(),

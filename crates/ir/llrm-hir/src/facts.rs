@@ -14,6 +14,9 @@ pub enum Subject {
     Callable(i64),
     Param { function: i64, index: i64 },
     Instruction { function: i64, id: i64 },
+    /// Operand `operand` of call `instruction`.
+    Operand { function: i64, instruction: i64, operand: i64 },
+    Object(i64),
 }
 
 impl Subject {
@@ -22,6 +25,8 @@ impl Subject {
             Subject::Callable(_) => Kind::Callable,
             Subject::Param { .. } => Kind::Param,
             Subject::Instruction { .. } => Kind::Instruction,
+            Subject::Operand { .. } => Kind::Operand,
+            Subject::Object(_) => Kind::Object,
         }
     }
 
@@ -31,19 +36,23 @@ impl Subject {
             Kind::Callable => "callable",
             Kind::Param => "param",
             Kind::Instruction => "instruction",
+            Kind::Operand => "operand",
+            Kind::Object => "object",
         }
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Callable, Kind::Param, Kind::Instruction].into_iter().find(|&kind| Self::kind_key(kind) == key)
+        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object].into_iter().find(|&kind| Self::kind_key(kind) == key)
     }
 
-    /// The function a subject belongs to, and its own id in it.
-    pub fn fields(self) -> (Option<i64>, Option<i64>) {
+    /// The function a subject belongs to, its own id in it, and, for what
+    /// is a part of one thing, which part.
+    pub fn fields(self) -> (Option<i64>, Option<i64>, Option<i64>) {
         match self {
-            Subject::Callable(id) => (None, Some(id)),
-            Subject::Param { function, index } => (Some(function), Some(index)),
-            Subject::Instruction { function, id } => (Some(function), Some(id)),
+            Subject::Callable(id) | Subject::Object(id) => (None, Some(id), None),
+            Subject::Param { function, index } => (Some(function), Some(index), None),
+            Subject::Instruction { function, id } => (Some(function), Some(id), None),
+            Subject::Operand { function, instruction, operand } => (Some(function), Some(instruction), Some(operand)),
         }
     }
 
@@ -53,11 +62,13 @@ impl Subject {
     }
 
     /// The subject of `kind` with these fields; none where one is missing.
-    pub fn of(kind: Kind, function: Option<i64>, id: Option<i64>) -> Option<Subject> {
+    pub fn of(kind: Kind, function: Option<i64>, id: Option<i64>, part: Option<i64>) -> Option<Subject> {
         Some(match kind {
             Kind::Callable => Subject::Callable(id?),
             Kind::Param => Subject::Param { function: function?, index: id? },
             Kind::Instruction => Subject::Instruction { function: function?, id: id? },
+            Kind::Operand => Subject::Operand { function: function?, instruction: id?, operand: part? },
+            Kind::Object => Subject::Object(id?),
         })
     }
 }
@@ -100,6 +111,15 @@ impl Builder {
         self
     }
 
+    /// Adds facts stated elsewhere, as they were.
+    pub fn extend(&mut self, stated: impl IntoIterator<Item = Stated>) {
+        for one in stated {
+            if !self.stated.iter().any(|have| have.subject == one.subject && have.fact == one.fact) {
+                self.stated.push(one);
+            }
+        }
+    }
+
     /// Keeps the facts `keep` says to: a frontend that drops code drops what
     /// was stated of it.
     pub fn retain(&mut self, keep: impl Fn(&Stated) -> bool) {
@@ -129,10 +149,10 @@ mod tests {
     /// A subject's wire fields name it back.
     #[test]
     fn every_subject_round_trips_through_its_fields() {
-        let all = [Subject::Callable(4), Subject::Param { function: 1, index: 2 }, Subject::Instruction { function: 1, id: 5 }];
+        let all = [Subject::Callable(4), Subject::Param { function: 1, index: 2 }, Subject::Instruction { function: 1, id: 5 }, Subject::Operand { function: 1, instruction: 5, operand: 2 }, Subject::Object(7)];
         for subject in all {
-            let (function, id) = subject.fields();
-            assert_eq!(Subject::of(subject.kind(), function, id), Some(subject));
+            let (function, id, part) = subject.fields();
+            assert_eq!(Subject::of(subject.kind(), function, id, part), Some(subject));
             assert_eq!(Subject::kind_named(Subject::kind_key(subject.kind())), Some(subject.kind()));
         }
     }

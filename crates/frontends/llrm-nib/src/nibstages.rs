@@ -1,18 +1,12 @@
-//! Port of `tools/modernstages.py`: dump every implemented modern-language
-//! frontend stage to text files.
+//! `--dump`: the frontend's stages, then the pipeline's, as the compile
+//! `-o` runs writes them.
 
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
 use super::compile as nib;
 use super::driver;
-use llrm_core::backend::cpu::{self as targets, ProfileOrName};
-use llrm_core::backend::masm;
-use llrm_core::abi::qb::physicalize;
+use llrm_core::driver as codegen;
 use llrm_core::hir;
-use llrm_core::model::mir::MirBody;
-use llrm_core::model::passes::Options;
-use llrm_core::tools::stages;
 
 /// Python's text-mode read: universal newlines.
 fn _text(bytes: &[u8]) -> String {
@@ -23,30 +17,12 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|error| error.to_string())
 }
 
-/// Runs `optimize`, writing the body after each pass to `passes/RUN/NN-PASS.txt` (rule 4).
-fn passes<T>(
-    output: &Path,
-    run: &str,
-    optimize: impl FnOnce(&mut dyn FnMut(&str, &MirBody)) -> Result<T, String>,
-) -> Result<T, String> {
-    let directory = output.join("passes").join(run);
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let mut seen = Vec::new();
-    let done = optimize(&mut |stage: &str, body: &MirBody| seen.push((stage.to_owned(), body.clone())))?;
-    for (number, (stage, body)) in seen.into_iter().enumerate() {
-        let (text, _) = stages::mir_stage(&stage, &[(run.to_owned(), Rc::new(body))], None, None, None, true, true);
-        write(&directory.join(format!("{number:03}-{stage}.txt")), &text)?;
-    }
-    Ok(done)
-}
-
-/// Write source, lexical, syntax, HIR, and semantic-MIR snapshots.
-pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options: &Options) -> Result<PathBuf, String> {
+/// Write source, lexical, syntax and HIR snapshots, then compile through
+/// the one route `-S` and `-o` take, which writes each pipeline stage, the
+/// listing and its costs in `mir/`.
+pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options: &codegen::Options, entry: &str) -> Result<PathBuf, String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let program = driver::parsed(source, frontend, None).map_err(|error| error.0)?;
-    let lowered = nib::semantic_lowered(&program)?;
-    let target = targets::profile(nib::CPU)?;
-
     let input = std::fs::read(source).map_err(|error| error.to_string())?;
     write(&output.join("00-input.nib"), &_text(&input))?;
     let text = String::from_utf8_lossy(&input);
@@ -54,56 +30,18 @@ pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options:
     write(&output.join("01-tokens.txt"), &super::tokens_text(&text).map_err(refused)?)?;
     write(&output.join("02-syntax.txt"), &super::syntax_text(&text).map_err(refused)?)?;
     write(&output.join("03-hir.json"), &hir::encode(&program, Some(2)).map_err(|error| error.to_string())?)?;
-    let mut mir_files = Vec::new();
-    let mut number = 4;
-    assert_eq!(program.modules[0].functions.len(), lowered.len(), "zip(strict=True)");
-    for (function, semantic) in program.modules[0].functions.iter().zip(&lowered) {
-        let name = semantic.name.replace('.', "-");
-        let optimized = passes(output, &format!("{name}-optimized"), |watch| {
-            nib::watched(&program, function, semantic, target, None, options, Some(watch))
-        })?;
-        let physical = physicalize(&program, function, &optimized).map_err(|error| error.to_string())?;
-        let optimized_physical = passes(output, &format!("{name}-optimized-physical"), |watch| {
-            nib::watched(&program, function, &physical.lowered, target, Some(&physical.calls), options, Some(watch))
-        })?;
-        let stages = [
-            ("source", semantic),
-            ("optimized", &optimized),
-            ("physical", &physical.lowered),
-            ("optimized-physical", &optimized_physical),
-        ];
-        for (stage, body) in stages {
-            let filename = format!("{number:02}-{name}-{stage}-mir.txt");
-            write(&output.join(&filename), &hir::mir_text(body))?;
-            mir_files.push(format!("{filename}  {stage} MIR for {}", semantic.name));
-            number += 1;
-        }
-    }
-
-    // The emitted code, of a program with its entry or a library with exports.
-    let functions = &program.modules[0].functions;
-    if functions.iter().any(|function| function.name == "main" || function.linkage == hir::model::FunctionLinkage::External) {
-        let module = nib::assembled(&program, "main", ProfileOrName::Name(nib::CPU), options)?;
-        let filename = format!("{number:02}-listing.asm");
-        write(&output.join(&filename), &masm::text(&module).map_err(|error| error.0)?)?;
-        mir_files.push(format!("{filename}  the program as emitted, for {}", nib::CPU));
-    }
-
-    let mut files = vec![
-        "00-input.nib       exact source presented to the frontend".to_owned(),
-        "01-tokens.txt      lexer output with source positions".to_owned(),
-        "02-syntax.txt      indentation-aware syntax tree".to_owned(),
-        "03-hir.json        verified, source-neutral common HIR".to_owned(),
-    ];
-    files.extend(mir_files);
+    let stages = output.join("mir");
+    std::fs::create_dir_all(&stages).map_err(|error| error.to_string())?;
+    nib::assembled_from_mir(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() })?;
     write(
         &output.join("README.txt"),
-        &format!(
-            "Nib frontend stage dumps\n========================\n\n{}\n\n\
-             Native compilation runs the common MIR fixed point before and after ABI\n\
-             physicalization, then continues through legalization, LIR, allocation, and emission.\n",
-            files.join("\n")
-        ),
+        "Nib frontend stage dumps\n========================\n\n\
+         00-input.nib       exact source presented to the frontend\n\
+         01-tokens.txt      lexer output with source positions\n\
+         02-syntax.txt      indentation-aware syntax tree\n\
+         03-hir.json        verified, source-neutral common HIR\n\
+         mir/               the MIR after each pipeline pass, listing.asm and cost:\n\
+         \x20                  what -S and -o compile\n",
     )?;
     Ok(output.to_path_buf())
 }
@@ -114,41 +52,27 @@ mod tests {
 
     use super::dumped;
     use crate::test_nib_frontend::fixture;
-    use llrm_core::model::passes::O2;
     use llrm_core::support::pyjson::{self, Json};
+
+    fn options() -> llrm_core::driver::Options {
+        llrm_core::driver::Options { dump: None, ..llrm_core::driver::Options::of(crate::compile::machine()) }
+    }
 
     #[test]
     fn test_nbody_stage_dumps_cover_every_implemented_boundary() {
         // nbody used to expose HIR and MIR only through separate ad-hoc commands.
         let directory = tempfile::tempdir().expect("a directory");
         let nbody = fixture("nbody.nib");
-        let output = dumped(&nbody, &directory.path().join("nbody"), &super::super::Frontend::default(), &O2()).expect("dumps");
-
-        let mut names: Vec<String> = std::fs::read_dir(&output)
-            .expect("lists")
-            .map(|one| one.expect("an entry").file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(
-            names,
-            [
-                "00-input.nib",
-                "01-tokens.txt",
-                "02-syntax.txt",
-                "03-hir.json",
-                "04-nbody-nbody-source-mir.txt",
-                "05-nbody-nbody-optimized-mir.txt",
-                "06-nbody-nbody-physical-mir.txt",
-                "07-nbody-nbody-optimized-physical-mir.txt",
-                "08-nbody-main-source-mir.txt",
-                "09-nbody-main-optimized-mir.txt",
-                "10-nbody-main-physical-mir.txt",
-                "11-nbody-main-optimized-physical-mir.txt",
-                "12-listing.asm",
-                "README.txt",
-                "passes",
-            ]
-        );
+        let output = dumped(&nbody, &directory.path().join("nbody"), &super::super::Frontend::default(), &options(), "main").expect("dumps");
+        let names = |directory: &std::path::Path| -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(directory)
+                .expect("lists")
+                .map(|one| one.expect("an entry").file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names(&output), ["00-input.nib", "01-tokens.txt", "02-syntax.txt", "03-hir.json", "README.txt", "mir"]);
         let read = |name: &str| std::fs::read_to_string(output.join(name)).expect("dumped");
         assert_eq!(std::fs::read(output.join("00-input.nib")).unwrap(), std::fs::read(&nbody).unwrap());
         assert!(read("01-tokens.txt").contains("Fixed"));
@@ -156,15 +80,11 @@ mod tests {
         assert!(syntax.contains("Struct {\n            name: \"body\""));
         assert!(syntax.contains("ForRange {"));
         let Json::Dict(document) = pyjson::loads(&read("03-hir.json")).expect("JSON") else { panic!("an object") };
-        assert_eq!(document.get("schema"), Some(&Json::Int(2)));
-        let source_mir = read("04-nbody-nbody-source-mir.txt");
-        let optimized_mir = read("05-nbody-nbody-optimized-mir.txt");
-        let physical_mir = read("06-nbody-nbody-physical-mir.txt");
-        let optimized_physical_mir = read("07-nbody-nbody-optimized-physical-mir.txt");
-        assert!(source_mir.contains("function nbody.nbody"));
-        assert!(optimized_mir.contains(&format!("call {}", llrm_core::abi::nib::PRINT_Q4)));
-        assert!(source_mir.contains("mul"));
-        assert_ne!(physical_mir, optimized_physical_mir);
+        assert_eq!(document.get("schema"), Some(&Json::Int(4)));
+        let stages = names(&output.join("mir"));
+        assert!(stages.iter().any(|one| one.ends_with(".ll")), "{stages:?}");
+        assert!(stages.contains(&"listing.asm".to_owned()) && stages.contains(&"cost".to_owned()), "{stages:?}");
+        assert!(read("mir/listing.asm").contains("_main proc"));
     }
 
     #[test]
@@ -173,8 +93,48 @@ mod tests {
         let directory = tempfile::tempdir().expect("a directory");
         let source = directory.path().join("lib.nib");
         std::fs::write(&source, "@export(\"cdecl16\")\nfn twice(value: i16) -> i16:\n    return value * 2\n").expect("writes");
-        let output = dumped(&source, &directory.path().join("dump"), &super::super::Frontend::default(), &O2()).expect("dumps");
-        let listing = std::fs::read_to_string(output.join("08-listing.asm")).expect("a listing");
+        let output = dumped(&source, &directory.path().join("dump"), &super::super::Frontend::default(), &options(), "main").expect("dumps");
+        let listing = std::fs::read_to_string(output.join("mir/listing.asm")).expect("a listing");
         assert!(listing.contains("_twice"), "{listing}");
+    }
+
+    /// The listing the dump holds, wherever it is written.
+    fn dumped_listing(output: &std::path::Path) -> String {
+        let mut pending = vec![output.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).expect("lists") {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.to_string_lossy().ends_with("listing.asm") {
+                    return std::fs::read_to_string(path).expect("reads");
+                }
+            }
+        }
+        panic!("no listing in the dump")
+    }
+
+    #[test]
+    fn test_the_dump_shows_the_code_the_compiler_emits() {
+        // #136: --dump ran the legacy lowering, which drops noalias, so its
+        // listing reloaded `src.y` in the loop that -S hoists it out of.
+        let directory = tempfile::tempdir().expect("a directory");
+        let source = directory.path().join("bump.nib");
+        std::fs::write(&source, "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n").expect("writes");
+        let output = directory.path().join("dump");
+        // Unrolled, the 4-trip loop is gone and there is nothing to count.
+        let argv = [source.display().to_string(), "-O2".into(), "-fno-inline-functions".into(), "-fno-unroll-loops".into(), "-fno-peel-loops".into(), "--dump".into(), output.display().to_string()];
+        assert_eq!(crate::cli::main(&argv), 0);
+        let listing = dumped_listing(&output);
+        let body = listing.split("_bump proc far\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");
+        // The loop: from the label its backward jump names to that jump.
+        let jump = regex::Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+        let (head, end) = jump
+            .captures_iter(body)
+            .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+            .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+            .expect("a loop");
+        let looped = body[..end].split(&format!("{head}:\n")).nth(1).expect("the loop");
+        assert_eq!(looped.matches("ptr").count(), 1, "{looped}");
     }
 }

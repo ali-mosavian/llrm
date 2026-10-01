@@ -3292,9 +3292,8 @@ fn total(values: &[i16]) -> i16:
     return sum
 ";
     let hir = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message)).replace([' ', '\n'], "");
-    // Each offset's own fields run to the next instruction's `op`.
-    let offsets = hir.split("\"op\":\"ptr_offset\"").skip(1).map(|after| after.split("\"op\":").next().unwrap_or_default()).collect::<Vec<_>>();
-    assert!(!offsets.is_empty() && offsets.iter().all(|fields| fields.contains("\"inbounds\":true")), "{hir}");
+    let offsets = hir.matches("\"op\":\"ptr_offset\"").count();
+    assert!(offsets > 0 && hir.matches("\"fact\":\"inbounds\",\"function\"").count() >= offsets, "{hir}");
 }
 
 /// Nib's panics end the program: it states `noreturn` and `inaccessiblemem`

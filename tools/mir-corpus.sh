@@ -45,7 +45,9 @@ qb() {
 }
 nib() {
   local name=$1 source=$2
-  if "$bin/llrm-nib" "$source" --dump "$work/$name.d" >/dev/null 2>"$work/$name.frontend"; then
+  # The HIR is written before code is made; a backend failure is not the frontend's.
+  "$bin/llrm-nib" "$source" --dump "$work/$name.d" >/dev/null 2>"$work/$name.frontend"
+  if [ -f "$work/$name.d/03-hir.json" ]; then
     add "$name" "$work/$name.d/03-hir.json" "$bin/llrm-nib" "$source"
   else
     echo "frontend fails: $name: $(head -1 "$work/$name.frontend")"

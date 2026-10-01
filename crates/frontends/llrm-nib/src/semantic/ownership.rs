@@ -158,6 +158,11 @@ impl FunctionCompiler<'_> {
             owned.extend(own.into_iter().rev());
         }
         for (name, binding) in owned {
+            // A drop frees what the owner holds: a change to it.
+            if let Some(owner) = borrows::identity(&binding.storage) {
+                let error = Diagnostic::new(self.statement_span, format!("{name:?} is dropped here while still borrowed"));
+                self.drop_borrowed(owner, error);
+            }
             match (binding.type_, &binding.storage) {
                 (BindingType::Scalar(type_name), Storage::Place(place)) => {
                     let value = self.value(type_name);

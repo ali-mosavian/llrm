@@ -154,7 +154,7 @@ plain_record!(ArrayElement, Some("array_element"), place => "place", indices => 
 plain_record!(ProjectedPlace, Some("projection"), place => "place", indices => "indices", offset => "offset",
     r#type => "type");
 plain_record!(IndirectPlace, Some("indirect"), base => "base", offset => "offset", r#type => "type",
-    volatile => "volatile", published => "published", inbounds => "inbounds", origin => "origin",
+    volatile => "volatile", origin => "origin",
     allocation => "allocation");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
 plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
@@ -173,9 +173,6 @@ impl _Plain for model::Instruction {
         out.insert("pure".to_owned(), self.pure._plain());
         if let Some(asm) = &self.asm {
             out.insert("asm".to_owned(), asm._plain());
-        }
-        if self.inbounds {
-            out.insert("inbounds".to_owned(), self.inbounds._plain());
         }
         if let Some(line) = self.line {
             out.insert("line".to_owned(), line._plain());
@@ -202,9 +199,6 @@ impl _Plain for model::CallAbi {
         out.insert("distance".to_owned(), self.distance._plain());
         out.insert("callee".to_owned(), self.callee._plain());
         float_return(&mut out, self.float_return);
-        if !self.promises.is_empty() {
-            out.insert("promises".to_owned(), self.promises._plain());
-        }
         Json::Dict(out)
     }
 }
@@ -238,7 +232,6 @@ impl _Plain for model::ProcedureAbi {
         Json::Dict(out)
     }
 }
-plain_record!(ArgumentPromise, None, operand => "operand", bytes => "bytes");
 // `promises` only when made, so that a function reads as it always has.
 impl _Plain for model::Function {
     fn _plain(&self) -> JSON {
@@ -277,7 +270,7 @@ impl _Plain for model::DataRelocation {
         Json::Dict(out)
     }
 }
-// `segment` and `align` only when set, so that data reads as it always has.
+// `segment` only when set, so that data reads as it always has.
 impl _Plain for model::DataObject {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -292,9 +285,6 @@ impl _Plain for model::DataObject {
         if self.segment.is_some() {
             out.insert("segment".to_owned(), self.segment._plain());
         }
-        if self.align.is_some() {
-            out.insert("align".to_owned(), self.align._plain());
-        }
         Json::Dict(out)
     }
 }
@@ -302,7 +292,7 @@ plain_record!(AliasClass, None, name => "name", parent => "parent", types => "ty
 // A stated fact as flat fields: the subject's kind, its function and its id.
 impl _Plain for crate::facts::Stated {
     fn _plain(&self) -> JSON {
-        let (function, id) = self.subject.fields();
+        let (function, id, part) = self.subject.fields();
         let mut out: IndexMap<String, JSON> = IndexMap::default();
         out.insert("subject".to_owned(), Json::Str(crate::facts::Subject::kind_key(self.subject.kind()).to_owned()));
         if let Some(function) = function {
@@ -310,6 +300,9 @@ impl _Plain for crate::facts::Stated {
         }
         if let Some(id) = id {
             out.insert("id".to_owned(), id._plain());
+        }
+        if let Some(part) = part {
+            out.insert("part".to_owned(), part._plain());
         }
         out.insert("fact".to_owned(), Json::Str(self.fact.key().to_owned()));
         if let Some(value) = self.fact.wire_value() {
@@ -744,7 +737,6 @@ impl _FromMade for crate::facts::Stated {
 made_records!(
     CellWriters,
     RuntimePromises,
-    ArgumentPromise,
     Type,
     Place,
     Value,
@@ -951,8 +943,6 @@ static INDIRECT_PLACE: _Record = _Record {
         ("offset", _Hint::Int, true),
         ("type", _Hint::Int, true),
         ("volatile", _Hint::Bool, false),
-        ("published", _Hint::Bool, false),
-        ("inbounds", _Hint::Bool, false),
         ("origin", OPTIONAL_INT, false),
         ("allocation", OPTIONAL_INT, false),
     ],
@@ -962,8 +952,6 @@ static INDIRECT_PLACE: _Record = _Record {
             offset: _required(args, "offset")?,
             r#type: _required(args, "type")?,
             volatile: _default(args, "volatile", false)?,
-            published: _default(args, "published", false)?,
-            inbounds: _default(args, "inbounds", false)?,
             origin: _default(args, "origin", None)?,
             allocation: _default(args, "allocation", None)?,
         })
@@ -992,7 +980,6 @@ static INSTRUCTION: _Record = _Record {
         ("callee", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
         ("pure", _Hint::Bool, false),
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
-        ("inbounds", _Hint::Bool, false),
         ("line", _Hint::Union(&[_Hint::Int, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1004,7 +991,6 @@ static INSTRUCTION: _Record = _Record {
             callee: _default(args, "callee", None)?,
             pure: _default(args, "pure", false)?,
             asm: _default(args, "asm", None)?,
-            inbounds: _default(args, "inbounds", false)?,
             line: _default(args, "line", None)?,
         })
     },
@@ -1075,7 +1061,6 @@ static CALL_ABI: _Record = _Record {
         ("distance", enum_hint!(CallDistance), true),
         ("callee", OPTIONAL_INT, false),
         ("float_return", enum_hint!(FloatReturn), false),
-        ("promises", _Hint::Tuple(&_Hint::Record(&ARGUMENT_PROMISE)), false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -1085,15 +1070,8 @@ static CALL_ABI: _Record = _Record {
             distance: _required(args, "distance")?,
             callee: _default(args, "callee", None)?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
-            promises: _default(args, "promises", Vec::new())?,
         })
     },
-};
-
-static ARGUMENT_PROMISE: _Record = _Record {
-    name: "ArgumentPromise",
-    fields: &[("operand", _Hint::Int, true), ("bytes", _Hint::Int, true)],
-    build: |args| _object(model::ArgumentPromise { operand: _required(args, "operand")?, bytes: _required(args, "bytes")? }),
 };
 
 static CALLABLE: _Record = _Record {
@@ -1216,7 +1194,6 @@ static DATA_OBJECT: _Record = _Record {
         ("address", enum_hint!(AddressKind), false),
         ("addressed", _Hint::Bool, false),
         ("segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
-        ("align", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::DataObject {
@@ -1229,7 +1206,6 @@ static DATA_OBJECT: _Record = _Record {
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
             segment: _default(args, "segment", None)?,
-            align: _default(args, "align", None)?,
         })
     },
 };
@@ -1358,6 +1334,7 @@ static STATED_FACT: _Record = _Record {
         ("subject", _Hint::Str, true),
         ("function", OPTIONAL_INT, false),
         ("id", OPTIONAL_INT, false),
+        ("part", OPTIONAL_INT, false),
         ("fact", _Hint::Str, true),
         ("value", OPTIONAL_INT, false),
         ("source", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
@@ -1366,7 +1343,7 @@ static STATED_FACT: _Record = _Record {
         let key: String = _required(args, "subject")?;
         let name: String = _required(args, "fact")?;
         let kind = crate::facts::Subject::kind_named(&key).ok_or_else(|| InvalidHIR(format!("unknown fact subject {key:?}")))?;
-        let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?)
+        let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?, _default(args, "part", None)?)
             .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
         let value: Option<i64> = _default(args, "value", None)?;
         let fact = llrm_mir::facts::Fact::from_wire(&name, value).ok_or_else(|| InvalidHIR(format!("{name:?} with value {value:?} is not a fact")))?;

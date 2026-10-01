@@ -248,7 +248,26 @@ impl Program {
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);
-        let facts: Vec<_> = self.functions.iter().flat_map(|one| one.facts.iter().cloned()).chain(self.facts.iter().cloned()).collect();
+        let mut stated = llrm_core::hir::facts::Builder::new("nib");
+        for function in &self.functions {
+            stated.extend(function.facts.iter().cloned());
+            // A reference's place stays inside what it refers to, where the language checked it.
+            for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+                if instruction.inbounds {
+                    stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::InBounds);
+                }
+                for (index, operand) in instruction.operands.iter().enumerate() {
+                    if matches!(operand, Operand::IndirectPlace { inbounds: true, .. }) {
+                        stated.state(
+                            llrm_core::hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(instruction.id), operand: index as i64 },
+                            llrm_mir::facts::Fact::InBounds,
+                        );
+                    }
+                }
+            }
+        }
+        stated.extend(self.facts.iter().cloned());
+        let facts = stated.finish();
         if !facts.is_empty() {
             out.push_str(",\"facts\":");
             out.push_str(&llrm_core::hir::codec::facts_json(&facts));
@@ -282,7 +301,7 @@ impl Program {
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
         out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":2,\"target\":\"i386-real-mode\"}\n",
+            "]}],\"runtime\":\"freestanding\",\"schema\":4,\"target\":\"i386-real-mode\"}\n",
         );
         out
     }
@@ -330,9 +349,6 @@ fn function_json(out: &mut String, function: &Function) {
             out.push_str("],\"pure\":false,\"results\":[");
             numbers(out, &instruction.results);
             out.push(']');
-            if instruction.inbounds {
-                out.push_str(",\"inbounds\":true");
-            }
             if instruction.line > 0 {
                 write!(out, ",\"line\":{}", instruction.line).unwrap();
             }
@@ -440,10 +456,10 @@ fn operands(out: &mut String, values: &[Operand]) {
                 base,
                 offset,
                 type_id,
-                inbounds,
+                inbounds: _,
             } => write!(
                 out,
-                "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
+                "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
             )
             .unwrap(),
             Operand::DescriptorPlace {

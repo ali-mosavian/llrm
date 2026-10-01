@@ -12,6 +12,7 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
             let since = self.calls.len();
+            self.statement_span = statement.span();
             if self.debug {
                 // Another module's line is none of this source's.
                 let span = statement.span();
