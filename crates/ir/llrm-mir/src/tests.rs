@@ -268,3 +268,55 @@ b0:
     let error = crate::transforms::optimized_with(&mut module, &["instcombine"]).unwrap_err();
     assert!(error.starts_with("before the first pass:") && error.contains("dominate"), "{error}");
 }
+
+/// The recurrences a loop carries, for the loop corpus's `mir-ivs`: a far
+/// pointer walked beside a counter is two, though only the counter has a
+/// `Recurrence`. `wordlen` in BASIC counted one before the pass walked its
+/// far pointer as an integer offset and two after, for the same loop.
+#[test]
+fn a_walked_pointer_is_a_recurrence_the_loop_carries() {
+    let module = crate::parse::module(
+        "define i16 @f(ptr addrspace(1) %far, i16 %n) {
+entry:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %l ]
+  %p = phi ptr addrspace(1) [ %far, %entry ], [ %p.next, %l ]
+  %v = load i16, ptr addrspace(1) %p
+  %p.next = getelementptr i8, ptr addrspace(1) %p, i16 2
+  %i.next = add i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %i.next
+}
+
+define i16 @g(ptr addrspace(1) %far, i16 %n) {
+entry:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %l ]
+  %p = phi ptr addrspace(1) [ %far, %entry ], [ %p, %l ]
+  %v = load i16, ptr addrspace(1) %p
+  %i.next = add i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %i.next
+}
+",
+    )
+    .expect("a module");
+    let counted = |name: &str| {
+        let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function");
+        let tree = crate::dominators::DominatorTree::new(function);
+        let loops = crate::loops::LoopInfo::new(function, &tree);
+        let evolution = crate::scalarevolution::Evolution::new(&module.context, function, &loops);
+        evolution.counted(&module.context, function, &loops, loops.loops[0].header)
+    };
+    assert_eq!((counted("f"), counted("g")), (2, 1), "a counter and a walked pointer, then a counter and a pointer that stays");
+}
