@@ -476,3 +476,108 @@ fn main() -> i16:
     assert_eq!(refused_at(source), "4: \"v\" is borrowed here, so it cannot be changed");
     assert_eq!(output(&source.replace("    print(r)\n", "    print(v[0])\n")), "9\n");
 }
+
+#[test]
+fn whatever_bundles_borrows_lends_them_disjoint() {
+    // An escaping generator's state, a struct literal and a variant took
+    // `&mut p` beside `&p` unchecked: `gen(p, p)` ran `bump` with its noalias
+    // `src` loaded once, before the loop, and gave 4 where 8 is right.
+    let generator = "\
+struct P:
+    mut x: i16
+    mut y: i16
+
+fn bump(dst: &mut P, src: &P, n: i16) -> i16:
+    for i in 0..n:
+        dst.y += src.y
+    return dst.y
+
+fn gen(a: &mut P, b: &P) -> iter[i16]:
+    yield bump(a, b, 3)
+
+fn main() -> i16:
+    let mut p = P(x=0, y=1)
+    let it = gen(p, p)
+    for v in it:
+        print(v)
+    return 0
+";
+    assert_eq!(refused_at(generator), "15: borrow of \"p\" aliases a mutable argument");
+    let apart = generator.replace("    let it = gen(p, p)\n", "    let q = P(x=0, y=1)\n    let it = gen(p, q)\n");
+    assert_eq!(output(&apart), "4\n");
+    let literal = "\
+struct H2:
+    a: &mut i16
+    b: &i16
+
+fn main() -> i16:
+    let mut x: i16 = 1
+    let h = H2(a=&mut x, b=&x)
+    h.a = 5
+    print(h.b)
+    return 0
+";
+    assert_eq!(refused_at(literal), "7: borrow of \"x\" aliases a mutable argument");
+}
+
+#[test]
+fn an_inlined_generator_lends_what_its_caller_lent_it() {
+    // Its parameter borrowed nothing, so `g` reached `f`'s `&mut` unchecked
+    // while `f` read `g`.
+    let source = "\
+var g: i16 = 1
+
+fn f(p: &mut i16, n: i16) -> i16:
+    let mut s: i16 = 0
+    for i in 0..n:
+        p += 1
+        s += g
+    return s
+
+fn gen(x: &mut i16, n: i16) -> iter[i16]:
+    yield f(x, n)
+
+fn main() -> i16:
+    for y in gen(g, 3):
+        print(y)
+    return 0
+";
+    assert_eq!(refused_at(source), "11: \"g\" is lent to \"f\", which may read it");
+}
+
+#[test]
+fn a_value_never_holds_a_borrow_of_itself() {
+    // `n.p = &n.v` passed; `f(n)` then stated noalias on `n` while `n.p`
+    // reached `n.v`.
+    let source = "\
+struct N:
+    mut v: i16
+    mut p: &i16
+
+fn main() -> i16:
+    let z: i16 = 0
+    let mut n = N(v=1, p=z)
+    n.p = &n.v
+    print(n.p)
+    return 0
+";
+    assert_eq!(refused_at(source), "8: \"n\" would hold a borrow of itself");
+}
+
+#[test]
+fn a_module_variable_borrowed_across_a_call_is_not_written_by_it() {
+    // Only lends were checked: `r` read the 9 that `setg` wrote under it.
+    let source = "\
+var g: i16[2] = [1, 2]
+
+fn setg() -> void:
+    g[0] = 9
+
+fn main() -> i16:
+    let r = &g[0]
+    setg()
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "8: \"g\" is borrowed across a call to \"setg\", which may write it");
+}

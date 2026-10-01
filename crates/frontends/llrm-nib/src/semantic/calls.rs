@@ -185,14 +185,14 @@ impl<'a> FunctionCompiler<'a> {
         }
         let arguments = &arguments::bind(&signature.name, &formals, arguments.to_vec(), span)?;
         let lent = self.lent(arguments, &signature.parameters);
-        borrows::check_disjoint(&lent, arguments)?;
+        borrows::check_disjoint(&lent, &arguments.iter().map(Expr::span).collect::<Vec<_>>())?;
         let mut operands: Vec<hir::Operand> = slot.into_iter().collect();
         for (argument, parameter) in arguments.iter().zip(&signature.parameters) {
             let operand = self.argument_operand(argument, parameter)?;
             operands.push(operand);
         }
         self.store_call_borrows(arguments, &signature.parameters, &lent, span)?;
-        self.record_lends(&signature.name, arguments, &lent);
+        self.record_lends(&signature.name, arguments, &lent, span);
         operands.extend(signature.result_pointer.map(|pointer| self.result_pointer(pointer)));
         let returned = signature.returned(self.types);
         let results = if returned == TypeName::Void { Vec::new() } else { vec![self.value(returned)] };

@@ -43,10 +43,9 @@ pub(super) enum Life {
     Scope(usize),
 }
 
-/// The place a borrow borrows from: an owner and the fields below it. A
-/// generator's placeholders share one storage, so the name is part of what
-/// tells roots apart.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+/// The place a borrow borrows from: an owner, told apart by its storage
+/// alone, and the fields below it; the name is for diagnostics.
+#[derive(Clone, Debug)]
 pub(super) struct Root {
     pub(super) owner: BorrowKey,
     pub(super) name: String,
@@ -77,6 +76,32 @@ impl Root {
 
     fn somewhere(self) -> Self {
         Root { exact: false, ..self }
+    }
+}
+
+impl Root {
+    fn identity(&self) -> (BorrowKey, Life, &[String], bool) {
+        (self.owner, self.life, &self.path, self.exact)
+    }
+}
+
+impl PartialEq for Root {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity() == other.identity()
+    }
+}
+
+impl Eq for Root {}
+
+impl PartialOrd for Root {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Root {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.identity().cmp(&other.identity())
     }
 }
 
@@ -486,6 +511,19 @@ impl FunctionCompiler<'_> {
         holders
     }
 
+    /// What the bindings in scope borrow, each with whether the binding may
+    /// change it.
+    pub(super) fn held_borrows(&self) -> Vec<(Root, bool)> {
+        let mut borrows = Vec::new();
+        for binding in self.scopes.iter().flat_map(|scope| scope.values()) {
+            let lent = borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key));
+            let held = identity(&binding.storage).and_then(|key| self.held.get(&key));
+            let mutable = self.may_change(binding);
+            borrows.extend(lent.into_iter().chain(held).flatten().map(|root| (root.clone(), mutable)));
+        }
+        borrows
+    }
+
     /// Stores a borrow rooted in `roots` where `container` keeps it: the
     /// one check of every store. Each owner `container` writes into must not
     /// outlive a root, and borrows them from then on.
@@ -495,6 +533,10 @@ impl FunctionCompiler<'_> {
         }
         for target in self.store_targets(container) {
             check_holds(&target, &roots, span)?;
+            // Lent through itself, it would alias what it holds.
+            if roots.iter().any(|root| root.owner == target.owner) {
+                return Err(Diagnostic::new(span, format!("{:?} would hold a borrow of itself", target.name)));
+            }
             if matches!(target.life, Life::Frame | Life::Scope(_)) {
                 self.held.entry(target.owner).or_default().extend(roots.iter().cloned());
             }
@@ -515,26 +557,46 @@ impl FunctionCompiler<'_> {
         arguments
             .iter()
             .zip(parameters)
-            .map(|(argument, parameter)| {
-                let held = |element: ElementType| Lent { roots: self.value_roots(argument, element), mutable: self.holds_reference_where(element, true) };
-                match *parameter {
-                    SignatureParameter::Borrowed { mutable, .. } => Lent { roots: self.reach(argument), mutable },
-                    SignatureParameter::Adapter { .. } => Lent { roots: self.reach(argument), mutable: true },
-                    SignatureParameter::Scalar(type_name) => held(ElementType::Scalar(type_name)),
-                    SignatureParameter::Owned { struct_id, .. } => held(ElementType::Struct(struct_id)),
-                }
+            .map(|(argument, parameter)| match *parameter {
+                SignatureParameter::Borrowed { mutable, .. } => self.lent_borrow(argument, mutable),
+                SignatureParameter::Adapter { .. } => self.lent_borrow(argument, true),
+                SignatureParameter::Scalar(type_name) => self.lent_value(argument, ElementType::Scalar(type_name)),
+                SignatureParameter::Owned { struct_id, .. } => self.lent_value(argument, ElementType::Struct(struct_id)),
             })
             .collect()
     }
 
-    /// Stores what a call is lent: it may keep any of it in what a `&mut`
-    /// argument holds.
+    /// What a struct, enum or generator's state built from `values`, of
+    /// `fields`, lends: a field holding a reference or a view takes a borrow
+    /// as a parameter does, any other the borrows its value holds.
+    pub(super) fn lent_to_fields(&self, values: &[&Expr], fields: &[ElementType]) -> Vec<Lent> {
+        values
+            .iter()
+            .zip(fields)
+            .map(|(value, field)| match *field {
+                ElementType::Scalar(type_name @ TypeName::Pointer { mutable, .. }) if self.types.referent(type_name).is_some() => self.lent_borrow(value, mutable),
+                ElementType::Struct(id) if self.types.kept_views.contains_key(&id) => self.lent_borrow(value, self.types.writable_views.contains(&id)),
+                element => self.lent_value(value, element),
+            })
+            .collect()
+    }
+
+    fn lent_borrow(&self, value: &Expr, mutable: bool) -> Lent {
+        Lent { roots: self.reach(value), mutable }
+    }
+
+    fn lent_value(&self, value: &Expr, element: ElementType) -> Lent {
+        Lent { roots: self.value_roots(value, element), mutable: self.holds_reference_where(element, true) }
+    }
+
+    /// Stores what a call is lent: it may keep what any other argument
+    /// lends in what a `&mut` argument holds.
     pub(super) fn store_call_borrows(&mut self, arguments: &[Expr], parameters: &[SignatureParameter], lent: &[Lent], span: Span) -> Result<(), Diagnostic> {
-        let roots: BTreeSet<Root> = lent.iter().flat_map(|one| one.roots.iter().cloned()).collect();
-        for (argument, parameter) in arguments.iter().zip(parameters) {
+        for (at, (argument, parameter)) in arguments.iter().zip(parameters).enumerate() {
             if let SignatureParameter::Borrowed { mutable: true, target, .. } = *parameter {
                 if self.holds_reference(binding_element(target)) {
-                    self.store_borrow(argument, roots.clone(), span)?;
+                    let others = lent.iter().enumerate().filter(|(other, _)| *other != at).flat_map(|(_, one)| one.roots.iter().cloned()).collect();
+                    self.store_borrow(argument, others, span)?;
                 }
             }
         }
@@ -559,11 +621,11 @@ pub(super) struct Lent {
 }
 
 /// Errs when two of a call's lends reach one owner and either writes it.
-pub(super) fn check_disjoint(lent: &[Lent], arguments: &[Expr]) -> Result<(), Diagnostic> {
+pub(super) fn check_disjoint(lent: &[Lent], spans: &[Span]) -> Result<(), Diagnostic> {
     for (at, one) in lent.iter().enumerate() {
         for other in lent[..at].iter().filter(|other| one.mutable || other.mutable) {
             if let Some(shared) = one.roots.iter().find(|root| other.roots.iter().any(|them| them.overlaps(root.owner, &root.path))) {
-                return Err(Diagnostic::new(arguments[at].span(), format!("borrow of {:?} aliases a mutable argument", shared.name)));
+                return Err(Diagnostic::new(spans[at], format!("borrow of {:?} aliases a mutable argument", shared.name)));
             }
         }
     }

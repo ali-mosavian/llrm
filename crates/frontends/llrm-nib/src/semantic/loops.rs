@@ -256,11 +256,8 @@ impl<'a> FunctionCompiler<'a> {
                 "strings are immutable byte sequences",
             ));
         }
-        if mode == IterationMode::Mutable && !array.mutable {
-            return Err(Diagnostic::new(
-                span,
-                format!("cannot take a mutable view of immutable array {array_name:?}"),
-            ));
+        if mode == IterationMode::Mutable {
+            self.place_writable(iterable, span)?;
         }
         let string_pointer = if heap.is_some() {
             Some(self.string_pointer(&array, iterable.span())?)

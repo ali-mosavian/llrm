@@ -119,7 +119,7 @@ impl FunctionCompiler<'_> {
             .filter(|one| !scope.contains_key(&one.name))
             .collect();
         let kinds = parameters.iter().map(|one| parameter_kind(self.types, one)).collect::<Result<Vec<_>, _>>()?;
-        borrows::check_disjoint(&self.lent(&inferred.passed, &kinds), &inferred.passed)?;
+        borrows::check_disjoint(&self.lent(&inferred.passed, &kinds), &inferred.passed.iter().map(Expr::span).collect::<Vec<_>>())?;
         for ((parameter, argument), kind) in parameters.into_iter().zip(&inferred.passed).zip(kinds) {
             let operand = self.argument_operand(argument, &kind)?;
             let value = self.materialized(operand, kind.hir_type());

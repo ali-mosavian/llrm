@@ -1585,6 +1585,8 @@ struct FunctionCompiler<'a> {
     named_parameters: Vec<(u32, String)>,
     next_value: u32,
     next_place: u32,
+    /// Counts down the ids of bindings that only type a generator's body.
+    next_unbound: u32,
     /// Numbers the hidden names the compiler binds.
     next_hidden: u32,
     /// The generator calls in the statement being compiled that a loop consumes.
@@ -1671,6 +1673,7 @@ impl<'a> FunctionCompiler<'a> {
             next_value: 1,
             next_place: 1,
             next_hidden: 1,
+            next_unbound: u32::MAX,
             consumed: Vec::new(),
             next_instruction: 1,
             next_frame_offset: 0,
