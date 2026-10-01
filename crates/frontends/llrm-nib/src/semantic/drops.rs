@@ -105,10 +105,96 @@ impl FunctionCompiler<'_> {
         })
     }
 
-    /// Drops what `view` owns, if its owner is still live.
+    /// Drops what `view` owns, if its owner is still live, but for the
+    /// fields with a `drop` that moved out of it.
     pub(super) fn drop_owner(&mut self, view: &StructView) {
-        let flag = Self::whole_owner(view).and_then(|key| self.drop_flags.get(&key).copied());
-        self.when_live(flag.map(hir::Operand::Place), |this| this.drop_view(view));
+        let key = Self::whole_owner(view);
+        let flag = key.and_then(|key| self.drop_flags.get(&key).copied());
+        let fates = match key {
+            Some(key) => self.fates(key),
+            None => Vec::new(),
+        };
+        self.when_live(flag.map(hir::Operand::Place), |this| this.drop_except(view, &fates));
+    }
+
+    /// What became of each field of `owner` with a `drop` that moved: gone
+    /// on every path here, or on some, as its flag says.
+    fn fates(&mut self, owner: Owner) -> Vec<(Vec<String>, Option<u32>)> {
+        let dropped: BTreeSet<Vec<String>> = self.field_moves.iter().filter(|((one, _), ..)| *one == owner).map(|((_, path), ..)| path.clone()).collect();
+        let moved: Vec<Vec<String>> = self.moved_paths(owner).into_iter().filter(|path| dropped.contains(path)).collect();
+        moved
+            .into_iter()
+            .map(|path| match self.surely_moved(owner, &path) {
+                true => (path, None),
+                false => {
+                    let flag = self.field_flag(owner, &path);
+                    (path, Some(flag))
+                }
+            })
+            .collect()
+    }
+
+    /// `drop_view` of `view`, leaving out each field `fates` says moved, or
+    /// asking its flag, which it sets again for the next owner there.
+    fn drop_except(&mut self, view: &StructView, fates: &[(Vec<String>, Option<u32>)]) {
+        if fates.is_empty() {
+            return self.drop_view(view);
+        }
+        // Nothing moves out of a struct with a `drop`: it has none to call.
+        let layout = self.types.structure(view.struct_id).expect("registered layout").clone();
+        for (name, field) in &layout.fields {
+            let below: Vec<(Vec<String>, Option<u32>)> = fates.iter().filter(|(path, _)| path[0] == *name).map(|(path, flag)| (path[1..].to_vec(), *flag)).collect();
+            match below.iter().find(|(path, _)| path.is_empty()) {
+                Some((_, None)) => {}
+                Some((_, Some(flag))) => {
+                    let flag = hir::Operand::Place(*flag);
+                    self.when_live(Some(flag.clone()), |this| this.owned_field(view, *field, Owned::Drop));
+                    self.emit("store", Vec::new(), vec![flag, hir::Operand::Constant(BOOL, -1)], None);
+                }
+                None if below.is_empty() => self.owned_field(view, *field, Owned::Drop),
+                None => {
+                    let ElementType::Struct(struct_id) = field.type_ else {
+                        unreachable!("a path goes through structs")
+                    };
+                    let inner = StructView { struct_id, offset: view.offset + field.offset, ..view.clone() };
+                    self.drop_except(&inner, &below);
+                }
+            }
+        }
+    }
+
+    /// The flag of the field `path` of `owner`, made where a drop asks it:
+    /// set at the function's start, cleared by each move (`clear_moved`),
+    /// and set again after each drop that asks it.
+    fn field_flag(&mut self, owner: Owner, path: &[String]) -> u32 {
+        if let Some(flag) = self.field_flags.get(&(owner, path.to_vec())) {
+            return *flag;
+        }
+        let flag = self.place("$moved", TypeName::Bool, true);
+        self.field_flags.insert((owner, path.to_vec()), flag);
+        flag
+    }
+
+    /// Clears each flag a drop asks where its field moves, and sets it at
+    /// the start; a move whose drops all knew it moved needs none.
+    pub(super) fn clear_moved(&mut self) {
+        let mut stores: Vec<(u32, usize, u32, i64)> = std::mem::take(&mut self.field_moves)
+            .into_iter()
+            .filter_map(|(key, block, at)| Some((block, at, *self.field_flags.get(&key)?, 0)))
+            .collect();
+        for ((owner, filled), block, at) in std::mem::take(&mut self.field_refills) {
+            let flags = self.field_flags.iter().filter(|((one, path), _)| *one == owner && path.starts_with(&filled));
+            stores.extend(flags.map(|(_, flag)| (block, at, *flag, -1)));
+        }
+        stores.extend(self.field_flags.values().map(|flag| (1, 0, *flag, -1)));
+        // From the end of each block back, so that each index still holds.
+        stores.sort_by(|one, other| (other.0, other.1).cmp(&(one.0, one.1)).then(one.3.cmp(&other.3)));
+        for (block, at, flag, value) in stores {
+            let id = self.next_instruction;
+            self.next_instruction += 1;
+            let store = hir::Instruction { id, op: "store", results: Vec::new(), operands: vec![hir::Operand::Place(flag), hir::Operand::Constant(BOOL, value)], callee: None, asm: None, line: 0 };
+            self.blocks[(block - 1) as usize].instructions.insert(at, store);
+        }
     }
 
     /// Emits `then` to run only while `flag`, when there is one, is set.
