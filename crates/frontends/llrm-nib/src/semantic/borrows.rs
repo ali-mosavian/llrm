@@ -367,25 +367,6 @@ impl FunctionCompiler<'_> {
         borrowed || self.iterated.contains(&owner)
     }
 
-    /// Errs unless each field `place` writes through was declared `mut`
-    /// (section 5).
-    pub(super) fn check_mutable_fields(&self, place: &Expr) -> Result<(), Diagnostic> {
-        match place {
-            Expr::Member { base, field, span } => {
-                if let Some(owner) = self.receiver_type(base) {
-                    // An instance of a generic type is declared by its template.
-                    let declared = owner.split('[').next().unwrap_or(&owner);
-                    if self.types.fixed_fields.contains(&(declared.to_owned(), field.clone())) {
-                        return Err(Diagnostic::new(*span, format!("field {field:?} of {owner} is not declared 'mut'")));
-                    }
-                }
-                self.check_mutable_fields(base)
-            }
-            Expr::Index { base, .. } | Expr::Slice { base, .. } => self.check_mutable_fields(base),
-            _ => Ok(()),
-        }
-    }
-
     /// Stores a borrow rooted in `roots` where `container` keeps it: the
     /// one check of every store. Each owner `container` writes into must not
     /// outlive a root, and borrows them from then on.

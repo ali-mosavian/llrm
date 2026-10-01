@@ -78,3 +78,31 @@ fn main() -> i16:
     assert_eq!(refused_at(lent), "8: \"keep\" would outlive \"inner\", which it borrows");
     assert_eq!(output(&lent.replace("    if true:\n        let inner: i16 = 7\n        stash(keep, inner)", "    let inner: i16 = 7\n    stash(keep, inner)")), "1\n");
 }
+
+#[test]
+fn a_write_through_a_shared_reference_is_refused_on_any_path() {
+    // #122: `h.r = 7` wrote through `&i16` and changed an immutable `let`.
+    let field = "\
+struct H:
+    mut r: &i16
+
+fn main() -> i16:
+    let x: i16 = 1
+    let mut h = H(r=x)
+    h.r = 7
+    print(x)
+    return 0
+";
+    assert_eq!(refused_at(field), "7: cannot write through \"h.r\", a '&' reference");
+    let element = "\
+fn main() -> i16:
+    let x: i16 = 1
+    let mut v: vec[&i16] = [x]
+    v[0] = 7
+    print(x)
+    return 0
+";
+    assert_eq!(refused_at(element), "4: cannot write through \"v[...]\", a '&' reference");
+    let exclusive = field.replace("mut r: &i16", "mut r: &mut i16").replace("let x: i16", "let mut x: i16").replace("H(r=x)", "H(r=&mut x)");
+    assert_eq!(output(&exclusive), "7\n");
+}

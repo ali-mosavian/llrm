@@ -290,19 +290,13 @@ impl<'a> FunctionCompiler<'a> {
             self.check_unborrowed(owner, *span)?;
         }
         if *mutable {
-            self.check_mutable_fields(operand)?;
+            self.place_writable(operand, *span)?;
         }
         // A struct is borrowed through its view, whose address is far.
         if let BindingType::Struct(struct_id) = target {
             let view = self.struct_view(operand, *span)?;
             if view.struct_id != struct_id {
                 return Err(Diagnostic::new(*span, "borrowed struct has the wrong type"));
-            }
-            if *mutable && !view.mutable {
-                return Err(Diagnostic::new(
-                    *span,
-                    format!("cannot borrow {:?} mutably", view.owner),
-                ));
             }
             let owner = view.owner.clone();
             return Ok((self.address_as(&view, pointer_type), owner));
@@ -336,7 +330,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 // `&s.field` or `&items[i]`: a place's address.
                 if let BindingType::Scalar(type_name) = target {
-                    if let Some((place, actual, owner)) = self.place_of(operand, *mutable, *span)? {
+                    if let Some((place, actual, owner)) = self.place_of(operand, *span)? {
                         if actual != type_name {
                             return Err(Diagnostic::new(*span, format!("borrow of {owner:?}'s {} has the wrong type", type_name_text(actual))));
                         }
@@ -364,12 +358,6 @@ impl<'a> FunctionCompiler<'a> {
             return Err(Diagnostic::new(
                 *span,
                 format!("borrow of {name:?} has the wrong type"),
-            ));
-        }
-        if *mutable && !binding.mutable {
-            return Err(Diagnostic::new(
-                *span,
-                format!("cannot mutably borrow immutable binding {name:?}"),
             ));
         }
         if let BindingType::Slice { element, rank } = target {

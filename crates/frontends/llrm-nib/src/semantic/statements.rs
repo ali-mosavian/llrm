@@ -302,6 +302,7 @@ impl<'a> FunctionCompiler<'a> {
                     AssignTarget::Member { base, field } => self.frame_field(base, field, *span)?.flatten(),
                     _ => None,
                 };
+                self.check_written(target, *operation, value, *span)?;
                 self.moves.writing = reinitialized.is_some();
                 let place = self.assignment_target(target, *span);
                 self.moves.writing = false;

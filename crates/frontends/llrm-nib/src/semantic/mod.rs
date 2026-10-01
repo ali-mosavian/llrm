@@ -76,6 +76,7 @@ mod references;
 mod instances;
 mod iterators;
 mod views;
+mod writable;
 mod lambdas;
 mod matching;
 mod methods;

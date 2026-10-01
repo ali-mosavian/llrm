@@ -338,13 +338,6 @@ impl<'a> FunctionCompiler<'a> {
             self.check_unborrowed(owner, span)?;
         }
         match target {
-            AssignTarget::Member { base, field } => {
-                self.check_mutable_fields(&Expr::Member { base: Box::new(base.clone()), field: field.clone(), span })?
-            }
-            AssignTarget::Index { base, .. } => self.check_mutable_fields(base)?,
-            AssignTarget::Name(_) | AssignTarget::Deref(_) => {}
-        }
-        match target {
             AssignTarget::Deref(pointer) => {
                 let name = self.dereferenced(pointer, span)?;
                 self.assignment_target(&AssignTarget::Name(name), span)
@@ -378,12 +371,6 @@ impl<'a> FunctionCompiler<'a> {
             }
             AssignTarget::Member { base, field } => {
                 let parent = self.struct_view(base, span)?;
-                if !parent.mutable {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {:?} is immutable", parent.owner),
-                    ));
-                }
                 let layout = self
                     .types
                     .structure(parent.struct_id)
@@ -414,12 +401,6 @@ impl<'a> FunctionCompiler<'a> {
             }
             AssignTarget::Name(name) => {
                 let binding = self.binding(name, span)?.clone();
-                if !binding.mutable {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {name:?} is immutable"),
-                    ));
-                }
                 match binding.type_ {
                     BindingType::Scalar(type_name) => {
                         let destination = match binding.storage {
@@ -468,12 +449,6 @@ impl<'a> FunctionCompiler<'a> {
                     return Err(Diagnostic::new(span, "assignment target must be a named place or an array field"));
                 }
                 let (binding, base) = self.sequence_of(base)?;
-                if !binding.mutable {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {base:?} is immutable"),
-                    ));
-                }
                 if binding.type_ == BindingType::Scalar(TypeName::String) {
                     return self.string_element_target(&base, indices, span);
                 }
