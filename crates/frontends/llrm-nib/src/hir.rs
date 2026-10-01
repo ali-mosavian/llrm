@@ -81,6 +81,9 @@ pub struct Instruction {
     pub asm: Option<Asm>,
     /// The source line of the statement it belongs to, 0 for none.
     pub line: u32,
+    /// An address the frontend knows lies in the object its operand points
+    /// into: the borrow it indexes bounds it.
+    pub inbounds: bool,
 }
 
 /// An `asm` instruction's code and the 16-bit registers it reads and writes.
@@ -185,6 +188,8 @@ pub struct Program {
     pub types: Vec<Type>,
     pub functions: Vec<Function>,
     pub callables: Vec<Callable>,
+    /// What the program states of its routines, apart from each function's own.
+    pub facts: Vec<llrm_core::hir::facts::Stated>,
     pub data: Vec<DataObject>,
     /// `-g`: what a debugger names and how it reads it.
     pub debug: Option<llrm_core::hir::model::Debug>,
@@ -248,6 +253,9 @@ impl Program {
             stated.extend(function.facts.iter().cloned());
             // A reference's place stays inside what it refers to, where the language checked it.
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+                if instruction.inbounds {
+                    stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::InBounds);
+                }
                 for (index, operand) in instruction.operands.iter().enumerate() {
                     if matches!(operand, Operand::IndirectPlace { inbounds: true, .. }) {
                         stated.state(
@@ -258,6 +266,7 @@ impl Program {
                 }
             }
         }
+        stated.extend(self.facts.iter().cloned());
         let facts = stated.finish();
         if !facts.is_empty() {
             out.push_str(",\"facts\":");

@@ -281,8 +281,9 @@ enum Pointer {
     Frame { disp: i64, index: Option<Held>, scale: i64 },
     Based { base: Held, index: Option<Held>, scale: i64, offset: i64 },
     /// A near global's symbol, a displacement from it, and a register
-    /// holding a variable one.
-    Global { space: Space, index: i64, offset: i64, base: Option<Held> },
+    /// holding a variable one, times `scale`: a scaled one is a dword index.
+    /// A second register `plus`, added unscaled, makes the `[bx+si+symbol]` form.
+    Global { space: Space, index: i64, offset: i64, base: Option<Held>, scale: i64, plus: Option<Held> },
     /// A far pointer's selector and offset, and a displacement from it; no
     /// offset register is offset 0, as a segment's pointer has.
     Far { selector: Held, base: Option<Held>, index: Option<Held>, scale: i64, offset: i64 },
@@ -1260,7 +1261,7 @@ impl Selector<'_, '_, '_> {
             _ => Some(self.global(operand)?),
         };
         Ok(match pointer {
-            Some(Pointer::Global { space, index, offset, base: None }) => {
+            Some(Pointer::Global { space, index, offset, base: None, .. }) => {
                 Some(Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, offset) }) }))
             }
             _ => None,
@@ -1352,6 +1353,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Frame { index: Some(_), .. } | Pointer::Based { index: Some(_), .. } | Pointer::Far { index: Some(_), .. } => {
                 unreachable!("an indexed address is read only by accesses")
             }
+            Pointer::Global { scale, plus, .. } if scale != 1 || plus.is_some() => unreachable!("a scaled or two-register address is read only by accesses"),
             Pointer::Frame { disp, index: None, .. } => {
                 let address = Address { through: Register::BP, disp_width: 2, ..Address::new(Some(Addr::new(Space::Frame, disp))) };
                 semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Address(address)])
@@ -1364,7 +1366,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { base: None, offset, .. } | Pointer::Absolute { offset } => {
                 semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Imm(Imm { value: offset, width: held.width, address: None })])
             }
-            Pointer::Global { space, index, offset, base } => {
+            Pointer::Global { space, index, offset, base, .. } => {
                 let symbol = Loc::Imm(Imm { value: 0, width: held.width, address: Some(Addr { index, ..Addr::new(space, offset) }) });
                 match base {
                     None => semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![symbol]),
@@ -1439,7 +1441,7 @@ impl Selector<'_, '_, '_> {
             };
             return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset });
         }
-        Ok(Pointer::Global { space, index: i64::from(global.0), offset, base: None })
+        Ok(Pointer::Global { space, index: i64::from(global.0), offset, base: None, scale: 1, plus: None })
     }
 
     /// A GEP's indices, each a constant or `None`.
@@ -1481,10 +1483,47 @@ impl Selector<'_, '_, '_> {
             }
             return Ok(());
         }
+        // A constant added to an index is a displacement, as LLVM's address
+        // matcher folds it: `[base + index*scale + c*scale]`.
+        let mut offset = offset;
+        let mut peeled = Vec::new();
+        let mut taken = Vec::new();
+        for &(position, scale) in &variable {
+            let (index, constant, adds) = self.peeled(instruction.operands[1 + position], width);
+            offset += i128::from(constant) * i128::from(scale);
+            taken.extend(adds);
+            peeled.push((position, scale, index));
+        }
+        // An unscaled index that is a sum of two registers nothing else reads
+        // is both: the base and the index of the address.
+        if let [(position, 1, index)] = peeled[..]
+            && let Some((first, second, add)) = self.sum_of(index, width)
+        {
+            peeled = vec![(position, 1, first), (position, 1, second)];
+            taken.push(add);
+        }
+        let one = match peeled[..] {
+            [(_, scale, index)] => Some((index, scale as i64)),
+            _ => None,
+        };
+        if !taken.is_empty() {
+            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+                self.pointers.insert(address, scaled);
+                for &add in &taken {
+                    let add = self.value(add);
+                    self.folded.insert(add);
+                }
+                return Ok(());
+            }
+            for &add in &taken {
+                let add = self.value(add);
+                self.folded.insert(add);
+            }
+        }
         let exact = one.is_some_and(|(index, _)| matches!(index, Operand::Value(index) if self.exact.contains(&index)));
         let mut sum: Option<Held> = None;
-        for (position, scale) in variable {
-            let index = instruction.operands[1 + position];
+        let mut parts: Vec<Held> = Vec::new();
+        for (_, scale, index) in peeled {
             let index_ty = function.operand_type(&self.module.context, index).expect("a typed index");
             let mut held = self.held(index, index_ty, at, out)?;
             if held.width > width {
@@ -1506,6 +1545,24 @@ impl Selector<'_, '_, '_> {
                 out.push(insn(at, what));
                 held = scaled;
             }
+            parts.push(held);
+        }
+        // Two registers over a pointer with no register of its own are its
+        // base and its index: `fs:[bx+di]`, not their sum made first.
+        if let [first, second] = parts[..]
+            && self.only_addressed(address)
+        {
+            let two = match pointer.moved(offset as i64) {
+                Pointer::Far { selector, base: None, index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(first), index: Some(second), scale: 1, offset }),
+                Pointer::Global { space, index, offset, base: None, plus: None, .. } => Some(Pointer::Global { space, index, offset, base: Some(first), scale: 1, plus: Some(second) }),
+                _ => None,
+            };
+            if let Some(two) = two {
+                self.pointers.insert(address, two);
+                return Ok(());
+            }
+        }
+        for held in parts {
             sum = Some(match sum {
                 None => held,
                 Some(before) => {
@@ -1521,9 +1578,9 @@ impl Selector<'_, '_, '_> {
         }
         // A global's symbol is the displacement of the register holding the
         // index, [index+symbol], and the address as a value their sum.
-        if let Pointer::Global { space, index, offset: start, base: None } = pointer {
-            let indexed = Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum) };
-            if self.only_addressed(address) {
+        if let Pointer::Global { space, index, offset: start, base: None, .. } = pointer {
+            let indexed = Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum), scale: 1, plus: None };
+            if self.only_addressed(address) || self.indexed_by_bytes(address) {
                 self.pointers.insert(address, indexed);
             } else {
                 let held = Held { value: self.value(address), width };
@@ -1551,6 +1608,8 @@ impl Selector<'_, '_, '_> {
                 Pointer::Based { base, index: None, offset, .. } => Some(Pointer::Based { base, index: Some(sum), scale: 1, offset }),
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset }),
                 Pointer::Far { selector, base: None, index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(sum), index: None, scale: 1, offset }),
+                // A global and a register already added: the second register beside it.
+                Pointer::Global { space, index, offset, base: Some(base), scale: 1, plus: None } => Some(Pointer::Global { space, index, offset, base: Some(base), scale: 1, plus: Some(sum) }),
                 _ => None,
             };
             if let Some(indexed) = indexed {
@@ -1584,6 +1643,21 @@ impl Selector<'_, '_, '_> {
         let start = start.expect("a near pointer's register");
         out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), Loc::Held(sum)])));
         Ok(())
+    }
+
+    /// Whether every reader of `value` indexes it by one register, a byte
+    /// GEP whose own address only accesses read: the address `[register +
+    /// register + symbol]` those make is never built.
+    fn indexed_by_bytes(&self, value: ValueId) -> bool {
+        let function = self.function;
+        let users = function.users(value);
+        !users.is_empty()
+            && users.iter().all(|one| {
+                let instruction = function.instruction(one.user);
+                let Opcode::GetElementPtr { source } = instruction.opcode else { return false };
+                let (_, variable) = self.layout.collect_offset(self.types(), source, &self.indices(one.user));
+                one.index == 0 && matches!(variable[..], [(_, 1)]) && instruction.result.is_some_and(|result| self.only_addressed(result))
+            })
     }
 
     /// Whether every reader of `value` takes it as the address of a load or
@@ -1651,10 +1725,45 @@ impl Selector<'_, '_, '_> {
                 (Pointer::Far { selector, base: Some(wide), index: Some(wide), scale: 1, offset }, None)
             }
             Pointer::Far { selector, base: None, index: None, offset, .. } => (Pointer::Far { selector, base: None, index: Some(wide), scale, offset }, None),
+            Pointer::Global { space, index, offset, base: None, plus: None, .. } => (Pointer::Global { space, index, offset, base: Some(wide), scale, plus: None }, None),
             _ => return None,
         };
         self.promoted.extend(base.map(|base| base.value).into_iter().chain((!dword).then_some(wide.value)));
         Some(scaled)
+    }
+
+    /// The two registers `index` adds, where an add nothing else reads makes it
+    /// at the pointer's index `width`, and that add.
+    fn sum_of(&self, index: Operand, width: u32) -> Option<(Operand, Operand, ValueId)> {
+        let Operand::Value(value) = index else { return None };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return None };
+        let instruction = self.function.instruction(inst);
+        let (Opcode::Binary(BinaryOp::Add), [first @ Operand::Value(_), second @ Operand::Value(_)]) = (&instruction.opcode, &instruction.operands[..]) else { return None };
+        (self.width(instruction.ty).ok()? >= width && self.function.users(value).len() == 1).then_some((*first, *second, value))
+    }
+
+    /// `index` less the constants added to it at the pointer's index
+    /// `width` by adds nothing else reads, their sum, and those adds:
+    /// truncation keeps a sum a sum, but an add narrower than the index may
+    /// wrap where the sum does not.
+    fn peeled(&self, index: Operand, width: u32) -> (Operand, i64, Vec<ValueId>) {
+        let (mut at, mut total, mut adds) = (index, 0i64, Vec::new());
+        while let Operand::Value(value) = at
+            && let ValueDef::Instruction(inst) = self.function.value(value).def
+        {
+            let instruction = self.function.instruction(inst);
+            let own = self.width(instruction.ty).unwrap_or(0);
+            let (Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)), [from, by]) = (&instruction.opcode, &instruction.operands[..]) else { break };
+            let Some(constant) = self.constant(*by, own) else { break };
+            // An add something else reads is made anyway: the address uses it.
+            if own < width || self.function.users(value).len() != 1 {
+                break;
+            }
+            total += if *kind == BinaryOp::Add { constant } else { -constant };
+            adds.push(value);
+            at = *from;
+        }
+        (at, total, adds)
     }
 
     /// `index` times `scale` with the index's own multiply by a constant
@@ -1822,7 +1931,8 @@ impl Selector<'_, '_, '_> {
                 scale,
                 ..Mem::new(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, disp) }), width)
             },
-            Pointer::Global { space, index, offset, base } => Mem { disp_width: 2, base, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
+            Pointer::Global { space, index, offset, base, scale: 1, plus } => Mem { disp_width: 2, base, index: plus, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
+            Pointer::Global { space, index, offset, base, scale, .. } => Mem { disp_width: 2, index: base, scale, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Absolute { offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset & 0xFFFF)), width) },
             Pointer::Based { base, index: None, offset, .. } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
             // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
@@ -2804,7 +2914,7 @@ impl Pointer {
         match self {
             Pointer::Frame { disp, index, scale } => Pointer::Frame { disp: disp + by, index, scale },
             Pointer::Based { base, index, scale, offset } => Pointer::Based { base, index, scale, offset: offset + by },
-            Pointer::Global { space, index, offset, base } => Pointer::Global { space, index, offset: offset + by, base },
+            Pointer::Global { space, index, offset, base, scale, plus } => Pointer::Global { space, index, offset: offset + by, base, scale, plus },
             Pointer::Far { selector, base, index, scale, offset } => Pointer::Far { selector, base, index, scale, offset: offset + by },
             Pointer::Absolute { offset } => Pointer::Absolute { offset: offset + by },
         }

@@ -3,6 +3,10 @@
 //! rich MIR. LLVM's ScalarEvolution add recurrences and trip counts, with
 //! InductionDescriptor's view of a counter. A width is in bits.
 //!
+//! `Recurrence` is any such value as `pointer + start + step * trip`, with
+//! invariant symbols (`Linear`); `users` is what reads a loop's recurrences,
+//! as LLVM's IVUsers.
+//!
 //! A compare is the `icmp` a conditional `br` reads; a step is an `add` or
 //! a `sub` of a constant; a pointer offset is a `getelementptr`, scaled as
 //! the layout says. A counter tested narrower is a `trunc`, not a counter.
@@ -128,6 +132,9 @@ pub struct CountedLoop {
     pub stepped: bool,
     /// Some other exit stops the program; `count` is the trips when it goes on.
     pub stops: bool,
+    /// A loop tested after its trips whose symbolic trips assume the first
+    /// would have continued, which the branches over its preheader prove.
+    pub entry_guarded: bool,
     pub count: Option<BigInt>,
     pub first: Option<BigInt>,
     pub last: Option<BigInt>,
@@ -494,6 +501,8 @@ fn _composed(
             match operation.opcode {
                 Opcode::Cast(CastOp::SExt | CastOp::ZExt) if at != loop_.header => {
                     if let Some(extended) = _extended(unit, loop_, inst, &forms, facts) {
+                        let width = extended.0.start.width();
+                        out.insert(inst, Derived { op: inst, of: extended.0.clone(), by: AffineOperand::constant(1, width), offsets: Vec::new(), pointer: None });
                         forms.insert(result, extended);
                         changed = true;
                     }
@@ -651,6 +660,9 @@ struct _Control {
     exit: i64,
     posttested: bool,
     stops: bool,
+    /// A header that holds its whole trip, its latch only a jump back: its
+    /// test may read the stepped value, as after a trip.
+    after: bool,
 }
 
 /// The block whose conditional branch is the loop's only exit that goes on: its header, or its latch.
@@ -663,7 +675,25 @@ fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
     let latch = *blocks.get(loop_.latches.first()?)?;
     let header = blocks[&loop_.header];
     let inside = &loop_.body;
-    let (control, entered) = if latch.succ.as_slice() == [header.at] {
+    // A latch that only jumps on, split from a critical edge, is the end of
+    // the block that branches to it: that block is tested after its trip.
+    let forwarded = (latch.succ.as_slice() == [header.at]).then(|| {
+        let only = function.block(cfg::block(latch.at)).instructions();
+        let preds = graph.iter().filter(|block| block.succ.contains(&latch.at)).collect::<Vec<_>>();
+        match (only.len(), &preds[..]) {
+            (1, [pred]) if pred.at != header.at && inside.contains(&pred.at) && pred.succ.len() == 2 && pred.succ.contains(&latch.at) => Some(*pred),
+            _ => None,
+        }
+    });
+    // The latch jumps back and only the header branches to it: the header holds the trip.
+    let header_holds_trip = latch.succ.as_slice() == [header.at]
+        && function.block(cfg::block(latch.at)).instructions().len() == 1
+        && header.succ.len() == 2
+        && header.succ.contains(&latch.at)
+        && graph.iter().filter(|block| block.succ.contains(&latch.at)).count() == 1;
+    let (control, entered) = if let Some(Some(pred)) = forwarded {
+        (pred, vec![latch.at])
+    } else if latch.succ.as_slice() == [header.at] {
         (header, header.succ.iter().copied().filter(|at| inside.contains(at)).collect::<Vec<_>>())
     } else if latch.succ.contains(&header.at) {
         (latch, vec![header.at])
@@ -697,8 +727,9 @@ fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
         preheader,
         entered: entered[0],
         exit: exits[0],
-        posttested: control.at == latch.at,
+        posttested: control.at == latch.at || matches!(forwarded, Some(Some(_))),
         stops: !elsewhere.is_empty(),
+        after: header_holds_trip,
     })
 }
 
@@ -744,14 +775,61 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
     let [condition, Operand::Block(taken), Operand::Block(_)] = function.instruction(branch).operands[..] else { return Vec::new() };
     let Some((compare, icmp)) = unit.defining(condition) else { return Vec::new() };
     let Opcode::ICmp(predicate) = icmp.opcode else { return Vec::new() };
+    let continuing = if loop_.body.contains(&cfg::id(taken)) { predicate } else { predicate.inverse() };
+    let mut proven = _proven(unit, loop_, facts, inbounds, &shape, branch, compare, continuing, false);
+    if shape.after {
+        proven.extend(_proven(unit, loop_, facts, inbounds, &_Control { posttested: true, ..shape }, branch, compare, continuing, false).into_iter().filter(|proof| proof.stepped));
+    }
+    proven
+}
+
+/// Every counter whose compare `compare`, which keeps the loop going while
+/// `continuing` holds, ends it at the branch `shape` places.
+#[allow(clippy::too_many_arguments)]
+fn _proven(
+    unit: &Unit,
+    loop_: &Loop,
+    facts: &IndexMap<ValueId, Known>,
+    inbounds: bool,
+    shape: &_Control,
+    branch: InstId,
+    compare: InstId,
+    continuing: IntPredicate,
+    shifted: bool,
+) -> Vec<CountedLoop> {
+    let function = unit.function;
+    let icmp = function.instruction(compare);
     let inside = &loop_.body;
-    let continuing = if inside.contains(&cfg::id(taken)) { predicate } else { predicate.inverse() };
     let latch = *loop_.latches.first().expect("_control proved one latch");
     let still = invariant(function, inside);
 
+    let basic = basics(unit, loop_);
+    let mut counters = basic.values().map(|one| (one.clone(), one.value)).collect::<Vec<_>>();
+    // A counter plus a constant, tested before a trip, counts as a counter
+    // that started that far on: `i + 8 < len` ends the loop at `len - 8`.
+    if shifted && !shape.posttested {
+        for formula in derived(unit, loop_, Some(&basic)) {
+            let AffineOperand::Const(by) = &formula.by else { continue };
+            let (Some(result), AffineOperand::Const(start), None) = (function.instruction(formula.op).result, &formula.of.start, &formula.pointer) else { continue };
+            let width = start.width;
+            let mut shift = BigInt::from(0);
+            let constant = formula.offsets.iter().all(|(term, factor)| match term {
+                AffineOperand::Const(known) => {
+                    shift += &known.n * factor;
+                    true
+                }
+                AffineOperand::Value(..) => false,
+            });
+            let same_width = unit.int_bits(Operand::Value(result)) == Some(width);
+            if by.n == BigInt::from(1) && constant && by.width == width && same_width {
+                let start = AffineOperand::constant(&start.n + shift, width);
+                counters.push((Affine { value: result, start, step: formula.of.step.clone(), header: formula.of.header }, formula.of.value));
+            }
+        }
+    }
     let mut proven = Vec::new();
-    for counter in basics(unit, loop_).values() {
-        let Some(phi) = defining(function, counter.value) else { continue };
+    for (counter, source) in &counters {
+        let Some(phi) = defining(function, *source).filter(|&inst| function.instruction(inst).opcode == Opcode::Phi) else { continue };
         let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
         let mut tested = BTreeMap::from([(counter.value, false)]);
         if shape.posttested {
@@ -789,7 +867,7 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
         // The start as counted: itself, or the entry value it is proven to equal.
         let mut equal = start.clone();
         if count.is_none()
-            && let Some((entry, rewinds)) = _carried(unit, loop_, &start, counter.value, update, width)
+            && let Some((entry, rewinds)) = _carried(unit, loop_, &start, *source, update, width)
             && let (entered, Some(trips)) = counted_from(&entry)
             && rewinds.iter().all(|(stepped_root, offset)| {
                 let exited = &trips - BigInt::from(u8::from(shape.posttested && !stepped_root));
@@ -799,12 +877,21 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
             (begin, count, equal) = (entered, Some(trips), entry);
         }
         let (mut first, mut last) = (None, None);
+        let mut entry_guarded = false;
+        // Tested after its trips with a bound not known, it runs the trips a
+        // pre-tested one would where its branch over the entry proves one.
+        let entered = shape.posttested
+            && stepped
+            && test != IntPredicate::Ne
+            && (begin.is_none() || limit.is_none())
+            && _entered(unit, &shape, &start, &bound, test, width);
         let maximum = if let Some(count) = &count {
             (first, last) = _signed_span(&equal, facts, width, count, &step);
             Some(count.clone())
-        } else if shape.posttested || abs(&step) != BigInt::from(1) {
+        } else if (shape.posttested && !entered) || abs(&step) != BigInt::from(1) {
             continue;
         } else {
+            entry_guarded = shape.posttested;
             let promised = _promised(function, update, &step, _unsigned(test));
             let found = _unit_maximum(unit, loop_, width, begin.as_ref(), limit.as_ref(), &step, test, inbounds, promised);
             if found.is_none() && _inclusive(test) {
@@ -829,12 +916,165 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
             posttested: shape.posttested,
             stepped,
             stops: shape.stops,
+            entry_guarded,
             count,
             first,
             last,
         });
     }
     proven
+}
+
+/// Whether the branches over the loop's preheader prove its first test
+/// would continue: `start test bound`, where the loop is entered.
+fn _entered(unit: &Unit, shape: &_Control, start: &AffineOperand, bound: &AffineOperand, test: IntPredicate, width: u32) -> bool {
+    let Some(preheader) = shape.preheader else { return false };
+    crate::guards::holds(unit, preheader, test, &Linear::of(start, width), &Linear::of(bound, width))
+}
+
+/// Where a loop leaves, and after how many trips: an exiting block, and
+/// the backedges taken before its branch leaves, where counted.
+#[derive(Clone, Debug)]
+pub struct ExitCount {
+    pub block: i64,
+    pub branch: InstId,
+    pub exit: i64,
+    /// The backedges taken before it leaves: the least of these. A branch
+    /// leaving as soon as any of its compares fails takes the least of
+    /// theirs; one leaving only when all fail, their one count.
+    pub taken: Option<Vec<Linear>>,
+    /// The proofs its compares were counted by.
+    pub proofs: Vec<CountedLoop>,
+}
+
+/// Every exit of a single-latch loop, in dominance order where they
+/// dominate its latch, each counted where its compares are: LLVM's exit
+/// limits. An exit the latch does not follow is not counted.
+pub fn exits(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>, inbounds: bool) -> Vec<ExitCount> {
+    let function = unit.function;
+    let computed;
+    let facts = match facts {
+        Some(facts) => facts,
+        None => {
+            computed = unit.registers();
+            &*computed
+        }
+    };
+    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Vec::new() };
+    let shape = unit.shape();
+    let graph = cfg::graph(function);
+    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
+    let inside = &loop_.body;
+    let outside = graph.iter().filter(|block| block.succ.contains(&loop_.header) && !inside.contains(&block.at)).map(|block| block.at).collect::<BTreeSet<_>>();
+    let preheader = match outside.first() {
+        Some(&one) if outside.len() == 1 && blocks[&one].succ.as_slice() == [loop_.header] => Some(one),
+        _ => None,
+    };
+    let mut exiting = inside.iter().copied().filter(|at| blocks.get(at).is_some_and(|block| block.succ.iter().any(|to| !inside.contains(to)))).collect::<Vec<_>>();
+    // Those the latch follows are in a chain: each dominates the next.
+    exiting.sort_by_key(|&at| (!shape.dominance.dominates(at, latch), inside.iter().filter(|&&other| shape.dominance.dominates(other, at)).count()));
+    exiting
+        .into_iter()
+        .map(|at| {
+            let branch = function.terminator(cfg::block(at)).expect("a terminated block");
+            let block = blocks[&at];
+            let exit = block.succ.iter().copied().find(|to| !inside.contains(to)).expect("an exiting block");
+            let mut found = ExitCount { block: at, branch, exit, taken: None, proofs: Vec::new() };
+            let operands = &function.instruction(branch).operands;
+            let [Operand::Value(condition), Operand::Block(taken), Operand::Block(_)] = operands[..] else { return found };
+            let (Some(entered), true) = (block.succ.iter().copied().find(|to| inside.contains(to)), block.succ.len() == 2) else { return found };
+            if !shape.dominance.dominates(at, latch) {
+                return found;
+            }
+            let shaped = |posttested: bool| _Control { block: at, preheader, entered, exit, posttested, stops: false, after: false };
+            let stays = inside.contains(&cfg::id(taken));
+            let (leaves, first) = _leaves(function, condition, stays);
+            let mut counts = Vec::new();
+            for compare in leaves {
+                let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { return found };
+                let continuing = if stays { predicate } else { predicate.inverse() };
+                // Tested after the trip where it is the latch; in the body, a compare of the
+                // stepped value is tested after the step, one of the header's phi before it.
+                let tries: &[bool] = if at == latch { &[true] } else { &[false, true] };
+                let Some(proof) = tries.iter().find_map(|&posttested| {
+                    _proven(unit, loop_, facts, inbounds, &shaped(posttested), branch, compare, continuing, true).into_iter().next().filter(|proof| posttested == (at == latch) || proof.stepped == posttested)
+                }) else {
+                    return found;
+                };
+                let Some(count) = _backedges(&proof) else { return found };
+                counts.push(count);
+                found.proofs.push(proof);
+            }
+            // Leaving only once every compare fails is counted where they all agree.
+            if !first {
+                counts.dedup();
+                if counts.len() != 1 {
+                    return found;
+                }
+            }
+            found.taken = Some(counts);
+            found
+        })
+        .collect()
+}
+
+/// The compares a branch on `condition` reads through `and`s and `or`s,
+/// and whether it leaves as soon as one fails: a branch staying while
+/// `condition` holds (`stays`) leaves at the first to fail of an `and`'s,
+/// one leaving while it holds at the first to hold of an `or`'s.
+fn _leaves(function: &Function, condition: ValueId, stays: bool) -> (Vec<InstId>, bool) {
+    let joined = |value: ValueId| -> Option<(BinaryOp, [Operand; 2])> {
+        let inst = defining(function, value)?;
+        let op = function.instruction(inst);
+        match (&op.opcode, &op.operands[..]) {
+            (Opcode::Binary(kind @ (BinaryOp::And | BinaryOp::Or)), [left, right]) => Some((*kind, [*left, *right])),
+            _ => None,
+        }
+    };
+    let Some((kind, _)) = joined(condition) else { return (defining(function, condition).into_iter().collect(), true) };
+    let mut leaves = Vec::new();
+    let mut pending = vec![condition];
+    while let Some(value) = pending.pop() {
+        match joined(value) {
+            Some((one, parts)) if one == kind => pending.extend(parts.iter().filter_map(|part| match part {
+                Operand::Value(value) => Some(*value),
+                _ => None,
+            })),
+            _ => leaves.extend(defining(function, value)),
+        }
+    }
+    let first = (kind == BinaryOp::And) == stays;
+    (leaves, first)
+}
+
+/// The backedges a proof's loop takes before it leaves at the proof's
+/// branch: its trips, one fewer where tested after them.
+fn _backedges(proof: &CountedLoop) -> Option<Linear> {
+    let width = proof.width();
+    if let Some(count) = &proof.count {
+        return Some(Linear::constant(count - u8::from(proof.posttested), width));
+    }
+    if proof.posttested {
+        return None;
+    }
+    let (ahead, behind) = if proof.step > BigInt::from(0) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
+    Some(Linear::of(ahead, width).minus(&Linear::of(behind, width)).plus(&Linear::constant(u8::from(proof.inclusive()), width)))
+}
+
+/// The backedges a loop takes: the least of every exit's, where each is
+/// counted and the latch follows them all. LLVM's exact backedge-taken count.
+pub fn backedges(exits: &[ExitCount]) -> Option<Vec<Linear>> {
+    let mut least = Vec::new();
+    for one in exits {
+        least.extend(one.taken.clone()?);
+    }
+    (!least.is_empty()).then_some(least)
+}
+
+/// The most backedges a loop takes: the least of the counted exits'.
+/// LLVM's symbolic maximum.
+pub fn most_backedges(exits: &[ExitCount]) -> Vec<Linear> {
+    exits.iter().filter_map(|one| one.taken.clone()).flatten().collect()
 }
 
 /// A start carried round an enclosing loop: a phi outside `loop_` whose
@@ -1109,8 +1349,10 @@ fn _unit_maximum(
     inbounds: bool,
     promised: bool,
 ) -> Option<BigInt> {
+    // Both bound the trips; keep the tighter.
+    let bounded = if inbounds { inbounds_backedges(unit, loop_) } else { None };
     if test == IntPredicate::Ne {
-        return Some((BigInt::from(1) << width) - 1);
+        return Some((BigInt::from(1) << width) - 1).into_iter().chain(bounded).min();
     }
     let (unsigned, inclusive) = (_unsigned(test), _inclusive(test));
     let (low, high) = _extent(unsigned, width);
@@ -1141,8 +1383,6 @@ fn _unit_maximum(
         }
         _ => None,
     };
-    // Both bound the trips; keep the tighter.
-    let bounded = if inbounds { _inbounds_trips(unit, loop_, *loop_.latches.first().expect("one latch")) } else { None };
     ranged.into_iter().chain(bounded).min()
 }
 
@@ -1168,26 +1408,27 @@ pub fn advances(unit: &Unit, loop_: &Loop) -> IndexMap<ValueId, BigInt> {
     out.into_iter().filter(|(_, step)| *step != BigInt::from(0)).collect()
 }
 
-/// The most iterations an access made every iteration allows, as LLVM's inbounds does.
+/// The most backedges a loop takes that an access made every trip allows,
+/// as LLVM's inbounds does, whatever ends the loop.
 ///
 /// Iteration i reaches `b + i*s` inside one object, and an index `w` bits
 /// wide addresses at most 2**w bytes of it, so i*s + width <= 2**w. Only
 /// an access through `inbounds` GEPs is promised that.
-fn _inbounds_trips(unit: &Unit, loop_: &Loop, latch: i64) -> Option<BigInt> {
+pub fn inbounds_backedges(unit: &Unit, loop_: &Loop) -> Option<BigInt> {
     let step = advances(unit, loop_);
     let shape = unit.shape();
+    let latch = *loop_.latches.first()?;
     loop_
         .body
         .iter()
-        // The header also runs the final, failing test: n + 1 times.
-        .filter(|at| shape.dominance.dominates(**at, latch) && **at != loop_.header)
-        .flat_map(|&at| unit.function.block(cfg::block(at)).instructions())
-        .filter_map(|&inst| MemRef::of(unit, inst))
-        .filter(|reference| reference.inbounds)
-        .filter_map(|reference| {
+        .filter(|at| shape.dominance.dominates(**at, latch))
+        .flat_map(|&at| unit.function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
+        .filter_map(|(at, inst)| Some((at, MemRef::of(unit, inst)?)))
+        .filter(|(_, reference)| reference.inbounds)
+        .filter_map(|(at, reference)| {
             let advance = step.get(&reference.base?)? * reference.scale;
-            (advance != BigInt::from(0))
-                .then(|| ((BigInt::from(1) << reference.index_bits) - reference.width) / abs(&advance) + 1)
+            // The access runs at least once a backedge, and the header once more.
+            (advance != BigInt::from(0)).then(|| ((BigInt::from(1) << reference.index_bits) - reference.width) / abs(&advance) + 1 - BigInt::from(u8::from(at == loop_.header)))
         })
         .min()
 }
@@ -1528,6 +1769,387 @@ pub fn zero_terminating_control<'a>(
         return None;
     }
     Some(ZeroTerminatingControl { replacement, candidate: candidate.clone(), step, maximum: maximum.clone(), period })
+}
+
+/// Invariant values times coefficients, plus a constant, modulo `width`
+/// bits: SCEV's sum of unknowns and a constant.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Linear {
+    pub constant: BigInt,
+    pub terms: BTreeMap<ValueId, BigInt>,
+    pub width: u32,
+}
+
+impl Linear {
+    pub fn constant(n: impl Into<BigInt>, width: u32) -> Self {
+        Self { constant: masked(&n.into(), width), terms: BTreeMap::new(), width }
+    }
+
+    /// A term: a constant, or a value once.
+    pub fn of(term_: &AffineOperand, width: u32) -> Self {
+        match term_ {
+            AffineOperand::Const(known) => Self::constant(known.n.clone(), width),
+            AffineOperand::Value(value, _) => Self { constant: BigInt::from(0), terms: BTreeMap::from([(*value, BigInt::from(1))]), width },
+        }
+    }
+
+    fn normal(mut self) -> Self {
+        let width = self.width;
+        self.constant = masked(&self.constant, width);
+        self.terms = self.terms.into_iter().map(|(value, factor)| (value, masked(&factor, width))).filter(|(_, factor)| *factor != BigInt::from(0)).collect();
+        self
+    }
+
+    pub fn plus(&self, other: &Self) -> Self {
+        let mut sum = self.clone();
+        sum.constant += &other.constant;
+        for (value, factor) in &other.terms {
+            *sum.terms.entry(*value).or_insert_with(|| BigInt::from(0)) += factor;
+        }
+        sum.normal()
+    }
+
+    pub fn times(&self, by: &BigInt) -> Self {
+        Self { constant: &self.constant * by, terms: self.terms.iter().map(|(value, factor)| (*value, factor * by)).collect(), width: self.width }.normal()
+    }
+
+    pub fn minus(&self, other: &Self) -> Self {
+        self.plus(&other.times(&BigInt::from(-1)))
+    }
+
+    /// The same sum in `width` bits: its low bits where narrower.
+    pub fn truncated(&self, width: u32) -> Self {
+        Self { width, ..self.clone() }.normal()
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.terms.is_empty() && self.constant == BigInt::from(0)
+    }
+
+    /// Its value, where it has no terms, as a signed number.
+    pub fn known(&self) -> Option<BigInt> {
+        self.terms.is_empty().then(|| _as_signed(&self.constant, self.width))
+    }
+
+    /// `self * other`, where one of them is a constant.
+    pub fn product(&self, other: &Self) -> Option<Self> {
+        match (self.known(), other.known()) {
+            (Some(k), _) => Some(other.truncated(self.width).times(&k)),
+            (_, Some(k)) => Some(self.times(&k)),
+            _ => None,
+        }
+    }
+
+    /// The terms alone.
+    pub fn symbolic(&self) -> Self {
+        Self { constant: BigInt::from(0), ..self.clone() }
+    }
+
+    /// `k` with `self = k * by`, the smallest in magnitude, where there is one.
+    pub fn over(&self, by: &Self) -> Option<BigInt> {
+        if self.width != by.width || by.is_zero() {
+            return None;
+        }
+        let modulus = BigInt::from(1) << self.width;
+        let first = by.terms.iter().next().map_or((&by.constant, &self.constant), |(value, factor)| (factor, self.terms.get(value).unwrap_or(&modulus)));
+        let (divisor, dividend) = (_as_signed(first.0, self.width), _as_signed(&masked(first.1, self.width), self.width));
+        if &dividend % &divisor != BigInt::from(0) {
+            return None;
+        }
+        let k = dividend / divisor;
+        (by.times(&k) == *self).then_some(k)
+    }
+}
+
+/// A value on each trip of `header`'s loop, `pointer + start + step * trip`,
+/// in bytes where it is an address, modulo `start`'s width: SCEV's add
+/// recurrence. Every counter, and every value affine in one, is one.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Recurrence {
+    pub pointer: Option<Operand>,
+    pub start: Linear,
+    pub step: Linear,
+}
+
+impl Recurrence {
+    pub fn width(&self) -> u32 {
+        self.start.width
+    }
+
+    /// The same values in `width` bits.
+    pub fn truncated(&self, width: u32) -> Self {
+        Self { pointer: self.pointer, start: self.start.truncated(width), step: self.step.truncated(width) }
+    }
+}
+
+/// A counter as a recurrence of the trip.
+pub fn counter_recurrence(counter: &Affine) -> Recurrence {
+    let width = counter.start.width();
+    Recurrence { pointer: None, start: Linear::of(&counter.start, width), step: Linear::of(&counter.step, width) }
+}
+
+/// A derived value as a recurrence of the trip, where it is linear in the
+/// invariants: `by` times a symbolic start or step is not.
+pub fn recurrence(one: &Derived) -> Option<Recurrence> {
+    let width = one.of.start.width();
+    let (start, step) = (Linear::of(&one.of.start, width), Linear::of(&one.of.step, width));
+    let (mut start, step) = match &one.by {
+        AffineOperand::Const(by) => (start.times(&by.n), step.times(&by.n)),
+        by @ AffineOperand::Value(..) => {
+            let by = Linear::of(by, width);
+            (by.times(&start.known()?), by.times(&step.known()?))
+        }
+    };
+    for (term_, factor) in &one.offsets {
+        start = start.plus(&Linear::of(term_, width).times(factor));
+    }
+    Some(Recurrence { pointer: one.pointer, start, step })
+}
+
+/// How a use reads a recurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UseKind {
+    /// The address of a load or a store.
+    Address,
+    /// Compared with an invariant.
+    Compare,
+    /// Anything else.
+    Basic,
+}
+
+/// An operand that reads a recurrence, of an instruction that is not one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IvUse {
+    pub user: InstId,
+    pub index: usize,
+    pub value: ValueId,
+    pub of: Recurrence,
+    pub kind: UseKind,
+    /// The low bits of the value the user observes.
+    pub demanded: u32,
+}
+
+/// The low bits of operand `index` that `op` observes: an `and` with a
+/// mask of low ones, or a `trunc`, reads fewer than all.
+pub fn demanded(unit: &Unit, op: &Instruction, index: usize) -> Option<u32> {
+    let width = unit.int_bits(op.operands[index])?;
+    let low = match op.opcode {
+        Opcode::Binary(BinaryOp::And) => {
+            let mask = unit.int_constant(op.operands[1 - index])?;
+            let ones = mask.trailing_ones();
+            (mask >> ones == 0).then_some(ones)?
+        }
+        Opcode::Cast(CastOp::Trunc) => unit.int_bits(Operand::Value(op.result?))?,
+        _ => width,
+    };
+    Some(low.min(width))
+}
+
+/// A loop's recurrences and their uses: LLVM's IVUsers.
+#[derive(Clone, Debug, Default)]
+pub struct Users {
+    /// The counters' phis and every instruction whose value is a recurrence.
+    pub web: BTreeSet<InstId>,
+    pub values: BTreeMap<ValueId, Recurrence>,
+    /// The header phis among `values`: integer counters and pointers alike.
+    pub counters: Vec<ValueId>,
+    pub uses: Vec<IvUse>,
+}
+
+/// The bytes the constant and invariant indices of `op`, a
+/// `getelementptr`, add to its pointer, in `width` bits; None where an
+/// index is neither, or narrower than the pointer's.
+fn _gep_offset(unit: &Unit, op: &Instruction, width: u32, still: &Invariant) -> Option<Linear> {
+    let Opcode::GetElementPtr { source } = op.opcode else { return None };
+    let indices = op.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128)))).collect::<Vec<_>>();
+    let (constant, variable) = unit.layout.collect_offset(&unit.context.types, source, &indices);
+    let mut offset = Linear::constant(constant, width);
+    for (position, scale) in variable {
+        let index = op.operands[1 + position];
+        let Operand::Value(value) = index else { return None };
+        if !still.contains(value) || unit.int_bits(index)? < width {
+            return None;
+        }
+        offset = offset.plus(&Linear { constant: BigInt::from(0), terms: BTreeMap::from([(value, BigInt::from(scale))]), width }.normal());
+    }
+    Some(offset)
+}
+
+/// `pointer` as the invariant it offsets and the offset, through the
+/// `getelementptr`s over it the loop does not compute: SCEV's pointer as a
+/// base plus an add. Two addresses into one object share a base.
+pub fn rooted(unit: &Unit, pointer: Operand, width: u32, still: &Invariant) -> (Operand, Linear) {
+    let mut offset = Linear::constant(0, width);
+    let mut at = pointer;
+    while still.operand(at)
+        && let Some((_, op)) = unit.defining(at)
+        && let Some(part) = _gep_offset(unit, op, width, still)
+    {
+        offset = offset.plus(&part);
+        at = op.operands[0];
+    }
+    (at, offset)
+}
+
+/// `of` with its pointer rooted.
+fn _rooted(unit: &Unit, of: Recurrence, still: &Invariant) -> Recurrence {
+    let Some(pointer) = of.pointer else { return of };
+    let (root, offset) = rooted(unit, pointer, of.width(), still);
+    Recurrence { pointer: Some(root), start: of.start.plus(&offset), step: of.step }
+}
+
+/// What `derived` leaves: recurrences that step by an invariant, as a counter
+/// times one does (`i*m`), and what is made of them by sums, constant
+/// multiples, shifts and addresses, to a fixed point. SCEV's add recurrences
+/// with symbolic steps; `derived` composes only constant scales.
+fn _symbolic(unit: &Unit, loop_: &Loop, still: &Invariant, found: &mut Users) {
+    let function = unit.function;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (inst, block, op) in operations(function) {
+            let Some(result) = op.result else { continue };
+            if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || found.values.contains_key(&result) {
+                continue;
+            }
+            let Some(width) = unit.int_bits(Operand::Value(result)).or_else(|| unit.space(Operand::Value(result)).map(|space| unit.layout.pointer(space).index_bits)) else { continue };
+            let stepping = |operand: Operand| match operand {
+                Operand::Value(value) => found.values.get(&value).filter(|of| of.pointer.is_none() && of.step.known().is_none() && of.width() == width).cloned(),
+                _ => None,
+            };
+            let constant = |operand: Operand| unit.int_constant(operand).map(|bits| BigInt::from(signed(bits, width)));
+            let invariant = |operand: Operand| term(unit, operand).filter(|one| one.width() == width && matches!(one, AffineOperand::Const(_)) || matches!(one, AffineOperand::Value(value, _) if still.contains(*value)));
+            let made = match &op.opcode {
+                Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)) => {
+                    let (first, second) = (stepping(op.operands[0]), stepping(op.operands[1]));
+                    match (first, second, kind) {
+                        (Some(of), None, _) => invariant(op.operands[1]).map(|by| {
+                            let by = Linear::of(&by, width);
+                            Recurrence { start: if *kind == BinaryOp::Add { of.start.plus(&by) } else { of.start.minus(&by) }, ..of }
+                        }),
+                        (None, Some(of), BinaryOp::Add) => invariant(op.operands[0]).map(|by| Recurrence { start: of.start.plus(&Linear::of(&by, width)), ..of }),
+                        _ => None,
+                    }
+                }
+                Opcode::Binary(BinaryOp::Mul) => match (stepping(op.operands[0]), constant(op.operands[1]), stepping(op.operands[1]), constant(op.operands[0])) {
+                    (Some(of), Some(by), _, _) | (_, _, Some(of), Some(by)) => Some(Recurrence { start: of.start.times(&by), step: of.step.times(&by), ..of }),
+                    _ => None,
+                },
+                Opcode::Binary(BinaryOp::Shl) => match (stepping(op.operands[0]), constant(op.operands[1])) {
+                    (Some(of), Some(count)) if count >= BigInt::from(0) && count < BigInt::from(width) => {
+                        let by = BigInt::from(1) << usize::try_from(&count).expect("a count below the width");
+                        Some(Recurrence { start: of.start.times(&by), step: of.step.times(&by), ..of })
+                    }
+                    _ => None,
+                },
+                Opcode::GetElementPtr { source } if still.operand(op.operands[0]) => {
+                    let indices = op.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128)))).collect::<Vec<_>>();
+                    let (offset, variable) = unit.layout.collect_offset(&unit.context.types, *source, &indices);
+                    let [(position, scale)] = variable[..] else { continue };
+                    let Some(of) = stepping(op.operands[1 + position]) else { continue };
+                    let (root, base) = rooted(unit, op.operands[0], width, still);
+                    let scale = BigInt::from(scale);
+                    Some(Recurrence { pointer: Some(root), start: base.plus(&Linear::constant(offset, width)).plus(&of.start.times(&scale)), step: of.step.times(&scale) })
+                }
+                _ => None,
+            };
+            if let Some(of) = made {
+                found.web.insert(inst);
+                found.values.insert(result, of);
+                changed = true;
+            }
+        }
+    }
+}
+
+/// The recurrences of `loop_`'s `counters` and of what `derived` computes
+/// from them, of its pointer recurrences and the addresses off them, and
+/// every read of one by something else, in or after the loop.
+pub fn users(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, derived: &[Derived]) -> Users {
+    let function = unit.function;
+    let still = invariant(function, &loop_.body);
+    let mut found = Users::default();
+    for counter in counters.values() {
+        let Some(phi) = defining(function, counter.value) else { continue };
+        found.web.insert(phi);
+        found.values.insert(counter.value, counter_recurrence(counter));
+        found.counters.push(counter.value);
+    }
+    for one in derived {
+        let (Some(result), Some(of)) = (function.instruction(one.op).result, recurrence(one)) else { continue };
+        found.web.insert(one.op);
+        found.values.insert(result, _rooted(unit, of, &still));
+    }
+    for one in pointers(unit, loop_) {
+        let (Some(space), Some(stepped)) = (unit.space(Operand::Value(one.value)), function.instruction(one.stepping).result) else { continue };
+        let width = unit.layout.pointer(space).index_bits;
+        let (root, start) = rooted(unit, one.start, width, &still);
+        let of = Recurrence { pointer: Some(root), start, step: Linear::constant(one.step.clone(), width) };
+        found.web.extend([one.phi, one.stepping]);
+        found.values.insert(stepped, Recurrence { start: of.start.plus(&of.step), ..of.clone() });
+        found.values.insert(one.value, of);
+        found.counters.push(one.value);
+    }
+    _symbolic(unit, loop_, &still, &mut found);
+    // Addresses off a pointer recurrence, to a fixed point.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (inst, block, op) in operations(function) {
+            let Some(result) = op.result else { continue };
+            if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || !matches!(op.opcode, Opcode::GetElementPtr { .. }) {
+                continue;
+            }
+            let Operand::Value(base) = op.operands[0] else { continue };
+            let Some(of) = found.values.get(&base).filter(|of| of.pointer.is_some()).cloned() else { continue };
+            let Some(offset) = _gep_offset(unit, op, of.width(), &still) else { continue };
+            found.web.insert(inst);
+            found.values.insert(result, Recurrence { start: of.start.plus(&offset), ..of });
+            changed = true;
+        }
+    }
+    for (value, of) in &found.values {
+        for one in function.users(*value) {
+            if found.web.contains(&one.user) {
+                continue;
+            }
+            let op = function.instruction(one.user);
+            let index = one.index as usize;
+            let kind = match &op.opcode {
+                Opcode::Load { .. } if index == 0 => UseKind::Address,
+                Opcode::Store { .. } if index == 1 => UseKind::Address,
+                Opcode::ICmp(_) if still.operand(op.operands[1 - index]) => UseKind::Compare,
+                _ => UseKind::Basic,
+            };
+            let demanded = demanded(unit, op, index).unwrap_or(of.width());
+            found.uses.push(IvUse { user: one.user, index, value: *value, of: of.clone(), kind, demanded });
+        }
+    }
+    found.uses.sort_by_key(|one| (one.user, one.index));
+    found
+}
+
+impl CountedLoop {
+    /// The most trips the loop makes: its count, its `maximum`, or every
+    /// value of a unit step's width.
+    pub fn most(&self) -> Option<BigInt> {
+        self.count.clone().or_else(|| self.maximum.clone()).or_else(|| (abs(&self.step) == BigInt::from(1)).then(|| (BigInt::from(1) << self.width()) - 1))
+    }
+
+    /// Its trips on the entered path, as a sum of invariants: where `trips`
+    /// places them.
+    pub fn trips_linear(&self) -> Option<Linear> {
+        let width = self.width();
+        if self.posttested && !self.entry_guarded {
+            return self.count.as_ref().map(|count| Linear::constant(count.clone(), width));
+        }
+        if let Some(count) = &self.count {
+            return (count < &(BigInt::from(1) << width)).then(|| Linear::constant(count.clone(), width));
+        }
+        let (bound, start) = (Linear::of(&self.bound, width), Linear::of(&self.start, width));
+        let (ahead, behind) = if self.step > BigInt::from(0) { (bound, start) } else { (start, bound) };
+        Some(ahead.minus(&behind).plus(&Linear::constant(u8::from(self.inclusive()), width)))
+    }
 }
 
 #[cfg(test)]

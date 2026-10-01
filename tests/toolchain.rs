@@ -205,3 +205,53 @@ fn test_a_64k_far_array_after_an_odd_sized_far_segment_links() {
     let done = linked_fixture("farsegments", "_get");
     assert!(done.is_ok(), "{}", done.unwrap_err());
 }
+
+/// Nine to eleven arrays, near and far, summed over one counter on a P5 or Core: loop
+/// strength reduction kept four products live beside the counter and the
+/// allocator found "value cannot be spilled and no register is free", where
+/// main built them. A far access takes registers the pass did not count:
+/// one still failed the nine, two the eleven on a Core (loop-corpus
+/// `conc9`, `conc10`, `conc11`).
+#[test]
+fn test_loops_over_many_arrays_build_on_a_p5() {
+    let scratch = tempfile::tempdir().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c"));
+    for (name, cpu) in [("ninearrays", "P5"), ("tenarrays", "P5"), ("elevenarrays", "Core")] {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{name}.c"));
+        let done = Command::new(bin).args([source.to_str().unwrap(), "--cpu", cpu, "-O2", "-o", &format!("{name}.obj")]).current_dir(scratch.path()).output().unwrap();
+        assert!(done.status.success(), "{name}: {}", String::from_utf8_lossy(&done.stderr));
+    }
+}
+
+/// Five pointer streams on a P5: a reload confined to BX lost its register to
+/// a split after it was placed, and with eviction only tried at `Assign` and
+/// blocked by a younger cascade, failed "cannot be spilled and no register is
+/// free" (loop-corpus `rnd98_0183`).
+#[test]
+fn test_an_unspillable_range_evicts_a_spillable_holder_at_any_stage() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/fivestreams.c");
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .args([source.to_str().unwrap(), "--cpu", "P5", "-O2", "-o", "fivestreams.obj"])
+        .current_dir(scratch.path())
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+}
+
+/// Seven arrays of different element sizes summed over one symbolic count on
+/// a 386: the pass assumed a dword counter takes a scaled address, the
+/// selector scales it only where its range keeps it in a word, so the loop
+/// computed `i*2`, `i*4` and `i*8` into frame cells each trip (`shl dword ptr
+/// [bp-22], 1`), 40 instructions where main's walked pointers took 24
+/// (loop-corpus `rnd98_0305`).
+#[test]
+fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/tenstreams.c");
+    let listing = scratch.path().join("tenstreams.asm");
+    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c"))).args([source.to_str().unwrap(), "--cpu", "386", "-O2", "-S", "-o", listing.to_str().unwrap()]).output().unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let asm = std::fs::read_to_string(listing).unwrap();
+    assert!(!asm.contains("shl dword ptr [bp"), "{asm}");
+}

@@ -26,6 +26,8 @@ impl Effects {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Summary {
     pub effects: Effects,
+    /// Those of `effects` on memory the program can name: not `inaccessiblemem`.
+    pub accessible: Effects,
     /// Its effects only reach what its pointer arguments point to.
     pub arguments_only: bool,
     pub returns: bool,
@@ -57,6 +59,7 @@ pub fn summary(function: &Function) -> Summary {
     let attrs = &function.attrs;
     Summary {
         effects: stated(attrs),
+        accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),
         returns: returns(attrs),
         nocapture: function.parameter_attrs.iter().map(|one| has(one, "nocapture")).collect(),
@@ -196,6 +199,21 @@ pub fn through(attrs: &[Attribute]) -> Effects {
 /// anything reads them.
 pub fn initializes(attrs: &[Attribute]) -> &[(i64, i64)] {
     attrs.iter().find_map(|attr| if let Attribute::Initializes(ranges) = attr { Some(ranges.as_slice()) } else { None }).unwrap_or_default()
+}
+
+/// What `inst` may do to memory the program can name: a call's effects
+/// less those on `inaccessiblemem`, where a routine that ends the program
+/// keeps its own.
+pub fn accessible(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> Effects {
+    let instruction = function.instruction(inst);
+    match &instruction.opcode {
+        Opcode::Call(info) | Opcode::Invoke(info) => {
+            let at_site = stated_at(&info.attrs, |location| location != Some("inaccessiblemem"));
+            let declared = callee(context, function, inst).and_then(|one| callees.get(&one)).map_or(Effects::ANY, |one| one.accessible);
+            Effects { reads: at_site.reads && declared.reads, writes: at_site.writes && declared.writes }
+        }
+        _ => of(context, callees, function, inst),
+    }
 }
 
 /// What `inst` may do to memory.

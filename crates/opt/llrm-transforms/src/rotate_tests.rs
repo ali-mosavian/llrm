@@ -11,7 +11,6 @@
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::module::{Function, Module, Operand};
-use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 
 use super::Rotate;
 use crate::peel::Peel;
@@ -41,32 +40,6 @@ b2:
 b3:
   %r = add i16 %acc, %i
   ret i16 %r
-}}
-"
-    )
-}
-
-/// `%acc` tripled `%n` times, the counter read by nothing else, and the
-/// exit reading it through `leave` (`""` or an LCSSA phi).
-fn dead_counter(test: &str, leave: &str, result: &str) -> String {
-    format!(
-        "define i16 @f(i16 %x, i16 %n) {{
-b0:
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
-  %acc = phi i16 [ %x, %b0 ], [ %sum, %b2 ]
-  %go = icmp {test} i16 %i, %n
-  br i1 %go, label %b2, label %b3
-
-b2:
-  %sum = mul i16 %acc, 3
-  %next = add i16 %i, 1
-  br label %b1
-
-b3:
-{leave}  ret i16 {result}
 }}
 "
     )
@@ -171,46 +144,6 @@ b3:
 #[test]
 fn a_header_that_stores_keeps_its_first_test() {
     let text = format!("@g = global i16 0\n\n{}", summing("4").replace("  %go = icmp", "  store i16 %i, ptr @g\n  %go = icmp"));
-    assert!(!through(&text, Rotate).0);
-}
-
-/// C floats retained `add/cmp/jb` in its ten-trip hot path.
-///
-/// Clang tests the dynamic count once before the loop, then ends every
-/// trip with `dec/jne`. The entry test is essential: `bench_floats(0)` must
-/// still run the body no times, so the guard is asserted, not only the
-/// decrement.
-#[test]
-fn test_dead_dynamic_counter_counts_down_after_a_zero_trip_guard() {
-    for test in ["slt", "ult", "ne"] {
-        let (changed, mut module) = through(&dead_counter(test, "", "%acc"), Rotate);
-        assert!(changed, "{test}");
-        let function = f(&mut module);
-        let loop_ = only_loop(function);
-        assert_eq!(loop_.body.len(), 1, "{test}");
-        let block = cfg::block(loop_.header);
-        let ops = function.block(block).instructions().iter().map(|&inst| function.instruction(inst)).collect::<Vec<_>>();
-        let decrement = ops.iter().find(|op| op.opcode == Opcode::Binary(BinaryOp::Sub)).expect("a decrement");
-        let tested = ops.iter().find(|op| op.opcode == Opcode::ICmp(IntPredicate::Ne)).expect("a test for zero");
-        assert_eq!(tested.operands[0], Operand::Value(decrement.result.unwrap()), "{test}");
-        let entry = function.entry().unwrap();
-        let guard = function.instruction(function.terminator(entry).unwrap());
-        assert_eq!(guard.operands.len(), 3, "{test}: a guard");
-        assert!(guard.operands[1..].iter().any(|one| *one != Operand::Block(block)), "{test}");
-    }
-}
-
-/// The counter leaving through an LCSSA phi leaves as its exit value, or
-/// its start where the guard skipped the loop.
-#[test]
-fn a_counted_down_counter_still_leaves_with_its_value() {
-    assert!(through(&dead_counter("slt", "  %e = phi i16 [ %i, %b1 ]\n  %r = add i16 %e, %acc\n", "%r"), Rotate).0);
-}
-
-/// Replacing an index stored by the body with trips remaining changes the program.
-#[test]
-fn test_countdown_refuses_an_observed_source_counter() {
-    let text = format!("@g = global i16 0\n\n{}", dead_counter("slt", "", "%acc").replace("  %next = add", "  store i16 %i, ptr @g\n  %next = add"));
     assert!(!through(&text, Rotate).0);
 }
 

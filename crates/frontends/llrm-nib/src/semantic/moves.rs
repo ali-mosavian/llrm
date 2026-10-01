@@ -26,6 +26,10 @@ pub(super) struct Moves {
     entry: BTreeMap<u32, BTreeSet<Moved>>,
     /// The moved set at the end of what each started block holds so far.
     state: BTreeMap<u32, BTreeSet<Moved>>,
+    /// The same, of what moved on every path: a drop of what surely moved is
+    /// left out, and only one of what may have moved needs a flag.
+    must_entry: BTreeMap<u32, BTreeSet<Moved>>,
+    must_state: BTreeMap<u32, BTreeSet<Moved>>,
     /// A plain assignment is resolving its target, which it may reinitialize.
     pub(super) writing: bool,
     /// The owner a field path is being resolved in: the path, not the
@@ -41,6 +45,31 @@ impl FunctionCompiler<'_> {
         let block = self.current;
         let entry = self.moves.entry.remove(&block).unwrap_or_default();
         self.moves.state.entry(block).or_insert(entry)
+    }
+
+    /// What moved on every path to where code is emitted now.
+    fn must(&mut self) -> &mut BTreeSet<Moved> {
+        let block = self.current;
+        let entry = self.moves.must_entry.remove(&block).unwrap_or_default();
+        self.moves.must_state.entry(block).or_insert(entry)
+    }
+
+    /// Starts the current block's sets, as an instruction emitted there does.
+    pub(super) fn must_here(&mut self) {
+        self.must();
+    }
+
+    /// `moved` moved here.
+    pub(super) fn mark_moved(&mut self, moved: Moved) {
+        self.moved().insert(moved.clone());
+        self.must().insert(moved);
+    }
+
+    /// Whether the field `path` of `owner` moved on every path to here.
+    pub(super) fn surely_moved(&self, owner: Owner, path: &[String]) -> bool {
+        let block = self.current;
+        let set = self.moves.must_state.get(&block).or_else(|| self.moves.must_entry.get(&block));
+        set.is_some_and(|set| set.contains(&(owner, path.to_vec())))
     }
 
     /// The paths of `owner` moved here; an empty one is the whole owner.
@@ -101,6 +130,7 @@ impl FunctionCompiler<'_> {
     /// moved since. The scopes a jump there leaves are not seen.
     pub(super) fn flow_moves(&mut self, targets: &[u32]) {
         let moved = self.moved().clone();
+        let must = self.must().clone();
         for target in targets {
             if let Some(before) = self.moves.state.get(target) {
                 let depth = self.loops.iter().rev().find(|one| one.next == *target).map_or(self.scopes.len(), |one| one.next_depth);
@@ -123,6 +153,12 @@ impl FunctionCompiler<'_> {
                 .entry(*target)
                 .or_default()
                 .extend(moved.iter().cloned());
+            match self.moves.must_entry.get_mut(target) {
+                Some(entry) => entry.retain(|one| must.contains(one)),
+                None => {
+                    self.moves.must_entry.insert(*target, must.clone());
+                }
+            }
         }
     }
 
@@ -136,6 +172,10 @@ impl FunctionCompiler<'_> {
     /// The field `path` of `owner`, or all of it, holds a value again.
     pub(super) fn refilled(&mut self, one: Owner, path: &[String]) {
         self.moved().retain(|(owner, moved)| *owner != one || !moved.starts_with(path));
+        self.must().retain(|(owner, moved)| *owner != one || !moved.starts_with(path));
+        // What holds a value again is dropped again: its flag is set here.
+        let at = self.current_block_mut().instructions.len();
+        self.field_refills.push(((one, path.to_vec()), self.current, at));
     }
 
     /// The owner, its name and the fields down to `place`, when `place` is

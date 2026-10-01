@@ -34,6 +34,9 @@ pub(super) struct FieldMove {
     path: Vec<String>,
     /// Why it cannot move, when it cannot.
     refusal: Option<String>,
+    /// It holds a type with a `drop`: no null marks it moved, so its drop is
+    /// left out where it surely moved, and flagged where it may have.
+    dropped: bool,
 }
 
 /// What to do with each owning value an aggregate or vec holds.
@@ -124,7 +127,7 @@ impl FunctionCompiler<'_> {
                     vec![hir::Operand::Place(place), null],
                     None,
                 );
-                self.moved().insert(((false, place), Vec::new()));
+                self.mark_moved(((false, place), Vec::new()));
                 Ok(())
             }
             Some(Origin::Frame(place)) => {
@@ -301,7 +304,7 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    fn owned_field(&mut self, view: &StructView, field: FieldLayout, action: Owned) {
+    pub(super) fn owned_field(&mut self, view: &StructView, field: FieldLayout, action: Owned) {
         if let Some(shape) = field.shape {
             let struct_id = self.types.array(field.type_, shape);
             let array = StructView { struct_id, offset: view.offset + field.offset, ..view.clone() };
@@ -401,7 +404,7 @@ impl FunctionCompiler<'_> {
         };
         if let Some(owner) = moves::owner(&storage) {
             self.check_movable(owner, span)?;
-            self.moved().insert((owner, Vec::new()));
+            self.mark_moved((owner, Vec::new()));
             self.set_live(owner, false);
         }
         stores.extend(self.zero_stores(source, self.types.copy_units(ElementType::Struct(source.struct_id))));
@@ -410,8 +413,7 @@ impl FunctionCompiler<'_> {
 
     /// The move `place` would make, when it is a field of an owner this
     /// function owns: a field of a struct with a `drop` cannot move, as the
-    /// `drop` sees the whole, nor one that holds such a type, which has no
-    /// null to leave.
+    /// `drop` sees the whole.
     pub(super) fn field_move(&self, place: &Expr) -> Option<FieldMove> {
         let (owner, name, path) = self.projected(place)?;
         let binding = self.visible(&name)?;
@@ -437,10 +439,8 @@ impl FunctionCompiler<'_> {
                 id = next;
             }
         }
-        if self.holds_user_drop(element) {
-            refusal.get_or_insert(format!("\"{name}.{}\" holds a type with a drop: move all of {name:?}", path.join(".")));
-        }
-        Some(FieldMove { owner, name, path, refusal })
+        let dropped = self.holds_user_drop(element);
+        Some(FieldMove { owner, name, path, refusal, dropped })
     }
 
     /// Moves `moving`'s field out of its owner, which is then partly moved.
@@ -454,7 +454,11 @@ impl FunctionCompiler<'_> {
         };
         let error = Diagnostic::new(span, format!("{:?} is borrowed here, so it cannot be moved", moving.name));
         self.change_borrowed(key, &moving.path, None, error)?;
-        self.moved().insert((moving.owner, moving.path.clone()));
+        self.mark_moved((moving.owner, moving.path.clone()));
+        if moving.dropped {
+            let at = self.current_block_mut().instructions.len();
+            self.field_moves.push(((moving.owner, moving.path.clone()), self.current, at));
+        }
         Ok(())
     }
 

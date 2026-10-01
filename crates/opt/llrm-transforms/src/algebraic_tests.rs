@@ -441,6 +441,56 @@ b3:
     assert!(after.contains("phi i1") && after.matches("sext").count() == 1, "{after}");
 }
 
+/// `if !(a < b)` branched on `xor (icmp slt a b), true`: one compare of the
+/// inverse predicate, so the exit is the compare counting passes look for.
+#[test]
+fn test_a_negated_compare_is_the_inverse_compare() {
+    let text = "define i16 @f(i16 %a, i16 %b) {
+entry:
+  %c = icmp slt i16 %a, %b
+  %n = xor i1 %c, true
+  br i1 %n, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 2
+}
+";
+    let printed = checked(text, &edges(16).iter().flat_map(|&a| edges(16).into_iter().map(move |b| vec![a, b])).collect::<Vec<_>>());
+    assert!(printed.contains("icmp sge i16 %a, %b") && !printed.contains("xor"), "{printed}");
+    // A compare read elsewhere keeps its own value.
+    let shared = text.replace("ret i16 1", "%w = zext i1 %c to i16\n  ret i16 %w");
+    let kept = checked(&shared, &[vec![1, 2], vec![2, 1]]);
+    assert!(kept.contains("xor"), "{kept}");
+}
+
+/// Nib's `if !(a < b)`: the compare sign-extended to a byte, complemented and
+/// tested against zero, and the same through `zext` and `xor 1`. One compare
+/// of the inverse predicate, where it cost `setl; neg; xor; jne` and hid the
+/// exit from the counting passes.
+#[test]
+fn test_a_negated_extended_boolean_is_the_inverse_compare() {
+    let text = "define i16 @f(i16 %a, i16 %b) {
+entry:
+  %c = icmp slt i16 %a, %b
+  %e = sext i1 %c to i8
+  %n = xor i8 %e, -1
+  %t = icmp ne i8 %n, 0
+  br i1 %t, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 2
+}
+";
+    let inputs = edges(16).iter().flat_map(|&a| edges(16).into_iter().map(move |b| vec![a, b])).collect::<Vec<_>>();
+    let printed = checked(text, &inputs);
+    assert!(printed.contains("icmp sge i16 %a, %b") && !printed.contains("xor") && !printed.contains("sext"), "{printed}");
+    let unsigned = text.replace("sext i1 %c to i8", "zext i1 %c to i8").replace("xor i8 %e, -1", "xor i8 %e, 1");
+    let printed = checked(&unsigned, &inputs);
+    assert!(printed.contains("icmp sge i16 %a, %b") && !printed.contains("zext"), "{printed}");
+}
+
 /// `gep i8, ptr null, -4` stayed an instruction, and isel refused it as "an
 /// address of no global" (examples/entries.nib, tally.nib). A byte offset
 /// from a constant near address is the constant address.

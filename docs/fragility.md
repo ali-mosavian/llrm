@@ -12,6 +12,10 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **A regression test passed at HEAD.** The first count-to-zero test (RIPPLE) never reproduced the bug; the loop was already right in isolation, and went wrong only beside another loop. A test not seen to fail is evidence of nothing; the replacement was checked against the HEAD build before and after.
 
+**The estimate ran a loop tested at its header one trip short.** `executed` gave every loop exit the stay probability (N−1)/N, right for a test after the trip and short by one for a test before it, so an unrotated loop's body counted one trip fewer than a rotated one: rotating ivchan's 21-trip loop read as three more memory operands. Guard: the header's test stays N/(N+1), with a test.
+
+**An uncounted loop ran fewer trips the more ways out it had.** `executed` gave each exit of a loop with no proven count a stay of 0.9, so a loop with its two exits merged into one read as running twice as often: Nib's `zip` went from 59 to 90 instructions with a shorter loop. Guard: an uncounted loop goes round nine times in ten whatever its exits, with a test.
+
 **One price for two encodings.** The scorer and scheduler priced `shl r,1` (the D1 form, three clocks on the 386 and 486) as the two-clock imm8 form, so nothing saw that `add r,r` doubles in one. A golden carried over from the Python scorer held the wrong price as the expected answer. Guard: the D1 form has its own row, with a test.
 
 **The first test shape never reached the pass.** A one-dimensional lookup put its doubling into a scaled 32-bit address, so the new test passed without the fix. Check the listing contains the instruction under test before trusting the assertion.
@@ -28,15 +32,31 @@ What has broken, or let a break go unseen, and why. Each entry says what guards 
 
 **Refactoring one fact into one place changed its answer.** df89fc8a made liveness, regthrash and machinedce ask one `effect` per instruction — the right shape — but the shared answer carried the narrowest caller's assumption about calls. When facts merge, check each former caller's fallback, not only the common case.
 
+**A port was an unknown callee.** An OUT to a port that reaches memory was modelled as a call to an unknown function, which writes only what escaped, so a DMA write could not touch a global whose address was never taken. Nothing moved a load past it until loops were hoisted after rotation. Guard: such a port reads and writes every object, with a test.
+
+**The pass priced a form the selector did not build.** `lsr` priced twelve global arrays on one counter as one held register, since a global is a displacement, and the selector built twelve `array + 2n` pointers and spilled them. Nothing in the pass could see that. Guard: the selector builds `[bx+si+global]` from a global indexed by two registers, with a test; a frame object, which takes BP, stays priced as its own register, with a test.
+
+**A fact only the frontend knows stayed unsaid.** Nib reloaded a slice's length each trip because an element store might alias its descriptor, which kept every bounds check from being counted. The descriptor is `noalias readonly` and its panic routines end the program; the frontend says both, and `hoist` and `exitfold` read them. Guard: a test each for the load leaving the loop and the crashing exit tested ahead of it.
+
+**A wrapper dropped a fact the trait defaulted.** `LoweredTarget` forwards each `Machine` method by hand; a new method with a default silently answered 0 through it, so the far-access registers never reached the pass and nothing failed. Guard: the wrapper forwards every method; a new one gets a test through the real target.
+
+**The pass counted registers the access needs.** A far access and an indexed one read their base, index and selector back from spilled cells, so a loop that "fit" could not be allocated: nine- to eleven-array loops failed to build on P5 and Core. A measured constant (1, then 2, then 3) crept; the access's own address components replaced it. Guard: `tests/toolchain.rs` builds the nine-, ten- and eleven-array loops.
+
+**A copy sunk to an exit some iteration bypasses.** `copysink` moved a result copy to the loop exit, which the iteration that skipped the inner loop also reaches, so a register nothing had set overwrote the carried value (main passed by luck). Guard: the copy's block must lie on every path to the leaving block, with a test.
+
+**A new counter's step was moved back below its readers.** The exit test moved the step to just before the branch after the uses had been placed ahead of it, and a use read the stepped value before its definition. Guard: the step moves only if it sits after the branch.
+
+**An unspillable range was refused by a rule for spillable ones.** The allocator's eviction stage and cascade rule stopped a two-instruction reload confined to the index registers from taking one, and the build failed where main's did not. Guard: it evicts at any stage and past a spillable cascade (LLVM's urgent eviction), with a build test.
+
+**A far pointer was compared for the exit.** The pass tested an exit on a far pointer, which the selector has no compare for: 147 corpus builds failed. Guard: a pointer wider than its offset never tests the exit, with a test.
+
 **A parameter nobody read.** `ranges::constants` took the data group, but `consts::known` reads it only when calls are also given, and they never were. Hoist passing `None` and loop motion passing the group got the same answer, which the plan took for two derivations of one fact. Guard: the parameter is gone from `constants` and the functions that only forwarded it.
 
 ## Pass order and interaction
 
-**A pass that settles early decides on another pass's leftovers.** Count-to-zero ran inside strength reduction, each round, so it rotated a loop before strength had made that loop's pointer, and chose the counter a later round would have killed. Guard: passes run in stages; count-to-zero waits until strength reduction has settled.
+**A load leaves a loop only once the loop is entered at its body.** Rotation comes last, since unroll and peel read the loop tested at its header, so `hoist` runs again after `lsr` and `rotate`: before it, a load in a loop that may run no trip cannot move. `zeroed` used to rotate mid-pipeline and gave sum_three.c's pointer loads that chance by accident. Guard: the pipeline test of zero stores beside invariant loads.
 
 **A reorder hid a bug.** Before df89fc8a, running `fused` before `high_extracts` hid SHLD's false read of its destination. A pass order that makes something work is a fact nobody wrote down; the fix was to make the effect right.
-
-**A credit that ignores what follows.** Strength reduction freed a counter whenever its scaled uses covered it, even with a symbolic trip count. Count-to-zero then had to take control through a pointer at a symbolic bias, which cost a register in every address and spilled (SUMTHREE 8 → 9). Guard: the credit applies only when a root can take control at a constant bias.
 
 ## Invariants of the machine form
 
