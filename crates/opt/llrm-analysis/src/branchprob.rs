@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::module::{BlockId, Function, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::facts::Facts;
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantKind, Context};
 
@@ -84,7 +85,7 @@ pub fn estimated(context: &Context, declarations: &Declarations, function: &Func
                 odds.taken.insert((id(block), *only), 1.0);
             }
             _ => {
-                let (heuristic, weights) = weighed(context, function, shape, &cold, block, &successors);
+                let (heuristic, weights) = weighed(context, declarations, function, shape, &cold, block, &successors);
                 let total: f64 = weights.iter().sum();
                 for (to, weight) in successors.iter().zip(&weights) {
                     *odds.taken.entry((id(block), *to)).or_default() += weight / total;
@@ -98,7 +99,7 @@ pub fn estimated(context: &Context, declarations: &Declarations, function: &Func
 }
 
 /// The first heuristic that tells `block`'s successors apart, and their weights.
-fn weighed(context: &Context, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
+fn weighed(context: &Context, declarations: &Declarations, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
     let split = |favoured: &dyn Fn(i64) -> bool, (yes, no): (f64, f64)| -> Option<Vec<f64>> {
         let count = successors.iter().filter(|&&at| favoured(at)).count();
         if count == 0 || count == successors.len() {
@@ -116,7 +117,7 @@ fn weighed(context: &Context, function: &Function, shape: &Shape, cold: &BTreeSe
         }
     }
     if successors.len() == 2 {
-        if let Some((heuristic, likely, nan)) = compared(context, function, block) {
+        if let Some((heuristic, likely, nan)) = compared(context, declarations, function, block) {
             let weights = if nan { ORDERED } else { OPCODE };
             let (when_true, when_false) = if likely { weights } else { weights.swap() };
             return (heuristic, vec![when_true, when_false]);
@@ -146,7 +147,7 @@ impl Swap for (f64, f64) {
 /// The compare deciding `block`'s branch, if a heuristic reads it: which
 /// one, whether the branch's true edge is the likely one, and whether it
 /// tests for NaN, which takes the extreme weights.
-fn compared(context: &Context, function: &Function, block: BlockId) -> Option<(Heuristic, bool, bool)> {
+fn compared(context: &Context, declarations: &Declarations, function: &Function, block: BlockId) -> Option<(Heuristic, bool, bool)> {
     let branch = function.instruction(function.terminator(block)?);
     let (Opcode::Br, [Operand::Value(condition), ..]) = (&branch.opcode, branch.operands.as_slice()) else { return None };
     let ValueDef::Instruction(inst) = function.value(*condition).def else { return None };
@@ -185,6 +186,11 @@ fn compared(context: &Context, function: &Function, block: BlockId) -> Option<(H
             if truth(function, *compared, 4) {
                 return None;
             }
+            // Nor is a three-way compare's sign: of its result only equality
+            // with 0 says something, that the data are unlikely equal.
+            if three_way(context, declarations, function, *compared) && !(value == 0 && matches!(predicate, IntPredicate::Eq | IntPredicate::Ne)) {
+                return None;
+            }
             let likely = match (predicate, value) {
                 (IntPredicate::Eq, 0 | -1) => false,
                 (IntPredicate::Ne, 0 | -1) => true,
@@ -203,6 +209,16 @@ fn compared(context: &Context, function: &Function, block: BlockId) -> Option<(H
         },
         _ => None,
     }
+}
+
+/// Whether `operand` is the result of a call to a routine stated a
+/// three-way compare, at the call or of the callee.
+fn three_way(context: &Context, declarations: &Declarations, function: &Function, operand: Operand) -> bool {
+    let Operand::Value(value) = operand else { return false };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    let declared = llrm_mir::memory::callee(context, function, inst).and_then(|one| declarations.get(one.0 as usize)).and_then(|one| one.function());
+    Facts::of(&info.attrs).three_way_compare() || declared.is_some_and(|one| Facts::of(&one.attrs).three_way_compare())
 }
 
 /// Whether `operand` is provably 0 or all ones, or 0 or 1: a compare, one
