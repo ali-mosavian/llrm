@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
+use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{self, Classes, _whole};
 use crate::backend::frame::Frame;
@@ -304,6 +305,12 @@ struct Edits {
     at_end: Vec<u32>,
     /// Values an instruction reads from their slot, at each position.
     folded: IndexMap<usize, Vec<u32>>,
+    /// Values that leave the register set while live, before the instruction at each position.
+    leaves: IndexMap<usize, Vec<u32>>,
+    /// Values that leave it before the block's terminators.
+    leaves_at_end: Vec<u32>,
+    /// Phi results the block does not take into registers.
+    leaves_at_top: Vec<u32>,
     w_in: BTreeSet<u32>,
     w_out: BTreeSet<u32>,
 }
@@ -321,12 +328,28 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let room = loop_room(body, &flow, &machine, &skip);
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
     let remakes = remakable(body, &all);
+    let frequency = Frequency::of(body);
+    let graph = ranges::_graph(&body.blocks);
+    let found = crate::analysis::loops::loops(&graph, Some(body.entry));
     let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room);
-    for _ in 0..3 {
+    // A loop header keeps a value its back edge must reload only while those
+    // reloads run less often than the reloads at its first uses inside one trip.
+    for _ in 0..4 {
         let mut more = false;
         for ((from, to), values) in &result.across {
-            if place[from] >= place[to] {
-                for value in values {
+            if place[from] < place[to] {
+                continue;
+            }
+            let Some(within) = found.iter().find(|one| one.header == *to) else { continue };
+            for value in values {
+                let keep: f64 = body
+                    .blocks
+                    .iter()
+                    .filter(|block| block.succ.contains(to) && !result.edits[&block.at].w_out.contains(value))
+                    .map(|block| frequency.edge(block.at, *to))
+                    .sum();
+                let drop = first_uses(&flow, &frequency, &within.body, *to, *value);
+                if keep >= drop {
                     more |= dropped.entry(*to).or_default().insert(*value);
                 }
             }
@@ -339,13 +362,33 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     if result.stored.is_empty() {
         return Ok(body.clone());
     }
-    // A loop's back edge reloads before the latch branches: a block on that edge would run on every trip.
-    let graph = ranges::_graph(&body.blocks);
-    let back: BTreeSet<(i64, i64)> = crate::analysis::loops::loops(&graph, Some(body.entry))
+    // A value is stored once after its definition, or where it leaves the registers, whichever runs less.
+    let mut home: IndexMap<u32, i64> = IndexMap::default();
+    for (at, made) in &flow.defines {
+        for value in made.keys() {
+            home.insert(*value, *at);
+        }
+    }
+    let mut leaving: IndexMap<u32, f64> = IndexMap::default();
+    for (at, edit) in &result.edits {
+        let here = frequency.block(*at);
+        for value in edit.leaves.values().flatten().chain(&edit.leaves_at_end).chain(&edit.leaves_at_top) {
+            *leaving.entry(*value).or_default() += here;
+        }
+    }
+    for ((from, to), values) in &result.left {
+        for value in values {
+            *leaving.entry(*value).or_default() += frequency.edge(*from, *to);
+        }
+    }
+    let at_leaves: BTreeSet<u32> = result
+        .stored
         .iter()
-        .flat_map(|found| found.latches.iter().map(move |latch| (*latch, found.header)))
+        .copied()
+        .filter(|value| !remakes.contains_key(value))
+        .filter(|value| leaving.get(value).copied().unwrap_or(0.0) < home.get(value).map_or(f64::INFINITY, |at| frequency.block(*at)))
         .collect();
-    let spilled = written(body, &result.edits, &result.across, &back, &result.stored, &remakes, frame)?;
+    let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &at_leaves, &remakes, frame)?;
     Ok(ssarepair::repaired(&spilled, &result.stored))
 }
 
@@ -397,6 +440,7 @@ fn remade(one: &Insn, beside: &Insn) -> Arc<Insn> {
 struct Simulated {
     edits: IndexMap<i64, Edits>,
     across: IndexMap<(i64, i64), Vec<u32>>,
+    left: IndexMap<(i64, i64), Vec<u32>>,
     stored: BTreeSet<u32>,
 }
 
@@ -462,11 +506,13 @@ fn simulated(
             }
         }
         done.w_in = held.clone();
+        done.leaves_at_top = block.arrives().into_iter().filter(|value| wanted(*value) && !held.contains(value)).collect();
         for (position, one) in block.insns.iter().enumerate() {
             let used: BTreeSet<u32> = one.uses.iter().copied().filter(|value| wanted(*value)).collect();
             let made: BTreeSet<u32> = one.defines.iter().copied().filter(|value| wanted(*value)).collect();
             let acting: BTreeSet<u32> = used.union(&made).copied().collect();
-            let mut evict = |held: &mut BTreeSet<u32>, keep: &BTreeSet<u32>, room: usize| {
+            let mut leaving: Vec<u32> = Vec::new();
+            let evict = |held: &mut BTreeSet<u32>, leaving: &mut Vec<u32>, keep: &BTreeSet<u32>, room: usize| {
                 while !machine.fits(held, &acting, room) {
                     let victim = held
                         .iter()
@@ -474,8 +520,10 @@ fn simulated(
                         .max_by_key(|value| (flow.next_use(*at, position, **value), **value))
                         .copied();
                     let Some(victim) = victim else { break };
-                    llrm_support::debug!("ssaspill", "{}: evict v{victim} at {at:#x}:{position} held {held:?}", body.name);
                     held.remove(&victim);
+                    if flow.next_use(*at, position, victim) < FAR || flow.live_out[at].contains(&victim) {
+                        leaving.push(victim);
+                    }
                 }
             };
             let mut used = used;
@@ -491,7 +539,7 @@ fn simulated(
                     }
                 }
             }
-            evict(&mut held, &used, k);
+            evict(&mut held, &mut leaving, &used, k);
             // What the instruction states it takes leaves less for what lives through it.
             let taken = stated(one, &machine.general);
             // A register a value of this instruction sits in is that value's, not one more.
@@ -513,8 +561,8 @@ fn simulated(
                     let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (flow.next_use(*at, position, **value), **value)).copied();
                     let Some(victim) = victim else { break };
                     across.remove(&victim);
-                    llrm_support::debug!("ssaspill", "{}: calls evict v{victim} at {at:#x}:{position}", body.name);
                     held.remove(&victim);
+                    leaving.push(victim);
                 }
             }
             // The first source of a tied instruction gives its register to the result.
@@ -531,8 +579,16 @@ fn simulated(
                     held.insert(*value);
                 }
             }
-            evict(&mut held, &made.union(&keep).copied().collect(), k);
+            evict(&mut held, &mut leaving, &made.union(&keep).copied().collect(), k);
             held.retain(|value| flow.next_use(*at, position, *value) < FAR);
+            // A value made here leaves after the instruction, not before it.
+            let (after, before): (Vec<u32>, Vec<u32>) = leaving.into_iter().partition(|value| made.contains(value));
+            if !before.is_empty() {
+                done.leaves.entry(position).or_default().extend(before);
+            }
+            if !after.is_empty() {
+                done.leaves.entry(position + 1).or_default().extend(after);
+            }
         }
         // The arguments of its successors' phis are read at the end.
         let handed: BTreeSet<u32> = block
@@ -556,6 +612,9 @@ fn simulated(
                 let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (flow.next_use(*at, end, **value), **value)).copied();
                 let Some(victim) = victim else { break };
                 held.remove(&victim);
+                if flow.live_out[at].contains(&victim) {
+                    done.leaves_at_end.push(victim);
+                }
             }
         }
         held.retain(|value| flow.live_out[at].contains(value) || handed.contains(value));
@@ -564,6 +623,8 @@ fn simulated(
     }
     // Where a successor expects a register the predecessor does not end with, the edge reloads.
     let mut across: IndexMap<(i64, i64), Vec<u32>> = IndexMap::default();
+    // And where it ends with one the successor does not take, the value leaves on the edge.
+    let mut left: IndexMap<(i64, i64), Vec<u32>> = IndexMap::default();
     for block in &body.blocks {
         for to in &block.succ {
             let (Some(next), Some(here)) = (edits.get(to), edits.get(&block.at)) else { continue };
@@ -574,9 +635,38 @@ fn simulated(
                     stored.insert(*value);
                 }
             }
+            for value in &here.w_out {
+                if !arrives.contains(value) && flow.live_in[to].contains(value) && !next.w_in.contains(value) {
+                    left.entry((block.at, *to)).or_default().push(*value);
+                }
+            }
         }
     }
-    Simulated { edits, across, stored }
+    Simulated { edits, across, left, stored }
+}
+
+/// What reloading `value` at its first register uses costs, within one trip of the loop
+/// `within` entered at `header`: the frequency of each block on that frontier.
+fn first_uses(flow: &Flow, frequency: &Frequency, within: &BTreeSet<i64>, header: i64, value: u32) -> f64 {
+    let mut cost = 0.0;
+    let mut seen: BTreeSet<i64> = BTreeSet::new();
+    let mut todo: Vec<i64> = vec![header];
+    while let Some(at) = todo.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let length = flow.length[&at];
+        if flow.uses[&at].get(&value).is_some_and(|list| list.iter().any(|position| *position < length)) {
+            cost += frequency.block(at);
+            continue;
+        }
+        for to in &flow.succ[&at] {
+            if *to != header && within.contains(to) && flow.live_in[to].contains(&value) {
+                todo.push(*to);
+            }
+        }
+    }
+    cost
 }
 
 /// For each loop header, the most values live at once inside the loop.
@@ -631,14 +721,25 @@ fn reverse_postorder(body: &LirBody) -> Vec<i64> {
     post
 }
 
-/// `body` with the edits made: reloads, one store after each definition of a
-/// value reloaded anywhere, and the edge reloads.
+/// What one edge carries: stores of values leaving the register set on it,
+/// then reloads of values the successor expects in one.
+#[derive(Default)]
+struct Crossing {
+    stores: Vec<u32>,
+    reloads: Vec<u32>,
+}
+
+/// `body` with the edits made: reloads; each value reloaded anywhere stored
+/// once after its definition, or, for the values in `at_leaves`, wherever it
+/// leaves the register set while live; and the edge code.
+#[allow(clippy::too_many_arguments)]
 fn written(
     body: &LirBody,
     edits: &IndexMap<i64, Edits>,
     across: &IndexMap<(i64, i64), Vec<u32>>,
-    back: &BTreeSet<(i64, i64)>,
+    left: &IndexMap<(i64, i64), Vec<u32>>,
     stored: &BTreeSet<u32>,
+    at_leaves: &BTreeSet<u32>,
     remakes: &IndexMap<u32, Arc<Insn>>,
     frame: &mut Frame,
 ) -> Result<LirBody, String> {
@@ -648,24 +749,48 @@ fn written(
         let width = widths.get(value).copied().unwrap_or(2);
         cells.insert(*value, frame.cell(*value, width).map_err(|error| error.to_string())?);
     }
+    let in_memory = |value: &u32| stored.contains(value) && !remakes.contains_key(value);
     let reload = |beside: &Insn, value: u32| match remakes.get(&value) {
         Some(one) => remade(one, beside),
         None => spiller::_reload(beside, value, &cells[&value]),
     };
+    let store = |beside: &Insn, value: u32| spiller::_store(beside, value, &cells[&value]);
+    // The code on each edge.
+    let mut crossing: IndexMap<(i64, i64), Crossing> = IndexMap::default();
+    for (edge, values) in across {
+        crossing.entry(*edge).or_default().reloads.extend(values.iter().copied());
+    }
+    for (edge, values) in left {
+        crossing.entry(*edge).or_default().stores.extend(values.iter().copied().filter(|value| in_memory(value) && at_leaves.contains(value)));
+    }
+    let mut preds: IndexMap<i64, usize> = IndexMap::default();
+    for block in &body.blocks {
+        for to in &block.succ {
+            *preds.entry(*to).or_default() += 1;
+        }
+    }
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
-    let mut blocks: Vec<LirBlock> = Vec::new();
     let mut bridges: Vec<LirBlock> = Vec::new();
     let mut retarget: IndexMap<(i64, i64), i64> = IndexMap::default();
-    let mut single: IndexMap<i64, Vec<u32>> = IndexMap::default();
-    for ((from, to), values) in across {
-        let source = body.blocks.iter().find(|block| block.at == *from).expect("a predecessor");
-        if (source.succ.len() == 1 || back.contains(&(*from, *to)) || std::env::var_os("SSA_NO_BRIDGE").is_some()) && !source.insns.is_empty() {
-            single.entry(*from).or_default().extend(values.iter().copied());
+    // Edge code at the end of a predecessor with one successor, at the start of a successor with one predecessor, else in a block on the edge.
+    let mut at_end: IndexMap<i64, Vec<(bool, u32)>> = IndexMap::default();
+    let mut at_top: IndexMap<i64, Vec<(bool, u32)>> = IndexMap::default();
+    for ((from, to), code) in &crossing {
+        if code.stores.is_empty() && code.reloads.is_empty() {
+            continue;
+        }
+        let source = by_at[from];
+        let listed: Vec<(bool, u32)> = code.stores.iter().map(|value| (true, *value)).chain(code.reloads.iter().map(|value| (false, *value))).collect();
+        if source.succ.len() == 1 && !source.insns.is_empty() {
+            at_end.entry(*from).or_default().extend(listed);
+        } else if preds.get(to) == Some(&1) && !by_at[to].insns.is_empty() {
+            at_top.entry(*to).or_default().extend(listed);
         } else {
             let at = next_at;
             next_at += 1;
             let beside = source.insns.last().ok_or("an empty block with two successors")?;
-            let mut insns: Vec<Arc<Insn>> = values.iter().map(|value| reload(beside, *value)).collect();
+            let mut insns: Vec<Arc<Insn>> = listed.iter().map(|(stores, value)| if *stores { store(beside, *value) } else { reload(beside, *value) }).collect();
             let mut jump = Insn::new(
                 beside.at,
                 Some((beside.at, beside.at)),
@@ -676,27 +801,44 @@ fn written(
             jump.op = beside.op.clone();
             insns.push(Arc::new(jump));
             bridges.push(LirBlock { succ: vec![*to], ..LirBlock::new(at, insns) });
-            llrm_support::debug!("ssaspill", "{}: bridge {at:#x} on {from:#x} -> {to:#x} back {}", body.name, back.contains(&(*from, *to)));
             retarget.insert((*from, *to), at);
         }
     }
+    let mut blocks: Vec<LirBlock> = Vec::new();
     for block in &body.blocks {
         let edit = &edits[&block.at];
         let tail = splitkit::_tail(block);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         // A phi's result is written when control enters; its store comes first.
-        for phi in &block.phis {
-            if stored.contains(&phi.result) && !remakes.contains_key(&phi.result) {
-                if let Some(first) = block.insns.first() {
-                    insns.push(spiller::_store(first, phi.result, &cells[&phi.result]));
+        if let Some(first) = block.insns.first() {
+            for phi in &block.phis {
+                let leaves_here = edit.leaves_at_top.contains(&phi.result);
+                if in_memory(&phi.result) && (!at_leaves.contains(&phi.result) || leaves_here) {
+                    insns.push(store(first, phi.result));
                 }
             }
+            for (stores, value) in at_top.get(&block.at).into_iter().flatten() {
+                insns.push(if *stores { store(first, *value) } else { reload(first, *value) });
+            }
         }
+        let leave = |position: usize| edit.leaves.get(&position).into_iter().flatten().copied().filter(|value| in_memory(value) && at_leaves.contains(value));
+        let mut ending = |beside: &Insn, insns: &mut Vec<Arc<Insn>>| {
+            for value in edit.leaves_at_end.iter().copied().filter(|value| in_memory(value) && at_leaves.contains(value)) {
+                insns.push(store(beside, value));
+            }
+            for (stores, value) in at_end.get(&block.at).into_iter().flatten() {
+                insns.push(if *stores { store(beside, *value) } else { reload(beside, *value) });
+            }
+            for value in &edit.at_end {
+                insns.push(reload(beside, *value));
+            }
+        };
         for (position, one) in block.insns.iter().enumerate() {
+            for value in leave(position) {
+                insns.push(store(one, value));
+            }
             if position == tail {
-                for value in edit.at_end.iter().chain(single.get(&block.at).into_iter().flatten()) {
-                    insns.push(reload(one, *value));
-                }
+                ending(one, &mut insns);
             }
             for value in edit.before.get(&position).into_iter().flatten() {
                 insns.push(reload(one, *value));
@@ -725,16 +867,17 @@ fn written(
             }
             insns.push(Arc::clone(&one));
             for value in &one.defines {
-                if stored.contains(value) && !remakes.contains_key(value) && !block.phis.iter().any(|phi| phi.result == *value) {
-                    insns.push(spiller::_store(&one, *value, &cells[value]));
+                if in_memory(value) && !at_leaves.contains(value) && !block.phis.iter().any(|phi| phi.result == *value) {
+                    insns.push(store(&one, *value));
                 }
             }
         }
         if tail == block.insns.len() {
             if let Some(last) = block.insns.last() {
-                for value in edit.at_end.iter().chain(single.get(&block.at).into_iter().flatten()) {
-                    insns.push(reload(last, *value));
+                for value in leave(block.insns.len()) {
+                    insns.push(store(last, value));
                 }
+                ending(last, &mut insns);
             }
         }
         let succ = block.succ.iter().map(|to| retarget.get(&(block.at, *to)).copied().unwrap_or(*to)).collect();
