@@ -77,6 +77,9 @@ impl FunctionCompiler<'_> {
             },
             // What a caller lent outlives the struct that keeps it.
             Expr::Member { base, span, .. } if self.kept_borrow(base, expression, *span) => BTreeSet::new(),
+            // A reference read out of a field or an element borrows what
+            // the owner holds, not the owner.
+            Expr::Member { base, .. } | Expr::Index { base, .. } if self.reference_type(expression) => self.held_roots(base),
             Expr::Borrow { operand: base, .. }
             | Expr::Slice { base, .. }
             | Expr::Member { base, .. }
@@ -202,13 +205,26 @@ impl FunctionCompiler<'_> {
                     .flatten()
                     .collect()
             }
-            Expr::Name(name, _) => match self.resolve(name).and_then(|(_, binding)| self.held.get(&identity(&binding.storage)?)) {
-                Some(held) => held.clone(),
-                None => self.roots(expression),
-            },
+            Expr::Name(..) => self.held_roots(expression),
             // Any other value holding a reference is a call.
             _ => self.roots(expression),
         }
+    }
+
+    /// The borrows `expression`'s value holds: what its owner holds when
+    /// that is known, else its own roots, which outlive none of it.
+    fn held_roots(&self, expression: &Expr) -> BTreeSet<Root> {
+        let held = match expression {
+            Expr::Name(name, _) => self.resolve(name).and_then(|(_, binding)| self.held.get(&identity(&binding.storage)?)),
+            _ => None,
+        };
+        held.cloned().unwrap_or_else(|| self.roots(expression))
+    }
+
+    /// Whether `expression`, not a name, is a reference: a field's, an
+    /// element's or a call's. A name is bound as what it refers to.
+    pub(super) fn reference_type(&self, expression: &Expr) -> bool {
+        !matches!(expression, Expr::Name(..)) && self.expression_type_hint(expression).is_some_and(|one| self.types.referent(one).is_some())
     }
 
     /// Whether a value of `element` holds a reference.
@@ -233,19 +249,19 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Records that the struct at `place` borrows what the views `value`
-    /// keeps borrow, if it keeps any.
+    /// Records that the struct at `place` holds what the views and
+    /// references `value` keeps borrow, if it keeps any.
     pub(super) fn keep_borrows(&mut self, place: u32, value: &Expr) {
         let roots = match value {
             Expr::StructLiteral { .. } => self.roots(value),
-            Expr::Name(name, _) => match self.visible(name).map(|one| one.storage.clone()) {
-                Some(Storage::Place(source)) => self.borrowed_from.get(&BorrowKey::Place(source)).cloned().unwrap_or_default(),
-                _ => BTreeSet::new(),
+            Expr::Name(name, _) => match self.visible(name).and_then(|one| identity(&one.storage)) {
+                Some(source) => self.held.get(&source).cloned().unwrap_or_default(),
+                None => BTreeSet::new(),
             },
             _ => BTreeSet::new(),
         };
         if !roots.is_empty() {
-            self.borrowed_from.insert(BorrowKey::Place(place), roots);
+            self.held.insert(BorrowKey::Place(place), roots);
         }
     }
 
@@ -298,6 +314,7 @@ impl FunctionCompiler<'_> {
     /// its views and references, and the copies that share what it owns.
     pub(super) fn record_pattern_borrows(&mut self, pattern: &Pattern, subject: &Expr) {
         let roots = self.roots(subject);
+        let held = self.held_roots(subject);
         for name in pattern.names() {
             let Some(binding) = self.visible(name).cloned() else {
                 continue;
@@ -313,8 +330,11 @@ impl FunctionCompiler<'_> {
                 Some(key @ BorrowKey::Value(_)) => {
                     self.borrowed_from.entry(key).or_insert_with(|| roots.clone());
                 }
-                Some(key @ BorrowKey::Place(_)) if refers || (shares && !self.owns(&binding.storage)) => {
+                Some(key @ BorrowKey::Place(_)) if shares && !self.owns(&binding.storage) => {
                     self.borrowed_from.entry(key).or_insert_with(|| roots.clone());
+                }
+                Some(key @ BorrowKey::Place(_)) if refers => {
+                    self.held.entry(key).or_insert_with(|| held.clone());
                 }
                 _ => {}
             }

@@ -85,11 +85,8 @@ impl FunctionCompiler<'_> {
     /// Whether `place` -- a field, element or result, not a name, which is
     /// bound as what it refers to -- holds a reference: `Some(mutable)`.
     fn reference_at(&self, place: &Expr) -> Option<bool> {
-        if matches!(place, Expr::Name(..)) {
-            return None;
-        }
         match self.expression_type_hint(place)? {
-            type_name @ TypeName::Pointer { mutable, .. } if self.types.referent(type_name).is_some() => Some(mutable),
+            TypeName::Pointer { mutable, .. } if self.reference_type(place) => Some(mutable),
             _ => None,
         }
     }

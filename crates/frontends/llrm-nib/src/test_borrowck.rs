@@ -106,3 +106,45 @@ fn main() -> i16:
     let exclusive = field.replace("mut r: &i16", "mut r: &mut i16").replace("let x: i16", "let mut x: i16").replace("H(r=x)", "H(r=&mut x)");
     assert_eq!(output(&exclusive), "7\n");
 }
+
+#[test]
+fn a_struct_holding_borrows_is_itself_an_owner_to_borrow() {
+    // `&h` rooted at what `h` held, so `t` kept a pointer to `h` after its
+    // block ended; and a store into `s` hid what `s` was built with.
+    let referenced = "\
+struct S:
+    r: &i16
+
+struct T:
+    mut p: &S
+
+fn main() -> i16:
+    let x: i16 = 5
+    let s0 = S(r=x)
+    let mut t = T(p=s0)
+    if true:
+        let h = S(r=x)
+        t.p = &h
+    print(t.p.r)
+    return 0
+";
+    assert_eq!(refused_at(referenced), "13: \"t\" would outlive \"h\", which it borrows");
+    let held = "\
+struct S:
+    mut r: &i16
+    mut q: &i16
+
+fn main() -> i16:
+    let x: i16 = 0
+    let b: i16 = 2
+    let mut outer = S(r=x, q=x)
+    if true:
+        let a: i16 = 1
+        let mut s = S(r=a, q=x)
+        s.q = &b
+        outer = s
+    print(outer.r)
+    return 0
+";
+    assert_eq!(refused_at(held), "13: \"outer\" would outlive \"a\", which it borrows");
+}

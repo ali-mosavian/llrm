@@ -166,8 +166,10 @@ impl FunctionCompiler<'_> {
         self.hidden.push(BODY..depth);
         // The body's borrows root in its own names, not the caller's.
         let caller_borrows = std::mem::take(&mut self.borrowed_from);
+        let caller_held = std::mem::take(&mut self.held);
         let typed = self.typed_locals(&mut function.body, &mut fields, &mut borrowed);
         self.borrowed_from = caller_borrows;
+        self.held = caller_held;
         let lowered = typed.and_then(|()| {
             let kept = Kept {
                 owning: fields.iter().filter(|field| names.contains(&field.name) && self.element_needs_drop(field.element)).map(|field| field.name.clone()).collect(),
