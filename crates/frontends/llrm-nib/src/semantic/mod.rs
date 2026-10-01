@@ -1456,12 +1456,19 @@ fn program(
     }
     callables.extend(templates.borrow().callables(&mut types));
     let functions = checked(compiled, &builtin_ids, &literals)?;
+    // A routine that ends the program touches nothing a caller's loop reads back.
+    let mut stated = llrm_core::hir::facts::Builder::new("nib");
+    for callable in callables.iter().filter(|one| !one.defined && llrm_core::abi::nib::TERMINATING.contains(&one.name.as_str())) {
+        let subject = llrm_core::hir::facts::Subject::Callable(i64::from(callable.id));
+        stated.state(subject, llrm_mir::facts::Fact::NoReturn).state(subject, llrm_mir::facts::Fact::Memory(llrm_mir::facts::Effect::Inaccessible));
+    }
     let debug = frontend.debug.then(|| debug::described(&functions, &types));
     let program = hir::Program {
         module_name: module_name.into(),
         types: types.types,
         functions,
         callables,
+        facts: stated.finish(),
         data: literals.data,
         debug,
     };

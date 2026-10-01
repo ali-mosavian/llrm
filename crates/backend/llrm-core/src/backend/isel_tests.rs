@@ -5,7 +5,7 @@ use crate::backend::cpu::ProfileOrName;
 use crate::backend::isel::{self, Unselected};
 use crate::backend::masm;
 
-const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"\n";
+const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16\"\n";
 
 fn qb() -> HirAbi {
     HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default() }
@@ -292,6 +292,43 @@ fn test_variable_indices_are_scaled_and_added() {
             "retf",
         ]
     );
+}
+
+/// A constant added to an index is the address's displacement, not a
+/// register: `a[i + 8]` of bytes was `mov di, si; add di, 8; [bx+di]`, an
+/// add and a copy a trip that main's `[bx+si+8]` did not pay.
+#[test]
+fn test_a_constant_added_to_an_index_is_a_displacement() {
+    let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
+  %j = add nsw i16 %i, 8
+  %q = getelementptr inbounds i8, ptr %p, i16 %j
+  %v = load i8, ptr %q
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("[bx+si+8]") && !got.contains("add si, 8") && !got.contains("add di, 8"), "{got}");
+}
+
+/// A far pointer of offset zero indexed by a sum of two registers is a base
+/// and an index, `es:[bx+si]`: the sum was added into a third register
+/// first, a `mov` and an `add` a trip in qbdemo's FRACTALEFFECT.
+#[test]
+fn test_a_sum_of_two_registers_is_the_base_and_index_of_a_far_address() {
+    let text = "define i16 @f(i16 %sel, i16 %i, i16 %j) addrspace(1) {
+  %seg = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %seg to ptr addrspace(1)
+  %k = add i16 %i, %j
+  %p = getelementptr inbounds i8, ptr addrspace(1) %far, i16 %k
+  %v = load i8, ptr addrspace(1) %p
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("es:[bx+si]") || got.contains("es:[bx+di]") || got.contains("es:[si+bx]") || got.contains("es:[di+bx]"), "{got}");
+    assert!(!got.lines().any(|line| line.starts_with("add ") && !line.contains("sp")), "{got}");
 }
 
 #[test]
@@ -1140,7 +1177,8 @@ other:
 ";
     let got = listing(text, "f");
     let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
-    assert_eq!(got[call + 1], "jg L0_3", "{got:?}");
+    // Either polarity: the branch reads the call's flags, no compare between.
+    assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
 }
 
 /// A float function no x87 instruction is stays one operation on st(0),
@@ -2971,6 +3009,60 @@ fn test_dbg_lines_become_linnum() {
     assert!(marker, "the CodeView marker");
 }
 
+/// A near global indexed by a dword the loop proves small is its scaled
+/// cell: addrm's `B&` stored through `mov di,cx; shl edi,2` a trip, where
+/// a frame or a far base took the scale.
+#[test]
+fn test_a_global_indexed_by_a_small_dword_is_the_scaled_cell() {
+    let text = "@b = internal global [64 x i32] zeroinitializer
+define void @f(i32 %i) addrspace(1) {
+entry:
+  %c = icmp slt i32 %i, 0
+  br i1 %c, label %no, label %low
+low:
+  %d = icmp sgt i32 %i, 60
+  br i1 %d, label %no, label %ok
+ok:
+  %m = shl i32 %i, 2
+  %e = getelementptr i8, ptr @b, i32 %m
+  store i32 7, ptr %e, !tbaa !1
+  ret void
+no:
+  ret void
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("b[") && line.contains("*4]")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shl")), "{got:?}");
+}
+
+/// A global indexed by one register and then another is `[bx+si+global]`:
+/// conc12's twelve arrays, each `array + 2n` for the count-to-zero
+/// counter, were twelve pointers spilled to the frame and reloaded each
+/// trip, where the two registers make each address in its access.
+#[test]
+fn test_a_global_indexed_by_two_registers_is_one_address() {
+    let text = "@g = internal global [64 x i16] zeroinitializer
+define i16 @f(i16 %n, i16 %i) addrspace(1) {
+entry:
+  %a = getelementptr i8, ptr @g, i16 %n
+  %b = getelementptr i8, ptr %a, i16 %i
+  %c = getelementptr i8, ptr %b, i16 18
+  %v = load i16, ptr %c, !tbaa !1
+  ret i16 %v
+}
+
+!0 = !{!\"short\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("g+18[") && line.contains('+')), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("add ") || line.starts_with("lea ")), "{got:?}");
+}
+
 /// The optimizer left `getelementptr i8, ptr null, ...` and isel refused it as
 /// "an address of no global: Null": examples/entries.nib and tally.nib did not
 /// compile. A constant address is a direct address, `[disp16]`; a variable
@@ -3044,4 +3136,214 @@ b:
     assert!(text.contains("getelementptr i8, ptr null") && text.contains("phi ptr [ %g"), "the shape that was refused");
     let got = listing(text, "f");
     assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "mov ax, -4", "L0_3:", "pop bp", "retf"]);
+}
+
+/// A huge pointer indexes by 32 bits, so a displacement that crosses 64K steps
+/// the selector: the offset widened and summed, its high word shifted to the
+/// machine's stride (`shl 12`) and added to the selector. Folded into the
+/// access as a far one is, `es:[bx+80000]`, it wrapped (#101).
+#[test]
+fn test_a_huge_pointer_displacement_carries_into_its_selector() {
+    let text = "define i16 @f(ptr addrspace(3) %p) addrspace(1) {
+  %q = getelementptr i32, ptr addrspace(3) %p, i32 20000
+  %v = load i16, ptr addrspace(3) %q
+  ret i16 %v
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "movzx ebx, word ptr [bp+6]",
+            "mov ax, word ptr [bp+8]",
+            "add ebx, 80000",
+            "mov ecx, ebx",
+            "sar ecx, 16",
+            "shl ecx, 12",
+            "add ax, cx",
+            "mov es, ax",
+            "mov ax, word ptr es:[bx]",
+            "pop bp",
+            "retf",
+        ]
+    );
+    let far = "define i16 @f(ptr addrspace(1) %p) addrspace(1) {
+  %q = getelementptr i32, ptr addrspace(1) %p, i16 5000
+  %v = load i16, ptr addrspace(1) %q
+  ret i16 %v
+}
+";
+    assert!(!listing(far, "f").iter().any(|line| line.contains("sar")), "a far pointer's displacement wraps in its offset");
+}
+
+#[test]
+fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
+    let text = "define i16 @f(ptr addrspace(3) %p, i32 %i) addrspace(1) {
+  %q = getelementptr i16, ptr addrspace(3) %p, i32 %i
+  %v = load i16, ptr addrspace(3) %q
+  ret i16 %v
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "movzx ebx, word ptr [bp+6]",
+            "mov ax, word ptr [bp+8]",
+            "mov ecx, dword ptr [bp+10]",
+            "lea ebx, [ebx+ecx*2]",
+            "mov ecx, ebx",
+            "sar ecx, 16",
+            "shl ecx, 12",
+            "add ax, cx",
+            "mov es, ax",
+            "mov ax, word ptr es:[bx]",
+            "pop bp",
+            "retf",
+        ]
+    );
+}
+
+/// Huge pointers are canonical, so an order is the selector's then the
+/// offset's: one subtraction across both words, where a far pointer's order
+/// is its offset alone.
+#[test]
+fn test_huge_pointers_compare_by_selector_then_offset() {
+    let huge = "define i16 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
+  %c = icmp ult ptr addrspace(3) %a, %b
+  %z = zext i1 %c to i16
+  ret i16 %z
+}
+";
+    assert_eq!(
+        listing(huge, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "mov ax, word ptr [bp+6]",
+            "mov bx, word ptr [bp+8]",
+            "mov dx, word ptr [bp+12]",
+            "sub ax, word ptr [bp+10]",
+            "sbb bx, dx",
+            "setb al",
+            "movzx ax, al",
+            "pop bp",
+            "retf",
+        ]
+    );
+    let far = huge.replace("addrspace(3)", "addrspace(1)");
+    assert!(!listing(&far, "f").iter().any(|line| line.starts_with("sbb")));
+}
+
+#[test]
+fn test_a_huge_pointer_difference_is_whole_strides_and_the_offset_remainder() {
+    let text = "declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
+define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
+  %d = call i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3) %a, ptr addrspace(3) %b)
+  ret i32 %d
+}
+";
+    assert_eq!(
+        listing(text, "f"),
+        [
+            "push bp",
+            "mov bp, sp",
+            "L0_0:",
+            "movzx eax, word ptr [bp+6]",
+            "movzx ebx, word ptr [bp+8]",
+            "movzx edx, word ptr [bp+10]",
+            "movzx ecx, word ptr [bp+12]",
+            "sub eax, edx",
+            "sub ebx, ecx",
+            "sar ebx, 12",
+            "shl ebx, 16",
+            "add eax, ebx",
+            "shld edx, eax, 16",
+            "pop bp",
+            "retf",
+        ]
+    );
+}
+
+#[test]
+fn test_far_and_huge_pointers_cast_into_one_another_as_the_same_two_words() {
+    let text = "define ptr addrspace(3) @f(ptr addrspace(1) %p) addrspace(1) {
+  %h = addrspacecast ptr addrspace(1) %p to ptr addrspace(3)
+  %q = getelementptr i8, ptr addrspace(3) %h, i32 70000
+  ret ptr addrspace(3) %q
+}
+define ptr addrspace(1) @g(ptr addrspace(3) %p) addrspace(1) {
+  %f = addrspacecast ptr addrspace(3) %p to ptr addrspace(1)
+  ret ptr addrspace(1) %f
+}
+";
+    let got = listing(text, "f");
+    assert!(got.contains(&"add eax, 70000".to_owned()) && got.contains(&"sar ebx, 16".to_owned()), "{got:?}");
+    assert_eq!(listing(text, "g"), ["push bp", "mov bp, sp", "L1_0:", "mov ax, word ptr [bp+6]", "mov dx, word ptr [bp+8]", "pop bp", "retf"]);
+}
+
+/// A loop over a huge array: its pointer carries each trip, and its end
+/// compare is across both words.
+#[test]
+fn test_a_loop_walks_a_huge_pointer_to_its_end() {
+    let text = "define i16 @f(ptr addrspace(3) %p, ptr addrspace(3) %e) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %q = phi ptr addrspace(3) [ %p, %entry ], [ %n, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %t, %loop ]
+  %v = load i16, ptr addrspace(3) %q
+  %t = add i16 %s, %v
+  %n = getelementptr i16, ptr addrspace(3) %q, i32 1
+  %c = icmp ult ptr addrspace(3) %n, %e
+  br i1 %c, label %loop, label %done
+done:
+  ret i16 %t
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("sar edi, 16") && got.contains("shl edi, 12") && got.contains("sbb di, cx") && got.contains("jb "), "{got}");
+}
+
+/// A huge pointer made of a global's address and a constant past 64K is a
+/// stepped selector and the offset's remainder: the whole constant kept in
+/// the offset word wrapped to another element (#101).
+#[test]
+fn test_a_constant_huge_pointer_past_64k_steps_the_selector() {
+    let text = "@big = addrspace(1) global [4 x i32] zeroinitializer
+define i32 @f() addrspace(1) {
+  %v = load i32, ptr addrspace(3) getelementptr (i32, ptr addrspace(3) addrspacecast (ptr addrspace(1) @big to ptr addrspace(3)), i32 19999)
+  ret i32 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("add ") && line.ends_with(&format!(", {}", (1 << 12)))), "{got:?}");
+    assert!(got.iter().any(|line| line.contains("es:[bx+14460]") || line.contains("es:[bx+0x387c]") || line.contains("+14460]")), "{got:?}");
+}
+
+/// `(double)long_double` was rounded through a dword (fstp dword) whatever
+/// the target: a long double narrowed to double lost 29 bits (#103). A
+/// narrowing rounds to the target's width.
+#[test]
+fn test_a_narrowing_float_rounds_to_its_targets_width() {
+    let text = "define double @f(x86_fp80 %x) addrspace(1) {\n  %d = fptrunc x86_fp80 %x to double\n  ret double %d\n}\ndefine float @g(double %x) addrspace(1) {\n  %d = fptrunc double %x to float\n  ret float %d\n}\n";
+    assert!(text.contains("fptrunc x86_fp80"), "the shape that was rounded to a float");
+    assert!(listing(text, "f").contains(&"fstp qword ptr [bp-8]".to_owned()), "{:?}", listing(text, "f"));
+    assert!(listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
+}
+
+/// A long double is compared from a register: fcom has no 10-byte memory
+/// operand, and `fcomp tbyte ptr` could not be encoded (#103).
+#[test]
+fn test_an_extended_float_is_never_fcoms_memory_operand() {
+    let text = "@g = global x86_fp80 zeroinitializer\ndefine i16 @f(x86_fp80 %x) addrspace(1) {\n  %y = load x86_fp80, ptr @g\n  %c = fcmp ogt x86_fp80 %x, %y\n  %r = zext i1 %c to i16\n  ret i16 %r\n}\n";
+    assert!(text.contains("fcmp ogt x86_fp80"), "the shape that was refused");
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("fld tbyte")) && got.iter().any(|line| line.starts_with("fcom")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("fcom") && line.contains("tbyte")), "{got:?}");
 }

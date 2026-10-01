@@ -9,6 +9,7 @@
 
 pub mod alias;
 pub mod avail;
+pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
@@ -18,6 +19,7 @@ pub mod floatbounds;
 pub mod floatfacts;
 pub mod frameescape;
 pub mod graph;
+pub mod guards;
 pub mod globalsaa;
 pub mod induction;
 pub mod interprocedural;

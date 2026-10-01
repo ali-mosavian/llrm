@@ -27,6 +27,30 @@ pub trait Machine {
     /// Of `registers`, how many survive a call.
     fn call_registers(&self) -> i64;
 
+    /// Registers an access through a pointer wider than its offset takes
+    /// for its selector, besides those its address names.
+    fn far_access_registers(&self) -> i64 {
+        0
+    }
+
+    /// Segment registers a far pointer's selector can be held in, besides
+    /// `registers`: none where the target has none.
+    fn segment_registers(&self) -> i64 {
+        0
+    }
+
+    /// Of `registers`, how many survive a call to `callee`, named where the
+    /// call is direct: its own contract may keep more than any call does.
+    fn kept_across(&self, _callee: Option<&str>) -> i64 {
+        self.call_registers()
+    }
+
+    /// What multiplying by the constant `factor`, above one, costs: a
+    /// multiply, or the shifts and adds the target makes it of.
+    fn multiply_by(&self, _factor: i64) -> i64 {
+        self.costs().multiply
+    }
+
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
 
@@ -44,6 +68,14 @@ pub trait Machine {
     }
 }
 
+/// What advancing a pair pointer in a carrying space costs, given the price
+/// of its instructions: the offset widened, the displacement added, the
+/// carry copied and shifted down and up by the stride, added to the
+/// selector, and the offset and selector copied out.
+pub const fn carry_cost(extend: i64, add: i64, shift: i64, r#move: i64) -> i64 {
+    extend + 2 * add + 2 * shift + 3 * r#move
+}
+
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
@@ -52,6 +84,10 @@ pub struct OperationCosts {
     pub divide: i64,
     pub shift: i64,
     pub address: i64,
+    /// An address advanced in a space whose displacement carries into its
+    /// selector (a huge pointer's): the offset's sum, its carry, and the
+    /// selector stepped by it.
+    pub carry: i64,
     pub load: i64,
     pub store: i64,
     pub memory_update: i64,
@@ -78,6 +114,7 @@ impl Default for OperationCosts {
             divide: 1,
             shift: 1,
             address: 1,
+            carry: 1,
             load: 1,
             store: 1,
             memory_update: 1,
@@ -113,6 +150,10 @@ pub struct AddressForm {
     pub secondary: bool,
     // How many distinct bases one index can pair with at once; None is any.
     pub partners: Option<i64>,
+    // The registers an address takes as its base and as its index, where an
+    // address is one of each: a register is of one class or the other. None is any.
+    pub bases: Option<i64>,
+    pub indices: Option<i64>,
     // Compatibility name for `secondary`; both views stay identical.
     pub fallback: Option<bool>,
 }
@@ -140,6 +181,8 @@ impl AddressForm {
             extension_cost,
             secondary: selected,
             partners: None,
+            bases: None,
+            indices: None,
             fallback: Some(selected),
         })
     }
@@ -148,6 +191,11 @@ impl AddressForm {
     /// pairs and its partners. None is any.
     pub fn address_registers(&self) -> Option<i64> {
         self.partners.map(|partners| partners + 1)
+    }
+
+    /// The classes of an address's two registers, where the form has them.
+    pub fn register_classes(&self) -> Option<(i64, i64)> {
+        self.bases.zip(self.indices)
     }
 
     /// Whether this form is cheap enough to try before a frame spill.

@@ -327,6 +327,8 @@ impl<'a> FunctionCompiler<'a> {
             vec![hir::Operand::Value(pointer), byte_offset],
             None,
         );
+        // Every caller checked the index against the borrow's length.
+        self.current_block_mut().instructions.last_mut().expect("the offset just made").inbounds = true;
         Ok(address)
     }
 }

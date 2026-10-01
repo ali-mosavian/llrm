@@ -29,12 +29,29 @@ pub fn load(path: &Path, include_dirs: &[PathBuf]) -> Result<String, String> {
     load_with_map(path, include_dirs).map(|loaded| loaded.text)
 }
 
+/// `path` as the file DOS would open: file names there ignore case, a
+/// host's may not, so a name that is not there is looked for in its directory
+/// by its letters alone.
+fn dos_file(path: &Path) -> PathBuf {
+    if path.exists() {
+        return path.to_path_buf();
+    }
+    let (Some(directory), Some(name)) = (path.parent(), path.file_name().and_then(|one| one.to_str())) else {
+        return path.to_path_buf();
+    };
+    let directory = if directory.as_os_str().is_empty() { Path::new(".") } else { directory };
+    let found = fs::read_dir(directory).ok().and_then(|entries| {
+        entries.filter_map(Result::ok).find(|entry| entry.file_name().to_str().is_some_and(|candidate| candidate.eq_ignore_ascii_case(name)))
+    });
+    found.map_or_else(|| path.to_path_buf(), |entry| directory.join(entry.file_name()))
+}
+
 pub fn load_with_map(path: &Path, include_dirs: &[PathBuf]) -> Result<LoadedSource, String> {
     let mut loaded = LoadedSource {
         text: String::new(),
         locations: Vec::new(),
     };
-    expand(path, include_dirs, &mut Vec::new(), &mut loaded, None)?;
+    expand(&dos_file(path), include_dirs, &mut Vec::new(), &mut loaded, None)?;
     Ok(loaded)
 }
 
@@ -57,7 +74,7 @@ fn expand(
         if let Some(name) = include_name(line) {
             let found = std::iter::once(path.parent().unwrap_or_else(|| Path::new(".")))
                 .chain(include_dirs.iter().map(PathBuf::as_path))
-                .map(|directory| directory.join(name))
+                .map(|directory| dos_file(&directory.join(name)))
                 .find(|candidate| candidate.is_file())
                 .ok_or_else(|| {
                     format!("{}: included file {name:?} was not found", path.display())
@@ -156,6 +173,19 @@ mod tests {
         assert_eq!(include_name("  '$include: 'q_map.bi'"), Some("q_map.bi"));
         assert_eq!(include_name("  ' $INCLUDE: 'q_map.bi'"), Some("q_map.bi"));
         assert_eq!(include_name("' ordinary comment"), None);
+    }
+
+    /// DOS file names ignore case: `Q45L00.BAS` named in a suite file and an
+    /// `$INCLUDE 'NESTED.BI'` found nothing on Linux where the files are
+    /// `q45l00.bas` and `nested.bi` (qbfront's generated_parser tests failed).
+    #[test]
+    fn a_name_matches_the_file_by_its_letters_alone() {
+        let root = std::env::temp_dir().join(format!("qbfront-dos-case-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("nested.bi"), "from the include\n").unwrap();
+        fs::write(root.join("main.bas"), "'$include: 'NESTED.BI'\nmain line\n").unwrap();
+        let loaded = load_with_map(&root.join("MAIN.BAS"), &[]).unwrap();
+        assert_eq!(loaded.text, "from the include\nmain line\n");
     }
 
     #[test]

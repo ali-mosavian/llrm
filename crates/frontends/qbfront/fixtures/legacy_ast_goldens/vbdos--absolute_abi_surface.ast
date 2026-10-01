@@ -31,6 +31,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 3,
                             start: 22,
@@ -46,6 +47,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 3,
@@ -54,4 +56,5 @@ Module {
             },
         },
     ],
+    prelude: false,
 }

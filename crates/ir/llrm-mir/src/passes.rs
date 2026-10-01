@@ -117,6 +117,25 @@ impl ModuleAnalysis for CalleeEffects {
     }
 }
 
+/// How many registers a call to each function keeps, as the target says
+/// of it by name.
+pub struct CallRegisters;
+
+impl ModuleAnalysis for CallRegisters {
+    type Result = HashMap<GlobalId, i64>;
+    const NAME: &'static str = "call-registers";
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        let target = Rc::clone(&analyses.program().target);
+        module
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, global)| matches!(global.kind, crate::module::GlobalKind::Function(_)))
+            .map(|(at, global)| (GlobalId(at as u32), target.kept_across(global.name.as_deref())))
+            .collect()
+    }
+}
+
 /// Each global variable's size in bytes.
 pub struct GlobalSizes;
 
@@ -256,6 +275,13 @@ impl Outer {
 
     pub fn target(&self) -> &dyn Machine {
         &*self.program.target
+    }
+
+    /// How many registers a call to `callee` keeps, any call's where it is
+    /// not named: `CallRegisters`.
+    pub fn kept_across(&self, callee: Option<GlobalId>) -> i64 {
+        let kept = self.cached_ref::<CallRegisters>().expect("every outer proxy holds the calls' registers");
+        callee.and_then(|one| kept.get(&one).copied()).unwrap_or_else(|| self.target().call_registers())
     }
 
     /// What each function does to memory: `CalleeEffects`.
@@ -499,7 +525,7 @@ impl ModuleAnalyses {
     /// What a function analysis reads of `module`: the same proxy as last
     /// time where nothing it holds changed.
     pub fn outer(&mut self, module: &Module) -> Rc<Outer> {
-        let every = [Kind::of::<CalleeEffects>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>()].into_iter().chain(self.required.clone());
+        let every = [Kind::of::<CalleeEffects>(), Kind::of::<CallRegisters>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>()].into_iter().chain(self.required.clone());
         let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()]).downcast::<Vec<GlobalValue>>().expect("keyed by its type");
         let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };

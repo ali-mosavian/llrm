@@ -6,6 +6,7 @@
 
 pub mod dialect;
 pub mod dialect_extensions;
+pub mod driver;
 pub mod error;
 pub mod generated_parser;
 pub mod intrinsics;

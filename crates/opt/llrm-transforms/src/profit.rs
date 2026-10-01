@@ -15,21 +15,25 @@
 //! operation carries a folded memory operand and `memory_update` prices
 //! nothing; `llvm.memset` is the old fill, its bytes the cells; `select`,
 //! `frem` and `landingpad` had no old kind and stay unpriced. `spill_risk`
-//! takes liveness's live-out sets. `trips` is induction's proven counts
+//! is the spill model's (`spill`) over the whole body. `trips` is induction's proven counts
 //! (`proven_trips`); a loop it does not name gets the conventional ten.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::cfg;
 use llrm_analysis::consts::Known;
+use llrm_analysis::liveness::Liveness;
 use llrm_analysis::{induction, memory};
+
+use crate::spill::{self, Room};
 use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::Type;
-use llrm_support::hash::{HashMap, HashSet, IndexMap};
+use llrm_support::hash::IndexMap;
 use num_traits::ToPrimitive;
 
 // Trips assumed of a loop, and cells of a fill, whose count is not a number.
@@ -43,17 +47,23 @@ pub fn costs(outer: &Outer) -> OperationCosts {
 }
 
 /// How many integer values `outer`'s target holds in registers, and how
-/// many across a call; 0 each leaves pressure unpriced.
-pub fn registers(outer: &Outer) -> (i64, i64) {
-    (outer.target().registers(), outer.target().call_registers())
+/// many across a call.
+pub fn registers(outer: &Outer) -> Room {
+    Room::of(outer)
 }
 
 fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }
 
+/// Whether the pointer `value` is in a space whose displacement carries into
+/// its selector (`DataLayout::carries`).
+pub fn carries(context: &Context, layout: &DataLayout, function: &Function, value: ValueId) -> bool {
+    matches!(context.types.get(function.value(value).ty), Type::Pointer(space) if layout.carries(*space))
+}
+
 /// Target price for semantic work, or None when it cannot be priced.
-pub fn operation(context: &Context, function: &Function, callees: &Callees, one: InstId, costs: &OperationCosts) -> Option<i64> {
+pub fn operation(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, one: InstId, costs: &OperationCosts) -> Option<i64> {
     let instruction = function.instruction(one);
     let price = match &instruction.opcode {
         Opcode::Load { .. } if instruction.result.is_some_and(|value| floating(context, function, Operand::Value(value))) => costs.float_load,
@@ -65,6 +75,8 @@ pub fn operation(context: &Context, function: &Function, callees: &Callees, one:
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
+        // A displacement in a space whose index outruns its offset carries into the selector.
+        Opcode::GetElementPtr { .. } if instruction.result.is_some_and(|result| carries(context, layout, function, result)) => costs.carry,
         Opcode::Alloca { .. } | Opcode::GetElementPtr { .. } => costs.address,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
@@ -87,18 +99,18 @@ pub fn operation(context: &Context, function: &Function, callees: &Callees, one:
     Some(price)
 }
 
-pub fn _block(context: &Context, function: &Function, callees: &Callees, block: i64, costs: &OperationCosts) -> Option<i64> {
-    function.block(cfg::block(block)).instructions().iter().map(|&one| operation(context, function, callees, one, costs)).sum()
+pub fn _block(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, block: i64, costs: &OperationCosts) -> Option<i64> {
+    function.block(cfg::block(block)).instructions().iter().map(|&one| operation(context, layout, function, callees, one, costs)).sum()
 }
 
 /// Semantic work present once in the body, independent of frequency.
-pub fn r#static(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
-    function.layout().iter().map(|&block| _block(context, function, callees, cfg::id(block), costs)).sum()
+pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
+    function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
 }
 
 /// Whether the target prices every instruction here, which a copy's cost needs.
-pub fn priced(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
-    r#static(context, function, callees, costs).is_some()
+pub fn priced(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
+    r#static(context, layout, function, callees, costs).is_some()
 }
 
 /// Each loop's trips by latch, where induction proves them: the `trips`
@@ -138,141 +150,54 @@ pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> 
 ///
 /// `trips` keys a proven count by latch block; every other loop retains
 /// the conventional factor of ten.
-pub fn weighted(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
+pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
     let frequency = _frequencies(function, trips)?;
     let mut total = 0;
     for &block in function.layout() {
-        let priced = _block(context, function, callees, cfg::id(block), costs)?;
+        let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
         total += frequency[&cfg::id(block)] * priced;
     }
     Some(total)
 }
 
-/// Whole-live-range traffic needed to fit MIR within `capacity`.
-///
-/// Walks every program point, chooses the cheapest still-resident values
-/// needed to relieve that point, and retains those choices for the rest of
-/// the body.  Floating values do not consume the integer capacity.  Values
-/// cheaper to rebuild than to reload use that reconstruction price.
-/// `live_out` is each block's live-out set.
+/// Whole-live-range traffic needed to fit MIR within `room`, a call
+/// keeping what `across` says, as the one spill model (`spill`) prices it.
+#[allow(clippy::too_many_arguments)]
 pub fn spill_risk(
     context: &Context,
+    layout: &DataLayout,
     function: &Function,
     costs: &OperationCosts,
-    capacity: i64,
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
     trips: Option<&IndexMap<i64, i64>>,
-    live_out: &BTreeMap<i64, BTreeSet<ValueId>>,
+    found: &Liveness,
 ) -> Option<i64> {
-    if capacity <= 0 {
+    if !room.priced() {
         return Some(0);
     }
     let frequency = _frequencies(function, trips)?;
-    let mut definitions: BTreeMap<ValueId, i64> = BTreeMap::new();
-    let mut uses: BTreeMap<ValueId, i64> = BTreeMap::new();
-    let mut recipes: BTreeMap<ValueId, Vec<InstId>> = BTreeMap::new();
-    let mut floats: BTreeSet<ValueId> = BTreeSet::new();
-    for &block in function.layout() {
-        let each = frequency[&cfg::id(block)];
-        for &one in function.block(block).instructions() {
-            let instruction = function.instruction(one);
-            for operand in &instruction.operands {
-                if let Operand::Value(value) = *operand {
-                    *uses.entry(value).or_insert(0) += each;
-                }
-            }
-            if let Some(value) = instruction.result {
-                *definitions.entry(value).or_insert(0) += each;
-                recipes.entry(value).or_default().push(one);
-            }
-            // A floating type is on every value, phis' included: the old
-            // widening through phis has nothing left to find.
-            floats.extend(instruction.operands.iter().copied().chain(instruction.result.map(Operand::Value)).filter_map(|operand| match operand {
-                Operand::Value(value) if floating(context, function, operand) => Some(value),
-                _ => None,
-            }));
-        }
-    }
-
-    let reconstruction = |value: &ValueId| -> Option<i64> {
-        let found = recipes.get(value).map(Vec::as_slice).unwrap_or(&[]);
-        if found.len() != 1 {
-            return None;
-        }
-        let instruction = function.instruction(found[0]);
-        let constant = instruction.operands.iter().all(|operand| matches!(operand, Operand::Constant(_)));
-        match instruction.opcode {
-            // A frame address, or a symbol's.
-            Opcode::Alloca { .. } => Some(costs.address),
-            Opcode::GetElementPtr { .. } if constant => Some(costs.address),
-            _ => None,
-        }
-    };
-
-    let mut traffic: BTreeMap<ValueId, i64> = BTreeMap::new();
-    for value in definitions.keys().chain(uses.keys()).collect::<BTreeSet<_>>() {
-        let slot = definitions.get(value).copied().unwrap_or(0) * costs.store + uses.get(value).copied().unwrap_or(0) * costs.load;
-        let rematerialize = reconstruction(value);
-        traffic.insert(
-            *value,
-            match rematerialize {
-                None => slot,
-                Some(price) => slot.min(uses.get(value).copied().unwrap_or(0) * price),
-            },
-        );
-    }
-
-    let mut risk = 0;
-
-    let floats: HashSet<ValueId> = floats.into_iter().collect();
-    let traffic: HashMap<ValueId, i64> = traffic.into_iter().collect();
-    let mut spilled: HashSet<ValueId> = HashSet::default();
-    let mut account = |alive: &BTreeSet<ValueId>| {
-        let resident = |value: &&ValueId| !floats.contains(*value) && !spilled.contains(*value);
-        // Counted first: most points fit, and then nothing is collected.
-        let excess = alive.iter().filter(resident).count() as i64 - capacity;
-        if excess > 0 {
-            let mut selected = alive.iter().filter(resident).copied().collect::<Vec<_>>();
-            selected.sort_by_key(|value| (traffic.get(value).copied().unwrap_or(0), *value));
-            selected.truncate(excess as usize);
-            risk += selected.iter().map(|value| traffic.get(value).copied().unwrap_or(0)).sum::<i64>();
-            spilled.extend(selected);
-        }
-    };
-
-    for &block in function.layout() {
-        let mut alive = live_out[&cfg::id(block)].clone();
-        account(&alive);
-        // A phi defines at the block's top and reads on its edges.
-        for &one in function.block(block).instructions().iter().rev() {
-            let instruction = function.instruction(one);
-            if instruction.opcode == Opcode::Phi {
-                continue;
-            }
-            if let Some(value) = instruction.result {
-                alive.remove(&value);
-            }
-            alive.extend(instruction.operands.iter().filter_map(|operand| match operand {
-                Operand::Value(value) => Some(*value),
-                _ => None,
-            }));
-            account(&alive);
-        }
-    }
-    Some(risk)
+    let cells = spill::cells(function);
+    let traffic = spill::traffic(function, &frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
+    let counted = |value: ValueId| spill::integer(context, function, value);
+    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst| spill::transient(context, layout, function, inst, room), &cells, &counted, &|value| spill::segment_view(context, layout, function, value))).flat_map(spill::Site::points);
+    Some(spill::spilled(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
 }
 
 /// Semantic work plus finite-capacity whole-range spill traffic.
 pub fn pressure_adjusted(
     context: &Context,
+    layout: &DataLayout,
     function: &Function,
     callees: &Callees,
     costs: &OperationCosts,
-    capacity: i64,
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
     trips: Option<&IndexMap<i64, i64>>,
-    live_out: &BTreeMap<i64, BTreeSet<ValueId>>,
+    found: &Liveness,
 ) -> Option<i64> {
-    let work = weighted(context, function, callees, costs, trips);
-    let pressure = spill_risk(context, function, costs, capacity, trips, live_out);
+    let work = weighted(context, layout, function, callees, costs, trips);
+    let pressure = spill_risk(context, layout, function, costs, room, across, trips, found);
     match (work, pressure) {
         (Some(work), Some(pressure)) => Some(work + pressure),
         _ => None,

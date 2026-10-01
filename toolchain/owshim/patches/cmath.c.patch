@@ -1,0 +1,44 @@
+--- a/bld/cc/c/cmath.c
++++ b/bld/cc/c/cmath.c
+@@ -369,24 +369,24 @@
+ };
+ 
+ /*
+- * must be implemented for long double
+- * now mapped to error
++ * qbopt: long double converts as double does: a conversion is the same node
++ * whatever the width, and the code generator names the formats.
+  */
+-#define C2T     CER
+-#define S2T     CER
+-#define I2T     CER
+-#define U2T     CER
+-#define L2T     CER
+-#define M2T     CER
+-#define F2T     CER
+-#define D2T     CER
+-#define T2C     CER
+-#define T2S     CER
+-#define T2I     CER
+-#define T2L     CER
+-#define T2M     CER
+-#define T2F     CER
+-#define T2D     CER
++#define C2T     C2D
++#define S2T     S2D
++#define I2T     I2D
++#define U2T     U2D
++#define L2T     L2D
++#define M2T     M2D
++#define F2T     F2D
++#define D2T     D2F
++#define T2C     D2C
++#define T2S     D2S
++#define T2I     D2I
++#define T2L     D2L
++#define T2M     D2M
++#define T2F     D2F
++#define T2D     D2F
+ 
+ /*
+  * matches enum DATA_TYPE in ctypes.h

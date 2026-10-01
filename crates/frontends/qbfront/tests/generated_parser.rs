@@ -111,6 +111,12 @@ fn assert_matches_golden(case: &CompatCase) {
         source::load(&case.source, &[case.source.parent().unwrap().to_path_buf()]).unwrap();
     let generated = parse_vertical_slice(&source, case.dialect)
         .unwrap_or_else(|error| panic!("generated parser rejected golden {}: {error:?}", case.id));
+    // QBFRONT_BLESS=1 rewrites the golden: for a field the AST gained, whose
+    // diff is then the proof (added lines only, each at its default).
+    if std::env::var_os("QBFRONT_BLESS").is_some() {
+        fs::write(golden_path(case), golden_text(case, &generated.module)).unwrap();
+        return;
+    }
     let golden = fs::read_to_string(golden_path(case)).unwrap();
     assert_eq!(
         golden_text(case, &generated.module),

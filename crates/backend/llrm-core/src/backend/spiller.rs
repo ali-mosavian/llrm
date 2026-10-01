@@ -91,27 +91,31 @@ pub fn spilled(
     spilled_from(body, values, frame, 0)
 }
 
-/// `spilled`, numbering the values it makes from `floor` at least: an
-/// allocation in progress still knows values the body no longer names.
-pub fn spilled_from(
-    body: &LirBody,
-    values: &BTreeSet<u32>,
-    frame: Option<&mut Frame>,
-    floor: u32,
-) -> Result<(LirBody, BTreeSet<u32>), Error> {
-    if values.is_empty() {
-        return Ok((body.clone(), BTreeSet::new()));
+/// How each value of a set is spilled: the decision, made before any
+/// instruction is written. A value is made again where it is read (a constant,
+/// an address, an extension, a stable load of a frame cell, a frame home it
+/// already has), or stored to a slot of the frame.
+pub struct Plan {
+    constants: IndexMap<u32, Imm>,
+    addresses: IndexMap<u32, Address>,
+    extensions: IndexMap<u32, Arc<Insn>>,
+    frame_loads: IndexMap<u32, Mem>,
+    frame_homes: IndexMap<u32, (Mem, usize)>,
+    /// The cell of each value made again from the frame.
+    rebuilt: IndexMap<u32, Mem>,
+    stored: BTreeSet<u32>,
+    narrow: IndexMap<u32, Imm>,
+}
+
+impl Plan {
+    /// The values this plan puts in slots.
+    pub fn stored(&self) -> &BTreeSet<u32> {
+        &self.stored
     }
-    let mut owned;
-    let frame: &mut Frame = match frame {
-        Some(frame) => frame,
-        None => {
-            owned = frames::of(body, None, "", None)?;
-            &mut owned
-        }
-    };
-    let mut fresh = _next_value(body).max(floor);
-    let mut made: BTreeSet<u32> = BTreeSet::new();
+}
+
+/// `values` of `body` decided: how each is spilled, and the slots of those stored.
+pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Plan, Error> {
     let constants = _constants(body, values);
     let addresses = _addresses(body, values);
     let extensions = _extensions(body, values);
@@ -135,6 +139,39 @@ pub fn spilled_from(
     // Before any cell names a slot.
     _color_slots(body, &stored, &_widest(body, &stored), frame)?;
     let narrow = _literals(body, &stored, true);
+    Ok(Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow })
+}
+
+/// `spilled`, numbering the values it makes from `floor` at least: an
+/// allocation in progress still knows values the body no longer names.
+pub fn spilled_from(
+    body: &LirBody,
+    values: &BTreeSet<u32>,
+    frame: Option<&mut Frame>,
+    floor: u32,
+) -> Result<(LirBody, BTreeSet<u32>), Error> {
+    if values.is_empty() {
+        return Ok((body.clone(), BTreeSet::new()));
+    }
+    let mut owned;
+    let frame: &mut Frame = match frame {
+        Some(frame) => frame,
+        None => {
+            owned = frames::of(body, None, "", None)?;
+            &mut owned
+        }
+    };
+    let plan = planned(body, values, frame)?;
+    materialized(body, &plan, frame, floor)
+}
+
+/// `body` with `plan` written: a reload before each read of a stored value, a
+/// store after each write, and every other value made again where it is read.
+/// The values made are returned; each lives for one use.
+pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32) -> Result<(LirBody, BTreeSet<u32>), Error> {
+    let mut fresh = _next_value(body).max(floor);
+    let mut made: BTreeSet<u32> = BTreeSet::new();
+    let Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow } = plan;
     let (body, next) = _short_update_runs(body, &stored, frame, fresh)?;
     fresh = next;
     let (body, next) = _local_updates(&body, &stored, frame, fresh)?;
