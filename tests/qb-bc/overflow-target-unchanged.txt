@@ -1,0 +1,12 @@
+err 6 
+x=x+y 32767 
+err 6 
+x=y+x 32767 
+err 6 
+x=x+1 32767 
+err 6 
+x=x+y+0 32767 
+err 6 
+x=x-y-32768 
+err 6 
+z=z+y 32767 

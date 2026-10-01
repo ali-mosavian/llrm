@@ -1,0 +1,28 @@
+err 6  0 
+addv 7 
+err 6  0 
+sub 7 
+err 6  0 
+subv 7 
+err 6  0 
+mul 32767 
+err 6  0 
+mulv 32767 
+err 6  0 
+neg-32768 
+err 6  0 
+ladd 7 
+err 6  0 
+lsub 7 
+lmul-2 
+err 6  0 
+lneg 7 
+err 6  0 
+narrow 7 
+cint-32768 
+clng-2147483648 
+assign-32768 
+err 11  0 
+idiv-32768 
+err 11  0 
+mod-32768 

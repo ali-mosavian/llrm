@@ -307,7 +307,8 @@ pub type Moved = IndexMap<i64, Vec<usize>>;
 /// `carved`, and where it moved every instruction, for regions planned
 /// on `body` still to be carved.
 pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region: &Region) -> Option<(LirBody, Moved)> {
-    let region = region.snapped(body).trimmed(body, value);
+    // Trimming to the references can end a range inside a parallel group; snap last.
+    let region = region.trimmed(body, value).snapped(body);
     let referenced = body.blocks.iter().any(|block| {
         region.spans.get(&block.at).is_some_and(|ranges| {
             ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value)))
@@ -1057,6 +1058,45 @@ mod tests {
 
     fn region(body: &LirBody, blocks: &[i64]) -> Region {
         Region::blocks(body, blocks.iter().copied())
+    }
+
+    fn copy_in_group(at: i64, into: u32, from: u32, group: i64) -> Arc<Insn> {
+        let mut one = Insn::new(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", vec![held(into, 2)], vec![held(from, 2)], None)), vec![into], vec![from]);
+        one.group = Some(group);
+        Arc::new(one)
+    }
+
+    /// A range trimmed to the one copy of a parallel group that defines the
+    /// value ended inside the group, where `crossings` finds the value dead:
+    /// no copy back was made, the piece took the only definition, and what
+    /// still read the value (a slot nothing stored) was garbage on DOS (#108,
+    /// rnd98_0022: a pointer walker started at its base, not at its offset).
+    #[test]
+    fn test_a_piece_defined_in_a_parallel_group_hands_the_value_back_after_the_group() {
+        let body = body(
+            "one",
+            vec![
+                block(
+                    0,
+                    vec![
+                        move_imm(0, 10, 1),
+                        move_imm(1, 13, 2),
+                        copy_in_group(2, 11, 10, 1),
+                        copy_in_group(3, 12, 13, 1),
+                        jump(4, 0x10),
+                    ],
+                    &[0x10],
+                ),
+                block(0x10, vec![add(0x10, 12), jump(0x12, 0x20)], &[0x20]),
+                block(0x20, vec![push(0x20, 11), push(0x21, 12)], &[]),
+            ],
+        );
+        let mut region = Region::default();
+        region.add(0, 2, 5);
+        region.add(0x20, 0, 2);
+        let (cut, _) = super::carved_moving(&body, 11, 20, 2, &region).expect("cut");
+        let (live_in, _) = crate::backend::allocate::live(&cut);
+        assert!(live_in[&0].is_empty(), "v11 is read after the region with no definition: {live_in:?}");
     }
 
     #[test]

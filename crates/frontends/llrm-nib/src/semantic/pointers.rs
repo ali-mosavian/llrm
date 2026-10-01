@@ -171,7 +171,7 @@ impl FunctionCompiler<'_> {
                 ));
             };
             match self.binding(name, *name_span)?.clone() {
-                Binding { type_: BindingType::Slice { element, rank }, storage: Storage::Slice(descriptor), .. } if !mutable => {
+                Binding { type_: BindingType::Slice { element, rank }, storage: Storage::Slice(descriptor), .. } => {
                     let data = self.slice_data_pointer(descriptor, element, rank);
                     let result = self.value_type(pointer_id);
                     self.emit("copy", vec![result], vec![hir::Operand::Value(data)], None);

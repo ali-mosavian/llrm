@@ -2737,9 +2737,12 @@ fn checked_division_raises_error_11_where_bcs_divide_traps() {
     assert!(plain.modules[0].functions.iter().any(|one| one.name == "__main" && one.error_handler.is_some()));
     let divisions = instructions(&plain).iter().filter(|one| matches!(one.op, llrm_core::hir::model::Op::Div | llrm_core::hir::model::Op::Rem) && !matches!(one.operands[1], llrm_core::hir::model::Operand::Constant(_))).count();
     assert!(divisions >= 3, "{divisions}");
-    assert!(!instructions(&plain).iter().any(|one| raises(one, 11)));
-    let checked = instructions(&hir(true));
-    assert!(checked.iter().filter(|one| raises(one, 11)).count() >= divisions, "{checked:?}");
+    // Where errors land the narrow overflow is code anyway (BC's 16-bit divide
+    // traps on it), the zero divisor the IR's own; the option adds the zeros.
+    let raised = |program: &llrm_core::hir::model::Program| instructions(program).iter().filter(|one| raises(one, 11)).count();
+    let checked = hir(true);
+    assert!(raised(&plain) < raised(&checked), "{} {}", raised(&plain), raised(&checked));
+    assert!(raised(&checked) >= divisions, "{checked:?}");
 }
 
 /// The same on the rich route: the error is a call the landing pad names.

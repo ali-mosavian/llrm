@@ -1877,6 +1877,23 @@ fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
     assert!(after.iter().all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")), "{assembly}");
 }
 
+/// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
+/// addrspace(1) value", and a `&mut [T]` view had no raw address ("only a
+/// scalar, struct, or sequence has a raw address") though a `&[T]` did.
+#[test]
+fn test_a_raw_pointer_walks_an_array_and_a_mutable_view() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let walk = "var g: i16[10] = [0] * 10\n\nfn total(n: i16) -> i32:\n    let mut t: i32 = 0\n    let mut p: *far mut i16 = 0\n    let mut e: *far mut i16 = 0\n    unsafe:\n        p = (&mut g)\n        e = p.offset(n)\n    while p != e:\n        unsafe:\n            t += i32(p[0])\n            p = p.offset(1)\n    return t\n\nfn main() -> i16:\n    return i16(total(3))\n";
+    let view = "fn fill(a: &mut [i16]) -> void:\n    let mut p: *far mut i16 = 0\n    unsafe:\n        p = &mut a\n    let mut i: u16 = 0\n    while i < a.len:\n        unsafe:\n            p[0] = i16(i)\n            p = p.offset(1)\n        i += 1\n\nfn main() -> i16:\n    let mut g: i16[3] = [0, 0, 0]\n    fill(&mut g)\n    return g[2]\n";
+    assert!(walk.contains("while p != e") && view.contains("p = &mut a"), "the shapes that were refused");
+    for (name, source) in [("walk.nib", walk), ("view.nib", view)] {
+        rich(&directory, name, source);
+    }
+    let immutable = view.replace("a: &mut [i16]", "a: &[i16]").replace("fill(&mut g)", "fill(&g)");
+    let refused = driver::parsed(&written(&directory, "immutable.nib", &immutable), &Default::default(), None);
+    assert!(refused.is_err(), "a raw &mut of a &[T] view is still refused");
+}
+
 #[test]
 fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     // jwlink's `option eliminate` keeps a segment any other references, even
