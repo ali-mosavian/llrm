@@ -22,7 +22,7 @@ pub trait Machine {
     fn call_registers(&self) -> i64;
 
     /// Registers an access through a pointer wider than its offset takes
-    /// besides the values live: its offset and its selector.
+    /// besides the values live: its offset and selector pass through them.
     fn far_access_registers(&self) -> i64 {
         0
     }

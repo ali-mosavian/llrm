@@ -179,19 +179,19 @@ fn test_c_parity_fixtures_agree_on_both_routes() {
     }
 }
 
-/// Nine and ten arrays, near and far, summed over one counter on a P5: loop
+/// Nine to eleven arrays, near and far, summed over one counter on a P5 or Core: loop
 /// strength reduction kept four products live beside the counter and the
 /// allocator found "value cannot be spilled and no register is free", where
-/// main built them. A far access takes two registers, its offset and its
-/// selector, that the pass did not count: one still failed the nine
-/// (loop-corpus `conc9`, `conc10`, `conc11`).
+/// main built them. A far access takes registers the pass did not count:
+/// one still failed the nine, two the eleven on a Core (loop-corpus
+/// `conc9`, `conc10`, `conc11`).
 #[test]
 fn test_loops_over_many_arrays_build_on_a_p5() {
     let scratch = tempfile::tempdir().unwrap();
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c"));
-    for name in ["ninearrays", "tenarrays"] {
+    for (name, cpu) in [("ninearrays", "P5"), ("tenarrays", "P5"), ("elevenarrays", "Core")] {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{name}.c"));
-        let done = Command::new(bin).args([source.to_str().unwrap(), "--cpu", "P5", "-O2", "-o", &format!("{name}.obj")]).current_dir(scratch.path()).output().unwrap();
+        let done = Command::new(bin).args([source.to_str().unwrap(), "--cpu", cpu, "-O2", "-o", &format!("{name}.obj")]).current_dir(scratch.path()).output().unwrap();
         assert!(done.status.success(), "{name}: {}", String::from_utf8_lossy(&done.stderr));
     }
 }
