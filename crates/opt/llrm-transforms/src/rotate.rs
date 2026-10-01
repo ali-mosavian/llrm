@@ -5,24 +5,21 @@
 //!
 //! BC writes `FOR` as `jmp test; body: ...; test: cmp; jle body`. Where the
 //! first test is proven to pass the entry goes straight to the body, and the
-//! test is then reached only from the latch, which it merges into. A dead
-//! counter with a symbolic count becomes a guarded countdown first: a skip
-//! test before the loop, then trips remaining stepped down to zero.
+//! test is then reached only from the latch, which it merges into. `lsr`
+//! enters a loop it counts to zero at its body too, behind a skip guard.
 //!
 //! A rotated loop is no longer the pre-tested shape the counted-loop
 //! analyses, peel and unroll read, so this goes after them.
 //!
 //! What changed with the IR: the header's phis move to the body through
 //! `ssa::SsaUpdater`, which also rewrites every use, outside the loop
-//! included; the countdown's seeds, guard and exit values are `counting`'s.
-//! Dropped: `_step_test` and the countdown's branch on the decrement's
-//! flags -- an `icmp` is a value, and reusing a step's flags is isel's; the
-//! old body's `loop_trip_counts` and `integer_ranges` side tables; clearing
-//! a private start (Dead's).
+//! included. Dropped: `_step_test` -- an `icmp` is a value, and reusing a
+//! step's flags is isel's; the old body's `loop_trip_counts` and
+//! `integer_ranges` side tables; clearing a private start (Dead's).
 
 use std::collections::BTreeSet;
 
-use llrm_analysis::induction::{self, ControlReplacement};
+use llrm_analysis::induction;
 use llrm_analysis::manager::Registers;
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, memory};
@@ -31,11 +28,9 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use num_bigint::BigInt;
 
-use crate::counting::{self, Seeds};
 use crate::lcssa::{arms, from_arms};
 
 pub struct Rotate;
@@ -54,12 +49,10 @@ impl FunctionPass for Rotate {
     }
 }
 
-/// Every dead counter with a symbolic count counted down, every proven
-/// loop entered at its body, and each test merged into its latch; whether
-/// any loop was.
+/// Every proven loop entered at its body, and each test merged into its
+/// latch; whether any loop was.
 pub fn entered(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses) -> Result<bool, String> {
     let mut done = BTreeSet::new();
-    while _counted_down(context, layout, function, analyses, &mut done)? {}
     while rotated(context, layout, function, analyses, &mut done)? {}
     if done.is_empty() {
         return Ok(false);
@@ -226,84 +219,6 @@ pub fn rotated(context: &mut Context, layout: &DataLayout, function: &mut Functi
             continue;
         }
         _rotate(context, function, &shape, None)?;
-        done.insert(shape.first);
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-/// Rotate a dead counted counter into a guarded countdown; whether one was.
-///
-/// A dynamic bound cannot prove that the loop is entered, so the ordinary
-/// rotation leaves its first test in place. Where the counter is otherwise
-/// dead, its only meaning is the trips remaining:
-///
-/// ```text
-/// i = start; while (i < n) { body; ++i; }
-/// ```
-///
-/// becomes a zero-trip guard, then `body; --trips` until `trips` is zero.
-/// The guard makes a zero count exact, and refusing an observed counter
-/// makes replacing its values sound. Only the one-body-block form
-/// `induction::control_replacement` proves.
-pub fn _counted_down(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, done: &mut BTreeSet<BlockId>) -> Result<bool, String> {
-    let facts = analyses.fresh().get::<Registers>(context, layout, function);
-    for loop_ in cfg::Shape::of(function).loops {
-        if done.contains(&cfg::block(loop_.header)) {
-            continue;
-        }
-        let Some(shape) = _shape(function, &loop_) else {
-            continue;
-        };
-        let (proof, stepping, update, exits) = {
-            let unit = memory::Unit::within(context, layout, function, analyses.outer());
-            let proofs = induction::counted(&unit, &loop_, Some(&facts), true);
-            let [proof] = &proofs[..] else {
-                continue;
-            };
-            // A constant count is the finite-domain transforms' to take.
-            if proof.count.is_some() || proof.preheader != Some(cfg::id(shape.preheader)) || proof.exit != cfg::id(shape.exit) {
-                continue;
-            }
-            let Some(replacement) = induction::control_replacement(&unit, &loop_, proof, &BTreeSet::new()) else {
-                continue;
-            };
-            (proof.clone(), replacement.stepping, replacement.update, replacement.exits.clone())
-        };
-        let width = proof.width();
-        let entering = function.terminator(shape.preheader).expect("a terminated preheader");
-        let mut seeds = Seeds { context: &mut *context, function: &mut *function, at: entering, width };
-        let Some(count) = induction::trips(&proof, &mut |kind, args| seeds.computed(kind, args)) else {
-            unreachable!("control_replacement proved a pre-tested loop")
-        };
-        let count = seeds.operand(&count);
-        let guard = counting::skip_guard(&mut seeds, &proof).expect("a pre-tested loop");
-        let replacement = ControlReplacement { counted: &proof, stepping, update, exits };
-        let leaving = counting::leaving(&mut seeds, &replacement, true);
-
-        let ty = context.types.int(width);
-        let one = counting::constant(context, &BigInt::from(1), width);
-        let zero = counting::constant(context, &BigInt::from(0), width);
-        let trips = Operand::Value(proof.counter.value);
-        let back = function.terminator(shape.latch).expect("a terminated latch");
-        let decrement = function.create_instruction(Opcode::Binary(BinaryOp::Sub), ty, vec![trips, one], Flags::default(), Some("trips.next"));
-        function.insert(decrement, Position::Before(back))?;
-        let next = Operand::Value(function.instruction(decrement).result.expect("a value"));
-        function.set_operands(proof.phi, from_arms(&[(count, shape.preheader), (next, shape.latch)]));
-        function.erase(stepping)?;
-        for (phi, operands) in leaving {
-            function.set_operands(phi, operands);
-        }
-        // The header tests trips remaining, the branch's way round.
-        let branch = proof.branch;
-        let continues = function.instruction(branch).operands[1] == Operand::Block(shape.first);
-        let predicate = if continues { IntPredicate::Ne } else { IntPredicate::Eq };
-        let bit = context.types.int(1);
-        let test = function.create_instruction(Opcode::ICmp(predicate), bit, vec![trips, zero], Flags::default(), None);
-        function.insert(test, Position::Before(branch))?;
-        function.set_operand(branch, 0, Operand::Value(function.instruction(test).result.expect("a value")));
-        function.erase(proof.compare)?;
-        _rotate(context, function, &shape, Some(Operand::Value(guard)))?;
         done.insert(shape.first);
         return Ok(true);
     }

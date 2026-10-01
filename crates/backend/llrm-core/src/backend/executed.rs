@@ -1,7 +1,8 @@
 //! A finished body's executed work, estimated without a profile.
 //!
 //! `tools/quality.py`'s `_transitions` and `_frequencies`: a loop branch continues with
-//! its proved trip count, or nine times in ten; other branches split evenly. Each block's
+//! its proved trip count, or nine times in ten; other branches split evenly. A loop
+//! tested at its header tests once more than it trips. Each block's
 //! expected executions per call weigh its instructions and memory operands, so spill code
 //! the MIR estimate cannot see is counted.
 
@@ -44,6 +45,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
     let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     let size = body.blocks.len();
+    let successors_of: IndexMap<i64, Vec<i64>> = body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect();
     // f = entry + P^T f, solved directly.
     let mut matrix = vec![vec![0.0f64; size]; size];
     for (at, row) in matrix.iter_mut().enumerate() {
@@ -64,8 +66,16 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             let inside: Vec<i64> = successors.iter().copied().filter(|at| one.body.contains(at)).collect();
             let outside: Vec<i64> = successors.iter().copied().filter(|at| !one.body.contains(at)).collect();
             if !inside.is_empty() && !outside.is_empty() {
-                let count = if block.at == one.header || one.latches.contains(&block.at) { trips.get(&one.header) } else { None };
-                let stay = count.map_or(0.9, |count| (*count as f64 - 1.0) / *count as f64);
+                // A proven count holds where the loop's one exit is tested,
+                // whichever block that is: a split edge may make the way back
+                // a block of its own.
+                let exiting = one.body.iter().filter(|&&at| successors_of.get(&at).is_some_and(|succ| succ.iter().any(|to| !one.body.contains(to)))).count();
+                let count = if exiting == 1 || block.at == one.header || one.latches.contains(&block.at) { trips.get(&one.header) } else { None };
+                // Tested after a trip, the loop stays for all but its last;
+                // tested at its header before one, for every trip.
+                let tested = if block.at == one.header && !one.latches.contains(&block.at) { 0.0 } else { 1.0 };
+                // An uncounted loop goes round nine times in ten, however many ways it has out.
+                let stay = count.map_or(0.9_f64.powf(1.0 / exiting as f64), |count| (*count as f64 - tested) / (*count as f64 + 1.0 - tested));
                 let mut parts: Vec<(i64, f64)> = inside.iter().map(|at| (*at, stay / inside.len() as f64)).collect();
                 parts.extend(outside.iter().map(|at| (*at, (1.0 - stay) / outside.len() as f64)));
                 split = Some(parts);
@@ -73,15 +83,17 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             }
         }
         if split.is_none() && successors.len() == 2 {
-            let guarded: Vec<&loops::Loop> = natural
+            // A block that only falls into a loop enters it as its header does.
+            let entered = |at: i64, header: i64| at == header || successors_of.get(&at).is_some_and(|succ| succ == &[header]);
+            let guarded: Vec<(&loops::Loop, i64)> = natural
                 .iter()
-                .filter(|one| {
-                    successors.contains(&one.header)
-                        && successors.iter().all(|at| *at == one.header || !one.body.contains(at))
+                .filter_map(|one| {
+                    let into = successors.iter().copied().find(|&at| entered(at, one.header) && (at == one.header || !one.body.contains(&at)))?;
+                    successors.iter().all(|at| *at == into || !one.body.contains(at)).then_some((one, into))
                 })
                 .collect();
-            if let [one] = guarded.as_slice() {
-                split = Some(successors.iter().map(|at| (*at, if *at == one.header { 0.9 } else { 0.1 })).collect());
+            if let [(_, into)] = guarded.as_slice() {
+                split = Some(successors.iter().map(|at| (*at, if at == into { 0.9 } else { 0.1 })).collect());
             }
         }
         let split = split.unwrap_or_else(|| successors.iter().map(|at| (*at, 1.0 / successors.len() as f64)).collect());
@@ -220,6 +232,92 @@ mod tests {
         let body = LirBody::new("folded", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
         let done = executed(&body).expect("straight-line");
         assert_eq!((done.stores, done.reloads), (1.0, 1.0));
+    }
+
+    /// A loop tested at its header runs its body as many times as its trip
+    /// count, the header once more. The estimate gave the body one trip
+    /// fewer, so each such loop read cheaper than the same loop entered at
+    /// its body: suite/ivchan's 21 trips counted as 20.
+    #[test]
+    fn test_a_loop_tested_at_its_header_runs_its_body_every_trip() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
+            block(3, vec![insn(3, Operation::Move, "mov", vec![ax], vec![bx]), insn(4, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body = LirBody::new("counted", 1, blocks, IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(2, 5)];
+        // The entry's jump, the header's six tests, five trips of two, the return.
+        assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 6.0 + 10.0 + 1.0);
+    }
+
+    /// A loop whose way back runs through a block of its own, as a split
+    /// edge makes one, tests its exit in neither its header nor its latch:
+    /// its proven count went unread and it ran ten trips, not 24, so the
+    /// mandel whose outer loop LSR entered at its body read 57% cheaper.
+    #[test]
+    fn test_a_loop_counted_at_its_one_exit_runs_its_count() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(2, Operation::Move, "mov", vec![ax], vec![bx])], vec![3]),
+            block(3, vec![insn(3, Operation::Branch, "jne", vec![], vec![])], vec![5, 4]),
+            block(5, vec![insn(4, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body = LirBody::new("split", 1, blocks, IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(2, 5)];
+        // The entry's jump, five trips of the body's move and test, four of
+        // the way back, the return.
+        assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 10.0 + 4.0 + 1.0);
+    }
+
+    /// A guard entering a loop through a preheader enters it as often as
+    /// one branching to its header: nbody's inner loop read 180 entries
+    /// where its guard jumped to the header and 100 where it jumped to a
+    /// block that jumped there, the same code either way.
+    #[test]
+    fn test_a_guard_into_a_preheader_enters_its_loop_as_into_the_header() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let looped = |preheader: bool| {
+            let mut blocks = vec![block(1, vec![insn(1, Operation::Branch, "jne", vec![], vec![])], vec![if preheader { 2 } else { 3 }, 4])];
+            if preheader {
+                blocks.push(block(2, vec![insn(2, Operation::Jump, "jmp", vec![], vec![])], vec![3]));
+            }
+            blocks.push(block(3, vec![insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]), insn(4, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]));
+            blocks.push(block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]));
+            executed(&LirBody::new("guarded", 1, blocks, IndexMap::default(), IndexMap::default())).expect("a loop").instructions
+        };
+        // The preheader's jump, taken nine times in ten, is all that differs.
+        assert!((looped(true) - 0.9 - looped(false)).abs() < 1e-9, "{} {}", looped(true), looped(false));
+    }
+
+    /// An uncounted loop goes round as often with two exits as with one:
+    /// each exit staying nine times in ten made a loop tested twice a trip
+    /// run half as often, and Nib's `zip`, its two exits made one, read 59
+    /// instructions before and 90 after with fewer each trip.
+    #[test]
+    fn test_an_uncounted_loop_runs_as_often_whatever_its_exits() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let moved = |at| insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]);
+        let tested = |at| insn(at, Operation::Branch, "jne", vec![], vec![]);
+        let run = |blocks: Vec<LirBlock>| executed(&LirBody::new("uncounted", 1, blocks, IndexMap::default(), IndexMap::default())).expect("a loop").instructions;
+        let ret = |at| block(at, vec![insn(at, Operation::Return, "ret", vec![], vec![])], vec![]);
+        // The header, a move and a test, ten times in both.
+        let once = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![2, 4]), ret(4)]);
+        let twice = run(vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![3, 5]), block(3, vec![tested(4)], vec![2, 5]), ret(5)]);
+        assert!((once - (1.0 + 10.0 * 2.0 + 1.0)).abs() < 1e-9, "{once}");
+        assert!((twice - (1.0 + 10.0 * 2.0 + 10.0 * 0.9_f64.sqrt() + 1.0)).abs() < 1e-9, "{twice}");
     }
 
     /// An x87 spill store was counted while its restores, unflagged, were

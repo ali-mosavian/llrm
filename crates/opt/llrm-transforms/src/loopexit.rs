@@ -33,7 +33,6 @@ use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
@@ -43,7 +42,7 @@ use num_bigint::BigInt;
 use crate::counting::{self, Seeds};
 use crate::edges;
 use crate::lcssa::{arms, operations};
-use crate::transform::{_trivial_phis, live};
+use crate::transform::_trivial_phis;
 
 pub struct LoopExit;
 
@@ -53,7 +52,7 @@ impl FunctionPass for LoopExit {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        match evaluated(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer()) {
+        match evaluated(unit.context, unit.layout, unit.function, analyses.outer()) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("loopexit: {error}"),
@@ -73,10 +72,10 @@ enum Evaluation {
 }
 
 /// Loops evaluated, one at a time to a fixed point; whether any changed.
-pub fn evaluated(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer) -> Result<bool, String> {
+pub fn evaluated(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> Result<bool, String> {
     let mut changed = false;
     loop {
-        let found = _evaluation(context, layout, callees, function, outer)?;
+        let found = _evaluation(context, layout, function, outer)?;
         match found {
             None => return Ok(changed),
             Some(Evaluation::Deleted { header, exit, exits }) => _deleted(context, function, header, exit, &exits)?,
@@ -87,7 +86,7 @@ pub fn evaluated(context: &mut Context, layout: &DataLayout, callees: &Callees, 
 }
 
 /// The first loop whose exit values change something: the old `evaluated`.
-fn _evaluation(context: &Context, layout: &DataLayout, callees: &Callees, function: &Function, outer: &Outer) -> Result<Option<Evaluation>, String> {
+fn _evaluation(context: &Context, layout: &DataLayout, function: &Function, outer: &Outer) -> Result<Option<Evaluation>, String> {
     let unit = Unit::within(context, layout, function, outer);
     let facts = unit.registers();
     for loop_ in cfg::Shape::of(function).loops {
@@ -110,7 +109,7 @@ fn _evaluation(context: &Context, layout: &DataLayout, callees: &Callees, functi
         let (header, exit) = (cfg::block(loop_.header), cfg::block(proof.exit));
         let phied = edges::phis(function, header).iter().filter_map(|&phi| function.instruction(phi).result).collect::<BTreeSet<_>>();
         if exits.keys().copied().collect::<BTreeSet<_>>() != phied || !_disposable(&unit, &loop_) {
-            if let Some(found) = _constant_exits(context, callees, function, &loop_, &exits, exit, &facts)? {
+            if let Some(found) = _constant_exits(function, &loop_, &exits, exit, &facts)? {
                 return Ok(Some(found));
             }
             continue;
@@ -171,10 +170,26 @@ fn _exit_terms(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, 
     let phis = edges::phis(function, cfg::block(loop_.header));
     let still = induction::invariant(function, &loop_.body);
     let mut headers = phis.iter().filter_map(|&phi| function.instruction(phi).result).collect::<BTreeSet<_>>();
+    // An invariant is a term, whatever computes it.
+    for &at in &loop_.body {
+        for &inst in function.block(cfg::block(at)).instructions() {
+            headers.extend(function.instruction(inst).operands.iter().filter_map(|one| match one {
+                Operand::Value(value) if still.contains(*value) => Some(*value),
+                _ => None,
+            }));
+        }
+    }
     let widened = _widened_counters(unit, loop_, counters, facts)?;
     headers.extend(widened.keys().copied());
     let mut counters = counters.clone();
     counters.extend(widened);
+    // Each value affine in a counter is `start + step * trip`, summed over the trips.
+    let recurrences = induction::derived(unit, loop_, Some(&counters))
+        .iter()
+        .filter(|one| one.pointer.is_none())
+        .filter_map(|one| Some((function.instruction(one.op).result?, induction::recurrence(one)?)))
+        .collect::<BTreeMap<_, _>>();
+    headers.extend(recurrences.keys().copied());
     let within = |value: ValueId| unit.defining(Operand::Value(value)).and_then(|(inst, _)| function.parent(inst)).is_some_and(|block| loop_.body.contains(&cfg::id(block)));
     let mut exits = IndexMap::default();
     for phi in phis {
@@ -206,6 +221,14 @@ fn _exit_terms(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, 
                     let counter = &counters[value];
                     terms.push((counter.start.clone(), coefficient * count));
                     terms.push((counter.step.clone(), induction::floor_div(&(coefficient * count * (count - 1)), &BigInt::from(2))));
+                }
+                AffineOperand::Value(value, _) if recurrences.get(value).is_some_and(|of| of.width() == width) => {
+                    let of = &recurrences[value];
+                    let sums = [(&of.start, coefficient * count), (&of.step, induction::floor_div(&(coefficient * count * (count - 1)), &BigInt::from(2)))];
+                    for (sum, times) in sums {
+                        terms.push((AffineOperand::constant(sum.constant.clone(), width), times.clone()));
+                        terms.extend(sum.terms.iter().map(|(term, factor)| (AffineOperand::Value(*term, width), factor * &times)));
+                    }
                 }
                 AffineOperand::Value(..) => {
                     complete = false;
@@ -256,10 +279,8 @@ fn _widened_counters(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Aff
 }
 
 /// Constant live-outs replaced after the loop, leaving its observable
-/// work intact: only those the loop then no longer needs to compute.
+/// work intact. What the loop still computes for itself is `lsr`'s to keep.
 fn _constant_exits(
-    context: &Context,
-    callees: &Callees,
     function: &Function,
     loop_: &Loop,
     exits: &IndexMap<ValueId, Terms>,
@@ -322,12 +343,7 @@ fn _constant_exits(
     if swap.is_empty() {
         return Ok(None);
     }
-    let mut changed = function.clone();
-    let mut scratch = context.clone();
-    _substituted_exits(&mut scratch, &mut changed, exit, &following, &swap)?;
-    let alive = live(&scratch, callees, &changed);
-    let profitable = swap.into_iter().filter(|(value, _)| !alive.contains(value)).collect::<BTreeMap<_, _>>();
-    Ok((!profitable.is_empty()).then_some(Evaluation::Constant { exit, following, swap: profitable }))
+    Ok(Some(Evaluation::Constant { exit, following, swap }))
 }
 
 /// The exit's phis that take one value from the header alone: each phi's

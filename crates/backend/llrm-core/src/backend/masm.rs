@@ -23,8 +23,7 @@ pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
 /// `SAVED`: callee-saved under the C convention. A Borland caller keeps SI
 /// and DI, not their upper halves, and a caller built here keeps nothing
 /// across a call.
-pub static SAVED: LazyLock<IndexMap<Register, Register>> =
-    LazyLock::new(|| IndexMap::from_iter([(Register::ESI, Register::SI), (Register::EDI, Register::DI)]));
+pub static SAVED: LazyLock<IndexMap<Register, Register>> = LazyLock::new(|| IndexMap::from_iter(llrm_x86_code16::PRESERVED));
 /// `SEGMENTS`.
 pub static SEGMENTS: LazyLock<IndexMap<&'static str, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([("_DATA", ".data"), ("_BSS", ".data?"), ("CONST", ".const")]));

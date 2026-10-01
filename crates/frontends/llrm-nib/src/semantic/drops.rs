@@ -192,7 +192,7 @@ impl FunctionCompiler<'_> {
         for (block, at, flag, value) in stores {
             let id = self.next_instruction;
             self.next_instruction += 1;
-            let store = hir::Instruction { id, op: "store", results: Vec::new(), operands: vec![hir::Operand::Place(flag), hir::Operand::Constant(BOOL, value)], callee: None, asm: None, line: 0 };
+            let store = hir::Instruction { id, op: "store", results: Vec::new(), operands: vec![hir::Operand::Place(flag), hir::Operand::Constant(BOOL, value)], callee: None, asm: None, inbounds: false, line: 0 };
             self.blocks[(block - 1) as usize].instructions.insert(at, store);
         }
     }

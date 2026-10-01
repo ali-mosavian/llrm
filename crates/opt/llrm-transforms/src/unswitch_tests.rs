@@ -196,7 +196,7 @@ fn test_unswitch_prices_at_the_target_costs() {
 }
 
 /// Records the target's prices and registers each candidate's passes see.
-struct Seen(std::rc::Rc<std::cell::RefCell<Vec<(OperationCosts, (i64, i64))>>>);
+struct Seen(std::rc::Rc<std::cell::RefCell<Vec<(OperationCosts, crate::spill::Room)>>>);
 
 impl llrm_mir::passes::FunctionPass for Seen {
     fn name(&self) -> &'static str {
@@ -222,5 +222,5 @@ fn test_unswitch_reoptimization_preserves_mir_target_costs() {
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2, ..Default::default() })).unwrap();
     let seen = seen.borrow();
     assert!(!seen.is_empty());
-    assert!(seen.iter().all(|one| *one == (costs.clone(), (5, 2))), "{seen:?}");
+    assert!(seen.iter().all(|one| *one == (costs.clone(), crate::spill::Room { registers: 5, across_call: 2, ..Default::default() })), "{seen:?}");
 }

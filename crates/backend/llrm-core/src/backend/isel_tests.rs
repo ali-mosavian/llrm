@@ -294,6 +294,43 @@ fn test_variable_indices_are_scaled_and_added() {
     );
 }
 
+/// A constant added to an index is the address's displacement, not a
+/// register: `a[i + 8]` of bytes was `mov di, si; add di, 8; [bx+di]`, an
+/// add and a copy a trip that main's `[bx+si+8]` did not pay.
+#[test]
+fn test_a_constant_added_to_an_index_is_a_displacement() {
+    let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
+  %j = add nsw i16 %i, 8
+  %q = getelementptr inbounds i8, ptr %p, i16 %j
+  %v = load i8, ptr %q
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("[bx+si+8]") && !got.contains("add si, 8") && !got.contains("add di, 8"), "{got}");
+}
+
+/// A far pointer of offset zero indexed by a sum of two registers is a base
+/// and an index, `es:[bx+si]`: the sum was added into a third register
+/// first, a `mov` and an `add` a trip in qbdemo's FRACTALEFFECT.
+#[test]
+fn test_a_sum_of_two_registers_is_the_base_and_index_of_a_far_address() {
+    let text = "define i16 @f(i16 %sel, i16 %i, i16 %j) addrspace(1) {
+  %seg = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %seg to ptr addrspace(1)
+  %k = add i16 %i, %j
+  %p = getelementptr inbounds i8, ptr addrspace(1) %far, i16 %k
+  %v = load i8, ptr addrspace(1) %p
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("es:[bx+si]") || got.contains("es:[bx+di]") || got.contains("es:[si+bx]") || got.contains("es:[di+bx]"), "{got}");
+    assert!(!got.lines().any(|line| line.starts_with("add ") && !line.contains("sp")), "{got}");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {
@@ -2969,6 +3006,60 @@ fn test_dbg_lines_become_linnum() {
     assert_eq!(lines, [(7, 0), (8, 9)]);
     let marker = records.iter().any(|one| one.r#type == llrm_omf::omf::COMENT && one.body.get(1) == Some(&0xA1));
     assert!(marker, "the CodeView marker");
+}
+
+/// A near global indexed by a dword the loop proves small is its scaled
+/// cell: addrm's `B&` stored through `mov di,cx; shl edi,2` a trip, where
+/// a frame or a far base took the scale.
+#[test]
+fn test_a_global_indexed_by_a_small_dword_is_the_scaled_cell() {
+    let text = "@b = internal global [64 x i32] zeroinitializer
+define void @f(i32 %i) addrspace(1) {
+entry:
+  %c = icmp slt i32 %i, 0
+  br i1 %c, label %no, label %low
+low:
+  %d = icmp sgt i32 %i, 60
+  br i1 %d, label %no, label %ok
+ok:
+  %m = shl i32 %i, 2
+  %e = getelementptr i8, ptr @b, i32 %m
+  store i32 7, ptr %e, !tbaa !1
+  ret void
+no:
+  ret void
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("b[") && line.contains("*4]")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shl")), "{got:?}");
+}
+
+/// A global indexed by one register and then another is `[bx+si+global]`:
+/// conc12's twelve arrays, each `array + 2n` for the count-to-zero
+/// counter, were twelve pointers spilled to the frame and reloaded each
+/// trip, where the two registers make each address in its access.
+#[test]
+fn test_a_global_indexed_by_two_registers_is_one_address() {
+    let text = "@g = internal global [64 x i16] zeroinitializer
+define i16 @f(i16 %n, i16 %i) addrspace(1) {
+entry:
+  %a = getelementptr i8, ptr @g, i16 %n
+  %b = getelementptr i8, ptr %a, i16 %i
+  %c = getelementptr i8, ptr %b, i16 18
+  %v = load i16, ptr %c, !tbaa !1
+  ret i16 %v
+}
+
+!0 = !{!\"short\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("g+18[") && line.contains('+')), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("add ") || line.starts_with("lea ")), "{got:?}");
 }
 
 /// The optimizer left `getelementptr i8, ptr null, ...` and isel refused it as
