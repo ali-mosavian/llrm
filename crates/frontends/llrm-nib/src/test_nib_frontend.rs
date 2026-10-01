@@ -150,7 +150,7 @@ fn test_frontend_json_is_deterministic_and_replayable() {
     let Json::Dict(document) = pyjson::loads(&String::from_utf8(first).expect("utf-8")).expect("JSON") else {
         panic!("not an object");
     };
-    assert_eq!(document.get("schema"), Some(&Json::Int(2)));
+    assert_eq!(document.get("schema"), Some(&Json::Int(3)));
 }
 
 #[test]
