@@ -809,3 +809,21 @@ fn stated_facts_survive_the_codec() {
     assert!(text.contains("\"facts\":[{\"fact\":\"noalias\",\"function\":1,\"id\":0,\"source\":\"c:12\",\"subject\":\"param\"}]"), "{text}");
     assert_eq!(crate::codec::decode(&text).unwrap().modules[0].facts, program.modules[0].facts);
 }
+
+/// Schema 1 had `promises` and `nowrap`, which no longer exist; a program
+/// that says it is schema 1 is refused by its version, not by whichever
+/// field the decoder meets first.
+#[test]
+fn a_program_of_the_old_schema_is_refused_by_its_version() {
+    let mut program = program(difference());
+    program.schema = 1;
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("unsupported HIR schema 1"));
+}
+
+/// The same, as JSON: the old schema's `promises` field was what it was
+/// refused for.
+#[test]
+fn old_json_is_refused_by_its_schema() {
+    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":2", "\"promises\":[],\"schema\":1");
+    assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
+}

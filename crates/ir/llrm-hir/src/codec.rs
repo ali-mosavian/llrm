@@ -588,6 +588,13 @@ pub fn debug_json(debug: &model::Debug) -> String {
 
 pub fn decode(text: &str) -> Result<model::Program, InvalidHIR> {
     let raw = pyjson::loads(text).map_err(|error| InvalidHIR(format!("invalid HIR JSON: {error}")))?;
+    // A program of another schema is refused as such, not by the first field it has that this one does not.
+    if let Json::Dict(fields) = &raw
+        && let Some(Json::Int(schema)) = fields.get("schema")
+        && *schema != model::SCHEMA_VERSION
+    {
+        return Err(InvalidHIR(format!("unsupported HIR schema {schema}")));
+    }
     let _Made::Object(program) = _record(&PROGRAM, &raw, "program", false)? else {
         unreachable!("a record builds an object");
     };

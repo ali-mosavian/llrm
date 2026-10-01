@@ -277,7 +277,7 @@ impl Program {
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
         out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":1,\"target\":\"i386-real-mode\"}\n",
+            "]}],\"runtime\":\"freestanding\",\"schema\":2,\"target\":\"i386-real-mode\"}\n",
         );
         out
     }
