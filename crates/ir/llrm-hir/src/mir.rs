@@ -1319,7 +1319,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     Some(_) => Some(self.tables.tags.allocation),
                     None => inside.then_some(self.tables.tags.place),
                 };
-                Ok((self.offset(base, one.offset, one.inbounds), ty, one.volatile, tag))
+                // Another agent may write what a published place holds: ordered as volatile is.
+                Ok((self.offset(base, one.offset, one.inbounds), ty, one.volatile || one.published, tag))
             }
             Operand::DescriptorPlace(one) => {
                 let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;

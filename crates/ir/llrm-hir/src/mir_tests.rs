@@ -827,3 +827,27 @@ fn old_json_is_refused_by_its_schema() {
     let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":2", "\"promises\":[],\"schema\":1");
     assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
 }
+
+/// A load another agent's write may change is ordered like a volatile one;
+/// `published` was dropped here, so a BYREF polling loop read its variable
+/// once and spun on the register.
+#[test]
+fn a_published_load_is_volatile() {
+    use crate::model::IndirectPlace;
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }];
+    let at = |published| Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published, inbounds: false, origin: None, allocation: None });
+    let mut text = Vec::new();
+    for published in [false, true] {
+        let load = Instruction::new(1, Op::Load, vec![2], vec![at(published)]);
+        let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+        let mut function = Function::new(1, "f", 1, values.clone(), Vec::new(), vec![block], 1);
+        function.parameters = vec![1];
+        let mut program = program(function);
+        program.modules[0].types.push(Type::new(3, "near", TypeKind::Pointer, 2));
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        text.push(llrm_mir::print::module(&emitted.module));
+    }
+    assert!(text[0].contains("= load i16"), "{}", text[0]);
+    assert!(text[1].contains("= load volatile i16"), "{}", text[1]);
+}

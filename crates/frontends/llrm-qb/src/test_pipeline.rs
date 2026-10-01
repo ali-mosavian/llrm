@@ -143,3 +143,20 @@ fn test_a_reference_parameter_is_dereferenceable() {
     let define = text.lines().find(|line| line.starts_with("define") && line.contains("@S(")).expect("SUB s");
     assert!(define.contains("ptr dereferenceable(18) %0, ptr dereferenceable(4) %1, i16 %2"), "{define}");
 }
+
+/// A BYREF parameter another agent writes while the procedure polls it: the
+/// load stays in the loop. The default route hoisted it, and the loop spun
+/// on a register for ever.
+#[test]
+fn test_a_byref_polling_loop_reads_its_variable_each_trip() {
+    use crate::driver as qb_driver;
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = directory.path().join("POLL.BAS");
+    let lines = ["DECLARE SUB WaitFor (x AS INTEGER)", "DIM k AS INTEGER", "WaitFor k", "SUB WaitFor (x AS INTEGER)", "DO WHILE x = 0", "LOOP", "END SUB"];
+    std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
+    let text = llrm_mir::print::module(&llrm_core::hir::mir::emit(&program)[0].module);
+    let define = text.find("@WAITFOR(").expect("the SUB");
+    assert!(text[define..].contains("load volatile i16"), "{text}");
+}
