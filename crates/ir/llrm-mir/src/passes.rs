@@ -630,6 +630,15 @@ impl PassManager {
         self.runs = 0;
         let count = program.modules.len();
         let dumps: Vec<_> = (0..count).map(|at| self.dump.as_ref().map(|one| if count > 1 { one.join(format!("module{at}")) } else { one.clone() })).collect();
+        // A module a frontend made wrong is its maker's, not the first pass's.
+        for module in &program.modules {
+            if self.verify_each {
+                let problems = crate::verify::verify(module);
+                if !problems.is_empty() {
+                    return Err(format!("before the first pass: {}", problems.join("; ")));
+                }
+            }
+        }
         let mut start = 0;
         while start < self.passes.len() {
             if let Pass::Program(pass) = &mut self.passes[start] {
