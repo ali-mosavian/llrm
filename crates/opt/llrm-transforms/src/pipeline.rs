@@ -35,7 +35,7 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
+    algebraic, dead, decide, dse, fill, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
     promote, rotate, unroll, unswitch,
 };
 
@@ -248,6 +248,10 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") {
         manager.add(hoist::Hoist);
+    }
+    // After hoist, which would move a constant `gep` out of its loop.
+    if applied.options.wanted("gepoffset") {
+        manager.add(gepoffset::GepOffset);
     }
     manager.run(program)
 }
