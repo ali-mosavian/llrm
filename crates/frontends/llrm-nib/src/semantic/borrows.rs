@@ -291,16 +291,14 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Records that the struct at `place` holds what the views and
-    /// references `value` keeps borrow, if it keeps any.
-    pub(super) fn keep_borrows(&mut self, place: u32, value: &Expr) {
+    /// Records that the binding at `place`, a value of `element` made from
+    /// `value`, holds the borrows `value` holds, if any: binding one is a
+    /// store.
+    pub(super) fn keep_borrows(&mut self, place: u32, element: ElementType, value: &Expr) {
         let roots = match value {
+            // A literal also keeps the views its fields hold.
             Expr::StructLiteral { .. } => self.roots(value),
-            Expr::Name(name, _) => match self.visible(name).and_then(|one| identity(&one.storage)) {
-                Some(source) => self.held.get(&source).cloned().unwrap_or_default(),
-                None => BTreeSet::new(),
-            },
-            _ => BTreeSet::new(),
+            _ => self.value_roots(value, element),
         };
         if !roots.is_empty() {
             self.held.insert(BorrowKey::Place(place), roots);
@@ -412,11 +410,11 @@ impl FunctionCompiler<'_> {
     /// Notes a shared borrow of `place`, refused if a `&mut` borrow that
     /// may change it is used later.
     pub(super) fn check_shareable(&mut self, place: &Expr, span: Span) -> Result<(), Diagnostic> {
-        let Some((owner, path)) = owner_path(place) else {
+        let Some((owner, via, targets)) = self.targets(place) else {
             return Ok(());
         };
-        if let Some(key) = self.resolve(owner).and_then(|(_, binding)| identity(&binding.storage)) {
-            self.share_borrowed(key, &path, Diagnostic::new(span, format!("{owner:?} is mutably borrowed here, so it cannot be borrowed")));
+        for target in targets {
+            self.share_borrowed(target.owner, &target.path, via, Diagnostic::new(span, format!("{owner:?} is mutably borrowed here, so it cannot be borrowed")));
         }
         Ok(())
     }
@@ -424,12 +422,32 @@ impl FunctionCompiler<'_> {
     /// Notes a change to `place`, refused if a borrow of it, or of a place
     /// holding or held by it, is used later.
     pub(super) fn check_unborrowed(&mut self, place: &Expr, span: Span) -> Result<(), Diagnostic> {
-        let Some((owner, path)) = owner_path(place) else {
+        let Some((owner, via, targets)) = self.targets(place) else {
             return Ok(());
         };
-        match self.resolve(owner).and_then(|(_, binding)| identity(&binding.storage)) {
-            Some(key) => self.change_borrowed(key, &path, Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed"))),
-            None => Ok(()),
+        for target in targets {
+            self.change_borrowed(target.owner, &target.path, via, Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed")))?;
+        }
+        Ok(())
+    }
+
+    /// The places writing or borrowing `place` touches, with the name it
+    /// is written by: its owner's, or what that borrows when it is a
+    /// reference or a view, which is then the binding it goes through.
+    fn targets<'e>(&self, place: &'e Expr) -> Option<(&'e str, Option<BorrowKey>, Vec<Root>)> {
+        let (name, path, exact) = owner_path(place)?;
+        let (depth, binding) = self.resolve(name)?;
+        // An element a loop walks is changed under the walk's own borrow.
+        if let Storage::ArrayView { .. } = binding.storage {
+            return None;
+        }
+        let extend = |root: Root| path.iter().fold(root, |root, field| root.field(field));
+        let narrowed = |root: Root| if exact { root } else { root.somewhere() };
+        match (&binding.storage, borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key))) {
+            (Storage::Reference(_) | Storage::Slice(_), Some(roots)) => {
+                Some((name, borrow_key(&binding.storage), roots.iter().cloned().map(extend).map(narrowed).collect()))
+            }
+            _ => Some((name, None, self.root(name, depth, binding).into_iter().map(extend).map(narrowed).collect())),
         }
     }
 
@@ -443,20 +461,22 @@ impl FunctionCompiler<'_> {
         match name {
             Some((name, _)) => {
                 let error = Diagnostic::new(span, format!("{name:?} is borrowed here, so it cannot be moved"));
-                self.change_borrowed(key, &[], error)
+                self.change_borrowed(key, &[], None, error)
             }
             None => Ok(()),
         }
     }
 
-    /// The bindings in scope, other than `owner` itself, that borrow
-    /// `path` in it, or a place holding or held by it; only those that may
-    /// change it when `exclusive`.
-    pub(super) fn holders(&self, owner: BorrowKey, path: &[String], exclusive: bool) -> BTreeSet<BorrowKey> {
+    /// The bindings in scope, other than `owner` itself and the reference
+    /// `via` that the change goes through, that borrow `path` in it, or a
+    /// place holding or held by it; only those that may change it when
+    /// `exclusive`.
+    pub(super) fn holders(&self, owner: BorrowKey, path: &[String], exclusive: bool, via: Option<BorrowKey>) -> BTreeSet<BorrowKey> {
         let borrows = |roots: Option<&BTreeSet<Root>>| roots.is_some_and(|roots| roots.iter().any(|root| root.overlaps(owner, path)));
         let mut holders = BTreeSet::new();
         for binding in self.scopes.iter().flat_map(|scope| scope.values()) {
-            if identity(&binding.storage) == Some(owner) || exclusive && !self.may_change(binding) {
+            let itself = identity(&binding.storage);
+            if itself == Some(owner) || itself.is_some() && itself == via || exclusive && !self.may_change(binding) {
                 continue;
             }
             let lent = borrow_key(&binding.storage).filter(|key| borrows(self.borrowed_from.get(key)));
@@ -485,16 +505,7 @@ impl FunctionCompiler<'_> {
     /// The owners a store into `container` writes: its root binding, or
     /// what that binding borrows when it is a reference or a view.
     fn store_targets(&self, container: &Expr) -> Vec<Root> {
-        let Some(name) = expression_owner(container) else {
-            return Vec::new();
-        };
-        let Some((depth, binding)) = self.resolve(name) else {
-            return Vec::new();
-        };
-        match (&binding.storage, borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key))) {
-            (Storage::Reference(_) | Storage::Slice(_), Some(roots)) => roots.iter().cloned().collect(),
-            _ => self.root(name, depth, binding).into_iter().collect(),
-        }
+        self.targets(container).map(|(_, _, targets)| targets).unwrap_or_default()
     }
 
     /// What a call lends through each argument: a borrow lends what it
@@ -585,9 +596,9 @@ pub(super) fn written_owner(target: &AssignTarget) -> Option<&str> {
     }
 }
 
-/// The owner `place` is in, and the fields down to it; an element is its
-/// whole sequence, fields and all.
-pub(super) fn owner_path(place: &Expr) -> Option<(&str, Vec<String>)> {
+/// The owner `place` is in, the fields down to it, and whether those name
+/// it exactly: an element is somewhere in its sequence.
+fn owner_path(place: &Expr) -> Option<(&str, Vec<String>, bool)> {
     fn walk(place: &Expr) -> Option<(&str, Vec<String>, bool)> {
         match place {
             Expr::Name(name, _) => Some((name, Vec::new(), true)),
@@ -602,7 +613,7 @@ pub(super) fn owner_path(place: &Expr) -> Option<(&str, Vec<String>)> {
             _ => None,
         }
     }
-    walk(place).map(|(owner, path, _)| (owner, path))
+    walk(place)
 }
 
 pub(super) fn expression_owner(expression: &Expr) -> Option<&str> {

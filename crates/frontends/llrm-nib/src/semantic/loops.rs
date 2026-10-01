@@ -177,9 +177,11 @@ impl<'a> FunctionCompiler<'a> {
             Some(_) if !self.loop_consumes(iterable) => self.roots(iterable),
             _ => BTreeSet::new(),
         };
-        for root in &walked {
-            let error = Diagnostic::new(iterable.span(), format!("{:?} is mutably borrowed here, so it cannot be borrowed", root.name));
-            self.share_borrowed(root.owner, &root.path, error);
+        if !walked.is_empty() {
+            match mode {
+                IterationMode::Mutable => self.check_unborrowed(iterable, iterable.span())?,
+                IterationMode::Shared | IterationMode::Value => self.check_shareable(iterable, iterable.span())?,
+            }
         }
         let depth = self.iterated.len();
         self.iterated.extend(walked);

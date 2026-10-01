@@ -15,22 +15,23 @@ pub(super) struct Conflict {
 }
 
 impl FunctionCompiler<'_> {
-    /// Notes a change to `owner` here, refused with `error` if what borrows
-    /// it is used later. A sequence a loop walks is borrowed by the walk,
+    /// Notes a change to `path` in `owner` here, refused with `error` if
+    /// what borrows it, other than the reference `via` it is made through,
+    /// is used later. A sequence a loop walks is borrowed by the walk,
     /// for the whole loop.
-    pub(super) fn change_borrowed(&mut self, owner: BorrowKey, path: &[String], error: Diagnostic) -> Result<(), Diagnostic> {
+    pub(super) fn change_borrowed(&mut self, owner: BorrowKey, path: &[String], via: Option<BorrowKey>, error: Diagnostic) -> Result<(), Diagnostic> {
         if self.iterated.iter().any(|root| root.overlaps(owner, path)) {
             return Err(error);
         }
-        let holders = self.holders(owner, path, false);
+        let holders = self.holders(owner, path, false, via);
         self.conflict(holders, error);
         Ok(())
     }
 
     /// Notes a shared borrow of `path` in `owner` here, refused with `error`
     /// if a `&mut` borrow of it, which may change it, is used later.
-    pub(super) fn share_borrowed(&mut self, owner: BorrowKey, path: &[String], error: Diagnostic) {
-        let holders = self.holders(owner, path, true);
+    pub(super) fn share_borrowed(&mut self, owner: BorrowKey, path: &[String], via: Option<BorrowKey>, error: Diagnostic) {
+        let holders = self.holders(owner, path, true, via);
         self.conflict(holders, error);
     }
 
@@ -52,15 +53,24 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
-    /// `holders`, and every pointer computed from one: a view's data, a
-    /// field's address. A borrow lives on in each.
+    /// `holders`, every pointer computed from one -- a view's data, a
+    /// field's address -- and every place one is stored in. A borrow lives
+    /// on in each.
     fn derived(&self, holders: &BTreeSet<BorrowKey>) -> BTreeSet<BorrowKey> {
         let pointers: BTreeSet<u32> = self.values.iter().filter(|one| self.types.types[(one.type_id - 1) as usize].kind == "pointer").map(|one| one.id).collect();
         let mut held = holders.clone();
         loop {
             let before = held.len();
             for instruction in self.blocks.iter().flat_map(|block| &block.instructions) {
-                if instruction.operands.iter().any(|operand| mentions(operand).iter().any(|one| held.contains(one))) {
+                let reads = |operand: &hir::Operand| mentions(operand).iter().any(|one| held.contains(one));
+                // A held pointer stored somewhere makes that place a holder.
+                if let ("store", [place, value]) = (instruction.op, instruction.operands.as_slice()) {
+                    if reads(value) {
+                        held.extend(mentions(place));
+                    }
+                    continue;
+                }
+                if instruction.operands.iter().any(reads) {
                     held.extend(instruction.results.iter().filter(|one| pointers.contains(one)).map(|one| BorrowKey::Value(*one)));
                 }
             }

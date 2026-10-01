@@ -399,9 +399,26 @@ fn main() -> i16:
         a.push(x)
     return 0
 ";
-    assert_eq!(refused_at(walked), "4: \"v\" is mutably borrowed here, so it cannot be borrowed");
+    assert_eq!(refused_at(walked), "5: \"a\" is borrowed here, so it cannot be changed");
     let ended = source.replace("    let r = &v[0]\n    a.push(3)\n", "    a.push(3)\n    let r = &v[0]\n");
     assert_eq!(output(&ended), "1\n");
+}
+
+#[test]
+fn a_change_through_a_reference_changes_what_it_borrows() {
+    // `a.push` was checked against borrows of `a`, not of `v`, so `r`, a
+    // borrow of `v` taken through `a`, outlived the buffer `push` moved.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let a = &mut v
+    let r = &a[0]
+    a.push(3)
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "5: \"a\" is borrowed here, so it cannot be changed");
+    assert_eq!(output(&source.replace("    print(r)\n", "    print(a.len)\n")), "3\n");
 }
 
 #[test]
@@ -421,4 +438,41 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(refused_at(source), "8: \"v\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_binding_holds_the_borrows_its_value_holds() {
+    // Binding `o` recorded only what a struct literal kept, so with borrows
+    // ending at last use, `r`'s last use was `.some(r)` and `v.push` passed.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    let o: Option[&i16] = .some(r)
+    v.push(3)
+    match o:
+        .some(p):
+            print(p)
+        .none:
+            print(0)
+    return 0
+";
+    assert_eq!(refused_at(source), "5: \"v\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_mut_walk_changes_what_it_walks() {
+    // `for x in &mut v` checked nothing on entry: `r`, a `&i16`, read the 9
+    // the walk wrote.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    for x in &mut v:
+        x = 9
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "4: \"v\" is borrowed here, so it cannot be changed");
+    assert_eq!(output(&source.replace("    print(r)\n", "    print(v[0])\n")), "9\n");
 }
