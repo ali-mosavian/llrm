@@ -310,3 +310,69 @@ fn main() -> i16:
     let fresh = looped.replace("    let r = &v[0]\n", "").replace("        print(r)\n", "        let r = &v[0]\n        print(r)\n");
     assert_eq!(output(&fresh), "1\n1\n1\n");
 }
+
+#[test]
+fn borrows_of_disjoint_fields_do_not_conflict() {
+    // A borrow rooted at its owner's whole name, so `&mut p.y` beside
+    // `&mut p.x` was refused, and a method walking `self.items` could not
+    // count in `self.count`.
+    let fields = "\
+struct P:
+    mut x: i16
+    mut y: i16
+
+fn set(a: &mut i16, b: &mut i16) -> void:
+    a = 5
+    b = 6
+
+fn main() -> i16:
+    let mut p = P(x=1, y=2)
+    let a = &mut p.x
+    let b = &mut p.y
+    a = 3
+    b = 4
+    print(p.x + p.y)
+    set(p.x, p.y)
+    print(p.x + p.y)
+    return 0
+";
+    assert_eq!(output(fields), "7\n11\n");
+    let walked = "\
+struct S:
+    mut items: vec[i16]
+    mut count: i16
+
+fn S.bump(self: &mut S) -> void:
+    for x in &self.items:
+        self.count += x
+
+fn main() -> i16:
+    let mut s = S(items=[1, 2], count=0)
+    s.bump()
+    print(s.count)
+    return 0
+";
+    assert_eq!(output(walked), "3\n");
+    // The same field, a walked sequence, or a borrow a call returned from
+    // somewhere in `p`, still conflict.
+    assert_eq!(refused_at(&fields.replace("let b = &mut p.y", "let b = &mut p.x")), "12: \"p\" is borrowed here, so it cannot be changed");
+    assert_eq!(refused_at(&walked.replace("self.count += x", "self.items.push(x)")), "7: \"self\" is borrowed here, so it cannot be changed");
+    let returned = "\
+struct P:
+    mut x: i16
+    mut y: i16
+
+fn pick(p: &mut P) -> &mut i16:
+    return p.x
+
+fn main() -> i16:
+    let mut p = P(x=1, y=2)
+    let a = pick(p)
+    let b = &mut p.y
+    a = 3
+    b = 4
+    print(p.x + p.y)
+    return 0
+";
+    assert_eq!(refused_at(returned), "11: \"p\" is borrowed here, so it cannot be changed");
+}

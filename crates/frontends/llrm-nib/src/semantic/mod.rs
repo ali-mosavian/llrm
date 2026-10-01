@@ -1626,7 +1626,7 @@ struct FunctionCompiler<'a> {
     /// Its `&` and `&mut` parameters.
     references: Vec<llrm_core::hir::facts::Subject>,
     /// The named sequences `for` loops are walking, outermost first.
-    iterated: Vec<borrows::BorrowKey>,
+    iterated: Vec<borrows::Root>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -1763,7 +1763,7 @@ impl<'a> FunctionCompiler<'a> {
                     _ => None,
                 };
                 if life == borrows::Life::Frame && passed.is_some_and(|one| compiler.holds_reference(one)) {
-                    let root = borrows::Root { owner, name: parameter.name.clone(), life: borrows::Life::Lent };
+                    let root = borrows::Root { exact: false, ..borrows::Root::new(owner, &parameter.name, borrows::Life::Lent) };
                     compiler.held.insert(owner, BTreeSet::from([root]));
                 }
             }

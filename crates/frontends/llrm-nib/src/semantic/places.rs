@@ -334,9 +334,7 @@ impl<'a> FunctionCompiler<'a> {
         target: &AssignTarget,
         span: Span,
     ) -> Result<AssignmentPlace, Diagnostic> {
-        if let Some(owner) = borrows::written_owner(target) {
-            self.check_unborrowed(owner, span)?;
-        }
+        self.check_unborrowed(&target.expression(span), span)?;
         match target {
             AssignTarget::Deref(pointer) => {
                 let name = self.dereferenced(pointer, span)?;

@@ -43,13 +43,41 @@ pub(super) enum Life {
     Scope(usize),
 }
 
-/// An owner a borrow borrows from. A generator's placeholders share one
-/// storage, so the name is part of what tells roots apart.
+/// The place a borrow borrows from: an owner and the fields below it. A
+/// generator's placeholders share one storage, so the name is part of what
+/// tells roots apart.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct Root {
     pub(super) owner: BorrowKey,
     pub(super) name: String,
     pub(super) life: Life,
+    pub(super) path: Vec<String>,
+    /// The borrow is of exactly `path`, not of something somewhere below
+    /// it, as a call's result or an element is: a field of it is `path`'s.
+    pub(super) exact: bool,
+}
+
+impl Root {
+    pub(super) fn new(owner: BorrowKey, name: &str, life: Life) -> Self {
+        Root { owner, name: name.to_owned(), life, path: Vec::new(), exact: true }
+    }
+
+    /// Whether a borrow of it and one of `path` in `owner` may overlap: one
+    /// place holds the other. An element's fields are not told apart.
+    pub(super) fn overlaps(&self, owner: BorrowKey, path: &[String]) -> bool {
+        self.owner == owner && (self.path.starts_with(path) || path.starts_with(&self.path))
+    }
+
+    fn field(mut self, field: &str) -> Self {
+        if self.exact {
+            self.path.push(field.to_owned());
+        }
+        self
+    }
+
+    fn somewhere(self) -> Self {
+        Root { exact: false, ..self }
+    }
 }
 
 impl Life {
@@ -80,10 +108,9 @@ impl FunctionCompiler<'_> {
             // A reference read out of a field or an element borrows what
             // the owner holds, not the owner.
             Expr::Member { base, .. } | Expr::Index { base, .. } if self.reference_type(expression) => self.held_roots(base),
-            Expr::Borrow { operand: base, .. }
-            | Expr::Slice { base, .. }
-            | Expr::Member { base, .. }
-            | Expr::Index { base, .. } => self.roots(base),
+            Expr::Member { base, field, .. } => self.roots(base).into_iter().map(|root| root.field(field)).collect(),
+            Expr::Index { base, .. } | Expr::Slice { base, .. } => self.roots(base).into_iter().map(Root::somewhere).collect(),
+            Expr::Borrow { operand: base, .. } => self.roots(base),
             Expr::Conditional { then, otherwise, .. } => {
                 self.roots(then).into_iter().chain(self.roots(otherwise)).collect()
             }
@@ -131,7 +158,7 @@ impl FunctionCompiler<'_> {
             Some(life) => *life,
             None => Life::Scope(depth),
         };
-        Some(Root { owner, name: name.to_owned(), life })
+        Some(Root::new(owner, name, life))
     }
 
     /// The binding `name` names here, as a root.
@@ -167,6 +194,7 @@ impl FunctionCompiler<'_> {
             .zip(&signature.parameters)
             .filter(|(_, parameter)| matches!(parameter, SignatureParameter::Borrowed { .. }))
             .flat_map(|(argument, _)| self.roots(argument))
+            .map(Root::somewhere)
             .collect()
     }
 
@@ -370,9 +398,14 @@ impl FunctionCompiler<'_> {
     }
 
     /// Errs when a binding in scope, other than `owner` itself, borrows `owner`.
-    pub(super) fn check_unborrowed(&mut self, owner: &str, span: Span) -> Result<(), Diagnostic> {
+    /// Notes a change to `place`, refused if a borrow of it, or of a place
+    /// holding or held by it, is used later.
+    pub(super) fn check_unborrowed(&mut self, place: &Expr, span: Span) -> Result<(), Diagnostic> {
+        let Some((owner, path)) = owner_path(place) else {
+            return Ok(());
+        };
         match self.resolve(owner).and_then(|(_, binding)| identity(&binding.storage)) {
-            Some(key) => self.change_borrowed(key, Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed"))),
+            Some(key) => self.change_borrowed(key, &path, Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed"))),
             None => Ok(()),
         }
     }
@@ -387,21 +420,23 @@ impl FunctionCompiler<'_> {
         match name {
             Some((name, _)) => {
                 let error = Diagnostic::new(span, format!("{name:?} is borrowed here, so it cannot be moved"));
-                self.change_borrowed(key, error)
+                self.change_borrowed(key, &[], error)
             }
             None => Ok(()),
         }
     }
 
-    /// The bindings in scope, other than `owner` itself, that borrow it.
-    pub(super) fn holders(&self, owner: BorrowKey) -> BTreeSet<BorrowKey> {
+    /// The bindings in scope, other than `owner` itself, that borrow
+    /// `path` in it, or a place holding or held by it.
+    pub(super) fn holders(&self, owner: BorrowKey, path: &[String]) -> BTreeSet<BorrowKey> {
+        let borrows = |roots: Option<&BTreeSet<Root>>| roots.is_some_and(|roots| roots.iter().any(|root| root.overlaps(owner, path)));
         let mut holders = BTreeSet::new();
         for binding in self.scopes.iter().flat_map(|scope| scope.values()) {
             if identity(&binding.storage) == Some(owner) {
                 continue;
             }
-            let lent = borrow_key(&binding.storage).filter(|key| self.borrowed_from.get(key).is_some_and(|roots| roots.iter().any(|root| root.owner == owner)));
-            let held = identity(&binding.storage).filter(|key| self.held.get(key).is_some_and(|roots| roots.iter().any(|root| root.owner == owner)));
+            let lent = borrow_key(&binding.storage).filter(|key| borrows(self.borrowed_from.get(key)));
+            let held = identity(&binding.storage).filter(|key| borrows(self.held.get(key)));
             holders.extend(lent.into_iter().chain(held));
         }
         holders
@@ -492,7 +527,7 @@ pub(super) struct Lent {
 pub(super) fn check_disjoint(lent: &[Lent], arguments: &[Expr]) -> Result<(), Diagnostic> {
     for (at, one) in lent.iter().enumerate() {
         for other in lent[..at].iter().filter(|other| one.mutable || other.mutable) {
-            if let Some(shared) = one.roots.iter().find(|root| other.roots.iter().any(|them| them.owner == root.owner)) {
+            if let Some(shared) = one.roots.iter().find(|root| other.roots.iter().any(|them| them.overlaps(root.owner, &root.path))) {
                 return Err(Diagnostic::new(arguments[at].span(), format!("borrow of {:?} aliases a mutable argument", shared.name)));
             }
         }
@@ -524,6 +559,26 @@ pub(super) fn written_owner(target: &AssignTarget) -> Option<&str> {
         AssignTarget::Index { base, .. } | AssignTarget::Member { base, .. } => expression_owner(base),
         AssignTarget::Deref(_) => None,
     }
+}
+
+/// The owner `place` is in, and the fields down to it; an element is its
+/// whole sequence, fields and all.
+pub(super) fn owner_path(place: &Expr) -> Option<(&str, Vec<String>)> {
+    fn walk(place: &Expr) -> Option<(&str, Vec<String>, bool)> {
+        match place {
+            Expr::Name(name, _) => Some((name, Vec::new(), true)),
+            Expr::Member { base, field, .. } => {
+                let (owner, mut path, exact) = walk(base)?;
+                if exact {
+                    path.push(field.clone());
+                }
+                Some((owner, path, exact))
+            }
+            Expr::Index { base, .. } | Expr::Slice { base, .. } => walk(base).map(|(owner, path, _)| (owner, path, false)),
+            _ => None,
+        }
+    }
+    walk(place).map(|(owner, path, _)| (owner, path))
 }
 
 pub(super) fn expression_owner(expression: &Expr) -> Option<&str> {

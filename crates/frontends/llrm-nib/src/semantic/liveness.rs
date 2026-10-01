@@ -18,16 +18,20 @@ impl FunctionCompiler<'_> {
     /// Notes a change to `owner` here, refused with `error` if what borrows
     /// it is used later. A sequence a loop walks is borrowed by the walk,
     /// for the whole loop.
-    pub(super) fn change_borrowed(&mut self, owner: BorrowKey, error: Diagnostic) -> Result<(), Diagnostic> {
-        if self.iterated.contains(&owner) {
+    pub(super) fn change_borrowed(&mut self, owner: BorrowKey, path: &[String], error: Diagnostic) -> Result<(), Diagnostic> {
+        if self.iterated.iter().any(|root| root.overlaps(owner, path)) {
             return Err(error);
         }
-        let holders = self.holders(owner);
+        let holders = self.holders(owner, path);
+        self.conflict(holders, error);
+        Ok(())
+    }
+
+    fn conflict(&mut self, holders: BTreeSet<BorrowKey>, error: Diagnostic) {
         if !holders.is_empty() {
             let at = self.current_block_mut().instructions.len();
             self.conflicts.push(Conflict { block: self.current, at, holders, error });
         }
-        Ok(())
     }
 
     /// Errs at the first change some holder outlives.

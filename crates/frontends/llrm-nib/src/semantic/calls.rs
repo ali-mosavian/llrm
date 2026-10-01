@@ -272,8 +272,8 @@ impl<'a> FunctionCompiler<'a> {
         if required_mutable && !mutable {
             return Err(Diagnostic::new(*span, "mutable parameter requires '&mut'"));
         }
-        if let (true, Some(owner)) = (*mutable, borrows::expression_owner(operand)) {
-            self.check_unborrowed(owner, *span)?;
+        if *mutable {
+            self.check_unborrowed(operand, *span)?;
         }
         if *mutable {
             self.place_writable(operand, *span)?;
