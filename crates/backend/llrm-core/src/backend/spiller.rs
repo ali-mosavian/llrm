@@ -267,26 +267,20 @@ pub fn spilled_from(
                 insns.push(direct);
                 continue;
             }
-            if let Some((before, loaded)) = _memory_source_read_first(&one, &stored, fresh) {
+            if let Some((read, loaded)) = _memory_source_read_first(&one, &stored, fresh) {
                 one = loaded;
                 fresh += 1;
-                insns.push(before);
+                // The read names the cell's values: the spilled ones come back first.
+                let (reloads, renamed) = _reloaded(&read, &stored, frame, &mut fresh)?;
+                insns.extend(reloads);
+                insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
                 if let Some(direct) = _tied(&one, &stored, frame)? {
                     insns.push(direct);
                     continue;
                 }
             }
-            let mut before: Vec<Arc<Insn>> = Vec::new();
             let mut after: Vec<Arc<Insn>> = Vec::new();
-            let mut rename: IndexMap<u32, u32> = IndexMap::default();
-            for value in &one.uses {
-                if !stored.contains(value) || rename.contains_key(value) {
-                    continue;
-                }
-                rename.insert(*value, fresh);
-                before.push(_reload(&one, fresh, &frame.cell(*value, _width(&one, *value))?));
-                fresh += 1;
-            }
+            let (before, mut rename) = _reloaded(&one, &stored, frame, &mut fresh)?;
             for value in &one.defines {
                 if !stored.contains(value) {
                     continue;
@@ -341,6 +335,21 @@ pub fn spilled_from(
         result.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
     let made = made.intersection(&surviving).copied().collect();
     Ok((result, made))
+}
+
+/// The reloads of the spilled values `one` reads, and the value each is read as.
+fn _reloaded(one: &Insn, stored: &BTreeSet<u32>, frame: &mut Frame, fresh: &mut u32) -> Result<(Vec<Arc<Insn>>, IndexMap<u32, u32>), Error> {
+    let mut rename: IndexMap<u32, u32> = IndexMap::default();
+    let mut before: Vec<Arc<Insn>> = Vec::new();
+    for value in &one.uses {
+        if !stored.contains(value) || rename.contains_key(value) {
+            continue;
+        }
+        rename.insert(*value, *fresh);
+        before.push(_reload(one, *fresh, &frame.cell(*value, _width(one, *value))?));
+        *fresh += 1;
+    }
+    Ok((before, rename))
 }
 
 /// Keep a just-defined spilled value in a register through one update.
@@ -2751,6 +2760,25 @@ mod tests {
 
     fn _recreated(insns: &[Arc<Insn>]) -> Vec<&Arc<Insn>> {
         insns.iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Address)).collect()
+    }
+
+    /// `p = *p` with `p` spilled: the load read its own base from a register
+    /// nothing had reloaded, and the allocator emitted `mov cx, [bx]` with bx
+    /// never set (found by the allocator fuzz lane, seed 25).
+    #[test]
+    fn test_a_spilled_value_read_as_the_base_of_its_own_load_is_reloaded_first() {
+        let cell = Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
+        let first = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(8, 2)]), &[1], &[]);
+        let walk = insn(4, (4, 6), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), &[1], &[1]);
+        let store = insn(8, (8, 10), semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]), &[2], &[1]);
+        let result = _out(&_body(vec![first, walk, store]), &[1]);
+        let mut defined: BTreeSet<u32> = BTreeSet::new();
+        for one in &result {
+            for read in &one.uses {
+                assert!(defined.contains(read), "value#{read} is read before anything defines it: {one:?}");
+            }
+            defined.extend(one.defines.iter().copied());
+        }
     }
 
     /// A rematerialized address inserted between two moves of a parallel
