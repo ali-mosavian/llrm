@@ -1355,3 +1355,124 @@ done:
     let proofs = counted(&before.unit(), &before.only_loop(), None, false);
     assert!(proofs.iter().all(|proof| !proof.posttested), "{proofs:?}");
 }
+
+/// Every value of the loop `parsed` holds that is a recurrence, by form.
+fn recurrences_of(parsed: &Parsed) -> std::collections::BTreeMap<ValueId, Recurrence> {
+    let (unit, loop_) = (parsed.unit(), parsed.only_loop());
+    let counters = basics(&unit, &loop_);
+    let formulas = derived(&unit, &loop_, Some(&counters));
+    users(&unit, &loop_, &counters, &formulas).values
+}
+
+/// `sum` at the values `env` gives its unknowns, modulo its width.
+fn evaluated(sum: &Linear, env: &dyn Fn(ValueId) -> BigInt) -> BigInt {
+    let mut total = sum.constant.clone();
+    for (value, factor) in &sum.terms {
+        total += factor * env(*value);
+    }
+    masked(&total, sum.width)
+}
+
+/// Values the generated loops make that are affine in the counter but
+/// that have no recurrence: the form's reach, counted so it can only grow.
+const REFUSED_BASELINE: usize = 1431;
+
+/// A recurrence's form at trip `k` is what the interpreter computes there,
+/// wrapping included, for random loops of sums, products, shifts and
+/// extensions. A wrong form here was a wrong address or exit value.
+#[test]
+fn test_generated_recurrences_match_the_interpreter() {
+    use crate::generated::{Inputs, Rng, case, observed, seeds};
+    let (mut affine, mut found, mut checked) = (0, 0, 0);
+    for seed in seeds() {
+        let case = case(seed);
+        if std::env::var("SCEV_SEED").is_ok() {
+            eprintln!("{}", case.text);
+        }
+        let parsed = Parsed::new(&case.text);
+        let forms = recurrences_of(&parsed);
+        let mut rng = Rng::new(seed ^ 0xabcd);
+        for (which, one) in case.tracked.iter().enumerate() {
+            let value = parsed.value(&one.name);
+            affine += usize::from(one.affine());
+            let Some(of) = forms.get(&value).filter(|of| of.pointer.is_none()) else { continue };
+            found += usize::from(one.affine());
+            assert_eq!(of.width(), one.width, "seed {seed}: %{} is {} bits\n{}", one.name, one.width, case.text);
+            for _ in 0..4 {
+                let inputs = Inputs::random(&mut rng);
+                let trip = rng.below(40) as u16;
+                let env = |term: ValueId| {
+                    let name = parsed.function().value(term).name.clone().expect("a named unknown");
+                    let n = inputs.named(&name).map(u128::from).unwrap_or_else(|| {
+                        let at = case.tracked.iter().position(|one| one.name == name).expect("a tracked unknown");
+                        observed(&parsed.module, &inputs, at, 0).unwrap()
+                    });
+                    BigInt::from(n)
+                };
+                let (start, step) = (evaluated(&of.start, &env), evaluated(&of.step, &env));
+                let expected = masked(&(start + step * trip), of.width());
+                let got = masked(&BigInt::from(observed(&parsed.module, &inputs, which, trip).unwrap()), of.width());
+                assert_eq!(got, expected, "seed {seed} %{} at trip {trip}, {inputs:?}\n{}", one.name, case.text);
+                checked += 1;
+            }
+        }
+    }
+    eprintln!("affine values {affine}, with a recurrence {found}, refused {}, checked {checked}", affine - found);
+    assert!(affine - found <= REFUSED_BASELINE, "refusals grew");
+}
+
+fn random_sum(rng: &mut crate::generated::Rng, width: u32) -> Linear {
+    let mut sum = Linear::constant(rng.word(), width);
+    for _ in 0..rng.below(4) {
+        sum = sum.plus(&Linear::of(&AffineOperand::Value(ValueId(rng.below(4) as u32), width), width).times(&BigInt::from(rng.word() as i16)));
+    }
+    sum
+}
+
+/// `one * other`, where the form defines it.
+fn product_of(one: &Linear, other: &Linear) -> Option<Linear> {
+    one.product(other).into()
+}
+
+/// The algebra the form promises: add and mul commute and associate, mul
+/// distributes over add, 0 and 1 are identities, `x - x` is 0, and
+/// arithmetic wraps at the width with truncation commuting with both.
+/// Equal values must be one canonical form whatever order built them: a
+/// miss made two equal recurrences compare unequal and cost a counter.
+#[test]
+fn test_form_obeys_the_ring_laws() {
+    use crate::generated::Rng;
+    let mut products = 0;
+    for seed in 0..400 {
+        let mut rng = Rng::new(seed);
+        let width = [16, 32][rng.below(2) as usize];
+        let (x, y, z) = (random_sum(&mut rng, width), random_sum(&mut rng, width), random_sum(&mut rng, width));
+        let (zero, one) = (Linear::constant(0, width), Linear::constant(1, width));
+        assert_eq!(x.plus(&y), y.plus(&x), "seed {seed}");
+        assert_eq!(x.plus(&y).plus(&z), x.plus(&y.plus(&z)), "seed {seed}");
+        assert_eq!(x.plus(&zero), x, "seed {seed}");
+        assert!(x.minus(&x).is_zero(), "seed {seed}");
+        assert_eq!(x.minus(&y), x.plus(&y.times(&BigInt::from(-1))), "seed {seed}");
+        let narrow = width / 2;
+        assert_eq!(x.plus(&y).truncated(narrow), x.truncated(narrow).plus(&y.truncated(narrow)), "seed {seed}");
+        let k = BigInt::from(rng.word() as i16);
+        assert_eq!(x.plus(&y).times(&k), x.times(&k).plus(&y.times(&k)), "seed {seed}");
+        let constant = Linear::constant(k.clone(), width);
+        if let (Some(a), Some(b)) = (product_of(&x, &constant), product_of(&constant, &x)) {
+            assert_eq!(a, b, "seed {seed}");
+            assert_eq!(a, x.times(&k), "seed {seed}");
+        }
+        let Some(xy) = product_of(&x, &y) else { continue };
+        let (Some(yx), Some(xz), Some(yz)) = (product_of(&y, &x), product_of(&x, &z), product_of(&y, &z)) else { continue };
+        let (Some(xy_z), Some(x_yz)) = (product_of(&xy, &z), product_of(&x, &yz)) else { continue };
+        products += 1;
+        assert_eq!(xy, yx, "seed {seed}");
+        assert_eq!(xy_z, x_yz, "seed {seed}");
+        assert_eq!(product_of(&x, &y.plus(&z)), Some(xy.plus(&xz)), "seed {seed}");
+        assert_eq!(product_of(&x, &one), Some(x.clone()), "seed {seed}");
+        assert!(product_of(&x, &zero).is_some_and(|zero| zero.is_zero()), "seed {seed}");
+        assert_eq!(xy.truncated(narrow), product_of(&x.truncated(narrow), &y.truncated(narrow)).unwrap(), "seed {seed}");
+    }
+    eprintln!("products defined {products} of 400");
+    assert!(products > 0);
+}

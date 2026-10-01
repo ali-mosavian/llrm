@@ -140,3 +140,7 @@ pub fn placed(context: &mut Context, function: &mut Function, opcode: Opcode, ty
     Operand::Value(function.instruction(inst).result.expect("a value"))
 }
 
+
+#[cfg(test)]
+#[path = "expand_tests.rs"]
+mod tests;

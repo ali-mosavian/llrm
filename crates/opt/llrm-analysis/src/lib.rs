@@ -37,4 +37,6 @@ pub mod ssa;
 #[cfg(test)]
 mod corpus_tests;
 #[cfg(any(test, feature = "testing"))]
+pub mod generated;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
