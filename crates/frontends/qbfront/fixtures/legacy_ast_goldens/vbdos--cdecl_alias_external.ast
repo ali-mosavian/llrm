@@ -24,6 +24,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 5,
                         start: 4,
@@ -98,6 +99,7 @@ Module {
             },
             then_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -139,6 +141,7 @@ Module {
             },
         },
         Print {
+            kind: Print,
             file: None,
             using: None,
             items: [
@@ -183,6 +186,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 3,
                             start: 70,
@@ -200,6 +204,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 3,
@@ -208,4 +213,5 @@ Module {
             },
         },
     ],
+    prelude: false,
 }

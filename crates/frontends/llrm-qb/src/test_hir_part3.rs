@@ -4,12 +4,6 @@
 //! and `tests/test_qb_frontend_command.py::test_common_hir_profiles_do_not_become_qb_frontend_options`.
 //!
 // skipped: test_an_oversized_exact_loop_is_never_cloned_as_a_peel_candidate: monkeypatches loopclone.peeled
-// skipped: test_pytest_frontend_setup_builds_once_and_configures_producer: monkeypatches conftest and build_release
-// skipped: test_pytest_frontend_setup_preserves_an_explicit_producer: monkeypatches conftest and build_release
-// skipped: test_build_release_uses_cargos_qbfront_artifact: monkeypatches subprocess.run
-// skipped: test_build_release_rejects_invalid_cargo_report: monkeypatches subprocess.run
-// skipped: test_build_release_rejects_cargo_report_without_qbfront: monkeypatches subprocess.run
-// skipped: test_build_release_reports_cargo_start_failure: monkeypatches subprocess.run
 
 use std::collections::BTreeSet;
 use std::path::Path;

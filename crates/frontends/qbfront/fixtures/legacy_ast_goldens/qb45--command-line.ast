@@ -17,6 +17,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 2,
                         start: 4,
@@ -77,6 +78,7 @@ Module {
             },
             then_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -168,6 +170,7 @@ Module {
             },
             then_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -209,6 +212,7 @@ Module {
             },
         },
         Print {
+            kind: Print,
             file: None,
             using: None,
             items: [
@@ -243,4 +247,5 @@ Module {
         },
     ],
     procedures: [],
+    prelude: false,
 }

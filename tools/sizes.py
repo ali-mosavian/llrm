@@ -2,8 +2,8 @@
 
     python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]...
 
-Each directory holds llrm-qb, llrm-c, llrm-nib and qbfront (NEW defaults to
-target/release, whose llrm-qb builds this tree's qbfront itself). A program is tests/suite, bench and examples, plus the
+Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
+defaults to target/release). A program is tests/suite, bench and examples, plus the
 QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's;
 instructions and memory operands are the backend's `cost` estimate per call,
 summed (not a timing). Prints the programs that changed and the totals.
@@ -35,20 +35,10 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     return out
 
 
-def frontend(bins: Path) -> dict[str, str]:
-    """llrm-qb runs the qbfront of the tree it was built in, as that tree is now,
-    unless QBOPT_QBFRONT names one: a copied build must carry its own."""
-    if bins.resolve() == (ROOT / "target" / "release").resolve():
-        return {}
-    if not (bins / "qbfront").is_file():
-        sys.exit(f"{bins}/qbfront is missing: llrm-qb would run another tree's frontend")
-    return {"QBOPT_QBFRONT": str((bins / "qbfront").resolve())}
-
-
-def measure(command: list[str], level: str, env: dict[str, str]) -> tuple[int, int, int] | None:
+def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        done = subprocess.run([*command, "--cpu", "486", level, "-o", obj], capture_output=True, text=True, env={**environ, **env, "LLRM_DEBUG": "cost"}, timeout=300)
+        done = subprocess.run([*command, "--cpu", "486", level, "-o", obj], capture_output=True, text=True, env={**environ, "LLRM_DEBUG": "cost"}, timeout=300)
         if not Path(obj).exists():
             return None
         found = [tuple(map(int, one)) for one in COST.findall(done.stderr)]
@@ -56,10 +46,9 @@ def measure(command: list[str], level: str, env: dict[str, str]) -> tuple[int, i
 
 
 def table(bins: Path, level: str, demos: bool = True) -> dict:
-    env = frontend(bins)
     with ThreadPoolExecutor(8) as pool:
         listed = programs(bins, demos)
-        return dict(zip((name for name, _ in listed), pool.map(lambda one: measure(one[1], level, env), listed)))
+        return dict(zip((name for name, _ in listed), pool.map(lambda one: measure(one[1], level), listed)))
 
 
 def main() -> None:

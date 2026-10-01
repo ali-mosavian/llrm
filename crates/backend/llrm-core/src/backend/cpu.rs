@@ -216,6 +216,7 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
         divide: costs["div_r16"],
         shift: costs["shift_ri"],
         address: costs["lea"],
+        carry: llrm_mir::target::carry_cost(costs["movzx"], costs["alu_rr"], costs["shift_ri"], costs["mov_rr"]),
         load: costs["mov_rm"],
         store: costs["mov_mr"],
         memory_update: costs["alu_mr"],

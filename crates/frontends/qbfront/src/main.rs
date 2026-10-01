@@ -1,9 +1,8 @@
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use qbfront::{parse, Dialect};
+use qbfront::Dialect;
 
 fn main() -> ExitCode {
     let mut arguments = env::args().skip(1);
@@ -109,80 +108,39 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     };
-    let source = match qbfront::source::load_with_map(std::path::Path::new(&input), &include_dirs) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("qbfront: {input}: {error}");
-            return ExitCode::FAILURE;
-        }
+    let args = qbfront::driver::Args {
+        dialect,
+        runtime,
+        options: qbfront::semantic::Options {
+            row_major,
+            huge_arrays,
+            checked_arrays,
+            checked_division,
+            checked_overflow,
+            unchecked_bounds,
+            mbf,
+            alternate_math,
+            whole_program,
+            array_merging,
+            own_frames,
+            error_lines,
+        },
+        debug,
+        syntax,
+        include_dirs,
+        dump_source,
+        input: PathBuf::from(input),
     };
-    if let Some(path) = dump_source {
-        if let Err(error) = fs::write(&path, &source.text) {
-            eprintln!("qbfront: {}: {error}", path.display());
-            return ExitCode::FAILURE;
-        }
-    }
-    match parse(&source.text, dialect) {
-        Ok(module) => {
-            if syntax {
-                println!(
-                    "ok: {} module statements, {} procedures",
-                    module.statements.len(),
-                    module.procedures.len()
-                );
-                ExitCode::SUCCESS
-            } else {
-                let name = std::path::Path::new(&input)
-                    .file_stem()
-                    .and_then(|one| one.to_str())
-                    .unwrap_or("module");
-                let options = qbfront::semantic::Options {
-                    row_major,
-                    huge_arrays,
-                    checked_arrays,
-                    checked_division,
-                    checked_overflow,
-                    unchecked_bounds,
-                    mbf,
-                    alternate_math,
-                    whole_program,
-                    array_merging,
-                    own_frames,
-                    error_lines,
-                };
-                let expanded = source.text.lines().count();
-                let debugged = Some(qbfront::semantic::DebugSource {
-                    text: if debug { source.text.lines().map(str::to_owned).collect() } else { Vec::new() },
-                    lines: (1..=expanded).map(|line| source.location(line).map_or(0, |one| one.main_line)).collect(),
-                    debug,
-                });
-                match qbfront::semantic::compile_debugged(&module, name, dialect, &runtime, &options, debugged) {
-                    Ok((hir, warnings)) => {
-                        for warning in warnings {
-                            eprintln!("{input}: {warning}");
-                        }
-                        print!("{hir}");
-                        ExitCode::SUCCESS
-                    }
-                    Err(error) => {
-                        eprintln!("{input}: {}", error.message);
-                        ExitCode::FAILURE
-                    }
-                }
+    match qbfront::driver::compile(&args) {
+        Ok(compiled) => {
+            for warning in &compiled.warnings {
+                eprintln!("{warning}");
             }
+            print!("{}", compiled.text);
+            ExitCode::SUCCESS
         }
-        Err(error) => {
-            let location = source.location(error.span.line);
-            let path = location
-                .map(|location| location.path.display().to_string())
-                .unwrap_or_else(|| input.clone());
-            let line = location.map_or(error.span.line, |location| location.line);
-            eprintln!(
-                "{path}:{}:{}: {}",
-                line,
-                error.span.start + 1,
-                error.message
-            );
+        Err(message) => {
+            eprintln!("{message}");
             ExitCode::FAILURE
         }
     }

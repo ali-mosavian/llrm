@@ -56,8 +56,14 @@ fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }
 
+/// Whether the pointer `value` is in a space whose displacement carries into
+/// its selector (`DataLayout::carries`).
+pub fn carries(context: &Context, layout: &DataLayout, function: &Function, value: ValueId) -> bool {
+    matches!(context.types.get(function.value(value).ty), Type::Pointer(space) if layout.carries(*space))
+}
+
 /// Target price for semantic work, or None when it cannot be priced.
-pub fn operation(context: &Context, function: &Function, callees: &Callees, one: InstId, costs: &OperationCosts) -> Option<i64> {
+pub fn operation(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, one: InstId, costs: &OperationCosts) -> Option<i64> {
     let instruction = function.instruction(one);
     let price = match &instruction.opcode {
         Opcode::Load { .. } if instruction.result.is_some_and(|value| floating(context, function, Operand::Value(value))) => costs.float_load,
@@ -69,6 +75,8 @@ pub fn operation(context: &Context, function: &Function, callees: &Callees, one:
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
+        // A displacement in a space whose index outruns its offset carries into the selector.
+        Opcode::GetElementPtr { .. } if instruction.result.is_some_and(|result| carries(context, layout, function, result)) => costs.carry,
         Opcode::Alloca { .. } | Opcode::GetElementPtr { .. } => costs.address,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
@@ -91,18 +99,18 @@ pub fn operation(context: &Context, function: &Function, callees: &Callees, one:
     Some(price)
 }
 
-pub fn _block(context: &Context, function: &Function, callees: &Callees, block: i64, costs: &OperationCosts) -> Option<i64> {
-    function.block(cfg::block(block)).instructions().iter().map(|&one| operation(context, function, callees, one, costs)).sum()
+pub fn _block(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, block: i64, costs: &OperationCosts) -> Option<i64> {
+    function.block(cfg::block(block)).instructions().iter().map(|&one| operation(context, layout, function, callees, one, costs)).sum()
 }
 
 /// Semantic work present once in the body, independent of frequency.
-pub fn r#static(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
-    function.layout().iter().map(|&block| _block(context, function, callees, cfg::id(block), costs)).sum()
+pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
+    function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
 }
 
 /// Whether the target prices every instruction here, which a copy's cost needs.
-pub fn priced(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
-    r#static(context, function, callees, costs).is_some()
+pub fn priced(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
+    r#static(context, layout, function, callees, costs).is_some()
 }
 
 /// Each loop's trips by latch, where induction proves them: the `trips`
@@ -142,11 +150,11 @@ pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> 
 ///
 /// `trips` keys a proven count by latch block; every other loop retains
 /// the conventional factor of ten.
-pub fn weighted(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
+pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
     let frequency = _frequencies(function, trips)?;
     let mut total = 0;
     for &block in function.layout() {
-        let priced = _block(context, function, callees, cfg::id(block), costs)?;
+        let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
         total += frequency[&cfg::id(block)] * priced;
     }
     Some(total)
@@ -188,7 +196,7 @@ pub fn pressure_adjusted(
     trips: Option<&IndexMap<i64, i64>>,
     found: &Liveness,
 ) -> Option<i64> {
-    let work = weighted(context, function, callees, costs, trips);
+    let work = weighted(context, layout, function, callees, costs, trips);
     let pressure = spill_risk(context, layout, function, costs, room, across, trips, found);
     match (work, pressure) {
         (Some(work), Some(pressure)) => Some(work + pressure),

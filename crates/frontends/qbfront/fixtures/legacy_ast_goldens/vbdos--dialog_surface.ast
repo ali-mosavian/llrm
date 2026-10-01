@@ -24,6 +24,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 3,
                         start: 4,
@@ -44,6 +45,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 4,
                         start: 4,
@@ -229,4 +231,5 @@ Module {
         },
     ],
     procedures: [],
+    prelude: false,
 }
