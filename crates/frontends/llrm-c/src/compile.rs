@@ -1442,8 +1442,18 @@ mod tests {
         let from = asm.find("_test proc").expect("_test");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let calls: Vec<usize> = body.iter().enumerate().filter(|(_, one)| **one == "call far ptr _animate").map(|(at, _)| at).collect();
-        let stored = body[calls[0]..calls[1]].iter().filter(|one| one.starts_with("mov") && one.contains("ptr [bp-")).count();
-        assert_eq!(stored, 5, "{body:#?}");
+        // `s`, by the address passed to `animate`: `lea ax, [bp-N]`.
+        let base: i64 = body[..calls[1]].iter().rev().find_map(|one| one.strip_prefix("lea ax, [bp-")?.strip_suffix(']')?.parse().ok()).expect("&s");
+        // Every byte the stores between the calls write, by frame offset.
+        let mut written = std::collections::BTreeSet::new();
+        for one in &body[calls[0]..calls[1]] {
+            let Some((width, rest)) = [("byte", 1), ("word", 2), ("dword", 4)].iter().find_map(|(name, width)| Some((*width, one.strip_prefix(&format!("mov {name} ptr [bp-"))?))) else { continue };
+            let at: i64 = rest.split(']').next().and_then(|one| one.parse().ok()).expect("an offset");
+            written.extend(-at..-at + width);
+        }
+        // `animate` reads tab[2] (bytes 16..24 of `s`) and `last` (32..36).
+        let read: std::collections::BTreeSet<i64> = (16..24).chain(32..36).map(|one| one - base).collect();
+        assert!(read.is_subset(&written), "missing {:?}\n{body:#?}", read.difference(&written).collect::<Vec<_>>());
     }
 
     /// A local array read only by a variable index: DSE dropped its
