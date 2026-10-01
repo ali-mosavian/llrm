@@ -378,6 +378,11 @@ impl<'m> Machine<'m> {
                 void
             }
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare => void,
+            // Flat memory: the address difference, wrapped to the result.
+            Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
+                (Val::Ptr(a), Val::Ptr(b), Some(width)) => Val::Int { bits: u128::from(a.wrapping_sub(b)) & mask(width), width },
+                _ => Val::Poison,
+            },
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
             Intrinsic::Code => return unsupported("inline code"),

@@ -370,6 +370,8 @@ str_enum!(Op {
     // A place's address; with no operand, the address of the function `callee` names.
     Address("ADDRESS") = "address",
     PtrOffset("PTR_OFFSET") = "ptr_offset",
+    // The bytes between two huge pointers into one object.
+    PtrDiff("PTR_DIFF") = "ptr_diff",
     PointerSegment("POINTER_SEGMENT") = "pointer_segment",
     PointerOffset("POINTER_OFFSET") = "pointer_offset",
     Concat("CONCAT") = "concat",

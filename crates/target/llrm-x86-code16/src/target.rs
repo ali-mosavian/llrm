@@ -141,6 +141,7 @@ fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
         divide: cost("div_r16"),
         shift: cost("shift_ri"),
         address: cost("lea"),
+        carry: llrm_mir::target::carry_cost(cost("movzx"), cost("alu_rr"), cost("shift_ri"), cost("mov_rr")),
         load: cost("mov_rm"),
         store: cost("mov_mr"),
         memory_update: cost("alu_mr"),

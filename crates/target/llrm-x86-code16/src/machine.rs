@@ -69,6 +69,9 @@ pub struct Machine {
     pub cpu: String,
     /// A multi-byte access crossing a segment's last offset faults.
     pub segment_end_faults: bool,
+    /// Under protected addressing, the selector stride a huge pointer takes
+    /// per 64K, as a shift: the system's, so the description states it.
+    pub protected_huge_shift: Option<u32>,
 }
 
 impl Machine {
@@ -120,7 +123,18 @@ impl Machine {
             ports: ports(&table)?,
             cpu: cpu.to_owned(),
             segment_end_faults,
+            protected_huge_shift: table.get("huge_shift").and_then(toml::Value::as_integer).map(|shift| shift as u32),
         })
+    }
+
+    /// The selector stride a huge pointer takes per 64K, as a shift of the
+    /// carry: where a selector is a paragraph number, 64K is 1 << 12 of them.
+    /// None where nothing states it.
+    pub fn huge_shift(&self) -> Option<u32> {
+        match self.addressing {
+            Addressing::Real => Some(16 - 4),
+            Addressing::Protected => self.protected_huge_shift,
+        }
     }
 
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
