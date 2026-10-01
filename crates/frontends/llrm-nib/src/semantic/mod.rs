@@ -1444,9 +1444,11 @@ fn program(
         functions.push(compiled);
         lends.extend(lent);
     }
-    let runtime: BTreeSet<&str> = builtin_ids.keys().copied().collect();
-    modref::check_lends(&functions, &lends, &runtime)?;
     callables.extend(templates.borrow().callables(&mut types));
+    let runtime: BTreeSet<&str> = builtin_ids.keys().copied().collect();
+    let addressed: BTreeSet<u32> = literals.data.iter().filter_map(|one| one.code).collect();
+    let entries: BTreeSet<&str> = functions.iter().filter(|one| one.exported || addressed.contains(&one.id)).map(|one| one.name.as_str()).collect();
+    modref::check_lends(&functions, &lends, &runtime, &entries)?;
     let debug = frontend.debug.then(|| debug::described(&functions, &types));
     let program = hir::Program {
         module_name: module_name.into(),

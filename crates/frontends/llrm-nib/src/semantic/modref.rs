@@ -21,9 +21,14 @@ pub(super) struct Lend {
 struct Effects {
     reads: BTreeSet<u32>,
     writes: BTreeSet<u32>,
-    /// It may touch any of them: foreign code, `asm`, an unknown callee.
+    /// It may touch any of them: `asm` that touches memory.
     everything: bool,
 }
+
+/// What a call into code outside the module stands for: it touches the
+/// module variables shared with other objects, and calls back what it can
+/// reach, the entries.
+const FOREIGN: &str = "$foreign";
 
 impl Effects {
     fn absorb(&mut self, other: &Effects) {
@@ -43,15 +48,21 @@ impl Effects {
 
 /// Errs at the first lend whose callee may write the variable or, for a
 /// `&mut` lend, read it. `runtime` names the routines the compiler's own
-/// runtime defines, which touch no module variable.
-pub(super) fn check_lends(functions: &[hir::Function], lends: &[Lend], runtime: &BTreeSet<&str>) -> Result<(), Diagnostic> {
+/// runtime defines, which touch no module variable; `entries` the functions
+/// other objects may call: exported, or with their address taken.
+pub(super) fn check_lends(functions: &[hir::Function], lends: &[Lend], runtime: &BTreeSet<&str>, entries: &BTreeSet<&str>) -> Result<(), Diagnostic> {
     if lends.is_empty() {
         return Ok(());
     }
-    let summaries = summaries(functions, runtime);
-    let unknown = Effects { everything: true, ..Effects::default() };
+    let summaries = summaries(functions, runtime, entries);
+    // An interrupt may run during any call.
+    let mut interrupts = Effects::default();
+    for handler in functions.iter().filter(|one| one.abi.as_ref().is_some_and(|abi| abi.distance == "interrupt")) {
+        interrupts.absorb(&summaries[handler.name.as_str()]);
+    }
     for lend in lends {
-        let effects = summaries.get(lend.callee.as_str()).unwrap_or(&unknown);
+        let mut effects = summaries.get(lend.callee.as_str()).unwrap_or(&summaries[FOREIGN]).clone();
+        effects.absorb(&interrupts);
         let touched = match (effects.writes(lend.symbol), lend.mutable && effects.reads(lend.symbol)) {
             (true, _) => "write",
             (false, true) => "read",
@@ -63,21 +74,25 @@ pub(super) fn check_lends(functions: &[hir::Function], lends: &[Lend], runtime: 
 }
 
 /// Each function's effects, with those of everything it calls.
-fn summaries<'a>(functions: &'a [hir::Function], runtime: &BTreeSet<&str>) -> BTreeMap<&'a str, Effects> {
+fn summaries<'a>(functions: &'a [hir::Function], runtime: &BTreeSet<&str>, entries: &BTreeSet<&'a str>) -> BTreeMap<&'a str, Effects> {
+    let defined: BTreeSet<&str> = functions.iter().map(|one| one.name.as_str()).collect();
     let mut callees: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     let mut summaries: BTreeMap<&str, Effects> = BTreeMap::new();
     for function in functions {
         let (effects, called) = direct(function);
-        callees.insert(&function.name, called.into_iter().filter(|one| !runtime.contains(one)).collect());
+        let called = called.into_iter().filter(|one| !runtime.contains(one)).map(|one| if defined.contains(one) { one } else { FOREIGN });
+        callees.insert(&function.name, called.collect());
         summaries.insert(&function.name, effects);
     }
-    let unknown = Effects { everything: true, ..Effects::default() };
+    let shared: BTreeSet<u32> = functions.iter().flat_map(|one| &one.places).filter(|one| one.storage == "module" && one.volatile).map(|one| one.symbol).collect();
+    summaries.insert(FOREIGN, Effects { reads: shared.clone(), writes: shared, everything: false });
+    callees.insert(FOREIGN, entries.clone());
     loop {
         let mut changed = false;
         for (caller, called) in &callees {
             let mut effects = summaries[caller].clone();
             for callee in called {
-                effects.absorb(summaries.get(callee).unwrap_or(&unknown));
+                effects.absorb(&summaries[callee]);
             }
             if effects != summaries[caller] {
                 summaries.insert(caller, effects);
@@ -91,7 +106,7 @@ fn summaries<'a>(functions: &'a [hir::Function], runtime: &BTreeSet<&str>) -> BT
 }
 
 /// What `function` itself reads and writes of module variables, and the
-/// functions it calls by name.
+/// functions it calls; a call through a pointer calls foreign code.
 fn direct(function: &hir::Function) -> (Effects, BTreeSet<&str>) {
     let module: BTreeMap<u32, u32> = function.places.iter().filter(|one| one.storage == "module").map(|one| (one.id, one.symbol)).collect();
     let mut effects = Effects::default();
@@ -101,7 +116,9 @@ fn direct(function: &hir::Function) -> (Effects, BTreeSet<&str>) {
             ("call", Some(callee)) => {
                 called.insert(callee.as_str());
             }
-            ("call", None) => effects.everything = true,
+            ("call", None) => {
+                called.insert(FOREIGN);
+            }
             _ => {}
         }
         if instruction.asm.as_ref().is_some_and(|asm| asm.memory) {

@@ -209,3 +209,33 @@ fn main() -> i16:
 ";
     assert_eq!(refused_at(held), "12: borrow of \"x\" aliases a mutable argument");
 }
+
+#[test]
+fn foreign_code_touches_only_what_it_can_name_or_call_back() {
+    // Foreign code was taken to write every module variable, so lending
+    // one to a function that calls it was refused (the loop corpus's `bp`
+    // cases); it reaches only shared variables and the module's entries.
+    let source = "\
+@extern(\"cdecl16\")
+fn touch() -> void
+
+var a: i16[4] = [1, 2, 3, 4]
+
+fn total(values: &[i16]) -> i16:
+    let mut s: i16 = 0
+    for x in values:
+        unsafe:
+            touch()
+        s += x
+    return s
+
+fn main() -> i16:
+    print(total(&a))
+    return 0
+";
+    assert_eq!(refused_at(source), "accepted");
+    let called_back = source.replace("fn main", "@export(\"cdecl16\")\nfn reset() -> void:\n    a[0] = 0\n\nfn main");
+    assert_eq!(refused_at(&called_back), "19: \"a\" is lent to \"total\", which may write it");
+    let interrupted = source.replace("fn main", "@export(\"interrupt16\")\nfn tick() -> void:\n    a[0] = 0\n\nfn main").replace("        unsafe:\n            touch()\n", "");
+    assert_eq!(refused_at(&interrupted), "17: \"a\" is lent to \"total\", which may write it");
+}
