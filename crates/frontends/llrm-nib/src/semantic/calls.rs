@@ -185,7 +185,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         let arguments = &arguments::bind(&signature.name, &formals, arguments.to_vec(), span)?;
         let mut operands: Vec<hir::Operand> = slot.into_iter().collect();
-        let mut borrowed = BTreeMap::new();
+        let mut borrowed = Vec::new();
         for (argument, parameter) in arguments.iter().zip(&signature.parameters) {
             let operand = self.argument_operand(argument, parameter, &mut borrowed)?;
             operands.push(operand);
@@ -209,13 +209,13 @@ impl<'a> FunctionCompiler<'a> {
         Ok(results.first().copied())
     }
 
-    /// What a call passes for `parameter`. `borrowed` tracks the call's
-    /// borrows so that a mutable one aliases nothing.
+    /// What a call passes for `parameter`. `borrowed` holds what each of
+    /// the call's borrows reaches, so that a mutable one aliases nothing.
     pub(super) fn argument_operand(
         &mut self,
         argument: &Expr,
         parameter: &SignatureParameter,
-        borrowed: &mut BTreeMap<String, bool>,
+        borrowed: &mut Vec<(BTreeSet<borrows::Root>, bool)>,
     ) -> Result<hir::Operand, Diagnostic> {
         match parameter {
             // A BASIC procedure takes the near pointer the adapter is.
@@ -247,16 +247,17 @@ impl<'a> FunctionCompiler<'a> {
                 target,
                 pointer,
             } => {
-                let (operand, owner) =
-                    self.borrow_argument(argument, *mutable, *target, *pointer)?;
-                if let Some(previously_mutable) = borrowed.insert(owner.clone(), *mutable) {
-                    if *mutable || previously_mutable {
+                let reached = self.reach(argument);
+                let (operand, _) = self.borrow_argument(argument, *mutable, *target, *pointer)?;
+                for (other, other_mutable) in borrowed.iter().filter(|(_, other_mutable)| *mutable || *other_mutable) {
+                    if let Some(shared) = reached.iter().find(|root| other.iter().any(|one| one.owner == root.owner)) {
                         return Err(Diagnostic::new(
                             argument.span(),
-                            format!("borrow of {owner:?} aliases a mutable argument"),
+                            format!("borrow of {:?} aliases a mutable argument", shared.name),
                         ));
                     }
                 }
+                borrowed.push((reached, *mutable));
                 Ok(operand)
             }
         }

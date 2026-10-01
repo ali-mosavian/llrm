@@ -148,3 +148,36 @@ fn main() -> i16:
 ";
     assert_eq!(refused_at(held), "13: \"outer\" would outlive \"a\", which it borrows");
 }
+#[test]
+fn one_call_is_never_lent_an_owner_twice_when_one_lend_writes() {
+    // The alias check compared spellings: `f(r, x)` with `r = &mut x` passed,
+    // and `q: &i16`, stated noalias, read 5 where it was lent 1.
+    let source = "\
+fn f(p: &mut i16, q: &i16) -> i16:
+    p = 5
+    return q
+
+fn main() -> i16:
+    let mut x: i16 = 1
+    let r = &mut x
+    print(f(r, x))
+    return 0
+";
+    assert_eq!(refused_at(source), "8: borrow of \"x\" aliases a mutable argument");
+    let held = "\
+struct H:
+    r: &i16
+
+fn f(p: &mut i16, h: &H) -> i16:
+    p = 5
+    return h.r
+
+fn main() -> i16:
+    let mut x: i16 = 1
+    let r = &mut x
+    let h = H(r=x)
+    print(f(r, h))
+    return 0
+";
+    assert_eq!(refused_at(held), "12: borrow of \"x\" aliases a mutable argument");
+}

@@ -221,6 +221,16 @@ impl FunctionCompiler<'_> {
         held.cloned().unwrap_or_else(|| self.roots(expression))
     }
 
+    /// Every owner lending `argument` lets a callee reach: what it borrows,
+    /// and what the borrowed value holds.
+    pub(super) fn reach(&self, argument: &Expr) -> BTreeSet<Root> {
+        let place = match argument {
+            Expr::Borrow { operand, .. } => operand,
+            _ => argument,
+        };
+        self.roots(argument).into_iter().chain(self.held_roots(place)).collect()
+    }
+
     /// Whether `expression`, not a name, is a reference: a field's, an
     /// element's or a call's. A name is bound as what it refers to.
     pub(super) fn reference_type(&self, expression: &Expr) -> bool {

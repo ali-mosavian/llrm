@@ -118,7 +118,7 @@ impl FunctionCompiler<'_> {
             .iter()
             .filter(|one| !scope.contains_key(&one.name))
             .collect();
-        let mut borrowed = BTreeMap::new();
+        let mut borrowed = Vec::new();
         for (parameter, argument) in parameters.into_iter().zip(&inferred.passed) {
             let kind = parameter_kind(self.types, parameter)?;
             let operand = self.argument_operand(argument, &kind, &mut borrowed)?;
