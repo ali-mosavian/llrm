@@ -2,8 +2,8 @@
 
     python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]...
 
-Each directory holds llrm-qb, llrm-c and llrm-nib (NEW defaults to
-target/release). A program is tests/suite, bench and examples, plus the
+Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
+defaults to target/release). A program is tests/suite, bench and examples, plus the
 QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's;
 instructions and memory operands are the backend's `cost` estimate per call,
 summed (not a timing). Prints the programs that changed and the totals.

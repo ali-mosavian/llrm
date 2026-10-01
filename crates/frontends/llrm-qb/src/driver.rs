@@ -1,21 +1,14 @@
-//! Port of `qbopt/frontend/qb/driver.py`: invoke the isolated Rust parser and
+//! Port of `qbopt/frontend/qb/driver.py`: compile with qbfront, linked in, and
 //! decode its common-HIR document.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use llrm_core::hir::{codec, model};
-use llrm_core::support::pyjson::{self, Json};
 
 #[allow(non_snake_case)]
 pub fn ROOT() -> PathBuf {
     PathBuf::from(env!("LLRM_ROOT"))
-}
-
-#[allow(non_snake_case)]
-pub fn MANIFEST() -> PathBuf {
-    ROOT().join("crates/frontends/qbfront/Cargo.toml")
 }
 
 /// `DIALECTS`: the QB-family `hir.Dialect` values.
@@ -36,61 +29,6 @@ impl fmt::Display for FrontendError {
 }
 
 impl std::error::Error for FrontendError {}
-
-/// The configured installed producer, or the in-tree Cargo executable.
-pub fn command() -> Vec<String> {
-    if let Ok(configured) = std::env::var("QBOPT_QBFRONT") {
-        if !configured.is_empty() {
-            return vec![configured];
-        }
-    }
-    // Do not execute target/release/qbfront directly merely because it exists:
-    // that made stage dumps silently use an older semantic frontend after a
-    // source edit. Cargo's own dependency check is cheap when the build is
-    // current and authoritative when it is not.
-    ["cargo", "run", "--quiet", "--release", "--manifest-path"]
-        .iter()
-        .map(|one| (*one).to_owned())
-        .chain([MANIFEST().display().to_string(), "--".to_owned()])
-        .collect()
-}
-
-pub fn build_release() -> Result<PathBuf, FrontendError> {
-    let result = Command::new("cargo")
-        .args(["build", "--quiet", "--release", "--manifest-path"])
-        .arg(MANIFEST())
-        .args(["--bin", "qbfront", "--message-format=json"])
-        .current_dir(ROOT())
-        .output()
-        .map_err(|error| FrontendError(format!("could not start cargo build: {error}")))?;
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr).trim().to_owned();
-        let message = if stderr.is_empty() {
-            format!("cargo build exited with status {}", result.status.code().unwrap_or(-1))
-        } else {
-            stderr
-        };
-        return Err(FrontendError(message));
-    }
-
-    for line in String::from_utf8_lossy(&result.stdout).lines() {
-        let message = pyjson::loads(line).map_err(|_| FrontendError("cargo build emitted invalid JSON".into()))?;
-        let Json::Dict(message) = message else { continue };
-        let field = |name: &str| match message.get(name) {
-            Some(Json::Str(text)) => Some(text.as_str()),
-            _ => None,
-        };
-        let Some(Json::Dict(target)) = message.get("target") else { continue };
-        let named = matches!(target.get("name"), Some(Json::Str(name)) if name == "qbfront");
-        let binary = matches!(target.get("kind"), Some(Json::List(kinds)) if kinds.iter().any(|one| matches!(one, Json::Str(kind) if kind == "bin")));
-        if field("reason") == Some("compiler-artifact") && named && binary {
-            if let Some(executable) = field("executable").filter(|one| !one.is_empty()) {
-                return Ok(PathBuf::from(executable));
-            }
-        }
-    }
-    Err(FrontendError("cargo build did not report the qbfront executable".into()))
-}
 
 /// How qbfront compiles a source: its options, as BC's switches name them.
 #[derive(Clone, Debug)]
@@ -146,7 +84,7 @@ impl Frontend {
     }
 }
 
-fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendError> {
+fn _options(source: &Path, frontend: &Frontend) -> Result<qbfront::driver::Args, FrontendError> {
     let Frontend { dialect, runtime, array_order, .. } = frontend;
     if !DIALECTS.contains(&dialect.as_str()) {
         return Err(FrontendError(format!("unknown QB dialect '{dialect}'")));
@@ -157,77 +95,45 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
     if !ARRAY_ORDERS.contains(&array_order.as_str()) {
         return Err(FrontendError(format!("unknown QB array order '{array_order}'")));
     }
-    let mut out: Vec<String> =
-        vec!["--dialect".into(), dialect.clone(), "--runtime".into(), runtime.clone(), "--array-order".into(), array_order.clone()];
-    for (on, flag) in [
-        (frontend.huge_arrays, "--huge-arrays"),
-        (frontend.checked_arrays, "--checked-arrays"),
-        (frontend.checked_division, "--checked-division"),
-        (frontend.checked_overflow, "--checked-overflow"),
-        (frontend.unchecked_bounds, "--unchecked-bounds"),
-        (frontend.mbf, "--mbf"),
-        (frontend.alternate_math, "--alternate-math"),
-        (frontend.whole_program, "--whole-program"),
-        (frontend.array_merging, "--array-merging"),
-        (frontend.own_frames, "--own-frames"),
-        (frontend.error_lines, "--error-lines"),
-        (frontend.debug, "-g"),
-    ] {
-        if on {
-            out.push(flag.into());
-        }
-    }
-    // qbfront runs from ROOT: a relative path is the caller's.
-    let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string();
-    for directory in &frontend.includes {
-        out.push("--include".into());
-        out.push(absolute(directory));
-    }
-    out.push(absolute(source));
-    Ok(out)
+    let dialect = qbfront::Dialect::parse(dialect).ok_or_else(|| FrontendError(format!("unknown QB dialect '{dialect}'")))?;
+    Ok(qbfront::driver::Args {
+        dialect,
+        runtime: runtime.clone(),
+        options: qbfront::semantic::Options {
+            row_major: array_order == "row-major",
+            huge_arrays: frontend.huge_arrays,
+            checked_arrays: frontend.checked_arrays,
+            checked_division: frontend.checked_division,
+            checked_overflow: frontend.checked_overflow,
+            unchecked_bounds: frontend.unchecked_bounds,
+            mbf: frontend.mbf,
+            alternate_math: frontend.alternate_math,
+            whole_program: frontend.whole_program,
+            array_merging: frontend.array_merging,
+            own_frames: frontend.own_frames,
+            error_lines: frontend.error_lines,
+        },
+        debug: frontend.debug,
+        syntax: false,
+        include_dirs: frontend.includes.clone(),
+        dump_source: None,
+        input: source.to_path_buf(),
+    })
 }
 
-#[cfg(test)]
-mod options_tests {
-    use std::path::Path;
-
-    /// qbfront runs from the repo root, so `llrm-qb CE.BAS` from the
-    /// source's own directory said "CE.BAS: No such file or directory".
-    #[test]
-    fn test_a_relative_source_is_passed_as_the_callers_path() {
-        let options = super::_options(Path::new("CE.BAS"), &super::Frontend::new("vbdos", "vbdos")).unwrap();
-        assert_eq!(options.last().map(String::as_str), Some(std::env::current_dir().unwrap().join("CE.BAS").to_str().unwrap()));
-    }
-}
-
-/// Run `command() + arguments` from ROOT: stdout, or the refusal.
-fn _run(arguments: Vec<String>) -> Result<String, FrontendError> {
-    let command = command();
-    let result = Command::new(&command[0])
-        .args(&command[1..])
-        .args(arguments)
-        .current_dir(ROOT())
-        .output()
-        .map_err(|error| FrontendError(error.to_string()))?;
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr).trim().to_owned();
-        let message = if stderr.is_empty() {
-            format!("qbfront exited with status {}", result.status.code().unwrap_or(-1))
-        } else {
-            stderr
-        };
-        return Err(FrontendError(message));
-    }
+/// qbfront on `args`: its HIR text, or the refusal.
+fn _run(args: qbfront::driver::Args) -> Result<String, FrontendError> {
+    let compiled = qbfront::driver::compile(&args).map_err(FrontendError)?;
     // Warnings: the program still compiled.
-    eprint!("{}", String::from_utf8_lossy(&result.stderr));
-    Ok(String::from_utf8_lossy(&result.stdout).into_owned())
+    for warning in &compiled.warnings {
+        eprintln!("{warning}");
+    }
+    Ok(compiled.text)
 }
 
 /// Run only source loading and parsing, independently of semantic HIR support.
 pub fn syntax_checked(source: &Path, frontend: &Frontend) -> Result<(), FrontendError> {
-    let mut arguments = vec!["--syntax".to_owned()];
-    arguments.extend(_options(source, frontend)?);
-    _run(arguments).map(|_| ())
+    _run(qbfront::driver::Args { syntax: true, .._options(source, frontend)? }).map(|_| ())
 }
 
 pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result<model::Program, FrontendError> {

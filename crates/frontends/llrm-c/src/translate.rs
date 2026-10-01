@@ -2006,6 +2006,22 @@ mod tests {
         assert!(!scale("_through_a_signed").contains("nsw") && !scale("_through_a_signed").contains("nuw"), "{}", scale("_through_a_signed"));
     }
 
+    /// Every conversion to or from a long double was E1090 in the front end
+    /// (#103), and mixed arithmetic left its operand unconverted: the MIR
+    /// converts each way, between x86_fp80 and float, double and the integers.
+    #[test]
+    fn test_long_double_converts_to_and_from_every_arithmetic_type() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/longdouble.cgs")).unwrap();
+        assert!(text.contains("O_CONVERT") && text.contains("TY_LONG_DOUBLE"), "the shape the front end refused");
+        let module = raised("longdouble.cgs");
+        let printed = llrm_mir::print::module(&module);
+        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80", "sitofp i16"] {
+            assert!(printed.contains(conversion), "{conversion}: {printed}");
+        }
+        let main = defined(&module, "_main");
+        assert!(main.contains("sitofp") && main.contains("x86_fp80"), "{main}");
+    }
+
     /// `*seed` is a short's access: C's int2 class, not the character type.
     #[test]
     fn test_accesses_carry_their_aliasing_class() {
