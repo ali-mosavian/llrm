@@ -68,6 +68,14 @@ pub trait Machine {
     }
 }
 
+/// What advancing a pair pointer in a carrying space costs, given the price
+/// of its instructions: the offset widened, the displacement added, the
+/// carry copied and shifted down and up by the stride, added to the
+/// selector, and the offset and selector copied out.
+pub const fn carry_cost(extend: i64, add: i64, shift: i64, r#move: i64) -> i64 {
+    extend + 2 * add + 2 * shift + 3 * r#move
+}
+
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
@@ -76,6 +84,10 @@ pub struct OperationCosts {
     pub divide: i64,
     pub shift: i64,
     pub address: i64,
+    /// An address advanced in a space whose displacement carries into its
+    /// selector (a huge pointer's): the offset's sum, its carry, and the
+    /// selector stepped by it.
+    pub carry: i64,
     pub load: i64,
     pub store: i64,
     pub memory_update: i64,
@@ -102,6 +114,7 @@ impl Default for OperationCosts {
             divide: 1,
             shift: 1,
             address: 1,
+            carry: 1,
             load: 1,
             store: 1,
             memory_update: 1,

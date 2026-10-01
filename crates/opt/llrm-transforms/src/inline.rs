@@ -159,7 +159,8 @@ fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body
 
 /// The priced work `body` does once, unless something in it is unpriced.
 fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
-    body.walk().filter(|&(_, inst)| semantic(body, inst)).map(|(_, inst)| operation(&module.context, body, callees, inst, costs)).sum()
+    let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |text| DataLayout::parse(text).unwrap_or_default());
+    body.walk().filter(|&(_, inst)| semantic(body, inst)).map(|(_, inst)| operation(&module.context, &layout, body, callees, inst, costs)).sum()
 }
 
 /// Functions worth moving into their direct callers.

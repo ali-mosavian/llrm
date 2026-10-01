@@ -5,7 +5,7 @@ use crate::backend::cpu::ProfileOrName;
 use crate::backend::isel::{self, Unselected};
 use crate::backend::masm;
 
-const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"\n";
+const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16\"\n";
 
 fn qb() -> HirAbi {
     HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default() }
@@ -3135,4 +3135,15 @@ b:
     assert!(text.contains("getelementptr i8, ptr null") && text.contains("phi ptr [ %g"), "the shape that was refused");
     let got = listing(text, "f");
     assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "mov ax, -4", "L0_3:", "pop bp", "retf"]);
+}
+
+#[test]
+fn probe_huge() {
+    let text = "define i16 @f(ptr addrspace(3) %p, i32 %i) addrspace(1) {
+  %q = getelementptr i16, ptr addrspace(3) %p, i32 %i
+  %v = load i16, ptr addrspace(3) %q
+  ret i16 %v
+}
+";
+    eprintln!("{:#?}", std::panic::catch_unwind(|| listing(text, "f")));
 }

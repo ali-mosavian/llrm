@@ -425,6 +425,9 @@ pub struct Segments {
     /// The one that reaches the data group while `data` holds something
     /// else: the stack's, where the stack lives in the data group.
     pub through: Option<Register>,
+    /// The selector stride a huge pointer takes per carried 64K, as a shift:
+    /// the machine's (`Machine::huge_shift`), where it states one.
+    pub huge_shift: Option<u32>,
 }
 
 impl Segments {
@@ -448,6 +451,7 @@ impl Segments {
                 .collect(),
             data: register(&segments.data),
             through: segments.stack_is_data.then(|| register(&segments.stack)),
+            huge_shift: machine.huge_shift(),
         }
     }
 }

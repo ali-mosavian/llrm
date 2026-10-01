@@ -30,6 +30,9 @@ pub enum Intrinsic {
     PortIn,
     /// A value written to an I/O port.
     PortOut,
+    /// The bytes between two pointers into one object, as a wrapping integer:
+    /// a target's own, where a pointer's integer form is not its address.
+    PtrDiff,
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
@@ -205,7 +208,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 29] = [
+const TABLE: [Spec; 30] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -298,6 +301,15 @@ const TABLE: [Spec; 29] = [
         parameters: &[(Slot::Any(0), &[])],
         attrs: &["nounwind"],
         memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llrm.ia16.ptrdiff",
+        intrinsic: Intrinsic::PtrDiff,
+        overloads: &[Kind::Int, Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Any(1), &[]), (Slot::Any(1), &[])],
+        attrs: PURE,
+        memory: NO_MEMORY,
     },
     Spec {
         name: "llrm.ia16.out",
