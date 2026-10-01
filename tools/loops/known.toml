@@ -23,10 +23,6 @@ match = 'Core-O. nib on DOS.*conc[67]_s2_xi_bgnlnpfpn'
 issue = "#109"
 
 [[bug]]
-match = 'on DOS: x_shapenest2_pairjeq3ip1'
-issue = "#111"
-
-[[bug]]
 match = 'c on DOS: rnd98_0(004|317|022|267)'
 issue = "#108"
 
