@@ -277,7 +277,7 @@ impl _Plain for model::DataRelocation {
         Json::Dict(out)
     }
 }
-// `segment` and `align` only when set, so that data reads as it always has.
+// `segment` only when set, so that data reads as it always has.
 impl _Plain for model::DataObject {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -291,9 +291,6 @@ impl _Plain for model::DataObject {
         out.insert("addressed".to_owned(), self.addressed._plain());
         if self.segment.is_some() {
             out.insert("segment".to_owned(), self.segment._plain());
-        }
-        if self.align.is_some() {
-            out.insert("align".to_owned(), self.align._plain());
         }
         Json::Dict(out)
     }
@@ -1214,7 +1211,6 @@ static DATA_OBJECT: _Record = _Record {
         ("address", enum_hint!(AddressKind), false),
         ("addressed", _Hint::Bool, false),
         ("segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
-        ("align", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::DataObject {
@@ -1227,7 +1223,6 @@ static DATA_OBJECT: _Record = _Record {
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
             segment: _default(args, "segment", None)?,
-            align: _default(args, "align", None)?,
         })
     },
 };

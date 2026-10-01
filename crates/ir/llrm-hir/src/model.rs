@@ -738,9 +738,8 @@ pub struct DataObject {
     // False when no code takes its address, this module's or another's: only
     // a reference naming it reaches it.
     pub addressed: bool,
-    // The segment the frontend places it in, and its alignment in bytes.
+    // The segment the frontend places it in. Its alignment is a stated fact.
     pub segment: Option<String>,
-    pub align: Option<i64>,
 }
 
 impl DataObject {
@@ -755,7 +754,6 @@ impl DataObject {
             address: AddressKind::Near,
             addressed: true,
             segment: None,
-            align: None,
         }
     }
 }

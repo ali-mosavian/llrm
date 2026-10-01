@@ -21,6 +21,7 @@ pub enum Kind {
     Callable,
     Param,
     Instruction,
+    Object,
 }
 
 macro_rules! facts {
@@ -162,6 +163,7 @@ facts! {
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
+        Align(u64) align "align" on [Param, Object];
     }
     custom {
         Memory(Effect) memory "memory" on [Callable];

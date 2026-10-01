@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
+use llrm_mir::facts::Fact;
 use llrm_mir::datalayout::{DataLayout, float_bits};
 use llrm_mir::{
     Attribute, BinaryOp, BlockId, CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, FloatKind, FloatPredicate, Flags, GlobalId, GlobalVariable, IntPredicate,
@@ -341,7 +342,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     }
     let declared: HashMap<i64, GlobalId> = functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
     for one in &hir.facts {
-        if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, one) {
+        if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, &data, one) {
             refused.push((hir.name.clone(), why));
         }
     }
@@ -545,8 +546,7 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
         (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
         (Some(_), model::DataLinkage::Private) => Linkage::Private,
     };
-    let align = object.align.map(|one| one as u64);
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align };
+    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align: None };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { FAR } else { 0 };
     global
@@ -688,10 +688,21 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
 /// A stated fact as its MIR carrier: the one place a fact becomes MIR. A
 /// routine's or a parameter's is an attribute of its declaration; an
 /// instruction's is its flags, made with the instruction.
-fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declared: &HashMap<i64, GlobalId>, stated: &Stated) -> Emit<()> {
+fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declared: &HashMap<i64, GlobalId>, data: &HashMap<i64, GlobalId>, stated: &Stated) -> Emit<()> {
     let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
     let (global, parameter) = match stated.subject {
         Subject::Instruction { .. } => return Ok(()),
+        Subject::Object(id) => {
+            let Some(&global) = data.get(&id) else { return Ok(()) };
+            let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of a data object that is no variable".to_owned()) };
+            return match stated.fact {
+                Fact::Align(bytes) => {
+                    variable.align = Some(bytes);
+                    Ok(())
+                }
+                other => Err(format!("{} is not lowered for a data object", other.key())),
+            };
+        }
         Subject::Param { function, index } => match declared.get(&function) {
             Some(&global) => (global, Some(index)),
             None => return Ok(()),

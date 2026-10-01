@@ -14,6 +14,7 @@ pub enum Subject {
     Callable(i64),
     Param { function: i64, index: i64 },
     Instruction { function: i64, id: i64 },
+    Object(i64),
 }
 
 impl Subject {
@@ -22,6 +23,7 @@ impl Subject {
             Subject::Callable(_) => Kind::Callable,
             Subject::Param { .. } => Kind::Param,
             Subject::Instruction { .. } => Kind::Instruction,
+            Subject::Object(_) => Kind::Object,
         }
     }
 
@@ -31,17 +33,18 @@ impl Subject {
             Kind::Callable => "callable",
             Kind::Param => "param",
             Kind::Instruction => "instruction",
+            Kind::Object => "object",
         }
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Callable, Kind::Param, Kind::Instruction].into_iter().find(|&kind| Self::kind_key(kind) == key)
+        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Object].into_iter().find(|&kind| Self::kind_key(kind) == key)
     }
 
     /// The function a subject belongs to, and its own id in it.
     pub fn fields(self) -> (Option<i64>, Option<i64>) {
         match self {
-            Subject::Callable(id) => (None, Some(id)),
+            Subject::Callable(id) | Subject::Object(id) => (None, Some(id)),
             Subject::Param { function, index } => (Some(function), Some(index)),
             Subject::Instruction { function, id } => (Some(function), Some(id)),
         }
@@ -58,6 +61,7 @@ impl Subject {
             Kind::Callable => Subject::Callable(id?),
             Kind::Param => Subject::Param { function: function?, index: id? },
             Kind::Instruction => Subject::Instruction { function: function?, id: id? },
+            Kind::Object => Subject::Object(id?),
         })
     }
 }
@@ -129,7 +133,7 @@ mod tests {
     /// A subject's wire fields name it back.
     #[test]
     fn every_subject_round_trips_through_its_fields() {
-        let all = [Subject::Callable(4), Subject::Param { function: 1, index: 2 }, Subject::Instruction { function: 1, id: 5 }];
+        let all = [Subject::Callable(4), Subject::Param { function: 1, index: 2 }, Subject::Instruction { function: 1, id: 5 }, Subject::Object(7)];
         for subject in all {
             let (function, id) = subject.fields();
             assert_eq!(Subject::of(subject.kind(), function, id), Some(subject));

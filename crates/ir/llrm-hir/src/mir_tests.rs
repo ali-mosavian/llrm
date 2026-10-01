@@ -610,12 +610,13 @@ fn data_linkage_is_the_languages() {
     use crate::model::{DataLinkage, DataObject};
     let mut program = program(difference());
     let mut exported = DataObject::new(1, "shown", vec![1, 0]);
-    (exported.linkage, exported.align) = (DataLinkage::Exported, Some(2));
+    exported.linkage = DataLinkage::Exported;
     let mut literal = DataObject::new(2, "L", vec![65, 0]);
     (literal.linkage, literal.readonly) = (DataLinkage::Private, true);
     let mut imported = DataObject::new(3, "elsewhere", Vec::new());
     imported.linkage = DataLinkage::External;
     program.modules[0].data = vec![exported, literal, imported];
+    program.modules[0].facts = vec![crate::facts::Stated { subject: crate::facts::Subject::Object(1), fact: llrm_mir::facts::Fact::Align(2), source: None }];
 
     let text = llrm_mir::print::module(&emit(&program).remove(0).module);
     assert!(text.contains("@shown = global [2 x i8] c\"\\01\\00\", align 2\n@L = private constant [2 x i8] c\"A\\00\"\n@elsewhere = external global [0 x i8]\n"), "{text}");
@@ -826,4 +827,14 @@ fn a_program_of_the_old_schema_is_refused_by_its_version() {
 fn old_json_is_refused_by_its_schema() {
     let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":3", "\"promises\":[],\"schema\":1");
     assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
+}
+
+/// A fact of a data object the module lacks is refused, as one of a
+/// parameter it lacks is.
+#[test]
+fn an_alignment_of_no_object_is_refused() {
+    use crate::facts::{Stated, Subject};
+    let mut program = program(difference());
+    program.modules[0].facts = vec![Stated { subject: Subject::Object(9), fact: llrm_mir::facts::Fact::Align(2), source: None }];
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("object the module lacks"));
 }

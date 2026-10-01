@@ -40,8 +40,12 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     let mut callables: IndexMap<String, h::Callable> = IndexMap::default();
     let mut data = Vec::new();
+    let mut facts = Facts::new("c");
     for object in &objects {
         data.push(data_object(unit, object, keys[&object.key], &keys, &mut callables)?);
+        if let Some(align) = object.align {
+            facts.state(Subject::Object(keys[&object.key]), Fact::Align(align));
+        }
     }
     for symbol in imports {
         let id = keys[&Key::Symbol(symbol.id)];
@@ -56,7 +60,6 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
-    let mut facts = Facts::new("c");
     for (at, proc) in unit.procs.iter().enumerate() {
         functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, proc, at as i64 + 1)?);
     }
@@ -225,7 +228,6 @@ fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i
         linkage,
         address: address(space(unit, object.key)),
         segment: Some(object.segment.clone()),
-        align: object.align.map(|one| one as i64),
         ..h::DataObject::new(id, &object.name, object.bytes.iter().map(|&one| i64::from(one)).collect())
     })
 }

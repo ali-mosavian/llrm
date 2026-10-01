@@ -9777,9 +9777,6 @@ impl Compiler {
                 out.push(',');
             }
             out.push('{');
-            if object.align > 1 {
-                write!(out, "\"align\":{},", object.align).unwrap();
-            }
             out.push_str("\"bytes\":[");
             for (byte_index, byte) in object.bytes.iter().enumerate() {
                 if byte_index != 0 {
@@ -9831,6 +9828,10 @@ impl Compiler {
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
                 facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
             }
+        }
+        // How a word-sized object is placed: on a word.
+        for object in self.data.iter().filter(|object| object.align > 1) {
+            facts.state(llrm_hir::facts::Subject::Object(i64::from(object.id)), llrm_hir::facts::Fact::Align(u64::from(object.align)));
         }
         let facts = facts.finish();
         if !facts.is_empty() {
