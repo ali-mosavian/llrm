@@ -150,7 +150,7 @@ fn test_frontend_json_is_deterministic_and_replayable() {
     let Json::Dict(document) = pyjson::loads(&String::from_utf8(first).expect("utf-8")).expect("JSON") else {
         panic!("not an object");
     };
-    assert_eq!(document.get("schema"), Some(&Json::Int(4)));
+    assert_eq!(document.get("schema"), Some(&Json::Int(5)));
 }
 
 #[test]
@@ -1671,12 +1671,18 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     let program = parsed(&source);
     let text = listing_on(&program, "main", &level("O2"), "486");
     let lines: Vec<&str> = between(&text, "_tick proc far", "_tick endp").lines().map(str::trim).collect();
+    // BCC's nine words, then the 32-bit state llrm's code uses, then DGROUP.
+    let start = lines.iter().position(|one| *one == "push ax").expect("saves ax first");
     assert_eq!(
-        lines[1..11],
-        ["pushad", "push ds", "push es", "push fs", "push gs", "pushw DGROUP", "pop ds", "push ds", "pop es", "cld"],
+        lines[start..start + 17],
+        ["push ax", "push bx", "push cx", "push dx", "push es", "push ds", "push si", "push di", "push bp", "pushad", "push fs", "push gs", "pushw DGROUP", "pop ds", "push ds", "pop es", "cld"],
         "{text}"
     );
-    assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
+    assert_eq!(
+        lines[lines.len() - 13..],
+        ["pop gs", "pop fs", "popad", "pop bp", "pop di", "pop si", "pop ds", "pop es", "pop dx", "pop cx", "pop bx", "pop ax", "iret"],
+        "{text}"
+    );
     assert!(text.contains("dd _tick"), "{text}");
     nib_compile::written(&program, "main", &source, &level("O2")).expect("encodes");
 }

@@ -462,6 +462,23 @@ fn a_string_comparison_compares_its_callees_sign() {
     assert!(text.contains("%2 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(i16 %0, i16 %1)\n  %3 = icmp sgt i16 %2, 0\n  %4 = sext i1 %3 to i16"), "{text}");
 }
 
+/// A string comparison's callee is stated a three-way compare: its sign
+/// says which string is greater, nothing of how often. Without it
+/// branchprob read `a$ > b$` as a likely `x > 0`.
+#[test]
+fn a_string_comparisons_callee_is_a_three_way_compare() {
+    use crate::model::{CallAbi, CallDistance, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut compare = Instruction::new(1, Op::StringGt, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    compare.callee = Some("B$SCMP".to_owned());
+    function.blocks[0].instructions = vec![compare];
+    function.calls = vec![CallAbi { instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let emitted = emit(&program(function)).remove(0);
+    let module = &emitted.module;
+    let callee = module.global(module.named("llrm.qb.B$SCMP").expect("declared")).function().expect("a function");
+    assert!(llrm_mir::facts::Facts::of(&callee.attrs).three_way_compare(), "{}", llrm_mir::print::module(module));
+}
+
 /// A port read and write are calls of the target's port intrinsics, the
 /// port a word; they were refused, and with them every procedure that
 /// sets the palette.
@@ -827,7 +844,7 @@ fn a_program_of_the_old_schema_is_refused_by_its_version() {
 /// refused for.
 #[test]
 fn old_json_is_refused_by_its_schema() {
-    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":4", "\"promises\":[],\"schema\":1");
+    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":5", "\"promises\":[],\"schema\":1");
     assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
 }
 

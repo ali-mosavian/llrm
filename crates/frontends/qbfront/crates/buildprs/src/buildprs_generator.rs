@@ -1368,18 +1368,3 @@ Second:
         );
     }
 }
-
-#[test]
-fn check_irw_to_node_id() {
-    use crate::buildprs_artifacts::parse_irw_equates;
-    use crate::buildprs_grammar::parse_token_decls_file;
-    let tokens =
-        parse_token_decls_file("../../grammar/qbasbnf.prs").unwrap();
-    let generated = generate_token_artifacts_from_decls(&tokens);
-    let irw_to = generated.irw_equates["IRW_TO"];
-    let irw_for = generated.irw_equates["IRW_FOR"];
-    // node_id formula: 5 + num_nt_int + num_nt_ext + irw = 83 + irw (for qbasic-11 with 29+49)
-    let node_id_to = 5u16 + 29 + 49 + irw_to;
-    let node_id_for = 5u16 + 29 + 49 + irw_for;
-    panic!("IRW_TO={irw_to} node_id_to={node_id_to} | IRW_FOR={irw_for} node_id_for={node_id_for}");
-}

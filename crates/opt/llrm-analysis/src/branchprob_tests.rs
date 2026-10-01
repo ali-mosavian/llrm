@@ -350,4 +350,93 @@ out:
     assert!(close(odds.frequency.get(&at("head")).copied(), 101.0), "{:?}", odds.frequency);
     assert!(close(odds.frequency.get(&at("body")).copied(), 100.0), "{:?}", odds.frequency);
     assert!(close(odds.frequency.get(&at("out")).copied(), 1.0), "{:?}", odds.frequency);
+
+/// `@f` branching on `compare` of `@callee`'s result, `declared` its declaration.
+fn three_way_branch(declared: &str, callee: &str, compare: &str) -> (Odds, i64, i64) {
+    let (odds, at) = estimate(&format!(
+        "{declared}
+define i16 @f(ptr %a, ptr %b) {{
+entry:
+  %r = call i16 @{callee}(ptr %a, ptr %b)
+  %c = {compare}
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}}
+"
+    ));
+    (odds, at("entry"), at("yes"))
+}
+
+/// A three-way compare's sign says which string is greater, not how often:
+/// `B$SCMP(a, b) > 0`, BASIC's `a$ > b$`, read as `x > 0`, likely.
+#[test]
+fn test_a_three_way_compares_sign_is_no_zero_compare() {
+    let declared = "declare i16 @scmp(ptr, ptr) threeway";
+    // The premise: the routine is stated a three-way compare.
+    let module = crate::testing::parsed(&format!("{}{declared}\n", crate::testing::DOS));
+    assert!(llrm_mir::facts::Facts::of(&crate::testing::function(&module, "scmp").attrs).three_way_compare());
+    for compare in ["icmp sgt i16 %r, 0", "icmp slt i16 %r, 0", "icmp sle i16 %r, 0"] {
+        let (odds, entry, _) = three_way_branch(declared, "scmp", compare);
+        assert_ne!(odds.by.get(&entry), Some(&Heuristic::Zero), "{compare}");
+    }
+}
+
+/// Of its result only equality with 0 counts: the data unlikely equal.
+#[test]
+fn test_a_three_way_compares_equality_is_unlikely() {
+    let declared = "declare i16 @strcmp(ptr, ptr) threeway";
+    let (odds, entry, yes) = three_way_branch(declared, "strcmp", "icmp eq i16 %r, 0");
+    assert_eq!(odds.by.get(&entry), Some(&Heuristic::Zero));
+    assert!(close(odds.probability(entry, yes), 12.0 / 32.0));
+    let (odds, entry, yes) = three_way_branch(declared, "strcmp", "icmp ne i16 %r, 0");
+    assert!(close(odds.probability(entry, yes), 20.0 / 32.0) && odds.by.get(&entry) == Some(&Heuristic::Zero));
+}
+
+/// The fact, not the name: a routine called strcmp the language does not
+/// state a three-way compare is an ordinary call, its `> 0` likely.
+#[test]
+fn test_a_name_alone_states_no_three_way_compare() {
+    let (odds, entry, yes) = three_way_branch("declare i16 @strcmp(ptr, ptr)", "strcmp", "icmp sgt i16 %r, 0");
+    assert_eq!(odds.by.get(&entry), Some(&Heuristic::Zero));
+    assert!(close(odds.probability(entry, yes), 20.0 / 32.0));
+}
+
+/// A one-bit mask tested against 0 is a flag, not a quantity: LLVM's zero
+/// heuristic skips `(x & pow2) ==/!= 0`. deedlines tests `x AND 1`.
+#[test]
+fn test_a_single_bit_test_is_no_zero_compare() {
+    for mask in ["1", "128"] {
+        let (odds, at) = estimate(&format!(
+            "define i16 @f(i16 %x) {{
+entry:
+  %b = and i16 %x, {mask}
+  %c = icmp ne i16 %b, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}}
+"
+        ));
+        assert_ne!(odds.by.get(&at("entry")), Some(&Heuristic::Zero), "and {mask}");
+    }
+    // A mask of several bits is a quantity: `x & 6 != 0` keeps the heuristic.
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %x) {
+entry:
+  %b = and i16 %x, 6
+  %c = icmp ne i16 %b, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Zero));
 }

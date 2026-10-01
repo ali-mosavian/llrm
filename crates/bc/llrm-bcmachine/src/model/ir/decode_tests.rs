@@ -310,7 +310,8 @@ fn test_every_body_of_every_kind_is_fully_modelled() {
 
 #[test]
 fn test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() {
-    let code = [hx("B8 01 00"), hx("E4 40"), hx("C3")].concat();
+    // in al, 0: a DMA port, which the machine says may touch memory (the PIT's 40h is silent).
+    let code = [hx("B8 01 00"), hx("E4 00"), hx("C3")].concat();
     let insns = insns_of(&code);
     let block = Block { at: 0, end: code.len(), insns: insns.clone(), ends: Ends::Return, succ: Vec::new() };
     let found = hand_built(&code);
