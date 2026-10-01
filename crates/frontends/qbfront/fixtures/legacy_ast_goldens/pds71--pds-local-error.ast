@@ -17,6 +17,7 @@ Module {
                     fixed_length: None,
                     shared: true,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 4,
                         start: 11,
@@ -65,6 +66,7 @@ Module {
             },
             then_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -140,6 +142,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 2,
@@ -164,6 +167,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 3,
                             start: 24,
@@ -179,6 +183,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 3,
@@ -206,6 +211,7 @@ Module {
                             fixed_length: None,
                             shared: false,
                             dynamic: false,
+                            volatile: false,
                             span: Span {
                                 line: 15,
                                 start: 8,
@@ -582,6 +588,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 14,
@@ -606,6 +613,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 43,
                             start: 16,
@@ -619,6 +627,7 @@ Module {
             result: None,
             body: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -657,6 +666,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 43,
@@ -665,4 +675,5 @@ Module {
             },
         },
     ],
+    prelude: false,
 }

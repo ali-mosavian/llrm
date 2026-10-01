@@ -17,6 +17,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 3,
                         start: 4,
@@ -37,6 +38,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 4,
                         start: 4,
@@ -57,6 +59,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 5,
                         start: 4,
@@ -77,6 +80,7 @@ Module {
                     fixed_length: None,
                     shared: false,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 6,
                         start: 4,
@@ -347,6 +351,7 @@ Module {
             },
             then_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -373,6 +378,7 @@ Module {
             ],
             else_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -431,6 +437,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 1,
                             start: 27,
@@ -451,6 +458,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 1,
                             start: 52,
@@ -471,6 +479,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 1,
                             start: 79,
@@ -488,6 +497,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 1,
@@ -512,6 +522,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 19,
                             start: 19,
@@ -532,6 +543,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 19,
                             start: 44,
@@ -552,6 +564,7 @@ Module {
                         fixed_length: None,
                         shared: false,
                         dynamic: false,
+                        volatile: false,
                         span: Span {
                             line: 19,
                             start: 71,
@@ -789,6 +802,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 19,
@@ -797,4 +811,5 @@ Module {
             },
         },
     ],
+    prelude: false,
 }
