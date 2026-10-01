@@ -15,20 +15,12 @@ match = "llrm-c did not finish"
 issue = "#104"
 
 [[bug]]
-match = 'c on DOS.*conc1[02]_s2_xi_bgnlnpfpn_index_n_st1_sum_as_end'
-issue = "#108"
-
-[[bug]]
 match = 'Core-O. nib on DOS.*conc[67]_s2_xi_bgnlnpfpn'
 issue = "#109"
 
 [[bug]]
 match = 'on DOS: x_shapenest2_pairjeq3ip1'
 issue = "#111"
-
-[[bug]]
-match = 'c on DOS: rnd98_0(004|317|022|267)'
-issue = "#108"
 
 [[bug]]
 match = 'nib on DOS: rnd98_0185'
