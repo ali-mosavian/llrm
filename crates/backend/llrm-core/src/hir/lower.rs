@@ -880,7 +880,7 @@ impl<'a> _Scope<'a> {
                     },
                 }))
             }
-            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, published, inbounds, origin, allocation }) => {
+            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, inbounds, origin, allocation }) => {
                 let type_ = self.types[type_id];
                 // The owning descriptor names the allocation, as a symbol.
                 let allocation = match allocation.as_ref() {
@@ -913,8 +913,7 @@ impl<'a> _Scope<'a> {
                             base_width: pointer_type.width as u32,
                             provenance,
                             inbounds: *inbounds,
-                            volatile: *volatile || *published,
-                            published: *published,
+                            volatile: *volatile,
                             origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Literal, *offset)), type_.width as u32)
                         },
@@ -980,8 +979,7 @@ impl<'a> _Scope<'a> {
                             base_width: 2,
                             provenance,
                             inbounds: *inbounds,
-                            volatile: *volatile || *published,
-                            published: *published,
+                            volatile: *volatile,
                             origin: origin.map(|one| self.values[&one]),
                             allocation,
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
@@ -1043,8 +1041,7 @@ impl<'a> _Scope<'a> {
                         pointer: true,
                         provenance,
                         inbounds: *inbounds,
-                        volatile: *volatile || *published,
-                            published: *published,
+                        volatile: *volatile,
                         ..MemRef::new(None, type_.width as u32)
                     },
                 }))
@@ -1058,7 +1055,6 @@ impl<'a> _Scope<'a> {
                         offset,
                         r#type: *type_id,
                         volatile: false,
-                        published: false,
                         inbounds: false,
                         origin: None,
                         allocation: None,

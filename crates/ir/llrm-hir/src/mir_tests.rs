@@ -207,7 +207,7 @@ fn an_external_object_is_as_large_as_its_places() {
 fn an_allocation_and_a_place_are_tagged_apart() {
     use crate::model::{AddressKind, IndirectPlace, Place, Storage};
     let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
-    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation });
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, inbounds: false, origin: None, allocation });
     let instructions = vec![
         Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
         Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
@@ -576,7 +576,7 @@ fn a_languages_promises_reach_mir() {
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
     let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
     advance.inbounds = true;
-    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None });
+    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None, allocation: None });
     let instructions = vec![
         advance,
         Instruction::new(2, Op::Load, vec![3], vec![at]),
@@ -824,6 +824,6 @@ fn a_program_of_the_old_schema_is_refused_by_its_version() {
 /// refused for.
 #[test]
 fn old_json_is_refused_by_its_schema() {
-    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":2", "\"promises\":[],\"schema\":1");
+    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":3", "\"promises\":[],\"schema\":1");
     assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
 }

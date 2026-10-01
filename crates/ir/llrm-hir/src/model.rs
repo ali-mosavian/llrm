@@ -9,7 +9,7 @@ use std::fmt;
 
 use llrm_support::pyrepr::{self, Repr};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// A Python `StrEnum`: members, their values, `str()` and `repr()`.
 macro_rules! str_enum {
@@ -297,10 +297,6 @@ pub struct IndirectPlace {
     pub offset: i64,
     pub r#type: i64,
     pub volatile: bool,
-    /// Another agent may write the pointee at any time, as a BYREF argument
-    /// an interrupt handler owns: ordered like `volatile`, but a loop that
-    /// ends without the value may read it once.
-    pub published: bool,
     /// The language promises the access stays inside one object.
     pub inbounds: bool,
     /// The value holding the offset of that object's first byte, where the

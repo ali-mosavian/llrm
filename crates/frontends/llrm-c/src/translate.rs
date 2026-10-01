@@ -1766,7 +1766,7 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
 
 /// An access through `base`, `offset` bytes in, as `ty`.
 fn indirect(base: i64, offset: i64, ty: i64, volatile: bool) -> h::IndirectPlace {
-    h::IndirectPlace { base, offset, r#type: ty, volatile, published: false, inbounds: true, origin: None, allocation: None }
+    h::IndirectPlace { base, offset, r#type: ty, volatile, inbounds: true, origin: None, allocation: None }
 }
 
 #[cfg(test)]

@@ -1092,7 +1092,7 @@ fn test_hir_lowers_whole_pointer_indirect_memory_without_machine_registers() {
             1,
             hir::Op::Load,
             vec![2],
-            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
+            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None, allocation: None })],
         )],
     );
     let function = hir::Function { parameters: vec![1], ..hir::Function::new(1, "read", 0, values, vec![], vec![block], 1) };
@@ -1139,7 +1139,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
                     1,
                     hir::Op::Load,
                     vec![2],
-                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
+                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None, allocation: None })],
                 )],
             )],
             1,

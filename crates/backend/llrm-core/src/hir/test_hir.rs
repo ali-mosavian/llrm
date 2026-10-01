@@ -50,7 +50,7 @@ fn vbdos(modules: Vec<Module>) -> Program {
 }
 
 fn indirect(base: i64, offset: i64, r#type: i64) -> model::Operand {
-    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, published: false, inbounds: false, origin: None, allocation: None })
+    model::Operand::IndirectPlace(IndirectPlace { base, offset, r#type, volatile: false, inbounds: false, origin: None, allocation: None })
 }
 
 fn lowered_insns(name: &str, body: &mir::MirBody) -> usize {
@@ -107,8 +107,8 @@ fn kinds(operations: &[&mir::Op]) -> Vec<mir::Kind> {
 fn test_hir_json_is_deterministic_strict_and_replayable() {
     let text = encode(&program(), None).unwrap();
     assert_eq!(text, encode(&decode(&text).unwrap(), None).unwrap());
-    assert!(text.contains("\"schema\":2"));
-    let error = decode(&text.replace("\"schema\":2", "\"register\":\"eax\",\"schema\":2")).unwrap_err();
+    assert!(text.contains("\"schema\":3"));
+    let error = decode(&text.replace("\"schema\":3", "\"register\":\"eax\",\"schema\":3")).unwrap_err();
     assert!(error.0.contains("unknown fields"), "{error}");
     let error = decode(&text.replace("\"op\":\"add\"", "\"op\":\"adc\"")).unwrap_err();
     assert!(error.0.contains("unknown Op"), "{error}");
