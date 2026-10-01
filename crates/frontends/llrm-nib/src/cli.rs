@@ -109,7 +109,7 @@ pub fn main(argv: &[String]) -> i32 {
     };
     let result = (|| -> Result<(), String> {
         if let Some(dump) = &args.dump {
-            nibstages::dumped(&args.source, dump, &args.frontend, &args.options)?;
+            nibstages::dumped(&args.source, dump, &args.frontend, &args.codegen, &args.entry)?;
         }
         let output = match (&args.flags.output, &args.dump) {
             (Some(output), _) => output.clone(),
