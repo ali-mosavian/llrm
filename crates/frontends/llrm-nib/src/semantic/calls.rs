@@ -190,6 +190,7 @@ impl<'a> FunctionCompiler<'a> {
             let operand = self.argument_operand(argument, parameter, &mut borrowed)?;
             operands.push(operand);
         }
+        self.store_call_borrows(arguments, &signature.parameters, span)?;
         operands.extend(signature.result_pointer.map(|pointer| self.result_pointer(pointer)));
         let returned = signature.returned(self.types);
         let results = if returned == TypeName::Void { Vec::new() } else { vec![self.value(returned)] };

@@ -43,38 +43,24 @@ pub(super) enum Life {
     Scope(usize),
 }
 
-/// An owner a borrow borrows from.
-#[derive(Clone, Debug)]
+/// An owner a borrow borrows from. A generator's placeholders share one
+/// storage, so the name is part of what tells roots apart.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct Root {
     pub(super) owner: BorrowKey,
     pub(super) name: String,
     pub(super) life: Life,
 }
 
-impl Root {
-    /// Whether a borrow of it may outlive the frame: only what the caller lent.
-    pub(super) fn outlives_frame(&self) -> bool {
-        self.life == Life::Lent
-    }
-}
-
-impl PartialEq for Root {
-    fn eq(&self, other: &Self) -> bool {
-        self.owner == other.owner
-    }
-}
-
-impl Eq for Root {}
-
-impl PartialOrd for Root {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Root {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.owner.cmp(&other.owner)
+impl Life {
+    /// Whether an owner living this long may hold a borrow of `root`. What
+    /// the caller lent holds only what it lent: the callee cannot know how
+    /// the rest compares.
+    pub(super) fn may_hold(self, root: &Root) -> bool {
+        match self {
+            Life::Lent => root.life == Life::Lent,
+            held => root.life <= held,
+        }
     }
 }
 
@@ -183,7 +169,7 @@ impl FunctionCompiler<'_> {
 
     /// The owners the references inside `expression`, a value of `element`,
     /// borrow from: a reference's roots, and those of each reference field.
-    fn value_roots(&self, expression: &Expr, element: ElementType) -> BTreeSet<Root> {
+    pub(super) fn value_roots(&self, expression: &Expr, element: ElementType) -> BTreeSet<Root> {
         if !self.holds_reference(element) {
             return BTreeSet::new();
         }
@@ -216,7 +202,11 @@ impl FunctionCompiler<'_> {
                     .flatten()
                     .collect()
             }
-            // Any other value holding a reference is a name or a call.
+            Expr::Name(name, _) => match self.resolve(name).and_then(|(_, binding)| self.held.get(&identity(&binding.storage)?)) {
+                Some(held) => held.clone(),
+                None => self.roots(expression),
+            },
+            // Any other value holding a reference is a call.
             _ => self.roots(expression),
         }
     }
@@ -224,7 +214,10 @@ impl FunctionCompiler<'_> {
     /// Whether a value of `element` holds a reference.
     pub(super) fn holds_reference(&self, element: ElementType) -> bool {
         match element {
-            ElementType::Scalar(type_name) => self.types.referent(type_name).is_some(),
+            ElementType::Scalar(type_name) => {
+                self.types.referent(type_name).is_some()
+                    || self.types.sequence_element(type_name).is_some_and(|element| self.holds_reference(element))
+            }
             ElementType::Struct(id) => self
                 .types
                 .structure(id)
@@ -281,7 +274,9 @@ impl FunctionCompiler<'_> {
         if !self.reseatable.contains(&own) {
             return Ok(false);
         }
-        self.check_outlives(name, &self.roots(value), span)?;
+        if let Some(target) = self.named_root(name) {
+            check_holds(&target, &self.roots(value), span)?;
+        }
         let source = match self.view_of(value)? {
             Some((descriptor, found, found_rank)) if (found, found_rank) == (element, rank) => descriptor,
             Some(_) => return Err(Diagnostic::new(span, format!("{name:?} views another element type or rank"))),
@@ -334,7 +329,7 @@ impl FunctionCompiler<'_> {
             (None, Some(struct_id)) => self.value_roots(expression, ElementType::Struct(struct_id)),
             (None, None) => self.value_roots(expression, ElementType::Scalar(self.signature.result)),
         };
-        match roots.iter().find(|one| !one.outlives_frame()) {
+        match roots.iter().find(|one| !Life::Lent.may_hold(one)) {
             Some(local) => Err(Diagnostic::new(span, format!("a returned borrow of {:?} would dangle; only a borrowed parameter's can be returned", local.name))),
             None => Ok(()),
         }
@@ -365,10 +360,9 @@ impl FunctionCompiler<'_> {
 
     fn is_borrowed(&self, owner: BorrowKey) -> bool {
         let borrowed = self.scopes.iter().flat_map(|scope| scope.values()).any(|binding| {
-            identity(&binding.storage) != Some(owner)
-                && borrow_key(&binding.storage)
-                    .and_then(|key| self.borrowed_from.get(&key))
-                    .is_some_and(|roots| roots.iter().any(|root| root.owner == owner))
+            let lent = borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key));
+            let held = identity(&binding.storage).and_then(|key| self.held.get(&key));
+            identity(&binding.storage) != Some(owner) && lent.into_iter().chain(held).flatten().any(|root| root.owner == owner)
         });
         borrowed || self.iterated.contains(&owner)
     }
@@ -392,25 +386,84 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Errs when a borrow rooted in `roots` is stored where `target` holds
-    /// it: `target` must not outlive any of them.
-    pub(super) fn check_outlives(&self, target: &str, roots: &BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
-        let Some(target) = self.named_root(target) else {
+    /// Stores a borrow rooted in `roots` where `container` keeps it: the
+    /// one check of every store. Each owner `container` writes into must not
+    /// outlive a root, and borrows them from then on.
+    pub(super) fn store_borrow(&mut self, container: &Expr, roots: BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
+        if roots.is_empty() {
             return Ok(());
+        }
+        for target in self.store_targets(container) {
+            check_holds(&target, &roots, span)?;
+            if matches!(target.life, Life::Frame | Life::Scope(_)) {
+                self.held.entry(target.owner).or_default().extend(roots.iter().cloned());
+            }
+        }
+        Ok(())
+    }
+
+    /// The owners a store into `container` writes: its root binding, or
+    /// what that binding borrows when it is a reference or a view.
+    fn store_targets(&self, container: &Expr) -> Vec<Root> {
+        let Some(name) = expression_owner(container) else {
+            return Vec::new();
         };
-        match roots.iter().find(|root| root.life > target.life) {
-            Some(root) => Err(Diagnostic::new(span, format!("{:?} would outlive {:?}, which it borrows", target.name, root.name))),
-            None => Ok(()),
+        let Some((depth, binding)) = self.resolve(name) else {
+            return Vec::new();
+        };
+        match (&binding.storage, borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key))) {
+            (Storage::Reference(_) | Storage::Slice(_), Some(roots)) => roots.iter().cloned().collect(),
+            _ => self.root(name, depth, binding).into_iter().collect(),
         }
     }
 
-    /// Errs when assigning `value`, of `element`, through `target` would
-    /// store a borrow of something `target`'s owner outlives.
-    pub(super) fn check_assigned_borrows(&self, target: &AssignTarget, value: &Expr, element: ElementType, span: Span) -> Result<(), Diagnostic> {
+    /// Stores what a call passes: it may keep any borrow it is lent, or
+    /// any its by-value arguments hold, in what a `&mut` argument holds.
+    pub(super) fn store_call_borrows(&mut self, arguments: &[Expr], parameters: &[SignatureParameter], span: Span) -> Result<(), Diagnostic> {
+        let lent: BTreeSet<Root> = arguments
+            .iter()
+            .zip(parameters)
+            .flat_map(|(argument, parameter)| match *parameter {
+                SignatureParameter::Borrowed { .. } => self.roots(argument),
+                SignatureParameter::Scalar(type_name) => self.value_roots(argument, ElementType::Scalar(type_name)),
+                SignatureParameter::Owned { struct_id, .. } => self.value_roots(argument, ElementType::Struct(struct_id)),
+                SignatureParameter::Adapter { .. } => BTreeSet::new(),
+            })
+            .collect();
+        for (argument, parameter) in arguments.iter().zip(parameters) {
+            if let SignatureParameter::Borrowed { mutable: true, target, .. } = *parameter {
+                if self.holds_reference(binding_element(target)) {
+                    self.store_borrow(argument, lent.clone(), span)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Stores what assigning `value`, of `element`, through `target` keeps.
+    pub(super) fn store_assigned_borrows(&mut self, target: &AssignTarget, value: &Expr, element: ElementType, span: Span) -> Result<(), Diagnostic> {
         let Some(owner) = written_owner(target) else {
             return Ok(());
         };
-        self.check_outlives(owner, &self.value_roots(value, element), span)
+        let roots = self.value_roots(value, element);
+        self.store_borrow(&Expr::Name(owner.to_owned(), span), roots, span)
+    }
+}
+
+/// Errs unless `target` may hold a borrow of each of `roots`.
+fn check_holds(target: &Root, roots: &BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
+    match roots.iter().find(|root| !target.life.may_hold(root)) {
+        Some(root) => Err(Diagnostic::new(span, format!("{:?} would outlive {:?}, which it borrows", target.name, root.name))),
+        None => Ok(()),
+    }
+}
+
+/// What a binding of `type_` holds, element by element.
+fn binding_element(type_: BindingType) -> ElementType {
+    match type_ {
+        BindingType::Scalar(type_name) => ElementType::Scalar(type_name),
+        BindingType::Struct(id) => ElementType::Struct(id),
+        BindingType::Array { element, .. } | BindingType::Slice { element, .. } => element,
     }
 }
 

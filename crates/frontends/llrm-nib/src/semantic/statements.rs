@@ -312,7 +312,7 @@ impl<'a> FunctionCompiler<'a> {
                     AssignmentPlace::Bits { .. } | AssignmentPlace::Array(..) => None,
                 };
                 if let (Some(element), None) = (written, operation) {
-                    self.check_assigned_borrows(target, value, element, *span)?;
+                    self.store_assigned_borrows(target, value, element, *span)?;
                 }
                 match place {
                     AssignmentPlace::Scalar(destination, element) => {

@@ -1574,6 +1574,8 @@ struct FunctionCompiler<'a> {
     lambdas: Vec<lambdas::Lambda>,
     /// The owners each reference or view binding borrows, by its value.
     borrowed_from: BTreeMap<borrows::BorrowKey, BTreeSet<borrows::Root>>,
+    /// The borrows each owner holds in its value, stored there.
+    held: BTreeMap<borrows::BorrowKey, BTreeSet<borrows::Root>>,
     /// How long each parameter's binding lives, as a root.
     parameter_lives: BTreeMap<borrows::BorrowKey, borrows::Life>,
     /// Views bound with `let mut`, which an assignment reseats.
@@ -1641,6 +1643,7 @@ impl<'a> FunctionCompiler<'a> {
             aggregate_temporaries: Vec::new(),
             lambdas: Vec::new(),
             borrowed_from: BTreeMap::new(),
+            held: BTreeMap::new(),
             parameter_lives: BTreeMap::new(),
             reseatable: BTreeSet::new(),
             iterated: Vec::new(),
@@ -1705,6 +1708,16 @@ impl<'a> FunctionCompiler<'a> {
             };
             if let Some(owner) = borrows::identity(&binding.storage) {
                 compiler.parameter_lives.insert(owner, life);
+                // A value passed in holds only what the caller lent.
+                let passed = match binding.type_ {
+                    BindingType::Scalar(type_name) => Some(ElementType::Scalar(type_name)),
+                    BindingType::Struct(id) => Some(ElementType::Struct(id)),
+                    _ => None,
+                };
+                if life == borrows::Life::Frame && passed.is_some_and(|one| compiler.holds_reference(one)) {
+                    let root = borrows::Root { owner, name: parameter.name.clone(), life: borrows::Life::Lent };
+                    compiler.held.insert(owner, BTreeSet::from([root]));
+                }
             }
             compiler.scopes.last_mut().expect("scope").insert(parameter.name.clone(), binding);
         }

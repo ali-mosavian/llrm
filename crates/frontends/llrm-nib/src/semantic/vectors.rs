@@ -549,6 +549,8 @@ impl FunctionCompiler<'_> {
             ("push", [value]) => {
                 let settled = self.settled_failure(value, span)?;
                 let value = settled.as_ref().unwrap_or(value);
+                let roots = self.value_roots(value, element);
+                self.store_borrow(receiver, roots, span)?;
                 let place = self.sequence_place(receiver, span)?;
                 let vector = self.value(type_name);
                 self.emit("load", vec![vector], vec![place.clone()], None);
