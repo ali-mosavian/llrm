@@ -57,6 +57,8 @@ pub struct Interprocedural {
     /// What the last run proved.
     pub proved: Option<Proved>,
     pub inline: inline::Threshold,
+    /// Inlining weighs code bytes, not clocks.
+    pub size: bool,
 }
 
 impl ProgramPass for Interprocedural {
@@ -66,7 +68,7 @@ impl ProgramPass for Interprocedural {
 
     fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let pipeline = &mut self.pipeline;
-        let costs = program.target.costs();
+        let costs = if self.size { program.target.size_costs() } else { program.target.costs() };
         let roots = roots(program);
         let mut modules = managers(program, analyses);
         let proved = optimized::<String>(
@@ -171,13 +173,15 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &counts, &private[at], costs, threshold);
+            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold);
+            let recursive = inline::recursive(module);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
-                let constant = inline::constant_sites(module, caller, &constants, costs, threshold);
+                let constant = inline::constant_sites(module, &program.layout, &recursive, caller, &constants, costs, threshold);
                 let (context, function) = function_mut(module, id);
-                if !inline::expanded(context, function, &available, Some(&constant))? {
+                let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
+                if !inline::expanded(context, function, &by, &available, Some(&constant))? {
                     continue;
                 }
                 edited(&mut modules[at], &[id]);
@@ -255,13 +259,15 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &counts, &private[at], costs, threshold);
+            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold);
+            let recursive = inline::recursive(module);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
                 let current = facts::current_call_constants(&module.context, caller);
-                let constant = inline::constant_sites(module, caller, &current, costs, threshold);
+                let constant = inline::constant_sites(module, &program.layout, &recursive, caller, &current, costs, threshold);
                 let (context, function) = function_mut(module, id);
-                if !inline::expanded(context, function, &available, Some(&constant))? {
+                let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
+                if !inline::expanded(context, function, &by, &available, Some(&constant))? {
                     continue;
                 }
                 edited(&mut modules[at], &[id]);

@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 
 use llrm_mir::context::GlobalId;
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::interpret::{self, Val};
 use llrm_mir::module::{Linkage, Module};
 
@@ -24,24 +25,18 @@ fn private(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().filter(|(_, global, _)| matches!(global.linkage, Linkage::Internal | Linkage::Private)).map(|(id, _, _)| id).collect()
 }
 
-/// `module` with each body's effects stated, as the whole-program step leaves it.
-fn stamped(module: &Module) -> Module {
-    let mut stamped = module.clone();
-    crate::testing::stamped(&mut stamped).unwrap();
-    stamped
-}
-
 fn costs(call: i64) -> OperationCosts {
     OperationCosts { call, ..OperationCosts::default() }
 }
 
 /// Every call in `caller` that `candidates` admits, inlined.
 fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
-    let known = stamped(module);
-    let available = candidates(&known, &call_counts(&known), &private(&known), &costs(call), Threshold::default());
+    let layout = DataLayout::default();
+    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), Threshold::default());
+    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)) };
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
-    while expanded(context, function, &available, None).unwrap() {
+    while expanded(context, function, &by, &available, None).unwrap() {
         changed = true;
     }
     changed
@@ -83,16 +78,16 @@ b1:
 
 define i16 @main() {
 b1:
-  br label %b11
-
-b11:
   br label %0
 
 0:
+  br label %1
+
+1:
   br label %b4
 
 b4:
-  %joined = phi i16 [ 37, %0 ]
+  %joined = phi i16 [ 37, %1 ]
   ret i16 %joined
 }
 "
@@ -142,11 +137,10 @@ b1:
 }
 "
     ));
-    let module = stamped(&module);
-    let private = private(&module);
-    assert_eq!(candidates(&module, &call_counts(&module), &private, &costs(0), Threshold::default()), IndexMap::default());
+    let (private, layout) = (private(&module), DataLayout::default());
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), Threshold::default()), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
-    assert_eq!(candidates(&module, &call_counts(&module), &private, &costs(2), Threshold::default()).len(), 1);
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), Threshold::default()).len(), 1);
 }
 
 const HELPERS: &str = "define internal i16 @scale(i16 %x) {
@@ -379,7 +373,7 @@ b3:
 
 #[test]
 fn test_constant_sites_admit_only_a_call_with_a_known_actual() {
-    let module = stamped(&parsed(
+    let module = parsed(
         "define internal i16 @leaf(i16 %x) {
 b1:
   %y = add i16 %x, 37
@@ -394,14 +388,14 @@ b1:
   ret i16 %sum
 }
 ",
-    ));
+    );
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    let sites = constant_sites(&module, main, &constants, &costs(2), Threshold::default());
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &costs(2), Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[0]]);
     // Not priced above the work it clones: none.
-    assert!(constant_sites(&module, main, &constants, &costs(1), Threshold::default()).is_empty());
+    assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &costs(1), Threshold::default()).is_empty());
 }
 
 #[test]
@@ -413,10 +407,55 @@ fn test_call_counts_count_direct_calls_to_defined_functions() {
     assert_eq!(counts.get(&id(&module, "external")), None);
 }
 
+/// A callee whose frame is `size` bytes, called from `main`, which the loop
+/// calls `sites` times.
+fn framed(size: u32, sites: usize) -> String {
+    let calls: String = (0..sites).map(|at| format!("  %r{at} = call i16 @peek(i16 {at})\n")).collect();
+    let sum: String = (1..sites).map(|at| format!("  %s{at} = add i16 {}, %r{at}\n", if at == 1 { "%r0".to_owned() } else { format!("%s{}", at - 1) })).collect();
+    format!(
+        "define i16 @peek(i16 %k) {{\nb1:\n  %buf = alloca [{size} x i8]\n  %p = getelementptr i8, ptr %buf, i16 %k\n  store i8 1, ptr %p\n  %v = load i8, ptr %p\n  %w = zext i8 %v to i16\n  ret i16 %w\n}}\n\ndefine i16 @main() {{\nb1:\n{calls}{sum}  ret i16 %s{}\n}}\n",
+        sites - 1
+    )
+}
+
 #[test]
-fn test_a_callee_whose_effects_are_not_stated_is_not_a_candidate() {
-    let module = parsed(MIN);
-    assert!(candidates(&module, &call_counts(&module), &private(&module), &costs(8), Threshold::default()).is_empty());
-    let module = stamped(&module);
-    assert_eq!(candidates(&module, &call_counts(&module), &private(&module), &costs(8), Threshold::default()).len(), 1);
+fn test_copies_whose_frames_add_up_past_the_limit_stay() {
+    // Three 300-byte frames became `sub sp, 900` in a caller that had none.
+    let mut module = parsed(&framed(300, 3));
+    assert!(!inline_into(&mut module, "main", 40));
+    // Small ones inline.
+    let mut module = parsed(&framed(40, 3));
+    assert!(inline_into(&mut module, "main", 40));
+}
+
+#[test]
+fn test_a_frame_is_not_copied_into_a_recursive_function() {
+    // Each level of a recursive walk reserved the callee's 300 bytes.
+    let text = framed(8, 1).replace("define i16 @main() {\nb1:\n  %r0 = call i16 @peek(i16 0)\n  ret i16 %s0\n}", "define i16 @main(i16 %n) {\nb1:\n  %r0 = call i16 @peek(i16 %n)\n  %m = call i16 @main(i16 %n)\n  %t = add i16 %r0, %m\n  ret i16 %t\n}");
+    let mut module = parsed(&text);
+    assert!(!inline_into(&mut module, "main", 40), "{}", printed(&module));
+}
+
+#[test]
+fn test_a_counted_alloca_stays_a_call() {
+    // The count is a parameter: hoisted to the caller's entry, it sat above
+    // the value it is counted by ("does not dominate").
+    let text = "define internal i16 @dyn(i16 %n) {
+b1:
+  %buf = alloca i8, i16 %n
+  store i8 1, ptr %buf
+  %v = load i8, ptr %buf
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+
+define i16 @main(i16 %k) {
+b1:
+  %m = add i16 %k, 1
+  %r = call i16 @dyn(i16 %m)
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    assert!(!inline_into(&mut module, "main", 40));
 }

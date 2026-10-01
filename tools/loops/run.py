@@ -20,7 +20,7 @@ import shutil
 import argparse
 import subprocess
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -141,7 +141,7 @@ def check_mir(batch: Batch, result: Result) -> None:
     want = mir.fold(batch.expected)
     first, last = mir.stages(batch.work / "stages")
     names = [mir_name(batch.lang, c, k + 1) for k, c in enumerate(batch.cases)]
-    for name in mir.called(last, names):
+    for name in [] if batch.config.inline else mir.called(last, names):
         result.wrong.append(f"{batch.config.tag} {batch.lang}: {name} was inlined into the driver, so went unchecked")
     for stage in (first, last):
         try:
@@ -252,6 +252,7 @@ def reference_meets(result: Result, case: str, config: str, bound: int) -> bool:
 
 
 def judge(cases: list[Case], langs: list[str], configs: list, result: Result) -> None:
+    configs = [one for one in configs if not one.inline]
     by_name = {c.name: c for c in cases}
     for case in cases:
         for lang in langs:
@@ -313,6 +314,10 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
 
 
 def configs_from(args) -> list[build.Config]:
+    return [replace(one, inline=args.inline) for one in _configs_from(args)]
+
+
+def _configs_from(args) -> list[build.Config]:
     if args.config:
         out = []
         for one in args.config:
@@ -383,6 +388,7 @@ def main() -> int:
     parser.add_argument("--lang", action="append", choices=list(EMITTERS))
     parser.add_argument("--config", action="append", help="CPU-OPT, e.g. 486-O2")
     parser.add_argument("--dump", type=Path, default=build.ROOT / "build" / "loops", help="where everything goes")
+    parser.add_argument("--inline", action="store_true", help="let the compiler inline the functions under test: correctness only, no shortfalls")
     parser.add_argument("--no-dos", action="store_true", help="MIR only")
     parser.add_argument("--no-refs", action="store_true")
     parser.add_argument("--no-validate", action="store_true", help="skip checking the oracle against clang and BC")
@@ -492,7 +498,7 @@ def main() -> int:
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         jobs += [j for got in pool.map(one, all_batches) if got for j in got]
-        if not args.no_refs:
+        if not (args.no_refs or args.inline):
             chosen = per_lang.get("c", ([],))[0]
             chunks = [chosen[k : k + 25] for k in range(0, len(chosen), 25)]
             list(pool.map(lambda job: references(job[1], job[0], work / "refs", result),

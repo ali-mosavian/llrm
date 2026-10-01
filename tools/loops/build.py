@@ -28,10 +28,14 @@ class Config:
     cpu: str = "486"
     opt: str = "-O2"
     nib_checked: bool = False
+    # Whether the compiler may inline the function under test into its driver.
+    # Off, so a loop is measured where the case put it; on, only correctness
+    # is judged (the compiled code is the driver's, not the case's).
+    inline: bool = False
 
     @property
     def tag(self) -> str:
-        return f"{self.cpu}{self.opt}{'-checked' if self.nib_checked else ''}"
+        return f"{self.cpu}{self.opt}{'-checked' if self.nib_checked else ''}{'-inline' if self.inline else ''}"
 
 
 class CompileError(Exception):
@@ -60,8 +64,10 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
     if stages:
         env["LLRM_MIR_STAGES"] = str(stages)
     # no unrolling or peeling: each case keeps one loop to measure, and compiles faster;
-    # no inlining: the function under test stays a call, else the driver's constants fold it
-    common = [config.opt, "--cpu", config.cpu, "-fno-unroll-loops", "-fno-peel-loops", "-fno-inline-functions", "-o", str(obj)]
+    # no inlining unless the config asks: the function under test stays a call, else the driver's constants fold it
+    common = [config.opt, "--cpu", config.cpu, "-fno-unroll-loops", "-fno-peel-loops", "-o", str(obj)]
+    if not config.inline:
+        common.insert(-2, "-fno-inline-functions")
     if lang == "c":
         command = [str(BIN / "llrm-c"), str(source), *common]
     elif lang == "bas":

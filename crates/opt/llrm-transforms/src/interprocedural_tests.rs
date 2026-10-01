@@ -261,10 +261,44 @@ fn test_the_step_runs_as_a_program_pass() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default() });
+    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size: false });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
+}
+
+#[test]
+fn test_a_size_build_weighs_bytes_not_clocks() {
+    // A public six-operation body at three sites: cheaper than three calls
+    // in clocks, dearer in bytes. -Os copied it and grew the code.
+    let text = "define i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  ret i16 %t5
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = call i16 @mix(i16 %p, i16 %q)
+  ret i16 %r
+}
+";
+    let calls = |size: bool| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, ..OperationCosts::default() }, ..Default::default() };
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size });
+        manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
+        printed(&module).matches("call i16 @mix").count()
+    };
+    assert_eq!((calls(false), calls(true)), (0, 3));
 }
 
 const STAMPED: &str = "@slot = global ptr null
