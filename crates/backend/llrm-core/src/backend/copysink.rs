@@ -102,26 +102,6 @@ fn _between(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, copy_at: i
     Some(forward.intersection(&backward).copied().collect())
 }
 
-/// Whether every path from `header` to `exit_from` inside the loop passes
-/// through `copy_at`.
-fn _dominates(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, header: i64, copy_at: i64, exit_from: i64) -> bool {
-    if copy_at == header || copy_at == exit_from {
-        return true;
-    }
-    let mut seen = BTreeSet::new();
-    let mut queue = vec![header];
-    while let Some(at) = queue.pop() {
-        if at == copy_at || !seen.insert(at) {
-            continue;
-        }
-        if at == exit_from {
-            return false;
-        }
-        queue.extend(at_of[&at].succ.iter().copied().filter(|to| inside.contains(to)));
-    }
-    true
-}
-
 /// Per loop block, the lanes live on entry along paths that stay in the loop.
 ///
 /// The exit is left out: a lane only the exit reads is what the sunk copy is
@@ -157,6 +137,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
     if found.is_empty() {
         return body.clone();
     }
+    let dominance = loopy::dominance(&graph, Some(body.entry));
     let universe = _universe();
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut predecessors: IndexMap<i64, Vec<i64>> = at_of.keys().map(|at| (*at, Vec::new())).collect();
@@ -187,7 +168,9 @@ pub fn sunk(body: &LirBody) -> LirBody {
             continue;
         }
         let round_into = _round(&at_of, &inside, &universe);
-        for block in inside.iter().map(|at| at_of[at]).filter(|block| _dominates(&at_of, &inside, found_loop.header, block.at, source_at)) {
+        // Every way out runs the copy first: a loop left from its header
+        // before any trip never ran its latch.
+        for block in inside.iter().map(|at| at_of[at]).filter(|block| dominance.dominates(block.at, source_at)) {
             for (index, one) in block.insns.iter().enumerate() {
                 let pair = _copy(one);
                 let Some((dest, register)) = pair else {
