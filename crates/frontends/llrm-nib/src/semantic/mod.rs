@@ -1619,6 +1619,12 @@ struct FunctionCompiler<'a> {
     moves: moves::Moves,
     /// Each owning local's live flag, when its type holds a `drop`.
     drop_flags: BTreeMap<moves::Owner, u32>,
+    /// The flag of each field with a `drop` that moved on some paths only.
+    field_flags: BTreeMap<moves::Moved, u32>,
+    /// Where each field with a `drop` moved: block, instruction.
+    field_moves: Vec<(moves::Moved, u32, usize)>,
+    /// Where an owner, or a field of it, was given a value again.
+    field_refills: Vec<(moves::Moved, u32, usize)>,
     /// What each owning value read by name came from.
     origins: BTreeMap<u32, ownership::Origin>,
     /// Owned values the current statement made and has not moved.
@@ -1705,6 +1711,9 @@ impl<'a> FunctionCompiler<'a> {
             owned_references: BTreeSet::new(),
             moves: moves::Moves::default(),
             drop_flags: BTreeMap::new(),
+            field_flags: BTreeMap::new(),
+            field_moves: Vec::new(),
+            field_refills: Vec::new(),
             origins: BTreeMap::new(),
             temporaries: Vec::new(),
             aggregate_temporaries: Vec::new(),
@@ -1892,6 +1901,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.check_conflicts()?;
         self.lend_across();
+        self.clear_moved();
         self.prune_unreachable();
         let blocks = self
             .blocks

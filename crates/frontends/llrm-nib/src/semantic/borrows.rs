@@ -668,7 +668,7 @@ pub(super) fn written_owner(target: &AssignTarget) -> Option<&str> {
 
 /// The owner `place` is in, the fields down to it, and whether those name
 /// it exactly: an element is somewhere in its sequence.
-fn owner_path(place: &Expr) -> Option<(&str, Vec<String>, bool)> {
+pub(super) fn owner_path(place: &Expr) -> Option<(&str, Vec<String>, bool)> {
     fn walk(place: &Expr) -> Option<(&str, Vec<String>, bool)> {
         match place {
             Expr::Name(name, _) => Some((name, Vec::new(), true)),

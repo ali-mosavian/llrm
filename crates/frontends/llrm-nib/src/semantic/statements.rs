@@ -436,7 +436,12 @@ impl<'a> FunctionCompiler<'a> {
                     self.emit("store", Vec::new(), vec![flag, live], None);
                 }
                 if let Some(storage) = reinitialized {
-                    self.reinitialized(&storage);
+                    self.reinitialized(&storage, &[]);
+                }
+                if let (AssignTarget::Member { .. }, None) = (target, operation) {
+                    if let Some((owner, _, path)) = self.projected(&target.expression(*span)) {
+                        self.refilled(owner, &path);
+                    }
                 }
             }
             Statement::Expr(expression) => {

@@ -8073,6 +8073,18 @@ impl Compiler {
         if op == Binary::Power {
             return self.power(left, right);
         }
+        // BC folds a constant subexpression at compile time, to its type: a
+        // SINGLE one is a SINGLE constant, as CONST's is. Run-time arithmetic
+        // keeps the x87's precision. The folder is CONST's own.
+        if matches!(op, Binary::Add | Binary::Subtract | Binary::Multiply | Binary::Divide) {
+            if let (Ok((left_type, left)), Ok((right_type, right))) = (self.constant(left), self.constant(right)) {
+                if matches!(common_type(left_type, right_type, op), Ok(SINGLE | DOUBLE)) {
+                    if let Ok((type_id, Number::Real(value))) = constant_binary(op, left_type, left, right_type, right) {
+                        return Ok((self.floating_literal(&value, type_id)?, type_id));
+                    }
+                }
+            }
+        }
         let comparison = matches!(
             op,
             Binary::Eq
@@ -8187,8 +8199,10 @@ impl Compiler {
         } else {
             binary_name(op)
         };
-        if self.options.checked_division && matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
-            self.division_checked(&left_operand, &right_operand, common, narrow_divmod)?;
+        // Where errors land the processor's trap, which names no statement, is code.
+        if (self.options.checked_division || self.handles_errors || self.module_handled) && matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
+            // Where only errors land (no -fsanitize), the zero divisor is the IR's own check.
+            self.division_checked(&left_operand, &right_operand, common, narrow_divmod, self.options.checked_division)?;
             if !narrow_divmod {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));
@@ -8234,13 +8248,13 @@ impl Compiler {
     /// and for INTEGER operands (`narrow`, divided as LONG) -32768 by -1,
     /// whose quotient overflows the 16-bit divide. A LONG MIN by -1 wraps in
     /// BC's software divide.
-    fn division_checked(&mut self, dividend: &Operand, divisor: &Operand, type_id: u32, narrow: bool) -> Result<(), SemanticError> {
+    fn division_checked(&mut self, dividend: &Operand, divisor: &Operand, type_id: u32, narrow: bool, zero_too: bool) -> Result<(), SemanticError> {
         let constant = |operand: &Operand| match operand {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
         };
         let long = |value: i64| Operand::Constant(type_id, Number::Integer(value));
-        if constant(divisor).is_none_or(|value| value == 0) {
+        if zero_too && constant(divisor).is_none_or(|value| value == 0) {
             let zero = self.computed("eq", BOOLEAN, vec![divisor.clone(), long(0)]);
             self.raise_if(zero, 11)?;
         }
@@ -8814,7 +8828,7 @@ impl Compiler {
                     })
             }
             Expr::Field { .. } => {
-                let name = dotted_name(expression).expect("field chain");
+                let Some(name) = dotted_name(expression) else { return self.fail("not a constant expression") };
                 self.constants
                     .get(canonical(&name))
                     .cloned()
