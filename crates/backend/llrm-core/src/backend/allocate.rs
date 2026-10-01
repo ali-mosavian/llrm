@@ -757,8 +757,9 @@ pub fn rewritten(
     segments: &Segments,
     frame: &mut Frame,
     splitting: bool,
+    preferred: Option<&IndexMap<u32, Register>>,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
-    _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)))
+    _allocated(body, pinned, unspillable, protected, preferred, cpu, segments, Some((frame, splitting)))
 }
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
@@ -1667,6 +1668,8 @@ pub struct RegAlloc {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
     pub segments: Segments,
+    /// Registers an earlier phase advises for values, as `ssacolour` gives them on SSA.
+    pub colours: Option<crate::backend::ssacolour::Colours>,
 }
 
 impl RegAlloc {
@@ -1678,7 +1681,7 @@ impl RegAlloc {
         cpu: ProfileOrName<'_>,
         segments: &Segments,
     ) -> Result<Self, String> {
-        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone() })
+        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone(), colours: None })
     }
 
     /// Assign; where that spills, make the spill real and assign again.
@@ -1749,12 +1752,14 @@ impl RegAlloc {
         let start = frame.borrow().saved();
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
+        let advised: IndexMap<u32, Register> = self.colours.as_ref().map(|colours| colours.borrow().clone()).unwrap_or_default();
         let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
             let mut pins = prefer.clone();
             pins.extend(constrain::required(candidate));
             let before = last_resorts();
+            let advice = (!advised.is_empty()).then_some(&advised);
             let (got, out, spilled) =
-                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
+                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting, advice)?;
             Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
         let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
@@ -1807,6 +1812,11 @@ impl RegAlloc {
                     }
                 }
             }
+        }
+        if !advised.is_empty() {
+            let asked = advised.keys().filter(|value| best.got.r#where.contains_key(*value)).count();
+            let agreed = advised.iter().filter(|(value, register)| best.got.r#where.get(*value).is_some_and(|got| _whole(*got) == _whole(**register))).count();
+            llrm_support::debug!("advice", "{}: {agreed} of {asked} values took their colour ({} advised)", body.name, advised.len());
         }
         frame.borrow_mut().restore(&best.slots);
         applied(&best.out, &best.got).map(|placed| datagroup::restored(&placed, data_free, &segments))

@@ -59,6 +59,7 @@ pub mod executed;
 pub mod schedule;
 pub mod select;
 pub mod spiller;
+pub mod ssacolour;
 pub mod ssarepair;
 pub mod ssaspill;
 pub mod spillforward;

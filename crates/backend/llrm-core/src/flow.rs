@@ -14,7 +14,7 @@ use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, ssaspill, twoaddr,
+    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, ssacolour, ssaspill, twoaddr,
 };
 
 use crate::backend::verify::{self, Malformed};
@@ -42,16 +42,17 @@ pub fn machine<'a>(
         }
     }
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
+    let colours: ssacolour::Colours = Rc::default();
     Ok(vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone() }),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), colours: Rc::clone(&colours) }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None, segments)),
-        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)?),
+        Box::new(allocate::RegAlloc { colours: Some(Rc::clone(&colours)), ..allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)? }),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),

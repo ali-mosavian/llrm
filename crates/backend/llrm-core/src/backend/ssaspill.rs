@@ -25,7 +25,7 @@ use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{self, Classes, _whole};
 use crate::backend::frame::Frame;
 use crate::backend::target::{self, Segments};
-use crate::backend::{spiller, splitkit, ssarepair, twoaddr};
+use crate::backend::{spiller, splitkit, ssacolour, ssarepair, twoaddr};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -38,6 +38,8 @@ const EXIT: i64 = 1 << 20;
 pub struct SsaSpill {
     pub frame: Rc<RefCell<Frame>>,
     pub segments: Segments,
+    /// Where the colours of the spilled SSA body go, for the allocator.
+    pub colours: ssacolour::Colours,
 }
 
 impl SsaSpill {
@@ -62,7 +64,11 @@ impl LIRTransform for SsaSpill {
         if !Self::enabled() {
             return Ok(body);
         }
-        spilled(&body, &mut self.frame.borrow_mut(), &self.segments)
+        let out = spilled(&body, &mut self.frame.borrow_mut(), &self.segments)?;
+        if std::env::var_os("LLRM_SSA_COLOUR").is_some() {
+            *self.colours.borrow_mut() = ssacolour::coloured(&out, &untouchable(&out), &self.segments);
+        }
+        Ok(out)
     }
 }
 
