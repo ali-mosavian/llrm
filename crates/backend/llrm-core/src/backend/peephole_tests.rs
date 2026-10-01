@@ -1269,6 +1269,46 @@ fn test_zero_compare_before_its_branch_is_or() {
     }
 }
 
+/// A loop counted up to zero kept `add bx,2; cmp bx,0; jne` where its
+/// branch was followed by a jump to the exit: the add's flags were the test.
+#[test]
+fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
+    let bx = rl(Register::BX, 2);
+    let step = insn(0, Some((0, 3)), Some(sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), im(2, 2)])), vec![], vec![]);
+    let compare = insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![]);
+    let branch = insn(6, Some((6, 8)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
+    let jump = insn(8, Some((8, 10)), Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(10))), vec![], vec![]);
+    let ax = rl(Register::AX, 2);
+    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
+    let blocks = vec![
+        block(0, vec![Arc::new(step), Arc::new(compare), Arc::new(branch), Arc::new(jump)], vec![0, 10]),
+        block(10, vec![Arc::new(flags), Arc::new(exit)], vec![]),
+    ];
+    let names = tested(&body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    assert_eq!(names, ["add", "", "jne", "jmp"]);
+}
+
+/// rcflip's RAMP kept `add si,2; cmp si,0; jne`: an anchor carrying a
+/// phi's value sat between the test and its branch.
+#[test]
+fn test_a_zero_test_before_an_anchor_and_its_branch_reads_the_step() {
+    let bx = rl(Register::BX, 2);
+    let step = insn(0, Some((0, 3)), Some(sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), im(2, 2)])), vec![], vec![]);
+    let compare = insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), im(0, 2)])), vec![], vec![]);
+    let anchor = insn(6, None, Some(sem(Operation::Nothing, "", vec![], vec![])), vec![7], vec![5]);
+    let branch = insn(6, Some((6, 8)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
+    let ax = rl(Register::AX, 2);
+    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
+    let blocks = vec![
+        block(0, vec![Arc::new(step), Arc::new(compare), Arc::new(anchor), Arc::new(branch)], vec![0, 10]),
+        block(10, vec![Arc::new(flags), Arc::new(exit)], vec![]),
+    ];
+    let names = tested(&body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    assert_eq!(names, ["add", "", "", "jne"]);
+}
+
 #[test]
 fn test_register_round_trip_through_memory_is_one_instruction() {
     // `mov bx,[bp-4]; add bx,1; mov [bp-4],bx` where bcc writes `add word ptr [bp-4],1`.
@@ -2915,4 +2955,21 @@ fn test_a_store_through_another_register_is_not_fused() {
     let input = body("two-cells", 0, vec![block(0, head.clone(), vec![1]), block(1, vec![Arc::new(overwrite)], vec![])]);
 
     assert_eq!(whats(&fused(&input).blocks[0].insns), whats(&head));
+}
+
+/// mandel's column counted to zero in memory kept `add [bp-10],1;
+/// cmp [bp-10],0; jne` across an anchor: the add's flags were the test.
+#[test]
+fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-10), 2) });
+    let step = insn(0, Some((0, 4)), Some(sem(Operation::Binary, "add", vec![cell.clone()], vec![cell.clone(), im(1, 2)])), vec![], vec![]);
+    let compare = insn(4, Some((4, 8)), Some(sem(Operation::Compare, "cmp", vec![], vec![cell, im(0, 2)])), vec![], vec![]);
+    let branch = insn(8, Some((8, 10)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(0))), vec![], vec![]);
+    let ax = rl(Register::AX, 2);
+    let flags = insn(10, Some((10, 12)), Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])), vec![], vec![]);
+    let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
+    let anchor = insn(4, None, Some(sem(Operation::Nothing, "", vec![], vec![])), vec![7], vec![5]);
+    let blocks = vec![block(0, vec![Arc::new(step), Arc::new(anchor), Arc::new(compare), Arc::new(branch)], vec![0, 10]), block(10, vec![Arc::new(flags), Arc::new(exit)], vec![])];
+    let names = tested(&body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
+    assert_eq!(names, ["add", "", "", "jne"]);
 }

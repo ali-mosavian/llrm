@@ -52,3 +52,7 @@ pub const ERROR_BOUNDS: &str = "N$EBND";
 pub const ERROR_SHIFT: &str = "N$ESHF";
 pub const ERROR_CONVERT: &str = "N$ECNV";
 pub const ERROR_KEY: &str = "N$EKEY";
+pub const ERROR_DIVIDE: &str = "N$EDIV";
+
+/// The routines that end the program, touching only memory its caller cannot name.
+pub const TERMINATING: [&str; 5] = [ERROR_BOUNDS, ERROR_CONVERT, ERROR_DIVIDE, ERROR_KEY, ERROR_SHIFT];

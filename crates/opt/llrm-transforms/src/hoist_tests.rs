@@ -292,3 +292,37 @@ done:
     let done = checked(&format!("{}{text}", llrm_analysis::testing::DOS), &[vec![0]]);
     assert!(block(&done, "pre").iter().any(|one| one.contains("load")), "{done}");
 }
+
+/// A slice descriptor is a `noalias readonly` parameter and its elements are
+/// written through a pointer loaded from it: the length and the data pointer
+/// it holds are invariant whatever the stores write. Overlap with an
+/// unknown pointer kept both in Nib's loops, and with them every bounds
+/// check out of reach of the counting passes.
+#[test]
+fn test_a_load_from_a_readonly_noalias_parameter_leaves_past_a_store() {
+    let text = "define i16 @f(i16 %n, ptr noalias readonly dereferenceable(16) %d) {
+b0:
+  %data = getelementptr i8, ptr %d, i16 2
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = load ptr, ptr %data
+  %q = getelementptr i8, ptr %p, i16 %i
+  store i8 1, ptr %q
+  %v = load i16, ptr %d
+  %i1 = add i16 %i, %v
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+";
+    let (_, after) = hoisted(text);
+    let body = block_of(&printed(&after), "f", "b2");
+    assert!(body.iter().all(|line| !line.contains("load i16, ptr %d") && !line.contains("load ptr, ptr %data")), "{body:?}");
+}

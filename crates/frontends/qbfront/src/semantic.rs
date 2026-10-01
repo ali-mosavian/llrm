@@ -8073,6 +8073,18 @@ impl Compiler {
         if op == Binary::Power {
             return self.power(left, right);
         }
+        // BC folds a constant subexpression at compile time, to its type: a
+        // SINGLE one is a SINGLE constant, as CONST's is. Run-time arithmetic
+        // keeps the x87's precision. The folder is CONST's own.
+        if matches!(op, Binary::Add | Binary::Subtract | Binary::Multiply | Binary::Divide) {
+            if let (Ok((left_type, left)), Ok((right_type, right))) = (self.constant(left), self.constant(right)) {
+                if matches!(common_type(left_type, right_type, op), Ok(SINGLE | DOUBLE)) {
+                    if let Ok((type_id, Number::Real(value))) = constant_binary(op, left_type, left, right_type, right) {
+                        return Ok((self.floating_literal(&value, type_id)?, type_id));
+                    }
+                }
+            }
+        }
         let comparison = matches!(
             op,
             Binary::Eq
@@ -8816,7 +8828,7 @@ impl Compiler {
                     })
             }
             Expr::Field { .. } => {
-                let name = dotted_name(expression).expect("field chain");
+                let Some(name) = dotted_name(expression) else { return self.fail("not a constant expression") };
                 self.constants
                     .get(canonical(&name))
                     .cloned()

@@ -1877,20 +1877,46 @@ pub fn tested(body: &LirBody) -> LirBody {
             .map(|(index, _)| index)
             .collect();
         let at = |position: isize| work[usize::try_from(position).expect("a non-negative position")];
-        let mut test_at = work.len() as isize - 2;
-        while test_at >= 0 && _moves(&insns[at(test_at)], None) {
+        // A two-way branch may end in a jump to its other side.
+        let jumps = work.last().is_some_and(|&last| insns[last].what.as_ref().is_some_and(|what| what.op == Operation::Jump));
+        let branch_at = work.len() as isize - 1 - isize::from(jumps);
+        let mut test_at = branch_at - 1;
+        // Moves and anchors change no flag.
+        while test_at >= 0 && (_moves(&insns[at(test_at)], None) || _nothing(&insns[at(test_at)])) {
             test_at -= 1;
         }
-        let Some(register) = (test_at >= 0).then(|| _zero_tested(&insns[at(test_at)])).flatten() else {
+        if test_at < 0 {
             continue;
-        };
-        let branch = &insns[*work.last().expect("a test has a branch")];
+        }
+        let branch = &insns[at(branch_at)];
         if !branch.what.as_ref().is_some_and(|what| {
             what.op == Operation::Branch && what.name.as_deref().is_some_and(|name| peep::SET_ZERO_JCC.contains(name))
         }) || !live[&block.at].is_disjoint(&_DIFFERING)
         {
             continue;
         }
+        // A cell's step sets the flags its zero test would, where only
+        // anchors stand between them.
+        if let Some(cell) = _zero_tested_cell(&insns[at(test_at)]) {
+            let mut step_at = test_at - 1;
+            while step_at >= 0 && _nothing(&insns[at(step_at)]) {
+                step_at -= 1;
+            }
+            if step_at >= 0 && _sets_cell(&insns[at(step_at)], &cell) {
+                let test = Arc::clone(&insns[at(test_at)]);
+                blocks[block_index][at(test_at)] = Arc::new(Insn {
+                    what: Some(semantics(Operation::Nothing, "", vec![], vec![])),
+                    defines: Vec::new(),
+                    uses: Vec::new(),
+                    widths: Vec::new(),
+                    ..(*test).clone()
+                });
+            }
+            continue;
+        }
+        let Some(register) = _zero_tested(&insns[at(test_at)]) else {
+            continue;
+        };
         // The straight line into the test: a sole predecessor's work, then the block's.
         let sole = match predecessors.get(&block.at).map(Vec::as_slice) {
             Some([one]) if *one != block_index && body.blocks[*one].succ == [block.at] => Some(*one),
@@ -2023,6 +2049,30 @@ fn _zero_tested(one: &Insn) -> Option<Reg> {
             Some(*register)
         }
         _ => None,
+    }
+}
+
+/// The memory cell `cmp [m],0` tests.
+fn _zero_tested_cell(one: &Insn) -> Option<Mem> {
+    if !one.clobbers.is_empty() || one.symbol == Some(true) {
+        return None;
+    }
+    match (one.what.as_ref()?.op, one.what.as_ref()?.name.as_deref(), one.what.as_ref()?.sources.as_slice()) {
+        (Operation::Compare, Some("cmp"), [Loc::Mem(cell), Loc::Imm(Imm { value: 0, address: None, .. })]) => Some(cell.clone()),
+        _ => None,
+    }
+}
+
+fn _sets_cell(one: &Insn, cell: &Mem) -> bool {
+    if !one.clobbers.is_empty() {
+        return false;
+    }
+    let Some(what) = &one.what else {
+        return false;
+    };
+    match (what.op, what.name.as_deref(), what.dests.as_slice()) {
+        (Operation::Binary, Some("add" | "sub" | "and" | "or" | "xor"), [Loc::Mem(dest)]) | (Operation::Unary, Some("inc" | "dec" | "neg"), [Loc::Mem(dest)]) => dest == cell,
+        _ => false,
     }
 }
 

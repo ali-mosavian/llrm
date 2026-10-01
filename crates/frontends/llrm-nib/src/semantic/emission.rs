@@ -229,6 +229,7 @@ impl<'a> FunctionCompiler<'a> {
         self.next_instruction += 1;
         let line = self.line;
         self.moved();
+        self.must_here();
         self.current_block_mut()
             .instructions
             .push(hir::Instruction {
@@ -239,6 +240,7 @@ impl<'a> FunctionCompiler<'a> {
                 callee,
                 asm: None,
                 line,
+                inbounds: false,
             });
         id
     }

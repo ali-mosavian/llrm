@@ -419,6 +419,13 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
 fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let mut reads = NONLOCAL.slices.clone();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
+    // A port `ports` left reaching memory reaches it as its device does, by
+    // address: every object, whether the program ever took its address.
+    if matches!(unit.intrinsic(at), Some(llrm_mir::intrinsics::Intrinsic::PortIn | llrm_mir::intrinsics::Intrinsic::PortOut)) {
+        reads.extend(_globals(unit, (0..unit.globals.len()).map(|one| GlobalId(one as u32))));
+        let frames = unit.function.walk().filter(|&(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Alloca { .. }));
+        reads.extend(frames.filter_map(|(_, inst)| memory::object_of(unit, Operand::Value(unit.function.instruction(inst).result?))).map(Slice::whole));
+    }
     let mut writes = reads.clone();
     let Some(globals) = unit.globals_aa else { return Ok((reads, writes)) };
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
