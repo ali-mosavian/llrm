@@ -1638,13 +1638,14 @@ fn _rooted(unit: &Unit, of: Recurrence, still: &Invariant) -> Recurrence {
 /// addresses make of them, to a fixed point. SCEV's add recurrences, built
 /// by one fold per opcode; `uses` is empty.
 pub fn recurrences(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>) -> Users {
-    _recurrences(unit, loop_, counters, true)
+    _recurrences(unit, loop_, counters, false)
 }
 
-/// `recurrences`, through a truncation only where `narrowing`.
-fn _recurrences(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, narrowing: bool) -> Users {
+/// `recurrences`; where `priced`, only the forms `lsr` prices well: a
+/// truncation and the negation of a recurrence stay reads of one.
+fn _recurrences(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, priced: bool) -> Users {
     let function = unit.function;
-    let walk = Walk { unit, loop_, counters, narrowing, still: invariant(function, &loop_.body), facts: unit.registers().into_owned() };
+    let walk = Walk { unit, loop_, counters, priced, still: invariant(function, &loop_.body), facts: unit.registers().into_owned() };
     let mut found = Users::default();
     for counter in counters.values() {
         let Some(phi) = defining(function, counter.value) else { continue };
@@ -1684,7 +1685,7 @@ struct Walk<'a> {
     unit: &'a Unit<'a>,
     loop_: &'a Loop,
     counters: &'a IndexMap<ValueId, Affine>,
-    narrowing: bool,
+    priced: bool,
     still: Invariant,
     facts: IndexMap<ValueId, Known>,
 }
@@ -1725,7 +1726,7 @@ impl Walk<'_> {
                     (BinaryOp::Sub, Some(x), Some(y), ..) => Some(x.plus(&y.negated())),
                     (BinaryOp::Add, Some(x), None, _, Some(c)) | (BinaryOp::Add, None, Some(x), Some(c), _) => Some(x.offset(&c)),
                     (BinaryOp::Sub, Some(x), None, _, Some(c)) => Some(x.offset(&c.times(&BigInt::from(-1)))),
-                    (BinaryOp::Sub, None, Some(y), Some(c), _) => Some(y.negated().offset(&c)),
+                    (BinaryOp::Sub, None, Some(y), Some(c), _) if !self.priced => Some(y.negated().offset(&c)),
                     (BinaryOp::Mul, Some(x), None, _, Some(c)) | (BinaryOp::Mul, None, Some(x), Some(c), _) => x.scaled(&c),
                     (BinaryOp::Shl, Some(x), _, _, Some(count)) => {
                         let count = count.known().filter(|count| *count >= BigInt::from(0) && *count < BigInt::from(width))?;
@@ -1735,7 +1736,7 @@ impl Walk<'_> {
                 }
             }
             // Truncation commutes with add and mul: the low bits of a recurrence are one.
-            Opcode::Cast(CastOp::Trunc) if self.narrowing => {
+            Opcode::Cast(CastOp::Trunc) if !self.priced => {
                 let width = unit.int_bits(Operand::Value(result))?;
                 let from = unit.int_bits(op.operands[0])?;
                 self.rec(found, op.operands[0], from).filter(|_| from > width).map(|of| of.truncated(width))
@@ -1868,12 +1869,13 @@ impl Walk<'_> {
 
 /// The recurrences of `loop_`'s `counters`, and every read of one by
 /// something else, in or after the loop. A truncation is a read, not a
-/// recurrence: a candidate has one width, and a narrower use is priced from
-/// the wider value it truncates.
+/// recurrence (a candidate has one width, and a narrower use is priced from
+/// the wider value), and so is `c - r`: `lsr` realizes each site of it
+/// alone, a negation apiece where the loop computed one and shared it.
 pub fn users(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>) -> Users {
     let function = unit.function;
     let still = invariant(function, &loop_.body);
-    let mut found = _recurrences(unit, loop_, counters, false);
+    let mut found = _recurrences(unit, loop_, counters, true);
     for (value, of) in &found.values {
         for one in function.users(*value) {
             if found.web.contains(&one.user) {

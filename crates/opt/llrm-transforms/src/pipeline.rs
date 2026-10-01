@@ -138,7 +138,7 @@ impl Options {
             "gvn" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
-            "indvars" | "lsr" => self.strength,
+            "indvars" | "lsr" | "gepoffset" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
