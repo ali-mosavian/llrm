@@ -208,12 +208,16 @@ impl<'a> Machine<'a> {
         self.confined.get(&value).map(|class| class.iter().map(|one| _whole(*one)).filter(|one| self.general.contains(one)).collect())
     }
 
-    /// Whether `held` can be coloured by Hall's condition over the classes.
-    fn fits(&self, held: &BTreeSet<u32>, room: usize) -> bool {
+    /// Whether `held` fits `room` registers, and the `acting` values among it, which an
+    /// instruction needs in their class registers just now, satisfy Hall's condition.
+    /// A value waiting in another register costs a copy to act, not a place.
+    fn fits(&self, held: &BTreeSet<u32>, acting: &BTreeSet<u32>, room: usize) -> bool {
         if held.len() > room {
             return false;
         }
-        self.classes.iter().all(|class| held.iter().filter(|value| self.class(**value).is_some_and(|mine| mine.is_subset(class))).count() <= class.len())
+        self.classes.iter().all(|class| {
+            held.iter().filter(|value| acting.contains(*value) && self.class(**value).is_some_and(|mine| mine.is_subset(class))).count() <= class.len()
+        })
     }
 }
 
@@ -421,11 +425,12 @@ fn simulated(
         // Entering a loop, what is read only after it does not wait in a register.
         let header = ends.len() < preds.get(at).map_or(0, Vec::len);
         let limit = if header { EXIT } else { FAR };
-        for (_, near, value) in &candidates {
-            if *near < limit {
+        for (tier, near, value) in &candidates {
+            // What no predecessor ends with is reloaded where it is read, never on the edge.
+            if *near < limit && (*tier < 2 || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
-                if machine.fits(&next, k) {
+                if machine.fits(&next, &BTreeSet::new(), k) {
                     held = next;
                 }
             }
@@ -434,14 +439,16 @@ fn simulated(
         for (position, one) in block.insns.iter().enumerate() {
             let used: BTreeSet<u32> = one.uses.iter().copied().filter(|value| wanted(*value)).collect();
             let made: BTreeSet<u32> = one.defines.iter().copied().filter(|value| wanted(*value)).collect();
+            let acting: BTreeSet<u32> = used.union(&made).copied().collect();
             let mut evict = |held: &mut BTreeSet<u32>, keep: &BTreeSet<u32>, room: usize| {
-                while !machine.fits(held, room) {
+                while !machine.fits(held, &acting, room) {
                     let victim = held
                         .iter()
                         .filter(|value| !keep.contains(*value))
                         .max_by_key(|value| (flow.next_use(*at, position, **value), **value))
                         .copied();
                     let Some(victim) = victim else { break };
+                    llrm_support::debug!("ssaspill", "{}: evict v{victim} at {at:#x}:{position} held {held:?}", body.name);
                     held.remove(&victim);
                 }
             };
@@ -461,7 +468,17 @@ fn simulated(
             evict(&mut held, &used, k);
             // What the instruction states it takes leaves less for what lives through it.
             let taken = stated(one, &machine.general);
-            let outside = taken.len().saturating_sub(used.iter().filter(|value| one.requires.iter().any(|(held, _)| held.value == **value)).count() + made.iter().filter(|value| one.delivers.iter().any(|(held, _)| held.value == **value)).count());
+            // A register a value of this instruction sits in is that value's, not one more.
+            let mut covered: BTreeSet<Register> = one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)).collect();
+            if let Some(what) = &one.what {
+                for (place, register) in target::requirements(what) {
+                    let side = if place.side == "dest" { &what.dests } else { &what.sources };
+                    if matches!(side.get(place.index), Some(Loc::Held(_))) {
+                        covered.insert(_whole(register));
+                    }
+                }
+            }
+            let outside = taken.iter().filter(|register| !covered.contains(*register)).count();
             if outside > 0 {
                 let through: BTreeSet<u32> = held.iter().copied().filter(|value| !used.contains(value) && !made.contains(value)).collect();
                 let mut across = held.clone();
@@ -470,6 +487,7 @@ fn simulated(
                     let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (flow.next_use(*at, position, **value), **value)).copied();
                     let Some(victim) = victim else { break };
                     across.remove(&victim);
+                    llrm_support::debug!("ssaspill", "{}: calls evict v{victim} at {at:#x}:{position}", body.name);
                     held.remove(&victim);
                 }
             }
@@ -508,7 +526,7 @@ fn simulated(
         }
         {
             let end = block.insns.len();
-            while !machine.fits(&held, k) {
+            while !machine.fits(&held, &handed, k) {
                 let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (flow.next_use(*at, end, **value), **value)).copied();
                 let Some(victim) = victim else { break };
                 held.remove(&victim);
