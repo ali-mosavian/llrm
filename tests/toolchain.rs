@@ -179,6 +179,33 @@ fn test_c_parity_fixtures_agree_on_both_routes() {
     }
 }
 
+/// `fixture`.cgs through llrm-c and jwlink with a start-up object that names
+/// `entry`; the linker's complaint if it refuses.
+fn linked_fixture(fixture: &str, entry: &str) -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::write(dir.join("START.ASM"), format!(".model medium\n.stack 256\nextrn {entry}:far\n.code\nstart: call far ptr {entry}\nmov ax, 4C00h\nint 21h\nend start\n")).unwrap();
+    let run = |program: &str, args: &[&str]| {
+        let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
+        if done.status.success() { Ok(()) } else { Err(format!("{program}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr))) }
+    };
+    run("jwasm", &["-q", "-omf", "-FoSTART.OBJ", "START.ASM"])?;
+    let source = root.join(format!("tests/fixtures/c/{fixture}.cgs"));
+    run("llrm-c", &[source.to_str().unwrap(), "-O2", "--cpu", "486", "-o", "P.OBJ"])?;
+    run("jwlink", &["format", "dos", "name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"])
+}
+
+/// A far segment was word aligned: after `odd` (3 bytes) the next far
+/// segment held a 64K array at offset 4 of its frame, and jwlink refused it:
+/// "E2021: size of segment exceeds 64k by 8 bytes" (#102).
+#[test]
+fn test_a_64k_far_array_after_an_odd_sized_far_segment_links() {
+    let done = linked_fixture("farsegments", "_get");
+    assert!(done.is_ok(), "{}", done.unwrap_err());
+}
+
 /// Nine to eleven arrays, near and far, summed over one counter on a P5 or Core: loop
 /// strength reduction kept four products live beside the counter and the
 /// allocator found "value cannot be spilled and no register is free", where

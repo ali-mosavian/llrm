@@ -1,0 +1,58 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 13 attr=0x44 name="b13_DATA" align=16
+SEG 14 attr=0x44 name="b14_DATA" align=16
+SEG 15 attr=0x44 name="b15_DATA" align=16
+START
+TYPE T25 size=65536 align=2
+SETSEG 14
+SYM y1 name="whole" base="whole" pattern="_*" attr=0x6 seg=14
+b1 BENewBack y1
+- DGLabel b1
+- DGIBytes 8192 0
+- DGIBytes 8192 0
+- DGIBytes 8192 0
+- DGIBytes 8192 0
+- DGIBytes 8192 0
+- DGIBytes 8192 0
+- DGIBytes 8192 0
+- DGIBytes 8192 0
+TYPE T26 size=3 align=1
+SETSEG 13
+SYM y2 name="odd" base="odd" pattern="_*" attr=0x6 seg=13
+b2 BENewBack y2
+- DGLabel b2
+- DGIBytes 3 0
+f3 DBSrcFile "/home/alim/scratch/ctime-probe/hg/b.c" main=1
+- DBSrcCue f3 3 1
+SYM y3 name="get" base="get" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INTEGER
+SYM y4 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_UNSIGNED
+l4 CGLastParm
+t5 CGTemp TY_INTEGER
+n6 CGFEName y1 T25
+n7 CGFEName y4 TY_UNSIGNED
+n8 CGUnary O_POINTS n7 TY_UNSIGNED
+n9 CGInteger 2 TY_INTEGER
+n10 CGBinary O_TIMES n8 n9 TY_INTEGER
+n11 CGBinary O_PLUS n6 n10 TY_LONG_POINTER
+n12 CGUnary O_POINTS n11 TY_INTEGER
+n13 CGFEName y2 T26
+n14 CGInteger 0 TY_INTEGER
+n15 CGBinary O_PLUS n13 n14 TY_LONG_POINTER
+n16 CGUnary O_POINTS n15 TY_INT_1
+n17 CGBinary O_PLUS n12 n16 TY_INTEGER
+n18 CGUnary O_CONVERT n17 TY_INTEGER
+n19 CGTempName t5 TY_INTEGER
+n20 CGAssign n19 n18 TY_INTEGER
+- CGDone n20
+n21 CGTempName t5 TY_INTEGER
+n22 CGUnary O_POINTS n21 TY_INTEGER
+- CGReturn n22 TY_INTEGER
+STOP
+FINI

@@ -140,6 +140,15 @@ pub struct Module {
     pub debug: Option<super::codeview::Debug>,
 }
 
+impl Module {
+    /// Whether `segment` is outside DGROUP, so reached by its own selector alone
+    /// and paragraph aligned: its first byte is offset 0 of its frame, and a 64K
+    /// object in it fits. Every writer asks this.
+    pub fn selector_addressed(&self, segment: &str) -> bool {
+        self.private.contains(segment)
+    }
+}
+
 pub fn text(module: &Module) -> Result<String, Unprintable> {
     text_by(module, listing)
 }
@@ -149,9 +158,9 @@ pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec
     let mut out: Vec<String> = vec![".model medium".into(), ".386".into(), String::new()];
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     for (segment, items) in &module.data {
-        let private = module.private.contains(segment);
+        let private = module.selector_addressed(segment);
         out.push(SEGMENTS.get(segment.as_str()).map_or_else(
-            || format!("{segment} segment word public '{}'", if private { "FAR_DATA" } else { "DATA" }),
+            || format!("{segment} segment {} public '{}'", if private { "para" } else { "word" }, if private { "FAR_DATA" } else { "DATA" }),
             |one| (*one).to_owned(),
         ));
         out.extend(
