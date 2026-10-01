@@ -7,7 +7,9 @@
 //!
 //! A definition is a reload when the instruction says so (`spill_reload` or
 //! `rematerialized`) and defines one of `redefined`; the first definition of
-//! each value keeps its name, and each reload is named afresh.
+//! each value keeps its name, and each reload is named afresh. A block that
+//! holds the value in no register on entry (`held`) reloads it before every
+//! use, so it needs no phi for it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -26,7 +28,7 @@ fn reloads(one: &Insn, redefined: &BTreeSet<u32>) -> Option<u32> {
 }
 
 /// `body` in SSA again: every value in `redefined` has one definition per name.
-pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>) -> LirBody {
+pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, BTreeSet<u32>>) -> LirBody {
     let (live_in, _) = allocate::live(body);
     let graph = ranges::_graph(&body.blocks);
     let doms = loops::dominators(&graph, Some(body.entry));
@@ -75,7 +77,9 @@ pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>) -> LirBody {
         while let Some(at) = work.pop() {
             for next in frontier.get(&at).into_iter().flatten() {
                 if has.insert(*next) {
-                    if live_in[next].contains(value) && !body.blocks.iter().any(|block| block.at == *next && block.phis.iter().any(|phi| phi.result == *value)) {
+                    // A block that does not take the value into a register reloads it before every use: no phi.
+                    let registered = held.get(next).is_none_or(|set| set.contains(value));
+                    if registered && live_in[next].contains(value) && !body.blocks.iter().any(|block| block.at == *next && block.phis.iter().any(|phi| phi.result == *value)) {
                         placed.entry(*next).or_default().push(*value);
                     }
                     if !blocks.contains(next) {

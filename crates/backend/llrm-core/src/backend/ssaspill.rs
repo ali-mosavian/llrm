@@ -333,7 +333,7 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let found = crate::analysis::loops::loops(&graph, Some(body.entry));
     let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room);
     // A loop header keeps a value its back edge must reload only while those
-    // reloads run less often than the reloads at its first uses inside one trip.
+    // reloads run at most half as often as reloads at its first uses inside one trip.
     for _ in 0..4 {
         let mut more = false;
         for ((from, to), values) in &result.across {
@@ -349,7 +349,8 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
                     .map(|block| frequency.edge(block.at, *to))
                     .sum();
                 let drop = first_uses(&flow, &frequency, &within.body, *to, *value);
-                if keep >= drop {
+                // Holding the value costs its register through the trip as well: keep it only when the back edge reloads it rarely.
+                if 2.0 * keep >= drop {
                     more |= dropped.entry(*to).or_default().insert(*value);
                 }
             }
@@ -386,10 +387,11 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         .iter()
         .copied()
         .filter(|value| !remakes.contains_key(value))
-        .filter(|value| leaving.get(value).copied().unwrap_or(0.0) < home.get(value).map_or(f64::INFINITY, |at| frequency.block(*at)))
+        .filter(|value| std::env::var_os("SSA_DEF_STORES").is_none() && leaving.get(value).copied().unwrap_or(0.0) < home.get(value).map_or(f64::INFINITY, |at| frequency.block(*at)))
         .collect();
     let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &at_leaves, &remakes, frame)?;
-    Ok(ssarepair::repaired(&spilled, &result.stored))
+    let held: IndexMap<i64, BTreeSet<u32>> = result.edits.iter().map(|(at, edit)| (*at, edit.w_in.clone())).collect();
+    Ok(ssarepair::repaired(&spilled, &result.stored, &held))
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
