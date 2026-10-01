@@ -88,8 +88,11 @@ pub enum Where<'a> {
 // Python iced's `Instruction.create_*`, which raise where Rust's `with*`
 // returns `Err`. The `Err` text is the Python exception's.
 
-fn overflow(error: std::num::TryFromIntError) -> String {
-    error.to_string()
+/// The text is spelled here: std's `TryFromIntError` wording changed in 1.99.0
+/// ("out of range integral type conversion attempted" to "number too large to
+/// fit in target type") and sweep_07 compared it.
+fn overflow(_: std::num::TryFromIntError) -> String {
+    "out of range integral type conversion attempted".to_owned()
 }
 
 fn i32_of(value: i64) -> Result<i32, String> {
