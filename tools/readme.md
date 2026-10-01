@@ -32,6 +32,15 @@ digest of every array it writes. `loops/cases/` holds the families:
   bases, source forms, trips, steps, starts and whole-segment walks, with
   metamorphic variants composed from a recorded seed, each judged against its
   base.
+- `cross`: every pair of values of every two dimensions of one base loop:
+  trip, condition, counter width, start, step, element and field, storage,
+  2-D walk order, use of the counter (non-affine ones included), shape and a
+  second counter.
+- `fuzz`: loops drawn from both at once, every dimension random; `--seed`
+  replays a draw, and each case's note holds its parameters.
+- `adversarial`: the pressure ladder (1 to 7 arrays by 0 to 6 accumulators),
+  pointer chasing, a u16 counter through 65535 to 0, an i8 one across its
+  range, one array passed as two parameters, and BASIC's SINGLE counter.
 
 `loops/expect.py` derives each inner loop's bound from the spec and the target's
 tables (registers, address-form partners, segments); `loops/quality.py` reads a
