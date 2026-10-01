@@ -4,7 +4,7 @@ use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
 use crate::syntax::{
     Binary, Bound, CaseItem, Declaration, Expr, Haystack, Literal, Module, Parameter, PrintItem,
-    PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
+    PrintKind, PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
 };
 
 use super::engine::{DeclarationForm, ParseResult, ParseState, ParserEngine, ProcedureHeader};
@@ -1666,7 +1666,13 @@ fn synthesize_statement(
                     PrintItem { value, separator }
                 })
                 .collect();
+            let kind = match keyword {
+                one if one == named("tkLPRINT") => PrintKind::Lprint,
+                one if one == named("tkWRITE") => PrintKind::Write,
+                _ => PrintKind::Print,
+            };
             Statement::Print {
+                kind,
                 file,
                 using,
                 items,
@@ -2452,7 +2458,8 @@ fn finish_if_statement(state: &mut ParseState, condition: Expr, keyword_span: Sp
     };
     let mut else_branch = Vec::new();
     if consume_named(state, "tkELSE") {
-        let Ok(parsed) = single_line_if_branch(state, false) else {
+        // An IF has one ELSE: another ends this branch, for an enclosing IF's.
+        let Ok(parsed) = single_line_if_branch(state, true) else {
             return ParseResult::BadSyntax;
         };
         else_branch = parsed;
@@ -2483,7 +2490,15 @@ fn single_line_if_branch(
     let mut branch = Vec::new();
     loop {
         let before = state.statements.len();
-        if statement(&ParserEngine::new(), state) != ParseResult::GoodSyntax {
+        // A line number where a branch starts is a GOTO to it, not a label.
+        let number = match state.token() {
+            Some(Token { kind: TokenKind::Integer(value, None), span }) if branch.is_empty() && (0..=65_529).contains(value) => Some((value.to_string(), *span)),
+            _ => None,
+        };
+        if let Some((label, span)) = number {
+            state.at += 1;
+            state.statements.push(Statement::Goto(label, span));
+        } else if statement(&ParserEngine::new(), state) != ParseResult::GoodSyntax {
             return Err(ParseResult::BadSyntax);
         }
         let mut parsed = state.statements.split_off(before);
@@ -3448,6 +3463,42 @@ mod tests {
     /// A PRINT item followed by ELSE was refused ("invalid generated-grammar
     /// statement"): only a new line or colon ended it, not the ELSE of a
     /// one-line IF. tests/suite/flags.bas did not compile.
+    /// LPRINT and WRITE were refused ("unsupported opStLPrint"/"opStWrite"):
+    /// both are a PRINT with a preamble, and WRITE's items are comma-separated.
+    #[test]
+    fn lprint_and_write_are_prints_of_their_own_kind() {
+        let kinds = |source: &str| {
+            module(source, Dialect::QuickBasic45).statements.iter().filter_map(|one| match one {
+                Statement::Print { kind, file, items, .. } => Some((*kind, file.is_some(), items.len())),
+                _ => None,
+            }).collect::<Vec<_>>()
+        };
+        assert_eq!(kinds("lprint \"a\"; 5\r\n"), [(PrintKind::Lprint, false, 2)]);
+        assert_eq!(kinds("write 1, \"b\", x\r\nwrite\r\nwrite #2, y\r\n"), [(PrintKind::Write, false, 3), (PrintKind::Write, false, 0), (PrintKind::Write, true, 1)]);
+    }
+
+    /// `THEN 100` was a label definition, so `IF a THEN 100` with a line 100
+    /// reported "duplicate label 100".
+    #[test]
+    fn a_line_number_after_then_or_else_is_a_goto() {
+        let parsed = module("if a then 100 else 200\r\n", Dialect::QuickBasic45);
+        assert!(matches!(
+            &parsed.statements[0],
+            Statement::If { then_branch, else_branch, .. }
+                if matches!(&then_branch[..], [Statement::Goto(label, _)] if label == "100") && matches!(&else_branch[..], [Statement::Goto(label, _)] if label == "200")
+        ));
+    }
+
+    /// Each ELSE pairs with the nearest unmatched IF; the second ELSE of
+    /// `IF a THEN IF b THEN x=1 ELSE x=2 ELSE x=3` was refused.
+    #[test]
+    fn a_second_else_of_a_one_line_if_belongs_to_the_outer_if() {
+        let parsed = module("if a then if b then x = 1 else x = 2 else x = 3\r\n", Dialect::QuickBasic45);
+        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else { panic!("{:?}", parsed.statements) };
+        assert!(matches!(&then_branch[..], [Statement::If { else_branch: inner, .. }] if inner.len() == 1));
+        assert_eq!(else_branch.len(), 1);
+    }
+
     #[test]
     fn a_print_item_ends_at_the_else_of_a_one_line_if() {
         let parsed = module("if r = 0 then print r else print \"b\"\r\n", Dialect::QuickBasic45);

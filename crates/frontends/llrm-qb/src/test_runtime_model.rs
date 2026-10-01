@@ -174,3 +174,18 @@ fn on_goto_out_of_range_raises_error_5() {
     assert_ne!(executed.panic, None, "{}", executed.output);
     assert!(!executed.output.contains("fell"), "{}", executed.output);
 }
+
+/// The runtime routines the module-level code calls, in order.
+fn called(source: &str) -> Vec<String> {
+    let program = program(source, "qb45");
+    program.modules[0].functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).filter_map(|one| one.callee.clone()).collect()
+}
+
+/// LPRINT and WRITE were refused: BC 4.5 calls B$LPRT before the items of an
+/// LPRINT, and B$WRIT (after B$CHOU's channel) before a WRITE's; a bare WRITE
+/// is B$PESD alone, and WRITE's commas are `S` terminators.
+#[test]
+fn lprint_and_write_call_their_preambles_as_bc_does() {
+    assert_eq!(called("LPRINT \"a\"; 5\nLPRINT\n"), ["B$LPRT", "B$PSSD", "B$PEI2", "B$LPRT", "B$PESD"]);
+    assert_eq!(called("DEFINT A-Z\nWRITE \"x\", 3\nWRITE\nWRITE #1, 2\n"), ["B$WRIT", "B$PSSD", "B$PEI2", "B$PESD", "B$CHOU", "B$WRIT", "B$PEI2"]);
+}
