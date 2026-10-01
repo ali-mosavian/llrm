@@ -552,7 +552,7 @@ fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64
 
 /// What a trip pays to advance `one`: an add, or a pointer's own advance.
 fn _step(view: &memory::Unit, target: &Target, one: &Candidate) -> i64 {
-    one.pointer.map_or(target.costs.add, |ty| profit::advance(view.context, view.layout, ty, &target.costs))
+    one.pointer.map_or(target.costs.add, |ty| profit::advance(view.context, view.layout, ty, target.costs.add, &target.costs))
 }
 
 /// The candidates: each use's own recurrence, less its symbols and its
@@ -856,7 +856,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             let native = target.forms.first()?;
             // An integer cannot index a pair in a carrying space: the use advances
             // the pointer by it, and pays what an advance there costs over an address's.
-            let advance = profit::advance(view.context, view.layout, view.function.value(site.one.value).ty, costs);
+            let advance = profit::advance(view.context, view.layout, view.function.value(site.one.value).ty, costs.address, costs);
             price.cost += advance - costs.address;
             if pointer_base(&fit) {
                 // A global is a displacement beside two registers; a frame object
