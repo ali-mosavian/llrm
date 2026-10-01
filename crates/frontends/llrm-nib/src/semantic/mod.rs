@@ -76,6 +76,7 @@ mod references;
 mod instances;
 mod iterators;
 mod views;
+mod liveness;
 mod modref;
 mod writable;
 mod lambdas;
@@ -1620,6 +1621,8 @@ struct FunctionCompiler<'a> {
     reseatable: BTreeSet<u32>,
     /// The module variables this function lends to the calls it makes.
     lends: Vec<modref::Lend>,
+    /// Changes to borrowed owners, refused if a holder is used after one.
+    conflicts: Vec<liveness::Conflict>,
     /// Its `&` and `&mut` parameters.
     references: Vec<llrm_core::hir::facts::Subject>,
     /// The named sequences `for` loops are walking, outermost first.
@@ -1689,6 +1692,7 @@ impl<'a> FunctionCompiler<'a> {
             parameter_lives: BTreeMap::new(),
             reseatable: BTreeSet::new(),
             lends: Vec::new(),
+            conflicts: Vec::new(),
             references: Vec::new(),
             iterated: Vec::new(),
         };
@@ -1862,6 +1866,7 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
         }
+        self.check_conflicts()?;
         self.prune_unreachable();
         let blocks = self
             .blocks

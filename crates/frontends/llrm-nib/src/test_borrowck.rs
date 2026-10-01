@@ -261,3 +261,52 @@ fn main() -> i16:
     let shared = source.replace("r: &mut i16", "r: &i16").replace("    h.r = 5\n", "").replace("&mut x", "&x");
     assert_eq!(output(&shared), "1\n");
 }
+#[test]
+fn a_borrow_ends_at_its_last_use_on_every_path() {
+    // A borrow lived until its binding's scope ended, so changing `v` after
+    // the last read of `r` was refused.
+    let after = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    print(r)
+    v.push(3)
+    print(v.len)
+    return 0
+";
+    assert_eq!(output(after), "1\n3\n");
+    let exclusive = "\
+struct C:
+    mut n: i16
+
+fn C.inc(self: &mut C) -> void:
+    self.n += 1
+
+fn main() -> i16:
+    let mut c = C(n=0)
+    let m = &mut c
+    m.inc()
+    c.inc()
+    print(c.n)
+    return 0
+";
+    assert_eq!(output(exclusive), "2\n");
+    // Still in use later, on some path: a branch, or the loop's next turn.
+    let branch = after.replace("    print(v.len)\n", "    if v.len > 2:\n        print(r)\n");
+    assert_eq!(refused_at(&branch), "5: \"v\" is borrowed here, so it cannot be changed");
+    let looped = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    let mut i: i16 = 0
+    while i < 3:
+        print(r)
+        v.push(i)
+        i += 1
+    return 0
+";
+    assert_eq!(refused_at(looped), "7: \"v\" is borrowed here, so it cannot be changed");
+    // A borrow made anew each turn ends with its turn.
+    let fresh = looped.replace("    let r = &v[0]\n", "").replace("        print(r)\n", "        let r = &v[0]\n        print(r)\n");
+    assert_eq!(output(&fresh), "1\n1\n1\n");
+}

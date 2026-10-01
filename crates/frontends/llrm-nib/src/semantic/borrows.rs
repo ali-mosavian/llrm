@@ -370,35 +370,41 @@ impl FunctionCompiler<'_> {
     }
 
     /// Errs when a binding in scope, other than `owner` itself, borrows `owner`.
-    pub(super) fn check_unborrowed(&self, owner: &str, span: Span) -> Result<(), Diagnostic> {
-        if self.resolve(owner).and_then(|(_, binding)| identity(&binding.storage)).is_some_and(|key| self.is_borrowed(key)) {
-            return Err(Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed")));
+    pub(super) fn check_unborrowed(&mut self, owner: &str, span: Span) -> Result<(), Diagnostic> {
+        match self.resolve(owner).and_then(|(_, binding)| identity(&binding.storage)) {
+            Some(key) => self.change_borrowed(key, Diagnostic::new(span, format!("{owner:?} is borrowed here, so it cannot be changed"))),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Errs when the binding that is `owner`, about to move, is borrowed.
-    pub(super) fn check_movable(&self, owner: moves::Owner, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_movable(&mut self, owner: moves::Owner, span: Span) -> Result<(), Diagnostic> {
         let key = match owner {
             (false, place) => BorrowKey::Place(place),
             (true, value) => BorrowKey::Value(value),
         };
         let name = self.scopes.iter().rev().flat_map(|scope| scope.iter()).find(|(_, one)| moves::owner(&one.storage) == Some(owner));
         match name {
-            Some((name, _)) if self.is_borrowed(key) => {
-                Err(Diagnostic::new(span, format!("{name:?} is borrowed here, so it cannot be moved")))
+            Some((name, _)) => {
+                let error = Diagnostic::new(span, format!("{name:?} is borrowed here, so it cannot be moved"));
+                self.change_borrowed(key, error)
             }
-            _ => Ok(()),
+            None => Ok(()),
         }
     }
 
-    fn is_borrowed(&self, owner: BorrowKey) -> bool {
-        let borrowed = self.scopes.iter().flat_map(|scope| scope.values()).any(|binding| {
-            let lent = borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key));
-            let held = identity(&binding.storage).and_then(|key| self.held.get(&key));
-            identity(&binding.storage) != Some(owner) && lent.into_iter().chain(held).flatten().any(|root| root.owner == owner)
-        });
-        borrowed || self.iterated.contains(&owner)
+    /// The bindings in scope, other than `owner` itself, that borrow it.
+    pub(super) fn holders(&self, owner: BorrowKey) -> BTreeSet<BorrowKey> {
+        let mut holders = BTreeSet::new();
+        for binding in self.scopes.iter().flat_map(|scope| scope.values()) {
+            if identity(&binding.storage) == Some(owner) {
+                continue;
+            }
+            let lent = borrow_key(&binding.storage).filter(|key| self.borrowed_from.get(key).is_some_and(|roots| roots.iter().any(|root| root.owner == owner)));
+            let held = identity(&binding.storage).filter(|key| self.held.get(key).is_some_and(|roots| roots.iter().any(|root| root.owner == owner)));
+            holders.extend(lent.into_iter().chain(held));
+        }
+        holders
     }
 
     /// Stores a borrow rooted in `roots` where `container` keeps it: the
