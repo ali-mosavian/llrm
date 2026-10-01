@@ -498,7 +498,7 @@ struct Selector<'m, 'c, 'p> {
     /// The block being selected.
     current: Option<BlockId>,
     /// Each far global's offset and selector, where a block made them.
-    far_globals: IndexMap<(BlockId, GlobalId), (Held, Held)>,
+    far_globals: IndexMap<(BlockId, GlobalId, i64), (Held, Held)>,
     /// What `global` made for the instruction being selected, placed before it.
     materialized: Vec<Arc<Insn>>,
     /// The LIR blocks each MIR edge leaves from: a switch's cases leave
@@ -1430,7 +1430,11 @@ impl Selector<'_, '_, '_> {
         let space = crate::backend::globals::space(self.module, global);
         if self.module.global(global).address_space != 0 {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
-            let (base, selector) = match self.far_globals.get(&(block, global)) {
+            // A carried pointer is canonical: whole 64K strides of its offset are
+            // in the selector, so a constant past 64K is a stepped selector.
+            let carried = self.carries(self.module.context.get(id).ty);
+            let (carry, offset) = if carried { (offset >> 16, offset & 0xFFFF) } else { (0, offset) };
+            let (base, selector) = match self.far_globals.get(&(block, global, carry)) {
                 Some(&pair) => pair,
                 None => {
                     let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
@@ -1439,7 +1443,15 @@ impl Selector<'_, '_, '_> {
                     for (into, from) in [(selector, symbol(Space::Group, crate::backend::globals::segment_of(global))), (base, symbol(space, i64::from(global.0)))] {
                         self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from])));
                     }
-                    self.far_globals.insert((block, global), (base, selector));
+                    if carry != 0 {
+                        let Some(shift) = self.segments.huge_shift else { return refuse("a huge pointer on a machine that states no selector stride") };
+                        let step = Loc::Imm(Imm { value: (carry << shift) & 0xFFFF, width: 2, address: None });
+                        let stepped = self.fresh_held(2);
+                        self.materialized.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(stepped)], vec![Loc::Held(selector), step])));
+                        self.far_globals.insert((block, global, carry), (base, stepped));
+                        return Ok(Pointer::Far { selector: stepped, base: Some(base), index: None, scale: 1, offset });
+                    }
+                    self.far_globals.insert((block, global, carry), (base, selector));
                     (base, selector)
                 }
             };

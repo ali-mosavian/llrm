@@ -1535,6 +1535,13 @@ impl<'a, 't> Body<'a, 't> {
         Ok(())
     }
 
+    /// The value of integer constant `node`, unwrapped to its C type.
+    fn whole_constant(&self, node: &str) -> Option<i64> {
+        let tree = self.unit.nodes.get(&hir::handle(node))?;
+        let ("CGInteger", [value, _]) = (tree.call.as_str(), &tree.args[..]) else { return None };
+        value.trim().parse::<i64>().ok().filter(|bytes| i32::try_from(*bytes).is_ok())
+    }
+
     fn binary(&mut self, cg_op: &str, left: &str, right: &str, type_: &str) -> R<i64> {
         let canonical = self.unit.canonical_type(type_);
         if matches!(cg_op, "O_PLUS" | "O_MINUS") && !is_float(&canonical) {
@@ -1542,10 +1549,19 @@ impl<'a, 't> Body<'a, 't> {
             if pointers(&canonical) {
                 self.scaled(right)?;
             }
-            let b_got = self.eval(right)?;
+            let huge = canonical == "TY_HUGE_POINTER";
+            // Watcom states a folded displacement past 16 bits as a TY_INTEGER constant
+            // whose value is whole: a huge pointer takes all of it.
+            let whole = if huge { self.whole_constant(right) } else { None };
+            let b_got = match whole {
+                Some(bytes) => {
+                    let dword = self.types.int(4, true);
+                    Got::Value(self.constant(dword, Number::Int(bytes)))
+                }
+                None => self.eval(right)?,
+            };
             let (a, b) = (self.scalar(a_got)?, self.scalar(b_got)?);
             // Pointer arithmetic: the pointer moved, or two pointers' distance.
-            let huge = canonical == "TY_HUGE_POINTER";
             match (self.space(a).is_some(), self.space(b).is_some()) {
                 // The pointer is made huge first: a far one moves inside its segment.
                 (true, false) if huge => {

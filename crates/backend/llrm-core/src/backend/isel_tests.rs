@@ -3308,3 +3308,19 @@ done:
     let got = listing(text, "f").join("\n");
     assert!(got.contains("sar edi, 16") && got.contains("shl edi, 12") && got.contains("sbb di, cx") && got.contains("jb "), "{got}");
 }
+
+/// A huge pointer made of a global's address and a constant past 64K is a
+/// stepped selector and the offset's remainder: the whole constant kept in
+/// the offset word wrapped to another element (#101).
+#[test]
+fn test_a_constant_huge_pointer_past_64k_steps_the_selector() {
+    let text = "@big = addrspace(1) global [4 x i32] zeroinitializer
+define i32 @f() addrspace(1) {
+  %v = load i32, ptr addrspace(3) getelementptr (i32, ptr addrspace(3) addrspacecast (ptr addrspace(1) @big to ptr addrspace(3)), i32 19999)
+  ret i32 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line.starts_with("add ") && line.ends_with(&format!(", {}", (1 << 12)))), "{got:?}");
+    assert!(got.iter().any(|line| line.contains("es:[bx+14460]") || line.contains("es:[bx+0x387c]") || line.contains("+14460]")), "{got:?}");
+}

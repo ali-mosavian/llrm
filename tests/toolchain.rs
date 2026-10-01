@@ -263,3 +263,40 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
     let asm = std::fs::read_to_string(listing).unwrap();
     assert!(!asm.contains("shl dword ptr [bp"), "{asm}");
 }
+
+/// A `__huge` array of 80000 bytes, run on DOS: each routine reads or writes
+/// where a 16-bit offset that wraps at 64K would give another element, and a
+/// huge pointer's loop end, difference and step must carry into the selector
+/// by the DOS stride (#101).
+#[test]
+fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    let routines = [("_hfill", 59_998), ("_hsumidx", 599_990_000), ("_hsumptr", 599_990_000), ("_hdiff", 19_989), ("_hmid", 51_001)];
+    let mut start = String::from(".model medium\n.386\n");
+    for (name, _) in routines {
+        start += &format!("extrn {name}:far\n");
+    }
+    start += &format!(".data\nvalues dd {} dup (?)\nfilename db 'VALUES.BIN', 0\nstack_space db 1024 dup (?)\nstack_top label byte\n.code\nstart:\n    mov ax, @data\n    mov ds, ax\n    cli\n    mov ss, ax\n    mov sp, offset stack_top\n    sti\n    fninit\n", routines.len());
+    for (at, (name, _)) in routines.iter().enumerate() {
+        start += &format!("    call far ptr {name}\n    mov word ptr values+{}, ax\n    mov word ptr values+{}, dx\n", at * 4, at * 4 + 2);
+    }
+    start += &format!("    mov ah, 3ch\n    xor cx, cx\n    lea dx, filename\n    int 21h\n    mov bx, ax\n    mov ah, 40h\n    mov cx, {}\n    lea dx, values\n    int 21h\n    mov ax, 4c00h\n    int 21h\nend start\n", routines.len() * 4);
+    std::fs::write(dir.join("START.ASM"), start).unwrap();
+    let run = |program: &str, args: &[&str]| {
+        let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
+        assert!(done.status.success(), "{program}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    };
+    run("jwasm", &["-q", "-c", "-Cp", "-Zg", "-omf", "-FoSTART.OBJ", "START.ASM"]);
+    let source = root.join("tests/fixtures/c/hugearray.cgs");
+    run("llrm-c", &[source.to_str().unwrap(), "-O2", "--cpu", "486", "-o", "P.OBJ"]);
+    run("jwlink", &["format", "dos", "name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"]);
+    std::fs::write(dir.join("dosbox.conf"), format!("[autoexec]\nmount c {}\nc:\nP\nexit\n", dir.display())).unwrap();
+    run("dosbox-x", &["-nolog", "-exit", "-conf", dir.join("dosbox.conf").to_str().unwrap()]);
+    let bytes = std::fs::read(dir.join("VALUES.BIN")).unwrap_or_default();
+    let got: Vec<i64> = bytes.chunks_exact(4).map(|word| i64::from(i32::from_le_bytes(word.try_into().unwrap()))).collect();
+    let want: Vec<i64> = routines.iter().map(|(_, value)| *value).collect();
+    assert_eq!(got, want, "{:?}", routines.map(|(name, _)| name));
+}
