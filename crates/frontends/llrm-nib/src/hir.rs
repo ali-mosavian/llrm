@@ -243,7 +243,22 @@ impl Program {
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);
-        let facts: Vec<_> = self.functions.iter().flat_map(|one| one.facts.iter().cloned()).collect();
+        let mut stated = llrm_core::hir::facts::Builder::new("nib");
+        for function in &self.functions {
+            stated.extend(function.facts.iter().cloned());
+            // A reference's place stays inside what it refers to, where the language checked it.
+            for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+                for (index, operand) in instruction.operands.iter().enumerate() {
+                    if matches!(operand, Operand::IndirectPlace { inbounds: true, .. }) {
+                        stated.state(
+                            llrm_core::hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(instruction.id), operand: index as i64 },
+                            llrm_mir::facts::Fact::InBounds,
+                        );
+                    }
+                }
+            }
+        }
+        let facts = stated.finish();
         if !facts.is_empty() {
             out.push_str(",\"facts\":");
             out.push_str(&llrm_core::hir::codec::facts_json(&facts));
@@ -432,10 +447,10 @@ fn operands(out: &mut String, values: &[Operand]) {
                 base,
                 offset,
                 type_id,
-                inbounds,
+                inbounds: _,
             } => write!(
                 out,
-                "{{\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
+                "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
             )
             .unwrap(),
             Operand::DescriptorPlace {

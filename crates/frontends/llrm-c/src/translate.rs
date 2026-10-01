@@ -607,6 +607,14 @@ impl<'a, 't> Body<'a, 't> {
         }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
+        // Every address C computes through a pointer stays inside the object it points into.
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            for (index, operand) in instruction.operands.iter().enumerate() {
+                if matches!(operand, h::Operand::IndirectPlace(_)) {
+                    facts.state(Subject::Operand { function: id, instruction: instruction.id, operand: index as i64 }, Fact::InBounds);
+                }
+            }
+        }
         if let Some(described) = body.described.as_mut() {
             // A parameter as its home: where the function keeps it.
             for &(symbol, handle) in &proc.debug {
@@ -1383,7 +1391,8 @@ impl<'a, 't> Body<'a, 't> {
         }
         let at = self.int(2, by);
         let result = self.value(self.type_of(pointer));
-        self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).inbounds = true;
+        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).id;
+        self.stated_instructions.push((id, Fact::InBounds));
         result
     }
 
@@ -1534,7 +1543,8 @@ impl<'a, 't> Body<'a, 't> {
         let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
         let ty = self.type_of(pointer);
         let result = self.value(ty);
-        self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).inbounds = true;
+        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).id;
+        self.stated_instructions.push((id, Fact::InBounds));
         Ok(result)
     }
 
@@ -1768,7 +1778,7 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
 
 /// An access through `base`, `offset` bytes in, as `ty`.
 fn indirect(base: i64, offset: i64, ty: i64, volatile: bool) -> h::IndirectPlace {
-    h::IndirectPlace { base, offset, r#type: ty, volatile, inbounds: true, origin: None, allocation: None }
+    h::IndirectPlace { base, offset, r#type: ty, volatile, origin: None, allocation: None }
 }
 
 #[cfg(test)]

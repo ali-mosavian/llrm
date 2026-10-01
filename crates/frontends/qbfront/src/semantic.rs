@@ -9538,6 +9538,7 @@ impl Compiler {
     }
 
     fn json(&self) -> String {
+        let mut facts = llrm_hir::facts::Builder::new("qb");
         // A module that handles errors has a statement table, whose rows
         // are code's lines: its instructions say theirs.
         let lined = self.debugging() || (self.options.error_lines && self.functions.iter().any(|one| one.error_handler.is_some()));
@@ -9579,6 +9580,9 @@ impl Compiler {
                             out.push(',');
                         }
                         operand_json(&mut out, operand, function);
+                        if matches!(operand, Operand::Indirect { inbounds: true, .. }) {
+                            facts.state(llrm_hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(instruction.id), operand: operand_index as i64 }, llrm_hir::facts::Fact::InBounds);
+                        }
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
@@ -9806,7 +9810,6 @@ impl Compiler {
         }
         out.push(']');
         // What the language promises of each pointer parameter: it is addressable for the bytes it names.
-        let mut facts = llrm_hir::facts::Builder::new("qb");
         for function in &self.functions {
             for &(value, bytes) in &function.promises {
                 let index = function.parameters.iter().position(|&one| one == value).expect("a promise of a parameter") as i64;
@@ -9824,7 +9827,7 @@ impl Compiler {
         for function in &self.functions {
             for call in &function.calls {
                 for &(operand, bytes) in &call.fills {
-                    let argument = llrm_hir::facts::Subject::Argument { function: i64::from(function.id), instruction: i64::from(call.instruction), operand: operand as i64 };
+                    let argument = llrm_hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(call.instruction), operand: operand as i64 };
                     facts.state(argument, llrm_hir::facts::Fact::NoCapture).state(argument, llrm_hir::facts::Fact::WriteOnly).state(argument, llrm_hir::facts::Fact::Initializes(bytes as u64));
                 }
             }
@@ -10377,7 +10380,7 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             } else {
                 out.push('{');
             }
-            write!(out, "\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
+            write!(out, "\"base\":{base},\"offset\":{offset},").unwrap();
             if let Some(origin) = function.origins.get(base).filter(|_| *inbounds) {
                 write!(out, "\"origin\":{origin},").unwrap();
             }

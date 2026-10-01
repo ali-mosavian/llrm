@@ -154,7 +154,7 @@ plain_record!(ArrayElement, Some("array_element"), place => "place", indices => 
 plain_record!(ProjectedPlace, Some("projection"), place => "place", indices => "indices", offset => "offset",
     r#type => "type");
 plain_record!(IndirectPlace, Some("indirect"), base => "base", offset => "offset", r#type => "type",
-    volatile => "volatile", inbounds => "inbounds", origin => "origin",
+    volatile => "volatile", origin => "origin",
     allocation => "allocation");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
 plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
@@ -173,9 +173,6 @@ impl _Plain for model::Instruction {
         out.insert("pure".to_owned(), self.pure._plain());
         if let Some(asm) = &self.asm {
             out.insert("asm".to_owned(), asm._plain());
-        }
-        if self.inbounds {
-            out.insert("inbounds".to_owned(), self.inbounds._plain());
         }
         if let Some(line) = self.line {
             out.insert("line".to_owned(), line._plain());
@@ -946,7 +943,6 @@ static INDIRECT_PLACE: _Record = _Record {
         ("offset", _Hint::Int, true),
         ("type", _Hint::Int, true),
         ("volatile", _Hint::Bool, false),
-        ("inbounds", _Hint::Bool, false),
         ("origin", OPTIONAL_INT, false),
         ("allocation", OPTIONAL_INT, false),
     ],
@@ -956,7 +952,6 @@ static INDIRECT_PLACE: _Record = _Record {
             offset: _required(args, "offset")?,
             r#type: _required(args, "type")?,
             volatile: _default(args, "volatile", false)?,
-            inbounds: _default(args, "inbounds", false)?,
             origin: _default(args, "origin", None)?,
             allocation: _default(args, "allocation", None)?,
         })
@@ -985,7 +980,6 @@ static INSTRUCTION: _Record = _Record {
         ("callee", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
         ("pure", _Hint::Bool, false),
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
-        ("inbounds", _Hint::Bool, false),
         ("line", _Hint::Union(&[_Hint::Int, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -997,7 +991,6 @@ static INSTRUCTION: _Record = _Record {
             callee: _default(args, "callee", None)?,
             pure: _default(args, "pure", false)?,
             asm: _default(args, "asm", None)?,
-            inbounds: _default(args, "inbounds", false)?,
             line: _default(args, "line", None)?,
         })
     },

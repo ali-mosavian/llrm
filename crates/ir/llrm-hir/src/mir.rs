@@ -227,6 +227,8 @@ struct Tables<'h> {
     instruction_flags: HashMap<(i64, i64), Flags>,
     /// The facts stated of each call's arguments, by function and instruction id: the operand and the fact.
     argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>>,
+    /// The flags facts state of each instruction's operands, by function, instruction and operand index.
+    operand_flags: HashMap<(i64, i64, i64), Flags>,
     array_order: model::ArrayOrder,
     /// The module body's ON ERROR GOTO handlers, which every procedure's pad calls.
     module_handler: Option<handling::ModuleHandler>,
@@ -280,14 +282,19 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         }
     }
     let mut argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>> = HashMap::new();
+    let mut operand_flags: HashMap<(i64, i64, i64), Flags> = HashMap::new();
     for one in &hir.facts {
-        if let Subject::Argument { function, instruction, operand } = one.subject {
-            argument_facts.entry((function, instruction)).or_default().push((operand, one.fact));
+        if let Subject::Operand { function, instruction, operand } = one.subject {
+            match one.fact.attribute() {
+                Some(_) => argument_facts.entry((function, instruction)).or_default().push((operand, one.fact)),
+                None => operand_flags.entry((function, instruction, operand)).or_default().insert(one.fact.flags()),
+            }
         }
     }
     let mut tables = Tables {
         instruction_flags,
         argument_facts,
+        operand_flags,
         array_order,
         module_handler: None,
         zeroed,
@@ -701,7 +708,7 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
     let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
     let (global, parameter) = match stated.subject {
         // A call's arguments' facts are attributes of the call, made with it.
-        Subject::Instruction { .. } | Subject::Argument { .. } => return Ok(()),
+        Subject::Instruction { .. } | Subject::Operand { .. } => return Ok(()),
         Subject::Object(id) => {
             let Some(&global) = data.get(&id) else { return Ok(()) };
             let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of a data object that is no variable".to_owned()) };
@@ -1113,6 +1120,10 @@ struct Body<'b, 'm, 'h> {
     outlined: Option<handling::Outlined>,
     /// Where a floating result is stored, returned in its place.
     destination: Option<Value>,
+    /// The instruction being lowered, and where each of its operands is, to
+    /// know which operand a place is.
+    at_instruction: i64,
+    operands_at: Vec<usize>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
@@ -1138,6 +1149,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             handling: None,
             outlined: None,
             destination,
+            at_instruction: 0,
+            operands_at: Vec::new(),
         })
     }
 
@@ -1340,7 +1353,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     Some(_) => Some(self.tables.tags.allocation),
                     None => inside.then_some(self.tables.tags.place),
                 };
-                Ok((self.offset(base, one.offset, one.inbounds), ty, one.volatile, tag))
+                Ok((self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)), ty, one.volatile, tag))
             }
             Operand::DescriptorPlace(one) => {
                 let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;
@@ -1443,7 +1456,16 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         instruction.operands.iter().map(|one| self.value(one)).collect()
     }
 
+    /// The flags facts state of `operand`, one of the operands of the instruction being lowered.
+    fn operand_flags(&self, operand: &Operand) -> Flags {
+        let at = operand as *const Operand as usize;
+        let Some(index) = self.operands_at.iter().position(|&one| one == at) else { return Flags::default() };
+        self.tables.operand_flags.get(&(self.function.id, self.at_instruction, index as i64)).copied().unwrap_or_default()
+    }
+
     fn instruction(&mut self, instruction: &model::Instruction) -> Emit<()> {
+        self.at_instruction = instruction.id;
+        self.operands_at = instruction.operands.iter().map(|one| one as *const Operand as usize).collect();
         let op = instruction.op;
         let binary = match op {
             Op::Add => Some(BinaryOp::Add),
@@ -1608,7 +1630,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let i16 = self.b.context.types.int(16);
                 let displacement = self.convert(displacement, signed, i16)?;
                 let byte = self.b.context.types.int(8);
-                let flags = if instruction.inbounds { Flags::INBOUNDS } else { Flags::default() };
+                let flags = self.stated_flags(instruction);
                 let result = self.b.gep(byte, pointer, &[displacement], flags, "");
                 self.define(instruction, result);
             }

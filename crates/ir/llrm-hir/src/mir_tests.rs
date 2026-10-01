@@ -207,7 +207,7 @@ fn an_external_object_is_as_large_as_its_places() {
 fn an_allocation_and_a_place_are_tagged_apart() {
     use crate::model::{AddressKind, IndirectPlace, Place, Storage};
     let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
-    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, inbounds: false, origin: None, allocation });
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
     let instructions = vec![
         Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
         Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
@@ -575,8 +575,7 @@ fn a_languages_promises_reach_mir() {
     boolean.signed = Some(false);
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
     let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
-    advance.inbounds = true;
-    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, inbounds: false, origin: None, allocation: None });
+    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None });
     let instructions = vec![
         advance,
         Instruction::new(2, Op::Load, vec![3], vec![at]),
@@ -588,7 +587,10 @@ fn a_languages_promises_reach_mir() {
     function.parameters = vec![1];
     let mut program = program(function);
     program.zeroed_locals = false;
-    program.modules[0].facts = vec![crate::facts::Stated { subject: crate::facts::Subject::Param { function: 1, index: 0 }, fact: llrm_mir::facts::Fact::NoAlias, source: None }];
+    program.modules[0].facts = vec![
+        crate::facts::Stated { subject: crate::facts::Subject::Param { function: 1, index: 0 }, fact: llrm_mir::facts::Fact::NoAlias, source: None },
+        crate::facts::Stated { subject: crate::facts::Subject::Instruction { function: 1, id: 1 }, fact: llrm_mir::facts::Fact::InBounds, source: None },
+    ];
     program.modules[0].types.extend([boolean, Type::new(3, "near", TypeKind::Pointer, 2)]);
     program.modules[0].alias_classes = vec![
         AliasClass { name: "root".to_owned(), parent: None, types: Vec::new() },
@@ -856,7 +858,7 @@ fn facts_of_a_call_argument_are_its_call_site_attributes() {
     function.calls = vec![CallAbi { instruction: 1, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let mut program = program(function);
     let mut facts = Builder::new("test");
-    let argument = Subject::Argument { function: 1, instruction: 1, operand: 0 };
+    let argument = Subject::Operand { function: 1, instruction: 1, operand: 0 };
     facts.state(argument, Fact::NoCapture).state(argument, Fact::WriteOnly).state(argument, Fact::Initializes(4));
     program.modules[0].facts = facts.finish();
     let emitted = emit(&program).remove(0);
@@ -870,6 +872,6 @@ fn facts_of_a_call_argument_are_its_call_site_attributes() {
 fn a_fact_of_an_argument_the_call_lacks_is_refused() {
     use crate::facts::{Stated, Subject};
     let mut program = program(difference());
-    program.modules[0].facts = vec![Stated { subject: Subject::Argument { function: 1, instruction: 1, operand: 0 }, fact: llrm_mir::facts::Fact::NoCapture, source: None }];
+    program.modules[0].facts = vec![Stated { subject: Subject::Operand { function: 1, instruction: 1, operand: 0 }, fact: llrm_mir::facts::Fact::NoCapture, source: None }];
     assert!(crate::verify::verify(&program).unwrap_err().0.contains("argument the module lacks"));
 }

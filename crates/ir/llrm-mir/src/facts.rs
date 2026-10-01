@@ -21,8 +21,8 @@ pub enum Kind {
     Callable,
     Param,
     Instruction,
-    /// One argument of a call.
-    Argument,
+    /// One operand of an instruction: a call argument, or a place.
+    Operand,
     Object,
 }
 
@@ -161,14 +161,14 @@ facts! {
         NoAlias no_alias "noalias" on [Param];
         ReadOnly read_only "readonly" on [Param];
         NonNull non_null "nonnull" on [Param];
-        NoCapture no_capture "nocapture" on [Param, Argument];
-        WriteOnly write_only "writeonly" on [Argument];
+        NoCapture no_capture "nocapture" on [Param, Operand];
+        WriteOnly write_only "writeonly" on [Operand];
         NoReturn no_return "noreturn" on [Callable];
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
         Align(u64) align "align" on [Param, Object];
-        Initializes(u64) initializes "initializes" on [Argument];
+        Initializes(u64) initializes "initializes" on [Operand];
     }
     custom {
         Memory(Effect) memory "memory" on [Callable];
@@ -176,6 +176,7 @@ facts! {
     bits {
         NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction];
         NoUnsignedWrap no_unsigned_wrap "nuw" Flags::NUW, on [Instruction];
+        InBounds in_bounds "inbounds" Flags::INBOUNDS, on [Instruction, Operand];
     }
 }
 
@@ -187,7 +188,7 @@ impl Fact {
             Fact::Dereferenceable(bytes) => Some(Attribute::Int(self.key().to_owned(), bytes)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
-            Fact::NoSignedWrap | Fact::NoUnsignedWrap => None,
+            Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
     }

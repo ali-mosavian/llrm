@@ -15,7 +15,7 @@ pub enum Subject {
     Param { function: i64, index: i64 },
     Instruction { function: i64, id: i64 },
     /// Operand `operand` of call `instruction`.
-    Argument { function: i64, instruction: i64, operand: i64 },
+    Operand { function: i64, instruction: i64, operand: i64 },
     Object(i64),
 }
 
@@ -25,7 +25,7 @@ impl Subject {
             Subject::Callable(_) => Kind::Callable,
             Subject::Param { .. } => Kind::Param,
             Subject::Instruction { .. } => Kind::Instruction,
-            Subject::Argument { .. } => Kind::Argument,
+            Subject::Operand { .. } => Kind::Operand,
             Subject::Object(_) => Kind::Object,
         }
     }
@@ -36,13 +36,13 @@ impl Subject {
             Kind::Callable => "callable",
             Kind::Param => "param",
             Kind::Instruction => "instruction",
-            Kind::Argument => "argument",
+            Kind::Operand => "operand",
             Kind::Object => "object",
         }
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Argument, Kind::Object].into_iter().find(|&kind| Self::kind_key(kind) == key)
+        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object].into_iter().find(|&kind| Self::kind_key(kind) == key)
     }
 
     /// The function a subject belongs to, its own id in it, and, for what
@@ -52,7 +52,7 @@ impl Subject {
             Subject::Callable(id) | Subject::Object(id) => (None, Some(id), None),
             Subject::Param { function, index } => (Some(function), Some(index), None),
             Subject::Instruction { function, id } => (Some(function), Some(id), None),
-            Subject::Argument { function, instruction, operand } => (Some(function), Some(instruction), Some(operand)),
+            Subject::Operand { function, instruction, operand } => (Some(function), Some(instruction), Some(operand)),
         }
     }
 
@@ -67,7 +67,7 @@ impl Subject {
             Kind::Callable => Subject::Callable(id?),
             Kind::Param => Subject::Param { function: function?, index: id? },
             Kind::Instruction => Subject::Instruction { function: function?, id: id? },
-            Kind::Argument => Subject::Argument { function: function?, instruction: id?, operand: part? },
+            Kind::Operand => Subject::Operand { function: function?, instruction: id?, operand: part? },
             Kind::Object => Subject::Object(id?),
         })
     }
@@ -111,6 +111,15 @@ impl Builder {
         self
     }
 
+    /// Adds facts stated elsewhere, as they were.
+    pub fn extend(&mut self, stated: impl IntoIterator<Item = Stated>) {
+        for one in stated {
+            if !self.stated.iter().any(|have| have.subject == one.subject && have.fact == one.fact) {
+                self.stated.push(one);
+            }
+        }
+    }
+
     /// Keeps the facts `keep` says to: a frontend that drops code drops what
     /// was stated of it.
     pub fn retain(&mut self, keep: impl Fn(&Stated) -> bool) {
@@ -140,7 +149,7 @@ mod tests {
     /// A subject's wire fields name it back.
     #[test]
     fn every_subject_round_trips_through_its_fields() {
-        let all = [Subject::Callable(4), Subject::Param { function: 1, index: 2 }, Subject::Instruction { function: 1, id: 5 }, Subject::Argument { function: 1, instruction: 5, operand: 2 }, Subject::Object(7)];
+        let all = [Subject::Callable(4), Subject::Param { function: 1, index: 2 }, Subject::Instruction { function: 1, id: 5 }, Subject::Operand { function: 1, instruction: 5, operand: 2 }, Subject::Object(7)];
         for subject in all {
             let (function, id, part) = subject.fields();
             assert_eq!(Subject::of(subject.kind(), function, id, part), Some(subject));

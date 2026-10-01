@@ -297,8 +297,6 @@ pub struct IndirectPlace {
     pub offset: i64,
     pub r#type: i64,
     pub volatile: bool,
-    /// The language promises the access stays inside one object.
-    pub inbounds: bool,
     /// The value holding the offset of that object's first byte, where the
     /// frontend knows it: the pointer's offset plus `offset` is then that
     /// value plus a non-negative offset inside the object, and the object
@@ -466,8 +464,6 @@ pub struct Instruction {
     pub callee: Option<String>,
     pub pure: bool,
     pub asm: Option<Asm>,
-    /// A PTR_OFFSET's result stays inside its pointer's object.
-    pub inbounds: bool,
     /// The source line of the statement it belongs to, where known.
     pub line: Option<i64>,
 }
@@ -476,7 +472,7 @@ impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None, inbounds: false, line: None }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, line: None }
     }
 }
 
