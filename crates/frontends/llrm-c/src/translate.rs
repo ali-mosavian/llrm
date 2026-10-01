@@ -705,30 +705,6 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
-    /// C promises nothing signed of the multiply that scales an index to
-    /// bytes: it is the compiler's, not an `int` product, and `a[i]` with `i`
-    /// past 16383 of a far word array is valid where its byte offset passes
-    /// 32767. Of an unsigned index it does promise the offset fits the 64K
-    /// segment an object lives in, so the product does not wrap unsigned.
-    fn state_scale_wraps(&mut self, offset: i64) {
-        let defined = |this: &Self, value: i64| this.blocks[this.current].instructions.iter().rev().find(|one| one.results == [value]).cloned();
-        let Some(scale) = defined(self, offset).filter(|one| one.op == Op::Mul) else { return };
-        let unsigned = scale.operands.iter().any(|operand| {
-            let Operand::ValueRef(index) = operand else { return false };
-            // The index as the multiply reads it: a signed copy of an unsigned.
-            let source = defined(self, index.value).filter(|one| one.op == Op::Copy).and_then(|one| match one.operands[..] {
-                [Operand::ValueRef(ref from)] => Some(from.value),
-                _ => None,
-            });
-            matches!(self.shape(source.unwrap_or(index.value)), Shape::Int(_, false))
-        });
-        let before = self.stated_instructions.len();
-        self.stated_instructions.retain(|&(id, fact)| !(id == scale.id && fact == Fact::NoSignedWrap));
-        if unsigned && self.stated_instructions.len() != before {
-            self.stated_instructions.push((scale.id, Fact::NoUnsignedWrap));
-        }
-    }
-
     /// `op` of `operands`, a value of type `ty`.
     fn op(&mut self, op: Op, ty: i64, operands: Vec<Operand>) -> i64 {
         let result = self.value(ty);
@@ -1508,10 +1484,44 @@ impl<'a, 't> Body<'a, 't> {
         signed(&self.unit.canonical_type(type_)) && bits >= 16
     }
 
+    /// The index of a pointer add scaled to bytes, `index * size`: the
+    /// compiler's multiply, not an `int` product, so C promises nothing signed
+    /// of it (`a[i]` with `i` past 16383 of a far word array is valid where the
+    /// byte offset passes 32767). An unsigned index promises the offset fits the
+    /// 64K segment an object lives in: the product does not wrap unsigned.
+    /// Stated here, where the scale is made, from the index's C type.
+    fn scaled(&mut self, node: &str) -> R<()> {
+        let tree = self.unit.nodes[&hir::handle(node)].clone();
+        let [op, left, right, type_] = &tree.args[..] else { return Ok(()) };
+        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(&self.unit.canonical_type(type_)) {
+            return Ok(());
+        }
+        let constant = |this: &Self, node: &String| this.unit.nodes[&hir::handle(node)].call == "CGInteger";
+        let (index, size) = match (constant(self, left), constant(self, right)) {
+            (false, true) => (left, right),
+            (true, false) => (right, left),
+            _ => return Ok(()),
+        };
+        let unsigned = !signed(&self.unit.canonical_type(&self.type_of_node(index)));
+        let (a, b) = (self.value_as(index, type_)?, self.value_as(size, type_)?);
+        let ty = self.ty(type_)?;
+        let result = self.value(ty);
+        let (a, b) = if index == left { (a, b) } else { (b, a) };
+        let id = self.instruction(Op::Mul, vec![result], vec![value_ref(a), value_ref(b)]).id;
+        if unsigned {
+            self.stated_instructions.push((id, Fact::NoUnsignedWrap));
+        }
+        self.done.insert(hir::handle(node), Got::Value(result));
+        Ok(())
+    }
+
     fn binary(&mut self, cg_op: &str, left: &str, right: &str, type_: &str) -> R<i64> {
         let canonical = self.unit.canonical_type(type_);
         if matches!(cg_op, "O_PLUS" | "O_MINUS") && !is_float(&canonical) {
             let a_got = self.eval(left)?;
+            if pointers(&canonical) {
+                self.scaled(right)?;
+            }
             let b_got = self.eval(right)?;
             let (a, b) = (self.scalar(a_got)?, self.scalar(b_got)?);
             // Pointer arithmetic: the pointer moved, or two pointers' distance.
@@ -1559,7 +1569,6 @@ impl<'a, 't> Body<'a, 't> {
     /// `pointer` moved by `by` bytes, of C type `from`: inbounds, as C
     /// keeps pointer arithmetic inside its object.
     fn moved(&mut self, pointer: i64, by: i64, from: &str, subtract: bool) -> R<i64> {
-        self.state_scale_wraps(by);
         let word = self.types.int(2, true);
         let by = match self.bits(by) {
             Some(_) => self.resized(by, signed(&self.unit.canonical_type(from)), word),
@@ -1921,6 +1930,23 @@ mod tests {
         let scales: Vec<&str> = text.lines().filter(|one| one.contains(" = mul ")).collect();
         assert!(!scales.is_empty(), "the shape that was stated nsw: {text}");
         assert!(scales.iter().all(|one| !one.contains("nsw") && one.contains("mul nuw i16")), "{scales:#?}");
+    }
+
+    /// The scaling multiply's flag follows the index's C type, however the index
+    /// arrives: an unsigned one through a conversion (`(unsigned)c`) or a sum
+    /// (`u + 1`) is `nuw`; a signed one carries none (#150).
+    #[test]
+    fn test_the_scale_of_an_index_follows_the_indexs_type() {
+        let module = raised("scaledindex.cgs");
+        let scale = |name: &str| {
+            let text = defined(&module, name);
+            let muls: Vec<String> = text.lines().filter(|one| one.contains(" = mul ")).map(str::to_owned).collect();
+            assert_eq!(muls.len(), 1, "{name}: {text}");
+            muls[0].clone()
+        };
+        assert!(scale("_through_a_char").contains("mul nuw i16"), "{}", scale("_through_a_char"));
+        assert!(scale("_through_a_sum").contains("mul nuw i16"), "{}", scale("_through_a_sum"));
+        assert!(!scale("_through_a_signed").contains("nsw") && !scale("_through_a_signed").contains("nuw"), "{}", scale("_through_a_signed"));
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.
