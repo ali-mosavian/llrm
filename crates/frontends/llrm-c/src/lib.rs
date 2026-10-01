@@ -12,3 +12,5 @@ pub mod translate;
 mod callconv_tests;
 #[cfg(test)]
 mod debug_tests;
+#[cfg(test)]
+mod toolchain_tests;

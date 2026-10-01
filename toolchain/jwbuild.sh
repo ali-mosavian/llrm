@@ -10,23 +10,23 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm"
 JWASM_COMMIT=9fd1afd1a0d6fcebeba975f6586e33356e319e32
 JWLINK_COMMIT=4dfdd7896c39b9567f4ea9bfbb7eda601277311e
 
-# checkout NAME COMMIT: the fork at COMMIT, its build outputs dropped when it moved.
-checkout() {
-    tree="$CACHE/$1"
-    [ -d "$tree/.git" ] || git clone -q "https://github.com/ali-mosavian/$1.git" "$tree"
-    if [ "$(git -C "$tree" rev-parse HEAD)" != "$2" ]; then
-        git -C "$tree" fetch -q origin
-        git -C "$tree" checkout -q "$2"
-        find "$tree" -type d -name GccUnixR -prune -exec rm -rf {} +
-    fi
-}
+. "$(dirname "$0")/cache.sh"
 
-checkout JWasm "$JWASM_COMMIT"
-make -s -C "$CACHE/JWasm" -f GccUnix.mak
-checkout JWlink "$JWLINK_COMMIT"
-for part in dwarf/dw orl sdk/rc/wres .; do
-    make -s -C "$CACHE/JWlink/$part" -f GccUnix.mak
-done
+# fork NAME COMMIT DIR: the fork at COMMIT in DIR, built there; cached per commit.
+fork() {
+    git clone -q "https://github.com/ali-mosavian/$1.git" "$3"
+    git -C "$3" checkout -q "$2"
+    case "$1" in
+    JWasm) make -s -C "$3" -f GccUnix.mak ;;
+    JWlink)
+        for part in dwarf/dw orl sdk/rc/wres .; do
+            make -s -C "$3/$part" -f GccUnix.mak
+        done
+        ;;
+    esac
+}
+cached "$CACHE/JWasm-$JWASM_COMMIT" fork JWasm "$JWASM_COMMIT"
+cached "$CACHE/JWlink-$JWLINK_COMMIT" fork JWlink "$JWLINK_COMMIT"
 
 mkdir -p "$DEST"
-cp "$CACHE/JWasm/GccUnixR/jwasm" "$CACHE/JWlink/GccUnixR/jwlink" "$DEST/"
+cp "$CACHE/JWasm-$JWASM_COMMIT/GccUnixR/jwasm" "$CACHE/JWlink-$JWLINK_COMMIT/GccUnixR/jwlink" "$DEST/"
