@@ -3,8 +3,8 @@
 //! over `MachineBranchProbabilityInfo`.
 //!
 //! The edge probabilities are `LirBody::odds`, which isel made from
-//! `branchprob`'s heuristics over the MIR (an edge made since, as a split
-//! one, takes what its block's isel edges leave, evenly); a loop's proven
+//! `branchprob`'s heuristics over the MIR (an edge made by splitting one
+//! inherits its odds, `BlockOdds::redirected`); a loop's proven
 //! trips, which induction left in `loop_trip_counts`, replace the heuristic's
 //! 31 in 32; and `branchprob::propagated` turns them into frequencies.
 

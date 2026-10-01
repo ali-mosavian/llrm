@@ -627,6 +627,9 @@ pub fn _split_edges(
         });
     }
     let mut out = body.clone();
+    for (&(where_, into), &at) in &landing {
+        out.odds.redirected(where_, into, at);
+    }
     blocks.extend(made.into_values());
     out.blocks = blocks;
     Ok(out)
@@ -757,7 +760,8 @@ mod tests {
     use super::{Split, _observed, _settled, _split_edges, eliminated, unsplit};
     use crate::backend::verify;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-    use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+    use crate::analysis::frequency::Frequency;
+    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody, Phi};
 
     fn what(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Option<Semantics> {
         Some(Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) })
@@ -962,6 +966,37 @@ mod tests {
         assert!(edge.insns[0].group.is_some());
         assert_eq!(edge.insns[0].defines, vec![3]);
         assert_eq!(edge.insns[0].uses, vec![1]);
+    }
+
+    /// A branch with both of its edges split took the even odds of an edge
+    /// isel never estimated: tally's outer loop read 16x its frequency once
+    /// the splits were made, and every consumer of the odds read it.
+    #[test]
+    fn test_splitting_both_edges_of_a_branch_keeps_its_odds() {
+        let define = |at: i64, result: u32| {
+            Arc::new(Insn::new(at, Some((at, at + 1)), what(Operation::Move, "mov", vec![held(result, 4)], vec![imm(1, 4)], None), vec![result], vec![]))
+        };
+        let both = |value: u32| vec![Phi { result: value, incoming: vec![(0, 1), (4, 2)] }];
+        let mut branching = body(
+            "both-edges",
+            vec![
+                block(0, vec![define(0, 1), branch(1, Some((1, 2)), "jz", 2)], vec![1, 2], vec![]),
+                block(1, vec![], vec![], both(10)),
+                block(2, vec![], vec![], both(11)),
+                block(4, vec![define(4, 2), branch(5, Some((5, 6)), "jz", 2)], vec![1, 2], vec![]),
+            ],
+        );
+        for (to, probability) in [(1, 0.9), (2, 0.1)] {
+            branching.odds.taken.insert((0, to), (probability * BlockOdds::CERTAIN).round() as u32);
+        }
+
+        let done = eliminated(&branching).unwrap();
+
+        assert!(done.blocks.len() > branching.blocks.len() + 1, "both edges of block 0 are split");
+        let (before, after) = (Frequency::of(&branching), Frequency::of(&done));
+        for at in [1, 2] {
+            assert!((before.block(at) - after.block(at)).abs() < 1e-6, "block {at}: {} split into {}", before.block(at), after.block(at));
+        }
     }
 
     #[test]
