@@ -23,11 +23,14 @@ pub(super) struct GeneratorState {
     live: Vec<String>,
 }
 
-/// An escaping generator's frame: what it yields, and each field's live flag.
+/// An escaping generator's frame: what it yields, each field's live flag,
+/// and, for each field, the owner a borrow read out of it roots in: what
+/// its caller lent, which no other field reaches.
 #[derive(Clone, Debug)]
 pub(super) struct Frame {
     item: ElementType,
     flags: BTreeMap<String, String>,
+    pub(super) lent: BTreeMap<String, u32>,
 }
 
 /// A frame's field: its name, its type, and its shape when an array.
@@ -35,6 +38,14 @@ struct Field {
     name: String,
     element: ElementType,
     shape: Option<Shape>,
+}
+
+impl TypeRegistry {
+    /// An owner no binding has: what a frame's field holds.
+    fn lent_root(&mut self) -> u32 {
+        self.next_lent_root -= 1;
+        self.next_lent_root
+    }
 }
 
 impl FunctionCompiler<'_> {
@@ -57,6 +68,12 @@ impl FunctionCompiler<'_> {
                 made
             }
         };
+        // Its frame keeps what it is lent, and may store any of it in what
+        // a `&mut` argument holds, as a call may.
+        let kinds = function.parameters.iter().map(|one| parameter_kind(self.types, one)).collect::<Result<Vec<_>, _>>()?;
+        let lent = self.lent(&inferred.passed, &kinds);
+        borrows::check_disjoint(&lent, &inferred.passed.iter().map(Expr::span).collect::<Vec<_>>())?;
+        self.store_call_borrows(&inferred.passed, &kinds, &lent, span)?;
         let mut fields = vec![(RESUME.to_string(), Expr::Integer(0, span), span)];
         fields.extend(function.parameters.iter().zip(inferred.passed).map(|(parameter, argument)| (parameter.name.clone(), argument, span)));
         fields.extend(state.zeroed.into_iter().map(|name| (name, Expr::Zero(span), span)));
@@ -206,7 +223,8 @@ impl FunctionCompiler<'_> {
         fields.extend(flags.values().map(|flag| Field { name: flag.clone(), element: ElementType::Scalar(TypeName::Bool), shape: None }));
         let name = self.declare_frame(&fields, span)?;
         let id = self.types.structs[&name].id;
-        self.types.frames.insert(id, Frame { item, flags });
+        let lent = fields.iter().map(|field| (field.name.clone(), self.types.lent_root())).collect();
+        self.types.frames.insert(id, Frame { item, flags, lent });
         let next = self.next_method(&name, &fields, &borrowed, arms, args.clone(), span);
         self.templates.borrow_mut().generated(next, self.types)?;
         let zeroed = fields[parameters..].iter().map(|field| field.name.clone()).filter(|field| !live.contains(field)).collect();
@@ -225,7 +243,7 @@ impl FunctionCompiler<'_> {
                 SignatureParameter::Borrowed { mutable, target, .. } => match target.ranked() {
                     Some((element, rank, _)) => {
                         let kept = self.types.kept_view(element, rank, mutable, span)?;
-                        let view = Binding { type_: BindingType::Slice { element, rank }, mutable, storage: Storage::Slice(0) };
+                        let view = Binding { type_: BindingType::Slice { element, rank }, mutable, storage: Storage::Slice(self.lent_id()) };
                         (ElementType::Struct(kept), Some(view))
                     }
                     None => {
@@ -234,7 +252,7 @@ impl FunctionCompiler<'_> {
                             BindingType::Struct(id) => ElementType::Struct(id),
                             _ => unreachable!("an array is ranked"),
                         };
-                        let reference = Binding { mutable, storage: Storage::Reference(self.unbound()), ..self.placeholder(target, None) };
+                        let reference = Binding { mutable, storage: Storage::Reference(self.lent_id()), ..self.placeholder(target, None) };
                         (ElementType::Scalar(self.types.reference(target, mutable)), Some(reference))
                     }
                 },
@@ -323,13 +341,13 @@ impl FunctionCompiler<'_> {
                         Some(TypeAnnotation::Slice { .. }) => return Err(Diagnostic::new(*span, "an owned array needs a fixed length: 'T[N]'")),
                         None => (self.local_type(name, value, *span)?, None),
                     };
-                    self.check_lent(name, element, value, *span, fields, borrowed)?;
+                    self.check_lent(name, element, value, *span)?;
                     self.keep(name, element, shape, fields);
                 }
                 Statement::With { name, value, span, .. } if split => {
                     self.started_generators(value)?;
                     let element = self.local_type(name, value, *span)?;
-                    self.check_lent(name, element, value, *span, fields, borrowed)?;
+                    self.check_lent(name, element, value, *span)?;
                     self.keep(name, element, None, fields);
                 }
                 Statement::Destructure { pattern, value, span, .. } => {
@@ -344,7 +362,7 @@ impl FunctionCompiler<'_> {
                     self.started_generators(iterable)?;
                     // An iterator's item is kept; a sequence's is its element, read in place.
                     if let Some(frame) = self.frame_of_expression(iterable) {
-                        self.check_lent(name, frame.item, iterable, *span, fields, borrowed)?;
+                        self.check_lent(name, frame.item, iterable, *span)?;
                         self.keep(name, frame.item, None, fields);
                     } else {
                         let element = self.iterated_item(iterable).ok_or_else(|| Diagnostic::new(*span, "a generator that escapes iterates an iterator or a sequence"))?;
@@ -433,30 +451,23 @@ impl FunctionCompiler<'_> {
                 }
                 BindingType::Array { .. } => unreachable!("a pattern binds no array"),
             };
-            self.check_lent(&name, element, subject, span, fields, borrowed)?;
+            self.check_lent(&name, element, subject, span)?;
             self.keep(&name, element, None, fields);
         }
         Ok(())
     }
 
     /// Errs when `name`, a value of `element` made from `source`, would keep
-    /// a borrow of the frame's own values: the frame moves between
-    /// resumptions, so what it keeps borrows only what its caller lent it --
-    /// through its borrowed parameters, views and references it keeps, or
-    /// the generators it holds, which keep only the same.
-    #[allow(clippy::too_many_arguments)]
-    fn check_lent(&self, name: &str, element: ElementType, source: &Expr, span: Span, fields: &[Field], borrowed: &[(String, Binding)]) -> Result<(), Diagnostic> {
+    /// a borrow the frame may not hold: the frame moves between resumptions
+    /// and goes where its caller sends it, so it holds what a caller-lent
+    /// place may (`Life::may_hold`) -- through its borrowed parameters,
+    /// views and references it keeps, or the generators it holds, which keep
+    /// only the same.
+    fn check_lent(&self, name: &str, element: ElementType, source: &Expr, span: Span) -> Result<(), Diagnostic> {
         if !self.holds_reference(element) && !matches!(element, ElementType::Struct(id) if self.types.kept_views.contains_key(&id)) {
             return Ok(());
         }
-        let lent: BTreeSet<_> = borrowed.iter().filter_map(|(_, binding)| borrows::identity(&binding.storage)).collect();
-        let owned: BTreeSet<_> = fields
-            .iter()
-            .filter(|field| self.frame_of(field.element).is_none() && !self.holds_reference(field.element))
-            .filter_map(|field| self.visible(&field.name).and_then(|binding| borrows::identity(&binding.storage)))
-            .collect();
-        let own = |root: &borrows::Root| owned.contains(&root.owner) && !lent.contains(&root.owner);
-        match self.roots(source).iter().find(|root| own(root)) {
+        match self.roots(source).into_iter().find(|root| !borrows::Life::Lent.may_hold(root)) {
             Some(root) => Err(Diagnostic::new(span, format!("a generator that escapes keeps only borrows of what its caller lent it; {name:?} borrows its own {:?}", root.name))),
             None => Ok(()),
         }
@@ -476,23 +487,35 @@ impl FunctionCompiler<'_> {
     #[allow(clippy::too_many_arguments)]
     fn keep_view(&mut self, name: &str, element: ElementType, rank: u8, mutable: bool, source: &Expr, span: Span, fields: &mut Vec<Field>, borrowed: &mut Vec<(String, Binding)>) -> Result<(), Diagnostic> {
         let kept = ElementType::Struct(self.types.kept_view(element, rank, mutable, span)?);
-        self.check_lent(name, kept, source, span, fields, borrowed)?;
+        self.check_lent(name, kept, source, span)?;
         fields.push(Field { name: name.into(), element: kept, shape: None });
-        let view = Binding { type_: BindingType::Slice { element, rank }, mutable, storage: Storage::Slice(0) };
+        let view = Binding { type_: BindingType::Slice { element, rank }, mutable, storage: Storage::Slice(self.lent_id()) };
         self.scopes.last_mut().expect("scope").insert(name.into(), view.clone());
         borrowed.push((name.into(), view));
         Ok(())
     }
 
-    /// A binding of `element` that only types the body: its storage, which
-    /// no HIR names, keeps it apart from every other binding.
+    /// A field of `element` as a binding that only types the body: its
+    /// storage, which no HIR names, keeps it apart from every other binding.
+    /// A field that holds borrows or generators holds only what the caller
+    /// lent.
     fn placeholder(&mut self, element: ElementType, shape: Option<Shape>) -> Binding {
         let type_ = match (element, shape) {
             (element, Some(shape)) => BindingType::Array { element, shape },
             (ElementType::Scalar(type_name), None) => BindingType::Scalar(type_name),
             (ElementType::Struct(id), None) => BindingType::Struct(id),
         };
-        Binding { type_, mutable: true, storage: Storage::Place(self.unbound()) }
+        let lent = self.frame_of(element).is_some() || self.holds_reference(element) || matches!(element, ElementType::Struct(id) if self.types.kept_views.contains_key(&id));
+        let id = if lent { self.lent_id() } else { self.unbound() };
+        Binding { type_, mutable: true, storage: Storage::Place(id) }
+    }
+
+    /// An unbound id whose binding holds what the caller lent.
+    fn lent_id(&mut self) -> u32 {
+        let id = self.unbound();
+        self.parameter_lives.insert(borrows::BorrowKey::Place(id), borrows::Life::Lent);
+        self.parameter_lives.insert(borrows::BorrowKey::Value(id), borrows::Life::Lent);
+        id
     }
 
     /// An id no HIR place or value has, counted down from the top.

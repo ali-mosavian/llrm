@@ -324,8 +324,18 @@ pub fn lower(program: &model::Program) -> Result<Vec<Lowered>, InvalidHIR> {
                     _ => None,
                 })
                 .collect();
+            let inbounds: std::collections::HashSet<(i64, i64)> = module
+                .facts
+                .iter()
+                .filter(|one| one.fact == llrm_mir::facts::Fact::InBounds)
+                .filter_map(|one| match one.subject {
+                    llrm_hir::facts::Subject::Operand { function: owner, instruction, operand } if owner == function.id => Some((instruction, operand)),
+                    _ => None,
+                })
+                .collect();
             out.push(_function(
                 &no_wrap,
+                &inbounds,
                 &module.name,
                 &_materialized_booleans(&_taken_branches(function), &types),
                 &types,
@@ -534,6 +544,11 @@ struct _Scope<'a> {
     next_frame_offset: i64,
     at: i64,
     next_value: i64,
+    /// The operands (instruction, index) the language promises stay inside one object.
+    inbounds: &'a std::collections::HashSet<(i64, i64)>,
+    /// The instruction being lowered and where its operands are.
+    current: i64,
+    operands_at: Vec<usize>,
 }
 
 fn value_width(type_: &model::Type) -> u32 {
@@ -880,7 +895,8 @@ impl<'a> _Scope<'a> {
                     },
                 }))
             }
-            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, published, inbounds, origin, allocation }) => {
+            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, origin, allocation }) => {
+                let inbounds = &self.promised_inbounds(one);
                 let type_ = self.types[type_id];
                 // The owning descriptor names the allocation, as a symbol.
                 let allocation = match allocation.as_ref() {
@@ -913,8 +929,7 @@ impl<'a> _Scope<'a> {
                             base_width: pointer_type.width as u32,
                             provenance,
                             inbounds: *inbounds,
-                            volatile: *volatile || *published,
-                            published: *published,
+                            volatile: *volatile,
                             origin: origin.map(|one| self.values[&one]),
                             ..MemRef::new(Some(Addr::new(Space::Literal, *offset)), type_.width as u32)
                         },
@@ -980,8 +995,7 @@ impl<'a> _Scope<'a> {
                             base_width: 2,
                             provenance,
                             inbounds: *inbounds,
-                            volatile: *volatile || *published,
-                            published: *published,
+                            volatile: *volatile,
                             origin: origin.map(|one| self.values[&one]),
                             allocation,
                             ..MemRef::new(Some(Addr::new(Space::Far, 0)), type_.width as u32)
@@ -1043,8 +1057,7 @@ impl<'a> _Scope<'a> {
                         pointer: true,
                         provenance,
                         inbounds: *inbounds,
-                        volatile: *volatile || *published,
-                            published: *published,
+                        volatile: *volatile,
                         ..MemRef::new(None, type_.width as u32)
                     },
                 }))
@@ -1058,8 +1071,6 @@ impl<'a> _Scope<'a> {
                         offset,
                         r#type: *type_id,
                         volatile: false,
-                        published: false,
-                        inbounds: false,
                         origin: None,
                         allocation: None,
                     }),
@@ -1069,7 +1080,15 @@ impl<'a> _Scope<'a> {
         }
     }
 
+    /// Whether the language promises `operand`, one of the current instruction's, stays inside one object.
+    fn promised_inbounds(&self, operand: &model::Operand) -> bool {
+        let at = operand as *const model::Operand as usize;
+        self.operands_at.iter().position(|&one| one == at).is_some_and(|index| self.inbounds.contains(&(self.current, index as i64)))
+    }
+
     fn operation(&mut self, instruction: &model::Instruction) -> Result<Vec<mir::Op>, InvalidHIR> {
+        self.current = instruction.id;
+        self.operands_at = instruction.operands.iter().map(|one| one as *const model::Operand as usize).collect();
         let mut before: Vec<mir::Op> = Vec::new();
         let mut args = instruction
             .operands
@@ -1799,6 +1818,7 @@ impl<'a> _Scope<'a> {
 
 fn _function(
     no_wrap: &std::collections::HashSet<i64>,
+    inbounds: &std::collections::HashSet<(i64, i64)>,
     module: &str,
     function: &model::Function,
     types: &IndexMap<i64, &model::Type>,
@@ -1862,6 +1882,9 @@ fn _function(
         next_frame_offset,
         at: 0,
         next_value,
+        inbounds,
+        current: 0,
+        operands_at: Vec::new(),
     };
 
     // HIR block ids are stable source identities. Preserve them through MIR:

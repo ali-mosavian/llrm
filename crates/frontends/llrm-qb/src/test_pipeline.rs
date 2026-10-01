@@ -191,3 +191,11 @@ fn test_a_field_of_a_byref_record_follows_the_records_declaration() {
     assert!(!body(&plain).contains("volatile"), "{plain}");
     assert!(body(&volatile).contains("load volatile i16"), "{volatile}");
 }
+
+/// An array of words sits on a word: the alignment the frontend states of
+/// its data object reaches the global, as the field it replaced did.
+#[test]
+fn test_an_array_of_words_is_aligned_to_a_word() {
+    let text = mir_of(&["DIM SHARED a(1 TO 4) AS INTEGER", "a(1) = 1"]);
+    assert!(text.lines().any(|line| line.starts_with("@\"A%\"") && line.contains(", align 2")), "{text}");
+}
