@@ -1977,6 +1977,34 @@ fn test_a_range_loops_counter_does_not_wrap() {
     };
     assert_eq!(stated("i16"), vec![Fact::NoSignedWrap]);
     assert_eq!(stated("u16"), vec![Fact::NoUnsignedWrap]);
+    // It is the counter's own add of one, not the body's `s += i`.
+    let source = "fn total(n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "which.nib", source));
+    let total = function(&program, "total");
+    let ids: Vec<i64> = program.modules[0].facts.iter().filter_map(|one| match one.subject {
+        llrm_core::hir::facts::Subject::Instruction { function, id } if function == total.id => Some(id),
+        _ => None,
+    }).collect();
+    assert_eq!(ids.len(), 1);
+    let stated = total.blocks.iter().flat_map(|block| &block.instructions).find(|one| one.id == ids[0]).expect("the instruction");
+    assert_eq!(stated.op, llrm_core::hir::model::Op::Add);
+    assert!(matches!(stated.operands[1], llrm_core::hir::model::Operand::Constant(_)), "{:?}", stated.operands);
+}
+
+/// A shared reference is not null and points at all of its struct, so the
+/// load of its field is hoisted above the loop's guard and no register is
+/// saved to hold it: 15 instructions where 17 saved and restored `si`.
+#[test]
+fn test_a_reference_lets_its_field_load_leave_the_loop() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "struct V:\n    mut a: i16\n    b: i16\n\nfn sum(v: &V, n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += v.b\n    return s\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "refsum.nib", source));
+    let module = nib_compile::assembled_from_mir(&program, "sum", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
+    let asm = masm::text(&module).expect("prints");
+    let from = asm.find("_sum proc").expect("the function");
+    let body: Vec<&str> = asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).collect();
+    assert_eq!(body.len(), 15, "{body:?}");
+    assert!(!body.contains(&"push si"), "{body:?}");
 }
 
 /// A loop whose body always returns leaves its counter's increment
