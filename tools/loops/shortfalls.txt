@@ -382,6 +382,9 @@ conc1_s2_xy_bpn_index_n_st1_sum_pressure3_callmidtick_counterother c relation-iv
 conc1_s2_xy_bpn_index_n_st1_sum_pressure5_permute873_exitbreak bas relation-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc1_s2_xy_bpn_index_n_st1_sum_pressure5_permute873_exitbreak c relation-ivs #98 486-O2 486-O3 486-Os
 conc1_s2_xy_bpn_index_n_st1_sum_pressure5_permute873_exitbreak nib relation-ivs #98 486-O2 486-O3 486-Os
+conc1_s4_xi_bgh_index_n_st1_sum_whole c shape #98 486-O2
+conc1_s4_xi_bph_index_n_st1_sum_whole c invariant-loads #98 486-O2
+conc1_s4_xi_bph_index_n_st1_sum_whole c shape #98 486-O2
 conc2_s12_xi_bpf_index_n_st1_sum_as_end c invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc2_s12_xi_bpf_index_n_st1_sum_as_end c relation-size #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc2_s12_xi_bpf_index_n_st1_sum_as_end c size-vs-ref #98 386-O2 386-O3 Core-O2 Core-O3
@@ -408,8 +411,8 @@ conc2_s2_xi_bgn_index_len_st2_sum nib ivs-ideal #98 386-O2 386-O3 386-Os 486-O2 
 conc2_s2_xi_bgn_index_len_stm1_sum nib ivs-ideal #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc2_s2_xi_bgn_index_n_st1_sum nib ivs-ideal #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 conc2_s2_xi_bgn_index_n_st1_sum nib mir-ivs-ideal #98 386-O2 386-O3 P5-O2 P5-O3
-conc2_s2_xi_bgn_index_n_st1_sum_as_end c ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-conc2_s2_xi_bgn_index_n_st1_sum_as_end c mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+conc2_s2_xi_bgn_index_n_st1_sum_as_end c ivs #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+conc2_s2_xi_bgn_index_n_st1_sum_as_end c mir-ivs #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc2_s2_xi_bgn_index_n_st1_sum_as_end c relation-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc2_s2_xi_bgn_index_n_st1_sum_as_end c relation-size #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc2_s2_xi_bgn_index_n_st1_sum_as_end c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
@@ -7118,10 +7121,11 @@ x_tripdata_usescale5 nib ivs #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
 x_tripdata_usescale5 nib mir-ivs #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
 x_tripdata_usescale7 bas ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_tripdata_usescale7 bas mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+x_tripdata_usescale7 c invariant-loads #98 486-O2
 x_tripdata_usescale7 c ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_tripdata_usescale7 c mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-x_tripdata_usescale7 nib ivs #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
-x_tripdata_usescale7 nib mir-ivs #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
+x_tripdata_usescale7 nib ivs #98 486-O3 486-Os Core-O2 Core-O3 Core-Os
+x_tripdata_usescale7 nib mir-ivs #98 486-O3 486-Os Core-O2 Core-O3 Core-Os
 x_tripdata_usescalesym bas mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_tripdata_usescalesym c invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_tripdata_usescalesym c mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
