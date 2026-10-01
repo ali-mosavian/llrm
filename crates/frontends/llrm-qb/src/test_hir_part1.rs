@@ -1,8 +1,7 @@
 //! `tests/test_hir.py` QB cases, part 1; helpers in `test_hir`.
 //!
-//! skipped: test_qb_driver_never_replays_a_stale_in_tree_release_binary --
-//! unsetting QBOPT_QBFRONT is process-global and races the parallel tests
-//! that need it.
+//! (test_qb_driver_never_replays_a_stale_in_tree_release_binary has no
+//! subject now: qbfront is linked in.)
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

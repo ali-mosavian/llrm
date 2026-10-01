@@ -1,5 +1,4 @@
 [workspace]
-# qbfront is its own workspace; llrm-qb runs it as a program.
 members = [".", "crates/*/llrm-*"]
 default-members = [".", "crates/*/llrm-*"]
 resolver = "3"
