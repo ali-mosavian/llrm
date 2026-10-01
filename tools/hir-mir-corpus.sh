@@ -24,7 +24,9 @@ for source in "$root"/tests/suite/*.bas; do
 done
 for source in $(find "$root/tests/fixtures/nib" -name '*.nib' | sort); do
   name=nib-$(echo "${source#"$root"/tests/fixtures/nib/}" | tr / - | sed 's/\.nib$//')
-  if "$root/target/release/llrm-nib" "$source" --dump "$out/$name.d" >/dev/null 2>"$out/$name.frontend"; then
+  # The HIR is written before code is made; a backend failure is not the frontend's.
+  "$root/target/release/llrm-nib" "$source" --dump "$out/$name.d" >/dev/null 2>"$out/$name.frontend"
+  if [ -f "$out/$name.d/03-hir.json" ]; then
     cp "$out/$name.d/03-hir.json" "$out/$name.json"
     emit "$name"
   else
