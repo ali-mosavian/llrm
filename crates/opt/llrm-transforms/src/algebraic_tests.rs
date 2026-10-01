@@ -440,3 +440,26 @@ b3:
     let after = checked(text, &inputs);
     assert!(after.contains("phi i1") && after.matches("sext").count() == 1, "{after}");
 }
+
+/// `gep i8, ptr null, -4` stayed an instruction, and isel refused it as "an
+/// address of no global" (examples/entries.nib, tally.nib). A byte offset
+/// from a constant near address is the constant address.
+#[test]
+fn a_byte_offset_from_a_constant_address_is_that_address() {
+    let text = "define ptr @f() {\nb0:\n  %p = getelementptr i8, ptr null, i16 -4\n  ret ptr %p\n}\n";
+    assert!(text.contains("getelementptr i8, ptr null"), "the shape that was refused");
+    let after = bare(&simplified(text).1);
+    assert!(after.contains("ret ptr inttoptr (i16 -4 to ptr)"), "{after}");
+    let again = "define ptr @f() {\nb0:\n  %p = getelementptr i8, ptr inttoptr (i16 1132 to ptr), i16 2\n  ret ptr %p\n}\n";
+    assert!(bare(&simplified(again).1).contains("inttoptr (i16 1134 to ptr)"));
+}
+
+/// `*(int *)0x46c` read the address through a register: C's cast is an
+/// `inttoptr` instruction, which InstCombine makes the constant address.
+#[test]
+fn inttoptr_of_a_constant_is_the_constant_address() {
+    let text = "define i16 @f() {\nb0:\n  %p = inttoptr i16 1132 to ptr\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
+    assert!(text.contains("%p = inttoptr i16 1132 to ptr"), "the shape that was kept");
+    let after = bare(&simplified(text).1);
+    assert!(after.contains("load i16, ptr inttoptr (i16 1132 to ptr)") && !after.contains("%p ="), "{after}");
+}

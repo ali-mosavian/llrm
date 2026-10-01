@@ -773,6 +773,10 @@ pub fn _memory(cell: &ir::Mem, names: &IndexMap<(Space, i64), String>) -> Result
             };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
         }
+        // A direct address, as `[disp16]`: the offset is unsigned.
+        Space::Literal if registers.is_empty() && address.segment == Register::None => {
+            return Ok(format!("{size}[{}]", address.disp & 0xFFFF));
+        }
         Space::Far if address.segment != Register::None => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };
             return Ok(format!("{size}{}:[{inside}]", target::name_of(address.segment)));

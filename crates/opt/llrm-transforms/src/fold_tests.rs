@@ -448,3 +448,18 @@ fn a_constant_division_expanded_to_shifts_folds() {
         assert_eq!(results(&module, &[&[0]]), before);
     }
 }
+
+/// `icmp ne ptr null, null` survived the folder (only integers were known),
+/// so a drop of a null vec kept its guard and the dead code it guarded.
+#[test]
+fn comparing_constant_pointers_folds() {
+    let text = "define i16 @f() {\nb0:\n  %a = icmp ne ptr null, null\n  %b = icmp eq ptr inttoptr (i16 1132 to ptr), inttoptr (i16 1132 to ptr)\n  %c = icmp ne ptr inttoptr (i16 1132 to ptr), null\n  %x = zext i1 %a to i16\n  %y = zext i1 %b to i16\n  %z = zext i1 %c to i16\n  %s = add i16 %x, %y\n  %t = add i16 %s, %z\n  ret i16 %t\n}\n";
+    assert!(text.contains("icmp ne ptr null, null"), "the shape that survived");
+    let mut module = parsed(text);
+    assert!(fold(&mut module));
+    assert_eq!(results(&module, &[&[]]), results(&parsed(text), &[&[]]));
+    let after = printed(&module);
+    for folded in ["%x = zext i1 false to i16", "%y = zext i1 true to i16", "%z = zext i1 true to i16"] {
+        assert!(after.contains(folded), "{after}");
+    }
+}
