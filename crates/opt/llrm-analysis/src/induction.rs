@@ -628,18 +628,7 @@ pub fn derived(unit: &Unit, loop_: &Loop, found: Option<&IndexMap<ValueId, Affin
         }
         direct.insert(inst, Derived { op: inst, of: found[counter].clone(), by: _multiplier(shift, by), offsets: Vec::new(), pointer: None });
     }
-    // A counter times an invariant is a recurrence stepping by it, `{0,+,m}`:
-    // counted as one, the sums, scales and addresses off it compose as off any.
-    let mut counters = found.clone();
-    for formula in direct.values() {
-        let (Some(result), AffineOperand::Value(by, width)) = (unit.function.instruction(formula.op).result, &formula.by) else { continue };
-        let (AffineOperand::Const(start), AffineOperand::Const(step)) = (&formula.of.start, &formula.of.step) else { continue };
-        if start.n != BigInt::from(0) || step.n != BigInt::from(1) || !formula.offsets.is_empty() || !still.contains(*by) {
-            continue;
-        }
-        counters.insert(result, Affine { value: result, start: AffineOperand::constant(0, *width), step: AffineOperand::Value(*by, *width), header: formula.of.header });
-    }
-    for (inst, formula) in _composed(unit, loop_, &counters, &facts, &still) {
+    for (inst, formula) in _composed(unit, loop_, found, &facts, &still) {
         direct.insert(inst, formula);
     }
     for formula in _quotients(unit, loop_, found, &facts) {
@@ -2009,6 +1998,70 @@ fn _rooted(unit: &Unit, of: Recurrence, still: &Invariant) -> Recurrence {
     Recurrence { pointer: Some(root), start: of.start.plus(&offset), step: of.step }
 }
 
+/// What `derived` leaves: recurrences that step by an invariant, as a counter
+/// times one does (`i*m`), and what is made of them by sums, constant
+/// multiples, shifts and addresses, to a fixed point. SCEV's add recurrences
+/// with symbolic steps; `derived` composes only constant scales.
+fn _symbolic(unit: &Unit, loop_: &Loop, still: &Invariant, found: &mut Users) {
+    let function = unit.function;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (inst, block, op) in operations(function) {
+            let Some(result) = op.result else { continue };
+            if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || found.values.contains_key(&result) {
+                continue;
+            }
+            let Some(width) = unit.int_bits(Operand::Value(result)).or_else(|| unit.space(Operand::Value(result)).map(|space| unit.layout.pointer(space).index_bits)) else { continue };
+            let stepping = |operand: Operand| match operand {
+                Operand::Value(value) => found.values.get(&value).filter(|of| of.pointer.is_none() && of.step.known().is_none() && of.width() == width).cloned(),
+                _ => None,
+            };
+            let constant = |operand: Operand| unit.int_constant(operand).map(|bits| BigInt::from(signed(bits, width)));
+            let invariant = |operand: Operand| term(unit, operand).filter(|one| one.width() == width && matches!(one, AffineOperand::Const(_)) || matches!(one, AffineOperand::Value(value, _) if still.contains(*value)));
+            let made = match &op.opcode {
+                Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)) => {
+                    let (first, second) = (stepping(op.operands[0]), stepping(op.operands[1]));
+                    match (first, second, kind) {
+                        (Some(of), None, _) => invariant(op.operands[1]).map(|by| {
+                            let by = Linear::of(&by, width);
+                            Recurrence { start: if *kind == BinaryOp::Add { of.start.plus(&by) } else { of.start.minus(&by) }, ..of }
+                        }),
+                        (None, Some(of), BinaryOp::Add) => invariant(op.operands[0]).map(|by| Recurrence { start: of.start.plus(&Linear::of(&by, width)), ..of }),
+                        _ => None,
+                    }
+                }
+                Opcode::Binary(BinaryOp::Mul) => match (stepping(op.operands[0]), constant(op.operands[1]), stepping(op.operands[1]), constant(op.operands[0])) {
+                    (Some(of), Some(by), _, _) | (_, _, Some(of), Some(by)) => Some(Recurrence { start: of.start.times(&by), step: of.step.times(&by), ..of }),
+                    _ => None,
+                },
+                Opcode::Binary(BinaryOp::Shl) => match (stepping(op.operands[0]), constant(op.operands[1])) {
+                    (Some(of), Some(count)) if count >= BigInt::from(0) && count < BigInt::from(width) => {
+                        let by = BigInt::from(1) << usize::try_from(&count).expect("a count below the width");
+                        Some(Recurrence { start: of.start.times(&by), step: of.step.times(&by), ..of })
+                    }
+                    _ => None,
+                },
+                Opcode::GetElementPtr { source } if still.operand(op.operands[0]) => {
+                    let indices = op.operands[1..].iter().map(|&one| unit.int_constant(one).map(|bits| signed(bits, unit.int_bits(one).unwrap_or(128)))).collect::<Vec<_>>();
+                    let (offset, variable) = unit.layout.collect_offset(&unit.context.types, *source, &indices);
+                    let [(position, scale)] = variable[..] else { continue };
+                    let Some(of) = stepping(op.operands[1 + position]) else { continue };
+                    let (root, base) = rooted(unit, op.operands[0], width, still);
+                    let scale = BigInt::from(scale);
+                    Some(Recurrence { pointer: Some(root), start: base.plus(&Linear::constant(offset, width)).plus(&of.start.times(&scale)), step: of.step.times(&scale) })
+                }
+                _ => None,
+            };
+            if let Some(of) = made {
+                found.web.insert(inst);
+                found.values.insert(result, of);
+                changed = true;
+            }
+        }
+    }
+}
+
 /// The recurrences of `loop_`'s `counters` and of what `derived` computes
 /// from them, of its pointer recurrences and the addresses off them, and
 /// every read of one by something else, in or after the loop.
@@ -2037,6 +2090,7 @@ pub fn users(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, de
         found.values.insert(one.value, of);
         found.counters.push(one.value);
     }
+    _symbolic(unit, loop_, &still, &mut found);
     // Addresses off a pointer recurrence, to a fixed point.
     let mut changed = true;
     while changed {

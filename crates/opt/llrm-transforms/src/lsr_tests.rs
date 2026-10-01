@@ -1646,6 +1646,16 @@ l3:
   ret i16 %s
 ";
 
+/// `i += 3` over `a[k * i + 8]`: the product steps by `3k`, which no single
+/// value carries.
+#[test]
+fn test_a_product_of_a_counter_stepping_by_three_is_walked_too() {
+    let text = program(&[("a", "i16", 2)], "i16", STRIDE_SYMBOLIC).replace("%i.next = add nsw i16 %i, 1", "%i.next = add nsw i16 %i, 3");
+    let printed = same(&text, &[&[0, 2], &[1, 2], &[5, 3], &[9, 2], &[5, -1]]);
+    let body = printed.split("\nl2:").nth(1).and_then(|rest| rest.split("\nl3:").next()).unwrap_or_default();
+    assert!(!body.contains(" mul ") && !body.contains("%x") && body.contains("i16 16"), "{printed}");
+}
+
 /// A product by an invariant, plus a constant, scaled by the element size, is
 /// an address recurrence stepping by a symbolic `2k`: walked as one, with the
 /// constant a displacement. The product was no recurrence a `gep` could be
