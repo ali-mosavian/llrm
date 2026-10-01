@@ -58,6 +58,16 @@ pub fn reads_arguments<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<Stri
         .collect()
 }
 
+/// The C library's routines whose result is a three-way compare of their
+/// data, as LLVM's LibFunc knows strcmp's: `_fstrcmp` and `_fmemcmp` are
+/// Borland's far forms.
+const THREE_WAY: [&str; 5] = ["strcmp", "strncmp", "memcmp", "_fstrcmp", "_fmemcmp"];
+
+/// Whether the function of object name `name` is one of them.
+pub fn three_way_compare(name: &str) -> bool {
+    THREE_WAY.contains(&name.strip_prefix('_').unwrap_or(name))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
