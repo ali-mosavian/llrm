@@ -27,6 +27,12 @@ mod test_quickr;
 mod test_frames;
 
 #[cfg(test)]
+mod test_intrinsics;
+
+#[cfg(test)]
+mod test_debug;
+
+#[cfg(test)]
 mod test_runtime_model;
 
 #[cfg(test)]

@@ -549,6 +549,8 @@ impl FunctionCompiler<'_> {
             ("push", [value]) => {
                 let settled = self.settled_failure(value, span)?;
                 let value = settled.as_ref().unwrap_or(value);
+                let roots = self.value_roots(value, element);
+                self.store_borrow(receiver, roots, span)?;
                 let place = self.sequence_place(receiver, span)?;
                 let vector = self.value(type_name);
                 self.emit("load", vec![vector], vec![place.clone()], None);
@@ -604,15 +606,7 @@ impl FunctionCompiler<'_> {
     pub(super) fn sequence_place(&mut self, receiver: &Expr, span: Span) -> Result<hir::Operand, Diagnostic> {
         let target =
             AssignTarget::of(receiver.clone()).map_err(|message| Diagnostic::new(span, message))?;
-        if let AssignTarget::Name(name) = &target {
-            let binding = self.binding(name, span)?;
-            if !binding.mutable {
-                return Err(Diagnostic::new(
-                    span,
-                    format!("binding {name:?} is immutable"),
-                ));
-            }
-        }
+        self.place_writable(receiver, span)?;
         match self.assignment_target(&target, span)? {
             AssignmentPlace::Scalar(place, _) => Ok(place),
             AssignmentPlace::Struct(_) | AssignmentPlace::Array(..) | AssignmentPlace::Bits { .. } => {

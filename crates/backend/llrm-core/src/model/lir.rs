@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::model::ir::nodes::Node;
-use crate::model::ir::{Held, Operation, Semantics};
+use crate::model::ir::{Addr, Held, Operation, Semantics};
 
 use crate::support::hash::IndexMap;
 
@@ -47,6 +47,8 @@ pub struct Insn {
     pub volatile: bool,
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
+    /// The source line of the MIR instruction it was selected from (`!dbg`).
+    pub line: Option<u32>,
 }
 
 impl Insn {
@@ -82,6 +84,7 @@ impl Insn {
             rematerialized: false,
             volatile: false,
             reads_complete: false,
+            line: None,
         }
     }
 
@@ -301,6 +304,15 @@ impl LirBlock {
     }
 }
 
+/// `-g`: a source variable or parameter, and where it lives: a frame slot
+/// until a frame rewrite moves it with the operands.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugVariable {
+    pub name: String,
+    pub r#type: llrm_mir::MetadataId,
+    pub addr: Addr,
+}
+
 /// One lowered procedure.  Blocks remain in emitted order.
 ///
 /// Direct port of `qbopt.model.lir:LirBody`.
@@ -322,6 +334,8 @@ pub struct LirBody {
     /// Only an instruction that names them writes the incoming argument
     /// slots: the IR this came from cannot address them.
     pub sealed_arguments: bool,
+    /// `-g`'s parameters, in order, then variables.
+    pub variables: Vec<DebugVariable>,
 }
 
 impl LirBody {
@@ -346,6 +360,7 @@ impl LirBody {
             noreturn: false,
             source_order: false,
             sealed_arguments: false,
+            variables: Vec::new(),
         }
     }
 
@@ -364,6 +379,7 @@ impl LirBody {
             noreturn: self.noreturn,
             source_order: self.source_order,
             sealed_arguments: self.sealed_arguments,
+            variables: self.variables.clone(),
         }
     }
 

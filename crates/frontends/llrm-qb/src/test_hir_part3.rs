@@ -1046,6 +1046,7 @@ fn test_qb_inline_sin_reaches_allocated_lir_without_a_runtime_call() {
         }],
         private: BTreeSet::new(),
         requests: BTreeSet::new(),
+        debug: None,
     })
     .expect("prints");
     assert!(assembly.contains("db 0d9h,0feh"));
@@ -1186,11 +1187,12 @@ fn test_qb_string_comparison_abi_site_survives_alias_annotation() {
 
 /// IN_KEYSTROKE held a released key forever after GVN kept its first read.
 ///
-/// A BYREF pointee is published storage: an interrupt or another runtime
-/// callback may change it without an ordinary source store.  Both the guard
-/// and the back-edge condition must therefore remain observable loads.
+/// A BYREF pointee declared `VOLATILE` may be changed by an interrupt or
+/// another runtime callback without a source store in the function.  Both
+/// the guard and the back-edge condition must therefore remain observable
+/// loads.
 #[test]
-fn test_byref_loop_condition_reloads_the_published_pointee() {
+fn test_a_volatile_byref_loop_condition_reloads_the_pointee() {
     let source = parsed_as(&fixture("byreflp.bas"), "vbdos", "vbdos");
     let (_, function) = function_named(&source, "WAITKEY");
     let semantic = lower(&source).unwrap().into_iter().find(|one| one.name.ends_with("WAITKEY")).expect("WAITKEY");
@@ -1208,9 +1210,10 @@ fn test_byref_loop_condition_reloads_the_published_pointee() {
 }
 
 /// Every iteration of a counted loop reloaded its BYREF arguments, as if the
-/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times.
+/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times. A
+/// BYREF not declared `VOLATILE` is read once and is not ordered.
 #[test]
-fn test_a_counted_loop_reads_a_published_pointee_once() {
+fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(
         &directory,
@@ -1223,10 +1226,10 @@ fn test_a_counted_loop_reads_a_published_pointee_once() {
     let optimized = optimized(&source, function, &semantic);
     let natural = loops::loops(&optimized.body.blocks, Some(optimized.body.entry));
     let inside: BTreeSet<i64> = natural.iter().flat_map(|one| one.body.iter().copied()).collect();
-    let published = |one: &mir::Op| one.kind == Kind::Load && one.loads.iter().any(|reference| reference.published);
+    let ordered = |one: &mir::Op| one.kind == Kind::Load && (one.volatile || one.loads.iter().any(|reference| reference.volatile || reference.published));
 
-    assert!(ops(&optimized.body).into_iter().any(published));
-    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(published)));
+    assert!(!ops(&optimized.body).into_iter().any(ordered));
+    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(|one| one.kind == Kind::Load)));
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -2594,7 +2597,8 @@ fn erl_outside_the_handler_is_the_line_the_handler_took() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     let body = text.split("define ").find(|one| one.contains("void @__main()")).expect("the body");
-    assert!(body.contains("load i16, ptr @$QB$ERL\n"), "{body}");
+    // Lined, as a module handling errors is: `, !dbg`.
+    assert!(body.contains("load i16, ptr @$QB$ERL\n") || body.contains("load i16, ptr @$QB$ERL, !dbg"), "{body}");
 }
 
 /// DEF SEG stored to a b$seg the rich route defined in the module's own
@@ -2855,4 +2859,96 @@ fn sanitizers_select_bcs_debug_checks() {
     assert!(frontend("-fsanitize=bounds").checked_arrays && !frontend("-fsanitize=bounds").checked_overflow);
     assert!(frontend("-ftrapv").checked_overflow);
     assert!(!frontend("-O2").checked_arrays);
+}
+
+/// Each call in a body that handles errors comes after a statement row:
+/// the row locates an error the call raises, and RESUME continues from it.
+fn rows_precede_calls(program: &llrm_core::hir::model::Program) -> Vec<(String, i64)> {
+    let module = &program.modules[0];
+    let rows = module.statements().expect("a statement table");
+    let mut orphans = Vec::new();
+    for function in &module.functions {
+        let first = rows.iter().filter(|one| one.function == function.id).map(|one| one.instruction).min();
+        let Some(first) = first else { continue };
+        for call in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.op == llrm_core::hir::model::Op::Call && one.id < first) {
+            orphans.push((function.name.clone(), call.id));
+        }
+    }
+    orphans
+}
+
+/// GORILLA.BAS DIMs its dynamic arrays before InitVars sets ON ERROR, and
+/// the rich route refused it: "@__main: a call before the first
+/// statement". Rows began only once ON ERROR was compiled, and DIM, though
+/// a dynamic one allocates, was no statement.
+#[test]
+fn a_dynamic_dim_before_on_error_is_a_statement() {
+    let program = parsed_as(&fixture("dim-before-on-error.bas"), "qb45", "qb45");
+    // Premise: B$DDIM runs in the module body and in S, both handled.
+    let calls = |name: &str| program.modules[0].functions.iter().find(|one| one.name == name).expect("the function").blocks.iter().flat_map(|block| block.instructions.clone()).filter(|one| one.callee.as_deref() == Some("B$DDIM")).count();
+    assert!(calls("__main") > 0 && calls("S") > 0);
+    assert_eq!(rows_precede_calls(&program), Vec::<(String, i64)>::new());
+    rich_listing(&program);
+}
+
+/// The DATA rows' markers leave the rich route's input, and their ABI with
+/// them: left behind, the HIR no longer encodes ("ABI site 33 is not a call").
+#[test]
+fn positional_data_drops_the_markers_abi_too() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "data.bas", b"READ a\nPRINT a\nEND\nDATA 1\n");
+    let program = super::compile::_positional_data(&parsed_as(&path, "qb45", "qb45")).expect("lays DATA out");
+    llrm_core::hir::codec::encode(&program, None).expect("encodes");
+}
+
+/// The statement table's rows of `listing`: each label and BASIC line.
+fn statement_rows(listing: &str) -> Vec<(String, u16)> {
+    let table = between(listing, "$QB$STAT proc", "$QB$STAT endp");
+    let lines: Vec<&str> = table.lines().map(str::trim).collect();
+    lines
+        .windows(2)
+        .filter_map(|pair| {
+            let label = pair[0].strip_prefix("dw offset ")?;
+            let bytes: Vec<u8> = pair[1].strip_prefix("db ")?.split(',').map(|one| u8::from_str_radix(one.trim_end_matches('h'), 16).expect("a byte")).collect();
+            Some((label.to_owned(), u16::from_le_bytes([bytes[0], bytes[1]])))
+        })
+        .collect()
+}
+
+/// The lines the outlined handler's rows state.
+fn handler_lines(program: &llrm_core::hir::model::Program) -> Vec<u16> {
+    let listing = rich_listing(program);
+    // Premise: the handler is its own procedure, assembled second.
+    assert!(listing.contains("__main$handler proc"), "{listing}");
+    statement_rows(&listing).into_iter().filter(|(label, _)| label.starts_with("L1_")).map(|(_, line)| line).collect()
+}
+
+/// Under `--error-lines`, an error in the outlined module handler (`110
+/// ERROR 7`, or its end without RESUME) reported "in line 0": the handler
+/// had only its line-0 entry row. BC reports lines 110 and 100. Off by
+/// default: the rows cost 4 bytes a line.
+#[test]
+fn an_error_in_the_outlined_handler_reports_its_line() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let raising = "10 ON ERROR GOTO 100\n20 ERROR 5\n30 END\n100 PRINT \"h\"; ERR\n110 ERROR 7\n";
+    let unresumed = "10 ON ERROR GOTO 100\n20 ERROR 5\n30 END\n100 PRINT \"h\"; ERR\n";
+    for (source, lines) in [(raising, vec![100, 110]), (unresumed, vec![100])] {
+        let path = written(&directory, "handler.bas", source.as_bytes());
+        for runtime in ["qb45", "pds71", "vbdos"] {
+            let lined = qb_driver::Frontend { error_lines: true, ..qb_driver::Frontend::new(runtime, runtime) };
+            let found = handler_lines(&qb_driver::parsed(&path, &lined, None).expect("parses"));
+            assert!(lines.iter().all(|one| found.contains(one)), "{runtime}: {found:?}");
+            assert_eq!(handler_lines(&parsed_as(&path, runtime, runtime)), [0], "{runtime}: off by default");
+        }
+    }
+}
+
+/// The same, pinned at the backend's input.
+#[test]
+fn an_outlined_handler_takes_a_row_per_line() {
+    let program = qb_driver::decoded(include_str!("fixtures/outlined_handler_lines.json")).expect("decodes");
+    // Premise: the frontend states each line's BASIC number.
+    assert!(program.modules[0].line_numbers.contains(&(5, 110)));
+    let found = handler_lines(&program);
+    assert!(found.contains(&100) && found.contains(&110), "{found:?}");
 }

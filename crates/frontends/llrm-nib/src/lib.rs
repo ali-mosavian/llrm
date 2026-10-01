@@ -26,6 +26,8 @@ pub mod semantic;
 pub mod syntax;
 
 #[cfg(test)]
+mod test_borrowck;
+#[cfg(test)]
 mod test_language;
 #[cfg(test)]
 pub(crate) mod test_nib_frontend;
@@ -39,6 +41,8 @@ pub use parser::parse;
 pub struct Frontend {
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
     pub unchecked_bounds: bool,
+    /// `-g`: source lines and debug information.
+    pub debug: bool,
 }
 
 pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {
@@ -167,3 +171,5 @@ fn prepared(mut module: syntax::Module) -> Result<syntax::Module, Diagnostic> {
 mod test_execute;
 #[cfg(test)]
 mod test_pipeline;
+#[cfg(test)]
+mod test_debug;

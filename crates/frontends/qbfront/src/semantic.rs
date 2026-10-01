@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod debug;
 mod merging;
 mod assignment;
 mod format_spec;
@@ -60,6 +61,8 @@ struct Type {
 
 #[derive(Clone)]
 struct Variable {
+    /// A BYREF pointee or a variable declared VOLATILE: another agent may write it.
+    volatile: bool,
     place: u32,
     type_id: u32,
     element: Option<u32>,
@@ -88,7 +91,7 @@ enum Operand {
         type_id: u32,
         // A BYREF pointee: an interrupt handler may write it while a loop
         // waits on it (VBDOS IN_KEYSTROKE).
-        published: bool,
+        volatile: bool,
         // An array element: QB promises it stays inside its array.
         inbounds: bool,
     },
@@ -96,7 +99,7 @@ enum Operand {
 
 enum ProjectionBase {
     Place(u32, Vec<Operand>),
-    // Base, published, inbounds.
+    // Base, volatile, inbounds.
     Indirect(u32, bool, bool),
 }
 
@@ -115,6 +118,8 @@ struct Instruction {
     tag: Option<Tag>,
     /// The signed result fits its width: FOR raises Overflow, never wraps.
     nowrap: bool,
+    /// The expanded source line of the statement it belongs to; 0 for none.
+    line: usize,
 }
 
 struct CallAbi {
@@ -203,6 +208,8 @@ struct Block {
 
 #[derive(Clone)]
 struct Place {
+    /// Declared VOLATILE: every access is ordered.
+    volatile: bool,
     id: u32,
     name: String,
     type_id: u32,
@@ -301,6 +308,10 @@ struct Compiler {
     result_name: Option<String>,
     error_handler: Option<u32>,
     error_handler_local: bool,
+    /// The body being compiled has ON ERROR GOTO somewhere: each of its
+    /// statements, before that one too, is one RESUME may reach and an
+    /// error is located at.
+    handles_errors: bool,
     error_handlers: BTreeSet<u32>,
     /// The module body has ON ERROR GOTO, whose handler takes an error any
     /// procedure raises, on that procedure's frame, and RESUMEs there.
@@ -334,6 +345,13 @@ struct Compiler {
     data_entries: Vec<u32>,
     pending_numeric_line: Option<u16>,
     current_source_line: usize,
+    /// The source lines, and whether to describe it to a debugger.
+    source: Option<DebugSource>,
+    /// Each resumable statement's expanded line, and its BASIC line number.
+    numbered_lines: BTreeMap<usize, u16>,
+    debug: llrm_hir::debug::Builder,
+    /// Each TYPE's debug type, by its type.
+    debug_structures: BTreeMap<u32, i64>,
     /// The source line of each load in the function being built.
     load_lines: BTreeMap<u32, usize>,
     warnings: Vec<String>,
@@ -389,6 +407,9 @@ pub struct Options {
     /// Procedures frame themselves where the runtime needs no frame, as
     /// the dialect may by default.
     pub own_frames: bool,
+    /// Errors in code without a landing pad, as a module handler's, report
+    /// their BASIC line: a statement-table row, 4 bytes, per line.
+    pub error_lines: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -410,7 +431,31 @@ pub fn compile_with_warnings(
     runtime: &str,
     options: &Options,
 ) -> Result<(String, Vec<String>), SemanticError> {
-    let mut compiler = built(module, module_name, dialect, runtime, options)?;
+    compile_debugged(module, module_name, dialect, runtime, options, None)
+}
+
+/// The source `-g` describes: each expanded line's text, and its line in
+/// the main file.
+pub struct DebugSource {
+    /// Each expanded line's text, for names' spelling; empty unless `debug`.
+    pub text: Vec<String>,
+    /// Each expanded line's main-file line.
+    pub lines: Vec<usize>,
+    /// `-g`: debug information too, beyond the lines an error handler's
+    /// statement table needs.
+    pub debug: bool,
+}
+
+/// [`compile_with_warnings`], with debug information of `source`.
+pub fn compile_debugged(
+    module: &Module,
+    module_name: &str,
+    dialect: Dialect,
+    runtime: &str,
+    options: &Options,
+    source: Option<DebugSource>,
+) -> Result<(String, Vec<String>), SemanticError> {
+    let mut compiler = built_from(module, module_name, dialect, runtime, options, source)?;
     // /Ah and /D address every element through the descriptor at run time.
     if options.array_merging && !options.huge_arrays && !options.checked_arrays {
         merging::applied(&mut compiler);
@@ -420,12 +465,19 @@ pub fn compile_with_warnings(
 }
 
 /// Every procedure of `module` as HIR, before emission.
-fn built(
+#[cfg(test)]
+fn built(module: &Module, module_name: &str, dialect: Dialect, runtime: &str, options: &Options) -> Result<Compiler, SemanticError> {
+    built_from(module, module_name, dialect, runtime, options, None)
+}
+
+/// [`built`], describing `source` to a debugger.
+fn built_from(
     module: &Module,
     module_name: &str,
     dialect: Dialect,
     runtime: &str,
     options: &Options,
+    source: Option<DebugSource>,
 ) -> Result<Compiler, SemanticError> {
     check_private(module, dialect)?;
     if dialect.zero_based_arrays() {
@@ -446,6 +498,7 @@ fn built(
     let detached_results = detach_results(&mut module, dialect);
     let module = &module;
     let mut compiler = Compiler::new(module_name, dialect, runtime, *options);
+    compiler.source = source;
     compiler.detached_results = detached_results;
     compiler.record_default_types(module)?;
     compiler.apply_option_base(&module.statements)?;
@@ -460,6 +513,9 @@ fn built(
     compiler.declare_procedure_shared(module)?;
     compiler.finish();
     compiler.save_function(1, "__main", VOID, Vec::new(), false, 0, "internal");
+    if compiler.debugging() {
+        compiler.debug.module_code(1);
+    }
     compiler.module_handled = compiler.functions.iter().any(|one| one.id == 1 && one.error_handler.is_some() && !one.error_handler_local);
 
     compiler.module_variables = compiler.variables.clone();
@@ -495,6 +551,7 @@ fn built(
             "local"
         };
         compiler.position = source_position(procedure.span);
+        compiler.current_source_line = procedure.span.line;
         let mut parameters = Vec::new();
         let mut parameter_bytes = 0;
         // A reference parameter names a whole object: a descriptor of rank
@@ -535,10 +592,15 @@ fn built(
             if referenced > 0 {
                 promises.push((value, referenced));
             }
+            if is_array && parameter.declaration.volatile {
+                return compiler.fail(format!("{}: VOLATILE is not supported on an array parameter", parameter.declaration.name));
+            }
             if is_array {
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, true, false);
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
+                        volatile: false,
                         place: 0,
                         type_id: parameter_type,
                         element: Some(parameter_type),
@@ -565,15 +627,20 @@ fn built(
                 );
             } else if parameter.by_value {
                 let place = compiler.declare_as(&parameter.declaration, "local")?;
+                // The debugger reads the parameter as passed.
+                compiler.debug_forget(place);
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, false, true);
                 compiler.emit(
                     "store",
                     Vec::new(),
                     vec![Operand::Place(place), Operand::Value(value)],
                 );
             } else {
+                compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, false, false);
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
+                        volatile: parameter.declaration.volatile,
                         place: 0,
                         type_id: parameter_type,
                         element: None,
@@ -613,15 +680,18 @@ fn built(
                 fixed_length: None,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span: procedure.span,
             };
             let place = compiler.declare_as(&declaration, "local")?;
+            compiler.debug_forget(place);
             compiler.result_place = Some((place, result_type));
             compiler.result_name = Some(canonical(&procedure.name).into());
         }
         compiler.each_declared.clear();
         compiler.declarations_in(&procedure.body, compiler.implicit_storage)?;
         compiler.reserve_labels(&procedure.body)?;
+        compiler.handles_errors = handles_errors(&procedure.body);
         compiler
             .statement_list(&procedure.body)
             .map_err(|error| SemanticError {
@@ -656,6 +726,8 @@ fn built(
             },
         );
         compiler.functions.last_mut().expect("the saved function").promises = promises;
+        let result = (procedure.kind == ProcedureKind::Function).then_some(result_type);
+        compiler.debug_function(index as u32 + 2, &procedure.name, procedure.span, result);
     }
     Ok(compiler)
 }
@@ -736,6 +808,7 @@ fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, Typ
                     fixed_length: None,
                     shared: false,
                     dynamic: array,
+                    volatile: false,
                     span,
                 },
                 by_value: false,
@@ -903,6 +976,44 @@ fn loop_keyword(dialect: Dialect, name: &str) -> bool {
     dialect.loop_control() && matches!(canonical(name), "BREAK" | "CONTINUE")
 }
 
+/// The labels `statements`' ON ERROR GOTOs name, nested blocks included.
+fn error_targets(statements: &[Statement], targets: &mut BTreeSet<String>) {
+    for statement in statements {
+        match statement {
+            Statement::OnError { label, .. } if label != "0" => {
+                targets.insert(canonical(label).into());
+            }
+            Statement::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                error_targets(then_branch, targets);
+                error_targets(else_branch, targets);
+            }
+            Statement::For { body, .. }
+            | Statement::While { body, .. }
+            | Statement::Do { body, .. } => error_targets(body, targets),
+            Statement::Select {
+                arms, otherwise, ..
+            } => {
+                for (_, body) in arms {
+                    error_targets(body, targets);
+                }
+                error_targets(otherwise, targets);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether `statements` handle errors: some ON ERROR GOTO names a handler.
+fn handles_errors(statements: &[Statement]) -> bool {
+    let mut targets = BTreeSet::new();
+    error_targets(statements, &mut targets);
+    !targets.is_empty()
+}
+
 fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
     fn visit(statements: &[Statement], targets: &mut BTreeSet<String>) {
         for statement in statements {
@@ -975,36 +1086,6 @@ fn outline_module_gosubs(module: &Module) -> Result<Module, SemanticError> {
             }
         }
         Ok(())
-    }
-
-    fn error_targets(statements: &[Statement], targets: &mut BTreeSet<String>) {
-        for statement in statements {
-            match statement {
-                Statement::OnError { label, .. } if label != "0" => {
-                    targets.insert(canonical(label).into());
-                }
-                Statement::If {
-                    then_branch,
-                    else_branch,
-                    ..
-                } => {
-                    error_targets(then_branch, targets);
-                    error_targets(else_branch, targets);
-                }
-                Statement::For { body, .. }
-                | Statement::While { body, .. }
-                | Statement::Do { body, .. } => error_targets(body, targets),
-                Statement::Select {
-                    arms, otherwise, ..
-                } => {
-                    for (_, body) in arms {
-                        error_targets(body, targets);
-                    }
-                    error_targets(otherwise, targets);
-                }
-                _ => {}
-            }
-        }
     }
 
     fn ends_error_handler(statement: &Statement) -> bool {
@@ -1300,6 +1381,7 @@ impl Compiler {
             result_place: None,
             result_name: None,
             error_handler: None,
+            handles_errors: false,
             error_handler_local: false,
             error_handlers: BTreeSet::new(),
             module_handled: false,
@@ -1329,6 +1411,10 @@ impl Compiler {
             data_entries: Vec::new(),
             pending_numeric_line: None,
             current_source_line: 0,
+            source: None,
+            numbered_lines: BTreeMap::new(),
+            debug: llrm_hir::debug::Builder::default(),
+            debug_structures: BTreeMap::new(),
             load_lines: BTreeMap::new(),
             warnings: Vec::new(),
         }
@@ -1363,6 +1449,7 @@ impl Compiler {
         self.result_name = None;
         self.error_handler = None;
         self.error_handler_local = false;
+        self.handles_errors = false;
         self.error_handlers.clear();
         self.statement_entries.clear();
         self.data_entries.clear();
@@ -1515,7 +1602,7 @@ impl Compiler {
             .map(|(target, type_id)| {
                 let id = self.next_instruction;
                 self.next_instruction += 1;
-                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None, nowrap: false }
+                Instruction { id, op: "store", results: Vec::new(), operands: vec![target, Operand::Constant(type_id, Number::Integer(0))], callee: None, tag: None, nowrap: false, line: 0 }
             })
             .collect();
         let entry = self.blocks.iter_mut().find(|block| block.id == 1).expect("an entry block");
@@ -1586,9 +1673,10 @@ impl Compiler {
 
     fn type_declarations(&mut self, module: &Module) -> Result<(), SemanticError> {
         for statement in &module.statements {
-            let Statement::TypeDecl { name, fields, .. } = statement else {
+            let Statement::TypeDecl { name, fields, span } = statement else {
                 continue;
             };
+            let mut described = Vec::new();
             if self.udts.contains_key(canonical(name)) {
                 return self.fail(format!("duplicate TYPE {name}"));
             }
@@ -1656,9 +1744,11 @@ impl Compiler {
                 {
                     return self.fail(format!("duplicate field {name}.{}", field.name));
                 }
+                described.push((field, field_type, offset, extent));
                 offset += extent;
             }
             let type_id = self.opaque_type(name.clone(), offset);
+            self.debug_structure(type_id, name, *span, &described, offset);
             self.udts.insert(
                 canonical(name).into(),
                 Udt {
@@ -2088,6 +2178,7 @@ impl Compiler {
                 fixed_length,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span,
             },
             storage,
@@ -2211,7 +2302,9 @@ impl Compiler {
         if loop_keyword(self.dialect, &declaration.name) {
             return self.fail(format!("{} is reserved", declaration.name));
         }
+        self.refuse_keyword(&declaration.name)?;
         let key = self.declaration_key(declaration)?;
+        let (source, span) = (declaration.name.clone(), declaration.span);
         if storage == "module" && declaration.shared {
             self.shared_keys.insert(key.clone());
         }
@@ -2287,9 +2380,13 @@ impl Compiler {
                     },
                 )
             };
+            if declaration.volatile {
+                return self.fail(format!("{}: VOLATILE is not supported on a dynamic array", declaration.name));
+            }
             let descriptor_place = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2298,6 +2395,7 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
+            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, true);
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
@@ -2313,6 +2411,7 @@ impl Compiler {
             self.variables.insert(
                 key.clone(),
                 Variable {
+                    volatile: false,
                     place: 0,
                     type_id: element,
                     element: Some(element),
@@ -2357,9 +2456,13 @@ impl Compiler {
                     },
                 )
             };
+            if declaration.volatile {
+                return self.fail(format!("{}: VOLATILE is not supported on a dynamic array", declaration.name));
+            }
             let descriptor_place = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2368,6 +2471,7 @@ impl Compiler {
                 storage,
                 symbol: descriptor_symbol,
             });
+            self.debug_held(debug::Held::Place(descriptor_place), &source, span, element, true);
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
@@ -2380,6 +2484,7 @@ impl Compiler {
             self.variables.insert(
                 key.clone(),
                 Variable {
+                    volatile: false,
                     place: 0,
                     type_id: element,
                     element: Some(element),
@@ -2461,6 +2566,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: declaration.name.clone(),
             type_id,
@@ -2471,6 +2577,10 @@ impl Compiler {
         });
         if matches!(storage, "local" | "parameter") {
             self.data_offset += extent;
+        }
+        if array_element.is_none() {
+            let held = if storage == "module" { debug::Held::Data(place_symbol, place_offset) } else { debug::Held::Place(place) };
+            self.debug_held(held, &source, span, type_id, false);
         }
         let descriptor_place = if array_element.is_some() {
             let descriptor_type = self.opaque_type(
@@ -2494,6 +2604,7 @@ impl Compiler {
             let descriptor = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2502,6 +2613,7 @@ impl Compiler {
                 storage: descriptor_storage,
                 symbol: descriptor_symbol,
             });
+            self.debug_held(debug::Held::Place(descriptor), &source, span, element, true);
             if local_descriptor {
                 self.data_offset += descriptor_extent;
             } else {
@@ -2520,9 +2632,15 @@ impl Compiler {
         } else {
             None
         };
+        if declaration.volatile {
+            if let Some(one) = self.places.iter_mut().find(|one| one.id == place) {
+                one.volatile = true;
+            }
+        }
         self.variables.insert(
             key,
             Variable {
+                volatile: declaration.volatile,
                 place,
                 type_id,
                 element: array_element,
@@ -2729,13 +2847,14 @@ impl Compiler {
     }
 
     fn statements(&mut self, module: &Module) -> Result<(), SemanticError> {
+        self.handles_errors = handles_errors(&module.statements);
         self.statement_list(&module.statements)
     }
 
     /// The body's end, END SUB's or the module's, where RESUME NEXT after
     /// the last statement continues.
     fn end_statement(&mut self) {
-        if self.error_handler.is_some() || self.module_handled {
+        if self.handles_errors || self.module_handled {
             let line = self.pending_numeric_line.unwrap_or(0);
             self.begin_resumable_statement(line);
         }
@@ -2760,10 +2879,10 @@ impl Compiler {
         for statement in statements {
             self.current_source_line = statement.span().line;
             self.position = source_position(statement.span());
+            // DIM is a statement: a dynamic array's allocates, and may raise.
             let metadata_only = matches!(
                 statement,
-                Statement::Dim(_)
-                    | Statement::Static(_)
+                Statement::Static(_)
                     | Statement::Shared(_)
                     | Statement::DefType { .. }
                     | Statement::TypeDecl { .. }
@@ -2774,13 +2893,14 @@ impl Compiler {
                     | Statement::Data { .. }
                     | Statement::Label(_, _)
             );
-            if (self.error_handler.is_some() || self.module_handled) && !metadata_only {
+            if (self.handles_errors || self.module_handled) && !metadata_only {
                 // A numbered BASIC line remains the active ERL value for
                 // every following statement until another numeric label.
                 // PDS 7.1 BC emits that number on every statement-table row;
                 // consuming it here made ERROR 53 followed by an unnumbered
                 // handler report ERL 0 through B$FERL.
                 let line = self.pending_numeric_line.unwrap_or(0);
+                self.numbered_lines.insert(self.current_source_line, line);
                 self.begin_resumable_statement(line);
             }
             match statement {
@@ -2880,7 +3000,7 @@ impl Compiler {
                         name, arguments, ..
                     } = target
                     {
-                        if intrinsics::find(canonical(name), self.dialect)
+                        if self.intrinsic(name)
                             .is_some_and(|intrinsic| intrinsic.lowering == Lowering::Mid)
                         {
                             self.mid_assignment(arguments, value)?;
@@ -3312,6 +3432,7 @@ impl Compiler {
                         let place = self.next_place;
                         self.next_place += 1;
                         self.places.push(Place {
+                volatile: false,
                             id: place,
                             name: format!("$input{symbol}"),
                             type_id: BYTE,
@@ -3658,7 +3779,7 @@ impl Compiler {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
-                                    published: false,
+                                    volatile: false,
                                     inbounds: false,
                                 },
                                 value,
@@ -4381,14 +4502,14 @@ impl Compiler {
             Operand::Indirect {
                 base,
                 offset: at,
-                published,
+                volatile,
                 inbounds,
                 ..
             } => Ok(Operand::Indirect {
                 base: *base,
                 offset: at + offset,
                 type_id,
-                published: *published,
+                volatile: *volatile,
                 inbounds: *inbounds,
             }),
             Operand::Value(_) | Operand::Constant(_, _) => {
@@ -4476,7 +4597,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        published: true,
+                        volatile: variable.volatile,
                         inbounds: false,
                     }
                 } else {
@@ -4505,7 +4626,7 @@ impl Compiler {
                             base: pointer,
                             offset: 0,
                             type_id: element,
-                            published: false,
+                            volatile: false,
                             inbounds: true,
                         },
                         element,
@@ -4534,7 +4655,7 @@ impl Compiler {
                         base: pointer,
                         offset: 0,
                         type_id: element,
-                        published: false,
+                        volatile: false,
                         inbounds: true,
                     },
                     element,
@@ -4549,11 +4670,11 @@ impl Compiler {
                         offset,
                         type_id,
                     },
-                    ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
+                    ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                         base,
                         offset,
                         type_id,
-                        published,
+                        volatile,
                         inbounds,
                     },
                 };
@@ -4576,7 +4697,7 @@ impl Compiler {
                 let variable = self.variable(name)?;
                 let base = variable
                     .indirect
-                    .map(|base| ProjectionBase::Indirect(base, true, false))
+                    .map(|base| ProjectionBase::Indirect(base, variable.volatile, false))
                     .unwrap_or_else(|| ProjectionBase::Place(variable.place, Vec::new()));
                 Ok((base, 0, variable.type_id))
             }
@@ -4666,11 +4787,11 @@ impl Compiler {
                 offset,
                 type_id: array_type,
             },
-            ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
+            ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                 base,
                 offset,
                 type_id: array_type,
-                published,
+                volatile,
                 inbounds,
             },
         };
@@ -5023,7 +5144,7 @@ impl Compiler {
                 base: at,
                 offset: 16,
                 type_id: INTEGER,
-                published: false,
+                volatile: false,
                 inbounds: false,
             }],
         );
@@ -5036,7 +5157,7 @@ impl Compiler {
                     base: at,
                     offset: 14,
                     type_id: INTEGER,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -5101,7 +5222,7 @@ impl Compiler {
                 base: descriptor,
                 offset,
                 type_id,
-                published: false,
+                volatile: false,
                 inbounds: false,
             }],
         );
@@ -5218,6 +5339,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: "$fslSegment".into(),
             type_id: INTEGER,
@@ -5285,7 +5407,7 @@ impl Compiler {
         let descriptor_result = match source {
             Expr::Name(name, _) => self.bare_function_type(name) == Some(STRING),
             Expr::Apply { name, .. } => {
-                intrinsics::find(canonical(name), self.dialect)
+                self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.result == ResultClass::String)
                     || self
                         .signatures
@@ -5401,6 +5523,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$ds{symbol}"),
             type_id: INTEGER,
@@ -5466,7 +5589,7 @@ impl Compiler {
             return self.string_descriptor(operand);
         }
         if let Expr::Name(name, _) = expression {
-            if let Some(intrinsic) = intrinsics::find(canonical(name), self.dialect) {
+            if let Some(intrinsic) = self.intrinsic(name) {
                 if intrinsic.accepts(0) {
                     if let Lowering::RuntimeString(callee) = intrinsic.lowering {
                         let pointer_type = self.pointer_type(STRING);
@@ -5476,7 +5599,7 @@ impl Compiler {
                     }
                 }
             }
-            if intrinsics::find(canonical(name), self.dialect)
+            if self.intrinsic(name)
                 .is_some_and(|intrinsic| intrinsic.lowering == Lowering::CommandLine)
             {
                 let pointer_type = self.pointer_type(STRING);
@@ -5511,8 +5634,8 @@ impl Compiler {
             name, arguments, ..
         } = expression
         {
+            let intrinsic = self.intrinsic(name);
             let name = canonical(name);
-            let intrinsic = intrinsics::find(name, self.dialect);
             if let Some(intrinsic) = intrinsic {
                 if !intrinsic.accepts(arguments.len()) {
                     return self.fail(format!(
@@ -5742,13 +5865,13 @@ impl Compiler {
         // special case.
         let lvalue = match expression {
             Expr::Name(name, _)
-                if intrinsics::find(canonical(name), self.dialect).is_none()
+                if self.intrinsic(name).is_none()
                     && !self.signatures.contains_key(canonical(name)) =>
             {
                 Some(self.destination(expression)?)
             }
             Expr::Apply { name, .. }
-                if intrinsics::find(canonical(name), self.dialect).is_none()
+                if self.intrinsic(name).is_none()
                     && !self.signatures.contains_key(canonical(name))
                     && self.variables.contains_key(&self.array_key(name)) =>
             {
@@ -5848,7 +5971,7 @@ impl Compiler {
                 self.fail("string expressions are runtime-only and not attached yet")
             }
             Expr::Name(name, _) => {
-                if intrinsics::find(canonical(name), self.dialect)
+                if self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.accepts(0))
                 {
                     return self.builtin(name, &[])?.ok_or_else(|| SemanticError {
@@ -5876,7 +5999,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        published: true,
+                        volatile: variable.volatile,
                         inbounds: false,
                     }
                 } else {
@@ -6284,6 +6407,7 @@ impl Compiler {
             fixed_length,
             shared: false,
             dynamic: true,
+            volatile: false,
             span,
         })?;
         let (_, index) = self.hidden(INTEGER)?;
@@ -6323,6 +6447,7 @@ impl Compiler {
                 fixed_length,
                 shared: false,
                 dynamic: true,
+                volatile: false,
                 span,
             },
             self.implicit_storage,
@@ -6396,6 +6521,7 @@ impl Compiler {
                 fixed_length: None,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span,
             },
             self.implicit_storage,
@@ -6568,6 +6694,7 @@ impl Compiler {
         self.variables.insert(
             name.clone(),
             Variable {
+                volatile: false,
                 place,
                 type_id,
                 element: None,
@@ -6629,10 +6756,10 @@ impl Compiler {
         name: &str,
         arguments: &[Expr],
     ) -> Result<Option<(Operand, u32)>, SemanticError> {
-        let name = canonical(name);
-        let Some(intrinsic) = intrinsics::find(name, self.dialect) else {
+        let Some(intrinsic) = self.intrinsic(name) else {
             return Ok(None);
         };
+        let name = canonical(name);
         if !intrinsic.accepts(arguments.len()) {
             return self.fail(format!(
                 "{name} expects {}",
@@ -6679,9 +6806,14 @@ impl Compiler {
             let result = self.array_bound(descriptor, dimension, upper)?;
             return Ok(Some((result, INTEGER)));
         }
-        if intrinsic.lowering == Lowering::FreeFile {
+        if let Lowering::RuntimeInteger(routine) = intrinsic.lowering {
+            let mut operands = Vec::new();
+            for argument in arguments {
+                let (operand, type_id) = self.expression(argument)?;
+                operands.push(self.convert(operand, type_id, INTEGER)?);
+            }
             let result = self.value(INTEGER);
-            self.emit_runtime_call("B$FREF", vec![result], Vec::new());
+            self.emit_runtime_call(routine, vec![result], operands);
             return Ok(Some((Operand::Value(result), INTEGER)));
         }
         if intrinsic.lowering == Lowering::HeapFree {
@@ -6728,7 +6860,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -6768,7 +6900,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7153,7 +7285,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7180,7 +7312,7 @@ impl Compiler {
                 matches!(
                     &arguments[0],
                     Expr::Apply { name, .. }
-                        if intrinsics::find(canonical(name), self.dialect)
+                        if self.intrinsic(name)
                             .is_some_and(|intrinsic| intrinsic.result == ResultClass::String)
                 ) || matches!(&arguments[0], Expr::Literal(Literal::String(_), _))
                     || (self.place_syntax_type(&arguments[0]).is_none()
@@ -7278,7 +7410,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7301,18 +7433,11 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: DOUBLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
             return Ok(Some((Operand::Value(result), DOUBLE)));
-        }
-        if intrinsic.lowering == Lowering::Eof {
-            let (file, file_type) = self.expression(&arguments[0])?;
-            let file = self.convert(file, file_type, INTEGER)?;
-            let result = self.value(INTEGER);
-            self.emit_runtime_call("B$FEOF", vec![result], vec![file]);
-            return Ok(Some((Operand::Value(result), INTEGER)));
         }
         self.fail(format!(
             "intrinsic {name} has no semantic lowering for {:?}",
@@ -7643,7 +7768,7 @@ impl Compiler {
                         base,
                         offset,
                         type_id,
-                        published,
+                        volatile,
                         inbounds,
                     } => {
                         let pointer_type = self
@@ -7657,7 +7782,7 @@ impl Compiler {
                             base,
                             offset,
                             type_id,
-                            published,
+                            volatile,
                             inbounds,
                         };
                         if self.width(pointer_type) == 4 {
@@ -8094,7 +8219,7 @@ impl Compiler {
         match expression {
             Expr::Literal(Literal::String(_), _) => true,
             Expr::Name(name, _)
-                if intrinsics::find(canonical(name), self.dialect)
+                if self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.result == ResultClass::String) =>
             {
                 true
@@ -8102,7 +8227,7 @@ impl Compiler {
             Expr::Name(name, _) if suffix(name) == Some(TypeName::String) => true,
             Expr::Name(name, _) => self.bare_function_type(name) == Some(STRING),
             Expr::Apply { name, .. }
-                if intrinsics::find(canonical(name), self.dialect)
+                if self.intrinsic(name)
                     .is_some_and(|intrinsic| intrinsic.result == ResultClass::String) =>
             {
                 true
@@ -8487,11 +8612,33 @@ impl Compiler {
     fn array(&self, name: &str) -> Result<Variable, SemanticError> {
         match self.variables.get(&self.array_key(name)) {
             Some(variable) => Ok(variable.clone()),
-            None => self.fail(format!("{name} is not an array")),
+            None => {
+                self.refuse_keyword(name)?;
+                self.fail(format!("{name} is not an array"))
+            }
         }
     }
 
+    /// The intrinsic `name` names, as spelled; none for a keyword the table
+    /// lacks, so it is refused rather than read as another's.
+    fn intrinsic(&self, name: &str) -> Option<&'static intrinsics::Intrinsic> {
+        if intrinsics::unsupported(name, self.dialect) {
+            return None;
+        }
+        intrinsics::find(canonical(name), self.dialect)
+    }
+
+    /// Refuses a function keyword the table lacks: read as a variable, it
+    /// compiled silently to 0 or an empty string (#78).
+    fn refuse_keyword(&self, name: &str) -> Result<(), SemanticError> {
+        if intrinsics::unsupported(name, self.dialect) {
+            return self.fail(format!("{name} is not supported"));
+        }
+        Ok(())
+    }
+
     fn variable(&mut self, name: &str) -> Result<Variable, SemanticError> {
+        self.refuse_keyword(name)?;
         let key = self.variable_key(name);
         if let Some(variable) = self.variables.get(&key) {
             return Ok(variable.clone());
@@ -8507,6 +8654,7 @@ impl Compiler {
             fixed_length: None,
             shared: false,
             dynamic: false,
+            volatile: false,
             span: crate::syntax::Span {
                 line: 0,
                 start: 0,
@@ -8625,6 +8773,7 @@ impl Compiler {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id,
             name: format!("{prefix}{id}"),
             type_id,
@@ -8649,6 +8798,7 @@ impl Compiler {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id,
             name: format!("$stringArg{id}"),
             type_id: STRING,
@@ -8691,6 +8841,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: "b$seg".into(),
             type_id: INTEGER,
@@ -8750,6 +8901,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$float{symbol}"),
             type_id,
@@ -8877,6 +9029,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$string{payload_symbol}$descriptor"),
             type_id: STRING,
@@ -8889,6 +9042,7 @@ impl Compiler {
         let payload = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: payload,
             name: format!("$string{payload_symbol}$payload"),
             type_id: payload_type,
@@ -8916,6 +9070,7 @@ impl Compiler {
                 callee: None,
                 tag: None,
                 nowrap: false,
+                line: self.current_source_line,
             });
     }
 
@@ -8975,6 +9130,7 @@ impl Compiler {
                 callee: Some("B$SCMP".into()),
                 tag: None,
                 nowrap: false,
+                line: self.current_source_line,
             });
         self.invalidate_descriptor_cache();
     }
@@ -9018,6 +9174,7 @@ impl Compiler {
                 callee: Some(callee.into()),
                 tag: None,
                 nowrap: false,
+                line: self.current_source_line,
             });
         self.invalidate_descriptor_cache();
     }
@@ -9269,6 +9426,9 @@ impl Compiler {
     }
 
     fn json(&self) -> String {
+        // A module that handles errors has a statement table, whose rows
+        // are code's lines: its instructions say theirs.
+        let lined = self.debugging() || (self.options.error_lines && self.functions.iter().any(|one| one.error_handler.is_some()));
         let mut out = String::new();
         write!(
             out,
@@ -9311,8 +9471,9 @@ impl Compiler {
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
                     out.push(']');
-                    if instruction.nowrap {
-                        out.push_str(",\"nowrap\":true");
+                    let line = if lined { self.main_line(instruction.line) } else { 0 };
+                    if line != 0 {
+                        write!(out, ",\"line\":{line}").unwrap();
                     }
                     out.push('}');
                 }
@@ -9427,19 +9588,8 @@ impl Compiler {
                 string(&mut out, &place.name);
                 write!(
                     out,
-                    ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
-                    place.offset, place.storage, place.symbol, place.type_id
-                )
-                .unwrap();
-            }
-            out.push_str("],\"promises\":[");
-            for (index, (parameter, bytes)) in function.promises.iter().enumerate() {
-                if index != 0 {
-                    out.push(',');
-                }
-                write!(
-                    out,
-                    "{{\"bytes\":{bytes},\"parameter\":{parameter},\"readonly\":false,\"unaliased\":false}}"
+                    ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{},\"volatile\":{}}}",
+                    place.offset, place.storage, place.symbol, place.type_id, place.volatile
                 )
                 .unwrap();
             }
@@ -9555,9 +9705,45 @@ impl Compiler {
             }
             type_json(&mut out, type_);
         }
+        out.push(']');
+        // What the language promises of each pointer parameter: it is addressable for the bytes it names.
+        let mut facts = llrm_hir::facts::Builder::new("qb");
+        for function in &self.functions {
+            for &(value, bytes) in &function.promises {
+                let index = function.parameters.iter().position(|&one| one == value).expect("a promise of a parameter") as i64;
+                facts.state(llrm_hir::facts::Subject::Param { function: i64::from(function.id), index }, llrm_hir::facts::Fact::Dereferenceable(bytes as u64));
+            }
+        }
+        // What the language promises of a FOR counter's add: it does not wrap.
+        for function in &self.functions {
+            for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
+                facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
+            }
+        }
+        let facts = facts.finish();
+        if !facts.is_empty() {
+            out.push_str(",\"facts\":");
+            out.push_str(&llrm_hir::codec::facts_json(&facts));
+        }
+        if self.debugging() {
+            out.push_str(",\"debug\":");
+            out.push_str(&llrm_hir::codec::debug_json(self.debug.built()));
+        }
+        // The statement table's lines: each main-file line's BASIC number.
+        let numbers: BTreeMap<usize, u16> = self.numbered_lines.iter().map(|(&line, &number)| (self.main_line(line), number)).filter(|&(line, number)| line > 0 && number > 0).collect();
+        if self.options.error_lines && !numbers.is_empty() {
+            out.push_str(",\"line_numbers\":[");
+            for (index, (line, number)) in numbers.iter().enumerate() {
+                if index != 0 {
+                    out.push(',');
+                }
+                write!(out, "[{line},{number}]").unwrap();
+            }
+            out.push(']');
+        }
         write!(
             out,
-            "]}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":2,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -10070,7 +10256,7 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             base,
             offset,
             type_id,
-            published,
+            volatile,
             inbounds,
         } => {
             if let Some(place) = function.allocations.get(base).filter(|_| *inbounds) {
@@ -10082,7 +10268,7 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             if let Some(origin) = function.origins.get(base).filter(|_| *inbounds) {
                 write!(out, "\"origin\":{origin},").unwrap();
             }
-            write!(out, "\"published\":{published},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
+            write!(out, "\"volatile\":{volatile},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
         }
     }
 }

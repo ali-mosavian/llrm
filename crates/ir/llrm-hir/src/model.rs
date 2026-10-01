@@ -9,7 +9,7 @@ use std::fmt;
 
 use llrm_support::pyrepr::{self, Repr};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// A Python `StrEnum`: members, their values, `str()` and `repr()`.
 macro_rules! str_enum {
@@ -470,17 +470,17 @@ pub struct Instruction {
     pub callee: Option<String>,
     pub pure: bool,
     pub asm: Option<Asm>,
-    /// The signed result fits its width, as the language promises.
-    pub nowrap: bool,
     /// A PTR_OFFSET's result stays inside its pointer's object.
     pub inbounds: bool,
+    /// The source line of the statement it belongs to, where known.
+    pub line: Option<i64>,
 }
 
 impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false, inbounds: false }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, inbounds: false, line: None }
     }
 }
 
@@ -613,19 +613,78 @@ pub struct Function {
     pub error_handler_local: bool,
     pub external_entries: Vec<i64>,
     pub linkage: FunctionLinkage,
-    pub promises: Vec<Promise>,
     /// The name it links by, where not its own.
     pub symbol: Option<String>,
 }
 
-/// What the language promises of a pointer parameter, as LLVM's
-/// `noalias`, `readonly` and `dereferenceable(bytes)` state it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Promise {
-    pub parameter: i64,
-    pub bytes: i64,
-    pub unaliased: bool,
-    pub readonly: bool,
+/// The debug vocabulary, as MIR's metadata spells it.
+pub use llrm_mir::debuginfo::{Kind as DebugKind, Reach as DebugReach, Scalar as DebugScalar};
+
+/// A source type, as a debugger shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugType {
+    pub id: i64,
+    pub kind: DebugKind,
+    pub name: String,
+    pub target: Option<i64>,
+    pub size: i64,
+    pub reach: DebugReach,
+    pub members: Vec<DebugMember>,
+}
+
+/// A structure's field, or a procedure's parameter by its type alone.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugMember {
+    pub name: String,
+    pub r#type: i64,
+    pub offset: i64,
+}
+
+/// A parameter: the function's `argument`th, hidden ones counted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugParameter {
+    pub argument: i64,
+    pub name: String,
+    pub r#type: i64,
+}
+
+/// A variable: a place of the function.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugVariable {
+    pub place: i64,
+    pub name: String,
+    pub r#type: i64,
+}
+
+/// A function as a debugger names it: its procedure type, its source
+/// parameters, and its variables; `module` the module's own code, whose
+/// variables are the module's.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugFunction {
+    pub function: i64,
+    pub module: bool,
+    pub name: String,
+    pub r#type: i64,
+    pub parameters: Vec<DebugParameter>,
+    pub variables: Vec<DebugVariable>,
+}
+
+/// A variable in data: `offset` bytes into a data object; `function` the
+/// one declaring it, None for the module.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugGlobal {
+    pub function: Option<i64>,
+    pub object: i64,
+    pub offset: i64,
+    pub name: String,
+    pub r#type: i64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Debug {
+    pub types: Vec<DebugType>,
+    pub functions: Vec<DebugFunction>,
+    pub globals: Vec<DebugGlobal>,
 }
 
 impl Function {
@@ -654,7 +713,6 @@ impl Function {
             error_handler_local: false,
             external_entries: Vec::new(),
             linkage: FunctionLinkage::External,
-            promises: Vec::new(),
             symbol: None,
         }
     }
@@ -725,11 +783,18 @@ pub struct Module {
     pub data: Vec<DataObject>,
     pub callables: Vec<Callable>,
     pub alias_classes: Vec<AliasClass>,
+    /// What the language promises, as the frontend stated it.
+    pub facts: Vec<crate::facts::Stated>,
+    /// `-g`: what a debugger names and how it reads it.
+    pub debug: Option<Debug>,
+    /// Each source line's BASIC line number, where a statement table
+    /// reports one: (line, number).
+    pub line_numbers: Vec<(i64, i64)>,
 }
 
 impl Module {
     pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
-        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new() }
+        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), facts: Vec::new(), debug: None, line_numbers: Vec::new() }
     }
 
     /// The rows of the statement table, in source order; none without one.

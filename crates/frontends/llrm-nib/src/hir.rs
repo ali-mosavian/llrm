@@ -79,6 +79,8 @@ pub struct Instruction {
     pub operands: Vec<Operand>,
     pub callee: Option<String>,
     pub asm: Option<Asm>,
+    /// The source line of the statement it belongs to, 0 for none.
+    pub line: u32,
 }
 
 /// An `asm` instruction's code and the 16-bit registers it reads and writes.
@@ -142,17 +144,10 @@ pub struct Function {
     pub exported: bool,
     /// How it is entered and left, when not as a native function is.
     pub abi: Option<ProcedureAbi>,
-    pub promises: Vec<Promise>,
-}
-
-/// What the language promises of a pointer parameter, as LLVM's
-/// `noalias`, `readonly` and `dereferenceable(bytes)` state it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Promise {
-    pub parameter: u32,
-    pub bytes: u32,
-    pub unaliased: bool,
-    pub readonly: bool,
+    /// What the language promises of it, as the one API states it.
+    pub facts: Vec<llrm_core::hir::facts::Stated>,
+    /// `-g`: each source parameter's value and name.
+    pub named_parameters: Vec<(u32, String)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -191,6 +186,8 @@ pub struct Program {
     pub functions: Vec<Function>,
     pub callables: Vec<Callable>,
     pub data: Vec<DataObject>,
+    /// `-g`: what a debugger names and how it reads it.
+    pub debug: Option<llrm_core::hir::model::Debug>,
 }
 
 impl Program {
@@ -246,6 +243,15 @@ impl Program {
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);
+        let facts: Vec<_> = self.functions.iter().flat_map(|one| one.facts.iter().cloned()).collect();
+        if !facts.is_empty() {
+            out.push_str(",\"facts\":");
+            out.push_str(&llrm_core::hir::codec::facts_json(&facts));
+        }
+        if let Some(debug) = &self.debug {
+            out.push_str(",\"debug\":");
+            out.push_str(&llrm_core::hir::codec::debug_json(debug));
+        }
         out.push_str(",\"types\":[");
         for (index, type_) in self.types.iter().enumerate() {
             comma(&mut out, index);
@@ -271,7 +277,7 @@ impl Program {
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
         out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":1,\"target\":\"i386-real-mode\"}\n",
+            "]}],\"runtime\":\"freestanding\",\"schema\":2,\"target\":\"i386-real-mode\"}\n",
         );
         out
     }
@@ -318,7 +324,11 @@ fn function_json(out: &mut String, function: &Function) {
             operands(out, &instruction.operands);
             out.push_str("],\"pure\":false,\"results\":[");
             numbers(out, &instruction.results);
-            out.push_str("]}");
+            out.push(']');
+            if instruction.line > 0 {
+                write!(out, ",\"line\":{}", instruction.line).unwrap();
+            }
+            out.push('}');
         }
         out.push_str("],\"terminator\":{\"cases\":[],\"kind\":");
         string(out, block.terminator.kind);
@@ -368,16 +378,6 @@ fn function_json(out: &mut String, function: &Function) {
             out,
             ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{},\"volatile\":{}}}",
             place.offset, place.storage, place.symbol, place.type_id, place.volatile
-        )
-        .unwrap();
-    }
-    out.push_str("],\"promises\":[");
-    for (index, promise) in function.promises.iter().enumerate() {
-        comma(out, index);
-        write!(
-            out,
-            "{{\"bytes\":{},\"parameter\":{},\"readonly\":{},\"unaliased\":{}}}",
-            promise.bytes, promise.parameter, promise.readonly, promise.unaliased
         )
         .unwrap();
     }

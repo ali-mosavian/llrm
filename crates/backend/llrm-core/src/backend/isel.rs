@@ -22,7 +22,7 @@ use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
@@ -366,9 +366,55 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         pool,
         unsealed: false,
         variadic: None,
+        variables: Vec::new(),
     };
     let body = selector.body(name, &convention)?;
+    let mut body = lined(module, function, &selector.ats, body);
+    body.variables = parameters(module, name, &convention);
+    // An inlined callee's variables are not this procedure's.
+    body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
+}
+
+/// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
+fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<DebugVariable> {
+    let Some(function) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else { return Vec::new() };
+    let cell = |index: i64| usize::try_from(index).ok().and_then(|index| convention.parameters.get(index)).copied();
+    function
+        .parameters
+        .into_iter()
+        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?) }))
+        .collect()
+}
+
+/// `body` with each instruction's source line: that of the MIR instruction
+/// its `at` was selected from, as its `!dbg` names it.
+fn lined(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>, body: LirBody) -> LirBody {
+    let mut lines: IndexMap<i64, u32> = IndexMap::default();
+    for (&inst, &at) in ats {
+        let line = function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "dbg").and_then(|&(_, node)| match module.metadata[node.0 as usize].operands.first() {
+            Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
+                llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
+                _ => None,
+            },
+            _ => None,
+        });
+        if let Some(line) = line {
+            lines.insert(at, line);
+        }
+    }
+    if lines.is_empty() {
+        return body;
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| block.with_insns(block.insns.iter().map(|one| match lines.get(&one.at) {
+            Some(&line) if one.line.is_none() => Arc::new(Insn { line: Some(line), ..(**one).clone() }),
+            _ => Arc::clone(one),
+        }).collect()))
+        .collect();
+    body.with_blocks(blocks)
 }
 
 struct Selector<'m, 'c, 'p> {
@@ -484,6 +530,8 @@ struct Selector<'m, 'c, 'p> {
     /// Where the first variadic argument is, by its displacement from BP:
     /// past the last parameter's slot.
     variadic: Option<i64>,
+    /// `-g`'s frame variables, each with the function declaring it.
+    variables: Vec<(String, DebugVariable)>,
 }
 
 impl Selector<'_, '_, '_> {
@@ -1265,6 +1313,18 @@ impl Selector<'_, '_, '_> {
                 Ok(held)
             }
         }
+    }
+
+    /// `-g`: the variable `inst`'s `!var` names is in the frame slot its
+    /// argument points at. No code.
+    fn declare_variable(&mut self, inst: InstId, arguments: &[Operand]) -> Result<(), Unselected> {
+        let attached = self.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == llrm_mir::debuginfo::VARIABLE).map(|&(_, node)| node);
+        let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
+        if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
+            let addr = Addr::new(Space::Frame, disp + variable.offset);
+            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr }));
+        }
+        Ok(())
     }
 
     /// `llvm.va_start`: the list made to point at the first variadic
@@ -2103,6 +2163,7 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 Some(Intrinsic::Code) => self.inline_code(inst, convention, name, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
+                Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
                 _ => refuse(format!("@{name}")),
             };
         }

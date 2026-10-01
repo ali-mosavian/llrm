@@ -239,3 +239,53 @@ this into the documented format: `NBxx` trailer, a subsection directory
 `S_LPROC16`/`S_BPREL16`/`S_LDATA16` records with full lexical-scope linkage,
 and a `sstGlobalTypes` table using the real numbered LF_ leaves. QB 4.5
 doesn't ship CVPACK, so this path only exists for VBDOS and PDS.
+
+## Writing it (`-g`)
+
+`llrm-qb -g` writes this layout; `crates/target/llrm-omf/src/cvwrite.rs`
+inverts the reader. A frontend describes its types, procedures and
+variables in HIR through `llrm_hir::debug::Builder`. `llrm_mir::debuginfo`
+carries them through MIR, a frame variable as an `llvm.dbg.declare` of its
+alloca. `backend/codeview.rs` adds each procedure's place and frame offsets
+and encodes. Under `-g` a named variable keeps its memory: a debugger reads
+it at any time.
+
+QB 4.5's `STRING * n` record, `0x78`, is an array of `size_bits` bits of
+its element, a char; `cvwrite` writes any array laid out in place with it.
+
+Our `llrm-qb -g` build (left) against BC `/Zi` (right), both stopped at the
+same line. VBDOS's CodeView 4, locals and parameters, then module variables:
+
+![BASIC locals in CodeView 4](codeview/basic-locals-cv4.png)
+![BASIC module variables in CodeView 4](codeview/basic-module-cv4.png)
+
+PDS 7.1's CodeView 3, which evaluates BASIC: arrays and TYPE fields, then
+every local and parameter of the SUB:
+
+![BASIC arrays and TYPEs in CodeView 3](codeview/basic-types-cv3.png)
+![BASIC locals in CodeView 3, first half](codeview/basic-all-a-cv3.png)
+![BASIC locals in CodeView 3, second half](codeview/basic-all-b-cv3.png)
+
+### C and Nib (`llrm-c -g`, `llrm-nib -g`)
+
+wcc describes C's types and symbols under `-d2`; the recording shim writes
+them to the stream, and `llrm-c/src/debug.rs` maps them. Nib's are read from
+its own HIR types (`llrm-nib/src/semantic/debug.rs`). The codes BASIC never
+used were measured by how CodeView 4 names a patched local:
+
+| code | CodeView 4 shows |
+|---|---|
+| `0x80` | char |
+| `0x84` | unsigned char |
+| `0x85` | unsigned short |
+| `0x86` | unsigned long |
+| `0x8A` | long double |
+| `0x9C` | void (BASIC's far STRING) |
+
+A pointer's reach byte: `0x74` near, `0x73` far, `0x5E` huge. A signature's
+calling-convention byte shows no difference, so BC's `0x73` stays.
+
+CodeView 4 on `llrm-c -g` and `llrm-nib -g`, stopped in each program:
+
+![C in CodeView 4](codeview/c-cv4.png)
+![Nib in CodeView 4](codeview/nib-cv4.png)

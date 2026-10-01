@@ -102,6 +102,8 @@ pub struct Frontend {
     pub checked_arrays: bool,
     /// Integer division raises error 11 in code: `-fsanitize=integer-divide-by-zero`.
     pub checked_division: bool,
+    /// `-g`: each statement's source line.
+    pub debug: bool,
     /// Integer arithmetic and narrowing raise error 6, Overflow:
     /// `-fsanitize=signed-integer-overflow`.
     pub checked_overflow: bool,
@@ -115,6 +117,8 @@ pub struct Frontend {
     /// Procedures frame themselves where the runtime needs no frame, not
     /// only where the dialect does so by default: `--own-frames`.
     pub own_frames: bool,
+    /// Errors in a module handler report their BASIC line: `--error-lines`.
+    pub error_lines: bool,
     pub includes: Vec<PathBuf>,
 }
 
@@ -128,6 +132,7 @@ impl Frontend {
             huge_arrays: false,
             checked_arrays: false,
             checked_division: false,
+            debug: false,
             checked_overflow: false,
             unchecked_bounds: false,
             mbf: false,
@@ -135,6 +140,7 @@ impl Frontend {
             whole_program: false,
             array_merging: false,
             own_frames: false,
+            error_lines: false,
             includes: Vec::new(),
         }
     }
@@ -164,6 +170,8 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<Vec<String>, FrontendE
         (frontend.whole_program, "--whole-program"),
         (frontend.array_merging, "--array-merging"),
         (frontend.own_frames, "--own-frames"),
+        (frontend.error_lines, "--error-lines"),
+        (frontend.debug, "-g"),
     ] {
         if on {
             out.push(flag.into());

@@ -1,0 +1,186 @@
+INIT sw=0x6988000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+d1 DBScalar "char" TY_INT_1
+d2 DBScalar "signed char" TY_INT_1
+d3 DBScalar "unsigned char" TY_UINT_1
+d4 DBScalar "short" TY_INT_2
+d5 DBScalar "unsigned short" TY_UINT_2
+d6 DBScalar "int" TY_INT_2
+d7 DBScalar "unsigned int" TY_UINT_2
+d8 DBScalar "long" TY_INT_4
+d9 DBScalar "unsigned long" TY_UINT_4
+d10 DBScalar "__int64" TY_INT_8
+d11 DBScalar "unsigned __int64" TY_UINT_8
+d12 DBScalar "_Bool" TY_UINT_1
+SETSEG 11
+SYM y1 name="gfp" base="gfp" pattern="_*" attr=0x6 seg=11
+b13 BENewBack y1
+- DGLabel b13
+- DGUBytes 4
+d14 DBPtr TY_LONG_POINTER d1
+- DBModSym y1 d14
+SETSEG 11
+SYM y2 name="ghp" base="ghp" pattern="_*" attr=0x6 seg=11
+b15 BENewBack y2
+- DGLabel b15
+- DGUBytes 4
+d16 DBPtr TY_HUGE_POINTER d6
+- DBModSym y2 d16
+TYPE T25 size=20 align=2
+SETSEG 11
+SYM y3 name="ga" base="ga" pattern="_*" attr=0x6 seg=11
+b17 BENewBack y3
+- DGLabel b17
+- DGUBytes 20
+d18 DBArray T25 9 d6
+- DBModSym y3 d18
+SYM y4 name="gul" base="gul" pattern="_*" attr=0x6 seg=4
+- DBModSym y4 d9
+TYPE T26 size=6 align=1
+SETSEG 11
+SYM y5 name="gp" base="gp" pattern="_*" attr=0x6 seg=11
+b19 BENewBack y5
+- DGLabel b19
+- DGUBytes 6
+d20 DBName "pt"
+d21 DBStruct "pt" struct 6
+- DBField d21 0 "x" d4
+- DBField d21 2 "y" d8
+- DBEndStruct d21
+- DBEndName d20 d21
+- DBModSym y5 d20
+TYPE T27 size=2 align=1
+SETSEG 11
+SYM y6 name="gu" base="gu" pattern="_*" attr=0x6 seg=11
+b22 BENewBack y6
+- DGLabel b22
+- DGUBytes 2
+d23 DBName "mix"
+d24 DBStruct "mix" union 2
+- DBField d24 0 "b" d3
+- DBField d24 0 "w" d5
+- DBEndStruct d24
+- DBEndName d23 d24
+- DBModSym y6 d23
+SETSEG 4
+b25 BENewBack y4
+- DGLabel b25
+- DGInteger 4000000000 TY_UINT_4
+f26 DBSrcFile "/tmp/tmp.hXdUAQIN3e/debug.h" main=0
+- DBSrcCue f26 1 1
+SYM y7 name="twice" base="twice" pattern="_*" attr=0x43 seg=1
+CALLCONV y7 class=0x80 target=0x712 parms=[] ret=0:0
+- CGProcDecl y7 TY_INTEGER
+d27 DBProc TY_CODE_PTR d6
+- DBParm d27 d6
+- DBModSym y7 d27
+SYM y8 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y8 TY_INTEGER
+- DBLocalSym y8 d6
+l28 CGLastParm
+t29 CGTemp TY_INTEGER
+- DBSrcCue f26 3 1
+n30 CGFEName y8 TY_INTEGER
+n31 CGUnary O_POINTS n30 TY_INTEGER
+n32 CGInteger 2 TY_INTEGER
+n33 CGBinary O_TIMES n31 n32 TY_INTEGER
+n34 CGUnary O_CONVERT n33 TY_INTEGER
+n35 CGTempName t29 TY_INTEGER
+n36 CGAssign n35 n34 TY_INTEGER
+- CGDone n36
+- DBSrcCue f26 4 1
+n37 CGTempName t29 TY_INTEGER
+n38 CGUnary O_POINTS n37 TY_INTEGER
+- CGReturn n38 TY_INTEGER
+f39 DBSrcFile "/tmp/tmp.hXdUAQIN3e/debug.c" main=1
+- DBSrcCue f39 11 1
+SYM y9 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y9 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y9 TY_INT_4
+d40 DBProc TY_CODE_PTR d8
+- DBParm d40 d4
+d41 DBPtr TY_POINTER d20
+- DBParm d40 d41
+- DBParm d40 d1
+- DBModSym y9 d40
+SYM y10 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y10 TY_INT_2
+- DBLocalSym y10 d4
+SYM y11 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y11 TY_POINTER
+- DBLocalSym y11 d41
+SYM y12 name="c" base="c" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y12 TY_INT_1
+- DBLocalSym y12 d1
+l42 CGLastParm
+t43 CGTemp TY_INT_4
+SYM y13 name="l" base="l" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y13 TY_INTEGER
+- DBLocalSym y13 d6
+SETSEG 11
+SYM y14 name="st" base="st" pattern="_*" attr=0x1042 seg=11
+b44 BENewBack y14
+- DGLabel b44
+- DGUBytes 2
+- DBLocalSym y14 d6
+- DBSrcCue f39 13 1
+n45 CGFEName y13 TY_INTEGER
+n46 CGFEName y10 TY_INT_2
+n47 CGUnary O_POINTS n46 TY_INT_2
+n48 CGAssign n45 n47 TY_INTEGER
+- CGDone n48
+- DBSrcCue f39 15 1
+n49 CGFEName y14 TY_INTEGER
+n50 CGInteger 1 TY_INTEGER
+n51 CGPostGets O_PLUS n49 n50 TY_INTEGER
+- CGDone n51
+- DBSrcCue f39 16 1
+n52 CGFEName y13 TY_INTEGER
+n53 CGUnary O_POINTS n52 TY_INTEGER
+n54 CGFEName y11 TY_POINTER
+n55 CGUnary O_POINTS n54 TY_POINTER
+n56 CGInteger 2 TY_UNSIGNED
+n57 CGBinary O_PLUS n55 n56 TY_POINTER
+n58 CGUnary O_POINTS n57 TY_INT_4
+n59 CGBinary O_PLUS n53 n58 TY_INT_4
+n60 CGFEName y12 TY_INT_1
+n61 CGUnary O_POINTS n60 TY_INT_1
+n62 CGBinary O_PLUS n59 n61 TY_INT_4
+n63 CGFEName y14 TY_INTEGER
+n64 CGUnary O_POINTS n63 TY_INTEGER
+n65 CGBinary O_PLUS n62 n64 TY_INT_4
+n66 CGFEName y7 TY_CODE_PTR
+c67 CGInitCall n66 TY_INTEGER y7
+n68 CGFEName y13 TY_INTEGER
+n69 CGUnary O_POINTS n68 TY_INTEGER
+- CGAddParm c67 n69 TY_INTEGER
+n70 CGCall c67
+n71 CGUnary O_POINTS n70 TY_INTEGER
+n72 CGBinary O_PLUS n65 n71 TY_INT_4
+n73 CGUnary O_CONVERT n72 TY_INT_4
+n74 CGTempName t43 TY_INT_4
+n75 CGAssign n74 n73 TY_INT_4
+- CGDone n75
+- DBSrcCue f39 17 1
+n76 CGTempName t43 TY_INT_4
+n77 CGUnary O_POINTS n76 TY_INT_4
+- CGReturn n77 TY_INT_4
+- DBSrcCue f39 19 1
+SYM y15 name="v" base="v" pattern="_*" attr=0x7 seg=1
+CALLCONV y15 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y15 TY_INTEGER
+d78 DBScalar "void" TY_DEFAULT
+d79 DBProc TY_CODE_PTR d78
+- DBParm d79 d78
+- DBModSym y15 d79
+l80 CGLastParm
+t81 CGTemp TY_INTEGER
+- DBSrcCue f39 21 1
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

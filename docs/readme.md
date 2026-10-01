@@ -5,6 +5,7 @@
 | [architecture](architecture/readme.md) | The pipeline, the MIR boundary, HIR, source layout, packages |
 | [frontends/nib](frontends/nib/readme.md) | Nib: language spec, frontend, codegen plan, language server |
 | [frontends/qb](frontends/qb/readme.md) | The QuickBASIC source frontend |
+| [frontends/ow-contract](frontends/ow-contract.md) | What the Open Watcom C front end gathers and emits, and what each of our frontends states of it |
 | [semantics](semantics/switches.md) | Switches that change what a program means: bounds, overflow, floating point |
 | [optimizations](optimizations) | One note per optimization or blocker, each measured on a program |
 | [machine](machine) | x86 real mode: ABIs, prefixes, relocations, object formats |

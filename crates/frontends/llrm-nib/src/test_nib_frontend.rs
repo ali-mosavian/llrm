@@ -150,7 +150,7 @@ fn test_frontend_json_is_deterministic_and_replayable() {
     let Json::Dict(document) = pyjson::loads(&String::from_utf8(first).expect("utf-8")).expect("JSON") else {
         panic!("not an object");
     };
-    assert_eq!(document.get("schema"), Some(&Json::Int(1)));
+    assert_eq!(document.get("schema"), Some(&Json::Int(2)));
 }
 
 #[test]
@@ -1915,14 +1915,108 @@ fn test_a_loop_through_a_copied_pointer_converges() {
 }
 
 /// A borrowed view's descriptor is the caller's, never written in the
-/// call: promised as LLVM's `noalias readonly dereferenceable`, for LICM to
+/// call: stated as LLVM's `noalias readonly dereferenceable`, for LICM to
 /// hoist its loads.
 #[test]
-fn test_a_borrowed_view_promises_its_descriptor() {
+fn test_a_borrowed_view_states_facts_of_its_descriptor() {
+    use llrm_mir::facts::Fact;
     let program = parsed(&fixture("matmul8.nib"));
     let multiply = function(&program, "multiply");
-    let promised = |parameter| model::Promise { parameter, bytes: 10, unaliased: true, readonly: true };
-    assert_eq!(multiply.promises, multiply.parameters.iter().map(|&one| promised(one)).collect::<Vec<_>>());
+    let stated = |index: usize| -> Vec<Fact> {
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == multiply.id && at == index as i64))
+            .map(|one| one.fact)
+            .collect()
+    };
+    for index in 0..multiply.parameters.len() {
+        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10)], "parameter {index}");
+    }
+}
+
+/// A reference is not null and points at all it borrows; a shared one is
+/// read only. Not that nothing else reaches it: `bump` may write the module
+/// variable `g` it was lent, so no `noalias`.
+#[test]
+fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
+    use llrm_mir::facts::Fact;
+    let source = "struct Pt:\n    mut x: i16\n    y: i16\n\nvar g: Pt = Pt(x=1, y=2)\nvar h: Pt = Pt(x=3, y=4)\n\nfn bump(p: &mut Pt, q: &Pt) -> void:\n    p.x += q.y\n\nfn main() -> i16:\n    bump(g, h)\n    return g.x\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "refs.nib", source));
+    let bump = function(&program, "bump");
+    let stated = |index: i64| -> Vec<Fact> {
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index))
+            .map(|one| one.fact)
+            .collect()
+    };
+    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias]);
+    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias]);
+}
+
+/// `for i in 0..n` adds one to a counter that is below `n`: it cannot wrap,
+/// signed or unsigned. Stated, `nsw` or `nuw` on that add is what makes a
+/// variable bound a counted loop; unstated, the trip count was unknown.
+#[test]
+fn test_a_range_loops_counter_does_not_wrap() {
+    use llrm_mir::facts::Fact;
+    let directory = tempfile::tempdir().unwrap();
+    let stated = |type_name: &str| -> Vec<Fact> {
+        let source = format!("fn total(n: {type_name}) -> {type_name}:\n    let mut s: {type_name} = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n");
+        let program = parsed(&written(&directory, &format!("{type_name}.nib"), &source));
+        let total = function(&program, "total");
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == total.id))
+            .map(|one| one.fact)
+            .collect()
+    };
+    assert_eq!(stated("i16"), vec![Fact::NoSignedWrap]);
+    assert_eq!(stated("u16"), vec![Fact::NoUnsignedWrap]);
+    // It is the counter's own add of one, not the body's `s += i`.
+    let source = "fn total(n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "which.nib", source));
+    let total = function(&program, "total");
+    let ids: Vec<i64> = program.modules[0].facts.iter().filter_map(|one| match one.subject {
+        llrm_core::hir::facts::Subject::Instruction { function, id } if function == total.id => Some(id),
+        _ => None,
+    }).collect();
+    assert_eq!(ids.len(), 1);
+    let stated = total.blocks.iter().flat_map(|block| &block.instructions).find(|one| one.id == ids[0]).expect("the instruction");
+    assert_eq!(stated.op, llrm_core::hir::model::Op::Add);
+    assert!(matches!(stated.operands[1], llrm_core::hir::model::Operand::Constant(_)), "{:?}", stated.operands);
+}
+
+/// A shared reference is not null and points at all of its struct, so the
+/// load of its field is hoisted above the loop's guard and no register is
+/// saved to hold it: 15 instructions where 17 saved and restored `si`.
+#[test]
+fn test_a_reference_lets_its_field_load_leave_the_loop() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "struct V:\n    mut a: i16\n    b: i16\n\nfn sum(v: &V, n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += v.b\n    return s\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "refsum.nib", source));
+    let module = nib_compile::assembled_from_mir(&program, "sum", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
+    let asm = masm::text(&module).expect("prints");
+    let from = asm.find("_sum proc").expect("the function");
+    let body: Vec<&str> = asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).collect();
+    assert_eq!(body.len(), 15, "{body:?}");
+    assert!(!body.contains(&"push si"), "{body:?}");
+}
+
+/// A loop whose body always returns leaves its counter's increment
+/// unreachable; the fact stated of it named an instruction the function no
+/// longer had, and the program was refused as invalid HIR.
+#[test]
+fn test_a_fact_of_a_pruned_instruction_goes_with_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "fn first(n: i16) -> i16:\n    for i in 0..n:\n        return i\n    return -1\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "first.nib", source));
+    let first = function(&program, "first");
+    assert!(program.modules[0].facts.iter().all(|one| !matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == first.id)));
 }
 
 /// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as
@@ -1938,4 +2032,43 @@ fn test_the_level_reaches_the_rich_route() {
         std::fs::read(output).expect("the object").len()
     };
     assert!(object("-Os") < object("-O2"));
+}
+
+/// `dst: &mut P` and `src: &P` are stated noalias, so `src.y` is loaded
+/// once, before the loop. Unstated, the loop reloaded it after every store
+/// to `dst.x`.
+#[test]
+fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
+    use llrm_mir::facts::Fact;
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "bump.nib", source));
+    let bump = function(&program, "bump");
+    let unaliased = |index: i64| program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index));
+    assert!(unaliased(0) && unaliased(1), "the premise: both are stated noalias");
+    // The memory operands of `bump`'s loop: from the label its backward
+    // jump names to that jump.
+    let looped = |assembly: &str| -> usize {
+        let body = between(assembly, "_bump proc far\n", "_bump endp");
+        let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+        let (head, end) = jump
+            .captures_iter(body)
+            .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+            .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+            .expect("a loop");
+        between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
+    };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
+}
+
+/// examples/league.nib's `main` was refused after #127 made every spiller
+/// product unspillable: "value#23 cannot be spilled and no register is free".
+#[test]
+fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
+    let program = parsed(&fixture("league.nib"));
+    let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
+    assert!(result.is_ok(), "{:?}", result.err());
 }

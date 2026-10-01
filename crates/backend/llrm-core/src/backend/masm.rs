@@ -137,6 +137,8 @@ pub struct Module {
     pub private: BTreeSet<String>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
+    /// `-g`'s debug information.
+    pub debug: Option<super::codeview::Debug>,
 }
 
 pub fn text(module: &Module) -> Result<String, Unprintable> {
@@ -197,6 +199,21 @@ pub enum Item {
     Label(Label),
     Callee(Callee),
     Semantics(Semantics),
+    Mark(Mark),
+}
+
+/// `-g`: a place in the code a debugger is told of.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mark {
+    /// The code after it is this source line's: the procedure's `index`th
+    /// line, where [`line_label`] names it.
+    Line { line: u32, index: u32 },
+    /// The procedure's own code starts, its prologue done: the first code
+    /// of a source line.
+    BodyStart,
+    /// The procedure's own code ends, its epilogue next: after the last
+    /// code of a source line but a return.
+    BodyEnd,
 }
 
 fn reg(register: Register) -> Loc {
@@ -349,19 +366,36 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
     let (enter, leave) = _frame_parts(procedure);
-    let mut out: Vec<Item> = enter.into_iter().map(Item::Semantics).collect();
     let blocks = &procedure.body.blocks;
+    let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
+    let first = lined().next();
+    let last = lined().filter(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Return)).last();
+    // The prologue is the first line's, not the previous procedure's last.
+    let mut line = first.and_then(|one| one.line);
+    let mut lines = 0..;
+    let mut marked = |line: u32| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
+    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
         for one in &block.insns {
+            if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
+                out.push(Item::Mark(Mark::BodyStart));
+            }
             if fallthrough.is_some_and(|jump| Arc::ptr_eq(jump, one)) {
+                if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
+                    out.push(Item::Mark(Mark::BodyEnd));
+                }
                 continue;
             }
             let Some(what) = &one.what else {
                 return Err(Unprintable(format!("{} at {}: an instruction with no semantics", procedure.name, one.at)));
             };
+            if one.line.is_some() && one.line != line {
+                line = one.line;
+                out.extend(line.map(&mut marked));
+            }
             match what.op {
                 Operation::Move if _segment(&what.dests[0]) && matches!(what.sources[0], Loc::Imm(_)) => {
                     // x86 has no immediate move into a segment register; the stack holds it for one instruction.
@@ -396,6 +430,9 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
                     out.push(Item::Semantics(Semantics { name: Some(name), ..what.clone() }));
                 }
                 _ => out.push(Item::Semantics(what.clone())),
+            }
+            if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
+                out.push(Item::Mark(Mark::BodyEnd));
             }
         }
         let fall = _falls_to(block, &procedure.name)?;
@@ -439,6 +476,23 @@ pub fn _fallthrough_jump(block: &lir::LirBlock, following: Option<i64>) -> Optio
     Some(last)
 }
 
+/// The procedure numbered `number`'s `index`th line mark's symbol.
+pub fn line_label(number: usize, index: u32) -> String {
+    format!("L{number}_line{index}")
+}
+
+/// The procedure numbered `number`'s lines as its listing marks them: each
+/// one's symbol and source line, in order.
+pub fn line_starts(procedure: &Procedure, number: usize) -> Result<Vec<(String, u32)>, Unprintable> {
+    Ok(listing(procedure, number)?
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Mark(Mark::Line { line, index }) => Some((line_label(number, index), line)),
+            _ => None,
+        })
+        .collect())
+}
+
 pub fn label(number: usize, at: i64) -> String {
     format!("L{number}_{at}")
 }
@@ -451,11 +505,13 @@ pub fn _procedure(
     _procedure_of(procedure, listing(procedure, number)?, names, number)
 }
 
-fn _procedure_of(procedure: &Procedure, items: Vec<Item>, names: &IndexMap<(Space, i64), String>, number: usize) -> Result<Vec<String>, Unprintable> {
+/// The procedure's text, of the `items` a listing gives.
+pub fn _procedure_of(procedure: &Procedure, items: Vec<Item>, names: &IndexMap<(Space, i64), String>, number: usize) -> Result<Vec<String>, Unprintable> {
     let mut out = vec![format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" })];
     for item in items {
         match item {
             Item::Label(Label { name }) => out.push(format!("{name}:")),
+            Item::Mark(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }

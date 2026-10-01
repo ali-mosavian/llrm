@@ -184,12 +184,15 @@ impl<'a> FunctionCompiler<'a> {
             )?;
         }
         let arguments = &arguments::bind(&signature.name, &formals, arguments.to_vec(), span)?;
+        let lent = self.lent(arguments, &signature.parameters);
+        borrows::check_disjoint(&lent, &arguments.iter().map(Expr::span).collect::<Vec<_>>())?;
         let mut operands: Vec<hir::Operand> = slot.into_iter().collect();
-        let mut borrowed = BTreeMap::new();
         for (argument, parameter) in arguments.iter().zip(&signature.parameters) {
-            let operand = self.argument_operand(argument, parameter, &mut borrowed)?;
+            let operand = self.argument_operand(argument, parameter)?;
             operands.push(operand);
         }
+        self.store_call_borrows(arguments, &signature.parameters, &lent, span)?;
+        self.record_lends(&signature.name, arguments, &lent, span);
         operands.extend(signature.result_pointer.map(|pointer| self.result_pointer(pointer)));
         let returned = signature.returned(self.types);
         let results = if returned == TypeName::Void { Vec::new() } else { vec![self.value(returned)] };
@@ -208,14 +211,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok(results.first().copied())
     }
 
-    /// What a call passes for `parameter`. `borrowed` tracks the call's
-    /// borrows so that a mutable one aliases nothing.
-    pub(super) fn argument_operand(
-        &mut self,
-        argument: &Expr,
-        parameter: &SignatureParameter,
-        borrowed: &mut BTreeMap<String, bool>,
-    ) -> Result<hir::Operand, Diagnostic> {
+    /// What a call passes for `parameter`.
+    pub(super) fn argument_operand(&mut self, argument: &Expr, parameter: &SignatureParameter) -> Result<hir::Operand, Diagnostic> {
         match parameter {
             // A BASIC procedure takes the near pointer the adapter is.
             SignatureParameter::Adapter { pointer, .. } => {
@@ -246,17 +243,7 @@ impl<'a> FunctionCompiler<'a> {
                 target,
                 pointer,
             } => {
-                let (operand, owner) =
-                    self.borrow_argument(argument, *mutable, *target, *pointer)?;
-                if let Some(previously_mutable) = borrowed.insert(owner.clone(), *mutable) {
-                    if *mutable || previously_mutable {
-                        return Err(Diagnostic::new(
-                            argument.span(),
-                            format!("borrow of {owner:?} aliases a mutable argument"),
-                        ));
-                    }
-                }
-                Ok(operand)
+                Ok(self.borrow_argument(argument, *mutable, *target, *pointer)?.0)
             }
         }
     }
@@ -285,23 +272,19 @@ impl<'a> FunctionCompiler<'a> {
         if required_mutable && !mutable {
             return Err(Diagnostic::new(*span, "mutable parameter requires '&mut'"));
         }
-        if let (true, Some(owner)) = (*mutable, borrows::expression_owner(operand)) {
-            self.check_unborrowed(owner, *span)?;
+        if *mutable {
+            self.check_unborrowed(operand, *span)?;
+        } else {
+            self.check_shareable(operand, *span)?;
         }
         if *mutable {
-            self.check_mutable_fields(operand)?;
+            self.place_writable(operand, *span)?;
         }
         // A struct is borrowed through its view, whose address is far.
         if let BindingType::Struct(struct_id) = target {
             let view = self.struct_view(operand, *span)?;
             if view.struct_id != struct_id {
                 return Err(Diagnostic::new(*span, "borrowed struct has the wrong type"));
-            }
-            if *mutable && !view.mutable {
-                return Err(Diagnostic::new(
-                    *span,
-                    format!("cannot borrow {:?} mutably", view.owner),
-                ));
             }
             let owner = view.owner.clone();
             return Ok((self.address_as(&view, pointer_type), owner));
@@ -335,7 +318,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 // `&s.field` or `&items[i]`: a place's address.
                 if let BindingType::Scalar(type_name) = target {
-                    if let Some((place, actual, owner)) = self.place_of(operand, *mutable, *span)? {
+                    if let Some((place, actual, owner)) = self.place_of(operand, *span)? {
                         if actual != type_name {
                             return Err(Diagnostic::new(*span, format!("borrow of {owner:?}'s {} has the wrong type", type_name_text(actual))));
                         }
@@ -363,12 +346,6 @@ impl<'a> FunctionCompiler<'a> {
             return Err(Diagnostic::new(
                 *span,
                 format!("borrow of {name:?} has the wrong type"),
-            ));
-        }
-        if *mutable && !binding.mutable {
-            return Err(Diagnostic::new(
-                *span,
-                format!("cannot mutably borrow immutable binding {name:?}"),
             ));
         }
         if let BindingType::Slice { element, rank } = target {

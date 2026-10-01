@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use llrm_core::hir::facts::{Builder as Facts, Subject};
+use llrm_mir::facts::Fact;
 use llrm_core::hir::model::{
     self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup, Storage, TerminatorKind, TypeKind,
 };
@@ -52,15 +54,25 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
         .map(|proc| proc.symbol)
         .collect();
     let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
+    let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
+    let mut facts = Facts::new("c");
     for (at, proc) in unit.procs.iter().enumerate() {
-        functions.push(Body::function(&module, &mut types, &mut callables, proc, at as i64 + 1)?);
+        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, proc, at as i64 + 1)?);
     }
+    let debug = described.map(|one| one.finish(|symbol| keys.get(&Key::Symbol(symbol)).copied()));
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
+    for symbol in unit.symbols.values().filter(|one| one.proc()) {
+        if let Some(callable) = callables.iter().find(|one| one.name == symbol.object_name()) {
+            for fact in crate::ow_facts::of_call_class(symbol.call_class) {
+                facts.state(Subject::Callable(callable.id), fact);
+            }
+        }
+    }
     let (types, alias_classes) = types.finished();
-    let module = h::Module { data, callables, alias_classes, ..h::Module::new(1, name, types, functions) };
+    let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
     // Borland's medium model: a call keeps what its contract does not clobber;
     // the compiler's constants go in CONST.
     let preserved = llrm_core::abi::runtime::preserves(&crate::raise_hir::medium_model(String::new(), true, 0));
@@ -385,6 +397,8 @@ struct Open {
 }
 
 struct Body<'a, 't> {
+    /// The facts the language states of instructions, by instruction id.
+    stated_instructions: Vec<(i64, Fact)>,
     shared: &'a Shared<'a>,
     unit: &'a hir::Unit,
     proc: &'a hir::Proc,
@@ -406,6 +420,9 @@ struct Body<'a, 't> {
     inlined: Option<i64>,
     /// The far pointer to where a struct result goes, where it is passed one.
     destination: Option<i64>,
+    /// `-g`: the unit's debug types, and the statement's source line.
+    described: &'t mut Option<crate::debug::Described<'a>>,
+    line: i64,
 }
 
 /// Whether inline code is `symbol`: `_asm`, or `__emit__`'s bytes.
@@ -511,19 +528,16 @@ fn with_destination(parameters: &mut Vec<i64>, destination: i64, in_order: bool)
     }
 }
 
-/// Whether some restrict lvalue names parameter `symbol`.
-fn restricted(unit: &hir::Unit, symbol: i64) -> bool {
-    unit.nodes.values().any(|node| match (node.call.as_str(), &node.args[..]) {
-        ("CGAttr", [inner, attr]) if attr == "3" => {
-            let inner = &unit.nodes[&hir::handle(inner)];
-            inner.call == "CGFEName" && hir::handle(&inner.args[0]) == symbol
-        }
-        _ => false,
-    })
-}
-
 impl<'a, 't> Body<'a, 't> {
-    fn function(shared: &'a Shared<'a>, types: &'t mut Types<'a>, callables: &'t mut IndexMap<String, h::Callable>, proc: &'a hir::Proc, id: i64) -> R<h::Function> {
+    fn function(
+        shared: &'a Shared<'a>,
+        types: &'t mut Types<'a>,
+        callables: &'t mut IndexMap<String, h::Callable>,
+        described: &'t mut Option<crate::debug::Described<'a>>,
+        facts: &mut Facts,
+        proc: &'a hir::Proc,
+        id: i64,
+    ) -> R<h::Function> {
         let unit = shared.unit;
         let symbol = &unit.symbols[&proc.symbol];
         let cleanup = cleanup(symbol)?;
@@ -543,10 +557,13 @@ impl<'a, 't> Body<'a, 't> {
             globals: HashMap::new(),
             done: HashMap::new(),
             selects: IndexMap::default(),
+            stated_instructions: Vec::new(),
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
             destination: None,
+            described,
+            line: 0,
         };
         let entry = body.block();
         body.current = entry;
@@ -558,11 +575,12 @@ impl<'a, 't> Body<'a, 't> {
             },
             None => body.ty(&proc.type_)?,
         };
-        let (parameters, promises, homes, struct_homes) = body.frame()?;
+        let (parameters, stated, homes, struct_homes) = body.frame()?;
         for one in &proc.body {
             body.statement(one)?;
         }
         body.finish()?;
+        let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
         let body_widths: HashMap<i64, i64> = parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
         let parameter_bytes = body_widths.values().sum();
         let blocks = body
@@ -576,11 +594,29 @@ impl<'a, 't> Body<'a, 't> {
             abi: Some(h::ProcedureAbi { cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
             calls: body.calls,
             linkage,
-            promises,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
         };
+        for (instruction, fact) in std::mem::take(&mut body_instruction_facts) {
+            facts.state(Subject::Instruction { function: id, id: instruction }, fact);
+        }
+        for (value, fact) in stated {
+            let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
+            facts.state(Subject::Param { function: id, index }, fact);
+        }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
+        if let Some(described) = body.described.as_mut() {
+            // A parameter as its home: where the function keeps it.
+            for &(symbol, handle) in &proc.debug {
+                let name = &unit.symbols[&symbol].name;
+                match (body.slots.get(&format!("y{symbol}")), shared.keys.get(&Key::Symbol(symbol))) {
+                    (Some(&place), _) => described.variable(place, name, handle),
+                    (None, Some(&object)) => described.local_static(object, name, handle),
+                    (None, None) => {}
+                }
+            }
+            described.function(id, &symbol.name, proc.debug_type);
+        }
         Ok(function)
     }
 
@@ -643,10 +679,20 @@ impl<'a, 't> Body<'a, 't> {
 
     fn instruction(&mut self, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> &mut h::Instruction {
         self.instructions += 1;
-        let made = h::Instruction::new(self.instructions, op, results, operands);
+        let mut made = h::Instruction::new(self.instructions, op, results, operands);
+        if self.described.is_some() && self.line > 0 {
+            made.line = Some(self.line);
+        }
         let block = &mut self.blocks[self.current];
         block.instructions.push(made);
         block.instructions.last_mut().expect("just pushed")
+    }
+
+    /// That C promises the result of instruction `id` fits its type.
+    fn state_no_wrap(&mut self, id: i64, promised: bool) {
+        if promised {
+            self.stated_instructions.push((id, Fact::NoSignedWrap));
+        }
     }
 
     /// `op` of `operands`, a value of type `ty`.
@@ -786,9 +832,9 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Each parameter and auto a place; each parameter stored into its own.
     /// A scalar parameter's home is also returned, by place and parameter.
-    fn frame(&mut self) -> R<(Vec<i64>, Vec<h::Promise>, Vec<(i64, i64)>, Vec<i64>)> {
+    fn frame(&mut self) -> R<(Vec<i64>, Vec<(i64, Fact)>, Vec<(i64, i64)>, Vec<i64>)> {
         let mut parameters = Vec::new();
-        let mut promises = Vec::new();
+        let mut stated = Vec::new();
         let mut homes = Vec::new();
         let mut struct_homes = Vec::new();
         let mut stores = Vec::new();
@@ -817,10 +863,8 @@ impl<'a, 't> Body<'a, 't> {
                     stores.push((place, -1, parameter));
                     homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
-                    // C99 6.7.3.1: what a restrict parameter reaches, nothing else in its block does.
-                    if restricted(self.unit, *symbol) {
-                        promises.push(h::Promise { parameter, bytes: 0, unaliased: true, readonly: false });
-                    }
+                    // What the language states of a parameter: C99 6.7.3.1 for restrict.
+                    stated.extend(crate::ow_facts::of_param(self.unit, *symbol).into_iter().map(|fact| (parameter, fact)));
                 }
             }
         }
@@ -852,12 +896,13 @@ impl<'a, 't> Body<'a, 't> {
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
-        Ok((parameters, promises, homes, struct_homes))
+        Ok((parameters, stated, homes, struct_homes))
     }
 
     // ---- statements ----
 
     fn statement(&mut self, one: &hir::Statement) -> R<()> {
+        self.line = one.line;
         let args: Vec<&str> = one.args.iter().map(String::as_str).collect();
         if !matches!(one.call.as_str(), "DBSrcCue" | "CGReturn") {
             self.inlined = None;
@@ -1067,6 +1112,7 @@ impl<'a, 't> Body<'a, 't> {
         match tree.call.as_str() {
             "CGCall" => self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
             "CGEval" | "CGVolatile" | "CGAttr" => self.type_of_node(&tree.args[0]),
+            "CGFact" => self.type_of_node(&tree.args[1]),
             "CGFlow" | "CGCompare" => "TY_BOOLEAN".to_owned(),
             _ => tree.args.last().cloned().unwrap_or_default(),
         }
@@ -1257,7 +1303,7 @@ impl<'a, 't> Body<'a, 't> {
                 self.position(join);
                 Got::Value(self.op(Op::Load, truth, vec![Operand::place_ref(flowed)]))
             }
-            ("CGEval", [inner]) | ("CGAttr", [inner, _]) => self.eval(inner)?,
+            ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
             ("CGVolatile", [inner]) => {
                 let got = self.eval(inner)?;
                 Got::Volatile(self.address(got)?.0)
@@ -1408,7 +1454,8 @@ impl<'a, 't> Body<'a, 't> {
                 let bits = self.bits(value).ok_or_else(|| Unsupported(format!("{}: negation of a non-integer", self.name())))?;
                 let nowrap = self.wraps(type_, bits);
                 let result = self.value(ty);
-                self.instruction(Op::Neg, vec![result], vec![value_ref(value)]).nowrap = nowrap;
+                let id = self.instruction(Op::Neg, vec![result], vec![value_ref(value)]).id;
+                self.state_no_wrap(id, nowrap);
                 result
             }
             ("O_COMPLEMENT", false) => {
@@ -1531,7 +1578,8 @@ impl<'a, 't> Body<'a, 't> {
             other => return self.refuse(other.to_owned()),
         };
         let result = self.value(ty);
-        self.instruction(op, vec![result], vec![value_ref(a), value_ref(b)]).nowrap = nowrap;
+        let id = self.instruction(op, vec![result], vec![value_ref(a), value_ref(b)]).id;
+        self.state_no_wrap(id, nowrap);
         Ok(result)
     }
 
@@ -1753,13 +1801,55 @@ mod tests {
         tag[..tag.find(' ').unwrap()].to_owned()
     }
 
+    /// The attributes of the function `@name`, declared or defined.
+    fn attributes(module: &Module, name: &str) -> Vec<llrm_mir::Attribute> {
+        module.global(module.named(name).unwrap()).function().unwrap().attrs.clone()
+    }
+
+    /// `__declspec(noreturn)` and `#pragma aux ... aborts` are in the call
+    /// class; the compile dropped them, and the call fell through to the
+    /// code after it.
+    #[test]
+    fn test_noreturn_and_aborts_are_stated_of_the_callee() {
+        let module = raised("tests/test_noreturn_and_aborts_are_stated_of_the_callee.cgs");
+        let noreturn = llrm_mir::Attribute::Flag("noreturn".to_owned());
+        assert!(attributes(&module, "_die").contains(&noreturn));
+        assert!(attributes(&module, "_quit").contains(&noreturn));
+        assert!(!attributes(&module, "_f").contains(&noreturn));
+    }
+
+    /// `#pragma aux ... parm nomemory modify nomemory` is a routine that
+    /// touches no memory; the compile dropped it and kept both calls.
+    #[test]
+    fn test_nomemory_is_stated_of_the_callee() {
+        let module = raised("tests/test_nomemory_is_stated_of_the_callee.cgs");
+        assert_eq!(attributes(&module, "_sq"), vec![llrm_mir::Attribute::Memory(vec![(None, "none".to_owned())])]);
+    }
+
+    /// The facts C states of `add` hold when it runs: called on three arrays it
+    /// runs, and called with one array as two of its restrict parameters it is
+    /// the caller that broke restrict, which the checked interpreter reports.
+    #[test]
+    fn test_a_restrict_call_on_one_array_is_reported_by_the_checked_run() {
+        use llrm_mir::interpret::{Trap, run_checked};
+        let text = format!(
+            "{}\n@one = global [8 x i16] zeroinitializer\n@two = global [8 x i16] zeroinitializer\n@three = global [8 x i16] zeroinitializer\n\
+             define void @apart() {{\n  call addrspace(1) void @_add(ptr @one, ptr @two, ptr @three)\n  ret void\n}}\n\
+             define void @same() {{\n  call addrspace(1) void @_add(ptr @one, ptr @one, ptr @three)\n  ret void\n}}\n",
+            llrm_mir::print::module(&raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs"))
+        );
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+        assert!(run_checked(&module, "apart", Vec::new(), 10_000).is_ok(), "{:?}", run_checked(&module, "apart", Vec::new(), 10_000));
+        let trapped = run_checked(&module, "same", Vec::new(), 10_000).unwrap_err();
+        assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("noalias parameter")), "{trapped:?}");
+    }
+
     /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
     #[test]
     fn test_restrict_parameters_are_noalias() {
         let module = raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
         let function = module.global(module.named("_add").unwrap()).function().unwrap();
-        let noalias = Attribute::Flag("noalias".to_owned());
-        assert!(function.parameter_attrs.iter().all(|one| one.contains(&noalias)), "{:?}", function.parameter_attrs);
+        assert!((0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_alias()), "{:?}", function.parameter_attrs);
     }
 
     #[test]

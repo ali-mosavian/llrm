@@ -170,3 +170,45 @@ fn fixed_point_intrinsics_are_their_expansions() {
         }
     }
 }
+
+#[test]
+fn near_memory_stays_below_64k_whatever_is_far() {
+    // Globals were laid out in order, allocas after them, so a far array
+    // pushed a near global and every frame past 0xFFFF, and a near pointer
+    // stored in its 16 bits came back pointing at 0 (tools/loops batches).
+    let text = "@big = addrspace(1) global [70000 x i8] zeroinitializer\n@n = global i16 0\n\
+        define i16 @f() {\n  %slot = alloca ptr\n  store ptr @n, ptr %slot\n  %p = load ptr, ptr %slot\n  \
+        store i16 7, ptr %p\n  %v = load i16, ptr @n\n  ret i16 %v\n}\n";
+    assert_eq!(result(text), int(7, 16));
+}
+
+/// Runs `@f` on two pointers to one 4-byte cell, each as given, checked.
+fn aliased(attrs: &str, body: &str) -> Result<Val, Trap> {
+    let text = format!(
+        "target datalayout = \"{LAYOUT}\"\n@cell = global [2 x i16] zeroinitializer\n\
+         define i16 @g(ptr {attrs} %p, ptr {attrs} %q) {{\n{body}}}\n\
+         define i16 @f() {{\n  %r = call i16 @g(ptr @cell, ptr @cell)\n  ret i16 %r\n}}\n"
+    );
+    let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    crate::interpret::run_checked(&module, "g", vec![Val::Ptr(16), Val::Ptr(16)], 10_000)
+}
+
+const WRITES_THEN_READS: &str = "  store i16 1, ptr %p\n  %x = load i16, ptr %q\n  ret i16 %x\n";
+
+/// A `noalias` parameter reached through another pointer that writes is a
+/// broken promise; unchecked it ran, and whatever a pass did with the fact
+/// was wrong without a trace.
+#[test]
+fn a_noalias_parameter_reached_another_way_is_reported() {
+    let trapped = aliased("noalias", WRITES_THEN_READS).unwrap_err();
+    assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("noalias parameter")), "{trapped:?}");
+}
+
+/// Without the fact there is no promise to break, and two readers do not
+/// conflict.
+#[test]
+fn aliased_pointers_without_noalias_or_with_only_reads_are_fine() {
+    assert_eq!(aliased("", WRITES_THEN_READS), int(1, 16));
+    assert_eq!(aliased("noalias", "  %x = load i16, ptr %p\n  %y = load i16, ptr %q\n  %s = add i16 %x, %y\n  ret i16 %s\n"), int(0, 16));
+}

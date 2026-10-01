@@ -62,3 +62,52 @@ def test_data_between_procedures_is_not_decoded_as_code():
     found = innerloops.loops(_object(code, "SUM", at=2))
     assert [(one.at, one.size) for one in found] == [(2, 3)]
 
+
+
+def test_a_loop_is_its_blocks_not_the_addresses_it_spans():
+    """A rotated loop whose exit block sits between its test and its body
+    (Open Watcom's layout) was read as the address range from test to back
+    jump, so the exit's `mov` and `retf` counted as two loop instructions."""
+    code = bytes.fromhex(
+        "31c9"  # xor cx,cx
+        "39d9"  # head: cmp cx,bx
+        "7c03"  # jl body
+        "89c8"  # mov ax,cx
+        "cb"  # retf
+        "030d"  # body: add cx,[di]
+        "83c702"  # add di,2
+        "ebf2"  # jmp head
+    )
+    found = innerloops.loops(_object(code, "SUM"))
+    assert [(one.name, one.size, one.memory) for one in found] == [("SUM#0", 5, 1)]
+
+
+def test_a_backward_jump_that_is_no_back_edge_makes_no_loop():
+    """A jump back to a shared tail its source is not dominated by (llrm's
+    layout of a divide's slow path) was taken for a back edge, and the walk
+    back from it took in the whole function: an 848-instruction "loop"."""
+    code = bytes.fromhex(
+        "85c0"  # test ax,ax
+        "7405"  # je slow
+        "31c0"  # tail: xor ax,ax
+        "cb"  # retf
+        "90"  # nop
+        "90"  # nop
+        "40"  # slow: inc ax
+        "ebf8"  # jmp tail
+    )
+    assert innerloops.loops(_object(code, "F"), calls=True) == []
+
+
+def test_a_static_procedure_s_loop_is_not_charged_to_the_public_before_it():
+    """C's static helpers have no public name, so their loops were named for
+    the case function laid out before them: fixscale showed 48 loops."""
+    code = bytes.fromhex(
+        "e80100"  # PUB: call helper
+        "cb"  # retf
+        "49"  # helper: dec cx
+        "75fd"  # jne helper
+        "c3"  # ret
+    )
+    found = innerloops.loops(_object(code, "PUB"))
+    assert [one.name for one in found] == ["sub_0004#0"]

@@ -107,9 +107,11 @@ impl Options {
         Self { limits: Limits { max_unrolled_operations: 2 * limits.max_unrolled_operations, ..limits }, inline: inline::Threshold(250), ..Self::default() }
     }
 
-    /// -Os: no copy grows the code. Inlining keeps -O2's threshold: what
-    /// it admits, a body called once or a leaf cheaper than its calls,
-    /// shrinks the code here.
+    /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
+    /// threshold bounds a body's size, and what it admits, a body called
+    /// once or one whose copies cost less than the calls they remove,
+    /// shrinks the code here. A lower one would also refuse a constant-site
+    /// clone that folds away.
     pub fn size() -> Self {
         Self { limits: Limits { grows: false, ..Limits::default() }, ..Self::default() }
     }
@@ -243,6 +245,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
         pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
         inline: applied.options.inline,
+        size: applied.options.prefers_size(),
     });
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.

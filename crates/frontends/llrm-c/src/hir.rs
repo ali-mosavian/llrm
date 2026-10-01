@@ -54,7 +54,7 @@ pub const STATEMENTS: [&str; 9] = [
     "CGSelect",
     "CGBigLabel",
 ];
-pub const IGNORED: [&str; 9] = [
+pub const IGNORED: [&str; 13] = [
     "START",
     "STOP",
     "FINI",
@@ -62,8 +62,12 @@ pub const IGNORED: [&str; 9] = [
     "BENewLabel",
     "BEFiniLabel",
     "CGLastParm",
-    "DBSrcFile",
     "BEFiniBack",
+    "DBEndStruct",
+    "DBConst",
+    "DBTypeDef",
+    "DBBegBlock",
+    "DBEndBlock",
 ];
 
 /// A construct the C path refuses rather than guesses at.
@@ -246,6 +250,31 @@ pub struct Proc {
     pub parms: Vec<(i64, String)>, // as declared: last first where the convention pushes in order
     pub autos: Vec<(String, String)>, // ("y5" | "t3", type)
     pub body: Vec<Statement>,
+    /// Under -d2: its own debug type, and each parameter's and local's.
+    pub debug_type: Option<i64>,
+    pub debug: Vec<(i64, i64)>,
+}
+
+/// A debug type as the front end described it, by the handles of those it
+/// is made of.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DebugType {
+    Scalar { name: String, cg: String },
+    Array { hi: i64, base: i64 },
+    Pointer { cg: String, base: i64 },
+    Struct { name: String, union: bool, size: i64, fields: Vec<(i64, String, i64)> },
+    Enum { cg: String },
+    Proc { result: i64, parameters: Vec<i64> },
+    /// A tag or typedef name for the type it names.
+    Name { name: String, target: Option<i64> },
+}
+
+/// Under -d2, what the front end describes: each debug type, and each
+/// variable of the module with its type.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Debug {
+    pub types: IndexMap<i64, DebugType>,
+    pub globals: Vec<(i64, i64)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -267,6 +296,8 @@ pub struct Unit {
     pub nodes: IndexMap<i64, Node>,
     pub calls: IndexMap<i64, Call>,
     pub procs: Vec<Proc>,
+    /// Compiled with -d2.
+    pub debug: Option<Debug>,
 }
 
 impl Unit {
@@ -341,6 +372,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
     let mut proc: Option<usize> = None;
     let mut segment: Option<i64> = None;
     let mut line = 0;
+    let mut main_file: Option<String> = None;
     for one in records {
         let args = &one.args;
         match one.call.as_str() {
@@ -351,7 +383,47 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     args.join(" ")
                 )));
             }
-            "INIT" => made.target = hex(field(one, "target")),
+            "INIT" => {
+                made.target = hex(field(one, "target"));
+                // CGSW_GEN_DBG_TYPES or CGSW_GEN_DBG_LOCALS
+                if hex(field(one, "sw")) & 0x0018_0000 != 0 {
+                    made.debug = Some(Debug::default());
+                }
+            }
+            "DBScalar" | "DBArray" | "DBPtr" | "DBStruct" | "DBEnum" | "DBProc" | "DBName" => {
+                let result = handle(one.result.as_deref().expect("a debug type's handle"));
+                let debug = made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
+                let described = match one.call.as_str() {
+                    "DBScalar" => DebugType::Scalar { name: arg(one, 0).to_owned(), cg: arg(one, 1).to_owned() },
+                    "DBArray" => DebugType::Array { hi: int(arg(one, 1)), base: handle(arg(one, 2)) },
+                    "DBPtr" => DebugType::Pointer { cg: arg(one, 0).to_owned(), base: handle(arg(one, 1)) },
+                    "DBStruct" => DebugType::Struct { name: arg(one, 0).to_owned(), union: arg(one, 1) == "union", size: int(arg(one, 2)), fields: Vec::new() },
+                    "DBEnum" => DebugType::Enum { cg: arg(one, 0).to_owned() },
+                    "DBProc" => DebugType::Proc { result: handle(arg(one, 1)), parameters: Vec::new() },
+                    _ => DebugType::Name { name: arg(one, 0).to_owned(), target: None },
+                };
+                debug.types.insert(result, described);
+            }
+            "DBField" | "DBBitField" | "DBParm" | "DBEndName" => {
+                let debug = made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
+                let known = debug.types.get_mut(&handle(arg(one, 0)));
+                match (one.call.as_str(), known) {
+                    ("DBField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)))),
+                    // A bit field as its base type: CodeView's own is unmeasured.
+                    ("DBBitField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 4).to_owned(), handle(arg(one, 5)))),
+                    ("DBParm", Some(DebugType::Proc { parameters, .. })) => parameters.push(handle(arg(one, 1))),
+                    ("DBEndName", Some(DebugType::Name { target, .. })) => *target = Some(handle(arg(one, 1))),
+                    _ => return Err(Unsupported(format!("stream line {}: {} of an unknown debug type", one.line, one.call))),
+                }
+            }
+            "DBModSym" | "DBLocalSym" => {
+                let (symbol, described) = (handle(arg(one, 0)), handle(arg(one, 1)));
+                match proc.map(|at| &mut made.procs[at]) {
+                    Some(open) if one.call == "DBModSym" && open.symbol == symbol => open.debug_type = Some(described),
+                    Some(open) if one.call == "DBLocalSym" => open.debug.push((symbol, described)),
+                    _ => made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug symbol without -d2", one.line)))?.globals.push((symbol, described)),
+                }
+            }
             "SEG" => {
                 let id = int(arg(one, 0));
                 made.segments.insert(
@@ -438,6 +510,8 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     parms: Vec::new(),
                     autos: Vec::new(),
                     body: Vec::new(),
+                    debug_type: None,
+                    debug: Vec::new(),
                 });
                 proc = Some(made.procs.len() - 1);
             }
@@ -476,7 +550,10 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .parms
                     .push(parm);
             }
-            "DBSrcCue" => line = int(arg(one, 1)),
+            "DBSrcFile" if one.fields.get("main").is_some_and(|one| one == "1") => main_file = one.result.clone(),
+            "DBSrcFile" => {}
+            // A line of another file, a header's, is no line of the source.
+            "DBSrcCue" => line = if main_file.as_deref() == Some(arg(one, 0)) { int(arg(one, 1)) } else { 0 },
             "CGSelInit" => {
                 let at = open(proc);
                 let result = one.result.clone().expect("CGSelInit returns a handle");
@@ -508,6 +585,11 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .push((call.to_owned(), Tuple(args.clone())));
             }
             call if IGNORED.contains(&call) => {}
+            "CGFact" => {
+                let node = Node { call: one.call.clone(), args: args.clone() };
+                crate::ow_facts::check(&node)?;
+                made.nodes.insert(handle(one.result.as_deref().expect("a fact names its node")), node);
+            }
             _ if one
                 .result
                 .as_deref()

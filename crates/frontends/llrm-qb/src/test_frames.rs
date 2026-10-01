@@ -88,3 +88,32 @@ fn own_frames_clear_zeroed_aggregates_in_one_fill() {
         assert!(!entry.contains("mov word ptr [bp") && !entry.contains("mov dword ptr [bp"), "{dialect}: {own}");
     }
 }
+
+/// Each indexed frame cell's displacement, `[bp+si-30]`, from the listing's
+/// first frame address: the REDIM array's descriptor.
+fn indexed_from_descriptor(listing: &str) -> Vec<i64> {
+    let number = |text: &str| text[..text.find(']').unwrap()].parse::<i64>().unwrap();
+    let descriptor = listing.lines().filter(|line| line.trim().starts_with("lea ")).find_map(|line| line.split("[bp").nth(1)).map(number).expect("the descriptor's address");
+    let indexed: Vec<i64> = listing
+        .lines()
+        .filter_map(|line| line.split("[bp+").nth(1))
+        .filter(|rest| rest.starts_with(|first: char| first.is_ascii_alphabetic()))
+        .map(|rest| number(&rest[2..]) - descriptor)
+        .collect();
+    assert!(!indexed.is_empty(), "no indexed frame cell: {listing}");
+    indexed
+}
+
+/// UBOUND of a local REDIM array printed -1 on the runtime's frame: its
+/// bounds, read through `[bp+si-30]`, stayed where they were while B$ENRA's
+/// header moved the rest of the descriptor down (#80).
+#[test]
+fn indexed_frame_cells_move_with_the_runtime_frame() {
+    let source = "SUB arrs (n AS INTEGER)\nREDIM v(n) AS LONG\nv(n) = 7\nPRINT UBOUND(v); v(n)\nEND SUB\narrs 3\n";
+    for (dialect, runtime) in DIALECTS {
+        let framed = procedure(source, dialect, runtime, false, "ARRS");
+        assert!(runtime_framed(&framed), "{dialect}");
+        let own = procedure(source, dialect, runtime, true, "ARRS");
+        assert_eq!(indexed_from_descriptor(&framed), indexed_from_descriptor(&own), "{dialect}:\n{framed}\n{own}");
+    }
+}

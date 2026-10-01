@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use crate::context::{ConstantKind, Context, GlobalId};
+use crate::facts::Facts;
 use crate::datalayout::DataLayout;
 use crate::module::{Function, GlobalKind, InstId, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, Opcode};
@@ -223,7 +224,7 @@ pub fn invariant(context: &Context, layout: &DataLayout, function: &Function, po
     let ValueDef::Argument(at) = function.value(base).def else { return false };
     let attrs = &function.parameter_attrs[at as usize];
     let has = |flag: &str| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag));
-    has("noalias") && has("readonly")
+    Facts::of(attrs).no_alias() && has("readonly")
 }
 
 /// Whether the call `inst` always comes back, as it or its callee says.

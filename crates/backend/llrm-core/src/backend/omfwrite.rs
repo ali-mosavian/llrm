@@ -167,6 +167,8 @@ pub enum Encoded {
     Piece(Piece),
     Jump(Jump),
     Near(Near),
+    /// A mark, and the symbol a line's defines.
+    Mark(masm::Mark, Option<String>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,6 +180,10 @@ pub struct Segment {
     /// [start, end) holding data
     pub spans: Vec<[usize; 2]>,
     pub fixups: Vec<Fixup>,
+    /// (source line, offset) of each line's first code, in order.
+    pub lines: Vec<(u32, usize)>,
+    /// Each procedure body's bounds, in order.
+    pub bodies: Vec<(masm::Mark, usize)>,
 }
 
 impl Segment {
@@ -189,6 +195,28 @@ impl Segment {
             image: Vec::new(),
             spans: Vec::new(),
             fixups: Vec::new(),
+            lines: Vec::new(),
+            bodies: Vec::new(),
+        }
+    }
+
+    /// `mark` is here.
+    pub fn mark(&mut self, mark: masm::Mark) {
+        match mark {
+            masm::Mark::Line { line, .. } => self.line(line),
+            bound => self.bodies.push((bound, self.image.len())),
+        }
+    }
+
+    /// Code at the current offset is `line`'s: the last line named at an
+    /// offset wins, as the one before it has no code.
+    pub fn line(&mut self, line: u32) {
+        let at = self.image.len();
+        if self.lines.last().is_some_and(|&(_, last)| last == at) {
+            self.lines.pop();
+        }
+        if self.lines.last().is_none_or(|&(last, _)| last != line) {
+            self.lines.push((line, at));
         }
     }
 
@@ -633,7 +661,7 @@ pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Near(Near { name }) => {
                         reached.insert(name);
                     }
-                    Encoded::Label(_) | Encoded::Jump(_) => {}
+                    Encoded::Label(_) | Encoded::Jump(_) | Encoded::Mark(..) => {}
                 }
             }
         }
@@ -729,6 +757,13 @@ pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Re
     for (index, group) in groups.iter().enumerate() {
         _code(&mut segments[index], index, module, group, &mut symbols)?;
     }
+    if let Some(debug) = &module.debug {
+        if groups.len() != 1 {
+            return Err(Unencodable("-g with a code segment per procedure".into()).into());
+        }
+        let described = super::codeview::segments(debug, module, source, &segments[0], &symbols).map_err(Unencodable)?;
+        segments.extend(described);
+    }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let records = _records(module, source, &mut segments, &symbols, &externs)?;
     Ok(records.iter().flat_map(|record| record.emit()).collect())
@@ -766,11 +801,23 @@ pub fn _code(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
 ) -> Result<(), Error> {
+    _code_by(segment, index, module, group, symbols, |procedure, number| masm::listing(procedure, number).map_err(|error| error.0))
+}
+
+/// [`_code`], each procedure's items as `listed` gives them.
+pub fn _code_by(
+    segment: &mut Segment,
+    index: usize,
+    module: &masm::Module,
+    group: &[usize],
+    symbols: &mut IndexMap<String, (usize, usize)>,
+    listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
+) -> Result<(), Error> {
     let mut items: Vec<Encoded> = Vec::new();
     for &number in group {
         let procedure = &module.procedures[number];
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
-        for item in masm::listing(procedure, number)? {
+        for item in listed(procedure, number).map_err(Unencodable)? {
             match _items(&item, &module.names, number) {
                 Ok(encoded) => items.extend(encoded),
                 Err(error) => return Err(Unencodable(format!("{}: {error}", procedure.name)).into()),
@@ -784,12 +831,19 @@ pub fn _code(
             Encoded::Label(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, at));
             }
+            Encoded::Mark(mark, name) => {
+                segment.mark(*mark);
+                if let Some(name) = name {
+                    symbols.insert(name.clone(), (index, at));
+                }
+            }
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
             Encoded::Jump(Jump { name, label, long }) => segment.put(&_jump(name, labels[label], at, *long)?.code, &[]),
             Encoded::Near(Near { name }) if labels.contains_key(name) => {
                 let distance = labels[name] - (at as i64 + 3);
-                let distance = i16::try_from(distance)
-                    .unwrap_or_else(|_| panic!("struct.error: 'h' format requires -32768 <= number <= 32767"));
+                let Ok(distance) = i16::try_from(distance) else {
+                    return Err(Unencodable(format!("a near call to {name} {distance} bytes away")).into());
+                };
                 segment.put(&[&[0xE8][..], &distance.to_le_bytes()].concat(), &[]);
             }
             Encoded::Near(Near { name }) if module.procedures.iter().any(|one| &one.name == name) => {
@@ -812,6 +866,8 @@ pub fn _items(
 ) -> Result<Vec<Encoded>, Unencodable> {
     Ok(match item {
         masm::Item::Label(label) => vec![Encoded::Label(label.clone())],
+        masm::Item::Mark(mark @ masm::Mark::Line { index, .. }) => vec![Encoded::Mark(*mark, Some(masm::line_label(number, *index)))],
+        masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
             code.iter().map(_part).collect::<Result<Vec<_>, _>>()?.into_iter().map(Encoded::Piece).collect()
         }
@@ -924,7 +980,7 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
 
 pub fn _length(item: &Encoded) -> usize {
     match item {
-        Encoded::Label(_) => 0,
+        Encoded::Label(_) | Encoded::Mark(..) => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
         Encoded::Jump(Jump { name, long, .. }) => {
             if !long {
@@ -1011,6 +1067,12 @@ pub fn _records(
         Rc::new(omf::Record::new(omf::THEADR, _string(source))),
         Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| _string(one)).collect())),
     ];
+    // -g's: lines alone may be only a statement table's.
+    let debugging = module.debug.is_some();
+    if debugging {
+        // CodeView 4's marker: LINK /CO reads the debug information after it.
+        records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x00, 0xA1, 0x01, b'C', b'V'])));
+    }
     records.extend(segdefs);
     records.push(grpdef);
     if !order.is_empty() {
@@ -1037,8 +1099,31 @@ pub fn _records(
         }
     }
     records.extend(data);
+    for (index, segment) in segments.iter().enumerate().filter(|_| debugging) {
+        records.extend(_linnum(index + 1, &segment.lines)?);
+    }
     records.push(Rc::new(omf::Record::new(omf::MODEND, vec![0])));
     Ok(records)
+}
+
+/// Segment `index`'s LINNUM records: no base group, then (line, offset) pairs.
+pub fn _linnum(index: usize, lines: &[(u32, usize)]) -> Result<Vec<Rc<omf::Record>>, Error> {
+    let mut head = vec![0];
+    head.extend(omf::as_index(index as i64)?);
+    lines
+        .chunks(CHUNK / 4)
+        .map(|chunk| {
+            let mut body = head.clone();
+            for &(line, at) in chunk {
+                let (Ok(line), Ok(at)) = (u16::try_from(line), u16::try_from(at)) else {
+                    return Err(Unencodable(format!("line {line} at {at:#x} does not fit LINNUM")).into());
+                };
+                body.extend(line.to_le_bytes());
+                body.extend(at.to_le_bytes());
+            }
+            Ok(Rc::new(omf::Record::new(omf::LINNUM, body)))
+        })
+        .collect()
 }
 
 /// `segments[index - 1]` is Python's `segment`; the whole list is passed so
@@ -1286,6 +1371,7 @@ mod tests {
             )],
             private: BTreeSet::new(),
             requests: BTreeSet::new(),
+            debug: None,
         };
         assert_eq!(
             masm::text(&built).unwrap(),
@@ -1372,6 +1458,7 @@ mod tests {
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
             requests: BTreeSet::new(),
+            debug: None,
         };
         assert_eq!(
             masm::text(&rich).unwrap(),

@@ -80,6 +80,11 @@ impl Address {
 }
 
 impl Address {
+    /// Its displacement is BP's: see `Mem::in_frame`.
+    pub fn in_frame(&self) -> bool {
+        _in_frame(self.addr, self.through)
+    }
+
     fn displacement(&self) -> Option<i64> {
         self.addr.is_none().then_some(self.offset)
     }
@@ -143,9 +148,19 @@ impl Mem {
         }
     }
 
+    /// Its displacement is BP's: a frame cell, or an indexed one, which is
+    /// spelled through BP with a literal displacement.
+    pub fn in_frame(&self) -> bool {
+        _in_frame(self.addr, self.through)
+    }
+
     fn displacement(&self) -> Option<i64> {
         self.addr.is_none().then_some(self.offset)
     }
+}
+
+fn _in_frame(addr: Option<Addr>, through: Register) -> bool {
+    addr.is_some_and(|addr| addr.space == Space::Frame || (addr.space == Space::Literal && matches!(through, Register::BP | Register::EBP)))
 }
 
 impl PartialEq for Mem {

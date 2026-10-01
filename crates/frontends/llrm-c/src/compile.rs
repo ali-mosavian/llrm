@@ -364,6 +364,7 @@ pub fn assembled(
             .map(|one| one.name.clone())
             .collect(),
         requests: BTreeSet::new(),
+        debug: None,
     };
     if dump.is_some() {
         let text = masm::text(&built)?;
@@ -833,8 +834,9 @@ struct Args {
     codegen: llrm_core::driver::Options,
 }
 
-/// The code-generator stream wccq records for one C file.
-pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsupported> {
+/// The code-generator stream wccq records for one C file; with `debug`,
+/// its debug types and symbols too (-d2).
+pub fn recorded(source: &Path, includes: &[String], debug: bool) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
     let wccq = Path::new(option_env!("LLRM_WCCQ").ok_or_else(|| hir::Unsupported("llrm was built without the toolchain feature".into()))?);
     // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
@@ -850,6 +852,7 @@ pub fn recorded(source: &Path, includes: &[String]) -> Result<String, hir::Unsup
     // In the scratch directory, where wccq also leaves its .err file.
     let done = std::process::Command::new(&wccq)
         .args(flags)
+        .args(debug.then_some("-d2"))
         .args(searched)
         .arg(format!("-fo={}/unit.obj", scratch.path().display()))
         .arg(absolute(source))
@@ -923,7 +926,7 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            recorded(&args.source, &args.include)?
+            recorded(&args.source, &args.include, args.flags.debug)?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args
@@ -1165,9 +1168,21 @@ mod tests {
         let root = Path::new(env!("LLRM_ROOT"));
         let source = root.join("tests/fixtures/c/halve.c");
         let without_path = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
-        let recorded = super::recorded(&source, &[]).expect("wccq records halve.c");
+        let recorded = super::recorded(&source, &[], false).expect("wccq records halve.c");
         let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
+    }
+
+    /// A long double global got its initializer as a double, 8 bytes, while
+    /// code loads it as 10 bytes: `gld` read 1.07e-49 and took two bytes of `after`.
+    #[test]
+    fn test_a_long_double_initializer_is_ten_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("probe.c");
+        std::fs::write(&source, "long double gld = 3.5;\nshort after = 7;\nlong double get(void) { return gld; }\n").unwrap();
+        let recorded = super::recorded(&source, &[], false).expect("wccq records probe.c");
+        let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGBytes")).collect();
+        assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
     }
 
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
@@ -1189,6 +1204,26 @@ mod tests {
             })
             .find(|body| body.iter().any(|one| one.starts_with(marker)))
             .expect("the loop")
+    }
+
+    /// The instructions of `function` as the rich route selects them.
+    fn selected_body(fixture: &str, function: &str) -> Vec<String> {
+        let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_core::driver::Options::of(machine)).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find(&format!("{function} proc")).expect("the function");
+        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
+    }
+
+    /// `die` and `quit` do not return: nothing follows their calls. Without
+    /// the call class stated, `f` kept a return after both, 11 instructions
+    /// to 8.
+    #[test]
+    fn test_nothing_follows_a_call_that_does_not_return() {
+        let body = selected_body("tests/test_noreturn_and_aborts_are_stated_of_the_callee", "_f");
+        assert_eq!(body.len(), 8, "{body:?}");
+        assert!(body.iter().all(|one| !one.starts_with("retf")), "{body:?}");
     }
 
     /// `strides` walks frame arrays of 1-, 2-, 4- and 8-byte elements with one

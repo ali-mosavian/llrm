@@ -322,7 +322,7 @@ fn _labeled_data_keys(data_keys: &IndexMap<i64, i64>, code_names: &IndexMap<i64,
 /// `program` with each DATA row keyed by its position in the table rather
 /// than a code label: no DATA marker, RESTORE passing the row to B$RSTB,
 /// and no DATA block a code entry.
-fn _positional_data(program: &model::Program) -> Result<model::Program, CompileError> {
+pub(super) fn _positional_data(program: &model::Program) -> Result<model::Program, CompileError> {
     let mut program = program.clone();
     for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
         let mut rows = BTreeSet::new();
@@ -343,6 +343,9 @@ fn _positional_data(program: &model::Program) -> Result<model::Program, CompileE
             }
         }
         function.external_entries.retain(|entry| !rows.contains(entry));
+        // A DATA marker's call goes with it, and so does its ABI.
+        let kept: BTreeSet<i64> = function.blocks.iter().flat_map(|block| &block.instructions).map(|one| one.id).collect();
+        function.calls.retain(|call| kept.contains(&call.instruction));
     }
     Ok(program)
 }
@@ -1319,6 +1322,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         private,
         requests: graphics,
         frames,
+        line_numbers: module.line_numbers.iter().copied().collect(),
     };
     Ok(basic::compiled(program, &object, codegen)?)
 }
@@ -1635,6 +1639,7 @@ pub fn assembled_by(
         procedures,
         private,
         requests: graphics,
+        debug: None,
     };
     _observe(&mut observer, "emitted-assembly", StageValue::Module(&emitted), None, None)?;
     Ok(emitted)

@@ -309,25 +309,8 @@ fn _emitted_asm(program: &model::Program, module: &masm::Module, pretty: bool) -
     for (number, procedure) in module.procedures.iter().enumerate() {
         let heading = format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" });
         let ending = format!("{} endp", procedure.name);
-        let mut lines = vec![heading.clone()];
-        for item in llrm_core::driver::basic::_basic_listing(procedure, number)? {
-            match &item {
-                masm::Item::Label(masm::Label { name }) => lines.push(format!("{name}:")),
-                masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => {
-                    lines.extend(masm::_code(code).into_iter().map(|line| format!("    {line}")));
-                }
-                masm::Item::Callee(masm::Callee { name, far, .. }) => {
-                    lines.push(format!("    call {}{name}", if *far { "far ptr " } else { "" }));
-                }
-                masm::Item::Semantics(what) => lines.extend(
-                    masm::_instruction(what, &module.names, number)
-                        .map_err(|error| error.0)?
-                        .into_iter()
-                        .map(|line| format!("    {line}")),
-                ),
-            }
-        }
-        lines.push(ending.clone());
+        let listing = llrm_core::driver::basic::_basic_listing(procedure, number)?;
+        let lines = masm::_procedure_of(procedure, listing, &module.names, number).map_err(|error| error.0)?;
         let mut rendered_lines: Vec<String> = rendered.lines().map(str::to_owned).collect();
         let start = rendered_lines.iter().position(|line| *line == heading);
         let stop = start.and_then(|start| {

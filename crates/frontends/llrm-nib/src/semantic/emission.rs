@@ -227,6 +227,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> u32 {
         let id = self.next_instruction;
         self.next_instruction += 1;
+        let line = self.line;
         self.moved();
         self.current_block_mut()
             .instructions
@@ -237,6 +238,7 @@ impl<'a> FunctionCompiler<'a> {
                 operands,
                 callee,
                 asm: None,
+                line,
             });
         id
     }

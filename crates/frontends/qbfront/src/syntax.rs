@@ -39,6 +39,9 @@ pub struct Declaration {
     pub fixed_length: Option<Expr>,
     pub shared: bool,
     pub dynamic: bool,
+    /// Declared `ID AS VOLATILE TYPE`: another agent may change it, so every
+    /// access is ordered.
+    pub volatile: bool,
     pub span: Span,
 }
 

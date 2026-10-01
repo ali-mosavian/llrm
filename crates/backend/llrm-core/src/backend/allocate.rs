@@ -766,9 +766,13 @@ impl Facts {
     fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
         let index = ranges::indexed(body);
         let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
+        // A reload or rematerialization of a spilled value gains nothing from
+        // a spill, however far a parallel copy stretches it. Any other
+        // product is unspillable only while it is short.
+        let reloaded = _reloaded(body);
         for one in unspillable {
             if let Some(interval) = live.get_mut(one) {
-                if interval.size() <= RELOAD {
+                if reloaded.contains(one) || interval.size() <= RELOAD {
                     interval.weight = INF;
                 }
             }
@@ -781,6 +785,17 @@ impl Facts {
         let masks = _masks(body, &index, segments);
         Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments), hints: _copy_hints(body) }
     }
+}
+
+/// The values only a reload or a rematerialization defines.
+fn _reloaded(body: &LirBody) -> BTreeSet<u32> {
+    let mut pure: BTreeSet<u32> = BTreeSet::new();
+    let mut other: BTreeSet<u32> = BTreeSet::new();
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let into = if one.spill_reload || one.rematerialized { &mut pure } else { &mut other };
+        into.extend(one.defines.iter().copied());
+    }
+    pure.difference(&other).copied().collect()
 }
 
 /// The values whose register a rewrite made them share with another, lose
@@ -2788,6 +2803,26 @@ mod tests {
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
     }
 
+    /// Every spiller product was made unspillable whatever its length (#127):
+    /// league.nib's `main` held a long load-modify-store value no register
+    /// could take, and was refused. Only a reload or a rematerialization,
+    /// which a spill cannot shorten, is unspillable when long.
+    #[test]
+    fn test_a_long_product_that_is_not_a_reload_stays_spillable() {
+        let cell = |base: u32| Mem { base: Some(Held { value: base, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
+        let remat = Insn { rematerialized: true, .._mov(2, 6, 2) };
+        let mut insns = vec![_mov(1, 5, 0), remat];
+        insns.extend((10..20u32).map(|one| _mov(one, 1, 4 + 2 * i64::from(one))));
+        insns.extend([_load(100, 30, cell(1), vec![1]), _load(102, 31, cell(2), vec![2])]);
+        let body = _one_block(insns);
+        let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
+        let made = BTreeSet::from([1, 2]);
+        let facts = Facts::of(&body, profile, &target::BUILT_IN, &made, &BTreeSet::new());
+        assert!(facts.live[&1].size() > RELOAD && facts.live[&2].size() > RELOAD, "premise: both are long: {:?} {:?}", facts.live[&1], facts.live[&2]);
+        assert!(facts.live[&1].weight < INF, "a long product that does real work can be spilled");
+        assert_eq!(facts.live[&2].weight, INF, "a long rematerialization cannot");
+    }
+
     /// A failed recoloring must leave every holder where it was.
     #[test]
     fn test_a_recoloring_that_fails_restores_every_holder() {
@@ -3252,4 +3287,56 @@ mod tests {
             BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX])
         );
     }
+    /// The body `walks10.ll` (ten pointer walks, `-O2 --cpu 386`) has when it
+    /// reaches the register allocator, and the phase itself.
+    fn before_regalloc() -> (LirBody, Box<dyn crate::model::passes::LIRTransform>) {
+        use crate::abi::runtime::{EVERY, Reg as Hard};
+        use crate::backend::constpool::Pool;
+        use crate::backend::{frame, isel};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir/walks10.ll");
+        let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
+        let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
+        let abi = crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
+        };
+        let cpu = cpu::profile("386").unwrap();
+        let pool = Rc::new(RefCell::new(Pool::new(0)));
+        let name = "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum";
+        let selected = isel::selected(&module, name, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
+        let mut made = frame::of(&selected.body, Some(&selected.calls), "", None).unwrap();
+        made.floor = made.floor.min(-selected.depth);
+        let shared = Rc::new(RefCell::new(made));
+        let pinned = selected.body.pins.clone();
+        let mut body = selected.body;
+        let phases =
+            crate::flow::machine(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN).unwrap();
+        for mut phase in phases {
+            if phase.class_name() == "RegAlloc" {
+                return (body, phase);
+            }
+            body = phase.transform(body).unwrap();
+        }
+        panic!("no RegAlloc phase");
+    }
+
+    /// Ten arrays walked by pointer: the loop preheader's parallel copy keeps
+    /// a rematerialized `lea` live across the whole group, longer than a
+    /// reload's range, so it was spillable; spilling it made the same `lea`
+    /// again, a new value every pass, and compilation did not finish (#104).
+    #[test]
+    fn test_a_reload_stretched_by_a_parallel_copy_is_not_spilled_again() {
+        let (body, mut phase) = before_regalloc();
+        let longest = body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
+        assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");
+
+        let before = splitkit::_next_value(&body);
+        let after = phase.transform(body).expect("allocates");
+        let made = splitkit::_next_value(&after) - before;
+        assert!(made < 1000, "{made} values made for ten walks");
+    }
+
 }

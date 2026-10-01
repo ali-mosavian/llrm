@@ -1286,6 +1286,84 @@ rt/string.asm: `cProc B$STI2,<PUBLIC,FAR>` with ParmW I2Arg, `Uses: Per conventi
 form = "STR$"
 type = "INTEGER"
 
+["B$STI4"]
+cleanup = 4
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "ARGUMENTS"
+clobbers = ["ax", "bx", "cx", "di", "ds", "dx", "es", "flags", "si"]
+established = true
+documented = ["ax", "bx", "cx", "dx", "flags"]
+inputs = []
+evidence = '''
+rt/string.asm: `cProc B$STI4,<PUBLIC,FAR>` with parmD arg4, which the callee pops. Like B$STI2 it sets AL = VT_I4 and falls into B$STR_COMMON, so its effects are B$STI2's: B$FOUTBX changes every register but BP, and B$STALCTMPCPY can move every live string.
+'''
+
+["B$STR4"]
+cleanup = 4
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "ARGUMENTS"
+clobbers = ["ax", "bx", "cx", "di", "ds", "dx", "es", "flags", "si"]
+established = true
+documented = ["ax", "bx", "cx", "dx", "flags"]
+inputs = []
+evidence = '''
+rt/stringfp.asm: `cProc B$STR4,<PUBLIC,FAR>` with parmD arg4, which the callee pops. Like B$STI2 it sets AL = VT_R4 and falls into B$STR_COMMON, so its effects are B$STI2's: B$FOUTBX changes every register but BP, and B$STALCTMPCPY can move every live string.
+'''
+
+["B$STR8"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "ARGUMENTS"
+clobbers = ["ax", "bx", "cx", "di", "ds", "dx", "es", "flags", "si"]
+established = true
+documented = ["ax", "bx", "cx", "dx", "flags"]
+inputs = []
+evidence = '''
+rt/stringfp.asm: `cProc B$STR8,<PUBLIC,FAR>` with ParmQ R8Arg, which the callee pops. Like B$STI2 it sets AL = VT_R8 and falls into B$STR_COMMON, so its effects are B$STI2's: B$FOUTBX changes every register but BP, and B$STALCTMPCPY can move every live string.
+'''
+
+["B$CSRL"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/gwscr.asm: `cProc B$CSRL,<PUBLIC,FAR>`, no parameters, `Exit: AX = screen row`, `Uses: Per convention`. It reads b$CURSOR and, past the last column, calls B$CRLF, which moves the cursor: runtime state only.
+'''
+
+["B$FPOS"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/gwscr.asm: `cProc B$FPOS,<PUBLIC,FAR>` with `parmW Dummy`, which the callee pops. It reads b$CSRX and b$CRTWIDTH, runtime state, into AX: `Modifies: F`, the wider per-convention set claimed here.
+'''
+
 ["B$SPAC"]
 cleanup = 2
 control = "returns"

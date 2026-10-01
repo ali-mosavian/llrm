@@ -1,16 +1,19 @@
 """
-Every innermost call-free loop in an OMF object, as the bytes decode.
+Every innermost loop in an object, as the bytes decode.
 
 The scoreboard for loop quality: instructions and memory operands per loop,
-read from the object, never from a dump taken before encoding.
+read from the object, never from a dump taken before encoding. OMF objects
+(llrm, Open Watcom, BC) and ELF ones (gcc-ia16's x86, LLVM's msp430) alike.
 
-    uv run python tools/innerloops.py A.OBJ [--names DUMPDIR] [--show]
+    uv run python tools/innerloops.py A.OBJ [--names DUMPDIR] [--show] [--calls]
     uv run python tools/innerloops.py A.OBJ B.OBJ --names DUMPDIR [--show]
 
 Loops are named `FUNCTION#k`, k counting a function's loops in address order.
 Names come from the object's public symbols; a QB object publishes only its
 entry, so `--names` takes the `--dump` directory, whose files are numbered in
-emission order.
+emission order. A loop is its natural loop in the control-flow graph: the
+blocks that reach its back edge without passing its header, wherever they
+are laid out. Loops with a call are left out unless `--calls`.
 """
 
 import re
@@ -18,9 +21,13 @@ import sys
 import bisect
 import argparse
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import iced_x86 as ix
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import msp430  # noqa: E402
 
 
 @dataclass
@@ -29,10 +36,25 @@ class Loop:
     at: int
     lines: list[str]
     memory: int
+    calls: int = 0
+    arch: str = "x86"
+    body: list = field(default_factory=list, repr=False)
+    header: int = 0
+    latch: int = 0
 
     @property
     def size(self) -> int:
         return len(self.lines)
+
+
+@dataclass
+class Code:
+    arch: str  # x86 or msp430
+    data: bytes
+    publics: dict[int, str]
+
+
+# --- OMF ---------------------------------------------------------------------
 
 
 def _index(body: bytes, at: int) -> tuple[int, int]:
@@ -50,9 +72,10 @@ def records(data: bytes):
         at += 3 + size
 
 
-def image(data: bytes) -> tuple[bytes, dict[int, str]]:
-    """The code segment's bytes, and the public names in it by offset."""
-    lnames, segments, chunks, publics = [""], [], {}, {}
+def segments(data: bytes) -> list[tuple[bytes, dict[int, str]]]:
+    """Each code segment of an OMF object, in definition order: its bytes, and
+    the public names in it by offset."""
+    lnames, classes, chunks, publics = [""], [], {}, {}
     for kind, body in records(data):
         if kind == 0x96:
             at = 0
@@ -63,7 +86,7 @@ def image(data: bytes) -> tuple[bytes, dict[int, str]]:
             at = 1 + (3 if body[0] >> 5 == 0 else 0) + (4 if kind == 0x99 else 2)
             name, at = _index(body, at)
             klass, at = _index(body, at)
-            segments.append(lnames[klass])
+            classes.append(lnames[klass])
         elif kind in (0xA0, 0xA1):
             segment, at = _index(body, 0)
             width = 4 if kind == 0xA1 else 2
@@ -81,9 +104,73 @@ def image(data: bytes) -> tuple[bytes, dict[int, str]]:
                 publics.setdefault(segment, {})[int.from_bytes(body[at : at + width], "little")] = name
                 at += width
                 _type, at = _index(body, at)
-    code = next(index + 1 for index, klass in enumerate(segments) if klass.endswith("CODE"))
-    bytes_ = chunks.get(code, {})
-    return bytes(bytes_.get(at, 0) for at in range(max(bytes_, default=-1) + 1)), publics.get(code, {})
+    out = []
+    for number, klass in enumerate(classes, 1):
+        if klass.endswith("CODE"):
+            bytes_ = chunks.get(number, {})
+            code = bytes(bytes_.get(at, 0) for at in range(max(bytes_, default=-1) + 1))
+            out.append((code, publics.get(number, {})))
+    return out
+
+
+def image(data: bytes) -> tuple[bytes, dict[int, str]]:
+    """An OMF object's first code segment's bytes, and the public names in it by offset."""
+    return segments(data)[0]
+
+
+# --- ELF ---------------------------------------------------------------------
+
+
+def _elf(data: bytes) -> list[Code]:
+    """Each executable section of a 32-bit ELF object, with its symbols."""
+    u16 = lambda at: int.from_bytes(data[at : at + 2], "little")  # noqa: E731
+    u32 = lambda at: int.from_bytes(data[at : at + 4], "little")  # noqa: E731
+    machine = u16(18)
+    arch = {3: "x86", 105: "msp430"}.get(machine)
+    if arch is None:
+        raise ValueError(f"an ELF object for machine {machine}")
+    shoff, shentsize, shnum = u32(32), u16(46), u16(48)
+    sections = []
+    for number in range(shnum):
+        at = shoff + number * shentsize
+        sections.append({"type": u32(at + 4), "flags": u32(at + 8), "offset": u32(at + 16), "size": u32(at + 20),
+                         "link": u32(at + 24)})
+    names: dict[int, dict[int, str]] = {}
+    for section in sections:
+        if section["type"] != 2:  # SHT_SYMTAB
+            continue
+        strings = sections[section["link"]]
+        for at in range(section["offset"], section["offset"] + section["size"], 16):
+            name_at, value, info, shndx = u32(at), u32(at + 4), data[at + 12], u16(at + 14)
+            if info & 0xF in (1, 2) or (info & 0xF == 0 and info >> 4 == 1):  # object, function, global notype
+                start = strings["offset"] + name_at
+                name = data[start : data.index(b"\0", start)].decode("latin-1")
+                if name:
+                    names.setdefault(shndx, {})[value] = name
+    return [
+        Code(arch, data[s["offset"] : s["offset"] + s["size"]], names.get(number, {}))
+        for number, s in enumerate(sections)
+        if s["type"] == 1 and s["flags"] & 4 and s["size"]  # PROGBITS, executable
+    ]
+
+
+def images(data: bytes, procedures: list[str] | None = None) -> list[Code]:
+    """The object's code. `procedures` names an object compiled one
+    procedure per segment (llrm-nib --procedure-segments), in order."""
+    if data[:4] == b"\x7fELF":
+        return _elf(data)
+    found = segments(data)
+    if procedures and len(procedures) == len(found):
+        return [Code("x86", code, {0: name}) for (code, _), name in zip(found, procedures)]
+    return [Code("x86", code, publics) for code, publics in found]
+
+
+def listed(listing: Path) -> list[str]:
+    """The procedures of an llrm listing, in order."""
+    return re.findall(r"^(\S+) proc ", listing.read_text(), re.M)
+
+
+# --- decoding ----------------------------------------------------------------
 
 
 def _dumped(directory: Path) -> list[str]:
@@ -95,7 +182,7 @@ def _dumped(directory: Path) -> list[str]:
     return [names[key] for key in sorted(names)]
 
 
-def _entered(text: list[ix.Instruction], formatter: ix.Formatter) -> list[int]:
+def _entered(text: list, formatter: ix.Formatter) -> list[int]:
     """Where a BC-framed procedure starts: `cx` and `bx` set, then the far frame call."""
     starts = []
     for at in range(len(text) - 2):
@@ -113,78 +200,235 @@ def _entered(text: list[ix.Instruction], formatter: ix.Formatter) -> list[int]:
 # data of O_ENT bytes (runtime/inc/addr.inc) signed "bl"; its entry follows.
 MODULE_CODE = 48
 
+BRANCHES = (ix.FlowControl.CONDITIONAL_BRANCH, ix.FlowControl.UNCONDITIONAL_BRANCH)
+ENDS = (
+    ix.FlowControl.UNCONDITIONAL_BRANCH,
+    ix.FlowControl.INDIRECT_BRANCH,
+    ix.FlowControl.RETURN,
+    ix.FlowControl.INTERRUPT,
+    ix.FlowControl.EXCEPTION,
+)
+CALLS = (ix.FlowControl.CALL, ix.FlowControl.INDIRECT_CALL)
 
-def _decoded(code: bytes, entries: list[int]) -> list[ix.Instruction]:
+
+def _decode_one(arch: str, code: bytes, at: int):
+    if arch == "msp430":
+        return msp430.decode(code, at)
+    one = ix.Decoder(16, code[at:], ip=at).decode()
+    return None if one.code == ix.Code.INVALID else one
+
+
+def _target(one) -> int | None:
+    if isinstance(one, msp430.Insn):
+        return one.target
+    if one.op0_kind in (ix.OpKind.NEAR_BRANCH16, ix.OpKind.NEAR_BRANCH32):
+        return one.near_branch_target
+    return None
+
+
+def _decoded(code: bytes, entries: list[int], arch: str = "x86") -> list:
     """The instructions control reaches from `entries`, in address order.
 
     Following flow rather than sweeping keeps data in the code segment -- a
     module header, a jump table -- from being read as instructions and
     shifting the decode off every boundary after it."""
-    found: dict[int, ix.Instruction] = {}
+    found: dict[int, object] = {}
     pending = [one for one in entries if 0 <= one < len(code)]
     while pending:
         at = pending.pop()
         while 0 <= at < len(code) and at not in found:
-            one = ix.Decoder(16, code[at:], ip=at).decode()
-            if one.code == ix.Code.INVALID:
+            one = _decode_one(arch, code, at)
+            if one is None:
                 break
             found[at] = one
             flow = one.flow_control
-            if flow in (ix.FlowControl.CONDITIONAL_BRANCH, ix.FlowControl.UNCONDITIONAL_BRANCH, ix.FlowControl.CALL):
-                if one.op0_kind in (ix.OpKind.NEAR_BRANCH16, ix.OpKind.NEAR_BRANCH32):
-                    pending.append(one.near_branch_target)
-            if flow in (
-                ix.FlowControl.UNCONDITIONAL_BRANCH,
-                ix.FlowControl.INDIRECT_BRANCH,
-                ix.FlowControl.RETURN,
-                ix.FlowControl.INTERRUPT,
-                ix.FlowControl.EXCEPTION,
-            ):
+            if flow in (*BRANCHES, ix.FlowControl.CALL):
+                target = _target(one)
+                if target is not None:
+                    pending.append(target)
+            if flow in ENDS:
                 break
             at = one.next_ip
     return [found[at] for at in sorted(found)]
 
 
-def loops(data: bytes, names: list[str] | None = None) -> list[Loop]:
-    code, publics = image(data)
-    formatter = ix.Formatter(ix.FormatterSyntax.MASM)
-    start = MODULE_CODE if code[:2] == b"bl" else 0
-    text = _decoded(code, [start, *publics])
+def _successors(one, where: dict[int, int]) -> list[int]:
+    out = []
+    if one.flow_control not in ENDS and one.next_ip in where:
+        out.append(where[one.next_ip])
+    if one.flow_control in BRANCHES:
+        target = _target(one)
+        if target in where:
+            out.append(where[target])
+    return out
+
+
+def dominators(text: list, entries: list[int]) -> list[int]:
+    """Each instruction's immediate dominator (index), from a virtual root
+    above `entries`; -1 for the root's children, -2 for the unreached.
+    Cooper, Harvey and Kennedy's iteration over reverse postorder."""
+    where = {one.ip: index for index, one in enumerate(text)}
+    successors = [_successors(one, where) for one in text]
+    order, seen = [], set()
+    for entry in entries:
+        if entry in seen:
+            continue
+        stack = [(entry, iter(successors[entry]))]
+        seen.add(entry)
+        while stack:
+            node, rest = stack[-1]
+            nxt = next((s for s in rest if s not in seen), None)
+            if nxt is None:
+                order.append(node)
+                stack.pop()
+            else:
+                seen.add(nxt)
+                stack.append((nxt, iter(successors[nxt])))
+    order.reverse()
+    rank = {node: at for at, node in enumerate(order)}
+    predecessors: dict[int, list[int]] = {}
+    for node in order:
+        for s in successors[node]:
+            predecessors.setdefault(s, []).append(node)
+    ROOT = -1
+    idom = {entry: ROOT for entry in entries if entry in rank}
+
+    def intersect(a, b):
+        while a != b:
+            while a != ROOT and (b == ROOT or rank[a] > rank[b]):
+                a = idom[a]
+            while b != ROOT and (a == ROOT or rank[b] > rank[a]):
+                b = idom[b]
+        return a
+
+    changed = True
+    while changed:
+        changed = False
+        for node in order:
+            if node in entries:
+                continue
+            done = [p for p in predecessors.get(node, []) if p in idom]
+            if not done:
+                continue
+            new = done[0]
+            for p in done[1:]:
+                new = intersect(p, new)
+            if idom.get(node) != new:
+                idom[node] = new
+                changed = True
+    return [idom.get(at, -2) for at in range(len(text))]
+
+
+def _dominates(idom: list[int], a: int, b: int) -> bool:
+    while b >= 0:
+        if a == b:
+            return True
+        b = idom[b]
+    return False
+
+
+def natural_loops(text: list, entries: list[int] | None = None) -> list[tuple[int, list[int]]]:
+    """(header, member indices) per loop header, back edges to it merged.
+
+    A back edge, taken or falling through, goes to an instruction that
+    dominates it; its loop is the header and every instruction that reaches
+    the edge's source without passing the header."""
+    where = {one.ip: index for index, one in enumerate(text)}
+    idom = dominators(text, entries if entries is not None else [0] if text else [])
+    predecessors: dict[int, list[int]] = {}
+    for index, one in enumerate(text):
+        for successor in _successors(one, where):
+            predecessors.setdefault(successor, []).append(index)
+    bodies: dict[int, set[int]] = {}
+    edges = [(index, header) for index, one in enumerate(text) for header in _successors(one, where)]
+    for index, header in edges:
+        if not _dominates(idom, header, index):
+            continue
+        body = bodies.setdefault(header, {header})
+        pending = [index]
+        while pending:
+            at = pending.pop()
+            if at in body:
+                continue
+            body.add(at)
+            pending += predecessors.get(at, [])
+    return sorted((header, sorted(body)) for header, body in bodies.items())
+
+
+def _memory_operands(one) -> int:
+    if isinstance(one, msp430.Insn):
+        return one.memory
+    return sum(
+        1
+        for operand in range(one.op_count)
+        if one.op_kind(operand) == ix.OpKind.MEMORY and one.mnemonic != ix.Mnemonic.LEA
+    )
+
+
+def _named(code: Code, text: list, names: list[str] | None) -> dict[int, str]:
+    """Procedure starts by offset: the given or public names, and every call
+    target, unnamed ones as `sub_OFFSET`, so a static procedure's loops are
+    not charged to the public one before it."""
     if names:
+        formatter = ix.Formatter(ix.FormatterSyntax.MASM)
         starts = _entered(text, formatter)
         starts = ([0] if len(starts) < len(names) else []) + starts
         named = dict(zip(starts, names))
     else:
-        named = publics
-    offsets = sorted(named)
-    where = {one.ip: index for index, one in enumerate(text)}
-    edges = [
-        (where[one.near_branch_target], index)
-        for index, one in enumerate(text)
-        if one.flow_control in (ix.FlowControl.CONDITIONAL_BRANCH, ix.FlowControl.UNCONDITIONAL_BRANCH)
-        and one.near_branch_target <= one.ip
-        and one.near_branch_target in where
-    ]
-    inner = sorted(
-        edge for edge in edges if not any(other != edge and edge[0] <= other[0] and other[1] <= edge[1] for other in edges)
-    )
+        named = dict(code.publics)
+    for one in text:
+        if one.flow_control == ix.FlowControl.CALL:
+            target = _target(one)
+            if target is not None and target not in named:
+                named[target] = f"sub_{target:04x}"
+    return named
+
+
+def loops(data: bytes, names: list[str] | None = None, calls: bool = False,
+          procedures: list[str] | None = None) -> list[Loop]:
     out, seen = [], {}
-    for first, last in inner:
-        body = text[first : last + 1]
-        if any(one.flow_control in (ix.FlowControl.CALL, ix.FlowControl.INDIRECT_CALL) for one in body):
-            continue
-        owner = bisect.bisect_right(offsets, body[0].ip) - 1
-        name = named[offsets[owner]] if owner >= 0 else "?"
-        count = seen.get(name, 0)
-        seen[name] = count + 1
-        memory = sum(
-            1
-            for one in body
-            for operand in range(one.op_count)
-            if one.op_kind(operand) == ix.OpKind.MEMORY and one.mnemonic != ix.Mnemonic.LEA
-        )
-        lines = [f"{one.ip:04x}  {formatter.format(one)}" for one in body]
-        out.append(Loop(f"{name}#{count}", body[0].ip, lines, memory))
+    formatter = ix.Formatter(ix.FormatterSyntax.MASM)
+    for code in images(data, procedures):
+        start = MODULE_CODE if code.data[:2] == b"bl" else 0
+        text = _decoded(code.data, [start, *code.publics], code.arch)
+        named = _named(code, text, names)
+        offsets = sorted(named)
+        where = {one.ip: index for index, one in enumerate(text)}
+        called = [_target(one) for one in text if one.flow_control == ix.FlowControl.CALL]
+        entries = [where[at] for at in [start, *code.publics, *named, *called] if at in where]
+        found = natural_loops(text, list(dict.fromkeys(entries)))
+        headers = {header for header, _ in found}
+        for header, members in found:
+            # innermost: no other loop's header inside
+            if any(other in headers and other != header for other in members):
+                continue
+            body = [text[at] for at in members]
+            called = sum(1 for one in body if one.flow_control in CALLS)
+            if called and not calls:
+                continue
+            owner = bisect.bisect_right(offsets, text[header].ip) - 1
+            name = named[offsets[owner]] if owner >= 0 else "?"
+            count = seen.get(name, 0)
+            seen[name] = count + 1
+            lines = [f"{one.ip:04x}  {one.text if code.arch == 'msp430' else formatter.format(one)}" for one in body]
+            latch = max(members, key=lambda at: text[at].ip if header in _successors(text[at], where) else -1)
+            out.append(Loop(f"{name}#{count}", text[header].ip, lines, sum(map(_memory_operands, body)), called,
+                            code.arch, body, text[header].ip, text[latch].ip))
+    return out
+
+
+def procedures(data: bytes, procedures_: list[str] | None = None) -> dict[str, list]:
+    """Each procedure's reachable instructions, in address order."""
+    out: dict[str, list] = {}
+    for code in images(data, procedures_):
+        start = MODULE_CODE if code.data[:2] == b"bl" else 0
+        text = _decoded(code.data, [start, *code.publics], code.arch)
+        named = _named(code, text, None)
+        offsets = sorted(named)
+        for one in text:
+            owner = bisect.bisect_right(offsets, one.ip) - 1
+            if owner >= 0:
+                out.setdefault(named[offsets[owner]], []).append(one)
     return out
 
 
@@ -193,9 +437,10 @@ def main() -> None:
     parser.add_argument("objects", nargs="+", type=Path)
     parser.add_argument("--names", type=Path, help="a --dump directory naming the procedures")
     parser.add_argument("--show", action="store_true", help="print each loop's instructions")
+    parser.add_argument("--calls", action="store_true", help="keep loops that call")
     arguments = parser.parse_args()
     names = _dumped(arguments.names) if arguments.names else None
-    runs = [{one.name: one for one in loops(path.read_bytes(), names)} for path in arguments.objects]
+    runs = [{one.name: one for one in loops(path.read_bytes(), names, arguments.calls)} for path in arguments.objects]
     for name in runs[0]:
         row = [run.get(name) for run in runs]
         sizes = "  ".join(f"{one.size:4d} {one.memory:3d}m" if one else "   -     " for one in row)
