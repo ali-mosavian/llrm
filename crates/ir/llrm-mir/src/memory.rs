@@ -223,8 +223,8 @@ pub fn invariant(context: &Context, layout: &DataLayout, function: &Function, po
     let (Operand::Value(base), _) = crate::valuetracking::underlying(context, layout, function, pointer) else { return false };
     let ValueDef::Argument(at) = function.value(base).def else { return false };
     let attrs = &function.parameter_attrs[at as usize];
-    let has = |flag: &str| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag));
-    Facts::of(attrs).no_alias() && has("readonly")
+    let facts = Facts::of(attrs);
+    facts.no_alias() && facts.read_only()
 }
 
 /// Whether the call `inst` always comes back, as it or its callee says.

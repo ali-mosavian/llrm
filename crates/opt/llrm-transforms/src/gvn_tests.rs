@@ -433,3 +433,31 @@ b0:
     let after = printed(&module);
     assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
 }
+
+const TWO_ADDS: &str = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %p = and i16 %x, 255
+  %q = and i16 %y, 255
+  %a = add nsw i16 %p, %q
+  %b = add i16 %p, %q
+  %r = sub i16 %a, %b
+  ret i16 %r
+}
+";
+
+/// An add that promises not to wrap and one that does not are one value;
+/// they were two, because the promise was part of what was computed. The
+/// one that stands keeps only what both promised.
+#[test]
+fn test_adds_that_differ_only_in_a_wrap_promise_are_one() {
+    let after = managed(TWO_ADDS);
+    assert_eq!(after.matches(" = add ").count(), 1, "{after}");
+    assert!(!after.contains("nsw"), "{after}");
+}
+
+#[test]
+fn test_adds_that_both_promise_not_to_wrap_stay_so_when_one() {
+    let after = managed(&TWO_ADDS.replace("%b = add i16", "%b = add nsw i16"));
+    assert_eq!(after.matches(" = add ").count(), 1, "{after}");
+    assert!(after.contains("add nsw"), "{after}");
+}

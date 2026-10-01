@@ -100,7 +100,7 @@ pub fn terminal_sites(context: &Context, declarations: &Declarations, function: 
         .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_)))
         .filter(|&inst| {
             effects::callee(context, function, inst).is_some_and(|target| noreturn.contains(&target))
-                || effects::states(context, declarations, function, inst, "noreturn")
+                || effects::states_fact(context, declarations, function, inst, llrm_mir::facts::Fact::NoReturn)
         })
         .collect()
 }

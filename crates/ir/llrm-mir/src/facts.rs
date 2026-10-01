@@ -144,6 +144,13 @@ macro_rules! facts {
                 }
             }
 
+            /// The instruction flags that are facts, all together.
+            pub fn flag_mask() -> Flags {
+                let mut mask = Flags::default();
+                $(mask.insert($bflag);)*
+                mask
+            }
+
             /// The facts that flags state.
             pub fn of_flags(flags: Flags) -> Vec<Fact> {
                 let mut facts = Vec::new();
@@ -282,6 +289,15 @@ impl Facts {
         Facts(Fact::of_flags(flags))
     }
 
+    /// The flags these facts are, for an instruction.
+    pub fn flags(&self) -> Flags {
+        let mut flags = Flags::default();
+        for fact in &self.0 {
+            flags.insert(fact.flags());
+        }
+        flags
+    }
+
     /// Those of `function`'s `index`th parameter.
     pub fn param(function: &Function, index: usize) -> Facts {
         Facts::of(function.parameter_attrs.get(index).map(Vec::as_slice).unwrap_or_default())
@@ -336,6 +352,17 @@ mod tests {
         assert!(facts.no_alias());
         assert_eq!(facts.iter().count(), 1);
         assert!(!Facts::of(&[Attribute::Flag("readonly".to_owned())]).no_alias());
+    }
+
+    /// Two adds that become one keep `nsw` only if both had it.
+    #[test]
+    fn a_wrap_fact_survives_a_merge_only_if_both_state_it() {
+        let both = Facts::of_flags(Flags::NSW);
+        let none = Facts::default();
+        assert!(both.merged(&both).no_signed_wrap());
+        assert!(!both.merged(&none).no_signed_wrap());
+        assert!(!none.merged(&both).no_signed_wrap());
+        assert!(both.speculated().no_signed_wrap());
     }
 
     /// A declared fact survives a merge and a move.
