@@ -1377,3 +1377,130 @@ fn test_a_guarded_do_while_behind_a_forwarding_latch_keeps_one_counter() {
     let printed = same(&program(&[("a", "i16", 2), ("b", "i16", 2)], "i16", &text), &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]]);
     assert_eq!(counters(&printed), 1, "{printed}");
 }
+
+/// A far pointer walked a word a trip beside a counter that only tests
+/// the exit: the counter is the pointer's distance.
+const FAR_SUM: &str = "define i16 @f(ptr addrspace(1) %q, i16 %n) {
+entry:
+  br label %l1
+
+l1:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %l2 ]
+  %p = phi ptr addrspace(1) [ %q, %entry ], [ %p.next, %l2 ]
+  %s = phi i16 [ 0, %entry ], [ %t, %l2 ]
+  %more = icmp slt i16 %i, %n
+  br i1 %more, label %l2, label %l3
+
+l2:
+  %v = load i16, ptr addrspace(1) %p
+  %t = add i16 %s, %v
+  %p.next = getelementptr i8, ptr addrspace(1) %p, i16 2
+  %i.next = add nsw i16 %i, 1
+  br label %l1
+
+l3:
+  ret i16 %s
+}
+";
+
+/// Basic's five far arrays read at `lo + 8 + i`, as the descriptors give
+/// them: three word arrays and two dword, summed to a symbolic bound.
+const FAR_ARRAYS: &str = "define i32 @f(ptr dereferenceable(18) nocapture readonly %0, ptr dereferenceable(18) nocapture readonly %1, ptr dereferenceable(18) nocapture readonly %2, ptr dereferenceable(18) nocapture readonly %3, ptr dereferenceable(18) nocapture readonly %4, ptr dereferenceable(2) nocapture readonly %5, ptr dereferenceable(2) nocapture readonly %6, ptr dereferenceable(2) nocapture readonly %7) addrspace(1) memory(read, inaccessiblemem: none) {
+b1:
+  %8 = load i16, ptr %5
+  %9 = sub i16 %8, 1
+  %10 = getelementptr i8, ptr %0, i16 2
+  %11 = load i16, ptr %10
+  %12 = getelementptr i8, ptr %0, i16 10
+  %13 = load i16, ptr %12
+  %14 = inttoptr i16 %11 to ptr addrspace(2)
+  %15 = addrspacecast ptr addrspace(2) %14 to ptr addrspace(1)
+  %16 = getelementptr i8, ptr %1, i16 2
+  %17 = load i16, ptr %16
+  %18 = getelementptr i8, ptr %1, i16 10
+  %19 = load i16, ptr %18
+  %20 = inttoptr i16 %17 to ptr addrspace(2)
+  %21 = addrspacecast ptr addrspace(2) %20 to ptr addrspace(1)
+  %22 = getelementptr i8, ptr %2, i16 2
+  %23 = load i16, ptr %22
+  %24 = getelementptr i8, ptr %2, i16 10
+  %25 = load i16, ptr %24
+  %26 = inttoptr i16 %23 to ptr addrspace(2)
+  %27 = addrspacecast ptr addrspace(2) %26 to ptr addrspace(1)
+  %28 = getelementptr i8, ptr %3, i16 2
+  %29 = load i16, ptr %28
+  %30 = getelementptr i8, ptr %3, i16 10
+  %31 = load i16, ptr %30
+  %32 = inttoptr i16 %29 to ptr addrspace(2)
+  %33 = addrspacecast ptr addrspace(2) %32 to ptr addrspace(1)
+  %34 = getelementptr i8, ptr %4, i16 2
+  %35 = load i16, ptr %34
+  %36 = getelementptr i8, ptr %4, i16 10
+  %37 = load i16, ptr %36
+  %38 = inttoptr i16 %35 to ptr addrspace(2)
+  %39 = addrspacecast ptr addrspace(2) %38 to ptr addrspace(1)
+  br label %b2
+
+b2:
+  %40 = phi i16 [ 0, %b1 ], [ %69, %b5 ]
+  %41 = phi i32 [ 0, %b1 ], [ %68, %b5 ]
+  %42 = icmp sle i16 %40, %9
+  br i1 %42, label %b5, label %b6
+
+b5:
+  %43 = add i16 %40, 8
+  %44 = mul i16 %43, 2
+  %45 = add i16 %13, %44
+  %46 = getelementptr i8, ptr addrspace(1) %15, i16 %45
+  %47 = load i16, ptr addrspace(1) %46
+  %48 = sext i16 %47 to i32
+  %49 = add i32 %41, %48
+  %50 = mul i16 %43, 4
+  %51 = add i16 %19, %50
+  %52 = getelementptr i8, ptr addrspace(1) %21, i16 %51
+  %53 = load i32, ptr addrspace(1) %52
+  %54 = add i32 %49, %53
+  %55 = add i16 %25, %44
+  %56 = getelementptr i8, ptr addrspace(1) %27, i16 %55
+  %57 = load i16, ptr addrspace(1) %56
+  %58 = sext i16 %57 to i32
+  %59 = add i32 %54, %58
+  %60 = add i16 %31, %50
+  %61 = getelementptr i8, ptr addrspace(1) %33, i16 %60
+  %62 = load i32, ptr addrspace(1) %61
+  %63 = add i32 %59, %62
+  %64 = add i16 %37, %44
+  %65 = getelementptr i8, ptr addrspace(1) %39, i16 %64
+  %66 = load i16, ptr addrspace(1) %65
+  %67 = sext i16 %66 to i32
+  %68 = add i32 %63, %67
+  %69 = add nsw i16 %40, 1
+  br label %b2
+
+b6:
+  %70 = phi i32 [ %41, %b2 ]
+  %71 = add i32 %70, 1
+  ret i32 %71
+}
+";
+
+/// A far pointer walked beside the counter was tested for the exit with
+/// `icmp ne ptr addrspace(1)`, which the selector has no form for: 147
+/// loop-corpus cases (Basic and C) failed to build.
+#[test]
+fn test_a_far_pointer_is_never_compared_for_the_exit() {
+    let printed = on_core(FAR_ARRAYS);
+    assert!(!printed.lines().any(|line| line.contains("icmp") && line.contains("ptr addrspace(1)")), "{printed}");
+}
+
+/// `text` through `Lsr` on a Core: an address-size prefix stalls three clocks.
+fn on_core(text: &str) -> String {
+    let costs = llrm_x86_code16::target::costs("Core");
+    let machine = llrm_x86_code16::Dos { address_forms: llrm_x86_code16::target::address_forms(&costs, 3), costs, ..llrm_x86_code16::Dos::default() };
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr);
+    manager.run_module(&mut module, Rc::new(machine)).unwrap();
+    printed(&module)
+}

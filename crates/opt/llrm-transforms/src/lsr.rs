@@ -321,7 +321,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
     let fits = sites.iter().map(|site| candidates.iter().enumerate().map(|(index, one)| _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys)).collect()).collect();
     let exits = candidates
         .iter()
-        .map(|one| exit.as_ref().filter(|exit| _steps_before_test(function, &exit.proof, one)).and_then(|exit| _exit_price(target, exit, one, &mut keys)))
+        .map(|one| exit.as_ref().filter(|exit| _steps_before_test(function, &exit.proof, one) && _comparable(view, one)).and_then(|exit| _exit_price(target, exit, one, &mut keys)))
         .collect();
     let problem = Problem {
         target,
@@ -900,6 +900,18 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
         }
     }
     Some((fit, price))
+}
+
+/// Whether the exit can test `candidate` by one compare: not a pointer
+/// wider than its offset, a far one, which the selector has no compare for.
+fn _comparable(view: &memory::Unit, candidate: &Candidate) -> bool {
+    candidate.pointer.is_none_or(|ty| match view.context.types.get(ty) {
+        Type::Pointer(space) => {
+            let spec = view.layout.pointer(*space);
+            spec.bits <= spec.index_bits
+        }
+        _ => true,
+    })
 }
 
 /// The exit's price testing `candidate` for its last value: a compare,
