@@ -1477,10 +1477,11 @@ mod tests {
     /// function its branch and its jump back were both near, 4 and 3 bytes.
     /// QCport had 1,829 near branches past a return.
     #[test]
-    fn test_both_arms_of_an_if_else_come_before_the_return() {
+    fn test_both_arms_of_an_if_else_come_before_the_return_at_os() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/diamond.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "diamond", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(machine) };
+        let built = super::selected(&text, "diamond", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_diamond proc").expect("_diamond");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();

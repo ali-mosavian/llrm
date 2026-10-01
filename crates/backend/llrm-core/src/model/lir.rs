@@ -336,6 +336,32 @@ pub struct LirBody {
     pub sealed_arguments: bool,
     /// `-g`'s parameters, in order, then variables.
     pub variables: Vec<DebugVariable>,
+    /// Estimated block frequencies and branch probabilities, as isel found
+    /// them; a block made since has none.
+    pub odds: BlockOdds,
+}
+
+/// Fixed point so a body stays `Eq`: a frequency in 65536ths of the entry's,
+/// a probability in 2^31sts.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BlockOdds {
+    pub frequency: IndexMap<i64, u64>,
+    pub taken: IndexMap<(i64, i64), u32>,
+}
+
+impl BlockOdds {
+    pub const ONE: f64 = 65536.0;
+    pub const CERTAIN: f64 = 2147483648.0;
+
+    /// `from`'s edge to `to`'s probability, if isel estimated it.
+    pub fn probability(&self, from: i64, to: i64) -> Option<f64> {
+        self.taken.get(&(from, to)).map(|one| f64::from(*one) / Self::CERTAIN)
+    }
+
+    /// `at`'s frequency, the entry's 1, if isel estimated it.
+    pub fn frequency(&self, at: i64) -> Option<f64> {
+        self.frequency.get(&at).map(|one| *one as f64 / Self::ONE)
+    }
 }
 
 impl LirBody {
@@ -361,6 +387,7 @@ impl LirBody {
             source_order: false,
             sealed_arguments: false,
             variables: Vec::new(),
+            odds: BlockOdds::default(),
         }
     }
 
@@ -380,6 +407,7 @@ impl LirBody {
             source_order: self.source_order,
             sealed_arguments: self.sealed_arguments,
             variables: self.variables.clone(),
+            odds: self.odds.clone(),
         }
     }
 

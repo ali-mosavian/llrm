@@ -675,3 +675,56 @@ fn test_a_block_that_only_reaches_a_terminal_call_is_placed_after_the_return() {
 
     assert_eq!(placed(&low).unwrap().blocks.iter().map(|block| block.at).collect::<Vec<_>>(), vec![0, 20, 10]);
 }
+
+/// A diamond whose first arm in source order is the rare one: `x == 0`.
+const RARE_FIRST: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16\"
+define i16 @f(i16 %x, i16 %y) addrspace(1) {
+entry:
+  %c = icmp eq i16 %x, 0
+  br i1 %c, label %rare, label %common
+rare:
+  %r = mul i16 %y, 3
+  br label %join
+common:
+  %s = add i16 %y, 7
+  br label %join
+join:
+  %v = phi i16 [ %r, %rare ], [ %s, %common ]
+  %w = mul i16 %v, %x
+  ret i16 %w
+}
+";
+
+/// `@f`'s listing, tuned for size where `size`.
+fn rare_first(size: bool) -> Vec<String> {
+    let module = llrm_mir::parse::module(RARE_FIRST).expect("parses");
+    let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: Default::default() };
+    let cpu = crate::backend::cpu::tuned("486", size).unwrap();
+    let built = crate::backend::assemble::assembled(&module, &abi, "T_TEXT", crate::backend::cpu::ProfileOrName::Profile(cpu), &crate::backend::target::BUILT_IN).expect("assembles");
+    let text = crate::backend::masm::text(&built).expect("prints");
+    let from = text.find("f proc").expect("the procedure");
+    text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect()
+}
+
+/// By frequency the likely arm falls through and the rare one goes after
+/// the return; for size both stay before it. Placement had no estimate:
+/// it took the first arm in source order, rare or not.
+#[test]
+fn test_the_likely_arm_falls_through_and_the_rare_one_goes_after_the_return() {
+    // The premise: the zero heuristic makes `x == 0` the rare edge.
+    let module = llrm_mir::parse::module(RARE_FIRST).expect("parses");
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let odds = llrm_analysis::branchprob::estimated(&module.context, &module.globals, function, &llrm_analysis::cfg::Shape::of(function));
+    let entry = llrm_analysis::cfg::id(function.entry().unwrap());
+    assert_eq!(odds.by.get(&entry), Some(&llrm_analysis::branchprob::Heuristic::Zero));
+
+    let speed = rare_first(false);
+    let returned = speed.iter().position(|line| line.starts_with("ret")).expect("a return");
+    // The rare arm is block 2, the common one block 4.
+    let rare = speed.iter().position(|line| line == "L0_2:").expect("the rare arm");
+    let common = speed.iter().position(|line| line == "L0_4:").expect("the common arm");
+    assert!(common < returned && rare > returned, "{speed:#?}");
+
+    let size = rare_first(true);
+    assert!(size.last().is_some_and(|last| last.starts_with("ret")), "{size:#?}");
+}
