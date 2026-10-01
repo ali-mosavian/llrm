@@ -487,8 +487,9 @@ fn cleanup(symbol: &hir::Symbol) -> R<StackCleanup> {
 /// parameter value's bytes. Borland's STDARG.H steps `va_start` on from the
 /// last parameter's address by its size rounded to an int: in a variadic
 /// function an address-taken parameter lives with the arguments after it.
-/// An interrupt handler's parameters are the registers it saved, BP first,
-/// and what it writes to them is what it returns to.
+/// An interrupt handler's parameters are the registers it saved, named in
+/// Borland's order, each at its slot of the frame (`x86_intr_slot`); what it
+/// writes to them is what it returns to.
 fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[i64]) -> R<()> {
     let Some(abi) = function.abi.as_ref() else { return Ok(()) };
     let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
@@ -504,7 +505,7 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
     for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
-        let offset = if interrupt { rounded(&sizes[..at]) } else { -rounded(&sizes[at..]) };
+        let offset = if interrupt { interrupt_slot(&function.name, at, sizes[at])? } else { -rounded(&sizes[at..]) };
         let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
         (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, offset);
         let copy = |one: &h::Instruction| one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)];
@@ -513,6 +514,19 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
         }
     }
     Ok(())
+}
+
+/// Borland C's interrupt parameters, in order: the registers its handler saved.
+const BORLAND_INTERRUPT_PARAMETERS: [&str; 12] = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"];
+
+/// Where parameter `at` of handler `name`, `size` bytes, is in its frame: a
+/// register is one word, the low word of its slot.
+fn interrupt_slot(name: &str, at: usize, size: i64) -> R<i64> {
+    let Some(register) = BORLAND_INTERRUPT_PARAMETERS.get(at) else { return refuse(format!("{name}: an interrupt handler's parameter {at}: Borland's has {}", BORLAND_INTERRUPT_PARAMETERS.len())) };
+    if size != 2 {
+        return refuse(format!("{name}: an interrupt handler's parameter {register} is {size} bytes, not a register"));
+    }
+    Ok(llrm_mir::opcode::x86_intr_slot(register).expect("every Borland register is in the frame"))
 }
 
 fn distance(symbol: &hir::Symbol) -> CallDistance {
