@@ -24,13 +24,18 @@ def _known() -> set[str]:
     return {line[0] for line in lines if line}
 
 
+def _only_tests(name: str) -> bool:
+    """A file only `cargo test` builds does not make the binaries stale."""
+    return name.endswith("_tests.rs") or name.startswith("test_") or name == "tests.rs"
+
+
 def _newest_source() -> tuple[float, Path]:
     newest = (0.0, ROOT)
     for top in ("crates", "src"):
         for where, dirs, files in os.walk(ROOT / top):
             dirs[:] = [one for one in dirs if one not in ("target", "__pycache__")]
             for name in files:
-                if name.endswith(SOURCES):
+                if name.endswith(SOURCES) and not _only_tests(name):
                     path = Path(where) / name
                     newest = max(newest, (path.stat().st_mtime, path))
     return newest
