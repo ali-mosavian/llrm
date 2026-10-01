@@ -758,6 +758,16 @@ impl AssignTarget {
             _ => Err("expression is not assignable"),
         }
     }
+
+    /// The place, as the expression that names it.
+    pub fn expression(&self, span: Span) -> Expr {
+        match self {
+            Self::Name(name) => Expr::Name(name.clone(), span),
+            Self::Index { base, indices } => Expr::Index { base: Box::new(base.clone()), indices: indices.clone(), span },
+            Self::Member { base, field } => Expr::Member { base: Box::new(base.clone()), field: field.clone(), span },
+            Self::Deref(pointer) => Expr::Unary { op: UnaryOp::Deref, operand: Box::new(pointer.clone()), span },
+        }
+    }
 }
 
 impl Statement {

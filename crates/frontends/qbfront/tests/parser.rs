@@ -2340,3 +2340,28 @@ fn an_address_takes_a_long_as_an_unsigned_word() {
     let error = compile(&module, "wide", Dialect::QuickBasic45, "qb45").expect_err("65536 is no word");
     assert!(format!("{error:?}").contains("Math overflow"), "{error:?}");
 }
+
+/// `ID AS VOLATILE TYPE` in DIM and in every kind of parameter; `BYREF` is
+/// the default said aloud. Before, the word was a syntax error. A user type
+/// named VOLATILE is still a type.
+#[test]
+fn volatile_goes_after_as_and_byref_is_accepted() {
+    let module = parse(
+        "type volatile\nn as integer\nend type\n\
+         dim shared flag as volatile integer\ndim plain as integer\ndim buf(1 to 4) as volatile byte\ndim t as volatile\n\
+         declare sub w (byref a as volatile integer, byval b as volatile integer, seg c as volatile integer, d as integer, byref e as integer)\n\
+         sub w (byref a as volatile integer, byval b as volatile integer, seg c as volatile integer, d as integer, byref e as integer)\nend sub\n",
+        Dialect::VbDos,
+    )
+    .unwrap();
+    let declared: Vec<bool> = module
+        .statements
+        .iter()
+        .filter_map(|statement| if let Statement::Dim(declarations) = statement { Some(declarations[0].volatile) } else { None })
+        .collect();
+    assert_eq!(declared, [true, false, true, false]);
+    let sub = module.procedures.iter().find(|one| !one.declaration).expect("the SUB");
+    let volatile: Vec<bool> = sub.parameters.iter().map(|one| one.declaration.volatile).collect();
+    assert_eq!(volatile, [true, true, true, false, false]);
+    assert_eq!(sub.parameters.iter().map(|one| (one.by_value, one.segmented)).collect::<Vec<_>>(), [(false, false), (true, false), (false, true), (false, false), (false, false)]);
+}

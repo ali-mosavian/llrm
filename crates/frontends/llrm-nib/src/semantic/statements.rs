@@ -226,7 +226,7 @@ impl<'a> FunctionCompiler<'a> {
                     if self.element_needs_drop(ElementType::Struct(struct_id)) {
                         self.own_aggregate(&Storage::Place(place), struct_id);
                     }
-                    self.keep_borrows(place, value);
+                    self.keep_borrows(place, ElementType::Struct(struct_id), value);
                     self.scopes.last_mut().expect("scope").insert(
                         name.clone(),
                         Binding {
@@ -257,6 +257,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 self.consume(&value, *span)?;
                 let place = self.place(name, binding_type, *mutable);
+                self.keep_borrows(place, ElementType::Scalar(binding_type), source);
                 if ownership::needs_drop(binding_type) {
                     self.own(place);
                 }
@@ -302,6 +303,7 @@ impl<'a> FunctionCompiler<'a> {
                     AssignTarget::Member { base, field } => self.frame_field(base, field, *span)?.flatten(),
                     _ => None,
                 };
+                self.check_written(target, *operation, value, *span)?;
                 self.moves.writing = reinitialized.is_some();
                 let place = self.assignment_target(target, *span);
                 self.moves.writing = false;
@@ -312,7 +314,7 @@ impl<'a> FunctionCompiler<'a> {
                     AssignmentPlace::Bits { .. } | AssignmentPlace::Array(..) => None,
                 };
                 if let (Some(element), None) = (written, operation) {
-                    self.check_assigned_borrows(target, value, element, *span)?;
+                    self.store_assigned_borrows(target, value, element, *span)?;
                 }
                 match place {
                     AssignmentPlace::Scalar(destination, element) => {
