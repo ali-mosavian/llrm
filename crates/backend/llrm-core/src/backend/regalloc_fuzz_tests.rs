@@ -598,15 +598,16 @@ fn test_generated_bodies_allocate() {
     );
 }
 
-/// Seed 5 on 386, twelve values over six registers with calls and far
-/// accesses: a reload no register was free for was refused ("value#52 cannot
-/// be spilled and no register is free for it", #134). Its holders cannot all
-/// stay, so the last resort evicts the cheapest and spills them.
+/// Seed 4 on 386, twelve values over six registers with calls and far
+/// accesses: a reload no register is free for was refused ("value#52 cannot
+/// be spilled and no register is free for it", #134, seed 5 before block
+/// frequencies moved the spill weights). Its holders cannot all stay, so the
+/// last resort evicts the cheapest and spills them.
 #[test]
 fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     let before = crate::backend::allocate::last_resorts();
     let shape = Shape { pool: 12, ops: 11 };
-    let done = allocated(5, &shape, "386");
+    let done = allocated(4, &shape, "386");
     assert!(done.is_ok(), "{done:?}");
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
 }

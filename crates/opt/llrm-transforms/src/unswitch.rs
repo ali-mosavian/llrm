@@ -94,7 +94,8 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
     let price = |state: &Function| {
         let within = memory::Unit::within(unit.context, unit.layout, state, outer);
         let trips = profit::proven_trips(&within, &within.registers());
-        profit::weighted(unit.context, unit.layout, state, outer.callees(), costs, Some(&trips))
+        let frequency = profit::_frequencies(unit.context, &outer.globals, state, Some(&trips))?;
+        profit::weighted(unit.context, unit.layout, state, outer.callees(), costs, &frequency)
     };
     let worse = match (price(unit.function), price(&candidate)) {
         (Some(before), Some(after)) => after > before,

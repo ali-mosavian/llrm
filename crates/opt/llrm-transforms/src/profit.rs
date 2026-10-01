@@ -20,7 +20,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
+use llrm_analysis::effects::Declarations;
 use llrm_analysis::consts::Known;
 use llrm_analysis::liveness::Liveness;
 use llrm_analysis::{induction, memory};
@@ -56,13 +58,14 @@ fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }
 
-/// What a `getelementptr` producing `ty` costs: the address's own price, or
-/// the carry into the selector where its space's displacement has one
-/// (`DataLayout::carries`). The one place the advance's price is stated.
-pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, costs: &OperationCosts) -> i64 {
+/// What advancing a pointer of type `ty` costs: `plain`, the price of the
+/// advance as its caller makes it, or the carry into the selector where its
+/// space's displacement has one (`DataLayout::carries`). The one place the
+/// carry's price is stated.
+pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, plain: i64, costs: &OperationCosts) -> i64 {
     match context.types.get(ty) {
         Type::Pointer(space) if layout.carries(*space) => costs.carry,
-        _ => costs.address,
+        _ => plain,
     }
 }
 
@@ -79,7 +82,7 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
-        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs),
+        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs.address, costs),
         Opcode::Alloca { .. } => costs.address,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
@@ -128,8 +131,32 @@ pub fn proven_trips(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> In
     trips
 }
 
-/// Profile-free block frequencies, or `None` for conflicting proofs.
-pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+/// Block frequencies as `branchprob` estimates them (the heuristics, a loop's
+/// proven `trips` by latch), per entry, rounded and never below 1: this
+/// model counts whole executions, so a cold arm weighs as the entry. `None`
+/// for conflicting proofs.
+pub fn _frequencies(context: &Context, globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+    let shape = cfg::Shape::of(function);
+    let empty = IndexMap::default();
+    let trips = trips.unwrap_or(&empty);
+    let mut counted = BTreeMap::new();
+    for loop_ in &shape.loops {
+        let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
+        if exact.len() > 1 {
+            return None;
+        }
+        if let Some(count) = exact.into_iter().next() {
+            counted.insert(loop_.header, count);
+        }
+    }
+    let odds = branchprob::estimated(context, globals, function, &shape, &counted);
+    Some(cfg::graph(function).iter().map(|block| (block.at, odds.frequency.get(&block.at).map_or(1, |one| (one.round() as i64).max(1)))).collect())
+}
+
+/// Block frequencies as a product of the trips of each loop around a block, ten where none is
+/// proven: the model lsr's and gvn's prices were tuned on (#203, #202), until they are retuned on `_frequencies`. `None` for
+/// conflicting proofs.
+pub fn _loop_products(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let graph = cfg::graph(function);
     let mut frequency = graph.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
     let empty = IndexMap::default();
@@ -149,12 +176,9 @@ pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> 
     Some(frequency)
 }
 
-/// Profile-free expected work, using exact or ten trips per loop level.
-///
-/// `trips` keys a proven count by latch block; every other loop retains
-/// the conventional factor of ten.
-pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
-    let frequency = _frequencies(function, trips)?;
+/// Profile-free expected work at `frequency`, a block's executions per entry
+/// (`_frequencies`, or the older `_loop_products`).
+pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
     let mut total = 0;
     for &block in function.layout() {
         let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
@@ -173,15 +197,14 @@ pub fn spill_risk(
     costs: &OperationCosts,
     room: Room,
     across: &dyn Fn(InstId) -> i64,
-    trips: Option<&IndexMap<i64, i64>>,
+    frequency: &BTreeMap<i64, i64>,
     found: &Liveness,
 ) -> Option<i64> {
     if !room.priced() {
         return Some(0);
     }
-    let frequency = _frequencies(function, trips)?;
     let cells = spill::cells(function);
-    let traffic = spill::traffic(function, &frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
+    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
     let counted = |value: ValueId| spill::integer(context, function, value);
     let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst| spill::transient(context, layout, function, inst, room), &cells, &counted, &|value| spill::segment_view(context, layout, function, value))).flat_map(spill::Site::points);
     Some(spill::spilled(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
@@ -196,11 +219,11 @@ pub fn pressure_adjusted(
     costs: &OperationCosts,
     room: Room,
     across: &dyn Fn(InstId) -> i64,
-    trips: Option<&IndexMap<i64, i64>>,
+    frequency: &BTreeMap<i64, i64>,
     found: &Liveness,
 ) -> Option<i64> {
-    let work = weighted(context, layout, function, callees, costs, trips);
-    let pressure = spill_risk(context, layout, function, costs, room, across, trips, found);
+    let work = weighted(context, layout, function, callees, costs, frequency);
+    let pressure = spill_risk(context, layout, function, costs, room, across, frequency, found);
     match (work, pressure) {
         (Some(work), Some(pressure)) => Some(work + pressure),
         _ => None,

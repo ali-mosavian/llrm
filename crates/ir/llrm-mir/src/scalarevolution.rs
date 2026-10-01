@@ -10,6 +10,7 @@ use crate::dominators::DominatorTree;
 use crate::loops::{Loop, LoopInfo};
 use crate::module::{BlockId, Function, Operand, ValueDef, ValueId};
 use crate::opcode::{BinaryOp, IntPredicate, Opcode};
+use crate::types::Type;
 
 /// A sum of loop-invariant values, each times a constant, and a constant.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -47,6 +48,30 @@ impl Evolution {
     /// `value`'s recurrence in the innermost loop defining it.
     pub fn of(&self, value: ValueId) -> Option<&Recurrence> {
         self.recurrences.get(&value)
+    }
+
+    /// How many recurrences the loop `header` heads carries: its integer
+    /// header phis that step, and its pointer phis a `getelementptr` of the
+    /// phi steps, which are recurrences of an address and no `Recurrence`.
+    pub fn counted(&self, context: &Context, function: &Function, loops: &LoopInfo, header: BlockId) -> usize {
+        let Some(inside) = loops.loop_of(header).map(|one| &one.blocks) else { return 0 };
+        function
+            .block(header)
+            .instructions()
+            .iter()
+            .map(|&inst| function.instruction(inst))
+            .filter(|one| one.opcode == Opcode::Phi)
+            .filter_map(|phi| phi.result.map(|value| (phi, value)))
+            .filter(|&(phi, value)| match self.of(value) {
+                Some(recurrence) => recurrence.header == header && (!recurrence.step.terms.is_empty() || recurrence.step.constant != 0),
+                None => matches!(context.types.get(function.value(value).ty), Type::Pointer(_))
+                    && phi.operands.chunks(2).any(|pair| {
+                        let (Operand::Value(next), Operand::Block(from)) = (pair[0], pair[1]) else { return false };
+                        inside.contains(&from)
+                            && matches!(function.value(next).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }) && function.instruction(def).operands[0] == Operand::Value(value))
+                    }),
+            })
+            .count()
     }
 }
 

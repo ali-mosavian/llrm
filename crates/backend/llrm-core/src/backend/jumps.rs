@@ -16,6 +16,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::intervals;
+use crate::analysis::frequency::Frequency;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::omfwrite::{SHORT_JUMP, short_reaches};
@@ -125,7 +126,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
             predecessors.entry(*to).or_default().push(block.at);
         }
     }
-    let busy = Busy::of(body, &explicit, &predecessors, &natural);
+    let busy = Frequency::over(body, &explicit);
     // For size, frequency only orders what is the same size either way.
     let (odds, ties) = if size { (None, Some(&busy)) } else { (Some(&busy), None) };
     let mut order: Vec<LirBlock> = Vec::new();
@@ -149,7 +150,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
                 .filter(|block| !block.cold)
                 .filter_map(|block| predecessors.get(&block.at)?.iter().filter_map(|from| placed_at.get(from)).max().map(|last| (*last, *block)))
                 .max_by(|(one, first), (other, second)| match odds {
-                    Some(busy) => busy.frequency(first.at).total_cmp(&busy.frequency(second.at)).then(one.cmp(other)),
+                    Some(busy) => busy.block(first.at).total_cmp(&busy.block(second.at)).then(one.cmp(other)),
                     None => one.cmp(other),
                 })
                 .map(|(_, block)| block);
@@ -192,51 +193,6 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
     Ok(body.with_blocks(order))
 }
 
-/// Each block's estimated frequency over the final blocks, from the edge
-/// probabilities isel left in `LirBody::odds`.
-pub struct Busy {
-    frequency: IndexMap<i64, f64>,
-    taken: IndexMap<(i64, i64), f64>,
-}
-
-impl Busy {
-    fn of(body: &LirBody, blocks: &[LirBlock], predecessors: &IndexMap<i64, Vec<i64>>, natural: &[Loop]) -> Self {
-        let mut taken = IndexMap::default();
-        for block in blocks {
-            let succ: Vec<i64> = block.succ.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
-            let known: f64 = succ.iter().filter_map(|to| body.odds.probability(block.at, *to)).sum();
-            let unknown = succ.iter().filter(|to| body.odds.probability(block.at, **to).is_none()).count();
-            for to in &succ {
-                // An edge made after isel, as a split one, carries what its block's isel edges do not.
-                let share = match body.odds.probability(block.at, *to) {
-                    Some(probability) => probability,
-                    None => (1.0 - known).max(0.0) / unknown as f64,
-                };
-                taken.insert((block.at, *to), if succ.len() == 1 { 1.0 } else { share });
-            }
-        }
-        let successors: IndexMap<i64, Vec<i64>> = blocks.iter().map(|block| (block.at, block.succ.clone())).collect();
-        let order = branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
-        let cycles: Vec<branchprob::Cycle> = natural.iter().map(|one| branchprob::Cycle { header: one.header, latches: &one.latches, body: &one.body }).collect();
-        let frequency = branchprob::propagated(
-            &order,
-            &|at| predecessors.get(&at).cloned().unwrap_or_default(),
-            &cycles,
-            &|from, to| taken.get(&(from, to)).copied().unwrap_or(0.0),
-        );
-        Self { frequency: frequency.into_iter().collect(), taken }
-    }
-
-    fn frequency(&self, at: i64) -> f64 {
-        self.frequency.get(&at).copied().unwrap_or(0.0)
-    }
-
-    /// How often `from` goes to `to`, per entry.
-    fn edge(&self, from: i64, to: i64) -> f64 {
-        self.frequency(from) * self.taken.get(&(from, to)).copied().unwrap_or(0.0)
-    }
-}
-
 /// The block to place next: where the final jump goes, or else where the branch before it goes.
 ///
 /// The branch's target second, so that `jcc target; jmp placed` becomes one inverted branch.
@@ -245,8 +201,8 @@ pub fn _onward(
     done: &HashSet<i64>,
     inside: &BTreeSet<i64>,
     by_at: Option<&IndexMap<i64, LirBlock>>,
-    odds: Option<&Busy>,
-    ties: Option<&Busy>,
+    odds: Option<&Frequency>,
+    ties: Option<&Frequency>,
 ) -> Option<i64> {
     let real: Vec<&Semantics> = block
         .insns
@@ -662,10 +618,10 @@ pub fn _fold_converged(block: LirBlock) -> LirBlock {
 }
 
 /// Static and profile-free dynamic machine-instruction counts.
-pub fn _work(body: &LirBody) -> (i64, i64) {
-    let depth = intervals::depths(body);
+pub fn _work(body: &LirBody) -> (i64, f64) {
+    let busy = Frequency::of(body);
     let counts: IndexMap<i64, i64> = body.blocks.iter().map(|block| (block.at, _real(block).len() as i64)).collect();
-    (counts.values().sum(), counts.iter().map(|(at, count)| count * 10_i64.pow(depth[at])).sum())
+    (counts.values().sum(), counts.iter().map(|(at, count)| *count as f64 * busy.block(*at)).sum())
 }
 
 /// Take tail sharing only when size falls without adding executed work.

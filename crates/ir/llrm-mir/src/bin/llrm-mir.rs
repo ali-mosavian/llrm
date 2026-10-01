@@ -79,7 +79,6 @@ fn main() -> ExitCode {
 
 /// `function<TAB>loop<TAB>count` per innermost loop, loops in LoopInfo's order.
 fn induction_variables(module: &llrm_mir::module::Module) -> String {
-    use llrm_mir::opcode::Opcode;
     let mut out = String::new();
     for (_, global, function) in module.functions() {
         if function.layout().is_empty() {
@@ -91,15 +90,7 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
         let inner = (0..loops.loops.len()).filter(|&at| !loops.loops.iter().any(|one| one.parent == Some(at)));
         for (number, at) in inner.enumerate() {
             let header = loops.loops[at].header;
-            let count = function
-                .block(header)
-                .instructions()
-                .iter()
-                .map(|&inst| function.instruction(inst))
-                .filter(|one| one.opcode == Opcode::Phi)
-                .filter_map(|one| one.result.and_then(|value| evolution.of(value)))
-                .filter(|recurrence| recurrence.header == header && (!recurrence.step.terms.is_empty() || recurrence.step.constant != 0))
-                .count();
+            let count = evolution.counted(&module.context, function, &loops, header);
             out += &format!("{}\t{number}\t{count}\n", global.name.as_deref().unwrap_or("?"));
         }
     }

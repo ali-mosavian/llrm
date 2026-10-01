@@ -1786,3 +1786,46 @@ fn test_a_huge_pointer_walk_is_not_swapped_for_an_offset_that_carries_too() {
     let printed = printed(&after);
     assert!(!printed.contains("lsr.iv"), "{printed}");
 }
+
+/// Two arrays walked by pointers beside their counter, where a copy loop
+/// reads one and writes the other.
+const POINTER_WALK: &str = "@a = global [64 x i16] zeroinitializer
+@b = global [64 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+start:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l ]
+  %p = phi ptr [ @a, %start ], [ %p.next, %l ]
+  %q = phi ptr [ @b, %start ], [ %q.next, %l ]
+  %v = load i16, ptr %p
+  %w = add i16 %v, 1
+  store i16 %w, ptr %q
+  %p.next = getelementptr inbounds i16, ptr %p, i16 1
+  %q.next = getelementptr inbounds i16, ptr %q, i16 7
+  %i.next = add nsw i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %i.next
+}
+";
+
+/// A pointer steps with an add, not an address: pricing its step as `lea`
+/// (#183) made a dear `lea` swap every pointer walk for integer offsets,
+/// one more register in the loop (x_tripdata_usescale7 in C: the bound spilled).
+#[test]
+fn test_a_pointer_steps_at_the_price_of_an_add_whatever_an_address_costs() {
+    let run = |address| {
+        let machine = Tuned { costs: OperationCosts { address, ..target().costs }, ..target() };
+        let mut after = parsed(&format!("{DOS}{POINTER_WALK}"));
+        let mut manager = PassManager::default();
+        manager.add(Lsr);
+        manager.run_module(&mut after, Rc::new(machine)).unwrap();
+        printed(&after)
+    };
+    assert_eq!(run(3), run(1));
+}
