@@ -1,0 +1,7 @@
+/*
+ * The facts the language states that Open Watcom's front end does not send,
+ * as terms of the language and the code each travels as through CGAttr.
+ * One list: the patched front end, the recording shim and llrm-c's
+ * ow_facts.rs all read it. A term is added here and in ow_facts.rs.
+ */
+QBFACT( restrict, 0x101 )

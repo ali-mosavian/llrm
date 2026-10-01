@@ -3297,13 +3297,12 @@ fn total(values: &[i16]) -> i16:
     assert!(!offsets.is_empty() && offsets.iter().all(|fields| fields.contains("\"inbounds\":true")), "{hir}");
 }
 
-/// Nib's panics end the program: the program it writes promises that, so a
-/// loop's stores ahead of a failed bounds check need not happen first.
+/// Nib's panics end the program: it states `noreturn` and `inaccessiblemem`
+/// of each, so a loop's stores ahead of a failed bounds check need not
+/// happen first.
 #[test]
-fn the_panic_routines_are_promised_to_end_the_program() {
-    let hir = super::compile("fn main() -> i16:\n    return 0\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
-    let promise = hir.split("\"terminating\":[").nth(1).and_then(|rest| rest.split(']').next()).unwrap_or_default().to_owned();
-    for routine in ["N$EBND", "N$EDIV", "N$ECNV", "N$ESHF", "N$EKEY"] {
-        assert!(promise.contains(&format!("\"{routine}\"")), "{hir}");
-    }
+fn the_panic_routines_are_stated_to_end_the_program() {
+    let hir = super::compile("fn main() -> i16:\n    let mut a: i16[4] = [0] * 4\n    let n: i16 = 3\n    return a[n]\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
+    assert!(stated("noreturn") >= 1 && stated("noreturn") == stated("memory"), "{hir}");
 }

@@ -585,6 +585,11 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .push((call.to_owned(), Tuple(args.clone())));
             }
             call if IGNORED.contains(&call) => {}
+            "CGFact" => {
+                let node = Node { call: one.call.clone(), args: args.clone() };
+                crate::ow_facts::check(&node)?;
+                made.nodes.insert(handle(one.result.as_deref().expect("a fact names its node")), node);
+            }
             _ if one
                 .result
                 .as_deref()

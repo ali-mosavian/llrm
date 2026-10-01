@@ -431,14 +431,19 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     assert!(text.contains(entry), "{text}");
 }
 
-/// A parameter's promise is its LLVM attributes, which LICM and EarlyCSE
+/// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
 /// ask; with none, a view descriptor's loads never left a loop.
 #[test]
-fn a_promise_becomes_its_parameters_attributes() {
-    let mut function = difference();
-    function.promises = vec![crate::model::Promise { parameter: 2, bytes: 10, unaliased: true, readonly: true }];
-    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
-    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) %1)"), "{text}");
+fn the_facts_of_a_parameter_become_its_attributes() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    let second = Subject::Param { function: 1, index: 1 };
+    facts.state(second, Fact::NoAlias).state(second, Fact::ReadOnly).state(second, Fact::Dereferenceable(10)).state(second, Fact::NonNull);
+    program.modules[0].facts = facts.finish();
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) nonnull %1)"), "{text}");
 }
 
 /// A string comparison compares its callee's sign with zero; it was
@@ -548,11 +553,15 @@ fn a_value_is_emitted_before_a_use_listed_ahead_of_it() {
 /// A FOR loop's step promises its counter fits, and the rich route dropped
 /// the promise: its add reached MIR without `nsw`.
 #[test]
-fn a_nowrap_promise_is_nsw() {
+fn a_no_signed_wrap_fact_is_nsw() {
+    use crate::facts::{Builder, Subject};
     let mut function = difference();
     function.blocks[0].instructions[0].op = Op::Add;
-    function.blocks[0].instructions[0].nowrap = true;
-    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
+    let mut program = program(function);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, llrm_mir::facts::Fact::NoSignedWrap);
+    program.modules[0].facts = facts.finish();
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
     assert!(text.contains("%2 = add nsw i16 %0, %1"), "{text}");
 }
 
@@ -561,7 +570,7 @@ fn a_nowrap_promise_is_nsw() {
 /// size, locals start indeterminate, and a value-less return gives poison.
 #[test]
 fn a_languages_promises_reach_mir() {
-    use crate::model::{AliasClass, IndirectPlace, Place, Promise, Storage};
+    use crate::model::{AliasClass, IndirectPlace, Place, Storage};
     let mut boolean = Type::new(2, "bool", TypeKind::Boolean, 2);
     boolean.signed = Some(false);
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
@@ -577,9 +586,9 @@ fn a_languages_promises_reach_mir() {
     let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
     let mut function = Function::new(1, "f", 1, values, vec![Place::new(1, "t", 2, Storage::Local, 0)], vec![block], 1);
     function.parameters = vec![1];
-    function.promises = vec![Promise { parameter: 1, bytes: 0, unaliased: true, readonly: false }];
     let mut program = program(function);
     program.zeroed_locals = false;
+    program.modules[0].facts = vec![crate::facts::Stated { subject: crate::facts::Subject::Param { function: 1, index: 0 }, fact: llrm_mir::facts::Fact::NoAlias, source: None }];
     program.modules[0].types.extend([boolean, Type::new(3, "near", TypeKind::Pointer, 2)]);
     program.modules[0].alias_classes = vec![
         AliasClass { name: "root".to_owned(), parent: None, types: Vec::new() },
@@ -750,15 +759,71 @@ fn resume_next_past_end_sub_continues_at_its_end() {
     emits(&program);
 }
 
-/// A routine that ends the program touching only memory its caller cannot
-/// name was taken to write every cell it could: stated as `noreturn` and
-/// `inaccessiblemem`, a loop's stores ahead of its bounds check may wait
-/// for it.
+/// A stated fact becomes its carrier on what it is stated of, and nowhere
+/// else; `noalias` is spelled only by `llrm_mir::facts`.
 #[test]
-fn a_routine_that_ends_the_program_is_noreturn_and_touches_nothing_nameable() {
-    let promises = crate::model::RuntimePromises { terminating: vec!["B$INKY".to_owned()], ..crate::model::RuntimePromises::of(["B$RUN"], [("b$seg", ["B$DSEG"])], []) };
-    let (_, text) = promised(&promises);
-    let stated = declaration(&text, "B$INKY");
-    assert!(stated.contains("noreturn") && stated.contains("memory(inaccessiblemem: readwrite)"), "{text}");
-    assert!(!declaration(&text, "B$DSEG").contains("noreturn"), "{text}");
+fn a_stated_fact_becomes_its_carrier() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 1 }, Fact::NoAlias);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("(i16 %0, i16 noalias %1)"), "{text}");
+}
+
+/// A fact of a kind it is not stated of was lowered to whatever the subject
+/// was; the verifier refuses it, as it does a subject the module lacks.
+#[test]
+fn a_fact_of_the_wrong_subject_is_refused() {
+    use crate::facts::{Builder, Stated, Subject};
+    use llrm_mir::facts::Fact;
+    let refusal = |subject| {
+        let mut program = program(difference());
+        program.modules[0].facts = vec![Stated { subject, fact: Fact::NoAlias, source: None }];
+        crate::verify::verify(&program).unwrap_err().0
+    };
+    assert!(refusal(Subject::Callable(1)).contains("noalias is not stated of a callable"));
+    assert!(refusal(Subject::Param { function: 1, index: 2 }).contains("noalias is stated of a param the module lacks"));
+    assert!(refusal(Subject::Param { function: 9, index: 0 }).contains("the module lacks"));
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 0 }, Fact::NoAlias);
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).is_ok());
+}
+
+/// Stated facts cross the wire and come back the same, source and all.
+#[test]
+fn stated_facts_survive_the_codec() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("c");
+    facts.state_at(Subject::Param { function: 1, index: 0 }, Fact::NoAlias, 12);
+    program.modules[0].facts = facts.finish();
+    let text = crate::codec::encode(&program, None).unwrap();
+    assert!(text.contains("\"facts\":[{\"fact\":\"noalias\",\"function\":1,\"id\":0,\"source\":\"c:12\",\"subject\":\"param\"}]"), "{text}");
+    assert_eq!(crate::codec::decode(&text).unwrap().modules[0].facts, program.modules[0].facts);
+}
+
+/// Schema 1 had `promises` and `nowrap`, which no longer exist; a program
+/// that says it is schema 1 is refused by its version, not by whichever
+/// field the decoder meets first.
+#[test]
+fn a_program_of_the_old_schema_is_refused_by_its_version() {
+    let mut program = program(difference());
+    program.schema = 1;
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("unsupported HIR schema 1"));
+}
+
+/// The same, as JSON: the old schema's `promises` field was what it was
+/// refused for.
+#[test]
+fn old_json_is_refused_by_its_schema() {
+    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":2", "\"promises\":[],\"schema\":1");
+    assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
 }

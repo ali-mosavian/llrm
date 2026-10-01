@@ -36,6 +36,7 @@ use std::sync::LazyLock;
 
 use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
+use llrm_mir::facts::Facts;
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
@@ -177,8 +178,7 @@ pub fn seeds(unit: &Unit) -> IndexMap<ValueId, Provenance> {
         .filter(|(_, value)| is_pointer(unit, Operand::Value(**value)))
         .map(|(at, value)| {
             let object = MemoryObject { identity: Some(Identity::Int(at as i64)), ..MemoryObject::new(MemoryKind::Parameter) };
-            let unaliased = function.parameter_attrs.get(at).is_some_and(|attrs| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noalias")));
-            let restrict = if unaliased { BTreeSet::from([Identity::Int(at as i64)]) } else { BTreeSet::new() };
+            let restrict = if Facts::param(function, at).no_alias() { BTreeSet::from([Identity::Int(at as i64)]) } else { BTreeSet::new() };
             (*value, Provenance::one_with_slice(object, 0, 1, 1, 1, restrict).expect("one byte is a slice"))
         })
         .collect()

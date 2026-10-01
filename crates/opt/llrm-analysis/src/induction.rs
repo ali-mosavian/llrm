@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::graph::loops::Loop;
 use llrm_mir::context::signed;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_support::hash::{HashSet, IndexMap};
 use num_bigint::BigInt;
 
@@ -1150,10 +1150,11 @@ fn _promised(function: &Function, update: ValueId, step: &BigInt, unsigned: bool
     let Some(inst) = defining(function, update) else { return false };
     let op = function.instruction(inst);
     let upward = step > &BigInt::from(0);
+    let stated = llrm_mir::facts::Facts::of_flags(op.flags);
     match op.opcode {
-        Opcode::Binary(BinaryOp::Add) if unsigned => upward && op.flags.contains(Flags::NUW),
-        Opcode::Binary(BinaryOp::Sub) if unsigned => !upward && op.flags.contains(Flags::NUW),
-        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => op.flags.contains(Flags::NSW),
+        Opcode::Binary(BinaryOp::Add) if unsigned => upward && stated.no_unsigned_wrap(),
+        Opcode::Binary(BinaryOp::Sub) if unsigned => !upward && stated.no_unsigned_wrap(),
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => stated.no_signed_wrap(),
         _ => false,
     }
 }
