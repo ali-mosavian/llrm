@@ -22,4 +22,7 @@ void main(void)
     report(k(-a * 3));
     report((long)(float)b);
     report(table[2] > table[1]);
+    /* a constant folds in double, not through float: 0.1f * 1e9 is 100000001 */
+    report((long)((double)(long double)0.1 * 1e9));
+    report((long)((double)(0.1L + 0.0L) * 1e9));
 }

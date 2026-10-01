@@ -57,4 +57,4 @@ def test_a_long_double_program_prints_on_dos_what_it_prints_on_the_host(tmp_path
     (tmp_path / "program.c").write_text(source)
     run("cc", "-O0", "-o", "host", "host.c", "program.c")
     assert on_dos == run("./host")
-    assert on_dos.split() == ["11", "23", "11500", "15", "-7", "11", "1"]
+    assert on_dos.split() == ["11", "23", "11500", "15", "-7", "11", "1", "100000000", "100000000"]
