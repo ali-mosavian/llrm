@@ -2142,6 +2142,9 @@ impl Selector<'_, '_, '_> {
             self.fars.insert(result, pair);
             return Ok(());
         }
+        if op == CastOp::PtrToInt && self.carries(from) {
+            return refuse("a huge pointer as an integer: its packed bits are not its address");
+        }
         let (offset, selector) = self.far(operand, at, out)?;
         match (op, self.types().get(to).clone()) {
             (CastOp::AddrSpaceCast, Type::Pointer(2)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector))),
