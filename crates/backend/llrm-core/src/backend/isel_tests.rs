@@ -294,6 +294,23 @@ fn test_variable_indices_are_scaled_and_added() {
     );
 }
 
+/// A constant added to an index is the address's displacement, not a
+/// register: `a[i + 8]` of bytes was `mov di, si; add di, 8; [bx+di]`, an
+/// add and a copy a trip that main's `[bx+si+8]` did not pay.
+#[test]
+fn test_a_constant_added_to_an_index_is_a_displacement() {
+    let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
+  %j = add nsw i16 %i, 8
+  %q = getelementptr inbounds i8, ptr %p, i16 %j
+  %v = load i8, ptr %q
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("[bx+si+8]") && !got.contains("add si, 8") && !got.contains("add di, 8"), "{got}");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {

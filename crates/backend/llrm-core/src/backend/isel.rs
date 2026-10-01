@@ -1472,10 +1472,38 @@ impl Selector<'_, '_, '_> {
             }
             return Ok(());
         }
+        // A constant added to an index is a displacement, as LLVM's address
+        // matcher folds it: `[base + index*scale + c*scale]`.
+        let mut offset = offset;
+        let mut peeled = Vec::new();
+        let mut taken = Vec::new();
+        for &(position, scale) in &variable {
+            let (index, constant, adds) = self.peeled(instruction.operands[1 + position], width);
+            offset += i128::from(constant) * i128::from(scale);
+            taken.extend(adds);
+            peeled.push((position, scale, index));
+        }
+        let one = match peeled[..] {
+            [(_, scale, index)] => Some((index, scale as i64)),
+            _ => None,
+        };
+        if !taken.is_empty() {
+            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+                self.pointers.insert(address, scaled);
+                for &add in &taken {
+                    let add = self.value(add);
+                    self.folded.insert(add);
+                }
+                return Ok(());
+            }
+            for &add in &taken {
+                let add = self.value(add);
+                self.folded.insert(add);
+            }
+        }
         let exact = one.is_some_and(|(index, _)| matches!(index, Operand::Value(index) if self.exact.contains(&index)));
         let mut sum: Option<Held> = None;
-        for (position, scale) in variable {
-            let index = instruction.operands[1 + position];
+        for (_, scale, index) in peeled {
             let index_ty = function.operand_type(&self.module.context, index).expect("a typed index");
             let mut held = self.held(index, index_ty, at, out)?;
             if held.width > width {
@@ -1653,6 +1681,30 @@ impl Selector<'_, '_, '_> {
         };
         self.promoted.extend(base.map(|base| base.value).into_iter().chain((!dword).then_some(wide.value)));
         Some(scaled)
+    }
+
+    /// `index` less the constants added to it at the pointer's index
+    /// `width` by adds nothing else reads, their sum, and those adds:
+    /// truncation keeps a sum a sum, but an add narrower than the index may
+    /// wrap where the sum does not.
+    fn peeled(&self, index: Operand, width: u32) -> (Operand, i64, Vec<ValueId>) {
+        let (mut at, mut total, mut adds) = (index, 0i64, Vec::new());
+        while let Operand::Value(value) = at
+            && let ValueDef::Instruction(inst) = self.function.value(value).def
+        {
+            let instruction = self.function.instruction(inst);
+            let own = self.width(instruction.ty).unwrap_or(0);
+            let (Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)), [from, by]) = (&instruction.opcode, &instruction.operands[..]) else { break };
+            let Some(constant) = self.constant(*by, own) else { break };
+            // An add something else reads is made anyway: the address uses it.
+            if own < width || self.function.users(value).len() != 1 {
+                break;
+            }
+            total += if *kind == BinaryOp::Add { constant } else { -constant };
+            adds.push(value);
+            at = *from;
+        }
+        (at, total, adds)
     }
 
     /// `index` times `scale` with the index's own multiply by a constant
