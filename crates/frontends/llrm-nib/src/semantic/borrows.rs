@@ -499,7 +499,7 @@ impl FunctionCompiler<'_> {
     pub(super) fn holders(&self, owner: BorrowKey, path: &[String], exclusive: bool, via: Option<BorrowKey>) -> BTreeSet<BorrowKey> {
         let borrows = |roots: Option<&BTreeSet<Root>>| roots.is_some_and(|roots| roots.iter().any(|root| root.overlaps(owner, path)));
         let mut holders = BTreeSet::new();
-        for binding in self.scopes.iter().flat_map(|scope| scope.values()) {
+        for binding in self.bindings() {
             let itself = identity(&binding.storage);
             if itself == Some(owner) || itself.is_some() && itself == via || exclusive && !self.may_change(binding) {
                 continue;
@@ -512,16 +512,23 @@ impl FunctionCompiler<'_> {
     }
 
     /// What the bindings in scope borrow, each with whether the binding may
-    /// change it.
-    pub(super) fn held_borrows(&self) -> Vec<(Root, bool)> {
+    /// change it, and the binding.
+    pub(super) fn held_borrows(&self) -> Vec<(Root, bool, BorrowKey)> {
         let mut borrows = Vec::new();
-        for binding in self.scopes.iter().flat_map(|scope| scope.values()) {
-            let lent = borrow_key(&binding.storage).and_then(|key| self.borrowed_from.get(&key));
-            let held = identity(&binding.storage).and_then(|key| self.held.get(&key));
+        for binding in self.bindings() {
             let mutable = self.may_change(binding);
-            borrows.extend(lent.into_iter().chain(held).flatten().map(|root| (root.clone(), mutable)));
+            let lent = borrow_key(&binding.storage).and_then(|key| Some((key, self.borrowed_from.get(&key)?)));
+            let held = identity(&binding.storage).and_then(|key| Some((key, self.held.get(&key)?)));
+            for (holder, roots) in lent.into_iter().chain(held) {
+                borrows.extend(roots.iter().map(|root| (root.clone(), mutable, holder)));
+            }
         }
         borrows
+    }
+
+    /// The bindings in scope, and those of the code a lambda is inlined in.
+    fn bindings(&self) -> impl Iterator<Item = &Binding> {
+        self.enclosing.iter().flatten().chain(&self.scopes).flat_map(|scope| scope.values())
     }
 
     /// Stores a borrow rooted in `roots` where `container` keeps it: the

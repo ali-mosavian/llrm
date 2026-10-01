@@ -89,10 +89,11 @@ impl FunctionCompiler<'_> {
         let mut body = lambda.body.clone();
         self.prepare_expression(&mut body)?;
         let caller = std::mem::replace(&mut self.scopes, lambda.scopes);
+        self.enclosing.push(caller);
         let hidden = std::mem::take(&mut self.hidden);
         self.scopes.push(parameters);
         let result = self.expression(&body, expected);
-        self.scopes = caller;
+        self.scopes = self.enclosing.pop().expect("the caller's scopes");
         self.hidden = hidden;
         result
     }

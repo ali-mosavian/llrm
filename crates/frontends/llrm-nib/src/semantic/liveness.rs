@@ -14,7 +14,31 @@ pub(super) struct Conflict {
     error: Diagnostic,
 }
 
+/// A module variable a binding borrows across a call, as of the call.
+pub(super) struct Across {
+    block: u32,
+    at: usize,
+    holder: BorrowKey,
+    lend: modref::Lend,
+}
+
 impl FunctionCompiler<'_> {
+    /// Notes `holder`'s borrow across the call about to be emitted.
+    pub(super) fn hold_across(&mut self, lend: modref::Lend, holder: BorrowKey) {
+        let at = self.current_block_mut().instructions.len();
+        self.across.push(Across { block: self.current, at, holder, lend });
+    }
+
+    /// Lends each call what is borrowed across it and used after it.
+    pub(super) fn lend_across(&mut self) {
+        for across in std::mem::take(&mut self.across) {
+            let held = self.derived(&BTreeSet::from([across.holder]));
+            if self.used_after(across.block, across.at + 1, &held) {
+                self.lends.push(across.lend);
+            }
+        }
+    }
+
     /// Notes a change to `path` in `owner` here, refused with `error` if
     /// what borrows it, other than the reference `via` it is made through,
     /// is used later. A sequence a loop walks is borrowed by the walk,

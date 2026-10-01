@@ -159,15 +159,19 @@ impl FunctionCompiler<'_> {
     /// Records the module variables a call of `callee` is lent, and those
     /// the bindings in scope hold borrowed across it.
     pub(super) fn record_lends(&mut self, callee: &str, arguments: &[Expr], lent: &[borrows::Lent], span: Span) {
-        let passed = arguments.iter().zip(lent).flat_map(|(argument, one)| one.roots.iter().map(move |root| (root.clone(), one.mutable, argument.span(), false)));
-        let held = self.held_borrows().into_iter().map(|(root, mutable)| (root, mutable, span, true));
+        let passed = arguments.iter().zip(lent).flat_map(|(argument, one)| one.roots.iter().map(move |root| (root.clone(), one.mutable, argument.span(), None)));
+        let held = self.held_borrows().into_iter().map(|(root, mutable, holder)| (root, mutable, span, Some(holder)));
         let lends: Vec<_> = passed.chain(held).filter(|(root, ..)| root.life == borrows::Life::Module).collect();
-        for (root, mutable, span, across) in lends {
+        for (root, mutable, span, holder) in lends {
             let borrows::BorrowKey::Place(place) = root.owner else {
                 continue;
             };
             let symbol = self.places.iter().find(|one| one.id == place).expect("a module place").symbol;
-            self.lends.push(Lend { callee: callee.to_owned(), symbol, name: root.name, mutable, span, across });
+            let lend = Lend { callee: callee.to_owned(), symbol, name: root.name, mutable, span, across: holder.is_some() };
+            match holder {
+                Some(holder) => self.hold_across(lend, holder),
+                None => self.lends.push(lend),
+            }
         }
     }
 }

@@ -581,3 +581,39 @@ fn main() -> i16:
 ";
     assert_eq!(refused_at(source), "8: \"g\" is borrowed across a call to \"setg\", which may write it");
 }
+
+#[test]
+fn a_lambda_changes_what_its_caller_borrows() {
+    // Inlined in its own scopes, the lambda's `v.push` saw no borrow of `v`,
+    // so `r` outlived the buffer it moved.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1]
+    let k = |d: i16| v.push(d)
+    let r = &v[0]
+    k(1)
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "3: \"v\" is borrowed here, so it cannot be changed");
+    assert_eq!(output(&source.replace("    print(r)\n", "    print(v.len)\n")), "2\n");
+}
+
+#[test]
+fn a_module_borrow_ends_before_a_call_that_writes_it() {
+    // A borrow of `g` no longer used counts across no call.
+    let source = "\
+var g: i16[2] = [1, 2]
+
+fn setg() -> void:
+    g[0] = 9
+
+fn main() -> i16:
+    let r = &g[0]
+    print(r)
+    setg()
+    print(g[0])
+    return 0
+";
+    assert_eq!(output(source), "1\n9\n");
+}
