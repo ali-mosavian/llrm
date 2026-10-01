@@ -261,6 +261,221 @@ fn main() -> i16:
     let shared = source.replace("r: &mut i16", "r: &i16").replace("    h.r = 5\n", "").replace("&mut x", "&x");
     assert_eq!(output(&shared), "1\n");
 }
+#[test]
+fn a_borrow_ends_at_its_last_use_on_every_path() {
+    // A borrow lived until its binding's scope ended, so changing `v` after
+    // the last read of `r` was refused.
+    let after = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    print(r)
+    v.push(3)
+    print(v.len)
+    return 0
+";
+    assert_eq!(output(after), "1\n3\n");
+    let exclusive = "\
+struct C:
+    mut n: i16
+
+fn C.inc(self: &mut C) -> void:
+    self.n += 1
+
+fn main() -> i16:
+    let mut c = C(n=0)
+    let m = &mut c
+    m.inc()
+    c.inc()
+    print(c.n)
+    return 0
+";
+    assert_eq!(output(exclusive), "2\n");
+    // Still in use later, on some path: a branch, or the loop's next turn.
+    let branch = after.replace("    print(v.len)\n", "    if v.len > 2:\n        print(r)\n");
+    assert_eq!(refused_at(&branch), "5: \"v\" is borrowed here, so it cannot be changed");
+    let looped = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    let mut i: i16 = 0
+    while i < 3:
+        print(r)
+        v.push(i)
+        i += 1
+    return 0
+";
+    assert_eq!(refused_at(looped), "7: \"v\" is borrowed here, so it cannot be changed");
+    // A borrow made anew each turn ends with its turn.
+    let fresh = looped.replace("    let r = &v[0]\n", "").replace("        print(r)\n", "        let r = &v[0]\n        print(r)\n");
+    assert_eq!(output(&fresh), "1\n1\n1\n");
+}
+
+#[test]
+fn borrows_of_disjoint_fields_do_not_conflict() {
+    // A borrow rooted at its owner's whole name, so `&mut p.y` beside
+    // `&mut p.x` was refused, and a method walking `self.items` could not
+    // count in `self.count`.
+    let fields = "\
+struct P:
+    mut x: i16
+    mut y: i16
+
+fn set(a: &mut i16, b: &mut i16) -> void:
+    a = 5
+    b = 6
+
+fn main() -> i16:
+    let mut p = P(x=1, y=2)
+    let a = &mut p.x
+    let b = &mut p.y
+    a = 3
+    b = 4
+    print(p.x + p.y)
+    set(p.x, p.y)
+    print(p.x + p.y)
+    return 0
+";
+    assert_eq!(output(fields), "7\n11\n");
+    let walked = "\
+struct S:
+    mut items: vec[i16]
+    mut count: i16
+
+fn S.bump(self: &mut S) -> void:
+    for x in &self.items:
+        self.count += x
+
+fn main() -> i16:
+    let mut s = S(items=[1, 2], count=0)
+    s.bump()
+    print(s.count)
+    return 0
+";
+    assert_eq!(output(walked), "3\n");
+    // The same field, a walked sequence, or a borrow a call returned from
+    // somewhere in `p`, still conflict.
+    assert_eq!(refused_at(&fields.replace("let b = &mut p.y", "let b = &mut p.x")), "12: \"p\" is borrowed here, so it cannot be changed");
+    assert_eq!(refused_at(&walked.replace("self.count += x", "self.items.push(x)")), "7: \"self\" is borrowed here, so it cannot be changed");
+    let returned = "\
+struct P:
+    mut x: i16
+    mut y: i16
+
+fn pick(p: &mut P) -> &mut i16:
+    return p.x
+
+fn main() -> i16:
+    let mut p = P(x=1, y=2)
+    let a = pick(p)
+    let b = &mut p.y
+    a = 3
+    b = 4
+    print(p.x + p.y)
+    return 0
+";
+    assert_eq!(refused_at(returned), "11: \"p\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn nothing_borrows_what_a_live_mut_borrow_may_change() {
+    // Only a change checked the borrows of what it changed: `&v[0]` beside a
+    // live `a = &mut v` passed, and `a.push` moved the buffer `r` points into.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let a = &mut v
+    let r = &v[0]
+    a.push(3)
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "4: \"v\" is mutably borrowed here, so it cannot be borrowed");
+    let walked = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let a = &mut v
+    for x in &v:
+        a.push(x)
+    return 0
+";
+    assert_eq!(refused_at(walked), "5: \"a\" is borrowed here, so it cannot be changed");
+    let ended = source.replace("    let r = &v[0]\n    a.push(3)\n", "    a.push(3)\n    let r = &v[0]\n");
+    assert_eq!(output(&ended), "1\n");
+}
+
+#[test]
+fn a_change_through_a_reference_changes_what_it_borrows() {
+    // `a.push` was checked against borrows of `a`, not of `v`, so `r`, a
+    // borrow of `v` taken through `a`, outlived the buffer `push` moved.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let a = &mut v
+    let r = &a[0]
+    a.push(3)
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "5: \"a\" is borrowed here, so it cannot be changed");
+    assert_eq!(output(&source.replace("    print(r)\n", "    print(a.len)\n")), "3\n");
+}
+
+#[test]
+fn a_consumed_generator_borrows_what_it_is_lent() {
+    // Its parameter, bound where the loop inlines it, borrowed nothing, so
+    // with borrows ending at last use `v.push` inside the loop passed.
+    let source = "\
+fn walk(v: &[i16]) -> iter[i16]:
+    for x in v:
+        yield x
+
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    for x in walk(v):
+        v.push(x)
+    print(v.len)
+    return 0
+";
+    assert_eq!(refused_at(source), "8: \"v\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_binding_holds_the_borrows_its_value_holds() {
+    // Binding `o` recorded only what a struct literal kept, so with borrows
+    // ending at last use, `r`'s last use was `.some(r)` and `v.push` passed.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    let o: Option[&i16] = .some(r)
+    v.push(3)
+    match o:
+        .some(p):
+            print(p)
+        .none:
+            print(0)
+    return 0
+";
+    assert_eq!(refused_at(source), "5: \"v\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_mut_walk_changes_what_it_walks() {
+    // `for x in &mut v` checked nothing on entry: `r`, a `&i16`, read the 9
+    // the walk wrote.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let r = &v[0]
+    for x in &mut v:
+        x = 9
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "4: \"v\" is borrowed here, so it cannot be changed");
+    assert_eq!(output(&source.replace("    print(r)\n", "    print(v[0])\n")), "9\n");
+}
 
 #[test]
 fn whatever_bundles_borrows_lends_them_disjoint() {
@@ -365,4 +580,40 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(refused_at(source), "8: \"g\" is borrowed across a call to \"setg\", which may write it");
+}
+
+#[test]
+fn a_lambda_changes_what_its_caller_borrows() {
+    // Inlined in its own scopes, the lambda's `v.push` saw no borrow of `v`,
+    // so `r` outlived the buffer it moved.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1]
+    let k = |d: i16| v.push(d)
+    let r = &v[0]
+    k(1)
+    print(r)
+    return 0
+";
+    assert_eq!(refused_at(source), "3: \"v\" is borrowed here, so it cannot be changed");
+    assert_eq!(output(&source.replace("    print(r)\n", "    print(v.len)\n")), "2\n");
+}
+
+#[test]
+fn a_module_borrow_ends_before_a_call_that_writes_it() {
+    // A borrow of `g` no longer used counts across no call.
+    let source = "\
+var g: i16[2] = [1, 2]
+
+fn setg() -> void:
+    g[0] = 9
+
+fn main() -> i16:
+    let r = &g[0]
+    print(r)
+    setg()
+    print(g[0])
+    return 0
+";
+    assert_eq!(output(source), "1\n9\n");
 }

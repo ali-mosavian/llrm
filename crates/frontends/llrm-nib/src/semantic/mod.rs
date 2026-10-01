@@ -76,6 +76,7 @@ mod references;
 mod instances;
 mod iterators;
 mod views;
+mod liveness;
 mod modref;
 mod writable;
 mod lambdas;
@@ -1569,6 +1570,9 @@ struct FunctionCompiler<'a> {
     stated: llrm_core::hir::facts::Builder,
     calls: Vec<hir::CallSite>,
     scopes: Vec<BTreeMap<String, Binding>>,
+    /// The scopes of the code a lambda is inlined into, innermost last: its
+    /// bindings still hold their borrows while the lambda runs.
+    enclosing: Vec<Vec<BTreeMap<String, Binding>>>,
     loops: Vec<Loop>,
     /// The generators being inlined, innermost last, whose `yield`s run a loop body.
     consumers: Vec<generators::Consumer>,
@@ -1622,10 +1626,15 @@ struct FunctionCompiler<'a> {
     reseatable: BTreeSet<u32>,
     /// The module variables this function lends to the calls it makes.
     lends: Vec<modref::Lend>,
+    /// Changes to borrowed owners, refused if a holder is used after one.
+    conflicts: Vec<liveness::Conflict>,
+    /// Module variables borrowed across a call, lent to it if the holder is
+    /// used after it.
+    across: Vec<liveness::Across>,
     /// Its `&` and `&mut` parameters.
     references: Vec<llrm_core::hir::facts::Subject>,
     /// The named sequences `for` loops are walking, outermost first.
-    iterated: Vec<borrows::BorrowKey>,
+    iterated: Vec<borrows::Root>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -1659,6 +1668,7 @@ impl<'a> FunctionCompiler<'a> {
             stated: llrm_core::hir::facts::Builder::new("nib"),
             calls: Vec::new(),
             scopes: vec![BTreeMap::new()],
+            enclosing: Vec::new(),
             loops: Vec::new(),
             consumers: Vec::new(),
             hidden: Vec::new(),
@@ -1692,6 +1702,8 @@ impl<'a> FunctionCompiler<'a> {
             parameter_lives: BTreeMap::new(),
             reseatable: BTreeSet::new(),
             lends: Vec::new(),
+            conflicts: Vec::new(),
+            across: Vec::new(),
             references: Vec::new(),
             iterated: Vec::new(),
         };
@@ -1762,7 +1774,7 @@ impl<'a> FunctionCompiler<'a> {
                     _ => None,
                 };
                 if life == borrows::Life::Frame && passed.is_some_and(|one| compiler.holds_reference(one)) {
-                    let root = borrows::Root { owner, name: parameter.name.clone(), life: borrows::Life::Lent };
+                    let root = borrows::Root { exact: false, ..borrows::Root::new(owner, &parameter.name, borrows::Life::Lent) };
                     compiler.held.insert(owner, BTreeSet::from([root]));
                 }
             }
@@ -1865,6 +1877,8 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
         }
+        self.check_conflicts()?;
+        self.lend_across();
         self.prune_unreachable();
         let blocks = self
             .blocks
