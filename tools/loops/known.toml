@@ -15,9 +15,6 @@ match = "llrm-c did not finish"
 issue = "#104"
 
 [[bug]]
-match = 'MIR .*conc\d+_s2_\S*_whole'
-issue = "#100"
-
 [[bug]]
 match = 'c on DOS.*conc1[02]_s2_xi_bgnlnpfpn_index_n_st1_sum_as_end'
 issue = "#108"

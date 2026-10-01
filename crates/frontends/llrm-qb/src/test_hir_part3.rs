@@ -2748,7 +2748,26 @@ fn test_checked_division_raises_on_the_rich_route() {
     let frontend = qb_driver::Frontend { checked_division: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
     let text = rich_listing(&qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses"));
     assert!(text.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
-    assert!(!rich_listing(&parsed_as(&fixture("checked-division.bas"), "vbdos", "vbdos")).contains("pushw 11"));
+    // Without the option a division where errors land is raised as code too
+    // (the next test); with no handler it stays the processor's.
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "plain.bas", b"DEFINT A-Z\nINPUT d\nPRINT 10 \\ d\n");
+    assert!(!rich_listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
+}
+
+/// An error raised in a FUNCTION called from a SUB, with the handler in the
+/// module body, resumed at the failing divide for ever (#79): the divide's
+/// trap names no statement, so the pad resumed the last call's, and the
+/// optimizer saw no edge from the divide to the pad. Where errors land, a
+/// divide by a variable raises error 11 as code, in the FUNCTION's own pad.
+#[test]
+fn test_a_division_in_a_called_function_raises_to_its_pad() {
+    let source = b"DECLARE SUB caller (d AS INTEGER)\nDECLARE FUNCTION inner% (d AS INTEGER)\nON ERROR GOTO h\ncaller 0\nEND\nh:\nRESUME NEXT\nSUB caller (d AS INTEGER)\nDIM b AS INTEGER\nb = inner(d)\nEND SUB\nFUNCTION inner% (d AS INTEGER)\ninner% = 10 \\ d\nEND FUNCTION\n";
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "called.bas", source);
+    let text = rich_listing(&parsed_as(&path, "vbdos", "vbdos"));
+    let inner = &text[text.find("INNER").expect("the function")..];
+    assert!(inner.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
 }
 
 /// BC's LONG divide is software: MIN by -1 wraps where the processor's

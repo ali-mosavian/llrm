@@ -15,7 +15,7 @@ use crate::generated_parser::{EACH, ON_SELECTOR, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter,
-    PrintSeparator,
+    PrintKind, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 use tags::{Passing, Shape, Slot, Tag};
@@ -3285,12 +3285,20 @@ impl Compiler {
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
                 Statement::Print {
-                    file, using, items, ..
+                    kind, file, using, items, ..
                 } => {
+                    if *kind == PrintKind::Lprint {
+                        self.emit_runtime_call("B$LPRT", Vec::new(), Vec::new());
+                    }
                     if let Some(file) = file {
                         let (file, file_type) = self.expression(file)?;
                         let file = self.convert(file, file_type, INTEGER)?;
                         self.emit_runtime_call("B$CHOU", Vec::new(), vec![file]);
+                    }
+                    // WRITE's preamble tells the runtime to write its items as
+                    // WRITE does; a bare WRITE is only a new line.
+                    if *kind == PrintKind::Write && !items.is_empty() {
+                        self.emit_runtime_call("B$WRIT", Vec::new(), Vec::new());
                     }
                     if let Some(format) = using {
                         let format = self.string_descriptor(format)?;
@@ -3320,6 +3328,8 @@ impl Compiler {
                             }
                         }
                         let term = match item.separator {
+                            // WRITE's commas are the runtime's: its items go as with `;`.
+                            PrintSeparator::Comma if *kind == PrintKind::Write => 'S',
                             PrintSeparator::Comma => 'C',
                             PrintSeparator::Semicolon => 'S',
                             PrintSeparator::End => 'E',
