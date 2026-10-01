@@ -13,18 +13,13 @@
 use crate::module::Function;
 use crate::opcode::{Attribute, Flags};
 
-/// The kind of thing a fact is stated of.
+/// The kind of thing a fact is stated of: a routine, one of its parameters,
+/// or one of its instructions. HIR names them; MIR has the carriers alone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
-    Function,
     Callable,
     Param,
-    Return,
     Instruction,
-    Block,
-    Place,
-    Object,
-    Program,
 }
 
 /// What becomes of a fact when two instructions that state it become one.
@@ -202,13 +197,13 @@ facts! {
         NoAlias no_alias "noalias" on [Param] Policy::DECLARED;
         ReadOnly read_only "readonly" on [Param] Policy::DECLARED;
         NonNull non_null "nonnull" on [Param] Policy::DECLARED;
-        NoReturn no_return "noreturn" on [Function, Callable] Policy::DECLARED;
+        NoReturn no_return "noreturn" on [Callable] Policy::DECLARED;
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param] Policy::DECLARED;
     }
     custom {
-        Memory(Effect) memory "memory" on [Function, Callable] Policy::DECLARED;
+        Memory(Effect) memory "memory" on [Callable] Policy::DECLARED;
     }
     bits {
         NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction] Policy { merge: Merge::Intersect, hoist: Hoist::Keep };

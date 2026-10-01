@@ -319,9 +319,6 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     for function in &hir.functions {
         match declare(&mut module, &tables, function) {
             Ok((global, convention)) => {
-                if let Err(why) = lower_facts(&mut module, global, function, &hir.facts) {
-                    refused.push((function.name.clone(), why));
-                }
                 let reference = module.reference(global);
                 tables.callees.insert(function.name.clone(), reference);
                 tables.conventions.insert(function.name.clone(), convention);
@@ -342,8 +339,9 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             refused.push((function.name.clone(), why));
         }
     }
+    let declared: HashMap<i64, GlobalId> = functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
     for one in &hir.facts {
-        if let Err(why) = lower_callable_fact(&mut module, &tables, hir, one) {
+        if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, one) {
             refused.push((hir.name.clone(), why));
         }
     }
@@ -381,7 +379,6 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
         variable.initializer = Some(initializer);
     }
-    let declared: HashMap<i64, GlobalId> = functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
     match debug::emitted(&mut module, &tables, hir, &data, &declared) {
         Ok(variables) => tables.variables = variables,
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -688,41 +685,33 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     Ok((global, abi.0))
 }
 
-/// The facts stated of `function` and its parts, as their MIR carriers. The
-/// one place a stated fact becomes MIR: a subject kind with no lowering here
-/// is refused, not dropped.
-fn lower_facts(module: &mut Module, global: GlobalId, function: &model::Function, stated: &[Stated]) -> Emit<()> {
-    let llrm_mir::GlobalKind::Function(defined) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
-    for one in stated.iter().filter(|one| one.subject.function() == Some(function.id)) {
-        // An instruction's facts are its flags, made with the instruction.
-        if matches!(one.subject, Subject::Instruction { .. }) {
-            continue;
+/// A stated fact as its MIR carrier: the one place a fact becomes MIR. A
+/// routine's or a parameter's is an attribute of its declaration; an
+/// instruction's is its flags, made with the instruction.
+fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declared: &HashMap<i64, GlobalId>, stated: &Stated) -> Emit<()> {
+    let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
+    let (global, parameter) = match stated.subject {
+        Subject::Instruction { .. } => return Ok(()),
+        Subject::Param { function, index } => match declared.get(&function) {
+            Some(&global) => (global, Some(index)),
+            None => return Ok(()),
+        },
+        Subject::Callable(id) => {
+            let callable = hir.callables.iter().find(|one| one.id == id).ok_or("a fact of no callable")?;
+            // A routine the module never calls has no declaration to carry it.
+            let Some(&reference) = tables.callees.get(&callable.name) else { return Ok(()) };
+            let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
+            (global, None)
         }
-        let attribute = one.fact.attribute().ok_or_else(|| format!("{}: {} is an instruction flag, not of a {}", function.name, one.fact.key(), Subject::kind_key(one.subject.kind())))?;
-        let attrs = match one.subject {
-            Subject::Param { index, .. } => defined.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
-            Subject::Function(_) => &mut defined.attrs,
-            Subject::Return(_) => &mut defined.return_attrs,
-            other => return Err(format!("{}: a fact of a {} has no lowering yet", function.name, Subject::kind_key(other.kind()))),
-        };
-        if !attrs.contains(&attribute) {
-            attrs.push(attribute);
-        }
-    }
-    Ok(())
-}
-
-/// A fact stated of a routine the module calls, as its declaration's
-/// attribute; a routine it never calls has none.
-fn lower_callable_fact(module: &mut Module, tables: &Tables, hir: &model::Module, stated: &Stated) -> Emit<()> {
-    let Subject::Callable(id) = stated.subject else { return Ok(()) };
-    let callable = hir.callables.iter().find(|one| one.id == id).ok_or("a fact of no callable")?;
-    let Some(&reference) = tables.callees.get(&callable.name) else { return Ok(()) };
-    let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
-    let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
-    let attribute = stated.fact.attribute().ok_or_else(|| format!("{}: {} is an instruction flag", callable.name, stated.fact.key()))?;
-    if !function.attrs.contains(&attribute) {
-        function.attrs.push(attribute);
+    };
+    let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of what is no function".to_owned()) };
+    let attrs = match parameter {
+        Some(index) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
+        None => &mut function.attrs,
+    };
+    let attribute = attribute()?;
+    if !attrs.contains(&attribute) {
+        attrs.push(attribute);
     }
     Ok(())
 }

@@ -786,7 +786,7 @@ fn a_fact_of_the_wrong_subject_is_refused() {
         program.modules[0].facts = vec![Stated { subject, fact: Fact::NoAlias, source: None }];
         crate::verify::verify(&program).unwrap_err().0
     };
-    assert!(refusal(Subject::Function(1)).contains("noalias is not stated of a function"));
+    assert!(refusal(Subject::Callable(1)).contains("noalias is not stated of a callable"));
     assert!(refusal(Subject::Param { function: 1, index: 2 }).contains("noalias is stated of a param the module lacks"));
     assert!(refusal(Subject::Param { function: 9, index: 0 }).contains("the module lacks"));
     let mut program = program(difference());
