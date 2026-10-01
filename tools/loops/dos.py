@@ -75,6 +75,23 @@ def assemble(source: Path, obj: Path, *defines: str) -> None:
     _run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
 
 
+# What DOSBox leaves a program of its 640K: the rest is DOS, the shell and the
+# environment. A bigger one stops with "Unable to run program (errcode=8)".
+LOAD_LIMIT = 560_000
+
+
+def check_loads(exe: Path) -> None:
+    """Raise CompileError for an EXE too big for DOS memory, so a batch that
+    outgrew it is run case by case, as one that did not link is."""
+    head = exe.read_bytes()[:14]
+    if head[:2] != b"MZ":
+        return
+    last, pages, _, header, minimum = (int.from_bytes(head[at : at + 2], "little") for at in (2, 4, 6, 8, 10))
+    image = pages * 512 - (512 - last if last else 0) - header * 16
+    if image + minimum * 16 > LOAD_LIMIT:
+        raise CompileError(f"{exe.name} needs {image + minimum * 16} bytes, more than DOS has: {LOAD_LIMIT}")
+
+
 def link_c(obj: Path, exe: Path, work: Path) -> None:
     crt, ext = work / "CRT.OBJ", work / "EXT.OBJ"
     if not crt.exists():
