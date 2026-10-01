@@ -1,0 +1,60 @@
+# The lib tests and the program-compile test on every pull request and push to
+# main, so main cannot go red unseen. Only wccq (Open Watcom's front end, built
+# by llrm-c's build.rs) is needed: the jw and dosrun features, which build jwasm,
+# jwlink and DOSBox-X, stay off.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  FEATURES: --no-default-features --features wccq
+
+jobs:
+  lib:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      # The Open Watcom tree, keyed on its commit: an exact hit or a rebuild,
+      # never an older tree (toolchain/cache.sh).
+      - id: openwatcom
+        run: echo "commit=$(cat toolchain/owshim/ow-commit)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/llrm
+          key: openwatcom-${{ steps.openwatcom.outputs.commit }}
+      # First, so a bad toolchain fails as that, not as unrelated tests.
+      - name: wccq matches the committed streams and its own stamp
+        run: cargo test --release -p llrm-c --features toolchain --lib -- test_wccq_built_here_records_the_committed_stream test_wccq_says_what_it_was_made_from
+      - run: cargo test --release $FEATURES --workspace --lib --no-fail-fast
+
+  programs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - id: openwatcom
+        run: echo "commit=$(cat toolchain/owshim/ow-commit)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/llrm
+          key: openwatcom-${{ steps.openwatcom.outputs.commit }}
+      - uses: astral-sh/setup-uv@v5
+      - run: cargo build --release $FEATURES --bins
+      - run: uv run --project tools --with pytest python -m pytest tests/test_programs_compile.py
+        env:
+          LLRM_REQUIRE_BINARIES: "1"

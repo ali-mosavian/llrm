@@ -462,8 +462,9 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
 /// Unpriced tail sharing grew C sieve from 54 to 55 instructions.
 #[test]
 fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
+    // The loop's exit test stays in 31 times in 32, as isel's heuristic odds say.
     let shaped = |entry: Vec<Arc<Insn>>, looped: Vec<Arc<Insn>>| {
-        body(
+        let mut shaped = body(
             "f",
             1,
             vec![
@@ -472,7 +473,11 @@ fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
                 block(20, vec![_jump(20, 10)], vec![10]),
                 block(30, vec![_return(30)], vec![]),
             ],
-        )
+        );
+        for (to, probability) in [(20, 124.0 / 128.0), (30, 4.0 / 128.0)] {
+            shaped.odds.taken.insert((10, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
+        }
+        shaped
     };
 
     let before = shaped(
@@ -674,4 +679,51 @@ fn test_a_block_that_only_reaches_a_terminal_call_is_placed_after_the_return() {
         .unwrap();
 
     assert_eq!(placed(&low).unwrap().blocks.iter().map(|block| block.at).collect::<Vec<_>>(), vec![0, 20, 10]);
+}
+
+/// A diamond, the fall-through arm 10 taken with `hot`, the branch arm 20
+/// with the rest; both rejoin at 30.
+fn weighted_diamond(hot: f64) -> LirBody {
+    let mut made = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
+            block(10, vec![_move(10, imm(1)), _jump(11, 30)], vec![30]),
+            block(20, vec![_move(20, imm(2)), _jump(21, 30)], vec![30]),
+            block(30, vec![_return(30)], vec![]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    made.odds.taken.insert((1, 10), fixed(hot));
+    made.odds.taken.insert((1, 20), fixed(1.0 - hot));
+    made
+}
+
+/// An arm leaves its join, to land after the return, only where the edge
+/// into the join from the block before it is `LIKELY`, MachineBlockPlacement's
+/// 80%. At even odds the arm went off the join, and a diamond no heuristic
+/// tells apart lost the shorter layout: deedlines ran 177 ms slower.
+#[test]
+fn test_an_arm_leaves_its_join_only_for_a_likely_edge() {
+    let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    assert_eq!(order(0.9), vec![1, 10, 30, 20]);
+    // Short of it both arms stay before the join, the likelier one second.
+    assert_eq!(order(0.7), vec![1, 20, 10, 30]);
+    assert_eq!(order(0.5), vec![1, 10, 20, 30]);
+}
+
+/// A diamond short of `LIKELY` keeps both arms before the join, so its
+/// likelier arm goes second and falls into the join. Made the fall-through
+/// at 62.5%, it jumped over the rare arm instead: deedlines' zoomdistort
+/// ran a jump more each of 31,000 passes.
+#[test]
+fn test_a_diamonds_likelier_arm_falls_into_its_join() {
+    let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    // The branch arm 20 likelier: it goes second.
+    assert_eq!(order(0.375), vec![1, 10, 20, 30]);
+    // The fall-through arm 10 likelier: 20 first, 10 second.
+    assert_eq!(order(0.625), vec![1, 20, 10, 30]);
+    // `LIKELY` and over: the likely arm falls through, the rare one leaves its join.
+    assert_eq!(order(0.1), vec![1, 20, 30, 10]);
 }

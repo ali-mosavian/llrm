@@ -80,7 +80,7 @@ mod tests {
         assert!(syntax.contains("Struct {\n            name: \"body\""));
         assert!(syntax.contains("ForRange {"));
         let Json::Dict(document) = pyjson::loads(&read("03-hir.json")).expect("JSON") else { panic!("an object") };
-        assert_eq!(document.get("schema"), Some(&Json::Int(4)));
+        assert_eq!(document.get("schema"), Some(&Json::Int(5)));
         let stages = names(&output.join("mir"));
         assert!(stages.iter().any(|one| one.ends_with(".ll")), "{stages:?}");
         assert!(stages.contains(&"listing.asm".to_owned()) && stages.contains(&"cost".to_owned()), "{stages:?}");

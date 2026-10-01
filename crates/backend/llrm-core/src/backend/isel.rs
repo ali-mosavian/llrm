@@ -22,7 +22,7 @@ use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{DebugVariable, Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{BlockOdds, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
@@ -754,6 +754,7 @@ impl Selector<'_, '_, '_> {
             }
         }
         let cold = self.cold(&order);
+        let odds = self.odds(&made, &block_at);
         let blocks = layout
             .iter()
             .flat_map(|block| {
@@ -768,7 +769,42 @@ impl Selector<'_, '_, '_> {
         body.inputs = self.inputs.clone();
         body.ordered = true;
         body.loop_trip_counts = self.trip_counts(&block_at);
+        body.odds = odds;
         Ok(body)
+    }
+
+    /// `branchprob`'s probabilities over the LIR blocks each MIR block
+    /// became: a branch takes its MIR edges', shared out among the
+    /// successors it has.
+    fn odds(&self, made: &IndexMap<BlockId, Vec<LirBlock>>, block_at: &IndexMap<BlockId, i64>) -> BlockOdds {
+        let unit = Unit::of(self.module, &self.layout, self.function);
+        let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.globals, self.function, &unit.shape(), &std::collections::BTreeMap::new());
+        let mut odds = BlockOdds::default();
+        for (block, chain) in made {
+            let taken: IndexMap<i64, f64> = self
+                .successors(*block)
+                .into_iter()
+                .filter_map(|to| Some((block_at[&to], estimated.probability(cfg::id(*block), cfg::id(to))?)))
+                .collect();
+            // An edge within the chain, as a switch's compares make, carries
+            // what the block's own MIR edges do not.
+            for one in chain {
+                if one.succ.len() < 2 {
+                    continue;
+                }
+                let known: f64 = one.succ.iter().filter_map(|to| taken.get(to)).sum();
+                let inner = one.succ.iter().filter(|to| !taken.contains_key(*to)).count();
+                let weight = |to: &i64| taken.get(to).copied().unwrap_or((1.0 - known).max(0.0) / inner.max(1) as f64);
+                let total: f64 = one.succ.iter().map(weight).sum();
+                if total <= 0.0 {
+                    continue;
+                }
+                for to in &one.succ {
+                    odds.taken.insert((one.at, *to), (weight(to) / total * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX)) as u32);
+                }
+            }
+        }
+        odds
     }
 
     /// Each loop's header and constant trips, as `induction` proves them.

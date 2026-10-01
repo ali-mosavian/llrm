@@ -938,17 +938,16 @@ small:
             "fstp qword ptr [bp-32]",
             "call far ptr show",
             "fld qword ptr [bp-32]",
-            "fld st(0)",
             "fcomp qword ptr [bp-24]",
             "fnstsw ax",
             "sahf",
             "ja L1_8",
             "L1_10:",
-            "fstp st(0)",
             "mov ax, 0",
             "leave",
             "retf",
             "L1_8:",
+            "fld qword ptr [bp-32]",
             "fistp word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
             "leave",
@@ -1177,7 +1176,8 @@ other:
 ";
     let got = listing(text, "f");
     let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
-    assert_eq!(got[call + 1], "jg L0_3", "{got:?}");
+    // Either polarity: the branch reads the call's flags, no compare between.
+    assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
 }
 
 /// A float function no x87 instruction is stays one operation on st(0),

@@ -60,7 +60,7 @@ pub fn machine<'a>(
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
-        Box::new(jumps::ControlFlow),
+        Box::new(jumps::ControlFlow { size: target.size }),
     ])
 }
 

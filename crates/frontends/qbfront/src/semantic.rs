@@ -9893,7 +9893,7 @@ impl Compiler {
         }
         write!(
             out,
-            "}}],\"runtime\":\"{}\",\"schema\":4,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
