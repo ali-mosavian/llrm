@@ -8187,8 +8187,10 @@ impl Compiler {
         } else {
             binary_name(op)
         };
-        if self.options.checked_division && matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
-            self.division_checked(&left_operand, &right_operand, common, narrow_divmod)?;
+        // Where errors land the processor's trap, which names no statement, is code.
+        if (self.options.checked_division || self.handles_errors || self.module_handled) && matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
+            // Where only errors land (no -fsanitize), the zero divisor is the IR's own check.
+            self.division_checked(&left_operand, &right_operand, common, narrow_divmod, self.options.checked_division)?;
             if !narrow_divmod {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));
@@ -8234,13 +8236,13 @@ impl Compiler {
     /// and for INTEGER operands (`narrow`, divided as LONG) -32768 by -1,
     /// whose quotient overflows the 16-bit divide. A LONG MIN by -1 wraps in
     /// BC's software divide.
-    fn division_checked(&mut self, dividend: &Operand, divisor: &Operand, type_id: u32, narrow: bool) -> Result<(), SemanticError> {
+    fn division_checked(&mut self, dividend: &Operand, divisor: &Operand, type_id: u32, narrow: bool, zero_too: bool) -> Result<(), SemanticError> {
         let constant = |operand: &Operand| match operand {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
         };
         let long = |value: i64| Operand::Constant(type_id, Number::Integer(value));
-        if constant(divisor).is_none_or(|value| value == 0) {
+        if zero_too && constant(divisor).is_none_or(|value| value == 0) {
             let zero = self.computed("eq", BOOLEAN, vec![divisor.clone(), long(0)]);
             self.raise_if(zero, 11)?;
         }
