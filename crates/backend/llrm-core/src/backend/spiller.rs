@@ -1801,7 +1801,7 @@ fn _group_source(one: &Insn) -> Option<Held> {
 /// The definition every one of `defining` repeats, if they all do the same.
 /// A split remakes a value where each piece ends, so a remakeable value can
 /// have several definitions that are one.
-fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
+pub fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
     let first = defining.first()?;
     let alike = |one: &Insn| {
         one.what == first.what
@@ -1898,7 +1898,7 @@ fn _literals(body: &LirBody, values: &BTreeSet<u32>, any_width: bool) -> IndexMa
 }
 
 /// Pure addresses cheap enough to recreate at every use.
-fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> {
+pub fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> {
     let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {

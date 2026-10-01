@@ -24,7 +24,7 @@ use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{self, Classes, _whole};
 use crate::backend::frame::Frame;
 use crate::backend::target::{self, Segments};
-use crate::backend::{spiller, splitkit, twoaddr};
+use crate::backend::{spiller, splitkit, ssarepair, twoaddr};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -305,7 +305,9 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
     // A value a loop's back edge must reload each trip is not worth holding at its header.
     let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
-    let mut result = simulated(body, &flow, &machine, &skip, &order, &dropped);
+    let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
+    let remakes = remakable(body, &all);
+    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped);
     for _ in 0..3 {
         let mut more = false;
         for ((from, to), values) in &result.across {
@@ -318,12 +320,58 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         if !more {
             break;
         }
-        result = simulated(body, &flow, &machine, &skip, &order, &dropped);
+        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped);
     }
     if result.stored.is_empty() {
         return Ok(body.clone());
     }
-    written(body, &result.edits, &result.across, &result.stored, frame)
+    let spilled = written(body, &result.edits, &result.across, &result.stored, &remakes, frame)?;
+    Ok(ssarepair::repaired(&spilled, &result.stored))
+}
+
+/// The values of `values` that are made again rather than stored and loaded:
+/// what reads nothing (a constant, an address), and what a cell nothing
+/// changes holds. Each maps to the one instruction that makes it.
+fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>> {
+    let mut defining: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
+    for one in body.insns() {
+        for value in &one.defines {
+            if values.contains(value) {
+                defining.entry(*value).or_default().push(one.clone());
+            }
+        }
+    }
+    let mut out: IndexMap<u32, Arc<Insn>> = IndexMap::default();
+    let pure: BTreeSet<u32> =
+        spiller::_constants(body, values).keys().chain(spiller::_addresses(body, values).keys()).copied().collect();
+    for value in &pure {
+        let Some(one) = defining.get(value).and_then(|found| spiller::_one_definition(found)) else { continue };
+        let alone = one.defines == [*value]
+            && one.uses.is_empty()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && one.clobbers.is_empty()
+            && one.group.is_none();
+        if alone {
+            out.insert(*value, Arc::clone(one));
+        }
+    }
+    for value in spiller::_stable_loads(body, values).keys() {
+        if let Some([only]) = defining.get(value).map(Vec::as_slice) {
+            out.insert(*value, Arc::clone(only));
+        }
+    }
+    out
+}
+
+/// `one` where it is read again: made once more beside `beside`, owning no bytes.
+fn remade(one: &Insn, beside: &Insn) -> Arc<Insn> {
+    let mut made = one.clone();
+    let at = beside.covers.map_or(beside.at, |covers| covers.0);
+    made.at = beside.at;
+    made.covers = Some((at, at));
+    made.rematerialized = true;
+    Arc::new(made)
 }
 
 struct Simulated {
@@ -337,6 +385,7 @@ fn simulated(
     flow: &Flow,
     machine: &Machine<'_>,
     skip: &BTreeSet<u32>,
+    remakes: &IndexMap<u32, Arc<Insn>>,
     order: &[i64],
     dropped: &IndexMap<i64, BTreeSet<u32>>,
 ) -> Simulated {
@@ -400,7 +449,7 @@ fn simulated(
             for value in used.clone() {
                 if !held.contains(&value) {
                     stored.insert(value);
-                    if folds(one, value) {
+                    if !remakes.contains_key(&value) && folds(one, value) {
                         used.remove(&value);
                         done.folded.entry(position).or_default().push(value);
                     } else {
@@ -516,15 +565,19 @@ fn written(
     edits: &IndexMap<i64, Edits>,
     across: &IndexMap<(i64, i64), Vec<u32>>,
     stored: &BTreeSet<u32>,
+    remakes: &IndexMap<u32, Arc<Insn>>,
     frame: &mut Frame,
 ) -> Result<LirBody, String> {
     let widths = spiller::_widest(body, stored);
     let mut cells: IndexMap<u32, crate::model::ir::Mem> = IndexMap::default();
-    for value in stored {
+    for value in stored.iter().filter(|value| !remakes.contains_key(*value)) {
         let width = widths.get(value).copied().unwrap_or(2);
         cells.insert(*value, frame.cell(*value, width).map_err(|error| error.to_string())?);
     }
-    let reload = |beside: &Insn, value: u32| spiller::_reload(beside, value, &cells[&value]);
+    let reload = |beside: &Insn, value: u32| match remakes.get(&value) {
+        Some(one) => remade(one, beside),
+        None => spiller::_reload(beside, value, &cells[&value]),
+    };
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut blocks: Vec<LirBlock> = Vec::new();
     let mut bridges: Vec<LirBlock> = Vec::new();
@@ -558,7 +611,7 @@ fn written(
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         // A phi's result is written when control enters; its store comes first.
         for phi in &block.phis {
-            if stored.contains(&phi.result) {
+            if stored.contains(&phi.result) && !remakes.contains_key(&phi.result) {
                 if let Some(first) = block.insns.first() {
                     insns.push(spiller::_store(first, phi.result, &cells[&phi.result]));
                 }
@@ -594,7 +647,7 @@ fn written(
             }
             insns.push(Arc::clone(&one));
             for value in &one.defines {
-                if stored.contains(value) && !block.phis.iter().any(|phi| phi.result == *value) {
+                if stored.contains(value) && !remakes.contains_key(value) && !block.phis.iter().any(|phi| phi.result == *value) {
                     insns.push(spiller::_store(&one, *value, &cells[value]));
                 }
             }
