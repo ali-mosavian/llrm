@@ -71,3 +71,9 @@ pub mod verify;
 
 #[cfg(test)]
 mod pricing_tests;
+#[cfg(test)]
+pub mod regalloc_input;
+#[cfg(test)]
+mod regalloc_total_tests;
+#[cfg(test)]
+mod regalloc_fuzz_tests;

@@ -135,15 +135,14 @@ pub fn spilled_from(
     // Before any cell names a slot.
     _color_slots(body, &stored, &_widest(body, &stored), frame)?;
     let narrow = _literals(body, &stored, true);
-    let (body, next, short) = _short_update_runs(body, &stored, frame, fresh)?;
+    let (body, next) = _short_update_runs(body, &stored, frame, fresh)?;
     fresh = next;
-    made.extend(short);
-    let (body, next, local) = _local_updates(&body, &stored, frame, fresh)?;
+    let (body, next) = _local_updates(&body, &stored, frame, fresh)?;
     fresh = next;
-    made.extend(local);
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
+    let body = _sunk_from_copies(&body, &addresses.keys().copied().collect());
     let r#final = _final_uses(&body);
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
@@ -151,8 +150,16 @@ pub fn spilled_from(
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
+        // Where the parallel copy being copied begins in `insns`: what its
+        // moves read is made before all of them, not between two.
+        let mut copy: Option<(i64, usize)> = None;
         for original in &block.insns {
             let mut one = Arc::clone(original);
+            copy = match (one.group, copy) {
+                (Some(group), Some((open, at))) if group == open => Some((open, at)),
+                (Some(group), _) => Some((group, insns.len())),
+                (None, _) => None,
+            };
             if _identity(&one, &stored, frame) {
                 identities.insert(key(&one));
                 insns.push(one);
@@ -236,7 +243,14 @@ pub fn spilled_from(
                 } else {
                     _reload(&one, fresh, &frame_homes[&value].0)
                 };
-                insns.push(_with(&inserted, |made| made.rematerialized = true));
+                let product = _with(&inserted, |made| made.rematerialized = true);
+                match &mut copy {
+                    Some((_, at)) => {
+                        insns.insert(*at, product);
+                        *at += 1;
+                    }
+                    None => insns.push(product),
+                }
                 made.insert(fresh);
                 fresh += 1;
             }
@@ -254,26 +268,20 @@ pub fn spilled_from(
                 insns.push(direct);
                 continue;
             }
-            if let Some((before, loaded)) = _memory_source_read_first(&one, &stored, fresh) {
+            if let Some((read, loaded)) = _memory_source_read_first(&one, &stored, fresh) {
                 one = loaded;
                 fresh += 1;
-                insns.push(before);
+                // The read names the cell's values: the spilled ones come back first.
+                let (reloads, renamed) = _reloaded(&read, &stored, frame, &mut fresh)?;
+                insns.extend(reloads);
+                insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
                 if let Some(direct) = _tied(&one, &stored, frame)? {
                     insns.push(direct);
                     continue;
                 }
             }
-            let mut before: Vec<Arc<Insn>> = Vec::new();
             let mut after: Vec<Arc<Insn>> = Vec::new();
-            let mut rename: IndexMap<u32, u32> = IndexMap::default();
-            for value in &one.uses {
-                if !stored.contains(value) || rename.contains_key(value) {
-                    continue;
-                }
-                rename.insert(*value, fresh);
-                before.push(_reload(&one, fresh, &frame.cell(*value, _width(&one, *value))?));
-                fresh += 1;
-            }
+            let (before, mut rename) = _reloaded(&one, &stored, frame, &mut fresh)?;
             for value in &one.defines {
                 if !stored.contains(value) {
                     continue;
@@ -330,6 +338,56 @@ pub fn spilled_from(
     Ok((result, made))
 }
 
+/// The reloads of the spilled values `one` reads, and the value each is read as.
+fn _reloaded(one: &Insn, stored: &BTreeSet<u32>, frame: &mut Frame, fresh: &mut u32) -> Result<(Vec<Arc<Insn>>, IndexMap<u32, u32>), Error> {
+    let mut rename: IndexMap<u32, u32> = IndexMap::default();
+    let mut before: Vec<Arc<Insn>> = Vec::new();
+    for value in &one.uses {
+        if !stored.contains(value) || rename.contains_key(value) {
+            continue;
+        }
+        rename.insert(*value, *fresh);
+        before.push(_reload(one, *fresh, &frame.cell(*value, _width(one, *value))?));
+        *fresh += 1;
+    }
+    Ok((before, rename))
+}
+
+/// `body` with each move of a parallel copy that reads a value in `reading`
+/// made a plain move after the copy. The value is then made again for that
+/// one move, beside it, rather than for the copy: it would live across all of
+/// them. A move that reads one value and writes another is as correct there,
+/// since a copy reads before it writes.
+fn _sunk_from_copies(body: &LirBody, reading: &BTreeSet<u32>) -> LirBody {
+    let moved = |one: &Insn| _group_source(one).is_some_and(|source| reading.contains(&source.value));
+    if !body.insns().iter().any(|one| moved(one)) {
+        return body.clone();
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns: Vec<Arc<Insn>> = Vec::new();
+            let mut sunk: Vec<Arc<Insn>> = Vec::new();
+            let mut copy: Option<i64> = None;
+            for one in &block.insns {
+                if one.group != copy {
+                    insns.append(&mut sunk);
+                }
+                copy = one.group;
+                if moved(one) {
+                    sunk.push(_with(one, |made| made.group = None));
+                } else {
+                    insns.push(Arc::clone(one));
+                }
+            }
+            insns.append(&mut sunk);
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
+
 /// Keep a just-defined spilled value in a register through one update.
 ///
 /// Only a source that dies at the copy: the update now writes its register.
@@ -338,10 +396,9 @@ fn _short_update_runs(
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
-) -> Result<(LirBody, u32, BTreeSet<u32>), Error> {
+) -> Result<(LirBody, u32), Error> {
     let index = ranges::indexed(body);
     let live = ranges::intervals(body, Some(&index));
-    let mut made: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -386,19 +443,18 @@ fn _short_update_runs(
             let updated = _renamed(second, &renamed);
             insns.push(updated);
             insns.push(_store(second, outof, &frame.cell(into, width)?));
-            made.insert(outof);
             position += 2;
         }
         blocks.push(block.with_insns(insns));
     }
-    Ok((body.with_blocks(blocks), fresh, made))
+    Ok((body.with_blocks(blocks), fresh))
 }
 
 /// An update of a spilled value whose result is read again in its block,
 /// as LLVM's local split: reloaded once, updated and read in a register,
 /// and stored only if still live after its last read there. Spilled whole,
 /// the update ran in memory and each read reloaded.
-fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut fresh: u32) -> Result<(LirBody, u32, BTreeSet<u32>), Error> {
+fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut fresh: u32) -> Result<(LirBody, u32), Error> {
     let index = ranges::indexed(body);
     let live = ranges::intervals(body, Some(&index));
     let register_only = |one: &Insn| {
@@ -409,7 +465,6 @@ fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut
             && one.clobbers_high.is_empty()
             && one.what.as_ref().is_some_and(|what| !what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_))))
     };
-    let mut made: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.clone();
@@ -457,7 +512,6 @@ fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut
             let cell = frame.cell(value, width)?;
             let register = fresh;
             fresh += 1;
-            made.insert(register);
             let renamed = IndexMap::from_iter([(value, register)]);
             for at in &reads {
                 insns[*at] = _renamed(&insns[*at], &renamed);
@@ -472,7 +526,7 @@ fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut
         }
         blocks.push(block.with_insns(insns));
     }
-    Ok((body.with_blocks(blocks), fresh, made))
+    Ok((body.with_blocks(blocks), fresh))
 }
 
 /// A move between two spilled values that share one slot.
@@ -2742,6 +2796,48 @@ mod tests {
 
     fn _recreated(insns: &[Arc<Insn>]) -> Vec<&Arc<Insn>> {
         insns.iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Address)).collect()
+    }
+
+    /// `p = *p` with `p` spilled: the load read its own base from a register
+    /// nothing had reloaded, and the allocator emitted `mov cx, [bx]` with bx
+    /// never set (found by the allocator fuzz lane, seed 25).
+    #[test]
+    fn test_a_spilled_value_read_as_the_base_of_its_own_load_is_reloaded_first() {
+        let cell = Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
+        let first = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(8, 2)]), &[1], &[]);
+        let walk = insn(4, (4, 6), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), &[1], &[1]);
+        let store = insn(8, (8, 10), semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]), &[2], &[1]);
+        let result = _out(&_body(vec![first, walk, store]), &[1]);
+        let mut defined: BTreeSet<u32> = BTreeSet::new();
+        for one in &result {
+            for read in &one.uses {
+                assert!(defined.contains(read), "value#{read} is read before anything defines it: {one:?}");
+            }
+            defined.extend(one.defines.iter().copied());
+        }
+    }
+
+    /// A rematerialized address inserted between two moves of a parallel
+    /// copy cut the copy in two, and lived across the rest of it (#104:
+    /// ten slots, spilled again without end; with more moves than registers,
+    /// a value for each, at once). The move that reads it leaves the copy and
+    /// follows it, with the address made beside it.
+    #[test]
+    fn test_a_move_of_a_parallel_copy_that_reads_a_remade_value_follows_the_copy() {
+        let source = _frame_address(-132, 2);
+        let body = _body(vec![
+            _lea(0, (0, 3), &source),
+            _move(10, 5, Some(1), 0x100),
+            _move(11, 1, Some(1), 0x100),
+            _move(12, 6, Some(1), 0x100),
+            _add(2, 10, 0x110),
+        ]);
+        let result = _out(&body, &[1]);
+        let copy: Vec<usize> = (0..result.len()).filter(|at| result[*at].group == Some(1)).collect();
+        assert_eq!(copy.len(), 2);
+        assert_eq!(copy[1] - copy[0], 1, "one parallel copy, in one piece: {copy:?}");
+        let made = result.iter().position(|one| one.rematerialized).expect("the address is made again");
+        assert!(made > copy[1] && result[made + 1].defines == [11], "made at {made}, the copy ends at {}", copy[1]);
     }
 
     #[test]
