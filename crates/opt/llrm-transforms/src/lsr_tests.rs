@@ -1746,3 +1746,43 @@ fn test_a_loop_the_pass_cannot_improve_is_left_as_it_is() {
     let loop_of = |text: &str| text.split("\nl1:").nth(1).and_then(|rest| rest.split("\n\n").next()).unwrap_or_default().to_owned();
     assert_eq!(loop_of(&printed), loop_of(&crate::testing::printed(&before)), "{printed}");
 }
+
+/// `a[i]` over a huge pointer, as C's `__huge` lowers it: the counter beside
+/// a pointer that each trip advances with a carry into its selector.
+const HUGE_WALK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+
+define i16 @f(ptr addrspace(3) %a, i16 %n) {
+start:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l ]
+  %p = phi ptr addrspace(3) [ %a, %start ], [ %p.next, %l ]
+  %v = load i16, ptr addrspace(3) %p
+  %s.next = add i16 %s, %v
+  %p.next = getelementptr inbounds i16, ptr addrspace(3) %p, i16 1
+  %i.next = add nsw i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %s.next
+}
+";
+
+/// Every advance of a huge pointer pays the carry into its selector, so
+/// an integer offset and a `getelementptr` per use saves nothing over the
+/// pointer that steps once. With the carry dear, the pass swapped the
+/// pointer for `%lsr.iv` and kept the carry in the loop all the same.
+#[test]
+fn test_a_huge_pointer_walk_is_not_swapped_for_an_offset_that_carries_too() {
+    let machine = Tuned { costs: OperationCosts { carry: 30, ..target().costs }, ..target() };
+    let mut after = parsed(HUGE_WALK);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr);
+    manager.run_module(&mut after, Rc::new(machine)).unwrap();
+    let printed = printed(&after);
+    assert!(!printed.contains("lsr.iv"), "{printed}");
+}

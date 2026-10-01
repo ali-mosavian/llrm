@@ -208,6 +208,8 @@ struct Plan {
 struct Problem<'a> {
     target: &'a Target<'a>,
     candidates: Vec<Candidate>,
+    /// What each candidate's step costs a trip.
+    steps: Vec<i64>,
     sites: Vec<Site>,
     /// Each site's fit and price from each candidate.
     fits: Vec<Vec<Option<(Fit, Price)>>>,
@@ -327,9 +329,11 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         .iter()
         .map(|one| exit.as_ref().filter(|exit| _steps_before_test(function, &exit.proof, one) && _comparable(view, one)).and_then(|exit| _exit_price(target, exit, one, &mut keys)))
         .collect();
+    let steps = candidates.iter().map(|one| _step(view, target, one)).collect();
     let problem = Problem {
         target,
         candidates,
+        steps,
         sites,
         fits,
         exit,
@@ -544,6 +548,15 @@ fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64
             loop_.body.iter().map(|&at| (at, liveness::live_points(function, &found, cfg::block(at)).into_iter().map(|(_, before, _)| before.iter().any(|&one| own(one))).collect())).collect()
         })
         .collect()
+}
+
+/// What a trip pays to advance `one`: an add, or the carry into the selector
+/// of a pointer in a space that has one (a huge pointer's).
+fn _step(view: &memory::Unit, target: &Target, one: &Candidate) -> i64 {
+    match one.pointer.map(|ty| view.context.types.get(ty)) {
+        Some(Type::Pointer(space)) if view.layout.carries(*space) => target.costs.carry,
+        _ => target.costs.add,
+    }
 }
 
 /// The candidates: each use's own recurrence, less its symbols and its
@@ -845,6 +858,13 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
         }
         UseKind::Address => {
             let native = target.forms.first()?;
+            // An integer cannot index a pair in a carrying space: each trip
+            // advances the pointer by it, and pays the carry as the pointer's own step would.
+            if let Type::Pointer(space) = view.context.types.get(view.function.value(site.one.value).ty)
+                && view.layout.carries(*space)
+            {
+                price.cost += costs.carry - native.use_cost;
+            }
             if pointer_base(&fit) {
                 // A global is a displacement beside two registers; a frame object
                 // takes BP for its own, and leaves one register for all it adds.
@@ -1068,7 +1088,7 @@ impl Problem<'_> {
             return None;
         }
         let costs = &self.target.costs;
-        let mut cost = set.len() as i64 * costs.add * self.latch;
+        let mut cost = set.iter().map(|&one| self.steps[one]).sum::<i64>() * self.latch;
         // A counter wider than the native index pays the operand-size prefix a step.
         let native = self.target.forms.first().map_or(i64::MAX, |form| form.index_width * 8);
         cost += set.iter().filter(|&&one| i64::from(self.candidates[one].of.width()) > native).count() as i64 * costs.prefix * self.latch;
