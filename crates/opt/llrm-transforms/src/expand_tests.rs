@@ -18,8 +18,7 @@ fn forms(text: &llrm_analysis::generated::Case) -> Vec<(usize, Linear, Linear)> 
     let unit = Unit::of(&module, &layout, function);
     let loop_ = unit.shape().loops[0].clone();
     let counters = induction::basics(&unit, &loop_);
-    let derived = induction::derived(&unit, &loop_, Some(&counters));
-    let users = induction::users(&unit, &loop_, &counters, &derived);
+    let users = induction::recurrences(&unit, &loop_, &counters);
     text.tracked
         .iter()
         .enumerate()

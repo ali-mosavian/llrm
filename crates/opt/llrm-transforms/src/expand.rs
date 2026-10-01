@@ -2,9 +2,7 @@
 //! built of its terms scaled and added once each, before one instruction,
 //! and the least of several as compares and selects.
 
-use std::collections::BTreeMap;
-
-use llrm_analysis::induction::Linear;
+use llrm_analysis::induction::{Linear, Monomial};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand};
@@ -78,17 +76,15 @@ fn sum_of(context: &mut Context, function: &mut Function, sum: &Linear, at: Posi
     }
     let mut total: Option<Operand> = None;
     let mut negative = Vec::new();
-    for (&value, factor) in &sum.terms {
+    for (product, factor) in &sum.terms {
         let factor = signed(factor, sum.width);
         let magnitude = BigInt::from(factor.magnitude().clone());
-        let alone = (None, Linear { constant: BigInt::from(0), terms: BTreeMap::from([(value, magnitude.clone())]), width: sum.width }, ty);
+        let alone = (None, Linear::monomial(product.clone(), magnitude.clone(), sum.width), ty);
         let scaled = match made.get(&alone) {
             Some(&one) => one,
             None => {
-                // A term is its value's low bits.
-                let bits = context.types.int_bits(function.value(value).ty).unwrap_or(sum.width);
-                let term = if bits > sum.width { placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at) } else { Operand::Value(value) };
-                let one = scaled(context, function, term, &magnitude, sum.width, at);
+                let one = product_of(context, function, product, sum.width, at, made);
+                let one = scaled(context, function, one, &magnitude, sum.width, at);
                 made.insert(alone, one);
                 one
             }
@@ -117,6 +113,28 @@ fn sum_of(context: &mut Context, function: &mut Function, sum: &Linear, at: Posi
     };
     made.insert((None, sum.clone(), ty), result);
     result
+}
+
+/// The unknowns of `product` multiplied once, a product of invariants in
+/// the block `at` is in: each factor is its value's low bits.
+fn product_of(context: &mut Context, function: &mut Function, product: &Monomial, width: u32, at: Position, made: &mut HashMap<(Option<Operand>, Linear, TypeId), Operand>) -> Operand {
+    let ty = context.types.int(width);
+    let key = (None, Linear::monomial(product.clone(), BigInt::from(1), width), ty);
+    if let Some(&one) = made.get(&key) {
+        return one;
+    }
+    let mut made_product = None;
+    for &value in product.values() {
+        let bits = context.types.int_bits(function.value(value).ty).unwrap_or(width);
+        let factor = if bits > width { placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at) } else { Operand::Value(value) };
+        made_product = Some(match made_product {
+            Some(so_far) => placed(context, function, Opcode::Binary(BinaryOp::Mul), ty, vec![so_far, factor], at),
+            None => factor,
+        });
+    }
+    let made_product = made_product.expect("a product has a factor");
+    made.insert(key, made_product);
+    made_product
 }
 
 /// `value * k`, `k` positive: itself, a shift or a multiply.

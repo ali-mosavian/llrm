@@ -250,8 +250,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
     let counters = induction::basics(view, loop_);
-    let derived = induction::derived(view, loop_, Some(&counters));
-    let users = induction::users(view, loop_, &counters, &derived);
+    let users = induction::users(view, loop_, &counters);
     if users.counters.is_empty() || users.counters.iter().any(|&one| _latch_arm(function, one, cfg::block(latch)).is_none()) {
         return None;
     }
@@ -496,13 +495,13 @@ fn _live_anyway(function: &Function, loop_: &Loop, users: &Users, exit: Option<&
 fn _symbols(users: &Users, exit: Option<&Exit>) -> BTreeSet<ValueId> {
     let mut symbols = BTreeSet::new();
     for of in users.values.values() {
-        symbols.extend(of.start.terms.keys().chain(of.step.terms.keys()));
+        symbols.extend(of.start.unknowns().chain(of.step.unknowns()));
         if let Some(Operand::Value(pointer)) = of.pointer {
             symbols.insert(pointer);
         }
     }
     if let Some(exit) = exit {
-        symbols.extend(exit.trips.terms.keys());
+        symbols.extend(exit.trips.unknowns());
         if let induction::AffineOperand::Value(bound, _) = exit.proof.bound {
             symbols.insert(bound);
         }
@@ -577,7 +576,7 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
         let terms = of.start.terms.iter().collect::<Vec<_>>();
         if terms.len() <= _SPLIT_TERMS {
             for mask in 0..1_usize << terms.len() {
-                let part = terms.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).map(|(_, (value, factor))| (**value, (*factor).clone())).collect();
+                let part = terms.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).map(|(_, (value, factor))| ((*value).clone(), (*factor).clone())).collect();
                 let symbolic = Linear { constant: BigInt::from(0), terms: part, width: of.width() };
                 add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None);
                 add(&mut found, Recurrence { start: symbolic.plus(&Linear::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None);
@@ -994,7 +993,7 @@ impl Problem<'_> {
     /// else a new register.
     fn resident(&self, key: usize) -> Resident {
         let named = match &self.keys[key] {
-            (None, sum) if sum.constant == BigInt::from(0) && sum.terms.len() == 1 => sum.terms.iter().find(|(_, factor)| **factor == BigInt::from(1)).map(|(value, _)| *value),
+            (None, sum) if sum.constant == BigInt::from(0) && sum.terms.len() == 1 => sum.terms.iter().find(|(_, factor)| **factor == BigInt::from(1)).and_then(|(product, _)| product.single()),
             (Some(Operand::Value(value)), sum) if sum.is_zero() => Some(*value),
             _ => None,
         };
@@ -1193,7 +1192,7 @@ impl Problem<'_> {
     /// Whether `key` is a value the loop holds anyway.
     fn free(&self, key: &Key) -> bool {
         match key {
-            (None, sum) => sum.constant == BigInt::from(0) && sum.terms.len() == 1 && sum.terms.iter().all(|(value, factor)| *factor == BigInt::from(1) && self.live.contains(value)),
+            (None, sum) => sum.constant == BigInt::from(0) && sum.terms.len() == 1 && sum.terms.iter().all(|(product, factor)| *factor == BigInt::from(1) && product.single().is_some_and(|value| self.live.contains(&value))),
             (Some(Operand::Value(value)), sum) => sum.is_zero() && (self.live.contains(value) || self.frames.contains(value)),
             (Some(_), sum) => sum.is_zero(),
         }

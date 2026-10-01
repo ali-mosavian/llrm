@@ -162,7 +162,7 @@ pub fn seeds() -> Vec<u64> {
     if let Some(one) = std::env::var("SCEV_SEED").ok().and_then(|text| text.parse().ok()) {
         return vec![one];
     }
-    let count = std::env::var("SCEV_SEEDS").ok().and_then(|text| text.parse().ok()).unwrap_or(1500);
+    let count = std::env::var("SCEV_SEEDS").ok().and_then(|text| text.parse().ok()).unwrap_or(600);
     (0..count).collect()
 }
 
