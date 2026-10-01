@@ -1,0 +1,71 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "unsignedindex.c" main=1
+- DBSrcCue f1 3 1
+SYM y1 name="sum" base="sum" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_4
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_LONG_POINTER
+SYM y3 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_UNSIGNED
+l2 CGLastParm
+t3 CGTemp TY_INT_4
+SYM y4 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INT_4
+SYM y5 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_UNSIGNED
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 5 1
+n6 CGFEName y4 TY_INT_4
+n7 CGInteger 0 TY_INTEGER
+n8 CGAssign n6 n7 TY_INT_4
+- CGDone n8
+- DBSrcCue f1 7 1
+n9 CGFEName y5 TY_UNSIGNED
+n10 CGInteger 0 TY_INTEGER
+n11 CGAssign n9 n10 TY_UNSIGNED
+- CGDone n11
+- CGControl O_LABEL n0 l4
+n12 CGFEName y5 TY_UNSIGNED
+n13 CGUnary O_POINTS n12 TY_UNSIGNED
+n14 CGFEName y3 TY_UNSIGNED
+n15 CGUnary O_POINTS n14 TY_UNSIGNED
+n16 CGCompare O_LT n13 n15 TY_UNSIGNED
+- CGControl O_IF_FALSE n16 l5
+- DBSrcCue f1 8 1
+n17 CGFEName y4 TY_INT_4
+n18 CGFEName y2 TY_LONG_POINTER
+n19 CGUnary O_POINTS n18 TY_LONG_POINTER
+n20 CGFEName y5 TY_UNSIGNED
+n21 CGUnary O_POINTS n20 TY_UNSIGNED
+n22 CGInteger 2 TY_INTEGER
+n23 CGBinary O_TIMES n21 n22 TY_INTEGER
+n24 CGBinary O_PLUS n19 n23 TY_LONG_POINTER
+n25 CGUnary O_POINTS n24 TY_INTEGER
+n26 CGPreGets O_PLUS n17 n25 TY_INT_4
+- CGDone n26
+n27 CGFEName y5 TY_UNSIGNED
+n28 CGInteger 1 TY_INTEGER
+n29 CGPostGets O_PLUS n27 n28 TY_UNSIGNED
+- CGDone n29
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 9 1
+n30 CGFEName y4 TY_INT_4
+n31 CGUnary O_POINTS n30 TY_INT_4
+n32 CGUnary O_CONVERT n31 TY_INT_4
+n33 CGTempName t3 TY_INT_4
+n34 CGAssign n33 n32 TY_INT_4
+- CGDone n34
+- DBSrcCue f1 10 1
+n35 CGTempName t3 TY_INT_4
+n36 CGUnary O_POINTS n35 TY_INT_4
+- CGReturn n36 TY_INT_4
+STOP
+FINI

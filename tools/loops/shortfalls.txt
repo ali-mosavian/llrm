@@ -20,11 +20,14 @@ alias bas ivs-ideal #98 486-Os Core-Os
 alias bas mir-ivs #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 alias bas mir-ivs-ideal #98 386-Os 486-Os Core-Os P5-Os
 alias bas shape #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
+alias c invariant-loads #150 486-O2
 alias c ivs #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 alias c ivs-ideal #98 386-Os 486-Os Core-Os P5-Os
-alias c mir-ivs #98 386-O2 386-O3 P5-O2 P5-O3
+alias c memory-vs-ref #150 486-O2
+alias c mir-ivs #98 386-O2 386-O3 486-O2 P5-O2 P5-O3
 alias c mir-ivs-ideal #98 386-Os P5-Os
 alias c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+alias c size-vs-ref #150 486-O2
 bp3_frame c invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bp3_frame c ivs #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 bp3_frame c ivs-ideal #98 386-Os 486-Os Core-Os P5-Os
@@ -52,7 +55,7 @@ bsearch nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O
 bubble bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bubble bas shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bubble c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-bubble c size-vs-ref #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+bubble c size-vs-ref #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bubble nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bubble nib shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 chase bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
