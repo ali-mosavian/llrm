@@ -135,12 +135,10 @@ pub fn spilled_from(
     // Before any cell names a slot.
     _color_slots(body, &stored, &_widest(body, &stored), frame)?;
     let narrow = _literals(body, &stored, true);
-    let (body, next, short) = _short_update_runs(body, &stored, frame, fresh)?;
+    let (body, next) = _short_update_runs(body, &stored, frame, fresh)?;
     fresh = next;
-    made.extend(short);
-    let (body, next, local) = _local_updates(&body, &stored, frame, fresh)?;
+    let (body, next) = _local_updates(&body, &stored, frame, fresh)?;
     fresh = next;
-    made.extend(local);
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
@@ -151,8 +149,16 @@ pub fn spilled_from(
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
+        // Where the parallel copy being copied begins in `insns`: what its
+        // moves read is made before all of them, not between two.
+        let mut copy: Option<(i64, usize)> = None;
         for original in &block.insns {
             let mut one = Arc::clone(original);
+            copy = match (one.group, copy) {
+                (Some(group), Some((open, at))) if group == open => Some((open, at)),
+                (Some(group), _) => Some((group, insns.len())),
+                (None, _) => None,
+            };
             if _identity(&one, &stored, frame) {
                 identities.insert(key(&one));
                 insns.push(one);
@@ -236,7 +242,14 @@ pub fn spilled_from(
                 } else {
                     _reload(&one, fresh, &frame_homes[&value].0)
                 };
-                insns.push(_with(&inserted, |made| made.rematerialized = true));
+                let product = _with(&inserted, |made| made.rematerialized = true);
+                match &mut copy {
+                    Some((_, at)) => {
+                        insns.insert(*at, product);
+                        *at += 1;
+                    }
+                    None => insns.push(product),
+                }
                 made.insert(fresh);
                 fresh += 1;
             }
@@ -338,10 +351,9 @@ fn _short_update_runs(
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
-) -> Result<(LirBody, u32, BTreeSet<u32>), Error> {
+) -> Result<(LirBody, u32), Error> {
     let index = ranges::indexed(body);
     let live = ranges::intervals(body, Some(&index));
-    let mut made: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -386,19 +398,18 @@ fn _short_update_runs(
             let updated = _renamed(second, &renamed);
             insns.push(updated);
             insns.push(_store(second, outof, &frame.cell(into, width)?));
-            made.insert(outof);
             position += 2;
         }
         blocks.push(block.with_insns(insns));
     }
-    Ok((body.with_blocks(blocks), fresh, made))
+    Ok((body.with_blocks(blocks), fresh))
 }
 
 /// An update of a spilled value whose result is read again in its block,
 /// as LLVM's local split: reloaded once, updated and read in a register,
 /// and stored only if still live after its last read there. Spilled whole,
 /// the update ran in memory and each read reloaded.
-fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut fresh: u32) -> Result<(LirBody, u32, BTreeSet<u32>), Error> {
+fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut fresh: u32) -> Result<(LirBody, u32), Error> {
     let index = ranges::indexed(body);
     let live = ranges::intervals(body, Some(&index));
     let register_only = |one: &Insn| {
@@ -409,7 +420,6 @@ fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut
             && one.clobbers_high.is_empty()
             && one.what.as_ref().is_some_and(|what| !what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_))))
     };
-    let mut made: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.clone();
@@ -457,7 +467,6 @@ fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut
             let cell = frame.cell(value, width)?;
             let register = fresh;
             fresh += 1;
-            made.insert(register);
             let renamed = IndexMap::from_iter([(value, register)]);
             for at in &reads {
                 insns[*at] = _renamed(&insns[*at], &renamed);
@@ -472,7 +481,7 @@ fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut
         }
         blocks.push(block.with_insns(insns));
     }
-    Ok((body.with_blocks(blocks), fresh, made))
+    Ok((body.with_blocks(blocks), fresh))
 }
 
 /// A move between two spilled values that share one slot.
@@ -2742,6 +2751,27 @@ mod tests {
 
     fn _recreated(insns: &[Arc<Insn>]) -> Vec<&Arc<Insn>> {
         insns.iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Address)).collect()
+    }
+
+    /// A rematerialized address inserted between two moves of a parallel
+    /// copy cut the copy in two, and lived across the rest of it (#104:
+    /// ten slots, spilled again without end). It is made before the copy.
+    #[test]
+    fn test_a_value_made_for_a_move_of_a_parallel_copy_is_made_before_the_whole_copy() {
+        let source = _frame_address(-132, 2);
+        let body = _body(vec![
+            _lea(0, (0, 3), &source),
+            _move(10, 5, Some(1), 0x100),
+            _move(11, 1, Some(1), 0x100),
+            _move(12, 6, Some(1), 0x100),
+            _add(2, 10, 0x110),
+        ]);
+        let result = _out(&body, &[1]);
+        let copy: Vec<usize> = (0..result.len()).filter(|at| result[*at].group == Some(1)).collect();
+        assert_eq!(copy.len(), 3);
+        assert_eq!(copy[2] - copy[0], 2, "one parallel copy, in one piece: {copy:?}");
+        let made = result.iter().position(|one| one.rematerialized).expect("the address is made again");
+        assert!(made + 1 == copy[0], "made at {made}, the copy starts at {}", copy[0]);
     }
 
     #[test]

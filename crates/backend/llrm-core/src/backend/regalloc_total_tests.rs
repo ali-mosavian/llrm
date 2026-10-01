@@ -40,35 +40,22 @@ fn test_a_value_read_in_one_register_and_written_in_another_is_allocated() {
     assert!(done.is_ok(), "{:?}", done.err());
 }
 
-/// Whether a parallel copy has moves that all read each other's
-/// destinations, one of them through a frame slot.
-fn has_a_cycle_through_a_slot(body: &LirBody) -> bool {
-    use crate::backend::parcopy::{_into, _outof};
-    body.blocks.iter().any(|block| {
-        let mut groups: std::collections::BTreeMap<i64, Vec<(String, String, bool)>> = Default::default();
-        for one in block.insns.iter().filter(|one| one.group.is_some()) {
-            let what = one.what.as_ref().expect("a move");
-            let slot = matches!(what.dests[0], Loc::Mem(_)) || matches!(what.sources[0], Loc::Mem(_));
-            groups.entry(one.group.expect("filtered")).or_default().push((_into(one).unwrap(), _outof(one).unwrap(), slot));
-        }
-        groups.values().any(|group| {
-            let mut left: Vec<&(String, String, bool)> = group.iter().filter(|(into, outof, _)| into != outof).collect();
-            while let Some(at) = left.iter().position(|(into, _, _)| !left.iter().any(|(_, outof, _)| outof == into)) {
-                left.remove(at);
-            }
-            left.iter().any(|(_, _, slot)| *slot)
-        })
-    })
+/// The most moves one parallel copy holds.
+fn longest_copy(body: &LirBody) -> usize {
+    body.blocks.iter().map(|block| block.insns.iter().filter(|one| one.group.is_some()).count()).max().unwrap_or(0)
 }
 
 /// `conc7` at `--cpu Core`: a far-pointer loop spills a dword and the word
 /// of it another value reads, and the loop's parallel copy exchanges them.
-/// ParallelCopy refused it ("need a temporary", #106).
+/// ParallelCopy refused it ("need a temporary", #106). Which cycles the
+/// allocator leaves depends on how it spills, so the premise is the loop's
+/// pressure; the cycle's shape is pinned in parcopy's own tests.
 #[test]
 fn test_a_parallel_copy_cycle_through_a_frame_slot_is_scheduled() {
     let (body, mut phases) = before_regalloc("conc7_far.ll", CONC7, "Core");
+    let longest = longest_copy(&body);
+    assert!(longest >= 8, "premise: a loop-carried parallel copy of {longest} moves, more than the registers hold");
     let allocated = phases.remove(0).transform(body).expect("allocates");
-    assert!(has_a_cycle_through_a_slot(&allocated), "premise: a copy cycle through a slot");
     let done = through(allocated, phases);
     assert!(done.is_ok(), "{:?}", done.err());
 }
@@ -115,4 +102,24 @@ fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_r
     for one in body.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| target::far_load(what)) {
         assert!(matches!(one.sources.as_slice(), [Loc::Mem(_)]), "a far pointer load reads memory only: {one:?}");
     }
+}
+
+#[test]
+fn probe104() {
+    let (body, mut phases) = before_regalloc("walks10.ll", "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum", "386");
+    eprintln!("{}", crate::tools::stages::lir_stage("in", &[(body.name.clone(), body.clone())]));
+    let out = phases.remove(0).transform(body).unwrap();
+    eprintln!("{}", crate::tools::stages::lir_stage("out", &[(out.name.clone(), out.clone())]));
+}
+
+/// league.nib's `main` spills a value that was loaded, updated and stored
+/// again in a register (`x = x * 8` on a pointer deref). Taking every spiller
+/// product as unspillable refused it ("value#23 cannot be spilled and no
+/// register is free", #129): only a product that lives for one use is.
+#[test]
+fn test_a_value_the_spiller_updated_in_a_register_can_be_spilled_again() {
+    let (body, mut phases) = before_regalloc_in(Calls::Everything, "league.ll", "main", "386");
+    let allocated = phases.remove(0).transform(body).expect("allocates");
+    let reloads = allocated.insns().iter().filter(|one| one.spill_reload).count();
+    assert!(reloads > 0, "premise: the function spills");
 }
