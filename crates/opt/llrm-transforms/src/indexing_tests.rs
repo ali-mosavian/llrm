@@ -17,7 +17,7 @@ fn target(registers: i64) -> Tuned {
     let costs = OperationCosts { memory_update: 3, prefix: 1, extend: 3, ..Default::default() };
     let native = AddressForm { partners: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).unwrap() };
     let wide = AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, 1, 3, true, None).unwrap();
-    Tuned { costs, registers, call_registers: registers, address_forms: vec![native, wide] }
+    Tuned { costs, sizes: Default::default(), registers, call_registers: registers, address_forms: vec![native, wide] }
 }
 
 /// `text` in the DOS layout through `Strength` on `target`, computing what

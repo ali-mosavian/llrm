@@ -16,6 +16,11 @@ fn ids(module: &Module, names: &[&str]) -> BTreeSet<GlobalId> {
 /// The step over `module` from `roots`, the call priced `call`; each
 /// pipeline run as `(procedure, stage)`.
 fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String, String)>) {
+    stepped(module, roots, call, Threshold::default())
+}
+
+/// `step` with inlining's `threshold`.
+fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold) -> (Proved, Vec<(String, String)>) {
     let roots = ids(module, roots).into_iter().map(|id| (0, id)).collect();
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
@@ -26,7 +31,7 @@ fn step(module: &mut Module, roots: &[&str], call: i64) -> (Proved, Vec<(String,
             &mut modules,
             &roots,
             &costs,
-            Threshold::default(),
+            threshold,
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
                 Ok(())
@@ -137,7 +142,8 @@ b:
 #[test]
 fn test_agreed_actuals_specialize_and_a_constant_return_is_carried() {
     let mut module = parsed(STORES);
-    let (_, stages) = step(&mut module, &["f"], 40);
+    // With no inlining: a callee that stores to memory is inlined otherwise.
+    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold(0));
     let text = printed(&module);
     assert!(text.contains("  store i16 5, ptr @g\n"), "{text}");
     assert!(text.contains("  %s = add i16 7, %a\n"), "{text}");
@@ -255,10 +261,44 @@ fn test_the_step_runs_as_a_program_pass() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default() });
+    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size: false });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
+}
+
+#[test]
+fn test_a_size_build_weighs_bytes_not_clocks() {
+    // A public six-operation body at three sites: cheaper than three calls
+    // in clocks, dearer in bytes. -Os copied it and grew the code.
+    let text = "define i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  ret i16 %t5
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = call i16 @mix(i16 %p, i16 %q)
+  ret i16 %r
+}
+";
+    let calls = |size: bool| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, ..OperationCosts::default() }, ..Default::default() };
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size });
+        manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
+        printed(&module).matches("call i16 @mix").count()
+    };
+    assert_eq!((calls(false), calls(true)), (0, 3));
 }
 
 const STAMPED: &str = "@slot = global ptr null
