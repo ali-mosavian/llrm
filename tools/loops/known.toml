@@ -19,10 +19,6 @@ match = "llrm-c did not finish"
 issue = "#104"
 
 [[bug]]
-match = 'MIR .*conc\d+_s2_\S*_whole'
-issue = "#100"
-
-[[bug]]
 match = "need a temporary"
 issue = "#106"
 
