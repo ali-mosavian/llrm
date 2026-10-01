@@ -342,3 +342,40 @@ fn test_a_name_alone_states_no_three_way_compare() {
     assert_eq!(odds.by.get(&entry), Some(&Heuristic::Zero));
     assert!(close(odds.probability(entry, yes), 20.0 / 32.0));
 }
+
+/// A one-bit mask tested against 0 is a flag, not a quantity: LLVM's zero
+/// heuristic skips `(x & pow2) ==/!= 0`. deedlines tests `x AND 1`.
+#[test]
+fn test_a_single_bit_test_is_no_zero_compare() {
+    for mask in ["1", "128"] {
+        let (odds, at) = estimate(&format!(
+            "define i16 @f(i16 %x) {{
+entry:
+  %b = and i16 %x, {mask}
+  %c = icmp ne i16 %b, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}}
+"
+        ));
+        assert_ne!(odds.by.get(&at("entry")), Some(&Heuristic::Zero), "and {mask}");
+    }
+    // A mask of several bits is a quantity: `x & 6 != 0` keeps the heuristic.
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %x) {
+entry:
+  %b = and i16 %x, 6
+  %c = icmp ne i16 %b, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Zero));
+}
