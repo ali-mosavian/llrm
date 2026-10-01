@@ -1,5 +1,6 @@
 """llrm-qb against BC 4.5, both run in DOSBox: tests/qb-bc/NAME.bas prints what
-tests/qb-bc/NAME.txt records (BC's own output) under BC's switches and llrm-qb's.
+tests/qb-bc/NAME.txt records (BC's own output, or for a documented divergence
+llrm's) under BC's switches and llrm-qb's.
 
 For what the matrix (tools/e2e, BC against its own rewrite) cannot hold: BC
 /D's overflow checks, and the front end's own code. Needs DOSBox-X and the QB
@@ -21,8 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 QB = Path(os.environ.get("LLRM_QB", ROOT / "target" / "release" / "llrm-qb"))
 CASES = {
     # BC's switches, llrm-qb's flags
-    "overflow-ops": ("/O /E /X /D", ["-ftrapv"]),
-    "overflow-in-place": ("/O /E /X /D", ["-ftrapv"]),
+    "overflow-ops": ("/O /E /X /D", ["-ftrapv"], True),
+    # llrm's own behaviour where BC's is its instruction selection's (docs/frontends/qb/divergences.md)
+    "overflow-target-unchanged": ("/O /E /X /D", ["-ftrapv"], False),
 }
 
 
@@ -45,7 +47,7 @@ def test_llrm_qb_prints_what_bc_does(name, tmp_path):
             pytest.fail(message)
         warnings.warn(message, stacklevel=1)
         pytest.skip(message)
-    switches, flags = CASES[name]
+    switches, flags, same_as_bc = CASES[name]
     source = ROOT / "tests" / "qb-bc" / f"{name}.bas"
     shutil.copy(source, tmp_path / "P.BAS")
     made = subprocess.run([QB, "P.BAS", "--dialect", "qb45", "--runtime", "qb45", *flags, "-o", "Q.OBJ"], cwd=tmp_path, capture_output=True, text=True)
@@ -57,5 +59,8 @@ def test_llrm_qb_prints_what_bc_does(name, tmp_path):
     assert dosbox.launch(tmp_path, QB45, lines, timeout=180).finished
     bc, llrm = (dosbox.read_dos(tmp_path, f"{one}.TXT").replace("\r", "") for one in ("P", "Q"))
     golden = (ROOT / "tests" / "qb-bc" / f"{name}.txt").read_text()
-    assert bc == golden, "BC's output is not the golden"
+    if same_as_bc:
+        assert bc == golden, "BC's output is not the golden"
+    else:
+        assert bc != golden, "BC now agrees: this is no divergence"
     assert llrm == golden

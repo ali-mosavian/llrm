@@ -1,11 +1,9 @@
 err 6  0 
-add-32768 
+addv 7 
 err 6  0 
-addv-32764 
+sub 7 
 err 6  0 
-sub 32767 
-err 6  0 
-subv 32763 
+subv 7 
 err 6  0 
 mul 32767 
 err 6  0 

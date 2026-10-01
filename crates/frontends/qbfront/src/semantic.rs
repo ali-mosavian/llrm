@@ -312,11 +312,6 @@ struct Compiler {
     /// statements, before that one too, is one RESUME may reach and an
     /// error is located at.
     handles_errors: bool,
-    /// The assignment being lowered stores an INTEGER add or subtract in place,
-    /// as BC's `add [x],ax` does: the next `binary` is its top-level one.
-    in_place_sum: bool,
-    /// Where that sum overflowed, raised after the store.
-    overflow_after_store: Option<Operand>,
     error_handlers: BTreeSet<u32>,
     /// The module body has ON ERROR GOTO, whose handler takes an error any
     /// procedure raises, on that procedure's frame, and RESUMEs there.
@@ -1413,8 +1408,6 @@ impl Compiler {
             pending_allocations: BTreeMap::new(),
             option_base: 0,
             statement_entries: Vec::new(),
-            in_place_sum: false,
-            overflow_after_store: None,
             data_entries: Vec::new(),
             pending_numeric_line: None,
             current_source_line: 0,
@@ -3042,18 +3035,9 @@ impl Compiler {
                         )?;
                         continue;
                     }
-                    // BC adds or subtracts into a scalar INTEGER in place (`x = x + e`,
-                    // `x = e + x`, `x = x - e`): the wrapped result is stored, then error 6.
-                    // BC drops a `+ 0` first, so `x = x + 1 + 0` is in place too.
-                    let value = if self.options.checked_overflow && destination_type == INTEGER && in_place_target(target, without_zero(value)) { without_zero(value) } else { value };
-                    self.in_place_sum = self.options.checked_overflow && destination_type == INTEGER && in_place_target(target, value);
                     let (source, source_type) = self.expression(value)?;
-                    self.in_place_sum = false;
                     let source = self.convert(source, source_type, destination_type)?;
                     self.emit("store", Vec::new(), vec![destination, source]);
-                    if let Some(overflowed) = self.overflow_after_store.take() {
-                        self.raise_if(overflowed, 6)?;
-                    }
                 }
                 Statement::Label(name, _) => {
                     let target = *self.labels.get(name).ok_or_else(|| SemanticError {
@@ -8086,8 +8070,6 @@ impl Compiler {
         left: &Expr,
         right: &Expr,
     ) -> Result<(Operand, u32), SemanticError> {
-        // Only the assignment's own top-level operation stores before it raises.
-        let in_place = std::mem::take(&mut self.in_place_sum);
         if op == Binary::Power {
             return self.power(left, right);
         }
@@ -8218,7 +8200,7 @@ impl Compiler {
             && matches!(common, INTEGER | LONG)
             && (matches!(op, Binary::Add | Binary::Subtract) || (op == Binary::Multiply && common == INTEGER))
         {
-            self.overflow_checked(operation, result, left_operand, right_operand, common, in_place && common == INTEGER)?;
+            self.overflow_checked(operation, result, left_operand, right_operand, common)?;
             return Ok((Operand::Value(result), result_type));
         }
         self.emit(operation, vec![result], vec![left_operand, right_operand]);
@@ -8290,20 +8272,12 @@ impl Compiler {
     /// raising ERROR 6 where it overflows as BC's /D checks it: INTEGER
     /// computed as LONG and narrowed; LONG + and - by their operands' and
     /// result's signs. BC's LONG multiply is software and unchecked.
-    fn overflow_checked(&mut self, operation: &'static str, result: u32, left: Operand, right: Operand, type_id: u32, after_store: bool) -> Result<(), SemanticError> {
+    fn overflow_checked(&mut self, operation: &'static str, result: u32, left: Operand, right: Operand, type_id: u32) -> Result<(), SemanticError> {
         if type_id == INTEGER {
             let left = self.convert(left, INTEGER, LONG)?;
             let right = self.convert(right, INTEGER, LONG)?;
             let wide = self.computed(operation, LONG, vec![left, right]);
-            if after_store {
-                // The wrapped sum is the result; the assignment raises once it has stored it.
-                let bound = |value: i64| Operand::Constant(LONG, Number::Integer(value));
-                let low = self.computed("lt", BOOLEAN, vec![wide.clone(), bound(-32768)]);
-                let high = self.computed("gt", BOOLEAN, vec![wide.clone(), bound(32767)]);
-                self.overflow_after_store = Some(self.computed("or", BOOLEAN, vec![low, high]));
-            } else {
-                self.narrowing_checked(&wide, LONG)?;
-            }
+            self.narrowing_checked(&wide, LONG)?;
             self.emit("convert", vec![result], vec![wide]);
             return Ok(());
         }
@@ -10284,28 +10258,6 @@ fn common_type(left: u32, right: u32, op: Binary) -> Result<u32, SemanticError> 
 
 /// The operator and operand of an augmented assignment's rewritten value,
 /// `$AUG<token>(operand)`.
-/// `value` without an added or subtracted literal 0, which BC folds away.
-fn without_zero(value: &Expr) -> &Expr {
-    let zero = |one: &Expr| matches!(one, Expr::Literal(Literal::Integer(0, _), _));
-    match value {
-        Expr::Binary { op: Binary::Add | Binary::Subtract, left, right, .. } if zero(right) => without_zero(left),
-        Expr::Binary { op: Binary::Add, left, right, .. } if zero(left) => without_zero(right),
-        other => other,
-    }
-}
-
-/// Whether `value` is an add or subtract BC does in place on `target`, a
-/// scalar variable: the target is the left operand, or either of an add's.
-fn in_place_target(target: &Expr, value: &Expr) -> bool {
-    let Expr::Name(name, _) = target else { return false };
-    let is_target = |one: &Expr| matches!(one, Expr::Name(other, _) if other.eq_ignore_ascii_case(name));
-    match value {
-        Expr::Binary { op: Binary::Add, left, right, .. } => is_target(left) || is_target(right),
-        Expr::Binary { op: Binary::Subtract, left, .. } => is_target(left),
-        _ => false,
-    }
-}
-
 fn augmented_op(value: &Expr) -> Option<(Binary, &Expr)> {
     let Expr::Apply { name, arguments, .. } = value else { return None };
     let token = name.strip_prefix(crate::generated_parser::AUGMENTED)?;

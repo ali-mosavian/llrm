@@ -1,12 +1,11 @@
-' INTEGER overflow under BC /D and llrm -ftrapv: which statement stores what before error 6.
+' INTEGER overflow under BC /D and llrm -ftrapv, where the two agree: the target keeps its old value.
 DEFINT A-Z
 DIM l AS LONG, m AS LONG, r AS LONG
 ON ERROR GOTO h
 x = 32767: y = 5
-x = x + 1: PRINT "add"; x
-x = 32767: x = x + y: PRINT "addv"; x
-x = -32768: x = x - 1: PRINT "sub"; x
-x = -32768: x = x - y: PRINT "subv"; x
+x = 7: x = y + 32767: PRINT "addv"; x
+x = 7: x = y - -32768: PRINT "sub"; x
+x = 7: x = -32768 - y: PRINT "subv"; x
 x = 32767: x = x * 2: PRINT "mul"; x
 x = 32767: x = x * y: PRINT "mulv"; x
 x = -32768: x = -x: PRINT "neg"; x
