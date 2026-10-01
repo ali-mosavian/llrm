@@ -128,8 +128,12 @@ impl FunctionCompiler<'_> {
                 },
                 None => BTreeSet::new(),
             },
-            // What a caller lent outlives the struct that keeps it.
-            Expr::Member { base, span, .. } if self.kept_borrow(base, expression, *span) => BTreeSet::new(),
+            // A frame's field holds only what its caller lent it.
+            Expr::Member { base, field, span } if self.frame_borrow(base, expression, *span) => {
+                let frame = self.struct_expression_type(base, *span).ok().flatten().and_then(|id| self.types.frames.get(&id));
+                let lent = frame.and_then(|one| one.lent.get(field)).expect("a frame's field");
+                BTreeSet::from([Root { exact: false, ..Root::new(BorrowKey::Place(*lent), field, Life::Lent) }])
+            }
             // A reference read out of a field or an element borrows what
             // the owner holds, not the owner.
             Expr::Member { base, .. } | Expr::Index { base, .. } if self.reference_type(expression) => self.held_roots(base),
@@ -157,6 +161,18 @@ impl FunctionCompiler<'_> {
             }
             _ => BTreeSet::new(),
         }
+    }
+
+    /// Whether `member`, a field of the generator frame `base`, holds a
+    /// borrow: a view or reference it keeps, or a generator.
+    fn frame_borrow(&self, base: &Expr, member: &Expr, span: Span) -> bool {
+        let in_frame = self.struct_expression_type(base, span).ok().flatten().is_some_and(|id| self.types.frames.contains_key(&id));
+        let element = match self.struct_expression_type(member, span).ok().flatten() {
+            Some(id) => Some(ElementType::Struct(id)),
+            None => self.expression_type_hint(member).map(ElementType::Scalar),
+        };
+        let kept_view = |one: ElementType| matches!(one, ElementType::Struct(id) if self.types.kept_views.contains_key(&id));
+        in_frame && element.is_some_and(|one| kept_view(one) || self.frame_of(one).is_some() || self.holds_reference(one))
     }
 
     /// The innermost binding of `name` outside the hidden scopes, with the
@@ -192,18 +208,6 @@ impl FunctionCompiler<'_> {
         self.root(name, depth, binding)
     }
 
-    /// Whether `member`, a field of `base`, borrows only what a caller lent:
-    /// a kept view, or a frame's field that holds a borrow, which the frame
-    /// keeps only of what its caller lent it (escaping.rs).
-    fn kept_borrow(&self, base: &Expr, member: &Expr, span: Span) -> bool {
-        let element = match self.struct_expression_type(member, span).ok().flatten() {
-            Some(id) => Some(ElementType::Struct(id)),
-            None => self.expression_type_hint(member).map(ElementType::Scalar),
-        };
-        let kept_view = matches!(element, Some(ElementType::Struct(id)) if self.types.kept_views.contains_key(&id));
-        let in_frame = self.struct_expression_type(base, span).ok().flatten().is_some_and(|id| self.types.frames.contains_key(&id));
-        kept_view || in_frame && element.is_some_and(|one| self.frame_of(one).is_some() || self.holds_reference(one))
-    }
 
     /// A call's result borrows from every argument it borrowed (section 8).
     fn call_roots(&self, expression: &Expr) -> BTreeSet<Root> {
@@ -612,11 +616,8 @@ impl FunctionCompiler<'_> {
 
     /// Stores what assigning `value`, of `element`, through `target` keeps.
     pub(super) fn store_assigned_borrows(&mut self, target: &AssignTarget, value: &Expr, element: ElementType, span: Span) -> Result<(), Diagnostic> {
-        let Some(owner) = written_owner(target) else {
-            return Ok(());
-        };
         let roots = self.value_roots(value, element);
-        self.store_borrow(&Expr::Name(owner.to_owned(), span), roots, span)
+        self.store_borrow(&target.expression(span), roots, span)
     }
 }
 
