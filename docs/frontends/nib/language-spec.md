@@ -667,6 +667,8 @@ A `*huge` pointer is a far one that foreign code keeps normalized. A `*near`
 pointer reaches only DGROUP: the program takes one to a module variable or to
 a string's or vec's data. A raw pointer to a field is the field's place; to a
 string, vec or array field, its first element.
+`&a` of a `&[T]` view and `&mut a` of a `&mut [T]` view are raw pointers to its
+first element, to walk with `offset`.
 
 `p.offset(n)` is `n` elements on, and `p[i]` is `*p.offset(i)`.
 `p.cast[U]()` is the same address as a `*U`, `p.far()` a near pointer's
