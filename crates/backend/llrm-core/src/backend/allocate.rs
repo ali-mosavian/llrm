@@ -1667,6 +1667,7 @@ impl RegAlloc {
         if self.frame.is_none() {
             self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
         }
+        llrm_support::debug!("cfg", "{} {}", body.name, body.blocks.iter().flat_map(|b| b.succ.iter().map(move |t| format!("{}>{}", b.at, t))).chain(body.blocks.iter().map(|b| format!("{}", b.at))).collect::<Vec<_>>().join(" "));
         let cpu = self.cpu.clone();
         // Only a body that never names the data segment register itself may
         // find it holding one of its values.
