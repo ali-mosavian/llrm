@@ -349,6 +349,8 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         stand_ins: IndexMap::default(),
         current: None,
         far_globals: IndexMap::default(),
+        zeroes: IndexMap::default(),
+        making_at: None,
         materialized: Vec::new(),
         edges: IndexMap::default(),
         chains: IndexMap::default(),
@@ -496,6 +498,10 @@ struct Selector<'m, 'c, 'p> {
     current: Option<BlockId>,
     /// Each far global's offset and selector, where a block made them.
     far_globals: IndexMap<(BlockId, GlobalId), (Held, Held)>,
+    /// The zero an address no global owns is a displacement from, made once per block.
+    zeroes: IndexMap<BlockId, Held>,
+    /// Where a phi's input is being made, before selection reaches its block.
+    making_at: Option<i64>,
     /// What `global` made for the instruction being selected, placed before it.
     materialized: Vec<Arc<Insn>>,
     /// The LIR blocks each MIR edge leaves from: a switch's cases leave
@@ -936,19 +942,29 @@ impl Selector<'_, '_, '_> {
                 if !self.reachable.contains(&from) || !self.successors(from).contains(&block) {
                     continue;
                 }
-                if let Operand::Value(one) = value
-                    && self.folded(one)?.is_none()
-                {
-                    continue;
-                }
                 let at = self.ats[&function.terminator(from).expect("a terminator")];
                 let mut made = Vec::new();
-                let held = self.held(value, instruction.ty, at, &mut made)?;
-                self.pending.entry(from).or_default().extend(made);
+                self.making_at = Some(at);
+                let held = self.phi_input(value, instruction.ty, at, &mut made);
+                self.making_at = None;
+                let Some(held) = held? else { continue };
+                let mut materialized = std::mem::take(&mut self.materialized);
+                materialized.extend(made);
+                self.pending.entry(from).or_default().extend(materialized);
                 self.phi_inputs.insert((inst, from), held.value);
             }
         }
         Ok(())
+    }
+
+    /// What a phi reads that is no register, held; none for a value that is one.
+    fn phi_input(&mut self, value: Operand, ty: TypeId, at: i64, made: &mut Vec<Arc<Insn>>) -> Result<Option<Held>, Unselected> {
+        if let Operand::Value(one) = value
+            && self.folded(one)?.is_none()
+        {
+            return Ok(None);
+        }
+        self.held(value, ty, at, made).map(Some)
     }
 
     /// A far or i64 phi as two, one per half: each input a pair its
@@ -1409,6 +1425,33 @@ impl Selector<'_, '_, '_> {
     /// instruction being selected.
     fn global(&mut self, operand: Operand) -> Result<Pointer, Unselected> {
         let Operand::Constant(id) = operand else { unreachable!("a constant") };
+        // An address no global owns is a displacement from zero: the zero a
+        // register holds, made once in each block, and a far one's selector.
+        if let Some(offset) = crate::backend::globals::absolute(self.module, &self.layout, id) {
+            let zero = match (self.current, self.making_at) {
+                (Some(block), _) => match self.zeroes.get(&block) {
+                    Some(&zero) => zero,
+                    None => {
+                        let zero = self.fresh_held(2);
+                        let at = self.ats[&self.function.block(block).instructions()[0]];
+                        self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(zero)], vec![Loc::Imm(Imm { value: 0, width: 2, address: None })])));
+                        self.zeroes.insert(block, zero);
+                        zero
+                    }
+                },
+                // A phi's input, made at the end of its predecessor.
+                (None, Some(at)) => {
+                    let zero = self.fresh_held(2);
+                    self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(zero)], vec![Loc::Imm(Imm { value: 0, width: 2, address: None })])));
+                    zero
+                }
+                (None, None) => return refuse("an address of no global outside a block"),
+            };
+            return Ok(match self.is_far(self.module.context.get(id).ty) {
+                true => Pointer::Far { selector: zero, base: None, index: None, scale: 1, offset },
+                false => Pointer::Based { base: zero, index: None, scale: 1, offset },
+            });
+        }
         let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id).map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
         let space = crate::backend::globals::space(self.module, global);
         if self.module.global(global).address_space != 0 {
@@ -2162,6 +2205,10 @@ impl Selector<'_, '_, '_> {
                 Some(intrinsic @ (Intrinsic::PortIn | Intrinsic::PortOut)) => self.port(intrinsic == Intrinsic::PortIn, inst, arguments, at, out),
                 Some(Intrinsic::Fixed { divide }) => self.fixed(divide, inst, arguments, at, out),
                 Some(Intrinsic::Code) => self.inline_code(inst, convention, name, arguments, at, out),
+                Some(Intrinsic::Asm) => {
+                    let Some(block) = llrm_mir::intrinsics::asm(&name) else { return refuse(format!("@{name} does not parse")) };
+                    self.called(inst, convention, Callee::Inline(name, block.code), arguments, at, out)
+                }
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
                 _ => refuse(format!("@{name}")),
@@ -2215,7 +2262,15 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, semantics(Operation::Nothing, "pushf", vec![], vec![])));
         }
         // The arguments the ABI passes in registers are the call's last.
-        let registers = self.abi.registers(&name).unwrap_or_default();
+        let asm = match callee {
+            Callee::Inline(..) => crate::abi::qb::asm_call(&name),
+            _ => None,
+        };
+        let (asm_contract, registers) = match asm {
+            Some(Ok((contract, registers))) => (Some(contract), registers),
+            Some(Err(error)) => return refuse(format!("@{name}: {}", error.0)),
+            None => (None, self.abi.registers(&name).unwrap_or_default()),
+        };
         let Some(stacked) = arguments.len().checked_sub(registers.arguments.len()) else {
             return refuse(format!("@{name} takes {} arguments in registers", registers.arguments.len()));
         };
@@ -2302,7 +2357,7 @@ impl Selector<'_, '_, '_> {
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
         let contract = match callee {
-            Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
+            Callee::Inline(..) => asm_contract.unwrap_or_else(|| crate::abi::runtime::inline_code(&name)),
             _ => self.abi.contract(&name, pops, pushed).map_err(Unselected)?,
         };
         let mut delivers = Vec::new();
@@ -2315,6 +2370,10 @@ impl Selector<'_, '_, '_> {
                 }
                 self.flagged.insert(value);
             }
+        } else if let Some(value) = instruction.result.filter(|_| registers.results.len() == 1 && !matches!(self.types().get(instruction.ty), Type::Struct { .. })) {
+            // One register answers a scalar.
+            let held = Held { value: self.value(value), width: self.width(instruction.ty)? };
+            delivers = vec![(held, registers.results[0])];
         } else if let Some(value) = instruction.result.filter(|_| !registers.results.is_empty()) {
             // Each field of the answer in the register the ABI names.
             let Type::Struct { fields, .. } = self.types().get(instruction.ty).clone() else {
@@ -2591,6 +2650,9 @@ impl Selector<'_, '_, '_> {
         if self.is_wide(ty) {
             return self.wide_compare(predicate, a, b, at, out);
         }
+        if self.is_far(ty) {
+            return self.far_compare(predicate, a, b, at, out);
+        }
         if matches!(predicate, IntPredicate::Eq | IntPredicate::Ne)
             && let Some(test) = self.compared_by_words(predicate, a, b, at, out)
         {
@@ -2599,6 +2661,39 @@ impl Selector<'_, '_, '_> {
         let a = Loc::Held(self.held(a, ty, at, out)?);
         let b = self.source(b, ty, at, out)?;
         out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![a, b])));
+        Ok(Test::One(condition_code(predicate)))
+    }
+
+    /// Far pointers compared: equal when offset and selector are, as their
+    /// words xor-ed and or-ed (a null second needs only the or); ordered by
+    /// offset alone, which is a far pointer's index (`p1:32:16:16:16`).
+    fn far_compare(&mut self, predicate: IntPredicate, a: Operand, b: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Test, Unselected> {
+        let (a_offset, a_selector) = self.far(a, at, out)?;
+        if !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+            let (b_offset, _) = self.far(b, at, out)?;
+            out.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![Loc::Held(a_offset), Loc::Held(b_offset)])));
+            return Ok(Test::One(condition_code(predicate)));
+        }
+        let null = self.constant(b, 4) == Some(0);
+        let b_words = if null { None } else { Some(self.far(b, at, out)?) };
+        let mut word_op = |selector: &mut Self, name: &str, sources: Vec<Loc>| {
+            let into = selector.fresh_held(2);
+            let operation = if name == "mov" { Operation::Move } else { Operation::Binary };
+            out.push(insn(at, semantics(operation, name, vec![Loc::Held(into)], sources)));
+            Loc::Held(into)
+        };
+        let low = word_op(self, "mov", vec![Loc::Held(a_offset)]);
+        match b_words {
+            None => {
+                word_op(self, "or", vec![low, Loc::Held(a_selector)]);
+            }
+            Some((b_offset, b_selector)) => {
+                let low = word_op(self, "xor", vec![low, Loc::Held(b_offset)]);
+                let high = word_op(self, "mov", vec![Loc::Held(a_selector)]);
+                let high = word_op(self, "xor", vec![high, Loc::Held(b_selector)]);
+                word_op(self, "or", vec![low, high]);
+            }
+        }
         Ok(Test::One(condition_code(predicate)))
     }
 

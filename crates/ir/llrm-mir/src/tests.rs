@@ -150,6 +150,23 @@ fn an_intrinsic_declaration_takes_llvms_attributes() {
     assert_eq!(print::module(&module), "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n");
 }
 
+/// Inline assembly's registers are in its callee's name; the declaration
+/// must answer them, and a block that reaches no memory keeps its place
+/// among the ports as their own state does.
+#[test]
+fn an_inline_assembly_declaration_is_checked_against_its_name() {
+    let name = "llrm.ia16.asm.cd1a.ax.cx_dx.flags.n";
+    let block = crate::intrinsics::asm(name).expect("parses");
+    assert_eq!((block.code, block.inputs, block.outputs, block.clobbers, block.memory), (vec![0xcd, 0x1a], vec!["ax".to_owned()], vec!["cx".to_owned(), "dx".to_owned()], vec!["flags".to_owned()], false));
+    assert_eq!(crate::intrinsics::asm_name(&crate::intrinsics::asm(name).unwrap()), name);
+    let problems = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    let right = format!("declare {{i16, i16}} @{name}(i16)\n");
+    assert_eq!(problems(&right), Vec::<String>::new());
+    assert_eq!(print::module(&parse::module(&right).unwrap()), format!("declare {{ i16, i16 }} @{name}(i16) nounwind memory(inaccessiblemem: readwrite)\n"));
+    assert!(problems(&format!("declare i16 @{name}(i16)\n"))[0].contains("incorrect return type"));
+    assert!(problems(&format!("declare {{i16, i16}} @{name}(i16, i16)\n"))[0].contains("incorrect argument type"));
+}
+
 /// BCC stores 3.125L as 00 00 00 00 00 00 00 C8 00 40; a long double
 /// global llrm lays down must hold the same ten bytes.
 #[test]

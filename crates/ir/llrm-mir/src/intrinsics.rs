@@ -42,6 +42,11 @@ pub enum Intrinsic {
     /// reads at a byte offset the name gives. It answers what it leaves in
     /// dx:ax, and may read, write or clobber anything.
     Code,
+    /// Inline assembly that declares its registers: its name carries the
+    /// bytes and the 16-bit registers it reads, answers and changes, each
+    /// argument going in one and each result coming out of one, in order.
+    /// It has side effects, and its bytes jump nowhere outside themselves.
+    Asm,
 }
 
 /// What names inline code: `llrm.ia16.code.<hex bytes>` and, per argument,
@@ -72,6 +77,42 @@ pub fn code(name: &str) -> Option<(Vec<u8>, Vec<(usize, i64)>)> {
         })
         .collect::<Option<Vec<_>>>()?;
     Some((bytes, places))
+}
+
+/// What names inline assembly with declared registers:
+/// `llrm.ia16.asm.<hex bytes>.<in>.<out>.<clobbers>.<m|n>`, each list its
+/// registers joined by `_` (`-` for none), `m` where it reaches memory.
+const ASM: &str = "llrm.ia16.asm.";
+
+/// An inline assembly block: registers by their 16-bit names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsmBlock {
+    pub code: Vec<u8>,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub clobbers: Vec<String>,
+    pub memory: bool,
+}
+
+pub fn asm_name(block: &AsmBlock) -> String {
+    let hex: String = block.code.iter().map(|one| format!("{one:02x}")).collect();
+    let list = |names: &[String]| if names.is_empty() { "-".to_owned() } else { names.join("_") };
+    format!("{ASM}{hex}.{}.{}.{}.{}", list(&block.inputs), list(&block.outputs), list(&block.clobbers), if block.memory { "m" } else { "n" })
+}
+
+pub fn asm(name: &str) -> Option<AsmBlock> {
+    let [hex, inputs, outputs, clobbers, memory] = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>()[..] else { return None };
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let code = (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect::<Option<Vec<u8>>>()?;
+    let list = |names: &str| if names == "-" { Vec::new() } else { names.split('_').map(str::to_owned).collect() };
+    let memory = match memory {
+        "m" => true,
+        "n" => false,
+        _ => return None,
+    };
+    Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -273,7 +314,12 @@ const TABLE: [Spec; 29] = [
 /// one; as in LLVM, whatever attributes it had are dropped.
 pub(crate) fn declare(function: &mut Function, name: &str) {
     let Some(intrinsic) = Intrinsic::named(name) else { return };
-    let (attrs, parameter_attrs) = intrinsic.attributes();
+    let (mut attrs, parameter_attrs) = intrinsic.attributes();
+    // Assembly that reaches no memory still has effects, kept in order with
+    // the ports: its own state, as a port that reaches no memory has.
+    if asm(name).is_some_and(|one| !one.memory) {
+        attrs.push(Attribute::Memory(vec![(Some("inaccessiblemem".to_owned()), "readwrite".to_owned())]));
+    }
     function.attrs = attrs;
     for (slot, attrs) in function.parameter_attrs.iter_mut().zip(parameter_attrs) {
         *slot = attrs;
@@ -319,6 +365,9 @@ impl Intrinsic {
         if name.starts_with(CODE) {
             return Some(Intrinsic::Code);
         }
+        if name.starts_with(ASM) {
+            return Some(Intrinsic::Asm);
+        }
         TABLE
             .iter()
             .filter(|spec| name.strip_prefix(spec.name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
@@ -328,7 +377,7 @@ impl Intrinsic {
 
     /// The function's attributes and each parameter's.
     pub fn attributes(self) -> (Vec<Attribute>, Vec<Vec<Attribute>>) {
-        if self == Intrinsic::Code {
+        if matches!(self, Intrinsic::Code | Intrinsic::Asm) {
             return (vec![Attribute::Flag("nounwind".to_owned())], Vec::new());
         }
         let spec = self.spec();
@@ -342,6 +391,22 @@ impl Intrinsic {
     /// `name` mangles it; the error is LLVM's.
     pub fn check(self, name: &str, types: &Types, function_type: TypeId) -> Result<(), String> {
         let Type::Function { returns, parameters, variadic } = types.get(function_type) else { unreachable!("a function's type") };
+        if self == Intrinsic::Asm {
+            let block = asm(name).ok_or("Inline assembly's name does not parse!")?;
+            let word = |ty: &TypeId| types.int_bits(*ty) == Some(16) || matches!(types.get(*ty), Type::Pointer(0));
+            let answers = match &block.outputs[..] {
+                [] => types.is_void(*returns),
+                [_] => word(returns),
+                outputs => matches!(types.get(*returns), Type::Struct { fields, .. } if fields.len() == outputs.len() && fields.iter().all(word)),
+            };
+            if !answers {
+                return Err("Intrinsic has incorrect return type!".to_owned());
+            }
+            if *variadic || parameters.len() != block.inputs.len() || !parameters.iter().all(word) {
+                return Err("Intrinsic has incorrect argument type!".to_owned());
+            }
+            return Ok(());
+        }
         if self == Intrinsic::Code {
             let (_, places) = code(name).ok_or("Inline code's name does not parse!")?;
             if types.int_bits(*returns) != Some(32) {

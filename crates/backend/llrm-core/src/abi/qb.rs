@@ -197,6 +197,36 @@ fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<runtime::Reg>, Ve
     Ok((contract, inputs, outputs))
 }
 
+/// The contract and registers of the inline block an intrinsic name spells,
+/// as `llrm_mir::intrinsics::asm` reads it; none for another name.
+pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
+    let block = llrm_mir::intrinsics::asm(name)?;
+    let asm = model::Asm {
+        code: block.code.iter().map(|&byte| i64::from(byte)).collect(),
+        inputs: block.inputs,
+        outputs: block.outputs,
+        clobbers: block.clobbers,
+        memory: block.memory,
+    };
+    Some(_inline_contract(&asm).and_then(|(contract, inputs, outputs)| {
+        let machine = |names: Vec<runtime::Reg>| {
+            names
+                .into_iter()
+                .map(|one| match one {
+                    runtime::Reg::Ax => Ok(Register::AX),
+                    runtime::Reg::Bx => Ok(Register::BX),
+                    runtime::Reg::Cx => Ok(Register::CX),
+                    runtime::Reg::Dx => Ok(Register::DX),
+                    runtime::Reg::Si => Ok(Register::SI),
+                    runtime::Reg::Di => Ok(Register::DI),
+                    other => Err(AbiError(format!("inline assembly passes a value in {}", other.name()))),
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        Ok((contract, Registers { arguments: machine(inputs)?, results: machine(outputs)? }))
+    }))
+}
+
 /// An inline block's call, its arguments in the contract's slot order, each
 /// a value: a constant is copied into one first.
 #[allow(clippy::type_complexity)]

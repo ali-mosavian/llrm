@@ -2970,3 +2970,79 @@ fn test_dbg_lines_become_linnum() {
     let marker = records.iter().any(|one| one.r#type == llrm_omf::omf::COMENT && one.body.get(1) == Some(&0xA1));
     assert!(marker, "the CodeView marker");
 }
+
+/// The optimizer left `getelementptr i8, ptr null, ...` (a drop of a null
+/// vec, its guard not folded) and isel refused it as "an address of no
+/// global: Null": examples/entries.nib and tally.nib did not compile.
+#[test]
+fn test_an_address_of_no_global_is_a_displacement_from_zero() {
+    let constant = "define i16 @f() addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 -4\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
+    let variable = "define i16 @f(i16 %i) addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 %i\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
+    let far = "define i16 @f(i16 %i) addrspace(1) {\n  %p = getelementptr i8, ptr addrspace(1) null, i16 %i\n  %v = load i16, ptr addrspace(1) %p\n  ret i16 %v\n}\n";
+    for text in [constant, variable, far] {
+        assert!(text.contains("getelementptr i8, ptr null") || text.contains("ptr addrspace(1) null, i16"), "the shape that was refused");
+    }
+    assert_eq!(listing(constant, "f"), ["L0_0:", "mov bx, 0", "mov ax, word ptr [bx-4]", "retf"]);
+    assert_eq!(listing(variable, "f"), ["push bp", "mov bp, sp", "push si", "L0_0:", "mov bx, word ptr [bp+6]", "mov si, 0", "mov ax, word ptr [bx+si]", "pop si", "pop bp", "retf"]);
+    assert_eq!(listing(far, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "pushw 0", "pop es", "mov ax, word ptr es:[bx]", "pop bp", "retf"]);
+}
+
+/// `icmp` of far pointers was refused as "a ptr addrspace(1) value":
+/// examples/roster.nib did not compile. Equal is both words; ordered, the
+/// offsets.
+#[test]
+fn test_far_pointers_compare_by_words() {
+    let compare = |predicate: &str, second: &str| {
+        let text = format!("define i16 @f(ptr addrspace(1) %p, ptr addrspace(1) %q) addrspace(1) {{\n  %c = icmp {predicate} ptr addrspace(1) %p, {second}\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}\n");
+        assert!(text.contains(&format!("icmp {predicate} ptr addrspace(1)")), "the shape that was refused");
+        listing(&text, "f")
+    };
+    assert_eq!(
+        compare("eq", "%q"),
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "mov dx, word ptr [bp+12]", "xor ax, word ptr [bp+10]", "xor bx, dx", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
+    );
+    assert_eq!(compare("ne", "null"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "or ax, word ptr [bp+8]", "setne al", "movzx ax, al", "pop bp", "retf"]);
+    assert!(compare("ult", "%q").iter().any(|line| line == "setb al"));
+}
+
+/// The rich route refused HIR inline assembly ("HIR asm"): examples/speaker.nib
+/// did not compile. A block is a call of `llrm.ia16.asm.*`: its bytes in
+/// place, each argument in the register it names, each field of the answer
+/// out of one, and what it changes clobbered.
+#[test]
+fn test_inline_assembly_is_its_bytes_with_its_declared_registers() {
+    let text = "declare {i16, i16} @llrm.ia16.asm.cd1a.ax.cx_dx.flags.n(i16)
+declare void @llrm.ia16.asm.fa.-.-.-.n()
+define i16 @f() addrspace(1) {
+  call void @llrm.ia16.asm.fa.-.-.-.n()
+  %r = call {i16, i16} @llrm.ia16.asm.cd1a.ax.cx_dx.flags.n(i16 0)
+  %a = extractvalue {i16, i16} %r, 0
+  %b = extractvalue {i16, i16} %r, 1
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+";
+    assert!(text.contains("call {i16, i16} @llrm.ia16.asm."), "the shape that was refused");
+    let got = listing(text, "f");
+    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "db 0fah", "mov ax, 0", "db 0cdh,01ah", "mov ax, cx", "add ax, dx", "pop bp", "retf"]);
+}
+
+/// The same address as a phi's input, made in the predecessor before
+/// selection reaches it: refused "outside a block".
+#[test]
+fn test_an_address_of_no_global_can_be_a_phis_input() {
+    let text = "define ptr @f(i1 %c, ptr %p) addrspace(1) {
+entry:
+  br i1 %c, label %a, label %b
+a:
+  %g = getelementptr i8, ptr null, i16 -4
+  br label %b
+b:
+  %r = phi ptr [ %g, %a ], [ %p, %entry ]
+  ret ptr %r
+}
+";
+    assert!(text.contains("getelementptr i8, ptr null") && text.contains("phi ptr [ %g"), "the shape that was refused");
+    let got = listing(text, "f");
+    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "xor ax, ax", "add ax, -4", "L0_3:", "pop bp", "retf"]);
+}

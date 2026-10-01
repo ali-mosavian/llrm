@@ -825,6 +825,18 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
                 slot.insert(module.reference(global));
             }
         }
+        if let Some(asm) = &instruction.asm {
+            let types = &mut module.context.types;
+            let parameters: Vec<TypeId> = instruction.operands.iter().map(|operand| value_type(types, tables.types[&operand_type(operand, &values, &places)])).collect::<Emit<_>>()?;
+            let fields: Vec<TypeId> = instruction.results.iter().map(|result| value_type(types, tables.types[&values[result]])).collect::<Emit<_>>()?;
+            let name = asm_name(asm);
+            if let Entry::Vacant(slot) = tables.callees.entry(name) {
+                let returns = asm_returns(types, fields);
+                let ty = function_type(types, returns, parameters);
+                let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                slot.insert(module.reference(global));
+            }
+        }
         let Some(callee) = instruction.callee.as_deref().filter(|_| instruction.op == Op::Call || three_way(instruction.op).is_some()) else { continue };
         if handling::resumes(callee) {
             // A RESUME fallen into raises its error as ERROR does.
@@ -978,6 +990,27 @@ const VA_START: &str = "llvm.va_start.p0";
 fn called(op: Op) -> Option<&'static str> {
     const CALLED: [(Op, &str); 2] = [(Op::PortIn, "llrm.ia16.in"), (Op::PortOut, "llrm.ia16.out")];
     CALLED.iter().find(|&&(one, _)| one == op).map(|&(_, name)| name)
+}
+
+/// The intrinsic a HIR inline block is a call of, named by its bytes and
+/// registers: it reaches memory only if it declares it.
+fn asm_name(asm: &model::Asm) -> String {
+    llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
+        code: asm.code.iter().map(|&byte| byte as u8).collect(),
+        inputs: asm.inputs.clone(),
+        outputs: asm.outputs.clone(),
+        clobbers: asm.clobbers.clone(),
+        memory: asm.memory,
+    })
+}
+
+/// What a block answers: nothing, its one register's value, or each as a field.
+fn asm_returns(types: &mut Types, mut fields: Vec<TypeId>) -> TypeId {
+    match fields.len() {
+        0 => types.void(),
+        1 => fields.remove(0),
+        _ => types.intern(Type::Struct { fields, packed: false }),
+    }
 }
 
 /// The parameters and result of a `called` intrinsic: a port is a word,
@@ -1472,6 +1505,27 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let one = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
             let result = self.b.cast(if one { CastOp::ZExt } else { CastOp::SExt }, truth, ty, "");
             self.define(instruction, result);
+            return Ok(());
+        }
+        if let Some(asm) = &instruction.asm {
+            let arguments = self.operands(instruction)?;
+            let parameters: Vec<TypeId> = arguments.iter().map(|&one| self.b.type_of(one)).collect();
+            let fields = instruction.results.iter().map(|&result| self.result_type(result)).collect::<Emit<Vec<_>>>()?;
+            let name = asm_name(asm);
+            let returns = asm_returns(&mut self.b.context.types, fields);
+            let ty = function_type(&mut self.b.context.types, returns, parameters);
+            let callee = Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+            if let Some(result) = self.b.call(ty, callee, &arguments, "") {
+                match instruction.results[..] {
+                    [_] => self.define(instruction, result),
+                    ref results => {
+                        for (index, &one) in results.iter().enumerate() {
+                            let field = self.b.extract_value(result, index as u32, "");
+                            self.values.insert(one, field);
+                        }
+                    }
+                }
+            }
             return Ok(());
         }
         if let Some(called) = called(op) {
