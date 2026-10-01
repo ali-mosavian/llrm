@@ -9,8 +9,8 @@
 //!   or a `cold` call (`noreturn::cold`) is all but never taken;
 //! - in a loop, staying in it is taken 124 times to every 4 exits;
 //! - `p == q` on pointers fails (20:12), as do `x == 0`, `x == -1`,
-//!   `x < 0` and `x <= 0` on integers but truth values, and `x == y` on
-//!   floats; `isnan` is all but never;
+//!   `x < 0` and `x <= 0` on integers but truth values and one-bit
+//!   tests, and `x == y` on floats; `isnan` is all but never;
 //! - a successor that calls, where the other does not, is not taken (67%);
 //! - a successor that returns, where the other does not, is not taken (66%).
 //!
@@ -181,9 +181,9 @@ fn compared(context: &Context, declarations: &Declarations, function: &Function,
                 (Some(value), None) => (predicate.swapped(), value, right),
                 _ => return None,
             };
-            // A truth value is no quantity: BASIC's `IF a AND b` tests its
-            // 0/-1 against 0, which says nothing of how often it holds.
-            if truth(function, *compared, 4) {
+            // A flag is no quantity: BASIC's `IF a AND b` tests a 0/-1 truth
+            // value against 0, `x AND 1` one bit; neither says how often.
+            if flag(context, function, *compared) {
                 return None;
             }
             // Nor is a three-way compare's sign: of its result only equality
@@ -209,6 +209,26 @@ fn compared(context: &Context, declarations: &Declarations, function: &Function,
         },
         _ => None,
     }
+}
+
+/// Whether `operand` has at most one bit that can be set: a truth value,
+/// or a one-bit mask. No known-bits analysis answers it, so these are the
+/// two forms: the first BASIC's, the second LLVM's `(x & pow2)`.
+fn flag(context: &Context, function: &Function, operand: Operand) -> bool {
+    truth(function, operand, 4) || single_bit(context, function, operand)
+}
+
+/// Whether `operand` is `x & 2^n`, as LLVM's zero heuristic leaves
+/// `(x & pow2) ==/!= 0` alone.
+fn single_bit(context: &Context, function: &Function, operand: Operand) -> bool {
+    let Operand::Value(value) = operand else { return false };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return false };
+    let instruction = function.instruction(inst);
+    let Opcode::Binary(BinaryOp::And) = instruction.opcode else { return false };
+    instruction.operands.iter().any(|one| match one {
+        Operand::Constant(at) => matches!(context.get(*at).kind, ConstantKind::Int(bits) if bits.is_power_of_two()),
+        _ => false,
+    })
 }
 
 /// Whether `operand` is the result of a call to a routine stated a
