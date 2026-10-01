@@ -34,3 +34,11 @@ and the answer comes back in ST0, which the rich route's runtime calls do not
 yet do (floats pass on the stack), and the call is 5 bytes where `fsin` is 2.
 For a less accurate answer. Not done; pinned by `tests/qb-bc/sin-cos`
 (llrm's output; BC must differ).
+
+## A constant times a quotient
+
+BC reassociates `c1 * (x / c2)` into `x * (c1 / c2)`, folding `c1 / c2` to a
+SINGLE constant at compile time: `.5 * (w / 7) * 1#` with `w% = -1` is the
+SINGLE -(.5 / 7) in BC and the full-precision quotient in llrm, a last-bit
+difference. llrm folds the constant subexpressions it is given (`(.5 / 7) * w`)
+and does not reassociate. Not pinned: BC's rewrite is its optimizer's.
