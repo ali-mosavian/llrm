@@ -118,6 +118,9 @@ impl<'a> FunctionCompiler<'a> {
                 format!("expected {}, found {name}", layout.name),
             ));
         }
+        let known: Vec<_> = fields.iter().filter_map(|(name, value, span)| Some((value, layout.fields.get(name)?.type_, *span))).collect();
+        let lent = self.lent_to_fields(&known.iter().map(|one| one.0).collect::<Vec<_>>(), &known.iter().map(|one| one.1).collect::<Vec<_>>());
+        borrows::check_disjoint(&lent, &known.iter().map(|one| one.2).collect::<Vec<_>>())?;
         let mut seen = BTreeMap::new();
         for (name, value, field_span) in fields {
             if seen.insert(name, *field_span).is_some() {

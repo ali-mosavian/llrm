@@ -15,6 +15,8 @@ pub(super) struct Lend {
     pub(super) name: String,
     pub(super) mutable: bool,
     pub(super) span: Span,
+    /// A borrow already held across the call, not passed to it.
+    pub(super) across: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -68,7 +70,8 @@ pub(super) fn check_lends(functions: &[hir::Function], lends: &[Lend], runtime: 
             (false, true) => "read",
             (false, false) => continue,
         };
-        return Err(Diagnostic::new(lend.span, format!("{:?} is lent to {:?}, which may {touched} it", lend.name, lend.callee)));
+        let how = if lend.across { "borrowed across a call to" } else { "lent to" };
+        return Err(Diagnostic::new(lend.span, format!("{:?} is {how} {:?}, which may {touched} it", lend.name, lend.callee)));
     }
     Ok(())
 }
@@ -153,16 +156,18 @@ fn place_of(operand: &hir::Operand) -> Option<u32> {
 }
 
 impl FunctionCompiler<'_> {
-    /// Records the module variables a call of `callee` is lent.
-    pub(super) fn record_lends(&mut self, callee: &str, arguments: &[Expr], lent: &[borrows::Lent]) {
-        for (argument, borrows::Lent { roots, mutable }) in arguments.iter().zip(lent) {
-            for root in roots.iter().filter(|root| root.life == borrows::Life::Module) {
-                let borrows::BorrowKey::Place(place) = root.owner else {
-                    continue;
-                };
-                let symbol = self.places.iter().find(|one| one.id == place).expect("a module place").symbol;
-                self.lends.push(Lend { callee: callee.to_owned(), symbol, name: root.name.clone(), mutable: *mutable, span: argument.span() });
-            }
+    /// Records the module variables a call of `callee` is lent, and those
+    /// the bindings in scope hold borrowed across it.
+    pub(super) fn record_lends(&mut self, callee: &str, arguments: &[Expr], lent: &[borrows::Lent], span: Span) {
+        let passed = arguments.iter().zip(lent).flat_map(|(argument, one)| one.roots.iter().map(move |root| (root.clone(), one.mutable, argument.span(), false)));
+        let held = self.held_borrows().into_iter().map(|(root, mutable)| (root, mutable, span, true));
+        let lends: Vec<_> = passed.chain(held).filter(|(root, ..)| root.life == borrows::Life::Module).collect();
+        for (root, mutable, span, across) in lends {
+            let borrows::BorrowKey::Place(place) = root.owner else {
+                continue;
+            };
+            let symbol = self.places.iter().find(|one| one.id == place).expect("a module place").symbol;
+            self.lends.push(Lend { callee: callee.to_owned(), symbol, name: root.name, mutable, span, across });
         }
     }
 }

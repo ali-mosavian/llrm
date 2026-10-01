@@ -160,7 +160,11 @@ impl FunctionCompiler<'_> {
         };
         let item = self.types.resolve_element(item, span)?;
         let depth = self.scopes.len();
-        let mut scope: BTreeMap<String, Binding> = fields.iter().map(|field| (field.name.clone(), placeholder(field.element, field.shape))).collect();
+        let mut scope: BTreeMap<String, Binding> = BTreeMap::new();
+        for field in &fields {
+            let binding = self.placeholder(field.element, field.shape);
+            scope.insert(field.name.clone(), binding);
+        }
         scope.extend(borrowed.iter().cloned());
         self.scopes.push(scope);
         self.hidden.push(BODY..depth);
@@ -230,7 +234,7 @@ impl FunctionCompiler<'_> {
                             BindingType::Struct(id) => ElementType::Struct(id),
                             _ => unreachable!("an array is ranked"),
                         };
-                        let reference = Binding { mutable, storage: Storage::Reference(0), ..placeholder(target, None) };
+                        let reference = Binding { mutable, storage: Storage::Reference(self.unbound()), ..self.placeholder(target, None) };
                         (ElementType::Scalar(self.types.reference(target, mutable)), Some(reference))
                     }
                 },
@@ -344,7 +348,8 @@ impl FunctionCompiler<'_> {
                         self.keep(name, frame.item, None, fields);
                     } else {
                         let element = self.iterated_item(iterable).ok_or_else(|| Diagnostic::new(*span, "a generator that escapes iterates an iterator or a sequence"))?;
-                        self.scopes.last_mut().expect("scope").insert(name.clone(), placeholder(element, None));
+                        let binding = self.placeholder(element, None);
+                        self.scopes.last_mut().expect("scope").insert(name.clone(), binding);
                     }
                 }
                 Statement::Match { subject, arms, .. } if split => {
@@ -444,10 +449,13 @@ impl FunctionCompiler<'_> {
         if !self.holds_reference(element) && !matches!(element, ElementType::Struct(id) if self.types.kept_views.contains_key(&id)) {
             return Ok(());
         }
-        let own = |root: &borrows::Root| {
-            !borrowed.iter().any(|(lent, _)| *lent == root.name)
-                && fields.iter().any(|field| field.name == root.name && self.frame_of(field.element).is_none() && !self.holds_reference(field.element))
-        };
+        let lent: BTreeSet<_> = borrowed.iter().filter_map(|(_, binding)| borrows::identity(&binding.storage)).collect();
+        let owned: BTreeSet<_> = fields
+            .iter()
+            .filter(|field| self.frame_of(field.element).is_none() && !self.holds_reference(field.element))
+            .filter_map(|field| self.visible(&field.name).and_then(|binding| borrows::identity(&binding.storage)))
+            .collect();
+        let own = |root: &borrows::Root| owned.contains(&root.owner) && !lent.contains(&root.owner);
         match self.roots(source).iter().find(|root| own(root)) {
             Some(root) => Err(Diagnostic::new(span, format!("a generator that escapes keeps only borrows of what its caller lent it; {name:?} borrows its own {:?}", root.name))),
             None => Ok(()),
@@ -476,10 +484,28 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
+    /// A binding of `element` that only types the body: its storage, which
+    /// no HIR names, keeps it apart from every other binding.
+    fn placeholder(&mut self, element: ElementType, shape: Option<Shape>) -> Binding {
+        let type_ = match (element, shape) {
+            (element, Some(shape)) => BindingType::Array { element, shape },
+            (ElementType::Scalar(type_name), None) => BindingType::Scalar(type_name),
+            (ElementType::Struct(id), None) => BindingType::Struct(id),
+        };
+        Binding { type_, mutable: true, storage: Storage::Place(self.unbound()) }
+    }
+
+    /// An id no HIR place or value has, counted down from the top.
+    fn unbound(&mut self) -> u32 {
+        self.next_unbound -= 1;
+        self.next_unbound
+    }
+
     /// `name` as a field, and in scope for the names after it.
     fn keep(&mut self, name: &str, element: ElementType, shape: Option<Shape>, fields: &mut Vec<Field>) {
         fields.push(Field { name: name.into(), element, shape });
-        self.scopes.last_mut().expect("scope").insert(name.into(), placeholder(element, shape));
+        let binding = self.placeholder(element, shape);
+        self.scopes.last_mut().expect("scope").insert(name.into(), binding);
     }
 
     /// The type of a local bound to `value` with none written: a borrow of a
@@ -533,18 +559,5 @@ impl FunctionCompiler<'_> {
         let flag = self.types.frames.get(&parent.struct_id)?.flags.get(field)?;
         let offset = self.types.structure(parent.struct_id)?.fields[flag].offset;
         Some(self.projected_place(parent, offset, TypeName::Bool))
-    }
-}
-
-/// A name for type checking only, bound to nothing.
-fn placeholder(element: ElementType, shape: Option<Shape>) -> Binding {
-    Binding {
-        type_: match (element, shape) {
-            (element, Some(shape)) => BindingType::Array { element, shape },
-            (ElementType::Scalar(type_name), None) => BindingType::Scalar(type_name),
-            (ElementType::Struct(id), None) => BindingType::Struct(id),
-        },
-        mutable: true,
-        storage: Storage::Place(0),
     }
 }
