@@ -3,8 +3,7 @@
 //! `tests/test_qb_frontend_command.py` cases. The `qbopt/hir`-only cases are
 //! in `crates/backend/llrm-core/src/hir/test_hir.rs`.
 //!
-//! Sources are parsed by `QBOPT_QBFRONT` when set, else by `cargo run` on
-//! `crates/frontends/qbfront`, exactly as the driver does.
+//! Sources are compiled by qbfront, linked in, exactly as the driver does.
 
 #![allow(dead_code)]
 

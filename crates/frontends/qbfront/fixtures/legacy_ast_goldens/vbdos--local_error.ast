@@ -24,6 +24,7 @@ Module {
                     fixed_length: None,
                     shared: true,
                     dynamic: false,
+                    volatile: false,
                     span: Span {
                         line: 5,
                         start: 11,
@@ -72,6 +73,7 @@ Module {
             },
             then_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -98,6 +100,7 @@ Module {
             ],
             else_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -150,6 +153,7 @@ Module {
             declaration: true,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 3,
@@ -177,6 +181,7 @@ Module {
                             fixed_length: None,
                             shared: false,
                             dynamic: false,
+                            volatile: false,
                             span: Span {
                                 line: 16,
                                 start: 8,
@@ -224,6 +229,7 @@ Module {
                     },
                 },
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -294,6 +300,7 @@ Module {
                     },
                     then_branch: [
                         Print {
+                            kind: Print,
                             file: None,
                             using: None,
                             items: [
@@ -364,6 +371,7 @@ Module {
                     },
                     then_branch: [
                         Print {
+                            kind: Print,
                             file: None,
                             using: None,
                             items: [
@@ -486,6 +494,7 @@ Module {
                     },
                     then_branch: [
                         Print {
+                            kind: Print,
                             file: None,
                             using: None,
                             items: [
@@ -572,6 +581,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 15,
@@ -580,4 +590,5 @@ Module {
             },
         },
     ],
+    prelude: false,
 }

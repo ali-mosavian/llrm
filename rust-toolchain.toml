@@ -1,0 +1,5 @@
+# The compiler CI and local builds use. Move it deliberately: a newer rustc has
+# changed std's error text and broken a test before (#196).
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"

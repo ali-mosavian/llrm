@@ -59,6 +59,7 @@ Module {
             declaration: false,
             is_static: false,
             exported: true,
+            private: false,
             module_scope: false,
             span: Span {
                 line: 3,
@@ -67,4 +68,5 @@ Module {
             },
         },
     ],
+    prelude: false,
 }

@@ -150,7 +150,7 @@ fn test_frontend_json_is_deterministic_and_replayable() {
     let Json::Dict(document) = pyjson::loads(&String::from_utf8(first).expect("utf-8")).expect("JSON") else {
         panic!("not an object");
     };
-    assert_eq!(document.get("schema"), Some(&Json::Int(4)));
+    assert_eq!(document.get("schema"), Some(&Json::Int(5)));
 }
 
 #[test]
@@ -1671,8 +1671,10 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     let program = parsed(&source);
     let text = listing_on(&program, "main", &level("O2"), "486");
     let lines: Vec<&str> = between(&text, "_tick proc far", "_tick endp").lines().map(str::trim).collect();
+    // The frame, once (PUSHAD, then the segments), then DGROUP in DS and ES.
+    let start = lines.iter().position(|one| *one == "pushad").expect("saves the registers first");
     assert_eq!(
-        lines[1..11],
+        lines[start..start + 10],
         ["pushad", "push ds", "push es", "push fs", "push gs", "pushw DGROUP", "pop ds", "push ds", "pop es", "cld"],
         "{text}"
     );

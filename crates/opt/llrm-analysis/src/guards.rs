@@ -10,15 +10,15 @@ use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 use num_bigint::BigInt;
 
 use crate::cfg;
-use crate::induction::{Linear, term};
+use crate::induction::{Scev, term};
 use crate::memory::Unit;
 
 /// `left predicate right`, proven on some edge.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Guard {
     pub predicate: IntPredicate,
-    pub left: Linear,
-    pub right: Linear,
+    pub left: Scev,
+    pub right: Scev,
 }
 
 /// The compares proven on entry to block `at`.
@@ -55,7 +55,7 @@ fn _proven(unit: &Unit, condition: ValueId, holds: bool, found: &mut Vec<Guard>)
         (Opcode::ICmp(predicate), [left, right]) => {
             let (Some(left), Some(right), Some(width)) = (term(unit, *left), term(unit, *right), unit.int_bits(*left)) else { return };
             let predicate = if holds { *predicate } else { predicate.inverse() };
-            found.push(Guard { predicate, left: Linear::of(&left, width), right: Linear::of(&right, width) });
+            found.push(Guard { predicate, left: Scev::of(&left, width), right: Scev::of(&right, width) });
         }
         (Opcode::Binary(kind @ (BinaryOp::And | BinaryOp::Or)), [Operand::Value(one), Operand::Value(other)]) if (*kind == BinaryOp::And) == holds => {
             _proven(unit, *one, holds, found);
@@ -67,7 +67,7 @@ fn _proven(unit: &Unit, condition: ValueId, holds: bool, found: &mut Vec<Guard>)
 
 /// Whether `left predicate right` holds on entry to block `at`: both
 /// constants, or a guard there proves it.
-pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Linear, right: &Linear) -> bool {
+pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
     if let (Some(one), Some(other)) = (left.known(), right.known()) {
         return evaluated(predicate, &one, &other, left.width);
     }
@@ -75,7 +75,7 @@ pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Linear, right
 }
 
 /// Whether `guard` proves `left predicate right`.
-pub fn implies(guard: &Guard, predicate: IntPredicate, left: &Linear, right: &Linear) -> bool {
+pub fn implies(guard: &Guard, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
     if guard.left == *left && guard.right == *right {
         return _stronger(guard.predicate, predicate);
     }

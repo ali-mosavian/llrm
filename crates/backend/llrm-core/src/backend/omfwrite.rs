@@ -44,6 +44,8 @@ pub const GROUP: i64 = 1;
 pub const CHUNK: usize = 1000;
 /// relocatable, word aligned, public, 16-bit
 pub const ACBP: u8 = 0x48;
+/// relocatable, paragraph aligned, public, 16-bit
+pub const PARAGRAPH: u8 = 0x68;
 pub const SEGMENT_TARGET: u8 = 0;
 pub const GROUP_TARGET: u8 = 1;
 pub const EXTERNAL_TARGET: u8 = 2;
@@ -740,7 +742,7 @@ pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Re
     let mut named: IndexMap<String, Segment> = IndexMap::from_iter([("_DATA".to_owned(), Segment::new("_DATA", "DATA", true))]);
     for (name, _items) in &module.data {
         if !named.contains_key(name) {
-            let private = module.private.contains(name);
+            let private = module.selector_addressed(name);
             let klass = CLASSES.get(name.as_str()).copied().unwrap_or(if private { "FAR_DATA" } else { "DATA" });
             named.insert(name.clone(), Segment::new(name, klass, !private));
         }
@@ -1025,7 +1027,8 @@ pub fn _records(
     for segment in segments.iter() {
         let (klass, name) = (lname(&segment.klass), lname(&segment.name));
         let size = segment.image.len();
-        let acbp = ACBP | if size == 0x10000 { 2 } else { 0 };
+        let alignment = if module.selector_addressed(&segment.name) { PARAGRAPH } else { ACBP };
+        let acbp = alignment | if size == 0x10000 { 2 } else { 0 };
         let mut body = vec![acbp];
         body.extend(((size & 0xFFFF) as u16).to_le_bytes());
         body.extend(_names(&[name, klass, 1])?);
@@ -1464,7 +1467,7 @@ mod tests {
             masm::text(&rich).unwrap(),
             ".model medium\n.386\n\npublic _f\npublic _table\n.data\nextern _b:byte\n_table label byte\n\
              db 001h,002h,003h\n    align 4\n    db 3 dup (7)\n    dw _table+2\n    dd _b\n.data?\nextern _b:byte\n\
-             _zero label byte\n    db 5 dup (?)\nFAR_SEG segment word public 'FAR_DATA'\nextern _b:byte\n\
+             _zero label byte\n    db 5 dup (?)\nFAR_SEG segment para public 'FAR_DATA'\nextern _b:byte\n\
              _far label byte\ndb 078h,079h,07ah,078h,079h,07ah,078h,079h,07ah,078h,079h,07ah,078h,079h,07ah,078h\n\
              db 079h,07ah,078h,079h,07ah\nFAR_SEG ends\nSHARED segment word public 'DATA'\nextern _b:byte\n\
              \x20   dw _far+1\nSHARED ends\nDGROUP group SHARED\nextern _ext:far\nextern _unused:near\n.code RICH_TEXT\n\
@@ -1478,7 +1481,7 @@ mod tests {
             written(&rich, "rich.c").unwrap(),
             hex("80080006726963682e633b9649000004434f444509524943485f544558540444415441055f4441544103425353045f\
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
-                 0201e9980700480d000504010298070048050007060106980700481500090801f29807004802000b0a01019a08000c\
+                 0201e9980700480d000504010298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
                  ff02ff03ff054b8c0500025f6200ac9009000001025f660500009a900d000102065f7461626c65000000f3a02e0001\
                  0000568bf05ec3558bec83ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb009c18\
                  00c414140102c417140102c420140102c8225404c8255501eba0110002000001020300070707020000000000309c0a\

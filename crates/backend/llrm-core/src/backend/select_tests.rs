@@ -838,3 +838,10 @@ fn near_counted_return() {
     check(sem(Op::Return, Some("ret"), vec![], vec![im(2, 2, None)], None, false), 0, false, false, None, None, Some(("c20200", None, Some(1), vec![1], true)));
     check(sem(Op::Return, Some("ret"), vec![], vec![im(0, 2, None)], None, false), 0, false, false, None, None, Some(("c3", None, None, vec![], true)));
 }
+
+/// sweep_07 failed on rustc 1.99.0: an immediate too wide for i32 raised std's own
+/// text, which that release reworded. The error is ours, and says one thing.
+#[test]
+fn test_an_immediate_too_wide_raises_the_same_text_on_every_compiler() {
+    assert_eq!(i32_of(1 << 40), Err("out of range integral type conversion attempted".to_owned()));
+}

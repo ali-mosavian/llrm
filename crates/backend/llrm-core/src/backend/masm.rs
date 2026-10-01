@@ -140,6 +140,15 @@ pub struct Module {
     pub debug: Option<super::codeview::Debug>,
 }
 
+impl Module {
+    /// Whether `segment` is outside DGROUP, so reached by its own selector alone
+    /// and paragraph aligned: its first byte is offset 0 of its frame, and a 64K
+    /// object in it fits. Every writer asks this.
+    pub fn selector_addressed(&self, segment: &str) -> bool {
+        self.private.contains(segment)
+    }
+}
+
 pub fn text(module: &Module) -> Result<String, Unprintable> {
     text_by(module, listing)
 }
@@ -149,9 +158,9 @@ pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec
     let mut out: Vec<String> = vec![".model medium".into(), ".386".into(), String::new()];
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     for (segment, items) in &module.data {
-        let private = module.private.contains(segment);
+        let private = module.selector_addressed(segment);
         out.push(SEGMENTS.get(segment.as_str()).map_or_else(
-            || format!("{segment} segment word public '{}'", if private { "FAR_DATA" } else { "DATA" }),
+            || format!("{segment} segment {} public '{}'", if private { "para" } else { "word" }, if private { "FAR_DATA" } else { "DATA" }),
             |one| (*one).to_owned(),
         ));
         out.extend(
@@ -303,17 +312,12 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     (enter, leave)
 }
 
-/// The registers an interrupt handler saves first, in Borland C's order:
-/// its parameters, BP nearest.
-const INTERRUPTED: [Register; 9] =
-    [Register::AX, Register::BX, Register::CX, Register::DX, Register::ES, Register::DS, Register::SI, Register::DI, Register::BP];
-
-/// Where an interrupt handler's first parameter, the first register it
-/// saved, is above its own BP: past what its entry pushes after those, and
-/// the BP its frame pushes.
+/// Where the frame an interrupt handler saved starts above its own BP: the
+/// last register it saved, past what its entry pushes after those and the BP
+/// its frame pushes. `llrm_mir::opcode::X86_INTR_FRAME` is the frame.
 pub fn interrupt_parameters() -> i64 {
     let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
-    let pushed: i64 = enter[INTERRUPTED.len()..]
+    let pushed: i64 = enter[INTERRUPT_SAVED..]
         .iter()
         .map(|one| match (one.op, one.name.as_deref()) {
             (_, Some("pushad")) => 32,
@@ -325,18 +329,23 @@ pub fn interrupt_parameters() -> i64 {
     pushed + 2
 }
 
+/// The entry's first instructions, which save the frame: PUSHAD, then the
+/// segments, so the last one pushed is the lowest slot.
+const INTERRUPT_SAVED: usize = 5;
+
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
-/// so it saves every register it or a callee may change, and gives compiled
-/// code what it assumes: DGROUP in DS and ES, the direction flag clear.
-/// Borland C's nine words come first, so its parameters are those registers
-/// and what it writes to them is what `iret` goes back with; PUSHAD then
-/// keeps their high halves. The x87 state is not saved.
+/// so it saves every register it or a callee may change once, as the frame
+/// `llrm_mir::opcode::X86_INTR_FRAME` lays out, and gives compiled code what
+/// it assumes: DGROUP in DS and ES, the direction flag clear. A handler's
+/// register parameters are slots of that frame, so what it writes to them is
+/// what POPAD or `iret` goes back with. The x87 state is not saved.
 fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
     let push = |one: Loc| semantics(Operation::Push, "push", vec![], vec![one]);
     let pop = |one: Register| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
-    let mut enter: Vec<Semantics> = INTERRUPTED.iter().map(|one| push(reg(*one))).collect();
-    enter.extend([
+    let enter = vec![
         semantics(Operation::Nothing, "pushad", vec![], vec![]),
+        push(reg(Register::DS)),
+        push(reg(Register::ES)),
         push(reg(Register::FS)),
         push(reg(Register::GS)),
         push(Loc::Imm(ir::Imm { value: 0, width: 2, address: Some(group) })),
@@ -344,9 +353,14 @@ fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
         push(reg(Register::DS)),
         pop(Register::ES),
         semantics(Operation::Nothing, "cld", vec![], vec![]),
-    ]);
-    let mut leave = vec![pop(Register::GS), pop(Register::FS), semantics(Operation::Nothing, "popad", vec![], vec![])];
-    leave.extend(INTERRUPTED.iter().rev().map(|one| pop(*one)));
+    ];
+    let leave = vec![
+        pop(Register::GS),
+        pop(Register::FS),
+        pop(Register::ES),
+        pop(Register::DS),
+        semantics(Operation::Nothing, "popad", vec![], vec![]),
+    ];
     (enter, leave)
 }
 
@@ -843,6 +857,44 @@ mod tests {
         let st = |index| Loc::St(ir::St { index });
         let swap = semantics(Operation::Exchange, "fxch", vec![st(0), st(1)], vec![st(0), st(1)]);
         assert_eq!(_instruction(&swap, &no_names(), 0).unwrap(), ["fxch st(1)"]);
+    }
+
+    /// What the interrupt entry saves, lowest slot first: each push's register
+    /// name, PUSHAD's eight dwords (EDI lowest) in its place.
+    fn saved_by_the_entry() -> Vec<(String, i64)> {
+        let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
+        let mut pushed = Vec::new();
+        for one in &enter[..INTERRUPT_SAVED] {
+            match (one.op, one.name.as_deref(), one.sources.first()) {
+                (_, Some("pushad"), _) => pushed.push(vec!["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].into_iter().map(|name| (name.to_owned(), 4)).collect::<Vec<_>>()),
+                (Operation::Push, _, Some(Loc::Reg(register))) => pushed.push(vec![(format!("{:?}", register.register).to_lowercase(), 2)]),
+                other => panic!("the entry saves with {other:?}"),
+            }
+        }
+        pushed.into_iter().rev().flat_map(|group| group.into_iter().rev()).collect()
+    }
+
+    /// The handler pushed AX, BX, CX, DX, SI, DI and BP in BCC's nine words and
+    /// again in PUSHAD: 14 bytes of code, 14 of stack and 14-35 cycles per
+    /// interrupt, saved twice for a frame nothing else read.
+    #[test]
+    fn test_an_interrupt_handler_saves_each_register_once() {
+        let mut names: Vec<String> = saved_by_the_entry().into_iter().map(|(name, size)| if size == 4 { name[1..].to_owned() } else { name }).collect();
+        names.sort();
+        let unique: BTreeSet<_> = names.iter().cloned().collect();
+        assert_eq!(names.len(), unique.len(), "saved twice: {names:?}");
+        assert_eq!(names, ["bp", "bx", "cx", "di", "ds", "dx", "es", "fs", "gs", "ax", "si", "sp"].iter().map(|one| one.to_string()).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>());
+    }
+
+    /// The frame MIR states (`X86_INTR_FRAME`) is the one the entry builds, so
+    /// a handler's parameters read the registers they name.
+    #[test]
+    fn test_the_entry_builds_the_frame_mir_states() {
+        let stated: Vec<(String, i64)> = llrm_mir::opcode::X86_INTR_FRAME.iter().map(|&(name, size)| (name.to_owned(), size)).collect();
+        assert_eq!(saved_by_the_entry()[..], stated[..12]);
+        assert_eq!(interrupt_parameters(), 2);
+        assert_eq!(llrm_mir::opcode::x86_intr_slot("ax"), Some(36));
+        assert_eq!(llrm_mir::opcode::x86_intr_slot("ds"), Some(6));
     }
 
     fn _printed(sources: Vec<Loc>, reserve: i64) -> Vec<String> {

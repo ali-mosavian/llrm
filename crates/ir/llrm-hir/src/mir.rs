@@ -22,14 +22,18 @@ mod debug;
 mod handling;
 
 /// The layout BC's objects fix: 16-bit near pointers, 32-bit far ones
-/// indexing by 16 bits, 16-bit segments, and 16-bit alignment.
-pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32";
+/// indexing by 16 bits, 16-bit segments, huge ones as far but indexing by
+/// 32 bits (a displacement past 64K carries into the selector), and 16-bit
+/// alignment.
+pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32";
 
 /// A far pointer's address space.
 pub const FAR: u32 = 1;
 /// A segment's: a cast from a far pointer gives its segment, and one back
 /// gives segment:0.
 pub const SEGMENT: u32 = 2;
+/// A huge pointer's: a far pointer whose index does not wrap at 64K.
+pub const HUGE: u32 = 3;
 
 /// The prefix of a runtime routine's name: a callee the module does not
 /// declare.
@@ -156,6 +160,7 @@ fn value_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
             _ => return Err(format!("a {}-byte float", hir.width)),
         },
         TypeKind::Pointer if hir.address == AddressKind::Segment => types.ptr(SEGMENT),
+        TypeKind::Pointer if hir.address == AddressKind::Huge => types.ptr(HUGE),
         TypeKind::Pointer => types.ptr(if hir.width == 4 { FAR } else { 0 }),
         TypeKind::Array | TypeKind::Opaque => return Err(format!("a value of type {}", hir.name)),
     })
@@ -834,7 +839,10 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             let from = value_type(types, tables.types[&operand_type(operand, &values, &places)]);
             let to = value_type(types, tables.types[&values[result]]);
             if let (Ok(from), Ok(to)) = (from, to)
-                && let Some((name, parameters)) = intrinsic(types, instruction.op, from, to).map(|name| (name, vec![from])).or_else(|| fixed(types, instruction.op, from))
+                && let Some((name, parameters)) = intrinsic(types, instruction.op, from, to)
+                    .map(|name| (name, vec![from]))
+                    .or_else(|| fixed(types, instruction.op, from))
+                    .or_else(|| ptrdiff(types, from, to).filter(|_| instruction.op == Op::PtrDiff).map(|name| (name, vec![from, from])))
                 && let Entry::Vacant(slot) = tables.callees.entry(name)
             {
                 let ty = function_type(types, to, parameters);
@@ -909,6 +917,14 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         let name = if tables.callables.contains_key(callee) { callee.to_owned() } else { format!("{RUNTIME}{callee}") };
         let global = module.add_function(&name, ty, Linkage::External)?;
         place_function(module, global, abi);
+        // A string comparison's callee answers a three-way compare: its
+        // result's sign says which is greater, not how often.
+        if three_way(instruction.op).is_some()
+            && let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind
+            && let Some(attribute) = llrm_mir::facts::Fact::ThreeWayCompare.attribute()
+        {
+            function.attrs.push(attribute);
+        }
         let reference = module.reference(global);
         tables.callees.insert(callee.to_owned(), reference);
         tables.conventions.insert(callee.to_owned(), abi.0);
@@ -973,6 +989,13 @@ fn intrinsic(types: &Types, op: Op, from: TypeId, to: TypeId) -> Option<String> 
         _ => return None,
     };
     Some(format!("llvm.{function}.{float}"))
+}
+
+/// The intrinsic that answers the bytes between two pointers of one type
+/// into an object, as an integer of `to`'s width.
+fn ptrdiff(types: &Types, from: TypeId, to: TypeId) -> Option<String> {
+    let Type::Pointer(space) = types.get(from) else { return None };
+    Some(format!("llrm.ia16.ptrdiff.i{}.p{space}", types.int_bits(to)?))
 }
 
 /// The fixed-point intrinsic a HIR instruction on `ty` calls, and its
@@ -1679,16 +1702,30 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let result = self.b.cast(CastOp::PtrToInt, pointer, ty, "");
                 self.define(instruction, result);
             }
-            // At the 16-bit index width, which for a far pointer moves the
-            // offset alone.
+            // At the pointer's index width: 16 bits for a far pointer, which
+            // moves the offset alone; 32 for a huge one, which carries.
             Op::PtrOffset => {
                 let [pointer, displacement] = self.operands(instruction)?[..] else { return Err("ptr_offset without two operands".to_owned()) };
                 let signed = self.operand_hir_type(&instruction.operands[1]).signed != Some(false);
-                let i16 = self.b.context.types.int(16);
-                let displacement = self.convert(displacement, signed, i16)?;
+                let space = match self.b.context.types.get(self.b.type_of(pointer)) {
+                    Type::Pointer(space) => *space,
+                    _ => 0,
+                };
+                let index = self.b.context.types.int(self.tables.layout.pointer(space).index_bits);
+                let displacement = self.convert(displacement, signed, index)?;
                 let byte = self.b.context.types.int(8);
                 let flags = self.stated_flags(instruction);
                 let result = self.b.gep(byte, pointer, &[displacement], flags, "");
+                self.define(instruction, result);
+            }
+            Op::PtrDiff => {
+                let [a, b] = self.operands(instruction)?[..] else { return Err("ptr_diff without two operands".to_owned()) };
+                let ty = self.result_type(instruction.results[0])?;
+                let from = self.b.type_of(a);
+                let name = ptrdiff(&self.b.context.types, from, ty).ok_or("a pointer difference of non-pointers")?;
+                let callee = Value::Constant(*self.tables.callees.get(&name).ok_or_else(|| format!("@{name} undeclared"))?);
+                let function = function_type(&mut self.b.context.types, ty, vec![from, from]);
+                let result = self.b.call(function, callee, &[a, b], "").expect("a difference");
                 self.define(instruction, result);
             }
             Op::Concat => {

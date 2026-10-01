@@ -4,3 +4,4 @@ build/
 /crates/*/*/target/
 .DS_Store
 ._*
+__pycache__/

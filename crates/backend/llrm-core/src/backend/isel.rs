@@ -22,7 +22,7 @@ use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
 use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
 use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{DebugVariable, Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{BlockOdds, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
@@ -247,7 +247,7 @@ const FILL_BYTES: i64 = 3 + 4 + 2 + 3 + 2 + 2;
 /// pointer is its offset and selector, in two registers.
 fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
     match module.context.types.get(ty) {
-        Type::Pointer(1) => Ok(4),
+        Type::Pointer(space) if layout.is_pair(*space) => Ok(4),
         Type::Int(64) => Ok(8),
         Type::Float(FloatKind::Float) => Ok(4),
         Type::Float(FloatKind::Double) => Ok(8),
@@ -498,7 +498,7 @@ struct Selector<'m, 'c, 'p> {
     /// The block being selected.
     current: Option<BlockId>,
     /// Each far global's offset and selector, where a block made them.
-    far_globals: IndexMap<(BlockId, GlobalId), (Held, Held)>,
+    far_globals: IndexMap<(BlockId, GlobalId, i64), (Held, Held)>,
     /// What `global` made for the instruction being selected, placed before it.
     materialized: Vec<Arc<Insn>>,
     /// The LIR blocks each MIR edge leaves from: a switch's cases leave
@@ -754,6 +754,7 @@ impl Selector<'_, '_, '_> {
             }
         }
         let cold = self.cold(&order);
+        let odds = self.odds(&made, &block_at);
         let blocks = layout
             .iter()
             .flat_map(|block| {
@@ -768,7 +769,42 @@ impl Selector<'_, '_, '_> {
         body.inputs = self.inputs.clone();
         body.ordered = true;
         body.loop_trip_counts = self.trip_counts(&block_at);
+        body.odds = odds;
         Ok(body)
+    }
+
+    /// `branchprob`'s probabilities over the LIR blocks each MIR block
+    /// became: a branch takes its MIR edges', shared out among the
+    /// successors it has.
+    fn odds(&self, made: &IndexMap<BlockId, Vec<LirBlock>>, block_at: &IndexMap<BlockId, i64>) -> BlockOdds {
+        let unit = Unit::of(self.module, &self.layout, self.function);
+        let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.globals, self.function, &unit.shape(), &std::collections::BTreeMap::new());
+        let mut odds = BlockOdds::default();
+        for (block, chain) in made {
+            let taken: IndexMap<i64, f64> = self
+                .successors(*block)
+                .into_iter()
+                .filter_map(|to| Some((block_at[&to], estimated.probability(cfg::id(*block), cfg::id(to))?)))
+                .collect();
+            // An edge within the chain, as a switch's compares make, carries
+            // what the block's own MIR edges do not.
+            for one in chain {
+                if one.succ.len() < 2 {
+                    continue;
+                }
+                let known: f64 = one.succ.iter().filter_map(|to| taken.get(to)).sum();
+                let inner = one.succ.iter().filter(|to| !taken.contains_key(*to)).count();
+                let weight = |to: &i64| taken.get(to).copied().unwrap_or((1.0 - known).max(0.0) / inner.max(1) as f64);
+                let total: f64 = one.succ.iter().map(weight).sum();
+                if total <= 0.0 {
+                    continue;
+                }
+                for to in &one.succ {
+                    odds.taken.insert((one.at, *to), (weight(to) / total * BlockOdds::CERTAIN).round().min(f64::from(u32::MAX)) as u32);
+                }
+            }
+        }
+        odds
     }
 
     /// Each loop's header and constant trips, as `induction` proves them.
@@ -1402,6 +1438,10 @@ impl Selector<'_, '_, '_> {
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return Ok(None) };
         let instruction = self.function.instruction(inst);
         let Opcode::GetElementPtr { source } = instruction.opcode else { return Ok(None) };
+        // A displacement that may carry into the selector is no address mode's.
+        if self.carries(instruction.ty) {
+            return Ok(None);
+        }
         let (offset, variable) = self.layout.collect_offset(self.types(), source, &self.indices(inst));
         if !variable.is_empty() {
             return Ok(None);
@@ -1426,7 +1466,12 @@ impl Selector<'_, '_, '_> {
         let space = crate::backend::globals::space(self.module, global);
         if self.module.global(global).address_space != 0 {
             let Some(block) = self.current else { return refuse("a far global outside a block") };
-            let (base, selector) = match self.far_globals.get(&(block, global)) {
+            // A carried pointer is canonical: whole 64K strides of its offset are
+            // in the selector, so a constant past 64K is a stepped selector.
+            let carried = self.carries(self.module.context.get(id).ty);
+            let bits = if carried { self.offset_bits(self.module.context.get(id).ty) } else { 0 };
+            let (carry, offset) = if carried { (offset >> bits, offset & ((1 << bits) - 1)) } else { (0, offset) };
+            let (base, selector) = match self.far_globals.get(&(block, global, carry)) {
                 Some(&pair) => pair,
                 None => {
                     let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
@@ -1435,7 +1480,15 @@ impl Selector<'_, '_, '_> {
                     for (into, from) in [(selector, symbol(Space::Group, crate::backend::globals::segment_of(global))), (base, symbol(space, i64::from(global.0)))] {
                         self.materialized.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from])));
                     }
-                    self.far_globals.insert((block, global), (base, selector));
+                    if carry != 0 {
+                        let Some(shift) = self.segments.huge_shift else { return refuse("a huge pointer on a machine that states no selector stride") };
+                        let step = Loc::Imm(Imm { value: (carry << shift) & ((1 << bits) - 1), width: 2, address: None });
+                        let stepped = self.fresh_held(2);
+                        self.materialized.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(stepped)], vec![Loc::Held(selector), step])));
+                        self.far_globals.insert((block, global, carry), (base, stepped));
+                        return Ok(Pointer::Far { selector: stepped, base: Some(base), index: None, scale: 1, offset });
+                    }
+                    self.far_globals.insert((block, global, carry), (base, selector));
                     (base, selector)
                 }
             };
@@ -1462,6 +1515,9 @@ impl Selector<'_, '_, '_> {
     fn indexed(&mut self, inst: InstId, source: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
+        if self.carries(instruction.ty) {
+            return self.carried(inst, source, at, out);
+        }
         // A far pointer's index is its 16-bit offset, as `p1:32:16:16:16` says.
         let far = self.is_far(instruction.ty);
         let width = if far { 2 } else { self.width(instruction.ty)? };
@@ -1642,6 +1698,72 @@ impl Selector<'_, '_, '_> {
         };
         let start = start.expect("a near pointer's register");
         out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(result)], vec![Loc::Held(start), Loc::Held(sum)])));
+        Ok(())
+    }
+
+    /// A GEP whose displacement carries into the selector (a huge pointer):
+    /// the offset widened and added to the displacement as a dword, the
+    /// offset the low word of the sum, the selector stepped by the sum's high
+    /// word at the target's stride (`Machine::huge_shift`). Every huge
+    /// pointer comes out of this, so selector:offset is canonical within an
+    /// object, and comparing and subtracting are lexicographic.
+    fn carried(&mut self, inst: InstId, source: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let Some(shift) = self.segments.huge_shift else { return refuse("a huge pointer on a machine that states no selector stride") };
+        let function = self.function;
+        let instruction = function.instruction(inst);
+        let address = instruction.result.expect("an address");
+        let (constant, variable) = self.layout.collect_offset(self.types(), source, &self.indices(inst));
+        let (offset, selector) = self.far(instruction.operands[0], at, out)?;
+        if constant == 0 && variable.is_empty() {
+            self.fars.insert(address, (Some(offset), selector));
+            return Ok(());
+        }
+        let dword = |value: i64| Loc::Imm(Imm { value, width: 4, address: None });
+        let byte = |value: i64| Loc::Imm(Imm { value, width: 1, address: None });
+        let mut sum = self.fresh_held(4);
+        out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(sum)], vec![Loc::Held(offset)])));
+        for (position, scale) in variable {
+            let index = instruction.operands[1 + position];
+            let ty = function.operand_type(&self.module.context, index).expect("a typed index");
+            let mut held = self.held(index, ty, at, out)?;
+            if held.width > 4 {
+                return refuse("an index wider than a dword in a huge pointer");
+            }
+            if held.width < 4 {
+                let wide = self.fresh_held(4);
+                out.push(insn(at, semantics(Operation::Extend, "movsx", vec![Loc::Held(wide)], vec![Loc::Held(held)])));
+                held = wide;
+            }
+            if scale != 1 {
+                let scaled = self.fresh_held(4);
+                let what = if scale.is_power_of_two() {
+                    semantics(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(held), byte(i64::from(scale.trailing_zeros()))])
+                } else {
+                    semantics(Operation::Multiply, "imul", vec![Loc::Held(scaled)], vec![Loc::Held(held), dword(scale as i64)])
+                };
+                out.push(insn(at, what));
+                held = scaled;
+            }
+            let added = self.fresh_held(4);
+            out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(added)], vec![Loc::Held(sum), Loc::Held(held)])));
+            sum = added;
+        }
+        if constant != 0 {
+            let added = self.fresh_held(4);
+            out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(added)], vec![Loc::Held(sum), dword(constant as i64)])));
+            sum = added;
+        }
+        let carry = self.fresh_held(4);
+        let steps = [("sar", self.offset_bits(instruction.ty)), ("shl", i64::from(shift))];
+        let mut from = sum;
+        for (name, count) in steps {
+            let into = if name == "shl" { carry } else { self.fresh_held(4) };
+            out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![Loc::Held(from), byte(count)])));
+            from = into;
+        }
+        let stepped = self.fresh_held(2);
+        out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(stepped)], vec![Loc::Held(selector), Loc::Held(Held { width: 2, ..carry })])));
+        self.fars.insert(address, (Some(Held { width: 2, ..sum }), stepped));
         Ok(())
     }
 
@@ -1951,8 +2073,22 @@ impl Selector<'_, '_, '_> {
         }
     }
 
+    /// Whether `ty` is a selector and an offset, two words in two registers.
     fn is_far(&self, ty: TypeId) -> bool {
-        matches!(self.types().get(ty), Type::Pointer(1))
+        matches!(self.types().get(ty), Type::Pointer(space) if self.layout.is_pair(*space))
+    }
+
+    /// The bits of a `ty` pair's offset word: its selector steps by what carries out of them.
+    fn offset_bits(&self, ty: TypeId) -> i64 {
+        match self.types().get(ty) {
+            Type::Pointer(space) => i64::from(self.layout.offset_bits(*space)),
+            _ => unreachable!("a pointer's offset"),
+        }
+    }
+
+    /// Whether a displacement added to a `ty` pointer carries into its selector.
+    fn carries(&self, ty: TypeId) -> bool {
+        matches!(self.types().get(ty), Type::Pointer(space) if self.layout.carries(*space))
     }
 
     fn is_float(&self, ty: TypeId) -> bool {
@@ -2035,6 +2171,11 @@ impl Selector<'_, '_, '_> {
                     (Some(offset), selector)
                 }
                 (CastOp::AddrSpaceCast, Type::Pointer(2)) => (None, self.held(operand, from, at, out)?),
+                // Far and huge pointers are the same two words.
+                (CastOp::AddrSpaceCast, Type::Pointer(space)) if self.layout.is_pair(space) => {
+                    let (offset, selector) = self.far(operand, at, out)?;
+                    (Some(offset), selector)
+                }
                 // A joined dword's words are the pointer's, as they are.
                 // Copied: the join's words are the call's dword registers,
                 // and a selector must be a word a segment register can take.
@@ -2057,6 +2198,9 @@ impl Selector<'_, '_, '_> {
             };
             self.fars.insert(result, pair);
             return Ok(());
+        }
+        if op == CastOp::PtrToInt && self.carries(from) {
+            return refuse("a huge pointer as an integer: its packed bits are not its address");
         }
         let (offset, selector) = self.far(operand, at, out)?;
         match (op, self.types().get(to).clone()) {
@@ -2088,10 +2232,12 @@ impl Selector<'_, '_, '_> {
                 self.values.insert(result, held.value);
             }
             CastOp::FPTrunc => {
+                // Rounded to the narrower format's width: a float's 4 bytes, a double's 8.
+                let size = self.size(to)? as u32;
                 let held = self.float(operand, at, out)?;
-                let cell = self.float_stored(held, "fstp", 4, at, out);
+                let cell = self.float_stored(held, "fstp", size, at, out);
                 let into = Held { value: self.value(result), width: FLOAT };
-                self.float_loaded(into, "fld", cell, 4, false, at, out);
+                self.float_loaded(into, "fld", cell, size, false, at, out);
             }
             CastOp::SIToFP => {
                 let mut held = self.held(operand, from, at, out)?;
@@ -2299,6 +2445,7 @@ impl Selector<'_, '_, '_> {
                     let Some(block) = llrm_mir::intrinsics::asm(&name) else { return refuse(format!("@{name} does not parse")) };
                     self.called(inst, convention, Callee::Inline(name, block.code), arguments, at, out)
                 }
+                Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
                 _ => refuse(format!("@{name}")),
@@ -2308,6 +2455,40 @@ impl Selector<'_, '_, '_> {
             in_the_frame(&declared.parameter_attrs)?;
         }
         self.called(inst, convention, Callee::Direct(name, far(global)?), arguments, at, out)
+    }
+
+    /// The bytes between two carried pointers into one object: each is
+    /// canonical, so the selectors differ by whole strides and the offsets by
+    /// the rest, `((selector - selector) >> stride << 16) + (offset - offset)`.
+    fn pointer_difference(&mut self, inst: InstId, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let Some(shift) = self.segments.huge_shift else { return refuse("a huge pointer difference on a machine that states no selector stride") };
+        let instruction = self.function.instruction(inst);
+        let result = instruction.result.expect("a difference");
+        if self.width(instruction.ty)? != 4 {
+            return refuse("a huge pointer difference that is not a dword");
+        }
+        let ((a_offset, a_selector), (b_offset, b_selector)) = (self.far(arguments[0], at, out)?, self.far(arguments[1], at, out)?);
+        let mut widened = |selector: &mut Self, held: Held, out: &mut Vec<Arc<Insn>>| {
+            let wide = selector.fresh_held(4);
+            out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(held)])));
+            wide
+        };
+        let mut binary = |selector: &mut Self, name: &str, into: Option<Held>, sources: Vec<Loc>, out: &mut Vec<Arc<Insn>>| {
+            let into = into.unwrap_or_else(|| selector.fresh_held(4));
+            out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], sources)));
+            into
+        };
+        let byte = |value: i64| Loc::Imm(Imm { value, width: 1, address: None });
+        let (a, b) = (widened(self, a_offset, out), widened(self, b_offset, out));
+        let within = binary(self, "sub", None, vec![Loc::Held(a), Loc::Held(b)], out);
+        let (a, b) = (widened(self, a_selector, out), widened(self, b_selector, out));
+        let between = binary(self, "sub", None, vec![Loc::Held(a), Loc::Held(b)], out);
+        let strides = binary(self, "sar", None, vec![Loc::Held(between), byte(i64::from(shift))], out);
+        let offset_bits = self.offset_bits(self.function.operand_type(&self.module.context, arguments[0]).expect("a typed operand"));
+        let high = binary(self, "shl", None, vec![Loc::Held(strides), byte(offset_bits)], out);
+        let into = Held { value: self.value(result), width: 4 };
+        binary(self, "add", Some(into), vec![Loc::Held(within), Loc::Held(high)], out);
+        Ok(())
     }
 
     /// A call through a code pointer: near through its word, far through a
@@ -2750,6 +2931,20 @@ impl Selector<'_, '_, '_> {
     /// Far pointers compared: equal when offset and selector are; ordered by
     /// offset alone, which is a far pointer's index (`p1:32:16:16:16`).
     fn far_compare(&mut self, predicate: IntPredicate, a: Operand, b: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Test, Unselected> {
+        // Carried pointers are canonical within an object, so an order is the
+        // selector's, then the offset's: the dword's, as one subtraction.
+        if self.carries(self.function.operand_type(&self.module.context, a).expect("a typed operand")) && !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+            let predicate = match predicate {
+                IntPredicate::Sgt | IntPredicate::Sle | IntPredicate::Ugt | IntPredicate::Ule => return self.far_compare(swapped(predicate), b, a, at, out),
+                predicate => predicate,
+            };
+            let ((a_offset, a_selector), (b_offset, b_selector)) = (self.far(a, at, out)?, self.far(b, at, out)?);
+            for (name, sources) in [("sub", [a_offset, b_offset]), ("sbb", [a_selector, b_selector])] {
+                let into = self.fresh_held(2);
+                out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], sources.map(Loc::Held).to_vec())));
+            }
+            return Ok(Test::One(condition_code(predicate)));
+        }
         let (a_offset, a_selector) = self.far(a, at, out)?;
         if !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
             let (b_offset, _) = self.far(b, at, out)?;

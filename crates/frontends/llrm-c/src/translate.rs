@@ -72,6 +72,9 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
             for fact in crate::ow_facts::of_call_class(symbol.call_class) {
                 facts.state(Subject::Callable(callable.id), fact);
             }
+            if !callable.defined && crate::libfunc::three_way_compare(&callable.name) {
+                facts.state(Subject::Callable(callable.id), llrm_mir::facts::Fact::ThreeWayCompare);
+            }
         }
     }
     let (types, alias_classes) = types.finished();
@@ -106,6 +109,8 @@ fn back_key(unit: &hir::Unit, back: i64) -> Key {
 
 /// A far pointer's address space, and far code's.
 const FAR: u32 = 1;
+/// A huge pointer's: a far one whose displacement carries into its selector.
+const HUGE: u32 = 3;
 
 /// Where a symbol or literal is: far unless in DGROUP.
 fn space(unit: &hir::Unit, key: Key) -> u32 {
@@ -133,6 +138,9 @@ struct Relocation {
     far: bool,
 }
 
+/// What one segment holds of a huge object: the 8086's 64K.
+const HUGE_SEGMENT: usize = 0x1_0000;
+
 /// A labelled data object: its bytes, the addresses in them, and where it goes.
 struct Object {
     key: Key,
@@ -152,6 +160,7 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     let mut out: Vec<Object> = Vec::new();
     for segment in unit.segments.values().filter(|one| one.attr & 0x1 == 0) {
         let first = out.len();
+        let continues = out.last().is_some_and(|one| one.bytes.len() % HUGE_SEGMENT == 0 && !one.bytes.is_empty());
         let mut align = None;
         for (call, args) in &segment.items {
             let args: Vec<&str> = args.0.iter().map(String::as_str).collect();
@@ -168,7 +177,10 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                 align = Some(number(to)? as u64);
                 continue;
             }
-            let Some(object) = out[first..].last_mut() else { return refuse(format!("{} data before any label", segment.name)) };
+            // A huge object runs on into further segments, which hold no label: each full
+            // 64K of it, and the rest in the last.
+            let found = if continues && out.len() == first { out.last_mut() } else { out[first..].last_mut() };
+            let Some(object) = found else { return refuse(format!("{} data before any label", segment.name)) };
             let pointer = |object: &mut Object, target: Key, offset: &str, far: bool| -> R<()> {
                 object.relocations.push(Relocation { at: object.bytes.len(), target, offset: number(offset)?, far });
                 object.bytes.extend(std::iter::repeat_n(0, if far { 4 } else { 2 }));
@@ -242,6 +254,8 @@ enum Shape {
     Bool,
     Float(i64),
     Pointer(i64),
+    /// A far pointer whose displacement carries into its selector.
+    Huge,
     Bytes(i64),
 }
 
@@ -275,6 +289,7 @@ impl<'u> Types<'u> {
             TypeKind::Boolean => Shape::Bool,
             TypeKind::Integer => Shape::Int(one.width, one.signed == Some(true)),
             TypeKind::Float => Shape::Float(one.width),
+            TypeKind::Pointer if one.address == AddressKind::Huge => Shape::Huge,
             TypeKind::Pointer => Shape::Pointer(one.width),
             TypeKind::Array | TypeKind::Opaque => Shape::Bytes(one.width),
         }
@@ -291,6 +306,7 @@ impl<'u> Types<'u> {
             Shape::Bool => (TypeKind::Boolean, 2),
             Shape::Float(width) => (TypeKind::Float, width),
             Shape::Pointer(width) => (TypeKind::Pointer, width),
+            Shape::Huge => (TypeKind::Pointer, 4),
             Shape::Bytes(width) => (TypeKind::Opaque, width),
         };
         let mut made = h::Type::new(id, &format!("{shape:?}{}", class.map_or(String::new(), |one| format!(" {one}"))), kind, width);
@@ -300,6 +316,7 @@ impl<'u> Types<'u> {
             Shape::Float(4) => made.evaluation = FloatEvaluation::Binary32,
             Shape::Float(_) => made.evaluation = FloatEvaluation::Binary64,
             Shape::Pointer(width) => made.address = address(if width == 4 { FAR } else { 0 }),
+            Shape::Huge => made.address = AddressKind::Huge,
             _ => {}
         }
         self.list.push(made);
@@ -315,7 +332,7 @@ impl<'u> Types<'u> {
     }
 
     fn pointer(&mut self, space: u32) -> i64 {
-        self.of(Shape::Pointer(if space == FAR { 4 } else { 2 }), None)
+        self.of(if space == HUGE { Shape::Huge } else { Shape::Pointer(if space == FAR { 4 } else { 2 }) }, None)
     }
 
     /// An aggregate's size; none for a scalar.
@@ -331,7 +348,8 @@ impl<'u> Types<'u> {
             "TY_POINTER" => Shape::Pointer(big(hir::BIG_DATA)),
             "TY_CODE_PTR" => Shape::Pointer(big(hir::BIG_CODE)),
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => Shape::Pointer(2),
-            "TY_LONG_POINTER" | "TY_HUGE_POINTER" | "TY_LONG_CODE_PTR" => Shape::Pointer(4),
+            "TY_HUGE_POINTER" => Shape::Huge,
+            "TY_LONG_POINTER" | "TY_LONG_CODE_PTR" => Shape::Pointer(4),
             "TY_SINGLE" => Shape::Float(4),
             "TY_DOUBLE" => Shape::Float(8),
             "TY_LONG_DOUBLE" => Shape::Float(10),
@@ -469,8 +487,9 @@ fn cleanup(symbol: &hir::Symbol) -> R<StackCleanup> {
 /// parameter value's bytes. Borland's STDARG.H steps `va_start` on from the
 /// last parameter's address by its size rounded to an int: in a variadic
 /// function an address-taken parameter lives with the arguments after it.
-/// An interrupt handler's parameters are the registers it saved, BP first,
-/// and what it writes to them is what it returns to.
+/// An interrupt handler's parameters are the registers it saved, named in
+/// Borland's order, each at its slot of the frame (`x86_intr_slot`); what it
+/// writes to them is what it returns to.
 fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[i64]) -> R<()> {
     let Some(abi) = function.abi.as_ref() else { return Ok(()) };
     let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
@@ -486,7 +505,7 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
     for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
-        let offset = if interrupt { rounded(&sizes[..at]) } else { -rounded(&sizes[at..]) };
+        let offset = if interrupt { interrupt_slot(&function.name, at, sizes[at])? } else { -rounded(&sizes[at..]) };
         let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
         (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, offset);
         let copy = |one: &h::Instruction| one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)];
@@ -495,6 +514,19 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
         }
     }
     Ok(())
+}
+
+/// Borland C's interrupt parameters, in order: the registers its handler saved.
+const BORLAND_INTERRUPT_PARAMETERS: [&str; 12] = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"];
+
+/// Where parameter `at` of handler `name`, `size` bytes, is in its frame: a
+/// register is one word, the low word of its slot.
+fn interrupt_slot(name: &str, at: usize, size: i64) -> R<i64> {
+    let Some(register) = BORLAND_INTERRUPT_PARAMETERS.get(at) else { return refuse(format!("{name}: an interrupt handler's parameter {at}: Borland's has {}", BORLAND_INTERRUPT_PARAMETERS.len())) };
+    if size != 2 {
+        return refuse(format!("{name}: an interrupt handler's parameter {register} is {size} bytes, not a register"));
+    }
+    Ok(llrm_mir::opcode::x86_intr_slot(register).expect("every Borland register is in the frame"))
 }
 
 fn distance(symbol: &hir::Symbol) -> CallDistance {
@@ -673,6 +705,7 @@ impl<'a, 't> Body<'a, 't> {
         match self.shape(value) {
             Shape::Pointer(4) => Some(FAR),
             Shape::Pointer(_) => Some(0),
+            Shape::Huge => Some(HUGE),
             _ => None,
         }
     }
@@ -1054,7 +1087,7 @@ impl<'a, 't> Body<'a, 't> {
                 let dword = self.types.int(4, false);
                 self.op(Op::Convert, dword, vec![value_ref(value)])
             }
-            Shape::Pointer(_) => {
+            Shape::Pointer(_) | Shape::Huge => {
                 let null = self.constant(self.type_of(value), Number::Int(0));
                 let truth = self.types.of(Shape::Bool, None);
                 self.op(Op::Ne, truth, vec![value_ref(value), value_ref(null)])
@@ -1189,7 +1222,8 @@ impl<'a, 't> Body<'a, 't> {
                 match self.types.shape(ty) {
                     Shape::Int(width, _) => Got::Value(self.constant(ty, Number::Int(wrapped(width)))),
                     // A pointer constant is an integer as wide: a far one segment:offset.
-                    Shape::Pointer(width) => {
+                    Shape::Pointer(_) | Shape::Huge => {
+                        let width = self.types.get(ty).width;
                         let int = self.types.int(width, false);
                         let value = self.constant(int, Number::Int(wrapped(width)));
                         Got::Value(self.converted(value, &format!("TY_UINT_{width}"), type_)?)
@@ -1425,15 +1459,18 @@ impl<'a, 't> Body<'a, 't> {
             (Shape::Float(_), Shape::Int(..)) => self.op(Op::Truncate, ty, vec![value_ref(value)]),
             (Shape::Float(_), Shape::Float(_)) => self.op(Op::Convert, ty, vec![value_ref(value)]),
             (Shape::Pointer(a), Shape::Pointer(b)) if a == b => value,
-            (Shape::Pointer(_), Shape::Pointer(_)) => self.op(Op::Convert, ty, vec![value_ref(value)]),
+            (Shape::Huge, Shape::Huge) => value,
+            (Shape::Pointer(_) | Shape::Huge, Shape::Pointer(_) | Shape::Huge) => self.op(Op::Convert, ty, vec![value_ref(value)]),
             // An integer is the pointer's own bits, extended to its width as
             // Borland does: a far one is segment:offset, 0 the null pointer.
-            (Shape::Int(..) | Shape::Bool, Shape::Pointer(width)) => {
+            (Shape::Int(..) | Shape::Bool, Shape::Pointer(_) | Shape::Huge) => {
+                let width = self.types.get(ty).width;
                 let int = self.types.int(width, false);
                 let value = self.resized(value, source_signed, int);
                 self.op(Op::Convert, ty, vec![value_ref(value)])
             }
-            (Shape::Pointer(width), Shape::Int(..)) => {
+            (Shape::Pointer(_) | Shape::Huge, Shape::Int(..)) => {
+                let width = self.types.get(self.type_of(value)).width;
                 let int = self.types.int(width, false);
                 let whole = self.op(Op::Convert, int, vec![value_ref(value)]);
                 self.resized(whole, false, ty)
@@ -1515,6 +1552,13 @@ impl<'a, 't> Body<'a, 't> {
         Ok(())
     }
 
+    /// The value of integer constant `node`, unwrapped to its C type.
+    fn whole_constant(&self, node: &str) -> Option<i64> {
+        let tree = self.unit.nodes.get(&hir::handle(node))?;
+        let ("CGInteger", [value, _]) = (tree.call.as_str(), &tree.args[..]) else { return None };
+        value.trim().parse::<i64>().ok().filter(|bytes| i32::try_from(*bytes).is_ok())
+    }
+
     fn binary(&mut self, cg_op: &str, left: &str, right: &str, type_: &str) -> R<i64> {
         let canonical = self.unit.canonical_type(type_);
         if matches!(cg_op, "O_PLUS" | "O_MINUS") && !is_float(&canonical) {
@@ -1522,10 +1566,31 @@ impl<'a, 't> Body<'a, 't> {
             if pointers(&canonical) {
                 self.scaled(right)?;
             }
-            let b_got = self.eval(right)?;
+            let huge = canonical == "TY_HUGE_POINTER";
+            // Watcom states a folded displacement past 16 bits as a TY_INTEGER constant
+            // whose value is whole: a huge pointer takes all of it.
+            let whole = if huge { self.whole_constant(right) } else { None };
+            let b_got = match whole {
+                Some(bytes) => {
+                    let dword = self.types.int(4, true);
+                    Got::Value(self.constant(dword, Number::Int(bytes)))
+                }
+                None => self.eval(right)?,
+            };
             let (a, b) = (self.scalar(a_got)?, self.scalar(b_got)?);
             // Pointer arithmetic: the pointer moved, or two pointers' distance.
             match (self.space(a).is_some(), self.space(b).is_some()) {
+                // The pointer is made huge first: a far one moves inside its segment.
+                (true, false) if huge => {
+                    let a = self.converted(a, &self.type_of_node(left), type_)?;
+                    let from = self.type_of_node(right);
+                    return self.moved(a, b, &from, cg_op == "O_MINUS");
+                }
+                (false, true) if huge && cg_op == "O_PLUS" => {
+                    let b = self.converted(b, &self.type_of_node(right), type_)?;
+                    let from = self.type_of_node(left);
+                    return self.moved(b, a, &from, false);
+                }
                 (true, false) => {
                     let from = self.type_of_node(right);
                     let moved = self.moved(a, b, &from, cg_op == "O_MINUS")?;
@@ -1535,6 +1600,14 @@ impl<'a, 't> Body<'a, 't> {
                     let from = self.type_of_node(left);
                     let moved = self.moved(b, a, &from, false)?;
                     return self.converted(moved, &self.type_of_node(right), type_);
+                }
+                // Two huge pointers' distance: their bytes, not their packed bits.
+                (true, true) if cg_op == "O_MINUS" && !pointers(&canonical) && self.space(a) == Some(HUGE) && self.space(b) == Some(HUGE) => {
+                    let ty = self.ty(type_)?;
+                    if self.types.get(ty).width != 4 {
+                        return self.refuse(format!("a huge pointer difference as {type_}"));
+                    }
+                    return Ok(self.op(Op::PtrDiff, ty, vec![value_ref(a), value_ref(b)]));
                 }
                 (true, true) if cg_op == "O_MINUS" && !pointers(&canonical) => {
                     let a = self.converted(a, &self.type_of_node(left), type_)?;
@@ -1569,7 +1642,8 @@ impl<'a, 't> Body<'a, 't> {
     /// `pointer` moved by `by` bytes, of C type `from`: inbounds, as C
     /// keeps pointer arithmetic inside its object.
     fn moved(&mut self, pointer: i64, by: i64, from: &str, subtract: bool) -> R<i64> {
-        let word = self.types.int(2, true);
+        // A huge pointer's index is a dword; a far one's its offset's word.
+        let word = self.types.int(if self.space(pointer) == Some(HUGE) { 4 } else { 2 }, true);
         let by = match self.bits(by) {
             Some(_) => self.resized(by, signed(&self.unit.canonical_type(from)), word),
             None => return self.refuse(format!("a pointer moved by a {from}")),
@@ -1831,6 +1905,15 @@ mod tests {
         emitted.module
     }
 
+    /// The C library's strcmp is stated a three-way compare: branchprob
+    /// read `strcmp(a, b) > 0` as a likely `x > 0`.
+    #[test]
+    fn strcmp_is_stated_a_three_way_compare() {
+        let module = raised("threeway.cgs");
+        let callee = module.globals.iter().find(|one| one.name.as_deref() == Some("_strcmp")).and_then(|one| one.function()).expect("strcmp declared");
+        assert!(llrm_mir::facts::Facts::of(&callee.attrs).three_way_compare(), "{}", llrm_mir::print::module(&module));
+    }
+
     /// `@name`'s definition as printed.
     fn defined(module: &Module, name: &str) -> String {
         let text = llrm_mir::print::module(module);
@@ -1947,6 +2030,22 @@ mod tests {
         assert!(scale("_through_a_char").contains("mul nuw i16"), "{}", scale("_through_a_char"));
         assert!(scale("_through_a_sum").contains("mul nuw i16"), "{}", scale("_through_a_sum"));
         assert!(!scale("_through_a_signed").contains("nsw") && !scale("_through_a_signed").contains("nuw"), "{}", scale("_through_a_signed"));
+    }
+
+    /// Every conversion to or from a long double was E1090 in the front end
+    /// (#103), and mixed arithmetic left its operand unconverted: the MIR
+    /// converts each way, between x86_fp80 and float, double and the integers.
+    #[test]
+    fn test_long_double_converts_to_and_from_every_arithmetic_type() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/longdouble.cgs")).unwrap();
+        assert!(text.contains("O_CONVERT") && text.contains("TY_LONG_DOUBLE"), "the shape the front end refused");
+        let module = raised("longdouble.cgs");
+        let printed = llrm_mir::print::module(&module);
+        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80", "sitofp i16"] {
+            assert!(printed.contains(conversion), "{conversion}: {printed}");
+        }
+        let main = defined(&module, "_main");
+        assert!(main.contains("sitofp") && main.contains("x86_fp80"), "{main}");
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.

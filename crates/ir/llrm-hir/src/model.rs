@@ -9,7 +9,7 @@ use std::fmt;
 
 use llrm_support::pyrepr::{self, Repr};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// A Python `StrEnum`: members, their values, `str()` and `repr()`.
 macro_rules! str_enum {
@@ -370,6 +370,8 @@ str_enum!(Op {
     // A place's address; with no operand, the address of the function `callee` names.
     Address("ADDRESS") = "address",
     PtrOffset("PTR_OFFSET") = "ptr_offset",
+    // The bytes between two huge pointers into one object.
+    PtrDiff("PTR_DIFF") = "ptr_diff",
     PointerSegment("POINTER_SEGMENT") = "pointer_segment",
     PointerOffset("POINTER_OFFSET") = "pointer_offset",
     Concat("CONCAT") = "concat",

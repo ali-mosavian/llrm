@@ -36,6 +36,7 @@ Module {
             },
         },
         Print {
+            kind: Print,
             file: None,
             using: None,
             items: [
@@ -106,6 +107,7 @@ Module {
             },
             then_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -132,6 +134,7 @@ Module {
             ],
             else_branch: [
                 Print {
+                    kind: Print,
                     file: None,
                     using: None,
                     items: [
@@ -173,4 +176,5 @@ Module {
         },
     ],
     procedures: [],
+    prelude: false,
 }

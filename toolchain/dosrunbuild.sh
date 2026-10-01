@@ -6,17 +6,17 @@ set -eu
 unset DEBUG TARGET HOST PROFILE OPT_LEVEL
 
 DEST="$1"
-TREE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm/dosbox-x"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm"
 COMMIT=36b738a39b5a08a9539a3235f6a7c322208b76df
 
-[ -d "$TREE/.git" ] || git clone -q --filter=blob:none -b dosrun https://github.com/ali-mosavian/dosbox-x.git "$TREE"
-if [ "$(git -C "$TREE" rev-parse HEAD)" != "$COMMIT" ]; then
-    git -C "$TREE" fetch -q origin dosrun
-    git -C "$TREE" checkout -q "$COMMIT"
-    rm -f "$TREE/Makefile"
-fi
-cd "$TREE"
-if [ -f Makefile ]; then make -s -j"$(nproc)"; else sh build-dosrun.sh; fi
+. "$(dirname "$0")/cache.sh"
+dosbox() {
+    git clone -q --filter=blob:none -b dosrun https://github.com/ali-mosavian/dosbox-x.git "$1"
+    git -C "$1" checkout -q "$COMMIT"
+    ( cd "$1" && sh build-dosrun.sh )
+}
+TREE="$CACHE/dosbox-x-$COMMIT"
+cached "$TREE" dosbox
 
 mkdir -p "$DEST"
 ln -sf "$TREE/src/dosbox-x" "$DEST/dosbox-x"

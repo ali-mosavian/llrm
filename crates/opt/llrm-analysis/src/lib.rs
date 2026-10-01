@@ -9,6 +9,7 @@
 
 pub mod alias;
 pub mod avail;
+pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
@@ -36,5 +37,7 @@ pub mod regions;
 pub mod ssa;
 #[cfg(test)]
 mod corpus_tests;
+#[cfg(any(test, feature = "testing"))]
+pub mod generated;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

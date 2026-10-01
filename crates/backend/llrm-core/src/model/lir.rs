@@ -336,6 +336,24 @@ pub struct LirBody {
     pub sealed_arguments: bool,
     /// `-g`'s parameters, in order, then variables.
     pub variables: Vec<DebugVariable>,
+    /// Estimated branch probabilities, by edge, as isel found them; an
+    /// edge made since has none.
+    pub odds: BlockOdds,
+}
+
+/// Fixed point, in 2^31sts, so a body stays `Eq`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BlockOdds {
+    pub taken: IndexMap<(i64, i64), u32>,
+}
+
+impl BlockOdds {
+    pub const CERTAIN: f64 = 2147483648.0;
+
+    /// `from`'s edge to `to`'s probability, if isel estimated it.
+    pub fn probability(&self, from: i64, to: i64) -> Option<f64> {
+        self.taken.get(&(from, to)).map(|one| f64::from(*one) / Self::CERTAIN)
+    }
 }
 
 impl LirBody {
@@ -361,6 +379,7 @@ impl LirBody {
             source_order: false,
             sealed_arguments: false,
             variables: Vec::new(),
+            odds: BlockOdds::default(),
         }
     }
 
@@ -380,6 +399,7 @@ impl LirBody {
             source_order: self.source_order,
             sealed_arguments: self.sealed_arguments,
             variables: self.variables.clone(),
+            odds: self.odds.clone(),
         }
     }
 
