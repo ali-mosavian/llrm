@@ -76,6 +76,7 @@ mod references;
 mod instances;
 mod iterators;
 mod views;
+mod modref;
 mod writable;
 mod lambdas;
 mod matching;
@@ -1390,9 +1391,10 @@ fn program(
         callables.len() as u32 + 1,
     ));
     let mut functions = Vec::new();
+    let mut lends = Vec::new();
     for function in concrete {
         let signature = signatures.get(&function.name).expect("collected function");
-        functions.push(
+        let (compiled, lent) =
             FunctionCompiler::new(
                 function,
                 signature,
@@ -1405,8 +1407,9 @@ fn program(
                 facts,
                 frontend,
             )?
-            .compile(function)?,
-        );
+            .compile(function)?;
+        functions.push(compiled);
+        lends.extend(lent);
     }
     // Each instance a call asked for, and those its own calls ask for; then
     // each dispatcher a call through a function value needs, once every
@@ -1424,7 +1427,7 @@ fn program(
         }) else {
             break;
         };
-        functions.push(
+        let (compiled, lent) =
             FunctionCompiler::new(
                 &function,
                 &signature,
@@ -1437,9 +1440,12 @@ fn program(
                 facts,
                 frontend,
             )?
-            .compile(&function)?,
-        );
+            .compile(&function)?;
+        functions.push(compiled);
+        lends.extend(lent);
     }
+    let runtime: BTreeSet<&str> = builtin_ids.keys().copied().collect();
+    modref::check_lends(&functions, &lends, &runtime)?;
     callables.extend(templates.borrow().callables(&mut types));
     let debug = frontend.debug.then(|| debug::described(&functions, &types));
     let program = hir::Program {
@@ -1581,6 +1587,8 @@ struct FunctionCompiler<'a> {
     parameter_lives: BTreeMap<borrows::BorrowKey, borrows::Life>,
     /// Views bound with `let mut`, which an assignment reseats.
     reseatable: BTreeSet<u32>,
+    /// The module variables this function lends to the calls it makes.
+    lends: Vec<modref::Lend>,
     /// The named sequences `for` loops are walking, outermost first.
     iterated: Vec<borrows::BorrowKey>,
 }
@@ -1647,6 +1655,7 @@ impl<'a> FunctionCompiler<'a> {
             held: BTreeMap::new(),
             parameter_lives: BTreeMap::new(),
             reseatable: BTreeSet::new(),
+            lends: Vec::new(),
             iterated: Vec::new(),
         };
         // Module variables are the outermost scope; parameters and the body
@@ -1684,14 +1693,18 @@ impl<'a> FunctionCompiler<'a> {
                     compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias).state(subject, llrm_mir::facts::Fact::ReadOnly).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(descriptor::size(rank) + 4)));
                 }
                 // A reference is made from a place, so it is not null and points at
-                // the whole of what it borrows; a shared one cannot write it. Whether
-                // nothing else reaches it is not stated: a callee may write a module
-                // variable the caller lent.
+                // the whole of what it borrows; a shared one cannot write it. Every
+                // caller of a function not exported is checked: no other argument
+                // reaches what a `&mut` does, and no callee writes a module variable
+                // lent to it (modref.rs), so nothing else writes it during the call.
                 SignatureParameter::Borrowed { mutable, target, .. } => {
                     if let Some(bytes) = compiler.types.referent_bytes(target) {
                         compiler.stated.state(subject, llrm_mir::facts::Fact::NonNull).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(bytes)));
                         if !mutable {
                             compiler.stated.state(subject, llrm_mir::facts::Fact::ReadOnly);
+                        }
+                        if !signature.exported {
+                            compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias);
                         }
                     }
                 }
@@ -1793,7 +1806,8 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn compile(mut self, function: &Function) -> Result<hir::Function, Diagnostic> {
+    /// The function's HIR, and the module variables it lends.
+    fn compile(mut self, function: &Function) -> Result<(hir::Function, Vec<modref::Lend>), Diagnostic> {
         self.statements(&function.body)?;
         // After a loop only `break` leaves, the end is reached only if one does.
         if self.open() && self.current != 1 && !self.reached(self.current) {
@@ -1831,7 +1845,8 @@ impl<'a> FunctionCompiler<'a> {
                     .expect("every semantic block is terminated"),
             })
             .collect();
-        Ok(hir::Function {
+        let lends = std::mem::take(&mut self.lends);
+        Ok((hir::Function {
             id: self.signature.id,
             name: self.signature.name.clone(),
             result_type: type_id(self.signature.returned(self.types)),
@@ -1845,7 +1860,7 @@ impl<'a> FunctionCompiler<'a> {
             exported: self.signature.exported,
             abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types)),
             named_parameters: self.named_parameters,
-        })
+        }, lends))
     }
 
     fn prune_unreachable(&mut self) {

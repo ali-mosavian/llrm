@@ -149,6 +149,34 @@ fn main() -> i16:
     assert_eq!(refused_at(held), "13: \"outer\" would outlive \"a\", which it borrows");
 }
 #[test]
+fn a_module_variable_is_not_lent_to_a_call_that_may_touch_it() {
+    // #124: `poke` wrote `g` while `f` read it through `p: &P`, so `f`
+    // returned 99 from a read-only borrow; `&mut` could not state noalias.
+    let shared = "\
+struct P:
+    mut n: i16
+
+var g: P = P(n=1)
+
+fn poke() -> void:
+    g.n = 99
+
+fn f(p: &P) -> i16:
+    poke()
+    return p.n
+
+fn main() -> i16:
+    print(f(g))
+    return 0
+";
+    assert_eq!(refused_at(shared), "14: \"g\" is lent to \"f\", which may write it");
+    let exclusive = shared.replace("fn f(p: &P) -> i16:\n    poke()", "fn f(p: &mut P) -> i16:\n    p.n = 5\n    peek()").replace("fn poke() -> void:\n    g.n = 99", "fn peek() -> i16:\n    return g.n");
+    assert_eq!(refused_at(&exclusive), "15: \"g\" is lent to \"f\", which may read it");
+    assert_eq!(output(&shared.replace("    poke()\n", "")), "1\n");
+}
+
+
+#[test]
 fn one_call_is_never_lent_an_owner_twice_when_one_lend_writes() {
     // The alias check compared spellings: `f(r, x)` with `r = &mut x` passed,
     // and `q: &i16`, stated noalias, read 5 where it was lent 1.

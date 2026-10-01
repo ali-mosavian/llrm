@@ -1941,7 +1941,7 @@ fn test_a_borrowed_view_states_facts_of_its_descriptor() {
 #[test]
 fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
     use llrm_mir::facts::Fact;
-    let source = "struct Pt:\n    mut x: i16\n    y: i16\n\nvar g: Pt = Pt(x=1, y=2)\nvar h: Pt = Pt(x=3, y=4)\n\nfn bump(p: &mut Pt, q: &Pt) -> void:\n    g.x = 7\n    p.x += q.y\n\nfn main() -> i16:\n    bump(g, h)\n    return g.x\n";
+    let source = "struct Pt:\n    mut x: i16\n    y: i16\n\nvar g: Pt = Pt(x=1, y=2)\nvar h: Pt = Pt(x=3, y=4)\n\nfn bump(p: &mut Pt, q: &Pt) -> void:\n    p.x += q.y\n\nfn main() -> i16:\n    bump(g, h)\n    return g.x\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "refs.nib", source));
     let bump = function(&program, "bump");
@@ -1953,8 +1953,8 @@ fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
             .map(|one| one.fact)
             .collect()
     };
-    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4)]);
-    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly]);
+    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias]);
+    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias]);
 }
 
 /// `for i in 0..n` adds one to a counter that is below `n`: it cannot wrap,
