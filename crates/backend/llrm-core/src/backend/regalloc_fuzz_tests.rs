@@ -637,3 +637,27 @@ fn test_exact_is_never_dearer_than_greedy_and_places_legally() {
         }
     }
 }
+
+/// The pressure bound and the forced spills only prune: with them off, the
+/// search that finishes must land on the same cost.
+#[test]
+fn test_exact_bounds_prune_without_changing_the_answer() {
+    use crate::backend::allocate::allocate;
+    use crate::backend::{cpu, exact};
+    let segments = &*target::BUILT_IN;
+    let profile = cpu::profile(ProfileOrName::Name("386")).expect("a cpu").clone();
+    let mut compared = 0;
+    for seed in 0..30 {
+        let (body, _) = body(seed, &Shape { pool: 7 + (seed % 3) as usize, ops: 5 + (seed % 4) as usize });
+        let none = std::collections::BTreeSet::new();
+        let pinned = IndexMap::default();
+        let greedy = allocate(&body, None, None, None, None, ProfileOrName::Name("386"), segments).expect("greedy allocates");
+        let with = exact::solved(&body, &pinned, &none, &none, &profile, segments, &greedy, true);
+        let without = exact::solved(&body, &pinned, &none, &none, &profile, segments, &greedy, false);
+        if with.optimal && without.optimal {
+            compared += 1;
+            assert!((with.cost - without.cost).abs() < 1e-9, "seed {seed}: bounded {} unbounded {}", with.cost, without.cost);
+        }
+    }
+    assert!(compared >= 10, "only {compared} seeds finished both ways");
+}

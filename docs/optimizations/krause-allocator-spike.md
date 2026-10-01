@@ -88,14 +88,22 @@ candidate registers are `allocate::candidates` (now also greedy's). It prices
 what greedy prices, whole values to the stack and no splits.
 `LLRM_DEBUG=exact` prints `greedy G exact E proved|unproved` per body.
 
-Same suite: 28 of the 82 bodies have nonzero greedy cost. On 15 the search
-finished and **greedy is optimal on all 15**. On the other 13 it ran out of
-nodes (2M, no lower bound), 12 with no improvement found and one
-(`SUMTHREE`, QB, 42 values) 13% cheaper, in absolute terms 0.25 to 0.22.
+The search is cut by two bounds, neither of which changes the answer
+(`test_exact_bounds_prune_without_changing_the_answer`): values no register
+can hold even alone (live across a call) are spilled up front, and at the
+most crowded points the values needing a general register must come down to
+the registers there are. The first mattered most: the bodies greedy spills
+are mostly not crowded, they are clobbered.
 
-So under whole-value spilling greedy is at or near optimal here. An
-exhausted search proves nothing, and the spill-only model cannot see what
-splitting would win: both limits are in the table above, not hidden.
+Same suite: 28 of the 82 bodies have nonzero greedy cost. On 25 the search
+finished, and **greedy is optimal on 24 of them**. The exception is
+`SUMTHREE` (QB, 42 values): greedy 0.250, optimum 0.218, 13% dearer, proved.
+Three bodies (`BLIT&`, and two `__main` of 37 and 208 values) still exhaust
+2M nodes with nothing cheaper found.
+
+Under whole-value spilling, then, greedy's eviction is near-optimal on this
+suite. The spill-only model cannot see what splitting would win, and
+`SUMTHREE` is the one body worth reading to learn what eviction missed.
 
 ## Recommendation
 
@@ -114,7 +122,7 @@ its complexity.
 ## Next steps
 
 1. Read the paper; settle gap 2 (can the DP express splitting).
-2. Give the oracle a lower bound (sweep-line pressure) so the 13 unproved
-   bodies finish, then rerun.
-3. If greedy still holds, put the effort in splitting and spill placement
+2. Read `SUMTHREE`: dump greedy's and the optimum's spill sets and say what
+   eviction missed; fix that if it is a general rule (rule 6).
+3. Greedy holds on the rest, so put the effort in splitting and spill placement
    (`codegen-improvements.md` section 6), not in a new allocator.
