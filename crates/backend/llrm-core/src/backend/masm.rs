@@ -152,7 +152,7 @@ pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec
     for (segment, items) in &module.data {
         let private = module.private.contains(segment);
         out.push(SEGMENTS.get(segment.as_str()).map_or_else(
-            || format!("{segment} segment word public '{}'", if private { "FAR_DATA" } else { "DATA" }),
+            || format!("{segment} segment {} public '{}'", if private { "para" } else { "word" }, if private { "FAR_DATA" } else { "DATA" }),
             |one| (*one).to_owned(),
         ));
         out.extend(
