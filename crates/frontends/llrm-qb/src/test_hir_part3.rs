@@ -143,7 +143,6 @@ fn stack_call(operands: Vec<Operand>, callee: &str, order: Vec<i64>) -> (hir::In
         distance: hir::CallDistance::Far,
         callee: None,
         float_return: hir::FloatReturn::Pointer,
-        promises: Vec::new(),
     };
     (instruction, call)
 }

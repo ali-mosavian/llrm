@@ -202,9 +202,6 @@ impl _Plain for model::CallAbi {
         out.insert("distance".to_owned(), self.distance._plain());
         out.insert("callee".to_owned(), self.callee._plain());
         float_return(&mut out, self.float_return);
-        if !self.promises.is_empty() {
-            out.insert("promises".to_owned(), self.promises._plain());
-        }
         Json::Dict(out)
     }
 }
@@ -238,7 +235,6 @@ impl _Plain for model::ProcedureAbi {
         Json::Dict(out)
     }
 }
-plain_record!(ArgumentPromise, None, operand => "operand", bytes => "bytes");
 // `promises` only when made, so that a function reads as it always has.
 impl _Plain for model::Function {
     fn _plain(&self) -> JSON {
@@ -299,7 +295,7 @@ plain_record!(AliasClass, None, name => "name", parent => "parent", types => "ty
 // A stated fact as flat fields: the subject's kind, its function and its id.
 impl _Plain for crate::facts::Stated {
     fn _plain(&self) -> JSON {
-        let (function, id) = self.subject.fields();
+        let (function, id, part) = self.subject.fields();
         let mut out: IndexMap<String, JSON> = IndexMap::default();
         out.insert("subject".to_owned(), Json::Str(crate::facts::Subject::kind_key(self.subject.kind()).to_owned()));
         if let Some(function) = function {
@@ -307,6 +303,9 @@ impl _Plain for crate::facts::Stated {
         }
         if let Some(id) = id {
             out.insert("id".to_owned(), id._plain());
+        }
+        if let Some(part) = part {
+            out.insert("part".to_owned(), part._plain());
         }
         out.insert("fact".to_owned(), Json::Str(self.fact.key().to_owned()));
         if let Some(value) = self.fact.wire_value() {
@@ -741,7 +740,6 @@ impl _FromMade for crate::facts::Stated {
 made_records!(
     CellWriters,
     RuntimePromises,
-    ArgumentPromise,
     Type,
     Place,
     Value,
@@ -1070,7 +1068,6 @@ static CALL_ABI: _Record = _Record {
         ("distance", enum_hint!(CallDistance), true),
         ("callee", OPTIONAL_INT, false),
         ("float_return", enum_hint!(FloatReturn), false),
-        ("promises", _Hint::Tuple(&_Hint::Record(&ARGUMENT_PROMISE)), false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -1080,15 +1077,8 @@ static CALL_ABI: _Record = _Record {
             distance: _required(args, "distance")?,
             callee: _default(args, "callee", None)?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
-            promises: _default(args, "promises", Vec::new())?,
         })
     },
-};
-
-static ARGUMENT_PROMISE: _Record = _Record {
-    name: "ArgumentPromise",
-    fields: &[("operand", _Hint::Int, true), ("bytes", _Hint::Int, true)],
-    build: |args| _object(model::ArgumentPromise { operand: _required(args, "operand")?, bytes: _required(args, "bytes")? }),
 };
 
 static CALLABLE: _Record = _Record {
@@ -1351,6 +1341,7 @@ static STATED_FACT: _Record = _Record {
         ("subject", _Hint::Str, true),
         ("function", OPTIONAL_INT, false),
         ("id", OPTIONAL_INT, false),
+        ("part", OPTIONAL_INT, false),
         ("fact", _Hint::Str, true),
         ("value", OPTIONAL_INT, false),
         ("source", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
@@ -1359,7 +1350,7 @@ static STATED_FACT: _Record = _Record {
         let key: String = _required(args, "subject")?;
         let name: String = _required(args, "fact")?;
         let kind = crate::facts::Subject::kind_named(&key).ok_or_else(|| InvalidHIR(format!("unknown fact subject {key:?}")))?;
-        let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?)
+        let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?, _default(args, "part", None)?)
             .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
         let value: Option<i64> = _default(args, "value", None)?;
         let fact = llrm_mir::facts::Fact::from_wire(&name, value).ok_or_else(|| InvalidHIR(format!("{name:?} with value {value:?} is not a fact")))?;

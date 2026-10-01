@@ -225,6 +225,8 @@ fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMa
 struct Tables<'h> {
     /// The flags facts state of each instruction, by function and instruction id.
     instruction_flags: HashMap<(i64, i64), Flags>,
+    /// The facts stated of each call's arguments, by function and instruction id: the operand and the fact.
+    argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>>,
     array_order: model::ArrayOrder,
     /// The module body's ON ERROR GOTO handlers, which every procedure's pad calls.
     module_handler: Option<handling::ModuleHandler>,
@@ -277,8 +279,15 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             flags.insert(one.fact.flags());
         }
     }
+    let mut argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>> = HashMap::new();
+    for one in &hir.facts {
+        if let Subject::Argument { function, instruction, operand } = one.subject {
+            argument_facts.entry((function, instruction)).or_default().push((operand, one.fact));
+        }
+    }
     let mut tables = Tables {
         instruction_flags,
+        argument_facts,
         array_order,
         module_handler: None,
         zeroed,
@@ -691,7 +700,8 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
 fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declared: &HashMap<i64, GlobalId>, data: &HashMap<i64, GlobalId>, stated: &Stated) -> Emit<()> {
     let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
     let (global, parameter) = match stated.subject {
-        Subject::Instruction { .. } => return Ok(()),
+        // A call's arguments' facts are attributes of the call, made with it.
+        Subject::Instruction { .. } | Subject::Argument { .. } => return Ok(()),
         Subject::Object(id) => {
             let Some(&global) = data.get(&id) else { return Ok(()) };
             let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of a data object that is no variable".to_owned()) };
@@ -1665,14 +1675,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let site = self.function.calls.iter().find(|one| one.instruction == instruction.id);
                 let order = site.and_then(|site| passed(site, operands.len())).unwrap_or_else(|| (0..operands.len()).collect());
                 let arguments: Vec<Value> = order.iter().map(|&one| operands[one]).collect();
-                let filled = site
-                    .map(|site| site.promises.iter().filter_map(|one| Some((order.iter().position(|&at| at as i64 == one.operand)?, one.bytes))).collect::<Vec<_>>())
-                    .unwrap_or_default();
                 let mut attributes = self.extensions(instruction, &order);
-                for &(index, bytes) in &filled {
-                    for attribute in [Attribute::Flag("nocapture".to_owned()), Attribute::Flag("writeonly".to_owned()), Attribute::Initializes(vec![(0, bytes)])] {
-                        attributes.push((index, attribute));
-                    }
+                for &(operand, fact) in self.tables.argument_facts.get(&(self.function.id, instruction.id)).into_iter().flatten() {
+                    let index = order.iter().position(|&at| at as i64 == operand).ok_or("a fact of an argument the call does not pass")?;
+                    attributes.push((index, fact.attribute().ok_or("an instruction flag of an argument")?));
                 }
                 let through = self.answer(instruction);
                 let returns = match instruction.results[..] {

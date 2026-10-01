@@ -41,7 +41,7 @@ fn a_call_repeats_its_callees_convention() {
     function.values.push(Value { id: 4, r#type: 1 });
     function.blocks[0].instructions.push(call);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
-    let site = |order| CallAbi { instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register, promises: Vec::new() };
+    let site = |order| CallAbi { instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register };
     function.calls = vec![site(vec![1, 0])];
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
@@ -455,7 +455,7 @@ fn a_string_comparison_compares_its_callees_sign() {
     let mut compare = Instruction::new(1, Op::StringGt, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
     compare.callee = Some("B$SCMP".to_owned());
     function.blocks[0].instructions = vec![compare];
-    function.calls = vec![CallAbi { instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register, promises: Vec::new() }];
+    function.calls = vec![CallAbi { instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let emitted = emit(&program(function)).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
@@ -633,7 +633,7 @@ fn a_call_through_a_functions_address() {
     function.blocks[0].instructions.extend([address, call]);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(5)];
     function.values.extend([Value { id: 4, r#type: 2 }, Value { id: 5, r#type: 1 }]);
-    function.calls = vec![CallAbi { instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register, promises: Vec::new() }];
+    function.calls = vec![CallAbi { instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let mut program = program(function);
     program.modules[0].types.push(Type::new(2, "far", TypeKind::Pointer, 4));
 
@@ -837,4 +837,39 @@ fn an_alignment_of_no_object_is_refused() {
     let mut program = program(difference());
     program.modules[0].facts = vec![Stated { subject: Subject::Object(9), fact: llrm_mir::facts::Fact::Align(2), source: None }];
     assert!(crate::verify::verify(&program).unwrap_err().0.contains("object the module lacks"));
+}
+
+/// What the language promises of a call's pointer argument is stated of that
+/// argument and reaches the call as its attributes: the callee writes the
+/// first bytes before reading any, reads none and keeps no copy.
+#[test]
+fn facts_of_a_call_argument_are_its_call_site_attributes() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::{CallAbi, CallDistance, FloatReturn, StackCleanup};
+    use llrm_mir::facts::Fact;
+    let values = vec![Value { id: 1, r#type: 1 }];
+    let mut call = Instruction::new(1, Op::Call, Vec::new(), vec![Operand::value_ref(1)]);
+    call.callee = Some("B$FILL".to_owned());
+    let block = Block::new(1, vec![call], Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let mut function = Function::new(1, "f", 0, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    function.calls = vec![CallAbi { instruction: 1, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    let mut facts = Builder::new("test");
+    let argument = Subject::Argument { function: 1, instruction: 1, operand: 0 };
+    facts.state(argument, Fact::NoCapture).state(argument, Fact::WriteOnly).state(argument, Fact::Initializes(4));
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("@llrm.qb.B$FILL(i16 nocapture writeonly initializes((0, 4)) %0)"), "{text}");
+}
+
+/// A fact of an argument the call lacks is refused.
+#[test]
+fn a_fact_of_an_argument_the_call_lacks_is_refused() {
+    use crate::facts::{Stated, Subject};
+    let mut program = program(difference());
+    program.modules[0].facts = vec![Stated { subject: Subject::Argument { function: 1, instruction: 1, operand: 0 }, fact: llrm_mir::facts::Fact::NoCapture, source: None }];
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("argument the module lacks"));
 }

@@ -1608,7 +1608,7 @@ impl<'a, 't> Body<'a, 't> {
         let instruction = self.instruction(Op::Call, results, operands);
         instruction.callee = callee.map(str::to_owned);
         let id = instruction.id;
-        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register, promises: Vec::new() });
+        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
     }
 
     /// Inline code as a call of `llrm.ia16.code`, each frame place it names

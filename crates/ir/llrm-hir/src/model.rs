@@ -525,16 +525,6 @@ pub struct CallAbi {
     pub distance: CallDistance,
     pub callee: Option<i64>,
     pub float_return: FloatReturn,
-    pub promises: Vec<ArgumentPromise>,
-}
-
-/// What the language promises of a call's pointer operand: the callee
-/// writes its first `bytes` before reading any, reads none and keeps no
-/// copy. LLVM's call-site `nocapture writeonly initializes((0, bytes))`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ArgumentPromise {
-    pub operand: i64,
-    pub bytes: i64,
 }
 
 /// One resolved language procedure symbol; calls refer to its stable id.

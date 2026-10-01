@@ -21,6 +21,8 @@ pub enum Kind {
     Callable,
     Param,
     Instruction,
+    /// One argument of a call.
+    Argument,
     Object,
 }
 
@@ -159,11 +161,14 @@ facts! {
         NoAlias no_alias "noalias" on [Param];
         ReadOnly read_only "readonly" on [Param];
         NonNull non_null "nonnull" on [Param];
+        NoCapture no_capture "nocapture" on [Param, Argument];
+        WriteOnly write_only "writeonly" on [Argument];
         NoReturn no_return "noreturn" on [Callable];
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
         Align(u64) align "align" on [Param, Object];
+        Initializes(u64) initializes "initializes" on [Argument];
     }
     custom {
         Memory(Effect) memory "memory" on [Callable];
@@ -181,6 +186,7 @@ impl Fact {
         match self {
             Fact::Dereferenceable(bytes) => Some(Attribute::Int(self.key().to_owned(), bytes)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
+            Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             Fact::NoSignedWrap | Fact::NoUnsignedWrap => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
@@ -191,6 +197,10 @@ impl Fact {
         match attribute {
             Attribute::Flag(name) => Fact::flag(name),
             Attribute::Int(name, value) => Fact::valued(name, *value),
+            Attribute::Initializes(ranges) => match ranges[..] {
+                [(0, bytes)] if bytes > 0 => Some(Fact::Initializes(bytes as u64)),
+                _ => None,
+            },
             Attribute::Memory(locations) => match locations[..] {
                 [(None, ref access)] => Effect::of_spelling(access).map(Fact::Memory),
                 _ => None,

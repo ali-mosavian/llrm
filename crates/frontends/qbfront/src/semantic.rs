@@ -9644,16 +9644,6 @@ impl Compiler {
                     write!(out, "{number}").unwrap();
                 }
                 out.push(']');
-                if !call.fills.is_empty() {
-                    out.push_str(",\"promises\":[");
-                    for (index, (operand, bytes)) in call.fills.iter().enumerate() {
-                        if index != 0 {
-                            out.push(',');
-                        }
-                        write!(out, "{{\"bytes\":{bytes},\"operand\":{operand}}}").unwrap();
-                    }
-                    out.push(']');
-                }
                 out.push('}');
             }
             out.push_str("],\"entry\":1,\"error_handler\":");
@@ -9827,6 +9817,16 @@ impl Compiler {
         for function in &self.functions {
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
                 facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
+            }
+        }
+        // A call that fills a fixed-length destination: the callee writes its first
+        // bytes before reading any, reads none and keeps no copy of the pointer.
+        for function in &self.functions {
+            for call in &function.calls {
+                for &(operand, bytes) in &call.fills {
+                    let argument = llrm_hir::facts::Subject::Argument { function: i64::from(function.id), instruction: i64::from(call.instruction), operand: operand as i64 };
+                    facts.state(argument, llrm_hir::facts::Fact::NoCapture).state(argument, llrm_hir::facts::Fact::WriteOnly).state(argument, llrm_hir::facts::Fact::Initializes(bytes as u64));
+                }
             }
         }
         // How a word-sized object is placed: on a word.
