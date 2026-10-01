@@ -1165,10 +1165,13 @@ impl Selector<'_, '_, '_> {
             insns.push(insn(at, Semantics { target: Some(target), ..semantics(Operation::Branch, code, vec![], vec![]) }));
             Ok(())
         };
+        let start = insns.len();
         branched(self, a, target, &mut insns)?;
+        insns.splice(start..start, std::mem::take(&mut self.materialized));
         blocks.push(LirBlock { succ: vec![target, other], phis, ..LirBlock::new(from, insns) });
         let mut tail = Vec::new();
         branched(self, b, taken, &mut tail)?;
+        tail.splice(0..0, std::mem::take(&mut self.materialized));
         blocks.push(LirBlock { succ: vec![taken, otherwise], ..LirBlock::new(second, tail) });
         Ok(())
     }

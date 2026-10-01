@@ -3046,3 +3046,28 @@ b:
     let got = listing(text, "f");
     assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "xor ax, ax", "add ax, -4", "L0_3:", "pop bp", "retf"]);
 }
+
+/// Two compares feeding one branch are selected apart from their block, and
+/// the zero an address of no global needs was queued for the next block: used
+/// before it was defined.
+#[test]
+fn test_a_merged_branch_defines_the_zero_its_compares_use() {
+    let text = "define i16 @f(ptr %p, ptr %q) addrspace(1) {
+entry:
+  %a = icmp ugt ptr %p, getelementptr (i8, ptr null, i16 16)
+  %b = icmp ult ptr %q, getelementptr (i8, ptr null, i16 32)
+  %c = and i1 %a, %b
+  br i1 %c, label %x, label %y
+x:
+  ret i16 1
+y:
+  ret i16 2
+}
+";
+    assert!(text.contains("getelementptr (i8, ptr null"), "the shape that was refused");
+    let got = listing(text, "f");
+    assert_eq!(
+        got,
+        ["push bp", "mov bp, sp", "L0_0:", "mov cx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "xor bx, bx", "mov dx, bx", "add dx, 16", "cmp cx, dx", "ja L0_6", "L0_5:", "mov ax, 2", "pop bp", "retf", "L0_6:", "add bx, 32", "cmp ax, bx", "jae L0_5", "L0_4:", "mov ax, 1", "pop bp", "retf"]
+    );
+}
