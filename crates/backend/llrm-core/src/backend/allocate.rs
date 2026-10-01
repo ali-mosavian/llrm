@@ -929,7 +929,8 @@ fn _allocated(
             continue;
         }
 
-        if at == Stage::Assign {
+        // An unspillable range has no fallback, so it may evict at any stage.
+        if at == Stage::Assign || mine.weight == INF {
             let movable = |other: u32, register: Register| -> bool {
                 if fixed.contains_key(&other) {
                     return false;
@@ -974,10 +975,12 @@ fn _allocated(
                 stage.insert(value, Stage::Done);
                 continue;
             }
-            stage.insert(value, Stage::Split);
-            queue.push(queued(value, &facts.live, &stage, &fixed));
-            *waiting.entry(value).or_insert(0) += 1;
-            continue;
+            if at == Stage::Assign {
+                stage.insert(value, Stage::Split);
+                queue.push(queued(value, &facts.live, &stage, &fixed));
+                *waiting.entry(value).or_insert(0) += 1;
+                continue;
+            }
         }
 
         let bound = fixed.contains_key(&value) || mine.weight == INF;
@@ -1413,11 +1416,13 @@ fn _evict(
         if victims.iter().any(|other| protected.contains(other)) {
             continue;
         }
+        // LLVM's urgent eviction: an unspillable range may break the cascade
+        // of a spillable one, or it would have nowhere to go.
         if let Some(cascade) = cascade {
-            if victims
-                .iter()
-                .any(|other| cascades.and_then(|found| found.get(other)).copied().unwrap_or(0) >= cascade)
-            {
+            if victims.iter().any(|other| {
+                cascades.and_then(|found| found.get(other)).copied().unwrap_or(0) >= cascade
+                    && !(one.weight == INF && live[other].weight < INF)
+            }) {
                 continue;
             }
         }

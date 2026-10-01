@@ -195,3 +195,19 @@ fn test_loops_over_many_arrays_build_on_a_p5() {
         assert!(done.status.success(), "{name}: {}", String::from_utf8_lossy(&done.stderr));
     }
 }
+
+/// Five pointer streams on a P5: a reload confined to BX lost its register to
+/// a split after it was placed, and with eviction only tried at `Assign` and
+/// blocked by a younger cascade, failed "cannot be spilled and no register is
+/// free" (loop-corpus `rnd98_0183`).
+#[test]
+fn test_an_unspillable_range_evicts_a_spillable_holder_at_any_stage() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/fivestreams.c");
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .args([source.to_str().unwrap(), "--cpu", "P5", "-O2", "-o", "fivestreams.obj"])
+        .current_dir(scratch.path())
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+}
