@@ -2881,8 +2881,8 @@ Rows 2, 5 and 6 replace `Instruction.pure`, `CallAbi.promises` and `RuntimePromi
 | # | C (from the recorded stream) | Quick BASIC | Nib | Cannot |
 |---|---|---|---|---|
 | 2 | call class `NORETURN`/`ABORTS` | — | panic routines `N$E*` | QB has no such routine; `ON ERROR` is an invoke |
-| 3 | `restrict` | — | `&mut` | QB: the same variable may be passed twice (legal) |
-| 4 | `const T *restrict` gives `ReadOnly` and `NoAlias`; `int a[static N]` gives `NonNull` and `Dereferenceable(N·size)` | BYREF: `Dereferenceable` | `&T`: `ReadOnly`, `NoCapture`, `NonNull`, `Dereferenceable`; `&mut`: the last three | C: plain `const T *` promises nothing (a callee may cast `const` away) |
+| 3 | `restrict` | — | slice descriptors only. Not `&mut`: a callee may write a module `var` the caller lent (`bump(g)` compiles), so the language does not enforce exclusion | QB: the same variable may be passed twice (legal) |
+| 4 | `const T *restrict` gives `ReadOnly` and `NoAlias`; `int a[static N]` gives `NonNull` and `Dereferenceable(N·size)` | BYREF: `Dereferenceable` | `&T`: `ReadOnly`, `NonNull`, `Dereferenceable`; `&mut`: the last two. Not `NoCapture`: a function may return its borrowed parameter | C: plain `const T *` promises nothing (a callee may cast `const` away) |
 | 5 | call class `NO_MEMORY_*` | runtime contracts (`reads_arguments`); SUB/FUNCTION by the one inference pass | `fn` with no `&mut`, by the same pass | — |
 | 6 | — | runtime contracts (`raises_error`) | — | C has no such notion |
 | 7 | signed arithmetic, pointer arithmetic | `FOR` counter | range-loop counter | C/Nib unsigned, QB `+` (wrap is defined) |
@@ -2891,7 +2891,7 @@ Rows 2, 5 and 6 replace `Instruction.pure`, `CallAbi.promises` and `RuntimePromi
 | 10 | `assert`, if the library is known | after a `-fsanitize` check | after an emitted bounds or divide check | C without `assert` |
 | 11 | C type | one class per array allocation | struct type | — |
 | 12 | `const` objects, string literals | statement table | literals, `let` bindings | — |
-| 13 | locals (C does not zero) | — | every binding has an initialiser | QB: the language zeroes |
+| 13 | locals (C does not zero) | — | every binding has an initialiser; measured: DSE already removes the entry zeroing (no change on two probes) | QB: the language zeroes |
 | 14 | `__unaligned` (1), `BEDefType` alignment | data `align` 2 | structs ≤ 2 | — |
 | 15 | `__inline`, `#pragma unroll`, `inline_depth` | — | — | QB, Nib: no syntax |
 | 16 | `noreturn` paths | `ON ERROR` paths | panic paths | — |
@@ -2940,3 +2940,21 @@ The mechanism and the IR-proper items need no row: a frontend calls `state` for 
 2. The mechanism with the facts that already have a carrier and a reader (rows 2 to 8, 11 to 14, 20): `facts::Builder`, the table macro, `lower`, `llrm_mir::facts`, the merge and speculation helpers, checked mode. Move `Promise`, `nowrap`, `inbounds`, `pure`, `cold` onto it one at a time.
 3. Replace `CGAttr n 3` with the `FACT` record and `ow_facts`; decode every call-class bit through it.
 4. Readers for rows 9, 15, 16, 17, 21, then their variants. Carriers for rows 10, 18, 19 when a reader is ready.
+
+### Status
+
+Implemented in #119 (branch `alim/feat/hir-facts`), against `origin/main` at `fd3dcfd9`.
+
+| Row | Fact | State | Measured |
+|---|---|---|---|
+| 3 | `NoAlias` | landed; C `restrict` via `CGFact v1`, Nib slice descriptors | 114 C, QB and Nib fixtures compile to the same assembly |
+| 4 | `ReadOnly`, `NonNull`, `Dereferenceable` | landed; `Promise` removed; Nib `&T`, `&mut T` | Nib `&T` loop 17 → 15 instructions (no frame register saved) |
+| 2 | `NoReturn` | landed; C call class | C `die`/`quit` probe 11 → 8 instructions |
+| 5 | `Memory` | landed; C `nomemory` | no change: a loop with a `nomemory` call and a global trades one memory operand for another under two free registers |
+| 7 | `NoSignedWrap`, `NoUnsignedWrap` | landed; C, Quick BASIC `FOR`, Nib range loops | no change on 36 Nib fixtures and two probes |
+| 13 | `NoEntryZeroing` | not built | the entry zeroing of Nib locals is already removed by dead-store elimination |
+| 8, 11, 12, 14, 20 | `InBounds`, `AliasClass`, `Immutable`, `Align`, `Owned` | not moved; `IndirectPlace.inbounds`, `alias_classes`, `DataObject.readonly`, `align` keep their own fields |  |
+| 6 | `NoUnwind`, `WillReturn` | not moved; `RuntimePromises` | |
+| 9, 10, 15 to 19, 21 | `Range`, `Assume`, hints, `Cold`, `MustProgress`, lifetimes, `Callees`, float flags | no variant: none has a program that shows a win, and a variant lands with its reader and a measured win | |
+
+Checked mode covers `noalias` only. Operand dominance in the verifier waits for the first relational fact.
