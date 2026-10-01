@@ -25,6 +25,7 @@ CASES = {
     "overflow-ops": ("/O /E /X /D", ["-ftrapv"], True),
     # llrm's own behaviour where BC's is its instruction selection's (docs/frontends/qb/divergences.md)
     "overflow-target-unchanged": ("/O /E /X /D", ["-ftrapv"], False),
+    "sin-cos": ("/O /E /X", [], False),
 }
 
 
