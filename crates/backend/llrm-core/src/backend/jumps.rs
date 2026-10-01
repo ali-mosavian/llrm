@@ -16,6 +16,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::intervals;
+use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::{machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
@@ -123,7 +124,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
             predecessors.entry(*to).or_default().push(block.at);
         }
     }
-    let busy = Busy::of(body, &explicit, &predecessors);
+    let busy = Busy::of(body, &explicit, &predecessors, &natural);
     let odds = (!size).then_some(&busy);
     let mut order: Vec<LirBlock> = Vec::new();
     let mut done: HashSet<i64> = HashSet::default();
@@ -189,22 +190,22 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
     Ok(body.with_blocks(order))
 }
 
-/// Each block's estimated frequency and edge probabilities, as isel left
-/// them in `LirBody::odds`; a block made since takes what its predecessors
-/// send it, an edge isel did not see an even share.
+/// Each block's estimated frequency over the final blocks, from the edge
+/// probabilities isel left in `LirBody::odds`.
 pub struct Busy {
     frequency: IndexMap<i64, f64>,
     taken: IndexMap<(i64, i64), f64>,
 }
 
 impl Busy {
-    fn of(body: &LirBody, blocks: &[LirBlock], predecessors: &IndexMap<i64, Vec<i64>>) -> Self {
+    fn of(body: &LirBody, blocks: &[LirBlock], predecessors: &IndexMap<i64, Vec<i64>>, natural: &[Loop]) -> Self {
         let mut taken = IndexMap::default();
         for block in blocks {
             let succ: Vec<i64> = block.succ.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
             let known: f64 = succ.iter().filter_map(|to| body.odds.probability(block.at, *to)).sum();
             let unknown = succ.iter().filter(|to| body.odds.probability(block.at, **to).is_none()).count();
             for to in &succ {
+                // An edge made after isel, as a split one, carries what its block's isel edges do not.
                 let share = match body.odds.probability(block.at, *to) {
                     Some(probability) => probability,
                     None => (1.0 - known).max(0.0) / unknown as f64,
@@ -212,21 +213,16 @@ impl Busy {
                 taken.insert((block.at, *to), if succ.len() == 1 { 1.0 } else { share });
             }
         }
-        let mut frequency: IndexMap<i64, f64> = blocks.iter().filter_map(|block| Some((block.at, body.odds.frequency(block.at)?))).collect();
-        // A few rounds settle chains of new blocks; a cycle of them stays 0.
-        for _ in 0..4 {
-            for block in blocks {
-                if frequency.contains_key(&block.at) {
-                    continue;
-                }
-                let from = predecessors.get(&block.at).map_or(&[][..], Vec::as_slice);
-                if from.iter().all(|one| frequency.contains_key(one)) || block.at == body.entry {
-                    let sum = from.iter().map(|one| frequency[one] * taken.get(&(*one, block.at)).copied().unwrap_or(0.0)).sum();
-                    frequency.insert(block.at, if block.at == body.entry { 1.0 } else { sum });
-                }
-            }
-        }
-        Self { frequency, taken }
+        let successors: IndexMap<i64, Vec<i64>> = blocks.iter().map(|block| (block.at, block.succ.clone())).collect();
+        let order = branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
+        let cycles: Vec<branchprob::Cycle> = natural.iter().map(|one| branchprob::Cycle { header: one.header, latches: &one.latches, body: &one.body }).collect();
+        let frequency = branchprob::propagated(
+            &order,
+            &|at| predecessors.get(&at).cloned().unwrap_or_default(),
+            &cycles,
+            &|from, to| taken.get(&(from, to)).copied().unwrap_or(0.0),
+        );
+        Self { frequency: frequency.into_iter().collect(), taken }
     }
 
     fn frequency(&self, at: i64) -> f64 {

@@ -773,15 +773,14 @@ impl Selector<'_, '_, '_> {
         Ok(body)
     }
 
-    /// `branchprob`'s estimate over the LIR blocks each MIR block became:
-    /// each takes its MIR block's frequency, and a branch its MIR edges'
-    /// probabilities, shared out among the successors it has.
+    /// `branchprob`'s probabilities over the LIR blocks each MIR block
+    /// became: a branch takes its MIR edges', shared out among the
+    /// successors it has.
     fn odds(&self, made: &IndexMap<BlockId, Vec<LirBlock>>, block_at: &IndexMap<BlockId, i64>) -> BlockOdds {
         let unit = Unit::of(self.module, &self.layout, self.function);
         let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.globals, self.function, &unit.shape());
         let mut odds = BlockOdds::default();
         for (block, chain) in made {
-            let frequency = estimated.frequency.get(&cfg::id(*block)).copied().unwrap_or(0.0);
             let taken: IndexMap<i64, f64> = self
                 .successors(*block)
                 .into_iter()
@@ -790,7 +789,6 @@ impl Selector<'_, '_, '_> {
             // An edge within the chain, as a switch's compares make, carries
             // what the block's own MIR edges do not.
             for one in chain {
-                odds.frequency.insert(one.at, (frequency * BlockOdds::ONE).round().min(u64::MAX as f64) as u64);
                 if one.succ.len() < 2 {
                     continue;
                 }
