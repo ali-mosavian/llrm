@@ -7121,7 +7121,6 @@ x_tripdata_usescale5 nib ivs #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
 x_tripdata_usescale5 nib mir-ivs #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
 x_tripdata_usescale7 bas ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_tripdata_usescale7 bas mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-x_tripdata_usescale7 c invariant-loads #98 486-O2
 x_tripdata_usescale7 c ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_tripdata_usescale7 c mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_tripdata_usescale7 nib ivs #98 486-O3 486-Os Core-O2 Core-O3 Core-Os
