@@ -1058,6 +1058,16 @@ fn _allocated(
             if fixed.contains_key(&value) || unspillable.contains(&value) {
                 let hard = |other: u32| fixed.contains_key(&other) || unspillable.contains(&other);
                 let Some((got, victims)) = _forced(&mine, &order, &union, &facts.live, &facts.masks, &hard, width) else {
+                    for register in &order {
+                        let holders: Vec<(u32, bool)> = union
+                            .get(&_whole(*register))
+                            .into_iter()
+                            .flatten()
+                            .filter(|other| facts.live.get(*other).is_some_and(|found| found.overlaps(&mine)))
+                            .map(|other| (*other, hard(*other)))
+                            .collect();
+                        llrm_support::debug!("regalloc", "{}: value#{value} {:?} {}: clobbered {}, held by {holders:?}", body.name, mine.segments, register.repr(), _clobbered(&mine, *register, &facts.masks, width));
+                    }
                     return Err(Unplaced(format!("value#{value} cannot be spilled and no register it may take is free of values that cannot be")).into());
                 };
                 LAST_RESORTS.with(|count| count.set(count.get() + 1));

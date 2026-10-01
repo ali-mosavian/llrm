@@ -103,3 +103,17 @@ fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_r
         assert!(matches!(one.sources.as_slice(), [Loc::Mem(_)]), "a far pointer load reads memory only: {one:?}");
     }
 }
+
+/// Seven pointers walking 24-byte records at `--cpu Core`: the loop's
+/// parallel copy has a move for each, each reading an address made again.
+/// A value made for the copy lives across all of it, and seven of them left
+/// no register for the eighth ("value#125 cannot be spilled and ...", found
+/// by the loop corpus after the products moved before the copy).
+#[test]
+fn test_the_addresses_a_parallel_copy_reads_do_not_all_live_across_it() {
+    let (body, phases) = before_regalloc("walks7_s24.ll", "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end", "Core");
+    let longest = longest_copy(&body);
+    assert!(longest >= 7, "premise: a parallel copy of {longest} moves");
+    let done = through(body, phases);
+    assert!(done.is_ok(), "{:?}", done.err());
+}

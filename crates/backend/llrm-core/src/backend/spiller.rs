@@ -142,6 +142,7 @@ pub fn spilled_from(
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
+    let body = _sunk_from_copies(&body, &addresses.keys().copied().collect());
     let r#final = _final_uses(&body);
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
@@ -350,6 +351,41 @@ fn _reloaded(one: &Insn, stored: &BTreeSet<u32>, frame: &mut Frame, fresh: &mut 
         *fresh += 1;
     }
     Ok((before, rename))
+}
+
+/// `body` with each move of a parallel copy that reads a value in `reading`
+/// made a plain move after the copy. The value is then made again for that
+/// one move, beside it, rather than for the copy: it would live across all of
+/// them. A move that reads one value and writes another is as correct there,
+/// since a copy reads before it writes.
+fn _sunk_from_copies(body: &LirBody, reading: &BTreeSet<u32>) -> LirBody {
+    let moved = |one: &Insn| _group_source(one).is_some_and(|source| reading.contains(&source.value));
+    if !body.insns().iter().any(|one| moved(one)) {
+        return body.clone();
+    }
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns: Vec<Arc<Insn>> = Vec::new();
+            let mut sunk: Vec<Arc<Insn>> = Vec::new();
+            let mut copy: Option<i64> = None;
+            for one in &block.insns {
+                if one.group != copy {
+                    insns.append(&mut sunk);
+                }
+                copy = one.group;
+                if moved(one) {
+                    sunk.push(_with(one, |made| made.group = None));
+                } else {
+                    insns.push(Arc::clone(one));
+                }
+            }
+            insns.append(&mut sunk);
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
 }
 
 /// Keep a just-defined spilled value in a register through one update.
@@ -2783,9 +2819,11 @@ mod tests {
 
     /// A rematerialized address inserted between two moves of a parallel
     /// copy cut the copy in two, and lived across the rest of it (#104:
-    /// ten slots, spilled again without end). It is made before the copy.
+    /// ten slots, spilled again without end; with more moves than registers,
+    /// a value for each, at once). The move that reads it leaves the copy and
+    /// follows it, with the address made beside it.
     #[test]
-    fn test_a_value_made_for_a_move_of_a_parallel_copy_is_made_before_the_whole_copy() {
+    fn test_a_move_of_a_parallel_copy_that_reads_a_remade_value_follows_the_copy() {
         let source = _frame_address(-132, 2);
         let body = _body(vec![
             _lea(0, (0, 3), &source),
@@ -2796,10 +2834,10 @@ mod tests {
         ]);
         let result = _out(&body, &[1]);
         let copy: Vec<usize> = (0..result.len()).filter(|at| result[*at].group == Some(1)).collect();
-        assert_eq!(copy.len(), 3);
-        assert_eq!(copy[2] - copy[0], 2, "one parallel copy, in one piece: {copy:?}");
+        assert_eq!(copy.len(), 2);
+        assert_eq!(copy[1] - copy[0], 1, "one parallel copy, in one piece: {copy:?}");
         let made = result.iter().position(|one| one.rematerialized).expect("the address is made again");
-        assert!(made + 1 == copy[0], "made at {made}, the copy starts at {}", copy[0]);
+        assert!(made > copy[1] && result[made + 1].defines == [11], "made at {made}, the copy ends at {}", copy[1]);
     }
 
     #[test]
