@@ -137,6 +137,10 @@ pub struct AddressForm {
     pub secondary: bool,
     // How many distinct bases one index can pair with at once; None is any.
     pub partners: Option<i64>,
+    // The registers an address takes as its base and as its index, where an
+    // address is one of each: a register is of one class or the other. None is any.
+    pub bases: Option<i64>,
+    pub indices: Option<i64>,
     // Compatibility name for `secondary`; both views stay identical.
     pub fallback: Option<bool>,
 }
@@ -164,6 +168,8 @@ impl AddressForm {
             extension_cost,
             secondary: selected,
             partners: None,
+            bases: None,
+            indices: None,
             fallback: Some(selected),
         })
     }
@@ -172,6 +178,11 @@ impl AddressForm {
     /// pairs and its partners. None is any.
     pub fn address_registers(&self) -> Option<i64> {
         self.partners.map(|partners| partners + 1)
+    }
+
+    /// The classes of an address's two registers, where the form has them.
+    pub fn register_classes(&self) -> Option<(i64, i64)> {
+        self.bases.zip(self.indices)
     }
 
     /// Whether this form is cheap enough to try before a frame spill.

@@ -30,7 +30,7 @@ use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use num_traits::ToPrimitive;
@@ -643,6 +643,26 @@ fn _views(view: &memory::Unit) -> BTreeSet<ValueId> {
     function.walk().filter_map(|(_, inst)| function.instruction(inst).result).filter(|&value| spill::segment_view(view.context, view.layout, function, value)).collect()
 }
 
+/// How many registers of an address cannot be where it needs them: each
+/// address of two is a base and an index, a register is one or the other, and
+/// the target has so many of each. The fewest, over every assignment.
+fn _misplaced(address: &BTreeSet<Reg>, pairs: &BTreeSet<(Reg, Reg)>, bases: i64, indices: i64) -> i64 {
+    let registers = address.iter().cloned().collect::<Vec<_>>();
+    if registers.len() > 16 {
+        return 0;
+    }
+    let at = |reg: &Reg| registers.iter().position(|one| one == reg).expect("an address register");
+    let edges = pairs.iter().map(|(one, other)| (at(one), at(other))).collect::<Vec<_>>();
+    (0u32..1 << registers.len())
+        .map(|base| {
+            let bases_used = i64::from(base.count_ones());
+            let clashes = edges.iter().filter(|&&(one, other)| (base >> one & 1) == (base >> other & 1)).count() as i64;
+            clashes + (bases_used - bases).max(0) + ((registers.len() as i64 - bases_used) - indices).max(0)
+        })
+        .min()
+        .unwrap_or(0)
+}
+
 /// What building `key` before the loop costs: its scaled terms, the adds
 /// that join its parts, and an address off its pointer.
 fn _built(target: &Target, key: &Key) -> i64 {
@@ -1159,19 +1179,8 @@ impl Problem<'_> {
         if self.target.room.priced() {
             cost += spill::spilled(points.chain(segment_points), |one| self.spill_price(one, &reads));
         }
-        if let Some(native) = self.target.forms.first()
-            && let Some(limit) = native.address_registers()
-        {
-            let over = address.len() as i64 - limit;
-            if over > 0 {
-                cost += over * costs.r#move * self.header;
-            }
-            let partners = native.partners.unwrap_or(i64::MAX);
-            let hub = address.iter().map(|reg| pairs.iter().filter(|(one, other)| one == reg || other == reg).count() as i64).max().unwrap_or(0);
-            let unpaired = pairs.len() as i64 - hub.min(partners);
-            if unpaired > 0 {
-                cost += unpaired * costs.add * self.header;
-            }
+        if let Some((bases, indices)) = self.target.forms.first().and_then(AddressForm::register_classes) {
+            cost += _misplaced(&address, &pairs, bases, indices) * costs.r#move * self.header;
         }
         Some(cost)
     }

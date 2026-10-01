@@ -106,7 +106,8 @@ impl Machine for Dos {
 /// extension of the index to a dword.
 pub fn address_forms(costs: &OperationCosts, address_stall: i64) -> Vec<AddressForm> {
     vec![
-        AddressForm { partners: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree") },
+        // BX is the base and SI and DI the indices: BP is the frame's.
+        AddressForm { partners: Some(2), bases: Some(1), indices: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree") },
         AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix + address_stall, costs.extend, true, None).expect("no fallback to disagree"),
     ]
 }

@@ -17,7 +17,7 @@ use crate::testing::{Tuned, parsed, printed, results};
 /// A 486's prices, six registers, two across a call, and its two address forms.
 fn target() -> Tuned {
     let costs = OperationCosts { add: 1, multiply: 13, divide: 24, shift: 2, address: 1, load: 1, store: 1, memory_update: 3, extend: 3, prefix: 1, ..OperationCosts::default() };
-    let word = AddressForm { partners: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("a form") };
+    let word = AddressForm { partners: Some(2), bases: Some(1), indices: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("a form") };
     let dword = AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix, costs.extend, true, None).expect("a form");
     Tuned { costs, registers: 6, call_registers: 2, address_forms: vec![word, dword], ..Tuned::default() }
 }
@@ -1701,4 +1701,21 @@ l3:
 fn test_a_far_view_of_a_segment_takes_no_general_register() {
     let printed = on_p5(FAR_SEGMENT_LOOP);
     assert!(!printed.contains(", 21"), "{printed}");
+}
+
+/// Each address of two registers is a base and an index, and a register is
+/// one or the other: with one base register and two index registers, a base
+/// shared by two streams is fine and two bases are not, as `partners` (how
+/// many bases one index pairs with) took `fs:[si+ax]` to be.
+#[test]
+fn test_addresses_need_a_base_register_and_an_index_register() {
+    use super::Reg;
+    let pair = |one: usize, other: usize| (Reg::Iv(one), Reg::Iv(other));
+    let registers = |pairs: &[(Reg, Reg)]| pairs.iter().flat_map(|(one, other)| [one.clone(), other.clone()]).collect::<std::collections::BTreeSet<_>>();
+    // `[bx+si]` and `[bx+di]`: one base, two indices.
+    let shared = [pair(0, 1), pair(0, 2)];
+    assert_eq!(super::_misplaced(&registers(&shared), &shared.iter().cloned().collect(), 1, 2), 0);
+    // `[bx+si]` and `[ax+di]`: two bases, and there is one.
+    let apart = [pair(0, 1), pair(2, 3)];
+    assert_eq!(super::_misplaced(&registers(&apart), &apart.iter().cloned().collect(), 1, 2), 1);
 }
