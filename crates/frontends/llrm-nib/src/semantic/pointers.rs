@@ -121,6 +121,9 @@ impl FunctionCompiler<'_> {
         if writes && !mutable {
             return Err(Diagnostic::new(span, "a *mut pointer is taken with '&mut'"));
         }
+        if mutable {
+            self.place_writable(operand, span)?;
+        }
         if width == 2 && !self.in_dgroup(operand) {
             return Err(Diagnostic::new(
                 span,
@@ -145,15 +148,9 @@ impl FunctionCompiler<'_> {
             )
         } else if let Some((view, element, _)) = self.array_view(operand, span)? {
             // An array's address is its first element's.
-            if mutable && !view.mutable {
-                return Err(Diagnostic::new(span, format!("cannot mutably borrow immutable binding {:?}", view.owner)));
-            }
             (element.id(), self.address_as(&view, pointer_id))
         } else if let Expr::Member { base, field, .. } = operand {
-            let (place, type_name, owned, _) = self.member_place(base, field, span)?;
-            if mutable && !owned {
-                return Err(Diagnostic::new(span, "cannot mutably borrow a field of an immutable binding"));
-            }
+            let (place, type_name, _, _) = self.member_place(base, field, span)?;
             match self.types.sequence_element(type_name) {
                 Some(element) => {
                     let data = self.value(type_name);
@@ -184,9 +181,6 @@ impl FunctionCompiler<'_> {
                 binding @ Binding { type_: BindingType::Scalar(sequence), .. }
                     if self.types.sequence_element(sequence).is_some() =>
                 {
-                    if mutable && !binding.mutable {
-                        return Err(Diagnostic::new(span, format!("cannot mutably borrow immutable binding {name:?}")));
-                    }
                     let element = self.types.sequence_element(sequence).expect("a sequence");
                     let data = self.string_pointer(&binding, *name_span)?;
                     (element.id(), self.data_address(data, element, pointer_id))

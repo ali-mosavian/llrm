@@ -77,13 +77,7 @@ impl FunctionCompiler<'_> {
         let Some(ElementType::Scalar(target)) = self.types.referent(*type_name) else {
             return place;
         };
-        let reference = match value {
-            Expr::Borrow { .. } => true,
-            Expr::Name(name, _) => self.visible(name).is_some_and(|one| matches!(one.storage, Storage::Reference(_)) && !self.owns(&one.storage)),
-            _ => self.expression_type_hint(value) == Some(*type_name),
-        };
-        let seated = operation.is_none() && reference;
-        if seated {
+        if self.seats(*type_name, operation, value) {
             return place;
         }
         let pointer = self.value(*type_name);
@@ -91,10 +85,21 @@ impl FunctionCompiler<'_> {
         AssignmentPlace::Scalar(hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false }, target)
     }
 
+    /// Whether assigning `value` to a place holding the reference `reference`
+    /// seats another reference there, rather than writing what it refers to.
+    pub(super) fn seats(&self, reference: TypeName, operation: Option<BinaryOp>, value: &Expr) -> bool {
+        let is_reference = match value {
+            Expr::Borrow { .. } => true,
+            Expr::Name(name, _) => self.visible(name).is_some_and(|one| matches!(one.storage, Storage::Reference(_)) && !self.owns(&one.storage)),
+            _ => self.expression_type_hint(value) == Some(reference),
+        };
+        operation.is_none() && is_reference
+    }
+
     /// The scalar place `expression` names -- a field or an element -- with
     /// its type and owner; `None` when it names none.
-    pub(super) fn place_of(&mut self, expression: &Expr, exclusive: bool, span: Span) -> Result<Option<(hir::Operand, TypeName, String)>, Diagnostic> {
-        let (place, type_name, writable, owner) = match expression {
+    pub(super) fn place_of(&mut self, expression: &Expr, span: Span) -> Result<Option<(hir::Operand, TypeName, String)>, Diagnostic> {
+        let (place, type_name, _, owner) = match expression {
             Expr::Member { base, field, .. } if self.bits_type(base).is_none() => self.member_place(base, field, span)?,
             Expr::Index { base, indices, .. } => {
                 let (binding, owner) = self.sequence_of(base)?;
@@ -106,9 +111,6 @@ impl FunctionCompiler<'_> {
             }
             _ => return Ok(None),
         };
-        if exclusive && !writable {
-            return Err(Diagnostic::new(span, format!("cannot mutably borrow immutable binding {owner:?}")));
-        }
         Ok(Some((place, type_name, owner)))
     }
 
