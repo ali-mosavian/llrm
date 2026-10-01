@@ -124,8 +124,8 @@ impl Selector<'_, '_, '_> {
             Type::Int(16) => "i16",
             Type::Int(32) => "i32",
             Type::Int(64) => "i64",
-            Type::Pointer(1) => "far",
-            Type::Pointer(0 | 2) => "ptr",
+            Type::Pointer(space) if self.layout.is_pair(*space) => "far",
+            Type::Pointer(_) => "ptr",
             Type::Float(_) => "float",
             _ => "other",
         }
