@@ -147,3 +147,18 @@ fn mid_statement_runs_in_the_model() {
     let source = "a$ = \"hello\"\nMID$(a$, 2, 3) = \"XYZW\"\nPRINT a$\nMID$(a$, 5) = \"!!\"\nPRINT a$\n";
     assert_eq!(printed_on(source, "vbdos", "vbdos"), "hXYZo\nhXYZ!\n");
 }
+
+/// ON n GOTO|GOSUB was parsed to nothing: tests/suite/jumps.bas did not
+/// compile. n picks the label; 0 or past the list falls through.
+#[test]
+fn on_goto_and_on_gosub_pick_the_nth_label() {
+    let source = "DEFINT A-Z\nFOR k = 0 TO 3\nON k GOSUB a, b\nON k GOTO c, d\nPRINT \"fell\"; k\nGOTO nxt\nc: PRINT \"c\"\nGOTO nxt\nd: PRINT \"d\"\nnxt:\nNEXT\nEND\na: PRINT \"a\"\nRETURN\nb: PRINT \"b\"\nRETURN\n";
+    assert_eq!(printed(source), "fell 0 \na\nc\nb\nd\nfell 3 \n");
+}
+
+/// A PRINT item before the ELSE of a one-line IF was refused:
+/// tests/suite/flags.bas did not compile.
+#[test]
+fn a_print_item_before_else_prints_the_right_branch() {
+    assert_eq!(printed("DEFINT A-Z\nr = 0\nIF r = 0 THEN PRINT r ELSE PRINT 7\nr = 1\nIF r = 0 THEN PRINT r ELSE PRINT 7\n"), " 0 \n 7 \n");
+}

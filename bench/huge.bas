@@ -5,7 +5,7 @@
 '
 '   BC /O /AH HUGE.BAS, HUGE.OBJ;
 DEFINT A-Z
-DIM n, i, t
+DIM n AS LONG, i, t
 n = 40000
 REDIM h(n)
 t = 0
