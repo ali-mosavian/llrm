@@ -1177,7 +1177,8 @@ other:
 ";
     let got = listing(text, "f");
     let call = got.iter().position(|line| line == "call far ptr B$SCMP").expect("the call");
-    assert_eq!(got[call + 1], "jg L0_3", "{got:?}");
+    // Either polarity: the branch reads the call's flags, no compare between.
+    assert!(got[call + 1].starts_with("jg ") || got[call + 1].starts_with("jle "), "{got:?}");
 }
 
 /// A float function no x87 instruction is stays one operation on st(0),

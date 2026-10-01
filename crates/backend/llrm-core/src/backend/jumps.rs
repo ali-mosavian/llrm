@@ -83,9 +83,9 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
 }
 
 /// `placed`, for short code where `size`, else by estimated frequency: the
-/// likelier edge falls through, an arm goes before its join only when it
-/// reaches the join more often than the block before it, and a new trace
-/// starts at the busiest block left.
+/// likelier edge falls through, an arm leaves its join only for a block
+/// before it that reaches the join `LIKELY`, and a new trace starts at the
+/// busiest block left.
 fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
     let mut explicit = Vec::new();
     for block in &body.blocks {
@@ -124,8 +124,8 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
             predecessors.entry(*to).or_default().push(block.at);
         }
     }
-    let busy = Busy::of(body, &explicit, &predecessors, &natural);
-    let odds = (!size).then_some(&busy);
+    let busy = (!size).then(|| Busy::of(body, &explicit, &predecessors, &natural));
+    let odds = busy.as_ref();
     let mut order: Vec<LirBlock> = Vec::new();
     let mut done: HashSet<i64> = HashSet::default();
     let mut current: Option<i64> = Some(body.entry);
@@ -166,9 +166,9 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
         // A join's other arm goes just before it, once everything reaching the
         // arm is placed: the arm falls into the join and the placed side jumps
         // over it. Left for later, it lands after the return, both of its jumps long.
-        // By frequency, only where the arm reaches the join at least as often
-        // as the block before it, whose fall-through it takes: a tie, as two
-        // edges no heuristic tells apart make, keeps the shorter layout.
+        // By frequency, unless the block before it, whose fall-through the
+        // arm takes, reaches the join as `LIKELY` as MachineBlockPlacement
+        // asks: else the shorter layout stands.
         let before = order.last().filter(|last| last.succ.contains(&at));
         let arm = explicit.iter().find(|one| {
             one.at != at
@@ -176,7 +176,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
                 && !done.contains(&one.at)
                 && one.succ == [at]
                 && predecessors.get(&one.at).is_some_and(|from| from.iter().all(|from| done.contains(from)))
-                && odds.is_none_or(|busy| before.is_none_or(|before| busy.edge(one.at, at) >= busy.edge(before.at, at)))
+                && odds.is_none_or(|busy| before.is_none_or(|before| busy.edge(one.at, at) * branchprob::LIKELY / (1.0 - branchprob::LIKELY) >= busy.edge(before.at, at)))
         });
         if let Some(arm) = arm {
             (current, source) = (Some(arm.at), None);
