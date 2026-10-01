@@ -18,6 +18,7 @@ use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::intervals;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
+use crate::backend::omfwrite::{SHORT_JUMP, short_reaches};
 use crate::backend::{machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -295,7 +296,7 @@ pub fn _onward(
         let arm = |at: &i64| by_at.get(at).filter(|arm| arm.succ.len() == 1);
         if let (Some(one), Some(other)) = (arm(first), arm(second))
             && one.succ == other.succ
-            && [one, other].into_iter().all(|arm| _arm_bytes(arm).is_some_and(|bytes| bytes + SHORT_JUMP <= SHORT_REACH))
+            && [one, other].into_iter().all(|arm| _arm_bytes(arm).is_some_and(|bytes| short_reaches(bytes + SHORT_JUMP)))
             && busy.edge(block.at, *first) > busy.edge(block.at, *second)
         {
             targets.reverse();
@@ -733,10 +734,6 @@ pub fn duplicated_returns(body: LirBody, return_overhead: i64) -> LirBody {
         }
     }
 }
-
-/// A short jump's bytes, and the farthest it reaches forward.
-const SHORT_JUMP: i64 = 2;
-const SHORT_REACH: i64 = 127;
 
 /// An arm's bytes but its final jump, as selected; none where an
 /// instruction has no encoding here.
