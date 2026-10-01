@@ -403,3 +403,22 @@ fn main() -> i16:
     let ended = source.replace("    let r = &v[0]\n    a.push(3)\n", "    a.push(3)\n    let r = &v[0]\n");
     assert_eq!(output(&ended), "1\n");
 }
+
+#[test]
+fn a_consumed_generator_borrows_what_it_is_lent() {
+    // Its parameter, bound where the loop inlines it, borrowed nothing, so
+    // with borrows ending at last use `v.push` inside the loop passed.
+    let source = "\
+fn walk(v: &[i16]) -> iter[i16]:
+    for x in v:
+        yield x
+
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    for x in walk(v):
+        v.push(x)
+    print(v.len)
+    return 0
+";
+    assert_eq!(refused_at(source), "8: \"v\" is borrowed here, so it cannot be changed");
+}

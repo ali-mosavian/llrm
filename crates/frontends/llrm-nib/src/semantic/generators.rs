@@ -124,6 +124,10 @@ impl FunctionCompiler<'_> {
             let operand = self.argument_operand(argument, &kind)?;
             let value = self.materialized(operand, kind.hir_type());
             let binding = self.parameter_binding(&parameter.name, &kind, value);
+            // Inlined, a borrowed one borrows what its argument does.
+            if matches!(kind, SignatureParameter::Borrowed { .. }) {
+                self.record_borrow(&binding, argument);
+            }
             scope.insert(parameter.name.clone(), binding);
         }
         let TypeAnnotation::Value(TypeSpec::Applied { args, .. }) = &function.result else {
