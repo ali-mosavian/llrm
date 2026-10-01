@@ -72,6 +72,8 @@ class Emitter:
     def const(self, value: int, kind) -> str:
         if isinstance(kind, Float):
             raise NotNib("a float")
+        if value < 0 and not kind.signed:
+            return str(kind.wrap(value))  # Nib has no negative unsigned literal; it wraps alike
         return f"{kind.name}({value})" if value < 0 else str(value)
 
     def expr(self, e, operand: bool = True) -> str:

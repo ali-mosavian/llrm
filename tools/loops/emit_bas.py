@@ -37,6 +37,8 @@ RESERVED = {
 
 def btype(kind) -> str:
     if isinstance(kind, Struct):
+        for _, field in kind.fields:
+            btype(field)  # a TYPE holds only what BASIC has
         return kind.name.upper()
     if kind not in TYPE:
         raise NotBasic(f"no BASIC type for {getattr(kind, 'name', kind)}")

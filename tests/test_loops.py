@@ -259,7 +259,7 @@ def test_a_case_s_quality_does_not_depend_on_its_batch(tmp_path):
 
 def test_every_quick_case_is_in_the_full_run():
     """--quick drew metamorphic variants of its own, so it reported cases
-    the full run's known.toml never saw as new shortfalls."""
+    the full run's shortfalls.txt never saw as new shortfalls."""
     full = {one.name for one in concurrent.cases()}
     assert {one.name for one in concurrent.cases(quick=True)} <= full
 
@@ -274,10 +274,10 @@ def test_the_ratchet_judges_only_what_the_run_evaluated():
 
 
 def test_writing_known_keeps_what_the_run_did_not_judge(tmp_path, monkeypatch):
-    """A run over one family rewrote known.toml from its own shortfalls and
+    """A run over one family rewrote the shortfalls from its own shortfalls and
     dropped every other family's baseline."""
     import known
-    monkeypatch.setattr(known, "PATH", tmp_path / "known.toml")
+    monkeypatch.setattr(known, "SHORTFALLS", tmp_path / "shortfalls.txt")
     other, mine = ("a", "c", "486-O2", "ivs"), ("b", "c", "486-O2", "ivs")
     known.write({other}, {})
     known.write({mine}, {}, judged={mine})
@@ -355,3 +355,55 @@ def test_a_long_basic_expression_is_wrapped():
     import emit_bas
     line = "x = " + " + ".join(f"CLNG(a{k}(i))" for k in range(40))
     assert max(len(one) for one in emit_bas.wrapped(line).split("\r\n")) <= 255
+
+
+def test_quick_leaves_the_bc_check_to_the_full_run(tmp_path):
+    """--quick took over a minute, most of it BC compiling the oracle's
+    BASIC batches in emulated DOS; it checks C against clang and stops."""
+    import run
+    from cases import classics
+    cases = classics.cases()[:2]
+    assert run.validate(cases, tmp_path, run.Result(), bc=False) == []
+    assert run.validate(cases, tmp_path, run.Result(), bc=True) != []
+
+
+def test_every_cross_case_means_something_in_every_language_it_is_written_in():
+    """cross first drew loops that ran past their array (n-1 with an unsigned
+    counter at n = 0, != past its end) or never ended (continue skipping the
+    step): the oracle calls those broken."""
+    import emit_c
+    import emit_bas
+    import emit_nib
+    from cases import cross
+    for case in cross.cases():
+        for lang, emitter in (("c", emit_c), ("bas", emit_bas), ("nib", emit_nib)):
+            if not emitter.expressible(case):
+                oracle.evaluate(case, lang)
+def test_a_struct_with_a_byte_is_not_basic():
+    """A case reading only a struct's INTEGER field passed as BASIC, then the
+    driver's TYPE met the byte field and the whole run stopped."""
+    import emit_bas
+    from cases import cross
+    case = next(one for one in cross.cases() if one.tags >= {"elem:s3"})
+    assert emit_bas.expressible(case) is not None
+
+
+def test_a_negative_unsigned_constant_is_written_wrapped_in_nib():
+    """A u16 counter stepping by -1 was written `i += u16(-1)`, which Nib
+    refuses; 65535 wraps to the same."""
+    import emit_nib
+    from spec import U16
+    from cases import cross
+    case = next(one for one in cross.cases() if one.tags >= {"counter:u16"})
+    assert emit_nib.Emitter(case).const(-1, U16) == "65535"
+
+
+def test_every_fuzz_case_means_something():
+    """The fuzzer's draws found three generator bugs (a walk on a walk that
+    shares an array, an end pointer before its outer loop, continue past a
+    do-while's step); the whole draw must evaluate."""
+    import emit_c
+    from cases import fuzz
+    for case in fuzz.cases():
+        if not emit_c.expressible(case):
+            oracle.evaluate(case, "c")
