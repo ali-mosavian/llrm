@@ -11,16 +11,32 @@ use crate::backend::{frame, isel, target};
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
 
+/// What a call leaves alone.
+pub enum Calls {
+    /// llrm-c's: everything but ax, bx, cx, dx, es and the flags.
+    C,
+    /// A Nib or BASIC program's: nothing.
+    Everything,
+}
+
+/// `name` of a C program's `tests/fixtures/mir/{fixture}`, as `before_regalloc_in`.
+pub fn before_regalloc<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    before_regalloc_in(Calls::C, fixture, name, cpu_name)
+}
+
 /// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
 /// phase before `RegAlloc`; the body, and the phases from `RegAlloc` on.
-pub fn before_regalloc<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir").join(fixture);
     let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
     let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
     let abi = crate::abi::qb::HirAbi {
         runtime: crate::hir::model::RuntimeProfile::Freestanding,
         objects: Default::default(),
-        preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
+        preserved: match calls {
+            Calls::C => EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
+            Calls::Everything => Default::default(),
+        },
     };
     let cpu = cpu::profile(cpu_name).unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));
