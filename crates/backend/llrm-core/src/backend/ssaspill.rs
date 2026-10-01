@@ -269,20 +269,28 @@ fn untouchable(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
-/// Whether `one` can read `value`, its second source, from memory: `op reg, [slot]`.
+/// Whether `one` can read `value` from memory as its second source: `op reg, [slot]`;
+/// a commutative operation turns its operands over first. The value is a source of the instruction.
 fn folds(one: &Insn, value: u32) -> bool {
     let Some(what) = &one.what else { return false };
     if !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
         return false;
     }
-    let shape = match (what.op, what.name.as_deref()) {
-        (Operation::Binary, Some("add" | "sub" | "and" | "or" | "xor")) => what.dests.len() == 1,
-        (Operation::Multiply, Some("imul")) => what.dests.len() == 1,
-        (Operation::Compare, Some("cmp")) => what.dests.is_empty(),
-        _ => false,
+    let (shape, commutes) = match (what.op, what.name.as_deref()) {
+        (Operation::Binary, Some("add" | "and" | "or" | "xor")) => (what.dests.len() == 1, true),
+        (Operation::Binary, Some("sub")) => (what.dests.len() == 1, false),
+        (Operation::Multiply, Some("imul")) => (what.dests.len() == 1, true),
+        (Operation::Compare, Some("cmp")) => (what.dests.is_empty(), false),
+        _ => (false, false),
     };
     match what.sources.as_slice() {
-        [Loc::Held(left), Loc::Held(right)] => shape && right.value == value && left.value != value && left.width == right.width && matches!(right.width, 2 | 4),
+        [Loc::Held(left), Loc::Held(right)] => {
+            shape
+                && left.value != right.value
+                && left.width == right.width
+                && matches!(right.width, 2 | 4)
+                && (right.value == value || (commutes && left.value == value))
+        }
         _ => false,
     }
 }
@@ -648,6 +656,9 @@ fn written(
             for value in edit.folded.get(&position).into_iter().flatten() {
                 let what = one.what.as_ref().expect("a fold has semantics");
                 let mut sources = what.sources.clone();
+                if matches!(&sources[0], Loc::Held(left) if left.value == *value) {
+                    sources.swap(0, 1);
+                }
                 sources[1] = Loc::Mem(cells[value].clone());
                 let mut made = (*one).clone();
                 made.what = Some(Semantics { sources, ..what.clone() });
