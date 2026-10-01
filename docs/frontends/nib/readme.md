@@ -276,3 +276,5 @@ lambdas, comprehension filters, or multiple comprehension clauses. General strin
 absent: f-strings are currently a print facility, not heap values. Those
 features should extend semantic analysis and elaborate to the same small HIR
 rather than adding surface-language HIR operations.
+
+See also [borrowck-vs-rust.md](borrowck-vs-rust.md): Nib's borrow checker against Rust's.
