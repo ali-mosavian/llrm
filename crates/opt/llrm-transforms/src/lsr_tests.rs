@@ -1659,3 +1659,36 @@ fn test_an_address_off_a_product_by_an_invariant_is_walked_by_it() {
     assert!(!body.contains("add nsw"), "{printed}");
     assert!(body.contains("i16 16"), "{printed}");
 }
+
+/// A far array of a runtime segment, offset zero, filled and summed over a
+/// constant 20 trips: `segld`'s inner loop.
+const FAR_SEGMENT_LOOP: &str = "define i16 @f(i16 %sel) {
+entry:
+  %seg = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %seg to ptr addrspace(1)
+  br label %l1
+
+l1:
+  %i = phi i16 [ 1, %entry ], [ %i.next, %l1 ]
+  %t = phi i16 [ 0, %entry ], [ %t.next, %l1 ]
+  %p = getelementptr inbounds i16, ptr addrspace(1) %far, i16 %i
+  store i16 %i, ptr addrspace(1) %p
+  %t.next = add i16 %t, %i
+  %i.next = add nsw i16 %i, 1
+  %more = icmp sle i16 %i.next, 20
+  br i1 %more, label %l1, label %l3
+
+l3:
+  ret i16 %t.next
+}
+";
+
+/// A far view of a segment is held in a segment register, not a general one:
+/// priced as a register it made walking the far pointer cheaper than counting
+/// an offset to zero, and `segld`'s loop kept a compare against 21 beside it
+/// (+105 instructions, and 1.2 million reloads in the QB demo's PLASMA).
+#[test]
+fn test_a_far_view_of_a_segment_takes_no_general_register() {
+    let printed = on_p5(FAR_SEGMENT_LOOP);
+    assert!(!printed.contains(", 21"), "{printed}");
+}

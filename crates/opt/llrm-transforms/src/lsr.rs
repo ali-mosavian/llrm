@@ -30,7 +30,7 @@ use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use num_traits::ToPrimitive;
@@ -338,7 +338,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         header: frequency(cfg::block(loop_.header)),
         entry: frequency(preheader),
         live,
-        frames: _frames(function),
+        frames: _frames(view),
     };
     let current = problem.candidates.iter().enumerate().filter(|(_, one)| one.existing.is_some()).map(|(index, _)| index).collect::<BTreeSet<_>>();
     let before = problem.total(&current);
@@ -625,9 +625,28 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
 /// The most symbols of a start split between counter and base, every way.
 const _SPLIT_TERMS: usize = 3;
 
-/// The function's frame objects, whose addresses need no register of their own.
-fn _frames(function: &Function) -> BTreeSet<ValueId> {
-    function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })).filter_map(|(_, inst)| function.instruction(inst).result).collect()
+/// The function's frame objects and its far views of a segment, whose
+/// addresses need no general register of their own: a frame object is BP's
+/// displacement, and a far pointer of offset zero (a selector cast to the far
+/// space) is held in a segment register.
+fn _frames(view: &memory::Unit) -> BTreeSet<ValueId> {
+    let function = view.function;
+    function
+        .walk()
+        .filter(|&(_, inst)| {
+            let op = function.instruction(inst);
+            match (&op.opcode, &op.operands[..]) {
+                (Opcode::Alloca { .. }, _) => true,
+                (Opcode::Cast(CastOp::AddrSpaceCast), [from]) => {
+                    let (to, from) = (op.result.and_then(|result| view.space(Operand::Value(result))), view.space(*from));
+                    let far = |space| view.layout.pointer(space).bits > view.layout.pointer(space).index_bits;
+                    matches!((to, from), (Some(to), Some(from)) if far(to) && from != 0 && !far(from))
+                }
+                _ => false,
+            }
+        })
+        .filter_map(|(_, inst)| function.instruction(inst).result)
+        .collect()
 }
 
 /// What building `key` before the loop costs: its scaled terms, the adds
@@ -793,7 +812,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
     }
     let costs = &target.costs;
     // A constant pointer is a displacement; any other base a register.
-    let frames = _frames(view.function);
+    let frames = _frames(view);
     let pointer_base = |fit: &Fit| matches!(fit.base, Some(Operand::Value(value)) if !frames.contains(&value)) || !fit.rest.is_zero();
     let mut price = Price { cost: 0, held: Vec::new(), address: Vec::new(), wide: false, product: None };
     let block = cfg::id(match site.at {
