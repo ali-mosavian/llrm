@@ -107,8 +107,8 @@ fn kinds(operations: &[&mir::Op]) -> Vec<mir::Kind> {
 fn test_hir_json_is_deterministic_strict_and_replayable() {
     let text = encode(&program(), None).unwrap();
     assert_eq!(text, encode(&decode(&text).unwrap(), None).unwrap());
-    assert!(text.contains("\"schema\":1"));
-    let error = decode(&text.replace("\"schema\":1", "\"register\":\"eax\",\"schema\":1")).unwrap_err();
+    assert!(text.contains("\"schema\":2"));
+    let error = decode(&text.replace("\"schema\":2", "\"register\":\"eax\",\"schema\":2")).unwrap_err();
     assert!(error.0.contains("unknown fields"), "{error}");
     let error = decode(&text.replace("\"op\":\"add\"", "\"op\":\"adc\"")).unwrap_err();
     assert!(error.0.contains("unknown Op"), "{error}");

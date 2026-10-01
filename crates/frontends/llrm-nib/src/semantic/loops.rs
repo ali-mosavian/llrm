@@ -529,7 +529,7 @@ impl<'a> FunctionCompiler<'a> {
             None,
         );
         let next_value = self.value(type_name);
-        self.emit(
+        let add = self.emit(
             "add",
             vec![next_value],
             vec![
@@ -538,6 +538,10 @@ impl<'a> FunctionCompiler<'a> {
             ],
             None,
         );
+        // The counter was below the limit before this body ran and nothing
+        // else writes it, so one more stays within its type.
+        let wrap = if is_unsigned(type_name) { llrm_mir::facts::Fact::NoUnsignedWrap } else { llrm_mir::facts::Fact::NoSignedWrap };
+        self.stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(add) }, wrap);
         self.emit(
             "store",
             Vec::new(),

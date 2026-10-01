@@ -9,7 +9,7 @@ use std::fmt;
 
 use llrm_support::pyrepr::{self, Repr};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// A Python `StrEnum`: members, their values, `str()` and `repr()`.
 macro_rules! str_enum {
@@ -470,8 +470,6 @@ pub struct Instruction {
     pub callee: Option<String>,
     pub pure: bool,
     pub asm: Option<Asm>,
-    /// The signed result fits its width, as the language promises.
-    pub nowrap: bool,
     /// A PTR_OFFSET's result stays inside its pointer's object.
     pub inbounds: bool,
     /// The source line of the statement it belongs to, where known.
@@ -482,7 +480,7 @@ impl Instruction {
     /// Python's `Instruction(id, op, results, operands)` with the remaining
     /// defaults.
     pub fn new(id: i64, op: Op, results: Vec<i64>, operands: Vec<Operand>) -> Self {
-        Self { id, op, results, operands, callee: None, pure: false, asm: None, nowrap: false, inbounds: false, line: None }
+        Self { id, op, results, operands, callee: None, pure: false, asm: None, inbounds: false, line: None }
     }
 }
 
@@ -615,7 +613,6 @@ pub struct Function {
     pub error_handler_local: bool,
     pub external_entries: Vec<i64>,
     pub linkage: FunctionLinkage,
-    pub promises: Vec<Promise>,
     /// The name it links by, where not its own.
     pub symbol: Option<String>,
 }
@@ -690,16 +687,6 @@ pub struct Debug {
     pub globals: Vec<DebugGlobal>,
 }
 
-/// What the language promises of a pointer parameter, as LLVM's
-/// `noalias`, `readonly` and `dereferenceable(bytes)` state it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Promise {
-    pub parameter: i64,
-    pub bytes: i64,
-    pub unaliased: bool,
-    pub readonly: bool,
-}
-
 impl Function {
     /// Python's seven-required-field construction with every default.
     pub fn new(
@@ -726,7 +713,6 @@ impl Function {
             error_handler_local: false,
             external_entries: Vec::new(),
             linkage: FunctionLinkage::External,
-            promises: Vec::new(),
             symbol: None,
         }
     }
@@ -797,6 +783,8 @@ pub struct Module {
     pub data: Vec<DataObject>,
     pub callables: Vec<Callable>,
     pub alias_classes: Vec<AliasClass>,
+    /// What the language promises, as the frontend stated it.
+    pub facts: Vec<crate::facts::Stated>,
     /// `-g`: what a debugger names and how it reads it.
     pub debug: Option<Debug>,
     /// Each source line's BASIC line number, where a statement table
@@ -806,7 +794,7 @@ pub struct Module {
 
 impl Module {
     pub fn new(id: i64, name: &str, types: Vec<Type>, functions: Vec<Function>) -> Self {
-        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), debug: None, line_numbers: Vec::new() }
+        Self { id, name: name.to_owned(), types, functions, data: Vec::new(), callables: Vec::new(), alias_classes: Vec::new(), facts: Vec::new(), debug: None, line_numbers: Vec::new() }
     }
 
     /// The rows of the statement table, in source order; none without one.

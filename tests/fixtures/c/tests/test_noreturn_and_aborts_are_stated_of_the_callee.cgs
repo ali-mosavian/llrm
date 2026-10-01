@@ -1,0 +1,45 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "noreturn.c" main=1
+- DBSrcCue f1 4 1
+SYM y1 name="f" base="f" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+l4 BENewLabel
+n5 CGFEName y2 TY_INTEGER
+n6 CGUnary O_POINTS n5 TY_INTEGER
+n7 CGInteger 0 TY_INTEGER
+n8 CGCompare O_NE n6 n7 TY_INTEGER
+- CGControl O_IF_FALSE n8 l4
+SYM y3 name="die" base="die" pattern="_*" attr=0xf seg=1
+CALLCONV y3 class=0x84 target=0x716 parms=[] ret=0:0
+n9 CGFEName y3 TY_CODE_PTR
+c10 CGInitCall n9 TY_INTEGER y3
+n11 CGInteger 1 TY_INTEGER
+- CGAddParm c10 n11 TY_INTEGER
+n12 CGCall c10
+- CGDone n12
+- CGControl O_LABEL n0 l4
+SYM y4 name="quit" base="quit" pattern="_*" attr=0xf seg=1
+CALLCONV y4 class=0x82 target=0x716 parms=[] ret=0:0
+n13 CGFEName y4 TY_CODE_PTR
+c14 CGInitCall n13 TY_INTEGER y4
+n15 CGCall c14
+- CGDone n15
+n16 CGInteger 0 TY_INTEGER
+n17 CGTempName t3 TY_INTEGER
+n18 CGAssign n17 n16 TY_INTEGER
+- CGDone n18
+n19 CGTempName t3 TY_INTEGER
+n20 CGUnary O_POINTS n19 TY_INTEGER
+- CGReturn n20 TY_INTEGER
+STOP
+FINI

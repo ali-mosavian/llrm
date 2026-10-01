@@ -27,7 +27,7 @@ CC_LINE=$(set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd "$CC_OBJ" \
     | grep -- '-o ccheck.obj' | sed -e 's|"||g' -e 's| -o ccheck.obj||' -e 's| [^ ]*/ccheck\.c$||')
 [ -n "$CC_LINE" ] || { echo "no compile line for ccheck.obj in $CC_OBJ" >&2; exit 1; }
 
-compile() { ( cd "$CC_OBJ" && $CC_LINE -o "$1" "$2" ); }
+compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -o "$1" "$2" ); }
 
 compile "$OUT/cgshim.o" "$HERE/cgshim.c"
 compile "$OUT/i64.o" "$OWROOT/bld/watcom/c/i64.c"

@@ -13,6 +13,7 @@ use llrm_mir::{
     Function, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Opcode, Operand as Value, Position, Type, TypeId, Types,
 };
 
+use crate::facts::{Stated, Subject};
 use crate::model::{self, AddressKind, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
 use crate::onerror::{self, Handled};
 
@@ -221,6 +222,8 @@ fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMa
 }
 
 struct Tables<'h> {
+    /// The flags facts state of each instruction, by function and instruction id.
+    instruction_flags: HashMap<(i64, i64), Flags>,
     array_order: model::ArrayOrder,
     /// The module body's ON ERROR GOTO handlers, which every procedure's pad calls.
     module_handler: Option<handling::ModuleHandler>,
@@ -266,7 +269,15 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
+    let mut instruction_flags: HashMap<(i64, i64), Flags> = HashMap::new();
+    for one in &hir.facts {
+        if let Subject::Instruction { function, id } = one.subject {
+            let flags = instruction_flags.entry((function, id)).or_default();
+            flags.insert(one.fact.flags());
+        }
+    }
     let mut tables = Tables {
+        instruction_flags,
         array_order,
         module_handler: None,
         zeroed,
@@ -328,6 +339,12 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             refused.push((function.name.clone(), why));
         }
     }
+    let declared: HashMap<i64, GlobalId> = functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
+    for one in &hir.facts {
+        if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, one) {
+            refused.push((hir.name.clone(), why));
+        }
+    }
     // Initialized once every function its data addresses is declared: one only addressed, far and C's.
     let mut code = HashMap::new();
     for callable in hir.data.iter().flat_map(|one| &one.relocations).filter(|one| one.code).filter_map(|one| hir.callables.iter().find(|callable| callable.id == one.target)) {
@@ -362,7 +379,6 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
         variable.initializer = Some(initializer);
     }
-    let declared: HashMap<i64, GlobalId> = functions.iter().filter_map(|(function, global)| Some((function.id, (*global)?))).collect();
     match debug::emitted(&mut module, &tables, hir, &data, &declared) {
         Ok(variables) => tables.variables = variables,
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -666,17 +682,38 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     };
     let global = module.add_function(&function.name, ty, linkage)?;
     place_function(module, global, abi);
-    let llrm_mir::GlobalKind::Function(defined) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
-    for promise in &function.promises {
-        let at = function.parameters.iter().position(|&one| one == promise.parameter).ok_or("a promise of no parameter")?;
-        let attrs = &mut defined.parameter_attrs[at];
-        attrs.extend(promise.unaliased.then(|| Attribute::Flag("noalias".to_owned())));
-        attrs.extend(promise.readonly.then(|| Attribute::Flag("readonly".to_owned())));
-        if promise.bytes > 0 {
-            attrs.push(Attribute::Int("dereferenceable".to_owned(), promise.bytes as u64));
-        }
-    }
     Ok((global, abi.0))
+}
+
+/// A stated fact as its MIR carrier: the one place a fact becomes MIR. A
+/// routine's or a parameter's is an attribute of its declaration; an
+/// instruction's is its flags, made with the instruction.
+fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declared: &HashMap<i64, GlobalId>, stated: &Stated) -> Emit<()> {
+    let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
+    let (global, parameter) = match stated.subject {
+        Subject::Instruction { .. } => return Ok(()),
+        Subject::Param { function, index } => match declared.get(&function) {
+            Some(&global) => (global, Some(index)),
+            None => return Ok(()),
+        },
+        Subject::Callable(id) => {
+            let callable = hir.callables.iter().find(|one| one.id == id).ok_or("a fact of no callable")?;
+            // A routine the module never calls has no declaration to carry it.
+            let Some(&reference) = tables.callees.get(&callable.name) else { return Ok(()) };
+            let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { return Err(format!("{}: a callee that is no function", callable.name)) };
+            (global, None)
+        }
+    };
+    let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of what is no function".to_owned()) };
+    let attrs = match parameter {
+        Some(index) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
+        None => &mut function.attrs,
+    };
+    let attribute = attribute()?;
+    if !attrs.contains(&attribute) {
+        attrs.push(attribute);
+    }
+    Ok(())
 }
 
 /// Local places that overlap, since they share their bytes: one alloca.
@@ -1025,6 +1062,13 @@ fn mark_cold(function: &mut Function, block: BlockId) {
             function.replace_all_uses_with(from, Value::Value(to));
         }
         function.erase(inst).expect("its uses moved to the cold call");
+    }
+}
+
+impl Body<'_, '_, '_> {
+    /// The flags the language's facts give an instruction.
+    fn stated_flags(&self, instruction: &model::Instruction) -> Flags {
+        self.tables.instruction_flags.get(&(self.function.id, instruction.id)).copied().unwrap_or_default()
     }
 }
 
@@ -1404,7 +1448,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
             // A shift count is its own width; LLVM's is the shifted value's.
             let b = if matches!(op, Op::Shl | Op::Shr | Op::Sar) { self.count(b, self.b.type_of(a))? } else { b };
-            let flags = if instruction.nowrap && matches!(op, Op::Add | Op::Sub | Op::Mul) { Flags::NSW } else { Flags::default() };
+            let flags = if matches!(op, Op::Add | Op::Sub | Op::Mul) { self.stated_flags(instruction) } else { Flags::default() };
             let result = self.b.binary(binary, a, b, flags, "");
             self.define(instruction, result);
             return Ok(());
@@ -1508,7 +1552,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[0])?;
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a negated non-integer")?;
                 let zero = self.b.int(bits, 0);
-                let flags = if instruction.nowrap { Flags::NSW } else { Flags::default() };
+                let flags = self.stated_flags(instruction);
                 let result = self.b.binary(BinaryOp::Sub, zero, value, flags, "");
                 self.define(instruction, result);
             }
