@@ -19,7 +19,7 @@ use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::target::{self, Segments};
-use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
+use crate::backend::{belady, constrain, datagroup, spiller, spillplacement, splitkit};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -1641,6 +1641,54 @@ fn unallocatable(facts: &Facts, fixed: &IndexMap<u32, Register>, unspillable: &B
     None
 }
 
+/// Depth-weighted instructions of `body` by what they are: reloads, stores, remats, others.
+fn _split(body: &LirBody) -> String {
+    let deep = ranges::depths(body);
+    let mut got = [0.0f64; 4];
+    for block in &body.blocks {
+        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+        for one in &block.insns {
+            let at = if one.spill_reload { 0 } else if one.spill_store { 1 } else if one.rematerialized { 2 } else { 3 };
+            got[at] += each;
+        }
+    }
+    format!("reload {} store {} remat {} other {}", got[0], got[1], got[2], got[3])
+}
+
+/// `body` with the values Belady's rule keeps in registers carved out as
+/// pieces, and the rest of each spilled whole; and the values the spill made.
+fn belady_body(
+    body: &LirBody,
+    pins: &IndexMap<u32, Register>,
+    confined: &Classes,
+    frame: &mut Frame,
+) -> Result<Option<(LirBody, BTreeSet<u32>)>, Error> {
+    let held = belady::regions(body, pins, confined);
+    let widths = _widest(body);
+    let mut cut = body.clone();
+    let mut moves: Vec<splitkit::Moved> = Vec::new();
+    let mut spill: BTreeSet<u32> = BTreeSet::new();
+    let mut floor = splitkit::_next_value(&cut);
+    for (value, region) in held {
+        let fresh = splitkit::_next_value(&cut).max(floor);
+        floor = fresh + 1;
+        let moved = moves.iter().fold(region, |region, moved| region.moved(moved));
+        if let Some((next, shifted)) = splitkit::carved_moving(&cut, value, fresh, widths.get(&value).copied().unwrap_or(2), &moved) {
+            cut = next;
+            moves.push(shifted);
+            spill.insert(value);
+        }
+    }
+    // A value every reference of which a piece took has nothing left to spill.
+    let named: BTreeSet<u32> = cut.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect();
+    spill.retain(|value| named.contains(value));
+    if spill.is_empty() {
+        return Ok(None);
+    }
+    let (spilt, made) = spiller::spilled_from(&cut, &spill, Some(frame), floor)?;
+    Ok(Some((spilt, made)))
+}
+
 /// Assign, then rewrite. LLVM's two halves, in one phase.
 pub struct RegAlloc {
     pub pinned: IndexMap<u32, Register>,
@@ -1786,6 +1834,31 @@ impl RegAlloc {
                         llrm_support::debug!("regalloc", "  kept the trial");
                         best = trial;
                     }
+                }
+            }
+        }
+        if !spilled.is_empty() && std::env::var_os("LLRM_NO_BELADY").is_none() {
+            frame.borrow_mut().restore(&start);
+            let mut pins = prefer.clone();
+            pins.extend(constrain::required(&body));
+            let confined = classes(&body, &BTreeSet::new(), &segments);
+            let carved = belady_body(&body, &pins, &confined, &mut frame.borrow_mut())?;
+            if carved.is_none() {
+                llrm_support::debug!("regalloc", "  belady: nothing carved");
+            }
+            if let Some((candidate, made)) = carved {
+                let unspillable: BTreeSet<u32> = reloads.union(&made).copied().collect();
+                match run(&candidate, &unspillable, &BTreeSet::new(), true) {
+                    Ok(trial) => {
+                        llrm_support::debug!("regalloc", "  belady: {} spilled, cost {}, {} forced (best {})", trial.spilled.len(), trial.cost, trial.forced, best.cost);
+                        llrm_support::debug!("regalloc", "  belady split {} / greedy {}", _split(&trial.out), _split(&best.out));
+                        if trial.cost < best.cost || std::env::var_os("LLRM_FORCE_BELADY").is_some() {
+                            llrm_support::debug!("regalloc", "  kept belady");
+                            best = trial;
+                        }
+                    }
+                    Err(Error::Unplaced(_)) => llrm_support::debug!("regalloc", "  belady: refused"),
+                    Err(other) => return Err(other),
                 }
             }
         }

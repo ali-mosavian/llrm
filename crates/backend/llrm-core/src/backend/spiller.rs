@@ -390,6 +390,16 @@ fn _reloaded(one: &Insn, stored: &BTreeSet<u32>, frame: &mut Frame, fresh: &mut 
     Ok((before, rename))
 }
 
+/// Whether `one` could read or write `value` straight from its slot, if it
+/// were spilled: the use then needs no register.
+pub fn folds(one: &Insn, value: u32) -> bool {
+    let values = BTreeSet::from([value]);
+    let mut frame = Frame::new(0);
+    matches!(_source(one, &values, &mut frame), Ok(Some(_)))
+        || matches!(_in_place(one, &values, &mut frame), Ok(Some(_)))
+        || matches!(_tied(one, &values, &mut frame), Ok(Some(_)))
+}
+
 /// `body` with each move of a parallel copy that reads a value in `reading`
 /// made a plain move after the copy. The value is then made again for that
 /// one move, beside it, rather than for the copy: it would live across all of

@@ -7,6 +7,7 @@ pub mod assemble;
 pub mod allocate;
 pub mod arithmetic;
 pub mod asm;
+pub mod belady;
 pub mod coalesce;
 pub mod codeview;
 pub mod comparefold;

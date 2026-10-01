@@ -93,6 +93,10 @@ fn _references(body: &LirBody, value: u32) -> IndexMap<i64, Vec<usize>> {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Region {
     pub spans: BTreeMap<i64, Vec<(usize, usize)>>,
+    /// The value may be stored where the piece writes it rather than where
+    /// the piece ends, whichever runs less often: a loop's invariant once
+    /// before the loop, not on each trip past an eviction.
+    pub stored_at_definition: bool,
 }
 
 impl Region {
@@ -155,7 +159,7 @@ impl Region {
 
     /// This region in a body `carved_moving` changed.
     pub fn moved(&self, moved: &Moved) -> Self {
-        let mut out = Self::default();
+        let mut out = Self { stored_at_definition: self.stored_at_definition, ..Self::default() };
         for (at, ranges) in &self.spans {
             for (from, to) in ranges {
                 match moved.get(at) {
@@ -177,7 +181,7 @@ impl Region {
                 predecessors.entry(*next).or_default().push(block.at);
             }
         }
-        let mut out = Self::default();
+        let mut out = Self { stored_at_definition: self.stored_at_definition, ..Self::default() };
         for block in &body.blocks {
             let Some(ranges) = self.spans.get(&block.at) else { continue };
             let named: Vec<usize> =
@@ -199,7 +203,7 @@ impl Region {
 
     /// Ranges widened to whole parallel groups: a copy never lands inside one.
     fn snapped(&self, body: &LirBody) -> Self {
-        let mut out = Self::default();
+        let mut out = Self { stored_at_definition: self.stored_at_definition, ..Self::default() };
         for block in &body.blocks {
             let Some(ranges) = self.spans.get(&block.at) else { continue };
             let inside = |position: usize| {
@@ -236,7 +240,12 @@ pub enum Crossing {
 /// never writes the value still equals it, so leaving needs no copy.
 /// `carved` places these copies and `_benefit` prices them: one fact.
 pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate::Live, live_out: &allocate::Live) -> Vec<(Crossing, bool)> {
-    let written = body.blocks.iter().any(|block| {
+    crossings_with(body, value, region, live_in, live_out, !region.stored_at_definition)
+}
+
+/// `crossings`, with the piece taken to write the value or not as `unwritten` says it does not.
+fn crossings_with(body: &LirBody, value: u32, region: &Region, live_in: &allocate::Live, live_out: &allocate::Live, may_write: bool) -> Vec<(Crossing, bool)> {
+    let written = may_write && body.blocks.iter().any(|block| {
         region.spans.get(&block.at).is_some_and(|ranges| {
             ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
         })
@@ -318,7 +327,32 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
         return None;
     }
     let (live_in, live_out) = allocate::live(body);
-    let found = crossings(body, value, &region, &live_in, &live_out);
+    // Stored where written, when that runs less often than copying back.
+    let remade = spiller::recomputed(body, value);
+    let stored = region.stored_at_definition && remade.is_none() && {
+        let depth = ranges::depths(body);
+        let at = |block: i64| ranges::level(depth.get(&block).copied().unwrap_or(0));
+        let leaving: Vec<f64> = crossings_with(body, value, &region, &live_in, &live_out, true)
+            .iter()
+            .filter(|(_, entering)| !entering)
+            .map(|(crossing, _)| match crossing {
+                Crossing::Inside { block, .. } => at(*block),
+                Crossing::Edge { from, .. } => at(*from),
+            })
+            .collect();
+        let writes: f64 = body
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                region.spans.get(&block.at).into_iter().flatten().filter_map(move |(from, to)| {
+                    let last = block.insns[*from..*to].iter().rposition(|one| one.defines.contains(&value));
+                    last.map(|_| at(block.at))
+                })
+            })
+            .sum();
+        !leaving.is_empty() && writes < leaving.iter().sum::<f64>()
+    };
+    let found = if region.stored_at_definition { crossings_with(body, value, &region, &live_in, &live_out, !stored) } else { crossings(body, value, &region, &live_in, &live_out) };
     let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
         for next in &block.succ {
@@ -356,7 +390,6 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
         }
     }
     // `defFromParent`: a value that reads nothing is remade, not copied.
-    let remade = spiller::recomputed(body, value);
     let copy = |beside: &Insn, entering: bool| {
         let into = if entering { fresh } else { value };
         match &remade {
@@ -391,6 +424,18 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
             shift.push(insns.len());
             if let Some(one) = block.insns.get(position) {
                 insns.push(if region.covers(block.at, position) { _renamed(one, &rename) } else { Arc::clone(one) });
+                // The piece's definition is written to the value as well, once, here.
+                let group_ends = one.group.is_none() || block.insns.get(position + 1).is_none_or(|next| next.group != one.group);
+                let group_defines = block.insns[allocate::_group_start(block, position)..=position].iter().any(|each| each.defines.contains(&value));
+                // Only the last write of a range is seen outside it.
+                let rewritten_later = region
+                    .spans
+                    .get(&block.at)
+                    .and_then(|ranges| ranges.iter().find(|(from, to)| *from <= position && position < *to))
+                    .is_some_and(|(_, to)| block.insns[position + 1..*to].iter().any(|each| each.defines.contains(&value)));
+                if stored && group_ends && group_defines && !rewritten_later && region.covers(block.at, position) {
+                    insns.push(_copy(one, value, fresh, width));
+                }
             }
         }
         moved.insert(block.at, shift);
