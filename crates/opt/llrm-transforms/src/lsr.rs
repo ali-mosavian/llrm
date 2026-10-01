@@ -258,7 +258,8 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         return None;
     }
     let facts = view.registers();
-    let frequencies = profit::_frequencies(function, Some(&profit::proven_trips(view, &facts)))?;
+    // lsr's prices were fitted to trips multiplied, ten where unproven: see #203.
+    let frequencies = profit::_loop_products(function, Some(&profit::proven_trips(view, &facts)))?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).cloned().collect::<Vec<_>>();
