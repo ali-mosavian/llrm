@@ -617,3 +617,26 @@ fn main() -> i16:
 ";
     assert_eq!(output(source), "1\n9\n");
 }
+
+#[test]
+fn an_owner_is_not_dropped_while_a_later_drop_reads_a_borrow_of_it() {
+    // #131: `v`, declared after `g`, dropped first; `g`'s drop then read
+    // `v[0]` from freed memory.
+    let source = "\
+struct G:
+    mut r: &i16
+
+fn G.drop(self: &mut G) -> void:
+    print(self.r)
+
+fn main() -> i16:
+    let z: i16 = 0
+    let mut g = G(r=z)
+    let v: vec[i16] = [7, 8]
+    g.r = &v[0]
+    return 0
+";
+    assert_eq!(refused_at(source), "12: \"v\" is dropped here while still borrowed");
+    // With no drop to read it, the borrow ends at its last use.
+    assert_eq!(output(&source.replace("fn G.drop(self: &mut G) -> void:\n    print(self.r)\n\n", "")), "");
+}
