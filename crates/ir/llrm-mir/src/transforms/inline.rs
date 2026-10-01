@@ -34,7 +34,7 @@ impl ModulePass for Inline {
                 let body = (**body).clone();
                 let Module { context, globals, .. } = &mut *module;
                 let GlobalKind::Function(function) = &mut globals[caller.0 as usize].kind else { unreachable!("a function") };
-                inline(context, function, call, &body);
+                splice(context, function, call, &body);
                 inlined = true;
             }
             if inlined {
@@ -62,28 +62,30 @@ fn site(module: &Module, graph: &CallGraph, caller: GlobalId) -> Option<(InstId,
     })
 }
 
-/// Small enough, and nothing a copy cannot carry: an unwind edge, or
-/// stack allocated anywhere but on entry.
+/// Small enough, and nothing a copy cannot carry.
 fn inlinable(body: &Function) -> bool {
+    carries(body) && body.walk().count() <= THRESHOLD
+}
+
+/// Whether a copy of `body` can stand in another function: no unwind edge,
+/// and stack allocated only on entry and of a constant size, so the copy
+/// can sit on the caller's entry, above anything it could be counted by.
+pub fn carries(body: &Function) -> bool {
     let entry = body.entry();
-    let mut count = 0;
-    for (block, inst) in body.walk() {
-        count += 1;
-        match body.instruction(inst).opcode {
-            Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => return false,
-            Opcode::Alloca { .. } if Some(block) != entry => return false,
-            _ => {}
-        }
-    }
-    count <= THRESHOLD
+    body.walk().all(|(block, inst)| match &body.instruction(inst).opcode {
+        Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => false,
+        Opcode::Alloca { .. } => Some(block) == entry && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_))),
+        _ => true,
+    })
 }
 
 fn phis(function: &Function, block: BlockId) -> Vec<InstId> {
     function.block(block).instructions().iter().copied().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
-/// `call`, a call to `callee`, replaced by a copy of its body.
-fn inline(context: &mut Context, function: &mut Function, call: InstId, callee: &Function) {
+/// `call`, a call to `callee`, replaced by a copy of its body, which
+/// `carries`.
+pub fn splice(context: &mut Context, function: &mut Function, call: InstId, callee: &Function) {
     let void = context.types.void();
     let block = function.parent(call).expect("a placed call");
     let instructions = function.block(block).instructions().to_vec();
@@ -126,7 +128,11 @@ fn inline(context: &mut Context, function: &mut Function, call: InstId, callee: 
                 function.insert(back, Position::End(blocks[&one])).expect("a placed block");
                 continue;
             }
-            let copy = function.create_instruction(instruction.opcode.clone(), instruction.ty, Vec::new(), instruction.flags, None);
+            let name = instruction.result.and_then(|value| callee.value(value).name.clone());
+            let copy = function.create_instruction(instruction.opcode.clone(), instruction.ty, Vec::new(), instruction.flags, name.as_deref());
+            for (kind, node) in &instruction.metadata {
+                function.annotate(copy, kind, *node);
+            }
             // A static alloca stays static: on the caller's entry.
             let position = match instruction.opcode {
                 Opcode::Alloca { .. } if one == entry => Position::Before(first),

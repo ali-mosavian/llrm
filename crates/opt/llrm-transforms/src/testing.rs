@@ -98,6 +98,7 @@ pub fn bodies(module: &Module) -> Vec<GlobalId> {
 #[derive(Default)]
 pub struct Tuned {
     pub costs: crate::profit::OperationCosts,
+    pub sizes: crate::profit::OperationCosts,
     pub registers: i64,
     pub call_registers: i64,
     pub far_access: i64,
@@ -113,6 +114,10 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn costs(&self) -> crate::profit::OperationCosts {
         self.costs.clone()
+    }
+
+    fn size_costs(&self) -> crate::profit::OperationCosts {
+        self.sizes.clone()
     }
 
     fn registers(&self) -> i64 {

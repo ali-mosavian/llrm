@@ -15,6 +15,12 @@ pub trait Machine {
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 
+    /// What each operation costs in code bytes, for a decision made for
+    /// size; by default the same prices.
+    fn size_costs(&self) -> OperationCosts {
+        self.costs()
+    }
+
     /// How many integer values fit in registers at once.
     fn registers(&self) -> i64;
 

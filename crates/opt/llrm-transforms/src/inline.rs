@@ -6,10 +6,15 @@
 //! operands, and join every return back to the continuation.  The ordinary
 //! body pipeline then simplifies the result.
 //!
-//! The initial policy covered leaf procedures called once.  It also admits a
-//! straight-line private leaf at every direct call site when the target-priced
-//! call work exceeds the semantic work duplicated by cloning.  In both cases
-//! the ordinary body pipeline simplifies the result; MIR chooses from semantic
+//! A callee is a candidate when cloning it is safe; whether it is worth it is
+//! cost: the body's priced work copied against the calls it removes, in the
+//! target's clocks, or its code bytes at -Os, bounded by the `Threshold`
+//! (nominal: a body's budget is at most 24 operations).  A
+//! body that only reads or writes through its arguments or its own frame
+//! inlines like any other: the clone keeps its memory operations and the
+//! ordinary body pipeline turns the caller's argument cells into values.  A
+//! public callee is inlined at its sites and stays defined; a private one
+//! called nowhere else goes with its last site.  MIR chooses from semantic
 //! costs and never sees opcodes or registers.  The call's price is profit's
 //! `OperationCosts::call`.
 //!
@@ -21,22 +26,25 @@
 //! call fits its callee.  A candidate is a snapshot of its callee, as the old
 //! one held the body it was chosen from.  A clone keeps its original's
 //! metadata, which replaces merging the pointer and range side tables.  The
-//! old `sealed` flag is a definition; a leaf touches no memory, which
-//! replaces admitting only formal loads.  SSA is checked by the verifier
+//! old `sealed` flag is a definition; a clone keeps its memory operations,
+//! which replaces admitting only formal loads.  The clone is llrm-mir's
+//! `splice`.  SSA is checked by the verifier
 //! after each pass, not here.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use llrm_mir::context::{ConstantId, Context, GlobalId};
-use llrm_mir::edit::Position;
-use llrm_mir::memory::callee;
-use llrm_mir::module::{BlockId, Function, InstId, Module, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::callgraph::CallGraph;
+use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::memory::{Callees, callee, has};
+use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
+use llrm_mir::opcode::Opcode;
+use llrm_mir::transforms::inline::{carries, splice};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
 
-use crate::profit::OperationCosts;
+use crate::profit::{OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
 /// for none. A callee's budget, in semantic operations, scales with it.
@@ -56,12 +64,25 @@ impl Threshold {
     }
 }
 
+/// The stack, in bytes, inlining may add to one function: a copy's frame is
+/// a cell of its own wherever it sits, so copies add up, and in a recursive
+/// function they add up per level.  LLVM bounds the same way.
+const FRAME_LIMIT: u64 = 256;
+
 /// Direct call counts by callee.
 pub type Counter = IndexMap<GlobalId, i64>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     pub body: Rc<Function>,
+    /// Bytes of stack the body allocates.
+    pub frame: u64,
+}
+
+/// What a caller says of itself that bounds what may be copied into it.
+pub struct Caller<'a> {
+    pub layout: &'a DataLayout,
+    pub recursive: bool,
 }
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
@@ -83,52 +104,104 @@ fn body(module: &Module, id: GlobalId) -> Option<&Function> {
     module.global(id).function().filter(|function| !function.is_declaration())
 }
 
-/// Private pure leaves worth moving into their direct callers.
-///
-/// A single-use body disappears after expansion, so it only has to fit the
-/// normal CFG budget.  A repeated body duplicates its semantic work once per
-/// additional caller.  Admit that only for a straight-line leaf, and only
-/// when the profile's total direct-call cost is greater than the duplicate
-/// work.  This lets a short arithmetic helper disappear at every site while
-/// keeping branchy or code-growing helpers out of the allocator's region.
-pub fn candidates(
-    module: &Module,
-    calls: &Counter,
-    private: &BTreeSet<GlobalId>,
-    pure: &BTreeSet<GlobalId>,
-    costs: &OperationCosts,
-    threshold: Threshold,
-) -> IndexMap<GlobalId, Candidate> {
-    let call_cost = costs.call;
-    let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
-    let mut out = IndexMap::default();
-    for &name in private.intersection(pure) {
-        let Some(body) = body(module, name) else { continue };
-        let semantic = semantic_count(body);
-        let count = calls.get(&name).copied().unwrap_or(0);
-        let repeated = semantic * (count - 1);
-        let profitable = count == 1 || (_straight(body) && repeated < count * call_cost);
-        if count != 0 && semantic <= budget && profitable && _leaf(&module.context, body) {
-            out.insert(name, Candidate { body: Rc::new(body.clone()) });
+/// Bytes of stack `function` allocates.
+fn frame(context: &Context, layout: &DataLayout, function: &Function) -> u64 {
+    function
+        .walk()
+        .filter_map(|(_, inst)| if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode { Some(layout.alloc_size(&context.types, allocated)) } else { None })
+        .sum()
+}
+
+/// The functions that call themselves, directly or not.
+pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
+    let graph = CallGraph::new(module);
+    module.functions().map(|(id, _, _)| id).filter(|&id| graph.reaches(id, id)).collect()
+}
+
+/// Functions whose address is taken: named anywhere but as a callee.
+fn addressed(module: &Module) -> BTreeSet<GlobalId> {
+    let context = &module.context;
+    let mut out = BTreeSet::new();
+    let mut work = Vec::new();
+    for (_, _, function) in module.functions() {
+        for (_, inst) in function.walk() {
+            let instruction = function.instruction(inst);
+            let skip = usize::from(callee(context, function, inst).is_some());
+            let kept = instruction.operands.len() - skip;
+            work.extend(instruction.operands[..kept].iter().filter_map(|&operand| if let Operand::Constant(id) = operand { Some(id) } else { None }));
+        }
+    }
+    work.extend(module.globals.iter().filter_map(|global| if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }));
+    while let Some(id) = work.pop() {
+        match &context.get(id).kind {
+            ConstantKind::Global(global) => {
+                out.insert(*global);
+            }
+            ConstantKind::Aggregate(members) => work.extend(members),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => work.extend(operands),
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
+            _ => {}
         }
     }
     out
 }
 
-/// Private pure leaves worth cloning at one constant direct-call site.
+/// Whether `body` may be cloned into another function: it returns, `splice`
+/// carries it, and it is not recursive, `noinline` or `setjmp`-like.
+fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
+    !body.is_declaration()
+        && carries(body)
+        && !has(&body.attrs, "noinline")
+        && !recursive.contains(&id)
+        && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)
+        && !body.walk().any(|(_, inst)| callee(&module.context, body, inst).and_then(|one| module.global(one).function()).is_some_and(|one| has(&one.attrs, "returns_twice")))
+}
+
+/// The priced work `body` does once, unless something in it is unpriced.
+fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
+    body.walk().filter(|&(_, inst)| semantic(body, inst)).map(|(_, inst)| operation(&module.context, body, callees, inst, costs)).sum()
+}
+
+/// Functions worth moving into their direct callers.
+///
+/// A candidate's size is bounded by the `Threshold`.  Inlining it at all
+/// `count` sites leaves the body behind when it is public or its address is
+/// taken; a private one goes with the last site, so one site costs nothing.
+/// Each copy beyond that duplicates the body's priced work, which has to
+/// stay below the calls removed.
+pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
+    let call_cost = costs.call;
+    let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
+    let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), addressed(module));
+    let mut out = IndexMap::default();
+    for (&name, &count) in calls {
+        let Some(body) = body(module, name) else { continue };
+        if count == 0 || semantic_count(body) > budget || !cloneable(module, &recursive, name, body) {
+            continue;
+        }
+        let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
+        if copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < count * call_cost) {
+            out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
+        }
+    }
+    out
+}
+
+/// Functions worth cloning at one call site whose actual is a known
+/// constant; `recursive` is `recursive(module)`.
 ///
 /// Whole-body parameter specialization needs every caller to agree.  This
 /// narrower policy instead admits a call whose known actual exposes local
 /// SCCP after the normal MIR clone.  The original body remains for dynamic
 /// callers, so no source-level calling convention or symbol changes.
-/// As with repeated-leaf inlining, the target profile must price the call
+/// As with repeated inlining, the target profile must price the call
 /// above the cloned semantic work.
 pub fn constant_sites(
     module: &Module,
+    layout: &DataLayout,
+    recursive: &BTreeSet<GlobalId>,
     caller: &Function,
     constants: &IndexMap<InstId, Vec<Option<ConstantId>>>,
-    private: &BTreeSet<GlobalId>,
-    pure: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
     threshold: Threshold,
 ) -> IndexMap<InstId, Candidate> {
@@ -141,45 +214,13 @@ pub fn constant_sites(
         if !known.iter().any(Option::is_some) {
             continue;
         }
-        if !private.contains(&name) || !pure.contains(&name) {
-            continue;
-        }
         let Some(body) = body(module, name) else { continue };
         let semantic = semantic_count(body);
-        if semantic < call_cost && semantic <= budget && _leaf(&module.context, body) {
-            out.insert(at, Candidate { body: Rc::new(body.clone()) });
+        if semantic < call_cost && semantic <= budget && cloneable(module, recursive, name, body) {
+            out.insert(at, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
     }
     out
-}
-
-/// Whether cloning the body duplicates no control-flow structure.
-fn _straight(body: &Function) -> bool {
-    body.layout().len() == 1
-}
-
-/// Whether a body does nothing but compute its result: no call, no memory,
-/// nothing that may trap and no floating work.
-fn _leaf(context: &Context, body: &Function) -> bool {
-    if body.is_declaration() {
-        return false;
-    }
-    let floating = |operand: Operand| body.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)));
-    let mut returns = false;
-    for (_, inst) in body.walk() {
-        let instruction = body.instruction(inst);
-        let forbidden = match instruction.opcode {
-            Opcode::Call(_) | Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => true,
-            Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Alloca { .. } => true,
-            Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => true,
-            _ => false,
-        };
-        if forbidden || instruction.result.is_some_and(|value| floating(Operand::Value(value))) || instruction.operands.iter().any(|&operand| floating(operand)) {
-            return false;
-        }
-        returns |= instruction.opcode == Opcode::Ret;
-    }
-    returns
 }
 
 /// Surviving direct call counts.
@@ -200,8 +241,9 @@ pub fn call_counts(module: &Module) -> Counter {
 
 /// Inline the first legal call site in `function`; whether one was.
 pub fn expanded(
-    context: &Context,
+    context: &mut Context,
     function: &mut Function,
+    caller: &Caller,
     available: &IndexMap<GlobalId, Candidate>,
     constant: Option<&IndexMap<InstId, Candidate>>,
 ) -> Result<bool, String> {
@@ -216,104 +258,22 @@ pub fn expanded(
         let Some(candidate) = candidate else {
             continue;
         };
-        if _at(context, function, call, candidate)? {
+        if fits(context, function, caller, call, candidate) {
+            splice(context, function, call, &candidate.body);
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn _at(context: &Context, function: &mut Function, call: InstId, candidate: &Candidate) -> Result<bool, String> {
+/// Whether the call fits its callee, which returns, and the stack the copy
+/// adds stays within `FRAME_LIMIT`, and in a recursive function none.
+fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, candidate: &Candidate) -> bool {
     let callee = &*candidate.body;
-    let Opcode::Call(info) = &function.instruction(call).opcode else { return Ok(false) };
-    if info.function_type != callee.ty || matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. }) {
-        return Ok(false);
-    }
-    let returns = callee.walk().filter(|&(_, inst)| callee.instruction(inst).opcode == Opcode::Ret).collect::<Vec<_>>();
-    if returns.is_empty() {
-        return Ok(false);
-    }
-    let void = callee.instruction(returns[0].1).ty;
-    let caller = function.parent(call).ok_or("the call is not placed")?;
-
-    // Each formal reads its actual; each callee value its clone.
-    let mut swap = callee.parameters().iter().zip(&function.instruction(call).operands).map(|(&formal, &actual)| (formal, actual)).collect::<BTreeMap<ValueId, Operand>>();
-    let mut labels = BTreeMap::<BlockId, BlockId>::new();
-    let mut after = caller;
-    for &block in callee.layout() {
-        let made = function.create_block(callee.block(block).name.as_deref());
-        function.insert_block(made, Some(after))?;
-        labels.insert(block, made);
-        after = made;
-    }
-    let continuation = function.create_block(None);
-    function.insert_block(continuation, Some(after))?;
-
-    let mut cloned = Vec::new();
-    let mut return_edges = Vec::<(BlockId, Option<Operand>)>::new();
-    for &block in callee.layout() {
-        for &inst in callee.block(block).instructions() {
-            let instruction = callee.instruction(inst);
-            if instruction.opcode == Opcode::Ret {
-                return_edges.push((labels[&block], instruction.operands.first().copied()));
-                continue;
-            }
-            let name = instruction.result.and_then(|value| callee.value(value).name.clone());
-            let made = function.create_instruction(instruction.opcode.clone(), instruction.ty, Vec::new(), instruction.flags.clone(), name.as_deref());
-            for (kind, node) in &instruction.metadata {
-                function.annotate(made, kind, *node);
-            }
-            if let (Some(from), Some(to)) = (instruction.result, function.instruction(made).result) {
-                swap.insert(from, Operand::Value(to));
-            }
-            cloned.push((block, inst, made));
-        }
-    }
-    let read = |operand: Operand| match operand {
-        Operand::Value(value) => swap[&value],
-        Operand::Block(block) => Operand::Block(labels[&block]),
-        Operand::Constant(_) => operand,
-    };
-    for (block, inst, made) in cloned {
-        function.set_operands(made, callee.instruction(inst).operands.iter().map(|&operand| read(operand)).collect());
-        function.insert(made, Position::End(labels[&block]))?;
-    }
-    let mut returned = Vec::new();
-    for (at, value) in &return_edges {
-        let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(continuation)], Flags::default(), None);
-        function.insert(jump, Position::End(*at))?;
-        returned.push((value.map(read), *at));
-    }
-
-    // What followed the call now follows the inlined body.
-    let position = function.block(caller).instructions().iter().position(|&one| one == call).expect("the call's block holds it");
-    let tail = function.block(caller).instructions()[position + 1..].to_vec();
-    if let Some(result) = function.instruction(call).result {
-        let value = if let [(Some(value), _)] = returned[..] {
-            value
-        } else {
-            let operands = returned.iter().flat_map(|&(value, at)| [value.expect("a value returned"), Operand::Block(at)]).collect();
-            let phi = function.create_instruction(Opcode::Phi, function.value(result).ty, operands, Flags::default(), None);
-            function.insert(phi, Position::End(continuation))?;
-            Operand::Value(function.instruction(phi).result.expect("a phi's value"))
-        };
-        function.replace_all_uses_with(result, value);
-    }
-    for inst in tail {
-        function.move_to(inst, Position::End(continuation))?;
-    }
-    for successor in function.successors(continuation) {
-        let phis = function.block(successor).instructions().iter().copied().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect::<Vec<_>>();
-        for phi in phis {
-            let operands = function.instruction(phi).operands.iter().map(|&one| if one == Operand::Block(caller) { Operand::Block(continuation) } else { one }).collect();
-            function.set_operands(phi, operands);
-        }
-    }
-    function.erase(call)?;
-    let entry = callee.entry().expect("a defined callee");
-    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(labels[&entry])], Flags::default(), None);
-    function.insert(jump, Position::End(caller))?;
-    Ok(true)
+    let Opcode::Call(info) = &function.instruction(call).opcode else { return false };
+    info.function_type == callee.ty
+        && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
+        && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
 }
 
 #[cfg(test)]

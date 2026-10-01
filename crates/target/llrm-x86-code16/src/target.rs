@@ -60,6 +60,10 @@ impl Machine for Dos {
         self.costs.clone()
     }
 
+    fn size_costs(&self) -> OperationCosts {
+        operations(bytes, 1)
+    }
+
     fn registers(&self) -> i64 {
         self.registers
     }
@@ -104,6 +108,19 @@ pub fn address_forms(costs: &OperationCosts, address_stall: i64) -> Vec<AddressF
 pub fn costs(arch: &str) -> OperationCosts {
     let at = timings::ARCHS.iter().position(|one| *one == arch).expect("a listed arch");
     operations(|kind| timings::COST[kind][at], timings::PREFIX[at])
+}
+
+/// Bytes of the instruction lowering picks for each kind of operation, as
+/// real mode encodes it: a register form is 2, one with a displacement 3. A
+/// far call is 5, and its pushes and cleanup 3 more.
+fn bytes(kind: &str) -> i64 {
+    match kind {
+        "alu_rr" | "mov_rr" | "jcc" | "rep_stos" => 2,
+        "ret_far" | "push_r" | "pop_seg" => 1,
+        "call_far" => 8,
+        "rep_stos_cell" => 0,
+        _ => 3,
+    }
 }
 
 /// The price of each operation, as the instructions lowering picks for it
