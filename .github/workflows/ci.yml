@@ -11,7 +11,7 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -36,7 +36,7 @@ jobs:
           key: openwatcom-${{ steps.openwatcom.outputs.commit }}
       # First, so a bad toolchain fails as that, not as unrelated tests.
       - name: wccq matches the committed streams and its own stamp
-        run: cargo test --release $FEATURES -p llrm-c --lib -- test_wccq_built_here_records_the_committed_stream test_wccq_says_what_it_was_made_from
+        run: cargo test --release -p llrm-c --features toolchain --lib -- test_wccq_built_here_records_the_committed_stream test_wccq_says_what_it_was_made_from
       - run: cargo test --release $FEATURES --workspace --lib --no-fail-fast
 
   programs:
