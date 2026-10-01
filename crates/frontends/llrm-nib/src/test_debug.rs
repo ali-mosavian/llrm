@@ -30,13 +30,18 @@ fn main() -> i16:
 ";
 
 fn object() -> Vec<Rc<omf::Record>> {
+    compiled(false)
+}
+
+fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = directory.path().join("probe.nib");
     std::fs::write(&path, SOURCE).expect("writes");
     let frontend = crate::Frontend { debug: true, ..crate::Frontend::default() };
     let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
-    // Not inlined: `scale` is a symbol and its lines are statements to read.
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    // Unless asked, not inlined: `scale` is a symbol and its lines are statements to read.
+    let threshold = if inlined { llrm_transforms::inline::Threshold::default() } else { llrm_transforms::inline::Threshold(0) };
+    let pipeline = llrm_transforms::pipeline::Options { inline: threshold, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(crate::compile::machine()) };
     let module = crate::compile::assembled_from_mir(&program, "main", &options).expect("compiles");
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment).expect("writes")).expect("parses")
@@ -70,4 +75,16 @@ fn nib_symbols_read_with_their_types() {
 fn nib_lines_are_its_statements() {
     let lines: Vec<u16> = object().iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).map(|(line, _)| line).collect();
     assert_eq!(lines, [9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
+}
+
+/// `scale` inlined into `main` has no symbols of its own; its statements,
+/// lines 9 and 10, are numbered where its code now is, between `main`'s.
+#[test]
+fn nib_inlined_code_keeps_its_lines_and_loses_its_symbols() {
+    let object = compiled(true);
+    let lines: Vec<u16> = object.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).map(|(line, _)| line).collect();
+    assert_eq!(lines, [13, 14, 15, 16, 17, 9, 10, 18, 19, 20, 21]);
+    let shape = cvinfo::parse(&object).shape();
+    assert!(shape.iter().all(|one| !one.contains("scale")), "{shape:?}");
+    assert!(shape.contains(&"PROC main flags 4 () -> INTEGER".to_owned()), "{shape:?}");
 }
