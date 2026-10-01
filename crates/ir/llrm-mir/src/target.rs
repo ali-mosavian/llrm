@@ -33,6 +33,12 @@ pub trait Machine {
         0
     }
 
+    /// Segment registers a far pointer's selector can be held in, besides
+    /// `registers`: none where the target has none.
+    fn segment_registers(&self) -> i64 {
+        0
+    }
+
     /// Of `registers`, how many survive a call to `callee`, named where the
     /// call is direct: its own contract may keep more than any call does.
     fn kept_across(&self, _callee: Option<&str>) -> i64 {

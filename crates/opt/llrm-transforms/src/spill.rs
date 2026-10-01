@@ -30,11 +30,13 @@ pub struct Room {
     pub across_call: i64,
     /// What an access through a far pointer takes besides its address: its selector.
     pub far_access: i64,
+    /// The segment registers a far pointer's selector is held in.
+    pub segments: i64,
 }
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
-        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers() }
+        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers() }
     }
 
     pub fn priced(&self) -> bool {
@@ -141,6 +143,20 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
     };
     components += i64::from(!symbolic);
     components + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
+}
+
+/// Whether `value` is a far pointer of offset zero, a selector cast to the
+/// far space: held in a segment register, where the target has one.
+pub fn segment_view(context: &Context, layout: &DataLayout, function: &Function, value: ValueId) -> bool {
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    let op = function.instruction(def);
+    let (Opcode::Cast(CastOp::AddrSpaceCast), [from]) = (&op.opcode, &op.operands[..]) else { return false };
+    let space = |operand: Operand| function.operand_type(context, operand).and_then(|ty| match context.types.get(ty) {
+        Type::Pointer(space) => Some(*space),
+        _ => None,
+    });
+    let far = |space: u32| layout.pointer(space).bits > layout.pointer(space).index_bits;
+    matches!((space(Operand::Value(value)), space(*from)), (Some(to), Some(from)) if far(to) && from != 0 && !far(from))
 }
 
 /// Whether `value` takes an integer register: floating values do not, nor
@@ -302,6 +318,8 @@ pub struct Site {
     pub inst: InstId,
     pub before: Point<ValueId>,
     pub across: Option<Point<ValueId>>,
+    /// The values live before it that the segment registers hold, against theirs.
+    pub segments: Point<ValueId>,
 }
 
 /// Each instruction's site in `block` but its phis, in order.
@@ -314,12 +332,16 @@ pub fn sites(
     transient: &dyn Fn(InstId) -> i64,
     cells: &BTreeMap<ValueId, ValueId>,
     counted: &dyn Fn(ValueId) -> bool,
+    segment: &dyn Fn(ValueId) -> bool,
 ) -> Vec<Site> {
-    let residents = |live: BTreeSet<ValueId>| live.into_iter().filter(|&one| counted(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
+    let viewed = |one: ValueId| room.segments > 0 && segment(one);
+    let residents = |live: BTreeSet<ValueId>| live.into_iter().filter(|&one| counted(one) && !viewed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
+    let held = |live: &BTreeSet<ValueId>| live.iter().copied().filter(|&one| counted(one) && viewed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
     liveness::live_points(function, found, block)
         .into_iter()
         .map(|(inst, before, past)| Site {
             inst,
+            segments: Point { registers: room.segments, residents: held(&before) },
             before: Point { registers: room.registers - transient(inst), residents: residents(before) },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
         })
@@ -329,7 +351,7 @@ pub fn sites(
 impl Site {
     /// Its points, in order.
     pub fn points(self) -> impl Iterator<Item = Point<ValueId>> {
-        std::iter::once(self.before).chain(self.across)
+        std::iter::once(self.before).chain(self.across).chain((!self.segments.residents.is_empty()).then_some(self.segments))
     }
 }
 

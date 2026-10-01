@@ -230,6 +230,8 @@ struct Problem<'a> {
     live: BTreeSet<ValueId>,
     /// Frame objects: their addresses are the frame's register and a displacement.
     frames: BTreeSet<ValueId>,
+    /// Far views of a segment: held in a segment register, not a general one.
+    views: BTreeSet<ValueId>,
 }
 
 fn _preheader(function: &Function, loop_: &Loop) -> Option<BlockId> {
@@ -338,7 +340,8 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         header: frequency(cfg::block(loop_.header)),
         entry: frequency(preheader),
         live,
-        frames: _frames(view),
+        frames: _frames(view.function),
+        views: _views(view),
     };
     let current = problem.candidates.iter().enumerate().filter(|(_, one)| one.existing.is_some()).map(|(index, _)| index).collect::<BTreeSet<_>>();
     let before = problem.total(&current);
@@ -524,7 +527,8 @@ fn _fixed(
     let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
     let transient = |inst: InstId| spill::transient(view.context, view.layout, function, inst, room);
-    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted))).collect()
+    let segment = |value: ValueId| spill::segment_view(view.context, view.layout, function, value);
+    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.
@@ -625,28 +629,15 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
 /// The most symbols of a start split between counter and base, every way.
 const _SPLIT_TERMS: usize = 3;
 
-/// The function's frame objects and its far views of a segment, whose
-/// addresses need no general register of their own: a frame object is BP's
-/// displacement, and a far pointer of offset zero (a selector cast to the far
-/// space) is held in a segment register.
-fn _frames(view: &memory::Unit) -> BTreeSet<ValueId> {
+/// The function's frame objects, whose addresses need no register of their own.
+fn _frames(function: &Function) -> BTreeSet<ValueId> {
+    function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })).filter_map(|(_, inst)| function.instruction(inst).result).collect()
+}
+
+/// The function's far views of a segment, which the segment registers hold.
+fn _views(view: &memory::Unit) -> BTreeSet<ValueId> {
     let function = view.function;
-    function
-        .walk()
-        .filter(|&(_, inst)| {
-            let op = function.instruction(inst);
-            match (&op.opcode, &op.operands[..]) {
-                (Opcode::Alloca { .. }, _) => true,
-                (Opcode::Cast(CastOp::AddrSpaceCast), [from]) => {
-                    let (to, from) = (op.result.and_then(|result| view.space(Operand::Value(result))), view.space(*from));
-                    let far = |space| view.layout.pointer(space).bits > view.layout.pointer(space).index_bits;
-                    matches!((to, from), (Some(to), Some(from)) if far(to) && from != 0 && !far(from))
-                }
-                _ => false,
-            }
-        })
-        .filter_map(|(_, inst)| function.instruction(inst).result)
-        .collect()
+    function.walk().filter_map(|(_, inst)| function.instruction(inst).result).filter(|&value| spill::segment_view(view.context, view.layout, function, value)).collect()
 }
 
 /// What building `key` before the loop costs: its scaled terms, the adds
@@ -812,7 +803,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
     }
     let costs = &target.costs;
     // A constant pointer is a displacement; any other base a register.
-    let frames = _frames(view);
+    let frames = _frames(view.function);
     let pointer_base = |fit: &Fit| matches!(fit.base, Some(Operand::Value(value)) if !frames.contains(&value)) || !fit.rest.is_zero();
     let mut price = Price { cost: 0, held: Vec::new(), address: Vec::new(), wide: false, product: None };
     let block = cfg::id(match site.at {
@@ -1126,8 +1117,10 @@ impl Problem<'_> {
             .iter()
             .map(|&one| Resident::Counter(one))
             .chain(set.iter().filter(|&&one| self.candidates[one].of.step.known().is_none()).map(|&one| Resident::Step(one)))
-            .chain(held.iter().filter(|&&key| !self.free(&self.keys[key])).map(|&key| Resident::Held(key)))
+            .chain(held.iter().filter(|&&key| !self.free(&self.keys[key]) && !self.viewed(key)).map(|&key| Resident::Held(key)))
             .collect::<Vec<_>>();
+        // A held far view of a segment is in a segment register, with those live.
+        let segmented = held.iter().filter(|&&key| !self.free(&self.keys[key]) && self.viewed(key)).map(|&key| Resident::Held(key)).collect::<Vec<_>>();
         let points = self.fixed.iter().flat_map(|(&block, sites)| {
             let (throughout, last, rebuilt) = (&throughout, &last, &rebuilt);
             sites.iter().enumerate().flat_map(move |(index, site)| {
@@ -1143,8 +1136,12 @@ impl Problem<'_> {
                 })
             })
         });
+        let segment_points = self.fixed.values().flatten().map(|site| spill::Point {
+            registers: site.segments.registers,
+            residents: site.segments.residents.iter().map(|&value| Resident::Value(value)).chain(segmented.iter().copied()).collect(),
+        });
         if self.target.room.priced() {
-            cost += spill::spilled(points, |one| self.spill_price(one, &reads));
+            cost += spill::spilled(points.chain(segment_points), |one| self.spill_price(one, &reads));
         }
         if let Some(native) = self.target.forms.first()
             && let Some(limit) = native.address_registers()
@@ -1161,6 +1158,11 @@ impl Problem<'_> {
             }
         }
         Some(cost)
+    }
+
+    /// Whether `key` is a far view of a segment: held in a segment register.
+    fn viewed(&self, key: usize) -> bool {
+        self.target.room.segments > 0 && matches!(&self.keys[key], (Some(Operand::Value(base)), sum) if sum.is_zero() && self.views.contains(base))
     }
 
     /// Whether `key` is a value the loop holds anyway.

@@ -25,6 +25,10 @@ pub struct Dos {
     pub far_access: i64,
 }
 
+/// The segment registers a selector is held in: ES, FS and GS, and DS where
+/// no data is addressed through it, as the allocator takes it once those run out.
+pub const SEGMENT_REGISTERS: i64 = 4;
+
 /// A far access sets a segment register from its selector, through a
 /// general register.
 pub const FAR_ACCESS: i64 = 1;
@@ -74,6 +78,10 @@ impl Machine for Dos {
 
     fn far_access_registers(&self) -> i64 {
         self.far_access
+    }
+
+    fn segment_registers(&self) -> i64 {
+        SEGMENT_REGISTERS
     }
 
     fn address_forms(&self) -> Vec<AddressForm> {

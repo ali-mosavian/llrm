@@ -7,7 +7,7 @@ use llrm_analysis::{cfg, liveness};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module, ValueId};
 
-use super::{Room, Traffic, cells, integer, sites, spilled, traffic, words};
+use super::{Room, Traffic, cells, integer, segment_view, sites, spilled, traffic, words};
 use crate::profit::OperationCosts;
 
 fn module(text: &str) -> Module {
@@ -141,7 +141,7 @@ entry:
     let cells = cells(function);
     let room = Room { registers: 3, across_call: 1, ..Room::default() };
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_| 0, &cells, &integer)).flat_map(super::Site::points).collect::<Vec<_>>();
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_| 0, &cells, &integer, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
     let prices = traffic(function, &looped(function), &cells, &costs(), &|_| true, &|_| 1);
     // Each of `a` and `b` is stored once and loaded once.
     assert_eq!(spilled(points, |one| prices.get(&one).map_or(0, |one| one.price(&costs()))), 2);
@@ -163,8 +163,44 @@ entry:
 ");
     let function = function(&module);
     let layout = llrm_analysis::testing::layout(&module);
-    let room = Room { registers: 6, across_call: 2, far_access: 1 };
+    let room = Room { registers: 6, across_call: 2, far_access: 1, ..Room::default() };
     let loads = function.layout().iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect::<Vec<_>>();
     let taken = loads.iter().map(|&inst| super::transient(&module.context, &layout, function, inst, room)).collect::<Vec<_>>();
     assert_eq!(taken, [2, 1]);
+}
+
+/// A far view of a segment is held in a segment register: counted against the
+/// target's segment registers, not its general ones, and a general one
+/// where the target has none. Lsr alone knew it, and gvn priced the same
+/// pointer as a register.
+#[test]
+fn test_a_far_view_of_a_segment_is_counted_in_the_segment_registers() {
+    let module = module("define i16 @f(i16 %a, i16 %b) {
+entry:
+  %sa = inttoptr i16 %a to ptr addrspace(2)
+  %fa = addrspacecast ptr addrspace(2) %sa to ptr addrspace(1)
+  %sb = inttoptr i16 %b to ptr addrspace(2)
+  %fb = addrspacecast ptr addrspace(2) %sb to ptr addrspace(1)
+  %x = load i16, ptr addrspace(1) %fa
+  %y = load i16, ptr addrspace(1) %fb
+  %s = add i16 %x, %y
+  ret i16 %s
+}
+");
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let found = liveness::live(function);
+    let cells = cells(function);
+    let integer = |value: ValueId| integer(&module.context, function, value);
+    let views = |value: ValueId| segment_view(&module.context, &layout, function, value);
+    let at = |segments: i64| {
+        let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
+        let block = function.layout()[0];
+        sites(function, &found, block, room, &|_| 2, &|_| 0, &cells, &integer, &views).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
+    };
+    let held = at(3);
+    assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
+    assert!(held.before.residents.iter().all(|&one| !views(one)));
+    let none = at(0);
+    assert!(none.segments.residents.is_empty() && none.before.residents.iter().filter(|&&one| views(one)).count() == 2, "no segment registers: general ones");
 }
