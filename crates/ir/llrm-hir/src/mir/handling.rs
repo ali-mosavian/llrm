@@ -467,6 +467,40 @@ impl Body<'_, '_, '_> {
         Ok(answered)
     }
 
+    /// A division the processor traps on, a zero divisor (and a signed
+    /// quotient that overflows): where errors land, BC's runtime finds the
+    /// statement from the trap's address. Here the trap is code, as ERROR is:
+    /// an invoke that names the statement and the pad, so RESUME and the
+    /// optimizer both see the edge.
+    pub(super) fn trapping(&mut self, instruction: i64, dividend: Value, divisor: Value, signed: bool) -> Emit<()> {
+        if self.handling.as_ref().is_none_or(|one| one.handling) {
+            return Ok(());
+        }
+        let ty = self.b.type_of(divisor);
+        let width = self.b.context.types.int_bits(ty).ok_or("a divide of a non-integer")?;
+        let zero = self.b.int(width, 0);
+        let mut trap = self.b.icmp(llrm_mir::IntPredicate::Eq, divisor, zero, "");
+        if signed {
+            let (minus_one, lowest) = (self.b.int(width, -1), self.b.int(width, -(1_i128 << (width - 1))));
+            let by_minus_one = self.b.icmp(llrm_mir::IntPredicate::Eq, divisor, minus_one, "");
+            let from_lowest = self.b.icmp(llrm_mir::IntPredicate::Eq, dividend, lowest, "");
+            let overflow = self.b.binary(llrm_mir::BinaryOp::And, by_minus_one, from_lowest, llrm_mir::Flags::default(), "");
+            trap = self.b.binary(llrm_mir::BinaryOp::Or, trap, overflow, llrm_mir::Flags::default(), "");
+        }
+        let (raise, next) = (self.b.block("trap"), self.b.block(""));
+        self.b.cond_br(trap, raise, next);
+        self.b.position(raise);
+        let number = self.b.int(16, 11);
+        let (void, word) = (self.b.context.types.void(), self.b.context.types.int(16));
+        let ty = super::function_type(&mut self.b.context.types, void, vec![word]);
+        let (convention, _) = super::convention(model::StackCleanup::Callee, model::CallDistance::Far)?;
+        let callee = Value::Constant(self.tables.callees[RAISE]);
+        self.raising_call(instruction, true, convention, ty, callee, &[number], &[])?;
+        self.b.unreachable();
+        self.b.position(next);
+        Ok(())
+    }
+
     fn attributed(&mut self, attributes: &[(usize, Attribute)]) {
         for (index, attribute) in attributes {
             self.b.argument_attr(*index, attribute.clone());
