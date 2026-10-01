@@ -1433,7 +1433,8 @@ impl Selector<'_, '_, '_> {
             // A carried pointer is canonical: whole 64K strides of its offset are
             // in the selector, so a constant past 64K is a stepped selector.
             let carried = self.carries(self.module.context.get(id).ty);
-            let (carry, offset) = if carried { (offset >> 16, offset & 0xFFFF) } else { (0, offset) };
+            let bits = if carried { self.offset_bits(self.module.context.get(id).ty) } else { 0 };
+            let (carry, offset) = if carried { (offset >> bits, offset & ((1 << bits) - 1)) } else { (0, offset) };
             let (base, selector) = match self.far_globals.get(&(block, global, carry)) {
                 Some(&pair) => pair,
                 None => {
@@ -1445,7 +1446,7 @@ impl Selector<'_, '_, '_> {
                     }
                     if carry != 0 {
                         let Some(shift) = self.segments.huge_shift else { return refuse("a huge pointer on a machine that states no selector stride") };
-                        let step = Loc::Imm(Imm { value: (carry << shift) & 0xFFFF, width: 2, address: None });
+                        let step = Loc::Imm(Imm { value: (carry << shift) & ((1 << bits) - 1), width: 2, address: None });
                         let stepped = self.fresh_held(2);
                         self.materialized.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(stepped)], vec![Loc::Held(selector), step])));
                         self.far_globals.insert((block, global, carry), (base, stepped));
@@ -1717,7 +1718,7 @@ impl Selector<'_, '_, '_> {
             sum = added;
         }
         let carry = self.fresh_held(4);
-        let steps = [("sar", 16), ("shl", i64::from(shift))];
+        let steps = [("sar", self.offset_bits(instruction.ty)), ("shl", i64::from(shift))];
         let mut from = sum;
         for (name, count) in steps {
             let into = if name == "shl" { carry } else { self.fresh_held(4) };
@@ -2039,6 +2040,14 @@ impl Selector<'_, '_, '_> {
     /// Whether `ty` is a selector and an offset, two words in two registers.
     fn is_far(&self, ty: TypeId) -> bool {
         matches!(self.types().get(ty), Type::Pointer(space) if self.layout.is_pair(*space))
+    }
+
+    /// The bits of a `ty` pair's offset word: its selector steps by what carries out of them.
+    fn offset_bits(&self, ty: TypeId) -> i64 {
+        match self.types().get(ty) {
+            Type::Pointer(space) => i64::from(self.layout.offset_bits(*space)),
+            _ => unreachable!("a pointer's offset"),
+        }
     }
 
     /// Whether a displacement added to a `ty` pointer carries into its selector.
@@ -2439,7 +2448,8 @@ impl Selector<'_, '_, '_> {
         let (a, b) = (widened(self, a_selector, out), widened(self, b_selector, out));
         let between = binary(self, "sub", None, vec![Loc::Held(a), Loc::Held(b)], out);
         let strides = binary(self, "sar", None, vec![Loc::Held(between), byte(i64::from(shift))], out);
-        let high = binary(self, "shl", None, vec![Loc::Held(strides), byte(16)], out);
+        let offset_bits = self.offset_bits(self.function.operand_type(&self.module.context, arguments[0]).expect("a typed operand"));
+        let high = binary(self, "shl", None, vec![Loc::Held(strides), byte(offset_bits)], out);
         let into = Held { value: self.value(result), width: 4 };
         binary(self, "add", Some(into), vec![Loc::Held(within), Loc::Held(high)], out);
         Ok(())

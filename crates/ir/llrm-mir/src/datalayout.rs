@@ -107,10 +107,16 @@ impl DataLayout {
         self.pointer(space).bits > self.pointer(0).bits
     }
 
+    /// The bits of a pair's offset: its entry's, a selector word then an
+    /// offset word. The one place the split is stated.
+    pub fn offset_bits(&self, space: u32) -> u32 {
+        self.pointer(space).bits / 2
+    }
+
     /// Whether a displacement in `space` carries into the selector: a pair
     /// whose index is wider than its offset, as a huge pointer's.
     pub fn carries(&self, space: u32) -> bool {
-        self.is_pair(space) && self.pointer(space).index_bits > self.pointer(0).bits
+        self.is_pair(space) && self.pointer(space).index_bits > self.offset_bits(space)
     }
 
     /// An integer's ABI alignment: its own entry, else the next wider one's,
