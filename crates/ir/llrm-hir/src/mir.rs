@@ -1525,6 +1525,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // A shift count is its own width; LLVM's is the shifted value's.
             let b = if matches!(op, Op::Shl | Op::Shr | Op::Sar) { self.count(b, self.b.type_of(a))? } else { b };
             let flags = if matches!(op, Op::Add | Op::Sub | Op::Mul) { self.stated_flags(instruction) } else { Flags::default() };
+            if matches!(op, Op::Div | Op::Rem | Op::Udiv | Op::Urem) && !matches!(&instruction.operands[1], Operand::Constant(one) if !matches!(one.value, Number::Int(0))) {
+                self.trapping(instruction.id, a, b, matches!(op, Op::Div | Op::Rem))?;
+            }
             let result = self.b.binary(binary, a, b, flags, "");
             self.define(instruction, result);
             return Ok(());
