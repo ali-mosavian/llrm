@@ -82,10 +82,10 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     _placed(body, false)
 }
 
-/// `placed`, for short code where `size`, else by estimated frequency: a
-/// `LIKELY` edge falls through, an arm leaves its join only for a block
-/// before it that reaches the join `LIKELY`, and a new trace starts at the
-/// busiest block left.
+/// `placed`, for short code where `size`, else by estimated frequency: the
+/// likelier edge falls through, a diamond's likelier arm falls into its
+/// join, an arm leaves its join only for a block before it that reaches the
+/// join `LIKELY`, and a new trace starts at the busiest block left.
 fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
     let mut explicit = Vec::new();
     for block in &body.blocks {
@@ -273,12 +273,17 @@ pub fn _onward(
             targets = vec![branch_target, jump_target];
         }
     }
-    // By frequency, the other edge first where it is `LIKELY`: then the
-    // arm it leaves leaves its join too. Short of that the arm rule keeps
-    // both arms before the join, where the source order serves no worse.
+    // By frequency, the likelier edge first. In a diamond short of `LIKELY`
+    // the arm rule keeps both arms before the join, so there the likelier
+    // arm goes second and falls into the join instead of jumping over the
+    // other; `LIKELY` and over, it falls through and the other leaves.
     if let (Some(busy), [Some(first), Some(second)]) = (odds, targets.as_slice()) {
-        let (first, second) = (busy.edge(block.at, *first), busy.edge(block.at, *second));
-        if second > 0.0 && second >= branchprob::LIKELY * (first + second) {
+        let (one, other) = (busy.edge(block.at, *first), busy.edge(block.at, *second));
+        let join = |at: i64| by_at.and_then(|by_at| by_at.get(&at)).and_then(|arm| (arm.succ.len() == 1).then(|| arm.succ[0]));
+        let diamond = join(*first).is_some() && join(*first) == join(*second);
+        let likely = |hot: f64, cold: f64| hot > 0.0 && hot >= branchprob::LIKELY * (hot + cold);
+        let swap = if diamond { likely(other, one) || (one > other && !likely(one, other)) } else { other > one };
+        if swap {
             targets.reverse();
         }
     }

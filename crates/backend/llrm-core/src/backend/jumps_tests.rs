@@ -703,18 +703,22 @@ fn weighted_diamond(hot: f64) -> LirBody {
 fn test_an_arm_leaves_its_join_only_for_a_likely_edge() {
     let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(0.9), vec![1, 10, 30, 20]);
-    assert_eq!(order(0.7), vec![1, 10, 20, 30]);
+    // Short of it both arms stay before the join, the likelier one second.
+    assert_eq!(order(0.7), vec![1, 20, 10, 30]);
     assert_eq!(order(0.5), vec![1, 10, 20, 30]);
 }
 
-/// The branch arm 20 likelier, but short of `LIKELY`: it stays the arm before
-/// the join, the source order. Made the fall-through at 62.5%, it jumped
-/// over the rare arm the arm rule kept before the join: deedlines'
-/// zoomdistort ran one more jump each of 31,000 passes.
+/// A diamond short of `LIKELY` keeps both arms before the join, so its
+/// likelier arm goes second and falls into the join. Made the fall-through
+/// at 62.5%, it jumped over the rare arm instead: deedlines' zoomdistort
+/// ran a jump more each of 31,000 passes.
 #[test]
-fn test_a_likelier_edge_short_of_likely_keeps_the_source_order() {
+fn test_a_diamonds_likelier_arm_falls_into_its_join() {
     let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    // The branch arm 20 likelier: it goes second.
     assert_eq!(order(0.375), vec![1, 10, 20, 30]);
+    // The fall-through arm 10 likelier: 20 first, 10 second.
+    assert_eq!(order(0.625), vec![1, 20, 10, 30]);
     // `LIKELY` and over: the likely arm falls through, the rare one leaves its join.
     assert_eq!(order(0.1), vec![1, 20, 30, 10]);
 }
