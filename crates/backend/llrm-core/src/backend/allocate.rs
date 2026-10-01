@@ -28,7 +28,9 @@ use crate::support::pyrepr::Repr;
 /// Most queue visits an allocation may take: more means it does not converge, a bug.
 pub const BUDGET: usize = 200_000;
 
-/// A value reached emission with no register. Always a bug here.
+/// A value has no register, or no register it may take is free of values that
+/// cannot be spilled: the body asks for more registers at one point than the
+/// machine has, or names a register no value can be in.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Unplaced(pub String);
 
@@ -1056,7 +1058,7 @@ fn _allocated(
             if fixed.contains_key(&value) || unspillable.contains(&value) {
                 let hard = |other: u32| fixed.contains_key(&other) || unspillable.contains(&other);
                 let Some((got, victims)) = _forced(&mine, &order, &union, &facts.live, &facts.masks, &hard, width) else {
-                    return Err(Unplaced(format!("value#{value} cannot be spilled and every register it may take is held by one that cannot be either")).into());
+                    return Err(Unplaced(format!("value#{value} cannot be spilled and no register it may take is free of values that cannot be")).into());
                 };
                 LAST_RESORTS.with(|count| count.set(count.get() + 1));
                 llrm_support::debug!("regalloc", "{}: last resort for value#{value}: {} evicts {victims:?}", body.name, got.repr());
@@ -1417,10 +1419,10 @@ fn _evict(
     best.map(|(_bill, register, victims)| (register, victims))
 }
 
-/// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and `VirtRegMap`.
 /// The last resort for a value that cannot be spilled: the register of its
 /// class whose holders it overlaps cost least to evict, and those holders.
-/// A holder that cannot be spilled either (`hard`) rules its register out;
+/// A holder that cannot be spilled either (`hard`) rules its register out; a
+/// protected holder may be evicted, and a trial that loses it is dropped;
 /// when every register is ruled out, one point of the body asks for more
 /// registers than the machine has.
 fn _forced(
@@ -1465,6 +1467,7 @@ pub fn last_resorts() -> usize {
     LAST_RESORTS.with(std::cell::Cell::get)
 }
 
+/// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and `VirtRegMap`.
 pub struct Coloring<'a> {
     pub union: &'a mut IndexMap<Register, Vec<u32>>,
     pub r#where: &'a mut IndexMap<u32, Register>,
@@ -1601,7 +1604,8 @@ impl RegAlloc {
         // find it holding one of its values.
         let segments = self.segments.clone();
         let data_free = !datagroup::names_data_segment(&body, &segments);
-        let mut body = explicit_selectors(&body, Some(&self.pinned), &segments);
+        let mut body = constrain::distinct_roles(&body, self.pinned.keys().copied().max().map_or(0, |one| one + 1));
+        body = explicit_selectors(&body, Some(&self.pinned), &segments);
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
         body = narrowed_body;
         self.pinned = narrower;
@@ -1636,7 +1640,6 @@ impl RegAlloc {
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });
-        body = constrain::distinct_roles(&body);
         let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned));
         body = constrained_body;
         let clash: BTreeSet<u32> = fixed

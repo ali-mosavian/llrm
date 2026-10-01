@@ -279,12 +279,13 @@ fn _disturbs(one: &Insn, value: u32, kept: &Held, root: Register, pins: &IndexMa
 /// Word addressing takes a base from one set of registers and an index from
 /// another, so one value in both roles needs two registers at once: the
 /// index reads a copy.
-pub fn distinct_roles(body: &LirBody) -> LirBody {
+pub fn distinct_roles(body: &LirBody, floor: u32) -> LirBody {
     let twice = |cell: &Mem| matches!((cell.base, cell.index), (Some(base), Some(index)) if base.value == index.value && base.width == 2 && index.width == 2);
     if !body.insns().iter().filter_map(|one| one.what.as_ref()).any(|what| what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(cell) if twice(cell)))) {
         return body.clone();
     }
-    let mut fresh = _next_value(body);
+    // Above every pin too: a copy must not take over a pinned number.
+    let mut fresh = _next_value(body).max(floor);
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();

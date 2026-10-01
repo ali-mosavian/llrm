@@ -1,8 +1,8 @@
 //! A fuzz lane for the register allocator: generated bodies at high pressure,
 //! every constraint kind, and the result must be an allocation (the allocator
-//! is total) that no value survives and that a later phase can schedule.
+//! is total), no longer name a value, and store what the generated body stores.
 //!
-//! `FUZZ_SEEDS=N` runs N seeds (default 60); `FUZZ_SEED=S` replays one and
+//! `FUZZ_SEEDS=N` runs N seeds (default 40); `FUZZ_SEED=S` replays one and
 //! prints its body; `FUZZ_CPU` names the profile (default: each of 386, 486, Core, P5).
 
 use std::sync::Arc;
@@ -302,14 +302,20 @@ mod run {
 
     impl Machine {
         pub fn new(virtual_: bool) -> Self {
-            Self { virtual_, vals: HashMap::new(), regs: HashMap::new(), mem: HashMap::new(), stack: Vec::new(), poison: 0x1_0000, log: Vec::new(), taken: 0 }
+            Self { virtual_, vals: HashMap::new(), regs: HashMap::new(), mem: HashMap::new(), stack: Vec::new(), poison: 0, log: Vec::new(), taken: 0 }
+        }
+
+        /// Nothing a body computes: the low word is hashed, so arithmetic that
+        /// masks to a word cannot land on a small constant by luck.
+        fn poisoned(count: u32) -> u32 {
+            0x8000_0000 | hashed((i64::from(count), 7, 7, 7))
         }
 
         fn register(&mut self, register: Register) -> u32 {
             let poison = &mut self.poison;
             *self.regs.entry(ir::root(register)).or_insert_with(|| {
                 *poison += 1;
-                *poison
+                Self::poisoned(*poison)
             })
         }
 
@@ -375,7 +381,7 @@ mod run {
             *self.mem.get(&key).unwrap_or(&hashed(key))
         }
 
-        /// The body from its entry, its loop taken twice.
+        /// The body from its entry, its loop run three times.
         pub fn execute(&mut self, body: &LirBody, again: i64) -> Result<(), String> {
             let mut at = body.entry;
             for _ in 0..10_000 {
@@ -476,7 +482,7 @@ mod run {
                             } else {
                                 for register in &one.clobbers {
                                     self.poison += 1;
-                                    self.regs.insert(ir::root(*register), self.poison);
+                                    self.regs.insert(ir::root(*register), Self::poisoned(self.poison));
                                 }
                                 self.regs.insert(Register::EAX, answer);
                             }
