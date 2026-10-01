@@ -5,9 +5,10 @@
 //! changes what the program means. What changes meaning (volatile, a callee
 //! that returns twice) is part of the IR proper, not a fact.
 //!
-//! Each fact is declared once, in `facts!`: its attribute, the kinds of
-//! subject it can be stated of, and what a pass that rewrites code does with
-//! it. A frontend states facts through `llrm_hir::facts`; a pass reads them
+//! Each fact is declared once, in `facts!`: its attribute or flag and the
+//! kinds of subject it can be stated of. What a pass that merges or moves
+//! instructions does with a fact is not declared here until a pass does it
+//! and that is measured to pay. A frontend states facts through `llrm_hir::facts`; a pass reads them
 //! through [`Facts`] and never parses an attribute by name.
 
 use crate::module::Function;
@@ -22,42 +23,12 @@ pub enum Kind {
     Instruction,
 }
 
-/// What becomes of a fact when two instructions that state it become one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Merge {
-    /// Both state it, so it holds for the one.
-    Intersect,
-    /// It is a property of the declaration, which a merge does not touch.
-    Keep,
-}
-
-/// What becomes of a fact when its instruction is moved where it may run
-/// without the path that made the fact true.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Hoist {
-    Keep,
-    /// It holds only on that path, so it is dropped.
-    Drop,
-}
-
-/// What a pass that rewrites code does with a fact; a clone keeps all.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Policy {
-    pub merge: Merge,
-    pub hoist: Hoist,
-}
-
-impl Policy {
-    /// A property of a declaration: no merge or move changes it.
-    pub const DECLARED: Policy = Policy { merge: Merge::Keep, hoist: Hoist::Keep };
-}
-
 macro_rules! facts {
     (
-        flags { $($flag:ident $fmethod:ident $fkey:literal on [$($fkind:ident),+] $fpolicy:expr;)* }
-        valued { $($valued:ident($vty:ty) $vmethod:ident $vkey:literal on [$($vkind:ident),+] $vpolicy:expr;)* }
-        custom { $($custom:ident($cty:ty) $cmethod:ident $ckey:literal on [$($ckind:ident),+] $cpolicy:expr;)* }
-        bits { $($bit:ident $bmethod:ident $bkey:literal $bflag:expr, on [$($bkind:ident),+] $bpolicy:expr;)* }
+        flags { $($flag:ident $fmethod:ident $fkey:literal on [$($fkind:ident),+];)* }
+        valued { $($valued:ident($vty:ty) $vmethod:ident $vkey:literal on [$($vkind:ident),+];)* }
+        custom { $($custom:ident($cty:ty) $cmethod:ident $ckey:literal on [$($ckind:ident),+];)* }
+        bits { $($bit:ident $bmethod:ident $bkey:literal $bflag:expr, on [$($bkind:ident),+];)* }
     ) => {
         /// A promise of the language, stated once per subject.
         #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -87,16 +58,6 @@ macro_rules! facts {
                     $(Fact::$valued(_) => &[$(Kind::$vkind),+],)*
                     $(Fact::$custom(_) => &[$(Kind::$ckind),+],)*
                     $(Fact::$bit => &[$(Kind::$bkind),+],)*
-                }
-            }
-
-            /// What a rewriting pass does with it.
-            pub fn policy(self) -> Policy {
-                match self {
-                    $(Fact::$flag => $fpolicy,)*
-                    $(Fact::$valued(_) => $vpolicy,)*
-                    $(Fact::$custom(_) => $cpolicy,)*
-                    $(Fact::$bit => $bpolicy,)*
                 }
             }
 
@@ -194,20 +155,20 @@ pub enum Effect {
 
 facts! {
     flags {
-        NoAlias no_alias "noalias" on [Param] Policy::DECLARED;
-        ReadOnly read_only "readonly" on [Param] Policy::DECLARED;
-        NonNull non_null "nonnull" on [Param] Policy::DECLARED;
-        NoReturn no_return "noreturn" on [Callable] Policy::DECLARED;
+        NoAlias no_alias "noalias" on [Param];
+        ReadOnly read_only "readonly" on [Param];
+        NonNull non_null "nonnull" on [Param];
+        NoReturn no_return "noreturn" on [Callable];
     }
     valued {
-        Dereferenceable(u64) dereferenceable "dereferenceable" on [Param] Policy::DECLARED;
+        Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
     }
     custom {
-        Memory(Effect) memory "memory" on [Callable] Policy::DECLARED;
+        Memory(Effect) memory "memory" on [Callable];
     }
     bits {
-        NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction] Policy { merge: Merge::Intersect, hoist: Hoist::Keep };
-        NoUnsignedWrap no_unsigned_wrap "nuw" Flags::NUW, on [Instruction] Policy { merge: Merge::Intersect, hoist: Hoist::Keep };
+        NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction];
+        NoUnsignedWrap no_unsigned_wrap "nuw" Flags::NUW, on [Instruction];
     }
 }
 
@@ -294,20 +255,6 @@ impl Facts {
     pub fn iter(&self) -> impl Iterator<Item = Fact> + '_ {
         self.0.iter().copied()
     }
-
-    /// What holds of the one instruction two instructions become.
-    pub fn merged(&self, other: &Facts) -> Facts {
-        let keeps = |fact: &Fact| match fact.policy().merge {
-            Merge::Intersect => other.contains(*fact),
-            Merge::Keep => true,
-        };
-        Facts(self.0.iter().copied().filter(keeps).collect())
-    }
-
-    /// What holds of an instruction moved where its path no longer guards it.
-    pub fn speculated(&self) -> Facts {
-        Facts(self.0.iter().copied().filter(|fact| fact.policy().hoist == Hoist::Keep).collect())
-    }
 }
 
 #[cfg(test)]
@@ -338,11 +285,4 @@ mod tests {
         assert!(!Facts::of(&[Attribute::Flag("readonly".to_owned())]).no_alias());
     }
 
-    /// A declared fact survives a merge and a move.
-    #[test]
-    fn a_declared_fact_is_not_changed_by_merge_or_speculation() {
-        let facts = Facts::of(&[Fact::NoAlias.attribute().unwrap()]);
-        assert!(facts.merged(&Facts::default()).no_alias());
-        assert!(facts.speculated().no_alias());
-    }
 }
