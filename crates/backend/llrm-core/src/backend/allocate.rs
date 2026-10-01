@@ -1784,6 +1784,8 @@ impl RegAlloc {
                 }
             }
         }
+        let (reloads, again) = redundant_reloads(&best.out);
+        llrm_support::debug!("regalloc", "{}: weighted reloads {reloads}, {again} of them redundant", best.out.name);
         frame.borrow_mut().restore(&best.slots);
         applied(&best.out, &best.got).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
@@ -1951,6 +1953,44 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
         }
     }
     out
+}
+
+/// Depth-weighted reloads of the output, and how many of them read a slot
+/// already read or stored earlier in the block with no write to it and no
+/// call between: what keeping the value in a register could save.
+pub fn redundant_reloads(body: &LirBody) -> (f64, f64) {
+    let deep = ranges::depths(body);
+    let (mut all, mut again) = (0.0, 0.0);
+    for block in &body.blocks {
+        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+        let mut held: BTreeSet<i64> = BTreeSet::new();
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            let cell = |place: &Loc| match place {
+                Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_none() => cell.addr.map(|addr| addr.disp + cell.offset),
+                _ => None,
+            };
+            if what.op == Operation::Call {
+                held.clear();
+            }
+            if one.spill_reload {
+                if let Some(slot) = what.sources.first().and_then(cell) {
+                    all += each;
+                    if !held.insert(slot) {
+                        again += each;
+                    }
+                }
+            } else {
+                for slot in what.dests.iter().filter_map(cell) {
+                    held.remove(&slot);
+                    if one.spill_store {
+                        held.insert(slot);
+                    }
+                }
+            }
+        }
+    }
+    (all, again)
 }
 
 /// The instructions a plan inserted, weighted by loop depth.
