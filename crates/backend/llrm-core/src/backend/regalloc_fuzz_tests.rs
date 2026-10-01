@@ -610,3 +610,30 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     assert!(done.is_ok(), "{done:?}");
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
 }
+
+/// The exact search must never cost more than greedy on the same facts, and
+/// what it places must not overlap in one register. Replay a seed with
+/// `FUZZ_SEED`.
+#[test]
+fn test_exact_is_never_dearer_than_greedy_and_places_legally() {
+    use crate::backend::allocate::{allocate, Facts};
+    use crate::backend::{cpu, exact};
+    let segments = &*target::BUILT_IN;
+    let profile = cpu::profile(ProfileOrName::Name("386")).expect("a cpu").clone();
+    let only: Option<u64> = std::env::var("FUZZ_SEED").ok().and_then(|one| one.parse().ok());
+    for seed in only.map_or(0..20, |one| one..one + 1) {
+        let (body, _) = body(seed, &Shape { pool: 7 + (seed % 5) as usize, ops: 6 + (seed % 7) as usize });
+        let none = std::collections::BTreeSet::new();
+        let pinned = IndexMap::default();
+        let greedy = allocate(&body, None, None, None, None, ProfileOrName::Name("386"), segments).expect("greedy allocates");
+        let better = exact::improved(&body, &pinned, &none, &none, &profile, segments, &greedy);
+        assert!(better.cost <= greedy.cost, "seed {seed}: exact {} dearer than greedy {}", better.cost, greedy.cost);
+        let facts = Facts::of(&body, &profile, segments, &none, &none);
+        for (one, mine) in &better.r#where {
+            for (other, theirs) in &better.r#where {
+                let same = crate::backend::allocate::_whole(*mine) == crate::backend::allocate::_whole(*theirs);
+                assert!(one == other || !same || !facts.live[one].overlaps(&facts.live[other]), "seed {seed}: values {one} and {other} overlap in {mine:?}");
+            }
+        }
+    }
+}

@@ -79,6 +79,24 @@ A Krause pass would replace only the *assign* step: same inputs, same
 4. **Blowup.** 16-bit x86 has few allocatable registers per class, which
    helps; wide live sets in unrolled loops do not. Needs a cap and fallback.
 
+## Measured: the oracle
+
+`backend/exact.rs`: branch and bound for the cheapest set of values to spill
+so the rest fit, seeded with greedy's cost. It owns no fact: values, weights,
+classes and clobbers are `allocate::Facts`, legality is `_free`, the
+candidate registers are `allocate::candidates` (now also greedy's). It prices
+what greedy prices, whole values to the stack and no splits.
+`LLRM_DEBUG=exact` prints `greedy G exact E proved|unproved` per body.
+
+Same suite: 28 of the 82 bodies have nonzero greedy cost. On 15 the search
+finished and **greedy is optimal on all 15**. On the other 13 it ran out of
+nodes (2M, no lower bound), 12 with no improvement found and one
+(`SUMTHREE`, QB, 42 values) 13% cheaper, in absolute terms 0.25 to 0.22.
+
+So under whole-value spilling greedy is at or near optimal here. An
+exhausted search proves nothing, and the spill-only model cannot see what
+splitting would win: both limits are in the table above, not hidden.
+
 ## Recommendation
 
 Do not replace the allocator. Build it as an **oracle first**: a test-only
@@ -95,7 +113,8 @@ its complexity.
 
 ## Next steps
 
-1. Read the paper; settle gap 2.
-2. Dump greedy's cost per function (`_emitted`) next to a brute-force
-   optimum on bodies with at most ~12 values.
-3. Decide from the gap.
+1. Read the paper; settle gap 2 (can the DP express splitting).
+2. Give the oracle a lower bound (sweep-line pressure) so the 13 unproved
+   bodies finish, then rerun.
+3. If greedy still holds, put the effort in splitting and spill placement
+   (`codegen-improvements.md` section 6), not in a new allocator.

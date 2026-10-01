@@ -19,7 +19,7 @@ use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::target::{self, Segments};
-use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
+use crate::backend::{constrain, datagroup, exact, spiller, spillplacement, splitkit};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -743,17 +743,17 @@ pub fn rewritten(
 }
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
-struct Facts {
-    index: Indexes,
-    live: IndexMap<u32, Interval>,
-    masks: Masks,
-    widths: IndexMap<u32, u32>,
-    confined: Classes,
-    hints: IndexMap<u32, Vec<u32>>,
+pub(super) struct Facts {
+    pub(super) index: Indexes,
+    pub(super) live: IndexMap<u32, Interval>,
+    pub(super) masks: Masks,
+    pub(super) widths: IndexMap<u32, u32>,
+    pub(super) confined: Classes,
+    pub(super) hints: IndexMap<u32, Vec<u32>>,
 }
 
 impl Facts {
-    fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
+    pub(super) fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
         let index = ranges::indexed(body);
         let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
         // A spiller product lives for one use: a spill gains nothing.
@@ -790,6 +790,20 @@ fn _overlapping(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Re
         }
     }
     out
+}
+
+/// The registers a value may take, before any preference orders them: the one
+/// it is pinned to, else its class, less the data segment register where the
+/// body names the data group itself.
+pub(super) fn candidates(value: u32, facts: &Facts, fixed: &IndexMap<u32, Register>, data_free: bool, segments: &Segments) -> Vec<Register> {
+    let mut order: Vec<Register> = match fixed.get(&value) {
+        None => target::order(facts.confined.get(&value), segments),
+        Some(register) => vec![*register],
+    };
+    if !data_free {
+        order.retain(|one| _whole(*one) != segments.data);
+    }
+    order
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -861,13 +875,7 @@ fn _allocated(
         let Some(mine) = facts.live.get(&value).cloned() else {
             continue;
         };
-        let mut order: Vec<Register> = match fixed.get(&value) {
-            None => target::order(facts.confined.get(&value), segments),
-            Some(register) => vec![*register],
-        };
-        if !data_free {
-            order.retain(|one| _whole(*one) != segments.data);
-        }
+        let mut order = candidates(value, &facts, &fixed, data_free, segments);
         if protected.contains(&value) && _reserves_word_base(&body, value, &facts.confined) {
             let word: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
             order = order
@@ -1238,7 +1246,7 @@ fn _recolored_hints(
 }
 
 /// Every value that wants a register, dead definitions included.
-fn _values(body: &LirBody) -> Vec<u32> {
+pub(super) fn _values(body: &LirBody) -> Vec<u32> {
     let mut out: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
         out.extend(block.arrives());
@@ -1357,7 +1365,7 @@ pub fn _clobbered(one: &Interval, register: Register, masks: &Masks, width: u32)
 }
 
 /// A register nothing live at the same time is using, and no call kills.
-fn _free(
+pub(super) fn _free(
     one: &Interval,
     order: &[Register],
     union: &IndexMap<Register, Vec<u32>>,
@@ -1731,14 +1739,21 @@ impl RegAlloc {
         let start = frame.borrow().saved();
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
-        let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
+        let pinned_for = |candidate: &LirBody| {
             let mut pins = prefer.clone();
             pins.extend(constrain::required(candidate));
+            pins
+        };
+        let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
+            let pins = pinned_for(candidate);
             let before = last_resorts();
             let (got, out, spilled) =
                 rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
             Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
+        if llrm_support::debug::enabled("exact") {
+            exact::report(&body, &pinned_for(&body), &reloads, &cpu, &segments);
+        }
         let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}, {} forced", body.name, best.out.insns().len(), best.spilled.len(), best.cost, best.forced);
         let spilled = best.spilled.clone();

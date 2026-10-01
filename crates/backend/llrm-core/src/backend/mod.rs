@@ -26,6 +26,7 @@ pub mod floatassign;
 pub mod floatregions;
 pub mod inline_asm;
 pub mod fpu;
+pub mod exact;
 pub mod frame;
 pub mod jumps;
 pub mod lanes;
