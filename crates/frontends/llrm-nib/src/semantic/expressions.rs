@@ -221,6 +221,8 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit("load", vec![result], vec![place.clone()], None);
                 if ownership::needs_drop(type_name) && self.frame_field(base, field, *span)?.is_some() {
                     self.origins.insert(result, ownership::Origin::Frame(place));
+                } else if let Some(moving) = self.field_move(expression).filter(|_| ownership::needs_drop(type_name)) {
+                    self.origins.insert(result, ownership::Origin::Field(moving, place));
                 }
                 Ok(TypedOperand {
                     operand: Some(hir::Operand::Value(result)),

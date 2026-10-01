@@ -374,6 +374,10 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             AssignTarget::Member { base, field } => {
+                // A moved field may be given a value again.
+                if let Some((owner, ..)) = self.projected(&target.expression(span)) {
+                    self.moves.projecting.set(Some(owner));
+                }
                 let parent = self.struct_view(base, span)?;
                 let layout = self
                     .types
@@ -484,6 +488,7 @@ impl<'a> FunctionCompiler<'a> {
         field_name: &str,
         span: Span,
     ) -> Result<(hir::Operand, TypeName, bool, String), Diagnostic> {
+        self.project(&Expr::Member { base: Box::new(base.clone()), field: field_name.to_owned(), span }, span)?;
         let view = self.struct_view(base, span)?;
         let layout = self
             .types
@@ -527,6 +532,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             Expr::Name(name, _) => {
                 let binding = self.binding(name, span)?.clone();
+                self.check_whole(name, &binding, span)?;
                 let BindingType::Struct(struct_id) = binding.type_ else {
                     return Err(Diagnostic::new(
                         span,
@@ -561,6 +567,7 @@ impl<'a> FunctionCompiler<'a> {
                 field,
                 span: member_span,
             } => {
+                self.project(expression, *member_span)?;
                 let parent = self.struct_view(base, *member_span)?;
                 let layout = self
                     .types
