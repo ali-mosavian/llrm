@@ -1979,6 +1979,18 @@ fn test_a_range_loops_counter_does_not_wrap() {
     assert_eq!(stated("u16"), vec![Fact::NoUnsignedWrap]);
 }
 
+/// A loop whose body always returns leaves its counter's increment
+/// unreachable; the fact stated of it named an instruction the function no
+/// longer had, and the program was refused as invalid HIR.
+#[test]
+fn test_a_fact_of_a_pruned_instruction_goes_with_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "fn first(n: i16) -> i16:\n    for i in 0..n:\n        return i\n    return -1\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "first.nib", source));
+    let first = function(&program, "first");
+    assert!(program.modules[0].facts.iter().all(|one| !matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == first.id)));
+}
+
 /// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as
 /// -O2 does, an object as large.
 #[test]

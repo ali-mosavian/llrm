@@ -1845,6 +1845,8 @@ impl<'a> FunctionCompiler<'a> {
             .collect::<BTreeSet<_>>();
         self.calls
             .retain(|call| instructions.contains(&call.instruction));
+        let function = i64::from(self.signature.id);
+        self.stated.retain(|one| !matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function: owner, id } if owner == function && !instructions.contains(&(id as u32))));
 
         let mut defined = self.parameters.iter().copied().collect::<BTreeSet<_>>();
         defined.extend(

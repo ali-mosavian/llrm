@@ -132,6 +132,12 @@ impl Builder {
         self
     }
 
+    /// Keeps the facts `keep` says to: a frontend that drops code drops what
+    /// was stated of it.
+    pub fn retain(&mut self, keep: impl Fn(&Stated) -> bool) {
+        self.stated.retain(keep);
+    }
+
     pub fn finish(self) -> Vec<Stated> {
         self.stated
     }
