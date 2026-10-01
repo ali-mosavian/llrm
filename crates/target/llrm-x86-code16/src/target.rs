@@ -3,9 +3,16 @@
 
 use std::collections::BTreeSet;
 
+use iced_x86::Register;
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 
 use crate::timings;
+
+/// The registers a value may be placed in.
+pub const GENERAL: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+
+/// Those a C callee keeps, as their word halves.
+pub const PRESERVED: [(Register, Register); 2] = [(Register::ESI, Register::SI), (Register::EDI, Register::DI)];
 
 /// Real-mode DOS on one CPU: its prices and registers, and the built-in
 /// description's foreign memory.
@@ -14,15 +21,24 @@ pub struct Dos {
     pub registers: i64,
     pub call_registers: i64,
     pub address_forms: Vec<AddressForm>,
+    /// Registers a far access takes for its selector.
+    pub far_access: i64,
 }
 
+/// The segment registers a selector is held in: ES, FS and GS, and DS where
+/// no data is addressed through it, as the allocator takes it once those run out.
+pub const SEGMENT_REGISTERS: i64 = 4;
+
+/// A far access sets a segment register from its selector, through a
+/// general register.
+pub const FAR_ACCESS: i64 = 1;
+
 impl Default for Dos {
-    /// On a 486, with the old profile's `register_capacity` and
-    /// `call_register_capacity`.
+    /// On a 486.
     fn default() -> Self {
         let costs = costs("486");
         let address_forms = address_forms(&costs, 0);
-        Self { costs, registers: 6, call_registers: 2, address_forms }
+        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms, far_access: FAR_ACCESS }
     }
 }
 
@@ -34,7 +50,7 @@ impl Dos {
         let cost = |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
         let costs = operations(cost, prefix);
         let address_forms = address_forms(&costs, address_stall);
-        Self { costs, registers, call_registers, address_forms }
+        Self { costs, registers, call_registers, address_forms, far_access: FAR_ACCESS }
     }
 }
 
@@ -48,12 +64,24 @@ impl Machine for Dos {
         self.costs.clone()
     }
 
+    fn size_costs(&self) -> OperationCosts {
+        operations(bytes, 1)
+    }
+
     fn registers(&self) -> i64 {
         self.registers
     }
 
     fn call_registers(&self) -> i64 {
         self.call_registers
+    }
+
+    fn far_access_registers(&self) -> i64 {
+        self.far_access
+    }
+
+    fn segment_registers(&self) -> i64 {
+        SEGMENT_REGISTERS
     }
 
     fn address_forms(&self) -> Vec<AddressForm> {
@@ -78,7 +106,8 @@ impl Machine for Dos {
 /// extension of the index to a dword.
 pub fn address_forms(costs: &OperationCosts, address_stall: i64) -> Vec<AddressForm> {
     vec![
-        AddressForm { partners: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree") },
+        // BX is the base and SI and DI the indices: BP is the frame's.
+        AddressForm { partners: Some(2), bases: Some(1), indices: Some(2), ..AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree") },
         AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 1, costs.prefix + address_stall, costs.extend, true, None).expect("no fallback to disagree"),
     ]
 }
@@ -88,6 +117,19 @@ pub fn address_forms(costs: &OperationCosts, address_stall: i64) -> Vec<AddressF
 pub fn costs(arch: &str) -> OperationCosts {
     let at = timings::ARCHS.iter().position(|one| *one == arch).expect("a listed arch");
     operations(|kind| timings::COST[kind][at], timings::PREFIX[at])
+}
+
+/// Bytes of the instruction lowering picks for each kind of operation, as
+/// real mode encodes it: a register form is 2, one with a displacement 3. A
+/// far call is 5, and its pushes and cleanup 3 more.
+fn bytes(kind: &str) -> i64 {
+    match kind {
+        "alu_rr" | "mov_rr" | "jcc" | "rep_stos" => 2,
+        "ret_far" | "push_r" | "pop_seg" => 1,
+        "call_far" => 8,
+        "rep_stos_cell" => 0,
+        _ => 3,
+    }
 }
 
 /// The price of each operation, as the instructions lowering picks for it

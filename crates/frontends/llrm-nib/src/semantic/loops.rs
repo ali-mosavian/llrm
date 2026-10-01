@@ -173,12 +173,20 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
     ) -> Result<(), Diagnostic> {
         // The sequence a loop walks is borrowed until the loop ends; an iterator it consumes is not.
-        let walked = borrows::expression_owner(iterable).filter(|_| !self.loop_consumes(iterable)).map(str::to_owned);
-        self.iterated.extend(walked.clone());
-        let result = self.for_walk(mode, name, iterable, body, span);
-        if walked.is_some() {
-            self.iterated.pop();
+        let walked = match borrows::expression_owner(iterable) {
+            Some(_) if !self.loop_consumes(iterable) => self.roots(iterable),
+            _ => BTreeSet::new(),
+        };
+        if !walked.is_empty() {
+            match mode {
+                IterationMode::Mutable => self.check_unborrowed(iterable, iterable.span())?,
+                IterationMode::Shared | IterationMode::Value => self.check_shareable(iterable, iterable.span())?,
+            }
         }
+        let depth = self.iterated.len();
+        self.iterated.extend(walked);
+        let result = self.for_walk(mode, name, iterable, body, span);
+        self.iterated.truncate(depth);
         result
     }
 
@@ -248,11 +256,8 @@ impl<'a> FunctionCompiler<'a> {
                 "strings are immutable byte sequences",
             ));
         }
-        if mode == IterationMode::Mutable && !array.mutable {
-            return Err(Diagnostic::new(
-                span,
-                format!("cannot take a mutable view of immutable array {array_name:?}"),
-            ));
+        if mode == IterationMode::Mutable {
+            self.place_writable(iterable, span)?;
         }
         let string_pointer = if heap.is_some() {
             Some(self.string_pointer(&array, iterable.span())?)
@@ -529,7 +534,7 @@ impl<'a> FunctionCompiler<'a> {
             None,
         );
         let next_value = self.value(type_name);
-        self.emit(
+        let add = self.emit(
             "add",
             vec![next_value],
             vec![
@@ -538,6 +543,10 @@ impl<'a> FunctionCompiler<'a> {
             ],
             None,
         );
+        // The counter was below the limit before this body ran and nothing
+        // else writes it, so one more stays within its type.
+        let wrap = if is_unsigned(type_name) { llrm_mir::facts::Fact::NoUnsignedWrap } else { llrm_mir::facts::Fact::NoSignedWrap };
+        self.stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(add) }, wrap);
         self.emit(
             "store",
             Vec::new(),

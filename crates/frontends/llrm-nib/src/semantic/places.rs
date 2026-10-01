@@ -118,6 +118,12 @@ impl<'a> FunctionCompiler<'a> {
                 format!("expected {}, found {name}", layout.name),
             ));
         }
+        // A generator's frame is lent its fields where it starts, as a call.
+        if !self.types.frames.contains_key(&destination.struct_id) {
+            let known: Vec<_> = fields.iter().filter_map(|(name, value, span)| Some((value, layout.fields.get(name)?.type_, *span))).collect();
+            let lent = self.lent_to_fields(&known.iter().map(|one| one.0).collect::<Vec<_>>(), &known.iter().map(|one| one.1).collect::<Vec<_>>());
+            borrows::check_disjoint(&lent, &known.iter().map(|one| one.2).collect::<Vec<_>>())?;
+        }
         let mut seen = BTreeMap::new();
         for (name, value, field_span) in fields {
             if seen.insert(name, *field_span).is_some() {
@@ -334,16 +340,7 @@ impl<'a> FunctionCompiler<'a> {
         target: &AssignTarget,
         span: Span,
     ) -> Result<AssignmentPlace, Diagnostic> {
-        if let Some(owner) = borrows::written_owner(target) {
-            self.check_unborrowed(owner, span)?;
-        }
-        match target {
-            AssignTarget::Member { base, field } => {
-                self.check_mutable_fields(&Expr::Member { base: Box::new(base.clone()), field: field.clone(), span })?
-            }
-            AssignTarget::Index { base, .. } => self.check_mutable_fields(base)?,
-            AssignTarget::Name(_) | AssignTarget::Deref(_) => {}
-        }
+        self.check_unborrowed(&target.expression(span), span)?;
         match target {
             AssignTarget::Deref(pointer) => {
                 let name = self.dereferenced(pointer, span)?;
@@ -377,13 +374,11 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             AssignTarget::Member { base, field } => {
-                let parent = self.struct_view(base, span)?;
-                if !parent.mutable {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {:?} is immutable", parent.owner),
-                    ));
+                // A moved field may be given a value again.
+                if let Some((owner, ..)) = self.projected(&target.expression(span)) {
+                    self.moves.projecting.set(Some(owner));
                 }
+                let parent = self.struct_view(base, span)?;
                 let layout = self
                     .types
                     .structure(parent.struct_id)
@@ -414,12 +409,6 @@ impl<'a> FunctionCompiler<'a> {
             }
             AssignTarget::Name(name) => {
                 let binding = self.binding(name, span)?.clone();
-                if !binding.mutable {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {name:?} is immutable"),
-                    ));
-                }
                 match binding.type_ {
                     BindingType::Scalar(type_name) => {
                         let destination = match binding.storage {
@@ -468,12 +457,6 @@ impl<'a> FunctionCompiler<'a> {
                     return Err(Diagnostic::new(span, "assignment target must be a named place or an array field"));
                 }
                 let (binding, base) = self.sequence_of(base)?;
-                if !binding.mutable {
-                    return Err(Diagnostic::new(
-                        span,
-                        format!("binding {base:?} is immutable"),
-                    ));
-                }
                 if binding.type_ == BindingType::Scalar(TypeName::String) {
                     return self.string_element_target(&base, indices, span);
                 }
@@ -505,6 +488,7 @@ impl<'a> FunctionCompiler<'a> {
         field_name: &str,
         span: Span,
     ) -> Result<(hir::Operand, TypeName, bool, String), Diagnostic> {
+        self.project(&Expr::Member { base: Box::new(base.clone()), field: field_name.to_owned(), span }, span)?;
         let view = self.struct_view(base, span)?;
         let layout = self
             .types
@@ -548,6 +532,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             Expr::Name(name, _) => {
                 let binding = self.binding(name, span)?.clone();
+                self.check_whole(name, &binding, span)?;
                 let BindingType::Struct(struct_id) = binding.type_ else {
                     return Err(Diagnostic::new(
                         span,
@@ -582,6 +567,7 @@ impl<'a> FunctionCompiler<'a> {
                 field,
                 span: member_span,
             } => {
+                self.project(expression, *member_span)?;
                 let parent = self.struct_view(base, *member_span)?;
                 let layout = self
                     .types

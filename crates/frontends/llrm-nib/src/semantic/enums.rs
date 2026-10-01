@@ -352,6 +352,9 @@ impl FunctionCompiler<'_> {
             arguments.to_vec(),
             span,
         )?;
+        let types: Vec<ElementType> = variant.fields.iter().map(|(_, field)| field.type_).collect();
+        let lent = self.lent_to_fields(&values.iter().collect::<Vec<_>>(), &types);
+        borrows::check_disjoint(&lent, &values.iter().map(Expr::span).collect::<Vec<_>>())?;
         for ((_, field), value) in variant.fields.iter().zip(&values) {
             self.prepare_field_store(destination, *field, value, value.span(), stores)?;
         }

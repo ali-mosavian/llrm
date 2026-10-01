@@ -7,7 +7,7 @@ reference compilers. See tools/readme.md.
     uv run --project tools python tools/loops/run.py [--family F] [--config 486-O2] [--dump DIR]
 
 Fails for any wrong answer, any case that falls short and is not in
-known.toml, and any known.toml entry that no longer falls short.
+shortfalls.txt, and any shortfalls.txt entry that no longer falls short.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import shutil
 import argparse
 import subprocess
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -141,7 +141,7 @@ def check_mir(batch: Batch, result: Result) -> None:
     want = mir.fold(batch.expected)
     first, last = mir.stages(batch.work / "stages")
     names = [mir_name(batch.lang, c, k + 1) for k, c in enumerate(batch.cases)]
-    for name in mir.called(last, names):
+    for name in [] if batch.config.inline else mir.called(last, names):
         result.wrong.append(f"{batch.config.tag} {batch.lang}: {name} was inlined into the driver, so went unchecked")
     for stage in (first, last):
         try:
@@ -252,6 +252,7 @@ def reference_meets(result: Result, case: str, config: str, bound: int) -> bool:
 
 
 def judge(cases: list[Case], langs: list[str], configs: list, result: Result) -> None:
+    configs = [one for one in configs if not one.inline]
     by_name = {c.name: c for c in cases}
     for case in cases:
         for lang in langs:
@@ -313,6 +314,10 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
 
 
 def configs_from(args) -> list[build.Config]:
+    return [replace(one, inline=args.inline) for one in _configs_from(args)]
+
+
+def _configs_from(args) -> list[build.Config]:
     if args.config:
         out = []
         for one in args.config:
@@ -324,9 +329,10 @@ def configs_from(args) -> list[build.Config]:
     return [build.Config(cpu, opt) for cpu in build.CPUS for opt in build.OPTS]
 
 
-def validate(cases: list[Case], work: Path, result: Result) -> list[dos.Job]:
+def validate(cases: list[Case], work: Path, result: Result, bc: bool = True) -> list[dos.Job]:
     """The oracle against real compilers: C by the host's clang now; the
-    BASIC jobs returned run under BC in the DOS launch."""
+    BASIC jobs returned run under BC in the DOS launch (`bc` False: clang
+    only, which --quick does, as BC compiles in emulated DOS)."""
     place = work / "validate"
     place.mkdir(parents=True, exist_ok=True)
     chosen = [c for c in cases if not emit_c.expressible(c)]
@@ -343,6 +349,8 @@ def validate(cases: list[Case], work: Path, result: Result) -> list[dos.Job]:
         got = [int(x) for x in subprocess.run([str(exe)], capture_output=True, text=True).stdout.split()]
         _compare("oracle vs host clang", group, streams, got, result)
     jobs = []
+    if not bc:
+        return jobs
     chosen = [c for c in cases if not emit_bas.expressible(c)]
     plans, streams = plans_for(chosen, "bas")
     for k, group in enumerate(batches(chosen, "bas")):
@@ -376,18 +384,20 @@ def main() -> int:
     parser.add_argument("--quick", action="store_true", help="the anchors, one configuration: under a minute")
     parser.add_argument("--family", action="append", help="only these families")
     parser.add_argument("--case", action="append", help="only cases whose name starts so")
+    parser.add_argument("--seed", type=int, default=families.SEED, help="the fuzz family's seed")
     parser.add_argument("--lang", action="append", choices=list(EMITTERS))
     parser.add_argument("--config", action="append", help="CPU-OPT, e.g. 486-O2")
     parser.add_argument("--dump", type=Path, default=build.ROOT / "build" / "loops", help="where everything goes")
+    parser.add_argument("--inline", action="store_true", help="let the compiler inline the functions under test: correctness only, no shortfalls")
     parser.add_argument("--no-dos", action="store_true", help="MIR only")
     parser.add_argument("--no-refs", action="store_true")
     parser.add_argument("--no-validate", action="store_true", help="skip checking the oracle against clang and BC")
-    parser.add_argument("--write-known", action="store_true", help="rewrite known.toml to what falls short now")
+    parser.add_argument("--write-known", action="store_true", help="rewrite shortfalls.txt to what falls short now")
     args = parser.parse_args()
 
     started = time.monotonic()
     stamp = build.binaries_stamp()
-    cases = families.load(args.family, quick=args.quick)
+    cases = families.load(args.family, quick=args.quick, seed=args.seed)
     if args.case:
         cases = [c for c in cases if any(c.name.startswith(p) for p in args.case)]
     langs = args.lang or list(EMITTERS)
@@ -417,7 +427,7 @@ def main() -> int:
                 chosen.append(case)
         per_lang[lang] = (chosen, *plans_for(chosen, lang))
 
-    jobs: list[dos.Job] = [] if args.no_validate or args.no_dos else validate(cases, work, result)
+    jobs: list[dos.Job] = [] if args.no_validate or args.no_dos else validate(cases, work, result, bc=not args.quick)
     all_batches = []
     for config in configs:
         for lang in langs:
@@ -488,7 +498,7 @@ def main() -> int:
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         jobs += [j for got in pool.map(one, all_batches) if got for j in got]
-        if not args.no_refs:
+        if not (args.no_refs or args.inline):
             chosen = per_lang.get("c", ([],))[0]
             chunks = [chosen[k : k + 25] for k in range(0, len(chosen), 25)]
             list(pool.map(lambda job: references(job[1], job[0], work / "refs", result),
@@ -550,7 +560,7 @@ def report(cases, langs, configs, result: Result, ratchet, work: Path, seconds: 
     lines += [f"  UNBUILT {one}{tagged(one)}" for one in result.unbuilt]
     lines.append(f"quality: {len(result.short)} shortfalls; {len(ratchet.new)} new, {len(ratchet.fixed)} fixed")
     lines += [f"  NEW {' '.join(one)}" for one in sorted(ratchet.new)]
-    lines += [f"  FIXED {' '.join(one)} (remove it from known.toml)" for one in sorted(ratchet.fixed)]
+    lines += [f"  FIXED {' '.join(one)} (run --write-known)" for one in sorted(ratchet.fixed)]
     lines += [f"  note: {one}" for one in result.notes[:20]]
     text = "\n".join(lines)
     print(text)

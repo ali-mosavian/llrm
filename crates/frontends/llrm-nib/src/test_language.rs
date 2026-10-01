@@ -194,7 +194,7 @@ fn question_mark_returns_the_failure_and_nested_patterns_cover_every_error() {
 }
 
 /// What `main` prints, having checked every heap buffer was dropped.
-fn output_without_leaks(source: &str) -> String {
+pub(crate) fn output_without_leaks(source: &str) -> String {
     let hir = super::compile(source, "t").unwrap_or_else(|error| {
         panic!(
             "{}:{}: {}",
@@ -233,16 +233,20 @@ fn main() -> i16:
     return 0
 ";
     assert_eq!(output_without_leaks(source), "xyz!?\nxyz!\n");
+    // A field of a borrowed struct cannot move; of an owned one it can (#135).
     let borrowed = "\
 struct Named:
     name: string
 
+fn take(n: &Named) -> void:
+    let taken = n.name
+
 fn main() -> i16:
     let n = Named(name=\"a\" + \"b\")
-    let taken = n.name
+    take(n)
     return 0
 ";
-    assert!(refused(borrowed).contains("cannot move"));
+    assert!(refused(borrowed).contains("cannot move"), "{}", refused(borrowed));
 }
 
 #[test]
@@ -3276,4 +3280,32 @@ fn main() -> i16:
     assert_eq!(output_without_leaks(source), "n5 1\nn5 3\n3\n");
     let own = "fn gen(x: i16) -> iter[i16]:\n    let mut y: i16 = x\n    let r = &mut y\n    yield 1\n    r += 1\n    yield y\n\nfn main() -> i16:\n    let mut g = gen(1)\n    return 0\n";
     assert!(refused(own).contains("keeps only borrows of what its caller lent it; \"r\" borrows its own \"y\""), "{}", refused(own));
+}
+
+/// A borrow's element address is in bounds of the object it borrows: the
+/// frontend checked the index against the borrow's length, and says so.
+/// Unsaid, Nib's `zip` of two slices kept two counters where C's dot
+/// counted one to zero.
+#[test]
+fn a_borrowed_element_address_is_in_bounds() {
+    let source = "\
+fn total(values: &[i16]) -> i16:
+    let mut sum: i16 = 0
+    for value in values:
+        sum += value
+    return sum
+";
+    let hir = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message)).replace([' ', '\n'], "");
+    let offsets = hir.matches("\"op\":\"ptr_offset\"").count();
+    assert!(offsets > 0 && hir.matches("\"fact\":\"inbounds\",\"function\"").count() >= offsets, "{hir}");
+}
+
+/// Nib's panics end the program: it states `noreturn` and `inaccessiblemem`
+/// of each, so a loop's stores ahead of a failed bounds check need not
+/// happen first.
+#[test]
+fn the_panic_routines_are_stated_to_end_the_program() {
+    let hir = super::compile("fn main() -> i16:\n    let mut a: i16[4] = [0] * 4\n    let n: i16 = 3\n    return a[n]\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
+    assert!(stated("noreturn") >= 1 && stated("noreturn") == stated("memory"), "{hir}");
 }

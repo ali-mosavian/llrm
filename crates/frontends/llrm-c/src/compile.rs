@@ -1206,6 +1206,26 @@ mod tests {
             .expect("the loop")
     }
 
+    /// The instructions of `function` as the rich route selects them.
+    fn selected_body(fixture: &str, function: &str) -> Vec<String> {
+        let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_core::driver::Options::of(machine)).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find(&format!("{function} proc")).expect("the function");
+        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
+    }
+
+    /// `die` and `quit` do not return: nothing follows their calls. Without
+    /// the call class stated, `f` kept a return after both, 11 instructions
+    /// to 8.
+    #[test]
+    fn test_nothing_follows_a_call_that_does_not_return() {
+        let body = selected_body("tests/test_noreturn_and_aborts_are_stated_of_the_callee", "_f");
+        assert_eq!(body.len(), 8, "{body:?}");
+        assert!(body.iter().all(|one| !one.starts_with("retf")), "{body:?}");
+    }
+
     /// `strides` walks frame arrays of 1-, 2-, 4- and 8-byte elements with one
     /// counter. Strength gave each stride its own pointer, and two of them lived
     /// in the frame: loaded for every access and stepped in memory.

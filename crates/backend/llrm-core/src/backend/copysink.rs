@@ -4,8 +4,11 @@
 //! A phi whose value is computed in a loop and read after it becomes a copy on
 //! the edge back to the header, so it runs every iteration to hand over a value
 //! nothing inside the loop looks at. The copy belongs on the exit edge. That is
-//! sound while the destination is read nowhere in the loop and the source is
-//! not written between the copy and the exit, which is what this checks.
+//! sound while every way out runs the copy first (its block dominates the
+//! exiting one: a loop left from its header before any trip never ran it, and
+//! the destination must keep what it held), the destination is read nowhere
+//! in the loop, and the source is not written between the copy and the exit,
+//! which is what this checks.
 
 use std::collections::BTreeSet;
 use crate::support::hash::HashSet;
@@ -134,6 +137,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
     if found.is_empty() {
         return body.clone();
     }
+    let dominance = loopy::dominance(&graph, Some(body.entry));
     let universe = _universe();
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut predecessors: IndexMap<i64, Vec<i64>> = at_of.keys().map(|at| (*at, Vec::new())).collect();
@@ -164,7 +168,9 @@ pub fn sunk(body: &LirBody) -> LirBody {
             continue;
         }
         let round_into = _round(&at_of, &inside, &universe);
-        for block in inside.iter().map(|at| at_of[at]) {
+        // Every way out runs the copy first: a loop left from its header
+        // before any trip never ran its latch.
+        for block in inside.iter().map(|at| at_of[at]).filter(|block| dominance.dominates(block.at, source_at)) {
             for (index, one) in block.insns.iter().enumerate() {
                 let pair = _copy(one);
                 let Some((dest, register)) = pair else {
@@ -330,6 +336,27 @@ mod tests {
             "f",
             1,
             vec![
+                block(1, vec![_jump(1, 5)], vec![5]),
+                block(5, vec![_move(5, DX, AX), _move(6, DI, DX), _compare(7, AX, BX), _branch(8, "jl", 5)], vec![5, 9]),
+                block(9, vec![_return(9)], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let copies = _copies(&sunk(&body));
+        assert!(copies[&5].is_empty() && copies[&9] == vec![r(DI)]);
+    }
+
+    #[test]
+    fn test_a_copy_a_zero_trip_loop_never_ran_stays_in_it() {
+        // #111: the latch's `mov di,dx` left for the exit of a loop tested at
+        // its header; run no times, the loop left DI the value DX happened to
+        // hold, not the one DI held before it (5812 where 0 is right on DOS).
+        use Register::{AX, BX, DI, DX};
+        let body = LirBody::new(
+            "f",
+            1,
+            vec![
                 block(1, vec![_jump(1, 3)], vec![3]),
                 block(3, vec![_compare(3, AX, BX), _branch(4, "jge", 9)], vec![5, 9]),
                 block(5, vec![_move(5, DX, AX), _move(6, DI, DX), _jump(7, 3)], vec![3]),
@@ -339,7 +366,7 @@ mod tests {
             IndexMap::default(),
         );
         let copies = _copies(&sunk(&body));
-        assert!(copies[&5].is_empty() && copies[&9] == vec![r(DI)]);
+        assert!(copies[&5] == vec![r(DI)] && copies[&9].is_empty(), "{copies:?}");
     }
 
     fn _raw_insn(at: i64, what: Semantics) -> Arc<Insn> {

@@ -26,6 +26,8 @@ pub mod semantic;
 pub mod syntax;
 
 #[cfg(test)]
+mod test_borrowck;
+#[cfg(test)]
 mod test_language;
 #[cfg(test)]
 pub(crate) mod test_nib_frontend;

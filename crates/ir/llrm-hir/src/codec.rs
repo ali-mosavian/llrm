@@ -154,7 +154,7 @@ plain_record!(ArrayElement, Some("array_element"), place => "place", indices => 
 plain_record!(ProjectedPlace, Some("projection"), place => "place", indices => "indices", offset => "offset",
     r#type => "type");
 plain_record!(IndirectPlace, Some("indirect"), base => "base", offset => "offset", r#type => "type",
-    volatile => "volatile", published => "published", inbounds => "inbounds", origin => "origin",
+    volatile => "volatile", origin => "origin",
     allocation => "allocation");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
 plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
@@ -173,12 +173,6 @@ impl _Plain for model::Instruction {
         out.insert("pure".to_owned(), self.pure._plain());
         if let Some(asm) = &self.asm {
             out.insert("asm".to_owned(), asm._plain());
-        }
-        if self.nowrap {
-            out.insert("nowrap".to_owned(), self.nowrap._plain());
-        }
-        if self.inbounds {
-            out.insert("inbounds".to_owned(), self.inbounds._plain());
         }
         if let Some(line) = self.line {
             out.insert("line".to_owned(), line._plain());
@@ -205,9 +199,6 @@ impl _Plain for model::CallAbi {
         out.insert("distance".to_owned(), self.distance._plain());
         out.insert("callee".to_owned(), self.callee._plain());
         float_return(&mut out, self.float_return);
-        if !self.promises.is_empty() {
-            out.insert("promises".to_owned(), self.promises._plain());
-        }
         Json::Dict(out)
     }
 }
@@ -241,8 +232,6 @@ impl _Plain for model::ProcedureAbi {
         Json::Dict(out)
     }
 }
-plain_record!(ArgumentPromise, None, operand => "operand", bytes => "bytes");
-plain_record!(Promise, None, parameter => "parameter", bytes => "bytes", unaliased => "unaliased", readonly => "readonly");
 // `promises` only when made, so that a function reads as it always has.
 impl _Plain for model::Function {
     fn _plain(&self) -> JSON {
@@ -261,9 +250,6 @@ impl _Plain for model::Function {
         out.insert("error_handler_local".to_owned(), self.error_handler_local._plain());
         out.insert("external_entries".to_owned(), self.external_entries._plain());
         out.insert("linkage".to_owned(), self.linkage._plain());
-        if !self.promises.is_empty() {
-            out.insert("promises".to_owned(), self.promises._plain());
-        }
         if self.symbol.is_some() {
             out.insert("symbol".to_owned(), self.symbol._plain());
         }
@@ -284,7 +270,7 @@ impl _Plain for model::DataRelocation {
         Json::Dict(out)
     }
 }
-// `segment` and `align` only when set, so that data reads as it always has.
+// `segment` only when set, so that data reads as it always has.
 impl _Plain for model::DataObject {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -299,13 +285,35 @@ impl _Plain for model::DataObject {
         if self.segment.is_some() {
             out.insert("segment".to_owned(), self.segment._plain());
         }
-        if self.align.is_some() {
-            out.insert("align".to_owned(), self.align._plain());
-        }
         Json::Dict(out)
     }
 }
 plain_record!(AliasClass, None, name => "name", parent => "parent", types => "types");
+// A stated fact as flat fields: the subject's kind, its function and its id.
+impl _Plain for crate::facts::Stated {
+    fn _plain(&self) -> JSON {
+        let (function, id, part) = self.subject.fields();
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("subject".to_owned(), Json::Str(crate::facts::Subject::kind_key(self.subject.kind()).to_owned()));
+        if let Some(function) = function {
+            out.insert("function".to_owned(), function._plain());
+        }
+        if let Some(id) = id {
+            out.insert("id".to_owned(), id._plain());
+        }
+        if let Some(part) = part {
+            out.insert("part".to_owned(), part._plain());
+        }
+        out.insert("fact".to_owned(), Json::Str(self.fact.key().to_owned()));
+        if let Some(value) = self.fact.wire_value() {
+            out.insert("value".to_owned(), value._plain());
+        }
+        if self.source.is_some() {
+            out.insert("source".to_owned(), self.source._plain());
+        }
+        Json::Dict(out)
+    }
+}
 // `alias_classes` only when made, so that a module reads as it always has.
 impl _Plain for model::Module {
     fn _plain(&self) -> JSON {
@@ -318,6 +326,9 @@ impl _Plain for model::Module {
         out.insert("callables".to_owned(), self.callables._plain());
         if !self.alias_classes.is_empty() {
             out.insert("alias_classes".to_owned(), self.alias_classes._plain());
+        }
+        if !self.facts.is_empty() {
+            out.insert("facts".to_owned(), self.facts._plain());
         }
         if self.debug.is_some() {
             out.insert("debug".to_owned(), self.debug._plain());
@@ -556,6 +567,12 @@ fn _record(type_: &_Record, value: &JSON, where_: &str, tagged: bool) -> Result<
     (type_.build)(&mut args)
 }
 
+/// `facts` as the module's `facts` field holds them, for a frontend
+/// that writes its module's JSON itself.
+pub fn facts_json(facts: &[crate::facts::Stated]) -> String {
+    pyjson::dumps(&facts.to_vec()._plain(), None, Some((",", ":")), true)
+}
+
 /// `debug` as the module's `debug` field holds it, for a frontend
 /// writing HIR as text.
 pub fn debug_json(debug: &model::Debug) -> String {
@@ -564,6 +581,13 @@ pub fn debug_json(debug: &model::Debug) -> String {
 
 pub fn decode(text: &str) -> Result<model::Program, InvalidHIR> {
     let raw = pyjson::loads(text).map_err(|error| InvalidHIR(format!("invalid HIR JSON: {error}")))?;
+    // A program of another schema is refused as such, not by the first field it has that this one does not.
+    if let Json::Dict(fields) = &raw
+        && let Some(Json::Int(schema)) = fields.get("schema")
+        && *schema != model::SCHEMA_VERSION
+    {
+        return Err(InvalidHIR(format!("unsupported HIR schema {schema}")));
+    }
     let _Made::Object(program) = _record(&PROGRAM, &raw, "program", false)? else {
         unreachable!("a record builds an object");
     };
@@ -701,11 +725,18 @@ macro_rules! made_records {
     };
 }
 
+impl _FromMade for crate::facts::Stated {
+    fn from_made(made: _Made) -> Result<Self, InvalidHIR> {
+        match made {
+            _Made::Object(one) => Ok(*one.downcast::<crate::facts::Stated>().expect("the hinted record")),
+            _ => unreachable!("a record hint makes an object"),
+        }
+    }
+}
+
 made_records!(
     CellWriters,
     RuntimePromises,
-    Promise,
-    ArgumentPromise,
     Type,
     Place,
     Value,
@@ -912,8 +943,6 @@ static INDIRECT_PLACE: _Record = _Record {
         ("offset", _Hint::Int, true),
         ("type", _Hint::Int, true),
         ("volatile", _Hint::Bool, false),
-        ("published", _Hint::Bool, false),
-        ("inbounds", _Hint::Bool, false),
         ("origin", OPTIONAL_INT, false),
         ("allocation", OPTIONAL_INT, false),
     ],
@@ -923,8 +952,6 @@ static INDIRECT_PLACE: _Record = _Record {
             offset: _required(args, "offset")?,
             r#type: _required(args, "type")?,
             volatile: _default(args, "volatile", false)?,
-            published: _default(args, "published", false)?,
-            inbounds: _default(args, "inbounds", false)?,
             origin: _default(args, "origin", None)?,
             allocation: _default(args, "allocation", None)?,
         })
@@ -953,8 +980,6 @@ static INSTRUCTION: _Record = _Record {
         ("callee", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
         ("pure", _Hint::Bool, false),
         ("asm", _Hint::Union(&[_Hint::Record(&ASM), _Hint::NoneType]), false),
-        ("nowrap", _Hint::Bool, false),
-        ("inbounds", _Hint::Bool, false),
         ("line", _Hint::Union(&[_Hint::Int, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -966,8 +991,6 @@ static INSTRUCTION: _Record = _Record {
             callee: _default(args, "callee", None)?,
             pure: _default(args, "pure", false)?,
             asm: _default(args, "asm", None)?,
-            nowrap: _default(args, "nowrap", false)?,
-            inbounds: _default(args, "inbounds", false)?,
             line: _default(args, "line", None)?,
         })
     },
@@ -1038,7 +1061,6 @@ static CALL_ABI: _Record = _Record {
         ("distance", enum_hint!(CallDistance), true),
         ("callee", OPTIONAL_INT, false),
         ("float_return", enum_hint!(FloatReturn), false),
-        ("promises", _Hint::Tuple(&_Hint::Record(&ARGUMENT_PROMISE)), false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -1048,15 +1070,8 @@ static CALL_ABI: _Record = _Record {
             distance: _required(args, "distance")?,
             callee: _default(args, "callee", None)?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
-            promises: _default(args, "promises", Vec::new())?,
         })
     },
-};
-
-static ARGUMENT_PROMISE: _Record = _Record {
-    name: "ArgumentPromise",
-    fields: &[("operand", _Hint::Int, true), ("bytes", _Hint::Int, true)],
-    build: |args| _object(model::ArgumentPromise { operand: _required(args, "operand")?, bytes: _required(args, "bytes")? }),
 };
 
 static CALLABLE: _Record = _Record {
@@ -1124,7 +1139,6 @@ static FUNCTION: _Record = _Record {
         ("error_handler_local", _Hint::Bool, false),
         ("external_entries", INTS, false),
         ("linkage", enum_hint!(FunctionLinkage), false),
-        ("promises", _Hint::Tuple(&_Hint::Record(&PROMISE)), false),
         ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1143,21 +1157,7 @@ static FUNCTION: _Record = _Record {
             error_handler_local: _default(args, "error_handler_local", false)?,
             external_entries: _default(args, "external_entries", Vec::new())?,
             linkage: _default(args, "linkage", model::FunctionLinkage::External)?,
-            promises: _default(args, "promises", Vec::new())?,
             symbol: _default(args, "symbol", None)?,
-        })
-    },
-};
-
-static PROMISE: _Record = _Record {
-    name: "Promise",
-    fields: &[("parameter", _Hint::Int, true), ("bytes", _Hint::Int, true), ("unaliased", _Hint::Bool, true), ("readonly", _Hint::Bool, true)],
-    build: |args| {
-        _object(model::Promise {
-            parameter: _required(args, "parameter")?,
-            bytes: _required(args, "bytes")?,
-            unaliased: _required(args, "unaliased")?,
-            readonly: _required(args, "readonly")?,
         })
     },
 };
@@ -1194,7 +1194,6 @@ static DATA_OBJECT: _Record = _Record {
         ("address", enum_hint!(AddressKind), false),
         ("addressed", _Hint::Bool, false),
         ("segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
-        ("align", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::DataObject {
@@ -1207,7 +1206,6 @@ static DATA_OBJECT: _Record = _Record {
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
             segment: _default(args, "segment", None)?,
-            align: _default(args, "align", None)?,
         })
     },
 };
@@ -1222,6 +1220,7 @@ static MODULE: _Record = _Record {
         ("data", _Hint::Tuple(&_Hint::Record(&DATA_OBJECT)), false),
         ("callables", _Hint::Tuple(&_Hint::Record(&CALLABLE)), false),
         ("alias_classes", _Hint::Tuple(&_Hint::Record(&ALIAS_CLASS)), false),
+        ("facts", _Hint::Tuple(&_Hint::Record(&STATED_FACT)), false),
         ("debug", _Hint::Union(&[_Hint::Record(&DEBUG), _Hint::NoneType]), false),
         ("line_numbers", _Hint::Tuple(&_Hint::Tuple(&_Hint::Int)), false),
     ],
@@ -1234,6 +1233,7 @@ static MODULE: _Record = _Record {
             data: _default(args, "data", Vec::new())?,
             callables: _default(args, "callables", Vec::new())?,
             alias_classes: _default(args, "alias_classes", Vec::new())?,
+            facts: _default(args, "facts", Vec::new())?,
             debug: _default(args, "debug", None)?,
             line_numbers: _default(args, "line_numbers", Vec::new())?,
         })
@@ -1326,6 +1326,29 @@ static DEBUG: _Record = _Record {
         ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
     ],
     build: |args| _object(model::Debug { types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? }),
+};
+
+static STATED_FACT: _Record = _Record {
+    name: "StatedFact",
+    fields: &[
+        ("subject", _Hint::Str, true),
+        ("function", OPTIONAL_INT, false),
+        ("id", OPTIONAL_INT, false),
+        ("part", OPTIONAL_INT, false),
+        ("fact", _Hint::Str, true),
+        ("value", OPTIONAL_INT, false),
+        ("source", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
+    ],
+    build: |args| {
+        let key: String = _required(args, "subject")?;
+        let name: String = _required(args, "fact")?;
+        let kind = crate::facts::Subject::kind_named(&key).ok_or_else(|| InvalidHIR(format!("unknown fact subject {key:?}")))?;
+        let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?, _default(args, "part", None)?)
+            .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
+        let value: Option<i64> = _default(args, "value", None)?;
+        let fact = llrm_mir::facts::Fact::from_wire(&name, value).ok_or_else(|| InvalidHIR(format!("{name:?} with value {value:?} is not a fact")))?;
+        _object(crate::facts::Stated { subject, fact, source: _default(args, "source", None)? })
+    },
 };
 
 static ALIAS_CLASS: _Record = _Record {

@@ -294,6 +294,43 @@ fn test_variable_indices_are_scaled_and_added() {
     );
 }
 
+/// A constant added to an index is the address's displacement, not a
+/// register: `a[i + 8]` of bytes was `mov di, si; add di, 8; [bx+di]`, an
+/// add and a copy a trip that main's `[bx+si+8]` did not pay.
+#[test]
+fn test_a_constant_added_to_an_index_is_a_displacement() {
+    let text = "define i16 @f(ptr %p, i16 %i) addrspace(1) {
+  %j = add nsw i16 %i, 8
+  %q = getelementptr inbounds i8, ptr %p, i16 %j
+  %v = load i8, ptr %q
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("[bx+si+8]") && !got.contains("add si, 8") && !got.contains("add di, 8"), "{got}");
+}
+
+/// A far pointer of offset zero indexed by a sum of two registers is a base
+/// and an index, `es:[bx+si]`: the sum was added into a third register
+/// first, a `mov` and an `add` a trip in qbdemo's FRACTALEFFECT.
+#[test]
+fn test_a_sum_of_two_registers_is_the_base_and_index_of_a_far_address() {
+    let text = "define i16 @f(i16 %sel, i16 %i, i16 %j) addrspace(1) {
+  %seg = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %seg to ptr addrspace(1)
+  %k = add i16 %i, %j
+  %p = getelementptr inbounds i8, ptr addrspace(1) %far, i16 %k
+  %v = load i8, ptr addrspace(1) %p
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("es:[bx+si]") || got.contains("es:[bx+di]") || got.contains("es:[si+bx]") || got.contains("es:[di+bx]"), "{got}");
+    assert!(!got.lines().any(|line| line.starts_with("add ") && !line.contains("sp")), "{got}");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {
@@ -2969,4 +3006,133 @@ fn test_dbg_lines_become_linnum() {
     assert_eq!(lines, [(7, 0), (8, 9)]);
     let marker = records.iter().any(|one| one.r#type == llrm_omf::omf::COMENT && one.body.get(1) == Some(&0xA1));
     assert!(marker, "the CodeView marker");
+}
+
+/// A near global indexed by a dword the loop proves small is its scaled
+/// cell: addrm's `B&` stored through `mov di,cx; shl edi,2` a trip, where
+/// a frame or a far base took the scale.
+#[test]
+fn test_a_global_indexed_by_a_small_dword_is_the_scaled_cell() {
+    let text = "@b = internal global [64 x i32] zeroinitializer
+define void @f(i32 %i) addrspace(1) {
+entry:
+  %c = icmp slt i32 %i, 0
+  br i1 %c, label %no, label %low
+low:
+  %d = icmp sgt i32 %i, 60
+  br i1 %d, label %no, label %ok
+ok:
+  %m = shl i32 %i, 2
+  %e = getelementptr i8, ptr @b, i32 %m
+  store i32 7, ptr %e, !tbaa !1
+  ret void
+no:
+  ret void
+}
+
+!0 = !{!\"long\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("b[") && line.contains("*4]")), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("shl")), "{got:?}");
+}
+
+/// A global indexed by one register and then another is `[bx+si+global]`:
+/// conc12's twelve arrays, each `array + 2n` for the count-to-zero
+/// counter, were twelve pointers spilled to the frame and reloaded each
+/// trip, where the two registers make each address in its access.
+#[test]
+fn test_a_global_indexed_by_two_registers_is_one_address() {
+    let text = "@g = internal global [64 x i16] zeroinitializer
+define i16 @f(i16 %n, i16 %i) addrspace(1) {
+entry:
+  %a = getelementptr i8, ptr @g, i16 %n
+  %b = getelementptr i8, ptr %a, i16 %i
+  %c = getelementptr i8, ptr %b, i16 18
+  %v = load i16, ptr %c, !tbaa !1
+  ret i16 %v
+}
+
+!0 = !{!\"short\"}
+!1 = !{!0, !0, i64 0}
+";
+    let got = listing_on("386", text, "f");
+    assert!(got.iter().any(|line| line.contains("g+18[") && line.contains('+')), "{got:?}");
+    assert!(!got.iter().any(|line| line.starts_with("add ") || line.starts_with("lea ")), "{got:?}");
+}
+
+/// The optimizer left `getelementptr i8, ptr null, ...` and isel refused it as
+/// "an address of no global: Null": examples/entries.nib and tally.nib did not
+/// compile. A constant address is a direct address, `[disp16]`; a variable
+/// index from it is the register.
+#[test]
+fn test_an_address_of_no_global_is_a_direct_address() {
+    let constant = "define i16 @f() addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 -4\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
+    let number = "define i16 @f() addrspace(1) {\n  %v = load i16, ptr inttoptr (i16 1132 to ptr)\n  ret i16 %v\n}\n";
+    let variable = "define i16 @f(i16 %i) addrspace(1) {\n  %p = getelementptr i8, ptr null, i16 %i\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n";
+    assert!(constant.contains("getelementptr i8, ptr null") && number.contains("inttoptr (i16 1132") && variable.contains("ptr null, i16 %i"), "the shape that was refused");
+    assert_eq!(listing(constant, "f"), ["L0_0:", "mov ax, word ptr [65532]", "retf"]);
+    assert_eq!(listing(number, "f"), ["L0_0:", "mov ax, word ptr [1132]", "retf"]);
+    assert_eq!(listing(variable, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov bx, word ptr [bp+6]", "mov ax, word ptr [bx]", "pop bp", "retf"]);
+}
+
+/// `icmp` of far pointers was refused as "a ptr addrspace(1) value":
+/// examples/roster.nib did not compile. Equal is both words; ordered, the
+/// offsets.
+#[test]
+fn test_far_pointers_compare_by_words() {
+    let compare = |predicate: &str, second: &str| {
+        let text = format!("define i16 @f(ptr addrspace(1) %p, ptr addrspace(1) %q) addrspace(1) {{\n  %c = icmp {predicate} ptr addrspace(1) %p, {second}\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}\n");
+        assert!(text.contains(&format!("icmp {predicate} ptr addrspace(1)")), "the shape that was refused");
+        listing(&text, "f")
+    };
+    assert_eq!(
+        compare("eq", "%q"),
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "mov dx, word ptr [bp+12]", "xor ax, word ptr [bp+10]", "xor bx, dx", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
+    );
+    assert_eq!(compare("ne", "null"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "or ax, word ptr [bp+8]", "setne al", "movzx ax, al", "pop bp", "retf"]);
+    assert!(compare("ult", "%q").iter().any(|line| line == "setb al"));
+}
+
+/// The rich route refused HIR inline assembly ("HIR asm"): examples/speaker.nib
+/// did not compile. A block is a call of `llrm.ia16.asm.*`: its bytes in
+/// place, each argument in the register it names, each field of the answer
+/// out of one, and what it changes clobbered.
+#[test]
+fn test_inline_assembly_is_its_bytes_with_its_declared_registers() {
+    let text = "declare {i16, i16} @llrm.ia16.asm.cd1a.ax.cx_dx.flags.n(i16)
+declare void @llrm.ia16.asm.fa.-.-.-.n()
+define i16 @f() addrspace(1) {
+  call void @llrm.ia16.asm.fa.-.-.-.n()
+  %r = call {i16, i16} @llrm.ia16.asm.cd1a.ax.cx_dx.flags.n(i16 0)
+  %a = extractvalue {i16, i16} %r, 0
+  %b = extractvalue {i16, i16} %r, 1
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+";
+    assert!(text.contains("call {i16, i16} @llrm.ia16.asm."), "the shape that was refused");
+    let got = listing(text, "f");
+    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "db 0fah", "mov ax, 0", "db 0cdh,01ah", "mov ax, cx", "add ax, dx", "pop bp", "retf"]);
+}
+
+/// The same address as a phi's input, made in the predecessor before
+/// selection reaches it: refused "outside a block".
+#[test]
+fn test_an_address_of_no_global_can_be_a_phis_input() {
+    let text = "define ptr @f(i1 %c, ptr %p) addrspace(1) {
+entry:
+  br i1 %c, label %a, label %b
+a:
+  %g = getelementptr i8, ptr null, i16 -4
+  br label %b
+b:
+  %r = phi ptr [ %g, %a ], [ %p, %entry ]
+  ret ptr %r
+}
+";
+    assert!(text.contains("getelementptr i8, ptr null") && text.contains("phi ptr [ %g"), "the shape that was refused");
+    let got = listing(text, "f");
+    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+8]", "cmp byte ptr [bp+6], 0", "je L0_3", "L0_1:", "mov ax, -4", "L0_3:", "pop bp", "retf"]);
 }

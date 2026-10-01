@@ -4,7 +4,7 @@ use crate::dialect_extensions::{recognize_statement, ExtensionAction};
 use crate::error::ParseError;
 use crate::syntax::{
     Binary, Bound, CaseItem, Declaration, Expr, Haystack, Literal, Module, Parameter, PrintItem,
-    PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
+    PrintKind, PrintSeparator, Procedure, ProcedureKind, Span, Statement, TypeName, Unary,
 };
 
 use super::engine::{DeclarationForm, ParseResult, ParseState, ParserEngine, ProcedureHeader};
@@ -26,11 +26,13 @@ pub fn parse(source: &str, dialect: Dialect) -> Result<Module, ParseError> {
 ///
 /// Unsupported grammar actions return an explicit symbolic error.
 pub fn parse_vertical_slice(source: &str, dialect: Dialect) -> Result<ParseOutput, ParseError> {
+    let (tokens, volatile_at) = without_volatile(lex(source, dialect).map_err(ParseError::from)?);
     let (tokens, private_at) = without_private(for_in(augmented(tuple_assignment(
-        returned(lex(source, dialect).map_err(ParseError::from)?, dialect),
+        returned(tokens, dialect),
         dialect,
     ))));
     let mut state = ParseState::new(tokens);
+    state.volatile_at = volatile_at;
     state.python_expressions = dialect.python_expressions();
     let engine = ParserEngine::new();
     while state.at < state.tokens.len() {
@@ -306,6 +308,10 @@ fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
 /// becomes `$TUPLE(a, b) = $TUPLE(b, a)`. No source name can spell it.
 pub const TUPLE: &str = "$TUPLE";
 
+/// ON n GOTO|GOSUB's selector: `n` rounded to INTEGER, ERROR 5 raised by the
+/// ON statement itself where it is outside 0..255, so RESUME retries the ON.
+pub const ON_SELECTOR: &str = "$ON";
+
 /// Where the first comma outside parentheses stands in `tokens`.
 fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
     let mut depth = 0usize;
@@ -488,6 +494,49 @@ fn without_private(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<usize>) {
         {
             marked.insert(kept.len());
             continue;
+        }
+        kept.push(token.clone());
+    }
+    (kept, marked)
+}
+
+/// `ID AS VOLATILE TYPE` and `ID(...) AS VOLATILE TYPE`, in DIM and in a
+/// parameter list: the grammar parses the declaration without the word, so
+/// VOLATILE leaves the stream and its declaration's identifier is recorded
+/// by line and start. `BYREF` before a parameter, the default said aloud, goes
+/// too.
+fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>) {
+    let is = |token: Option<&Token>, name: &str| token.is_some_and(|token| matches!(&token.kind, TokenKind::Reserved(id) if *id == named(name)));
+    let mut kept: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut marked = BTreeSet::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let word = |name: &str| matches!(&token.kind, TokenKind::Identifier(word) if word == name);
+        if word("BYREF") && (is(kept.last(), "tkLParen") || is(kept.last(), "tkComma")) && matches!(tokens.get(index + 1).map(|next| &next.kind), Some(TokenKind::Identifier(_))) {
+            continue;
+        }
+        // `AS VOLATILE` and then a type; `AS VOLATILE` alone is a type of that name.
+        let types = |next: Option<&Token>| next.is_some_and(|next| matches!(next.kind, TokenKind::Identifier(_)) || matches!(next.kind, TokenKind::Reserved(id) if id != named("tkNewLine") && id != named("tkColon") && id != named("tkComma") && id != named("tkRParen")));
+        if word("VOLATILE") && is(kept.last(), "tkAS") && types(tokens.get(index + 1)) {
+            // The identifier this declares: before the dimensions, if it has them.
+            let mut at = kept.len() - 1;
+            if is(at.checked_sub(1).and_then(|one| kept.get(one)), "tkRParen") {
+                let mut depth = 0;
+                while at > 0 {
+                    at -= 1;
+                    if is(kept.get(at), "tkRParen") {
+                        depth += 1;
+                    } else if is(kept.get(at), "tkLParen") {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(Token { kind: TokenKind::Identifier(_), span }) = at.checked_sub(1).and_then(|one| kept.get(one)) {
+                marked.insert((span.line, span.start));
+                continue;
+            }
         }
         kept.push(token.clone());
     }
@@ -880,6 +929,7 @@ fn declaration(state: &mut ParseState, form: DeclarationForm, require_array: boo
         fixed_length,
         shared: state.declaration_shared,
         dynamic: state.dynamic_arrays,
+        volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
         span: Span {
             line: token.span.line,
             start: token.span.start,
@@ -968,6 +1018,7 @@ fn end_print(state: &mut ParseState, has_expression: bool) -> ParseResult {
     }
     if at_named(state, "tkNewLine")
         || at_named(state, "tkColon")
+        || at_named(state, "tkELSE")
         || (has_expression && at_named(state, "tkUSING"))
     {
         return if has_expression {
@@ -1268,6 +1319,7 @@ fn parameter(state: &mut ParseState) -> ParseResult {
             fixed_length: None,
             shared: false,
             dynamic: false,
+            volatile: state.volatile_at.contains(&(token.span.line, token.span.start)),
             span: Span {
                 line: token.span.line,
                 start: token.span.start,
@@ -1447,15 +1499,41 @@ fn synthesize_statement(
                 && token.span.start >= span.end
                 && matches!(token.kind, TokenKind::Reserved(id) if id == named("tkINPUT"))
         });
-    let Some(descriptor) = (if line_input {
+    // ON n GOTO|GOSUB: the grammar marks which, as the original code
+    // generator read it, and emits no opcode of its own.
+    let on_branch = (keyword == named("tkON")).then(|| {
+        actions.iter().find_map(|action| match action {
+            AstAction::Mark { slot: 1, .. } => Some(false),
+            AstAction::Mark { slot: 2, .. } => Some(true),
+            _ => None,
+        })
+    });
+    let descriptor = if line_input {
         Some(StatementShape::LineInput)
     } else {
         dispatched.or(emitted)
-    }) else {
-        return false;
     };
     let arguments = state.expressions.split_off(expression_base);
     let labels = state.labels.split_off(label_base);
+    if let Some(Some(gosub)) = on_branch {
+        let ([selector], false) = (&arguments[..], labels.is_empty()) else {
+            return false;
+        };
+        state.statements.push(Statement::Select {
+            selector: Expr::Apply {
+                name: ON_SELECTOR.into(),
+                arguments: vec![selector.clone()],
+                span,
+            },
+            arms: on_branch_arms(gosub, labels, span),
+            otherwise: Vec::new(),
+            span,
+        });
+        return true;
+    }
+    let Some(descriptor) = descriptor else {
+        return false;
+    };
     let procedure_references = state
         .procedure_references
         .split_off(procedure_reference_base);
@@ -1588,7 +1666,13 @@ fn synthesize_statement(
                     PrintItem { value, separator }
                 })
                 .collect();
+            let kind = match keyword {
+                one if one == named("tkLPRINT") => PrintKind::Lprint,
+                one if one == named("tkWRITE") => PrintKind::Write,
+                _ => PrintKind::Print,
+            };
             Statement::Print {
+                kind,
                 file,
                 using,
                 items,
@@ -2054,6 +2138,34 @@ fn synthesize_statement(
     true
 }
 
+/// `ON n GOTO|GOSUB l1, l2, ...` as the SELECT CASE it means: the n-th label,
+/// nothing when n is 0 or past the list.
+fn on_branch_arms(
+    gosub: bool,
+    labels: Vec<(String, Span)>,
+    span: Span,
+) -> Vec<(Vec<CaseItem>, Vec<Statement>)> {
+    let number = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+    let mut arms = labels
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, label_span))| {
+            let jump = if gosub {
+                Statement::Call {
+                    name: "GOSUB".into(),
+                    arguments: vec![Expr::Name(label, label_span)],
+                    explicit: false,
+                    span,
+                }
+            } else {
+                Statement::Goto(label, span)
+            };
+            (vec![CaseItem::Value(number(index as i64 + 1))], vec![jump])
+        })
+        .collect::<Vec<_>>();
+    arms
+}
+
 fn block_until_next(state: &mut ParseState) -> Option<Vec<Statement>> {
     if !consume_named(state, "tkNewLine") && !consume_named(state, "tkColon") {
         return None;
@@ -2314,6 +2426,7 @@ fn type_declaration_fields(state: &mut ParseState) -> Option<Vec<Declaration>> {
             fixed_length,
             shared: false,
             dynamic: false,
+            volatile: false,
             span: token.span,
         });
         if !at_named(state, "tkNewLine") {
@@ -2345,7 +2458,8 @@ fn finish_if_statement(state: &mut ParseState, condition: Expr, keyword_span: Sp
     };
     let mut else_branch = Vec::new();
     if consume_named(state, "tkELSE") {
-        let Ok(parsed) = single_line_if_branch(state, false) else {
+        // An IF has one ELSE: another ends this branch, for an enclosing IF's.
+        let Ok(parsed) = single_line_if_branch(state, true) else {
             return ParseResult::BadSyntax;
         };
         else_branch = parsed;
@@ -2376,7 +2490,15 @@ fn single_line_if_branch(
     let mut branch = Vec::new();
     loop {
         let before = state.statements.len();
-        if statement(&ParserEngine::new(), state) != ParseResult::GoodSyntax {
+        // A line number where a branch starts is a GOTO to it, not a label.
+        let number = match state.token() {
+            Some(Token { kind: TokenKind::Integer(value, None), span }) if branch.is_empty() && (0..=65_529).contains(value) => Some((value.to_string(), *span)),
+            _ => None,
+        };
+        if let Some((label, span)) = number {
+            state.at += 1;
+            state.statements.push(Statement::Goto(label, span));
+        } else if statement(&ParserEngine::new(), state) != ParseResult::GoodSyntax {
             return Err(ParseResult::BadSyntax);
         }
         let mut parsed = state.statements.split_off(before);
@@ -3336,6 +3458,77 @@ mod tests {
         assert!(
             matches!(module("gosub firstPart\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, ref arguments, explicit: false, .. } if name == "GOSUB" && matches!(&arguments[..], [Expr::Name(label, _)] if label == "FIRSTPART"))
         );
+    }
+
+    /// A PRINT item followed by ELSE was refused ("invalid generated-grammar
+    /// statement"): only a new line or colon ended it, not the ELSE of a
+    /// one-line IF. tests/suite/flags.bas did not compile.
+    /// LPRINT and WRITE were refused ("unsupported opStLPrint"/"opStWrite"):
+    /// both are a PRINT with a preamble, and WRITE's items are comma-separated.
+    #[test]
+    fn lprint_and_write_are_prints_of_their_own_kind() {
+        let kinds = |source: &str| {
+            module(source, Dialect::QuickBasic45).statements.iter().filter_map(|one| match one {
+                Statement::Print { kind, file, items, .. } => Some((*kind, file.is_some(), items.len())),
+                _ => None,
+            }).collect::<Vec<_>>()
+        };
+        assert_eq!(kinds("lprint \"a\"; 5\r\n"), [(PrintKind::Lprint, false, 2)]);
+        assert_eq!(kinds("write 1, \"b\", x\r\nwrite\r\nwrite #2, y\r\n"), [(PrintKind::Write, false, 3), (PrintKind::Write, false, 0), (PrintKind::Write, true, 1)]);
+    }
+
+    /// `THEN 100` was a label definition, so `IF a THEN 100` with a line 100
+    /// reported "duplicate label 100".
+    #[test]
+    fn a_line_number_after_then_or_else_is_a_goto() {
+        let parsed = module("if a then 100 else 200\r\n", Dialect::QuickBasic45);
+        assert!(matches!(
+            &parsed.statements[0],
+            Statement::If { then_branch, else_branch, .. }
+                if matches!(&then_branch[..], [Statement::Goto(label, _)] if label == "100") && matches!(&else_branch[..], [Statement::Goto(label, _)] if label == "200")
+        ));
+    }
+
+    /// Each ELSE pairs with the nearest unmatched IF; the second ELSE of
+    /// `IF a THEN IF b THEN x=1 ELSE x=2 ELSE x=3` was refused.
+    #[test]
+    fn a_second_else_of_a_one_line_if_belongs_to_the_outer_if() {
+        let parsed = module("if a then if b then x = 1 else x = 2 else x = 3\r\n", Dialect::QuickBasic45);
+        let Statement::If { then_branch, else_branch, .. } = &parsed.statements[0] else { panic!("{:?}", parsed.statements) };
+        assert!(matches!(&then_branch[..], [Statement::If { else_branch: inner, .. }] if inner.len() == 1));
+        assert_eq!(else_branch.len(), 1);
+    }
+
+    #[test]
+    fn a_print_item_ends_at_the_else_of_a_one_line_if() {
+        let parsed = module("if r = 0 then print r else print \"b\"\r\n", Dialect::QuickBasic45);
+        assert!(matches!(
+            &parsed.statements[0],
+            Statement::If { then_branch, else_branch, .. }
+                if matches!(then_branch[..], [Statement::Print { .. }]) && matches!(else_branch[..], [Statement::Print { .. }])
+        ));
+    }
+
+    /// ON n GOTO|GOSUB parsed to no statement ("invalid generated-grammar
+    /// statement"): the grammar emitted no opcode for it. tests/suite/jumps.bas
+    /// did not compile.
+    #[test]
+    fn on_goto_and_on_gosub_select_the_nth_label() {
+        for (source, gosub) in [("on k goto one, two, three\r\n", false), ("on k gosub one, two, three\r\n", true)] {
+            let parsed = module(source, Dialect::QuickBasic45);
+            let Statement::Select { arms, .. } = &parsed.statements[0] else { panic!("{source}: {:?}", parsed.statements[0]) };
+            let jumps = arms[..3].iter().map(|(_, body)| &body[0]).collect::<Vec<_>>();
+            assert_eq!(arms.len(), 3, "{source}: one arm a label");
+            for (one, label) in jumps.iter().zip(["ONE", "TWO", "THREE"]) {
+                match one {
+                    Statement::Goto(target, _) if !gosub => assert_eq!(target, label),
+                    Statement::Call { name, arguments, .. } if gosub && name == "GOSUB" => {
+                        assert!(matches!(&arguments[..], [Expr::Name(target, _)] if target == label))
+                    }
+                    other => panic!("{source}: {other:?}"),
+                }
+            }
+        }
     }
 
     #[test]

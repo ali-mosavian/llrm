@@ -224,6 +224,22 @@ identity = "opPrintItemComma"
 action = "PrintItemComma"
 
 [[emit]]
+identity = "opStLPrint"
+action = "LPrintPreamble"
+
+[[emit]]
+identity = "opStWrite"
+action = "WritePreamble"
+
+[[emit]]
+identity = "opPrintItemEos"
+action = "PrintItemEnd"
+
+[[emit]]
+identity = "opPrintEos"
+action = "PrintEnd"
+
+[[emit]]
 identity = "opPrintItemSemi"
 action = "PrintItemSemicolon"
 
@@ -382,6 +398,16 @@ shape = "Runtime"
 [[dispatch]]
 identity = "tkPRINT"
 action = "Print"
+shape = "Print"
+
+[[dispatch]]
+identity = "tkLPRINT"
+action = "LPrint"
+shape = "Print"
+
+[[dispatch]]
+identity = "tkWRITE"
+action = "Write"
 shape = "Print"
 
 [[dispatch]]

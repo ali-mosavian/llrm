@@ -147,3 +147,45 @@ fn mid_statement_runs_in_the_model() {
     let source = "a$ = \"hello\"\nMID$(a$, 2, 3) = \"XYZW\"\nPRINT a$\nMID$(a$, 5) = \"!!\"\nPRINT a$\n";
     assert_eq!(printed_on(source, "vbdos", "vbdos"), "hXYZo\nhXYZ!\n");
 }
+
+/// ON n GOTO|GOSUB was parsed to nothing: tests/suite/jumps.bas did not
+/// compile. n picks the label; 0 or past the list falls through.
+#[test]
+fn on_goto_and_on_gosub_pick_the_nth_label() {
+    let source = "DEFINT A-Z\nFOR k = 0 TO 3\nON k GOSUB a, b\nON k GOTO c, d\nPRINT \"fell\"; k\nGOTO nxt\nc: PRINT \"c\"\nGOTO nxt\nd: PRINT \"d\"\nnxt:\nNEXT\nEND\na: PRINT \"a\"\nRETURN\nb: PRINT \"b\"\nRETURN\n";
+    assert_eq!(printed(source), "fell 0 \na\nc\nb\nd\nfell 3 \n");
+}
+
+/// A PRINT item before the ELSE of a one-line IF was refused:
+/// tests/suite/flags.bas did not compile.
+#[test]
+fn a_print_item_before_else_prints_the_right_branch() {
+    assert_eq!(printed("DEFINT A-Z\nr = 0\nIF r = 0 THEN PRINT r ELSE PRINT 7\nr = 1\nIF r = 0 THEN PRINT r ELSE PRINT 7\n"), " 0 \n 7 \n");
+}
+
+/// ON n outside 0..255 is ERROR 5 raised by the ON itself (tests/suite/onrange.bas
+/// pins that RESUME then retries the ON, as BC does): the selector is the range
+/// check, so no statement of its own follows it.
+#[test]
+fn on_goto_out_of_range_raises_error_5() {
+    let source = "DEFINT A-Z\nx = 300\nON x GOTO a, b\nPRINT \"fell\"\nEND\na: PRINT \"a\"\nb: PRINT \"b\"\n";
+    let program = program(source, "vbdos");
+    let executed = execute::run(&program, "__main", &[]).expect("runs");
+    assert_ne!(executed.panic, None, "{}", executed.output);
+    assert!(!executed.output.contains("fell"), "{}", executed.output);
+}
+
+/// The runtime routines the module-level code calls, in order.
+fn called(source: &str) -> Vec<String> {
+    let program = program(source, "qb45");
+    program.modules[0].functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).filter_map(|one| one.callee.clone()).collect()
+}
+
+/// LPRINT and WRITE were refused: BC 4.5 calls B$LPRT before the items of an
+/// LPRINT, and B$WRIT (after B$CHOU's channel) before a WRITE's; a bare WRITE
+/// is B$PESD alone, and WRITE's commas are `S` terminators.
+#[test]
+fn lprint_and_write_call_their_preambles_as_bc_does() {
+    assert_eq!(called("LPRINT \"a\"; 5\nLPRINT\n"), ["B$LPRT", "B$PSSD", "B$PEI2", "B$LPRT", "B$PESD"]);
+    assert_eq!(called("DEFINT A-Z\nWRITE \"x\", 3\nWRITE\nWRITE #1, 2\n"), ["B$WRIT", "B$PSSD", "B$PEI2", "B$PESD", "B$CHOU", "B$WRIT", "B$PEI2"]);
+}

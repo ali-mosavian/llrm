@@ -98,9 +98,14 @@ pub fn bodies(module: &Module) -> Vec<GlobalId> {
 #[derive(Default)]
 pub struct Tuned {
     pub costs: crate::profit::OperationCosts,
+    pub sizes: crate::profit::OperationCosts,
     pub registers: i64,
     pub call_registers: i64,
+    pub far_access: i64,
+    pub segments: i64,
     pub address_forms: Vec<llrm_mir::target::AddressForm>,
+    /// What a multiply by each constant costs, where not a multiply.
+    pub multiplies: std::collections::BTreeMap<i64, i64>,
 }
 
 impl llrm_mir::target::Machine for Tuned {
@@ -112,6 +117,10 @@ impl llrm_mir::target::Machine for Tuned {
         self.costs.clone()
     }
 
+    fn size_costs(&self) -> crate::profit::OperationCosts {
+        self.sizes.clone()
+    }
+
     fn registers(&self) -> i64 {
         self.registers
     }
@@ -120,8 +129,20 @@ impl llrm_mir::target::Machine for Tuned {
         self.call_registers
     }
 
+    fn far_access_registers(&self) -> i64 {
+        self.far_access
+    }
+
+    fn segment_registers(&self) -> i64 {
+        self.segments
+    }
+
     fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
         if self.address_forms.is_empty() { llrm_mir::target::Neutral.address_forms() } else { self.address_forms.clone() }
+    }
+
+    fn multiply_by(&self, factor: i64) -> i64 {
+        self.multiplies.get(&factor).copied().unwrap_or(self.costs.multiply)
     }
 }
 

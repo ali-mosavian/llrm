@@ -150,6 +150,23 @@ fn an_intrinsic_declaration_takes_llvms_attributes() {
     assert_eq!(print::module(&module), "declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n");
 }
 
+/// Inline assembly's registers are in its callee's name; the declaration
+/// must answer them, and a block that reaches no memory keeps its place
+/// among the ports as their own state does.
+#[test]
+fn an_inline_assembly_declaration_is_checked_against_its_name() {
+    let name = "llrm.ia16.asm.cd1a.ax.cx_dx.flags.n";
+    let block = crate::intrinsics::asm(name).expect("parses");
+    assert_eq!((block.code, block.inputs, block.outputs, block.clobbers, block.memory), (vec![0xcd, 0x1a], vec!["ax".to_owned()], vec!["cx".to_owned(), "dx".to_owned()], vec!["flags".to_owned()], false));
+    assert_eq!(crate::intrinsics::asm_name(&crate::intrinsics::asm(name).unwrap()), name);
+    let problems = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    let right = format!("declare {{i16, i16}} @{name}(i16)\n");
+    assert_eq!(problems(&right), Vec::<String>::new());
+    assert_eq!(print::module(&parse::module(&right).unwrap()), format!("declare {{ i16, i16 }} @{name}(i16) nounwind memory(inaccessiblemem: readwrite)\n"));
+    assert!(problems(&format!("declare i16 @{name}(i16)\n"))[0].contains("incorrect return type"));
+    assert!(problems(&format!("declare {{i16, i16}} @{name}(i16, i16)\n"))[0].contains("incorrect argument type"));
+}
+
 /// BCC stores 3.125L as 00 00 00 00 00 00 00 C8 00 40; a long double
 /// global llrm lays down must hold the same ten bytes.
 #[test]
@@ -159,4 +176,95 @@ fn test_a_double_is_laid_down_in_x87_extended_form() {
     assert_eq!(extended(-2.25), [0, 0, 0, 0, 0, 0, 0, 0x90, 0x00, 0xC0]);
     assert_eq!(extended(0.0), [0; 10]);
     assert_eq!(extended(f64::from_bits(1)), [0, 0, 0, 0, 0, 0, 0, 0x80, 0xCD, 0x3B]);
+}
+
+/// What a call does to memory the program can name, less what it does to
+/// memory it cannot: a routine that ends the program by writing its own
+/// state touches nothing the loop around the call can see.
+#[test]
+fn a_call_to_inaccessible_memory_touches_nothing_nameable() {
+    let module = crate::parse::module(
+        "declare void @stop() noreturn memory(inaccessiblemem: readwrite)
+declare void @any()
+
+define void @f() {
+b0:
+  call void @stop()
+  call void @any()
+  ret void
+}
+",
+    )
+    .expect("a module");
+    let callees = crate::memory::callees(&module);
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, crate::opcode::Opcode::Call(_))).collect::<Vec<_>>();
+    let stop = crate::memory::accessible(&module.context, &callees, function, calls[0]);
+    let any = crate::memory::accessible(&module.context, &callees, function, calls[1]);
+    assert_eq!((stop, any), (crate::memory::Effects::NONE, crate::memory::Effects::ANY));
+    assert!(crate::memory::of(&module.context, &callees, function, calls[0]).writes, "it still writes what it can reach");
+}
+
+fn dominance_problems(text: &str) -> Vec<String> {
+    crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}"))).into_iter().filter(|one| one.contains("dominate")).collect()
+}
+
+/// A value used in a branch arm that does not contain its definition, in
+/// the join after it, or before it in the same block, is not dominated; the
+/// verifier that runs after every pass must say so.
+#[test]
+fn a_use_not_dominated_by_its_definition_is_reported() {
+    let diamond = |join: &str| {
+        format!(
+            "define i16 @f(i1 %c, i16 %x) {{
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = add i16 %x, 1
+  br label %j
+r:
+  br label %j
+j:
+{join}
+}}
+"
+        )
+    };
+    assert_eq!(dominance_problems(&diamond("  ret i16 %x")), Vec::<String>::new());
+    assert_eq!(dominance_problems(&diamond("  ret i16 %a")).len(), 1, "a definition in one arm does not reach the join");
+    assert_eq!(dominance_problems(&diamond("  %p = phi i16 [ %a, %l ], [ %x, %r ]\n  ret i16 %p")), Vec::<String>::new());
+    assert_eq!(dominance_problems(&diamond("  %p = phi i16 [ %x, %l ], [ %a, %r ]\n  ret i16 %p")).len(), 1, "a phi input must dominate its own edge");
+}
+
+/// Within a block a use before the definition, and a use of the value
+/// itself, are not dominated.
+#[test]
+fn a_use_before_its_definition_in_one_block_is_reported() {
+    let before = "define i16 @f(i16 %x) {
+b0:
+  %b = add i16 %a, 1
+  %a = add i16 %x, 1
+  ret i16 %b
+}
+";
+    assert_eq!(dominance_problems(before).len(), 1);
+}
+
+/// A module its frontend made with a use its definition does not dominate
+/// was reported as the first pass's doing ("after mem2reg: ..."), sending
+/// the search to the wrong crate; it is reported before any pass runs.
+#[test]
+fn a_module_made_wrong_is_reported_before_the_first_pass() {
+    let mut module = parse::module(
+        "define i16 @f(i16 %x) {
+b0:
+  %b = add i16 %a, 1
+  %a = add i16 %x, 1
+  ret i16 %b
+}
+",
+    )
+    .expect("parses");
+    let error = crate::transforms::optimized_with(&mut module, &["instcombine"]).unwrap_err();
+    assert!(error.starts_with("before the first pass:") && error.contains("dominate"), "{error}");
 }

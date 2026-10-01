@@ -15,11 +15,41 @@ pub trait Machine {
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
 
+    /// What each operation costs in code bytes, for a decision made for
+    /// size; by default the same prices.
+    fn size_costs(&self) -> OperationCosts {
+        self.costs()
+    }
+
     /// How many integer values fit in registers at once.
     fn registers(&self) -> i64;
 
     /// Of `registers`, how many survive a call.
     fn call_registers(&self) -> i64;
+
+    /// Registers an access through a pointer wider than its offset takes
+    /// for its selector, besides those its address names.
+    fn far_access_registers(&self) -> i64 {
+        0
+    }
+
+    /// Segment registers a far pointer's selector can be held in, besides
+    /// `registers`: none where the target has none.
+    fn segment_registers(&self) -> i64 {
+        0
+    }
+
+    /// Of `registers`, how many survive a call to `callee`, named where the
+    /// call is direct: its own contract may keep more than any call does.
+    fn kept_across(&self, _callee: Option<&str>) -> i64 {
+        self.call_registers()
+    }
+
+    /// What multiplying by the constant `factor`, above one, costs: a
+    /// multiply, or the shifts and adds the target makes it of.
+    fn multiply_by(&self, _factor: i64) -> i64 {
+        self.costs().multiply
+    }
 
     /// The indexed addresses a memory access may use, native form first.
     fn address_forms(&self) -> Vec<AddressForm>;
@@ -107,6 +137,10 @@ pub struct AddressForm {
     pub secondary: bool,
     // How many distinct bases one index can pair with at once; None is any.
     pub partners: Option<i64>,
+    // The registers an address takes as its base and as its index, where an
+    // address is one of each: a register is of one class or the other. None is any.
+    pub bases: Option<i64>,
+    pub indices: Option<i64>,
     // Compatibility name for `secondary`; both views stay identical.
     pub fallback: Option<bool>,
 }
@@ -134,6 +168,8 @@ impl AddressForm {
             extension_cost,
             secondary: selected,
             partners: None,
+            bases: None,
+            indices: None,
             fallback: Some(selected),
         })
     }
@@ -142,6 +178,11 @@ impl AddressForm {
     /// pairs and its partners. None is any.
     pub fn address_registers(&self) -> Option<i64> {
         self.partners.map(|partners| partners + 1)
+    }
+
+    /// The classes of an address's two registers, where the form has them.
+    pub fn register_classes(&self) -> Option<(i64, i64)> {
+        self.bases.zip(self.indices)
     }
 
     /// Whether this form is cheap enough to try before a frame spill.

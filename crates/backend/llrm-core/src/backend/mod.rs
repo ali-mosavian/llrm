@@ -17,6 +17,7 @@ pub mod cpu;
 pub mod datagroup;
 pub mod division;
 pub mod ehprepare;
+pub mod selects;
 pub mod farcall;
 pub mod farload;
 pub mod constpool;
@@ -70,3 +71,9 @@ pub mod verify;
 
 #[cfg(test)]
 mod pricing_tests;
+#[cfg(test)]
+pub mod regalloc_input;
+#[cfg(test)]
+mod regalloc_total_tests;
+#[cfg(test)]
+mod regalloc_fuzz_tests;

@@ -8,5 +8,5 @@ pub mod target;
 pub mod timings;
 
 pub use cycles::report;
-pub use target::Dos;
+pub use target::{Dos, GENERAL, PRESERVED};
 pub use timings::ARCHS;

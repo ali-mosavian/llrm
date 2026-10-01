@@ -4,7 +4,7 @@ declare function waitKey (keyDown as integer) as integer
 
 end
 
-function waitKey (keyDown as integer) as integer
+function waitKey (keyDown as volatile integer) as integer
     if keyDown = 0 then
         waitKey = 0
         exit function

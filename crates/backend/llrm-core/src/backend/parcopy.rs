@@ -3,8 +3,7 @@
 //!
 //! After allocation: which moves conflict is a question about locations. A
 //! move may go once nothing left in the group reads what it writes; a cycle
-//! is exchanged or rotated through the machine stack, and one that cannot
-//! be is refused as `Tangled`.
+//! is exchanged or rotated through the machine stack: every cycle can be.
 
 use std::fmt;
 use std::sync::Arc;
@@ -18,36 +17,17 @@ use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;
 
-/// A parallel copy whose moves all read each other's destinations.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Tangled(pub String);
-
 /// Something in a copy group that is not a move of one place to another.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Malformed(pub String);
 
-/// Which of the two exceptions `scheduled` raised.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Refused {
-    Tangled(Tangled),
-    Malformed(Malformed),
-}
-
-impl From<Malformed> for Refused {
-    fn from(malformed: Malformed) -> Self {
-        Self::Malformed(malformed)
-    }
-}
-
-impl fmt::Display for Refused {
+impl fmt::Display for Malformed {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Tangled(Tangled(message)) | Self::Malformed(Malformed(message)) => formatter.write_str(message),
-        }
+        formatter.write_str(&self.0)
     }
 }
 
-impl std::error::Error for Refused {}
+impl std::error::Error for Malformed {}
 
 pub struct ParallelCopy;
 
@@ -65,13 +45,7 @@ impl LIRTransform for ParallelCopy {
     }
 
     fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        scheduled(&body).map_err(|refused| {
-            let kind = match refused {
-                Refused::Tangled(_) => "Tangled",
-                Refused::Malformed(_) => "Malformed",
-            };
-            Exception::defined_in("qbopt.backend.parcopy", kind, refused.to_string())
-        })
+        scheduled(&body).map_err(|malformed| Exception::defined_in("qbopt.backend.parcopy", "Malformed", malformed.to_string()))
     }
 }
 
@@ -101,7 +75,7 @@ fn remove(left: &mut Vec<Arc<Insn>>, one: &Arc<Insn>) {
 }
 
 /// `body` with every copy group written in an order that computes it.
-pub fn scheduled(body: &LirBody) -> Result<LirBody, Refused> {
+pub fn scheduled(body: &LirBody) -> Result<LirBody, Malformed> {
     if !body.blocks.iter().any(|block| block.insns.iter().any(|one| one.group.is_some())) {
         return Ok(body.clone());
     }
@@ -169,7 +143,7 @@ fn ungrouped(one: &Insn) -> Arc<Insn> {
 }
 
 /// One group, in an order where no move reads what an earlier one wrote.
-fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Refused> {
+fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
     let mut identities = Vec::new();
     for one in moves {
         if _into(one)? == _outof(one)? {
@@ -195,16 +169,7 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Refused> {
             }
         }
         if ready.is_empty() {
-            let Some((made, used)) = _rotated(&left)? else {
-                let described = left
-                    .iter()
-                    .map(|one| Ok(format!("{} <- {}", _into(one)?, _outof(one)?)))
-                    .collect::<Result<Vec<_>, Malformed>>()?;
-                return Err(Refused::Tangled(Tangled(
-                    "these moves all read each other's destinations and need a temporary: ".to_owned()
-                        + &described.join(", "),
-                )));
-            };
+            let (made, used) = _rotated(&left)?;
             out.extend(made);
             for one in &used {
                 remove(&mut left, one);
@@ -221,12 +186,15 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Refused> {
 
 type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);
 
-/// One cycle out of `left`, using exchanges or the machine stack.
+/// One cycle out of `left`, broken without a free register: by exchanges
+/// where the target can exchange every adjacent pair, else through the
+/// machine stack.
 ///
 /// A cycle `p1 <- p2 <- ... <- pn <- p1` is `xchg p1,p2` then `xchg p2,p3`
-/// and so on. When adjacent places are both spilled, save the first on the
-/// machine stack, perform the remaining moves, then pop into the last.
-fn _rotated(left: &[Arc<Insn>]) -> Result<Option<Rotation>, Malformed> {
+/// and so on. Otherwise save the place the closing move reads on the stack,
+/// perform the remaining moves in order, then pop into the closing move's
+/// destination.
+fn _rotated(left: &[Arc<Insn>]) -> Result<Rotation, Malformed> {
     let mut writes: IndexMap<String, &Arc<Insn>> = IndexMap::default();
     for one in left {
         writes.insert(_into(one)?, one);
@@ -235,12 +203,10 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Option<Rotation>, Malformed> {
     let mut cycle: Vec<Arc<Insn>> = vec![Arc::clone(start)];
     let mut place = _outof(start)?;
     while place != _into(start)? {
-        let Some(&one) = writes.get(&place) else {
-            return Ok(None); // not a cycle this walk closes
+        let one = writes.get(&place).copied().filter(|one| !cycle.iter().any(|each| **each == ***one));
+        let Some(one) = one else {
+            return Err(Malformed(format!("{:#06x} is in a copy group that is not a permutation of its places", start.at)));
         };
-        if cycle.iter().any(|each| **each == **one) {
-            return Ok(None);
-        }
         cycle.push(Arc::clone(one));
         place = _outof(one)?;
     }
@@ -248,49 +214,12 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Option<Rotation>, Malformed> {
     let dest = |one: &Arc<Insn>| one.what.as_ref().expect("a move").dests[0].clone();
     let source = |one: &Arc<Insn>| one.what.as_ref().expect("a move").sources[0].clone();
     let operands: Vec<Loc> = cycle.iter().map(dest).collect();
-    let pairs: Vec<(&Loc, &Loc)> = operands.iter().zip(operands.iter().skip(1)).collect();
-
-    if operands
-        .iter()
-        .any(|one| matches!(one, Loc::Reg(reg) if target::SEGMENTS.contains(&reg.register)))
-    {
-        return Ok(None); // no `xchg` names a segment register
-    }
     // One width across the whole chain: `_named` keys a register by its
     // root, so `mov ax,bx` and `mov ebx,eax` walk as one clean 2-cycle
     // whose exchange would be `xchg ax,ebx`.
-    let last = &cycle[cycle.len() - 1];
     let widths: IndexSet<u32> = operands.iter().map(_width).collect();
-    if widths.len() != 1 {
-        // Partial-register destinations cannot be exchanged as their roots.
-        // Save exactly the slice consumed by the closing move, rotate the
-        // other moves in dependency order, and restore that slice.
-        if !cycle.iter().all(|one| match (dest(one), source(one)) {
-            (Loc::Reg(into), Loc::Reg(out_of)) => into.width == out_of.width,
-            _ => false,
-        }) {
-            return Ok(None);
-        }
-        // The stack saves a word or a dword: close the cycle on a move
-        // whose source is one, so that source is the slice saved.
-        let Some(wide) = cycle.iter().rposition(|one| matches!(_width(&source(one)), 2 | 4)) else {
-            return Ok(None);
-        };
-        let count = cycle.len();
-        cycle.rotate_left((wide + 1) % count);
-        let (start, last) = (&cycle[0], &cycle[cycle.len() - 1]);
-        let closing_width = _width(&source(last));
-        let Loc::Reg(first) = dest(start) else { unreachable!("checked above") };
-        let saved = Loc::Reg(Reg {
-            register: target::named(first.register, i64::from(closing_width)),
-            width: closing_width,
-        });
-        let mut made = vec![push_of(start, saved)];
-        made.extend(cycle[..cycle.len() - 1].iter().map(|one| ungrouped(one)));
-        made.push(pop_into(last, dest(last)));
-        return Ok(Some((made, cycle)));
-    }
-    if !pairs.iter().any(|(a, b)| matches!(a, Loc::Mem(_)) && matches!(b, Loc::Mem(_))) {
+    let pairs: Vec<(&Loc, &Loc)> = operands.iter().zip(operands.iter().skip(1)).collect();
+    if widths.len() == 1 && pairs.iter().all(|(one, other)| target::exchangeable(one, other)) {
         let mut made: Vec<Arc<Insn>> = cycle
             .iter()
             .zip(&pairs)
@@ -308,23 +237,36 @@ fn _rotated(left: &[Arc<Insn>]) -> Result<Option<Rotation>, Malformed> {
             .collect();
         // The closing logical move contributes no machine instruction, but
         // it still defines the virtual value consumed after this edge.
-        made.push(lir::anchor(Arc::clone(last)));
-        return Ok(Some((made, cycle)));
+        made.push(lir::anchor(Arc::clone(&cycle[cycle.len() - 1])));
+        return Ok((made, cycle));
     }
 
-    if !matches!(_width(&operands[0]), 2 | 4) {
-        return Ok(None);
+    // Close the cycle on a move the stack can carry: its source is saved
+    // first, and every other move, in order, writes only what was read.
+    let closing = cycle
+        .iter()
+        .rposition(|one| target::pushed_width(&source(one)).is_some() && target::popped_width(&dest(one)).is_some())
+        .ok_or_else(|| Malformed(format!("{:#06x} is in a copy cycle no move of which the stack can carry", start.at)))?;
+    let count = cycle.len();
+    cycle.rotate_left((closing + 1) % count);
+    let (first, last) = (&cycle[0], &cycle[count - 1]);
+    let mut made = vec![push_of(first, source(last))];
+    made.extend(cycle[..count - 1].iter().map(|one| ungrouped(one)));
+    made.push(pop_into(last, dest(last)));
+    Ok((made, cycle))
+}
+
+/// `place` at the width the stack carries it: a frame cell's byte moves whole.
+fn _stacked(place: Loc) -> Loc {
+    match (&place, target::pushed_width(&place)) {
+        (Loc::Mem(cell), Some(width)) => Loc::Mem(Mem { width, ..cell.clone() }),
+        _ => place,
     }
-    let saved = operands[0].clone();
-    let mut made = vec![push_of(start, saved)];
-    made.extend(cycle[..cycle.len() - 1].iter().map(|one| ungrouped(one)));
-    made.push(pop_into(last, operands[operands.len() - 1].clone()));
-    Ok(Some((made, cycle)))
 }
 
 fn push_of(start: &Insn, saved: Loc) -> Arc<Insn> {
     let mut push = start.clone();
-    push.what = Some(semantics(Operation::Push, "push", vec![], vec![saved]));
+    push.what = Some(semantics(Operation::Push, "push", vec![], vec![_stacked(saved)]));
     push.group = None;
     push.defines = vec![];
     push.uses = vec![];
@@ -333,7 +275,7 @@ fn push_of(start: &Insn, saved: Loc) -> Arc<Insn> {
 
 fn pop_into(last: &Insn, into: Loc) -> Arc<Insn> {
     let mut pop = last.clone();
-    pop.what = Some(semantics(Operation::Pop, "pop", vec![into], vec![]));
+    pop.what = Some(semantics(Operation::Pop, "pop", vec![_stacked(into)], vec![]));
     pop.group = None;
     Arc::new(pop)
 }
@@ -380,7 +322,7 @@ mod tests {
     use iced_x86::Register;
     use crate::support::hash::IndexMap;
 
-    use super::{_into, _named, _outof, Refused, scheduled};
+    use super::{_into, _named, _outof, Malformed, scheduled};
     use crate::backend::verify;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -594,6 +536,31 @@ mod tests {
         assert_eq!(got[got.len() - 1].covers, Some((0x100, 0x102)));
     }
 
+    /// `conc7` at `--cpu Core` was refused ("need a temporary", #106): a slot
+    /// written from edx and read back into dx as a word is a two-place cycle
+    /// no exchange takes, since the places are read at two widths.
+    #[test]
+    fn test_a_slot_written_as_a_dword_and_read_as_a_word_cycles_through_the_stack() {
+        let dword_slot = Loc::Mem(Mem { width: 4, ..match _slot(32) { Loc::Mem(cell) => cell, _ => unreachable!() } });
+        let body = _body(vec![
+            grouped(dword_slot.clone(), reg(Register::EDX, 4), 1),
+            grouped(reg(Register::DX, 2), _slot(32), 1),
+        ]);
+        let got = scheduled(&body).unwrap().blocks[0].insns.clone();
+        assert_eq!(names(&got), ["push", "mov", "pop"]);
+        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![_slot(32)], "the word the closing move reads is saved");
+        assert_eq!(got[2].what.as_ref().unwrap().dests, vec![reg(Register::DX, 2)]);
+    }
+
+    /// No `xchg` names a segment register.
+    #[test]
+    fn test_a_cycle_through_a_segment_register_goes_through_the_stack() {
+        let body = _body(vec![grouped(reg(Register::ES, 2), _slot(4), 1), grouped(_slot(4), reg(Register::ES, 2), 1)]);
+        let got = scheduled(&body).unwrap().blocks[0].insns.clone();
+        assert_eq!(names(&got), ["push", "mov", "pop"]);
+        assert_eq!(got[0].what.as_ref().unwrap().sources, vec![reg(Register::ES, 2)]);
+    }
+
     #[test]
     fn test_mixed_width_register_cycle_uses_a_balanced_temporary() {
         // sieve rotates EDX->CX->SI->EDX without exchanging incompatible register widths.
@@ -637,6 +604,6 @@ mod tests {
     fn test_something_that_is_not_a_move_in_a_group_is_refused() {
         let mut other = _other(0x100);
         other.group = Some(1);
-        assert!(matches!(scheduled(&_body(vec![other])), Err(Refused::Malformed(_))));
+        assert!(matches!(scheduled(&_body(vec![other])), Err(Malformed(_))));
     }
 }

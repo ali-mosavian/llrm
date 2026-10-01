@@ -130,14 +130,16 @@ path. Losing that boundary truncated QRender's `LS_SELFTEST` and `SC_SELFTEST`
 after their first guard; the isolated parser/HIR regression checks both the
 two-statement arm and the surviving success assignment.
 
-Default-`BYREF` pointee reads are volatile HIR indirect places. Raw VBDOS
-`IN_KEYSTROKE` reloads the keyboard flag on every `DO ... LOOP WHILE`
+A variable or parameter declared `AS VOLATILE T` is a volatile HIR place (or
+indirect place, for a BYREF pointee): `DIM`, `BYVAL`, `BYREF` and `SEG` all
+take it between `AS` and the type, and `BYREF` is the default said aloud. Raw
+VBDOS `IN_KEYSTROKE` reloads the keyboard flag on every `DO ... LOOP WHILE`
 back-edge because the interrupt handler may release the key without a BASIC
-store in the current function. The frontend initially let GVN reuse the
-entry read and emitted a permanent register-only spin. `byreflp.bas` isolates
-the rule: both reads remain volatile after optimization, and one remains in
-the natural loop. HIR lowering carries the access property into existing MIR;
-the existing backend receives an ordinary memory comparison.
+store in the current function; its source declares `keyDown AS VOLATILE
+INTEGER`. `byreflp.bas` isolates the rule: both reads remain volatile after
+optimization, and one remains in the natural loop. An undeclared variable is
+not assumed volatile. HIR lowering carries the access property into existing
+MIR; the existing backend receives an ordinary memory comparison.
 [memory-model.md](memory-model.md) records the raw comparison.
 `tools/qbstages.py` writes input, HIR, semantic MIR, optimized MIR,
 physical MIR, LIR, every machine pass, inline-x87 output, readable emitted

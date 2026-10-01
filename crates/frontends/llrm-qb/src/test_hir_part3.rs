@@ -143,7 +143,6 @@ fn stack_call(operands: Vec<Operand>, callee: &str, order: Vec<i64>) -> (hir::In
         distance: hir::CallDistance::Far,
         callee: None,
         float_return: hir::FloatReturn::Pointer,
-        promises: Vec::new(),
     };
     (instruction, call)
 }
@@ -1092,7 +1091,7 @@ fn test_hir_lowers_whole_pointer_indirect_memory_without_machine_registers() {
             1,
             hir::Op::Load,
             vec![2],
-            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
+            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None })],
         )],
     );
     let function = hir::Function { parameters: vec![1], ..hir::Function::new(1, "read", 0, values, vec![], vec![block], 1) };
@@ -1139,7 +1138,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
                     1,
                     hir::Op::Load,
                     vec![2],
-                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None })],
+                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None })],
                 )],
             )],
             1,
@@ -1187,11 +1186,12 @@ fn test_qb_string_comparison_abi_site_survives_alias_annotation() {
 
 /// IN_KEYSTROKE held a released key forever after GVN kept its first read.
 ///
-/// A BYREF pointee is published storage: an interrupt or another runtime
-/// callback may change it without an ordinary source store.  Both the guard
-/// and the back-edge condition must therefore remain observable loads.
+/// A BYREF pointee declared `VOLATILE` may be changed by an interrupt or
+/// another runtime callback without a source store in the function.  Both
+/// the guard and the back-edge condition must therefore remain observable
+/// loads.
 #[test]
-fn test_byref_loop_condition_reloads_the_published_pointee() {
+fn test_a_volatile_byref_loop_condition_reloads_the_pointee() {
     let source = parsed_as(&fixture("byreflp.bas"), "vbdos", "vbdos");
     let (_, function) = function_named(&source, "WAITKEY");
     let semantic = lower(&source).unwrap().into_iter().find(|one| one.name.ends_with("WAITKEY")).expect("WAITKEY");
@@ -1209,9 +1209,10 @@ fn test_byref_loop_condition_reloads_the_published_pointee() {
 }
 
 /// Every iteration of a counted loop reloaded its BYREF arguments, as if the
-/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times.
+/// loop waited on them: TEXTFILL's `Fill` read `ch` and `at` 2000 times. A
+/// BYREF not declared `VOLATILE` is read once and is not ordered.
 #[test]
-fn test_a_counted_loop_reads_a_published_pointee_once() {
+fn test_a_counted_loop_reads_an_unannotated_byref_once() {
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(
         &directory,
@@ -1224,10 +1225,10 @@ fn test_a_counted_loop_reads_a_published_pointee_once() {
     let optimized = optimized(&source, function, &semantic);
     let natural = loops::loops(&optimized.body.blocks, Some(optimized.body.entry));
     let inside: BTreeSet<i64> = natural.iter().flat_map(|one| one.body.iter().copied()).collect();
-    let published = |one: &mir::Op| one.kind == Kind::Load && one.loads.iter().any(|reference| reference.published);
+    let ordered = |one: &mir::Op| one.kind == Kind::Load && (one.volatile || one.loads.iter().any(|reference| reference.volatile || reference.published));
 
-    assert!(ops(&optimized.body).into_iter().any(published));
-    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(published)));
+    assert!(!ops(&optimized.body).into_iter().any(ordered));
+    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(|one| one.kind == Kind::Load)));
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -2736,9 +2737,12 @@ fn checked_division_raises_error_11_where_bcs_divide_traps() {
     assert!(plain.modules[0].functions.iter().any(|one| one.name == "__main" && one.error_handler.is_some()));
     let divisions = instructions(&plain).iter().filter(|one| matches!(one.op, llrm_core::hir::model::Op::Div | llrm_core::hir::model::Op::Rem) && !matches!(one.operands[1], llrm_core::hir::model::Operand::Constant(_))).count();
     assert!(divisions >= 3, "{divisions}");
-    assert!(!instructions(&plain).iter().any(|one| raises(one, 11)));
-    let checked = instructions(&hir(true));
-    assert!(checked.iter().filter(|one| raises(one, 11)).count() >= divisions, "{checked:?}");
+    // Where errors land the narrow overflow is code anyway (BC's 16-bit divide
+    // traps on it), the zero divisor the IR's own; the option adds the zeros.
+    let raised = |program: &llrm_core::hir::model::Program| instructions(program).iter().filter(|one| raises(one, 11)).count();
+    let checked = hir(true);
+    assert!(raised(&plain) < raised(&checked), "{} {}", raised(&plain), raised(&checked));
+    assert!(raised(&checked) >= divisions, "{checked:?}");
 }
 
 /// The same on the rich route: the error is a call the landing pad names.
@@ -2747,7 +2751,26 @@ fn test_checked_division_raises_on_the_rich_route() {
     let frontend = qb_driver::Frontend { checked_division: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
     let text = rich_listing(&qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses"));
     assert!(text.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
-    assert!(!rich_listing(&parsed_as(&fixture("checked-division.bas"), "vbdos", "vbdos")).contains("pushw 11"));
+    // Without the option a division where errors land is raised as code too
+    // (the next test); with no handler it stays the processor's.
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "plain.bas", b"DEFINT A-Z\nINPUT d\nPRINT 10 \\ d\n");
+    assert!(!rich_listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
+}
+
+/// An error raised in a FUNCTION called from a SUB, with the handler in the
+/// module body, resumed at the failing divide for ever (#79): the divide's
+/// trap names no statement, so the pad resumed the last call's, and the
+/// optimizer saw no edge from the divide to the pad. Where errors land, a
+/// divide by a variable raises error 11 as code, in the FUNCTION's own pad.
+#[test]
+fn test_a_division_in_a_called_function_raises_to_its_pad() {
+    let source = b"DECLARE SUB caller (d AS INTEGER)\nDECLARE FUNCTION inner% (d AS INTEGER)\nON ERROR GOTO h\ncaller 0\nEND\nh:\nRESUME NEXT\nSUB caller (d AS INTEGER)\nDIM b AS INTEGER\nb = inner(d)\nEND SUB\nFUNCTION inner% (d AS INTEGER)\ninner% = 10 \\ d\nEND FUNCTION\n";
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "called.bas", source);
+    let text = rich_listing(&parsed_as(&path, "vbdos", "vbdos"));
+    let inner = &text[text.find("INNER").expect("the function")..];
+    assert!(inner.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
 }
 
 /// BC's LONG divide is software: MIN by -1 wraps where the processor's

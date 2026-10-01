@@ -143,3 +143,59 @@ fn test_a_reference_parameter_is_dereferenceable() {
     let define = text.lines().find(|line| line.starts_with("define") && line.contains("@S(")).expect("SUB s");
     assert!(define.contains("ptr dereferenceable(18) %0, ptr dereferenceable(4) %1, i16 %2"), "{define}");
 }
+
+/// The MIR of `lines` compiled as a program, whole.
+fn mir_of(lines: &[&str]) -> String {
+    use crate::driver as qb_driver;
+
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = directory.path().join("POLL.BAS");
+    std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
+    llrm_mir::print::module(&llrm_core::hir::mir::emit(&program)[0].module)
+}
+
+/// What a loop waiting on another agent reads, it reads each trip. The
+/// default route hoisted the load and the loop spun on a register for ever.
+#[test]
+fn test_a_volatile_variable_a_loop_polls_is_read_each_trip() {
+    let byref = mir_of(&["DECLARE SUB WaitFor (x AS INTEGER)", "DIM k AS INTEGER", "WaitFor k", "SUB WaitFor (x AS VOLATILE INTEGER)", "DO WHILE x = 0", "LOOP", "END SUB"]);
+    let shared = mir_of(&["DIM SHARED k AS VOLATILE INTEGER", "SUB WaitShared", "DO WHILE k = 0", "LOOP", "END SUB", "WaitShared"]);
+    let local = mir_of(&["SUB WaitLocal", "DIM f AS VOLATILE INTEGER", "DO WHILE f = 0", "LOOP", "END SUB", "WaitLocal"]);
+    for (name, text, routine) in [("BYREF", byref, "@WAITFOR("), ("SHARED", shared, "@WAITSHARED("), ("local", local, "@WAITLOCAL(")] {
+        let at = text.find(routine).unwrap_or_else(|| panic!("{name}: no {routine}\n{text}"));
+        assert!(text[at..].contains("load volatile i16"), "{name}\n{text}");
+    }
+}
+
+/// Nothing is assumed volatile: a BYREF no one declared so is an ordinary
+/// variable, and the same loop on it has an ordinary load.
+#[test]
+fn test_an_unannotated_byref_is_not_assumed_volatile() {
+    let text = mir_of(&["DECLARE SUB Sum (x AS INTEGER)", "DIM k AS INTEGER", "Sum k", "SUB Sum (x AS INTEGER)", "DO WHILE x = 0", "LOOP", "END SUB"]);
+    let at = text.find("@SUM(").expect("the SUB");
+    assert!(!text[at..].contains("volatile"), "{text}");
+}
+
+/// A field of a BYREF record is the record's: ordered when it is declared
+/// `VOLATILE`, ordinary when it is not. It was ordered always (qmove's
+/// `vel.x`), which the rich route ignored and the legacy route did not.
+#[test]
+fn test_a_field_of_a_byref_record_follows_the_records_declaration() {
+    let sub = |declared: &str| {
+        mir_of(&["TYPE V", "x AS INTEGER", "END TYPE", "DECLARE SUB S (v AS V)", "DIM r AS V", "S r", &format!("SUB S (v {declared} V)"), "DO WHILE v.x = 0", "LOOP", "END SUB"])
+    };
+    let plain = sub("AS");
+    let volatile = sub("AS VOLATILE");
+    let body = |text: &str| text[text.find("@S(").expect("the SUB")..].to_owned();
+    assert!(!body(&plain).contains("volatile"), "{plain}");
+    assert!(body(&volatile).contains("load volatile i16"), "{volatile}");
+}
+
+/// An array of words sits on a word: the alignment the frontend states of
+/// its data object reaches the global, as the field it replaced did.
+#[test]
+fn test_an_array_of_words_is_aligned_to_a_word() {
+    let text = mir_of(&["DIM SHARED a(1 TO 4) AS INTEGER", "a(1) = 1"]);
+    assert!(text.lines().any(|line| line.starts_with("@\"A%\"") && line.contains(", align 2")), "{text}");
+}

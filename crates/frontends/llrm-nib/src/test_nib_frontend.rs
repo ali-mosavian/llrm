@@ -150,7 +150,7 @@ fn test_frontend_json_is_deterministic_and_replayable() {
     let Json::Dict(document) = pyjson::loads(&String::from_utf8(first).expect("utf-8")).expect("JSON") else {
         panic!("not an object");
     };
-    assert_eq!(document.get("schema"), Some(&Json::Int(1)));
+    assert_eq!(document.get("schema"), Some(&Json::Int(4)));
 }
 
 #[test]
@@ -1809,6 +1809,91 @@ fn test_inline_assembly_outputs_survive_unrolling() {
     assert!(after.iter().all(|line| line.ends_with(", cx")), "{assembly}");
 }
 
+/// `source` through the rich MIR, as masm.
+fn rich(directory: &tempfile::TempDir, name: &str, source: &str) -> String {
+    let program = parsed(&written(directory, name, source));
+    let module = nib_compile::assembled_from_mir(&program, "main", &llrm_core::driver::Options::of(nib_compile::machine())).unwrap_or_else(|error| panic!("{error}"));
+    masm::text(&module).expect("prints")
+}
+
+/// The rich MIR refused every inline block as "HIR asm": examples/speaker.nib
+/// did not compile. Its bytes stand where it is called, fed and read in the
+/// registers it names: `a` goes to both cx and dx, `b` and 7 are packed into
+/// ax, and `sum` and `high` come out of bx and ch.
+#[test]
+fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = "fn mix(a: u16, b: u8) -> u16:\n    let mut high: u8 = 0\n    unsafe:\n        \
+         asm(cx=a, dx=a, al=b, ah=7, out=(bx=let sum, ch=high), clobbers=[flags]):\n            \
+         mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high)\n\n\
+         fn five() -> u16:\n    return 5\n\n\
+         fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n";
+    assert!(source.contains("asm("), "the shape that was refused");
+    let assembly = rich(&directory, "blocks.nib", source);
+    let mix = between(&assembly, "_mix proc far", "_mix endp");
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
+    let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
+    assert_eq!(found[1], found[2], "{mix}");
+    assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
+}
+
+/// A block that declares `memory` reaches what its pointer inputs point to:
+/// `bytes[3]` is read again after it, and only then.
+#[test]
+fn test_the_rich_mir_reads_memory_again_after_a_block_declaring_it() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "var bytes: u8[4] = [1, 2, 3, 4]\n\n\
+        fn poke() -> u16:\n    let before = u16(bytes[3])\n    unsafe:\n        \
+        let base: *near mut u8 = &mut bytes\n        asm(si=base, clobbers=[memory]):\n            \
+        mov byte ptr [si+3], 7\n    return u16(bytes[3]) + before\n\n\
+        fn main() -> i16:\n    return i16(poke())\n";
+    let mut reads = |text: &str| between(&rich(&directory, "poke.nib", text), "db 0c6h,044h,003h,007h", "retf").contains("byte ptr $var_bytes+3");
+    assert!(reads(text));
+    assert!(!reads(&text.replace("clobbers=[memory]", "clobbers=[]")));
+}
+
+/// Inputs reach the registers they name, whatever order they are written in.
+#[test]
+fn test_the_rich_mir_loads_each_input_into_its_register() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let assembly = rich(&directory, "pair.nib", "fn main() -> i16:\n    unsafe:\n        asm(si=1, di=2, ax=3, clobbers=[]):\n            cli\n    return 0\n");
+    let before = between(&assembly, "_main proc far", "db 0fah");
+    for set in ["mov si, 1", "mov di, 2", "mov ax, 3"] {
+        assert!(before.contains(set), "{set}: {before}");
+    }
+}
+
+/// A block's output is read from its register after a loop is unrolled: each
+/// of the three copies reads cx.
+#[test]
+fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
+         unsafe:\n            asm(bx=i, out=(cx=let got), clobbers=[]):\n                mov cx, bx\n            \
+         total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n";
+    let assembly = rich(&directory, "spin.nib", source);
+    let after: Vec<&str> = assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
+    assert_eq!(after.len(), 3, "{assembly}");
+    assert!(after.iter().all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")), "{assembly}");
+}
+
+/// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
+/// addrspace(1) value", and a `&mut [T]` view had no raw address ("only a
+/// scalar, struct, or sequence has a raw address") though a `&[T]` did.
+#[test]
+fn test_a_raw_pointer_walks_an_array_and_a_mutable_view() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let walk = "var g: i16[10] = [0] * 10\n\nfn total(n: i16) -> i32:\n    let mut t: i32 = 0\n    let mut p: *far mut i16 = 0\n    let mut e: *far mut i16 = 0\n    unsafe:\n        p = (&mut g)\n        e = p.offset(n)\n    while p != e:\n        unsafe:\n            t += i32(p[0])\n            p = p.offset(1)\n    return t\n\nfn main() -> i16:\n    return i16(total(3))\n";
+    let view = "fn fill(a: &mut [i16]) -> void:\n    let mut p: *far mut i16 = 0\n    unsafe:\n        p = &mut a\n    let mut i: u16 = 0\n    while i < a.len:\n        unsafe:\n            p[0] = i16(i)\n            p = p.offset(1)\n        i += 1\n\nfn main() -> i16:\n    let mut g: i16[3] = [0, 0, 0]\n    fill(&mut g)\n    return g[2]\n";
+    assert!(walk.contains("while p != e") && view.contains("p = &mut a"), "the shapes that were refused");
+    for (name, source) in [("walk.nib", walk), ("view.nib", view)] {
+        rich(&directory, name, source);
+    }
+    let immutable = view.replace("a: &mut [i16]", "a: &[i16]").replace("fill(&mut g)", "fill(&g)");
+    let refused = driver::parsed(&written(&directory, "immutable.nib", &immutable), &Default::default(), None);
+    assert!(refused.is_err(), "a raw &mut of a &[T] view is still refused");
+}
+
 #[test]
 fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     // jwlink's `option eliminate` keeps a segment any other references, even
@@ -1888,11 +1973,12 @@ fn test_a_program_compiles_through_the_rich_mir() {
 }
 
 /// The rich route priced every CPU as a 486, so a 386's dearer far call
-/// did not make evaluating `logic`'s calls pay.
+/// did not make evaluating `logic`'s calls pay. The body is one too dear to
+/// evaluate on a 486 after a complemented boolean folds to one compare.
 #[test]
 fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return a < b && !a == 0 || b == 7\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
+    let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
         let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
@@ -1915,14 +2001,108 @@ fn test_a_loop_through_a_copied_pointer_converges() {
 }
 
 /// A borrowed view's descriptor is the caller's, never written in the
-/// call: promised as LLVM's `noalias readonly dereferenceable`, for LICM to
+/// call: stated as LLVM's `noalias readonly dereferenceable`, for LICM to
 /// hoist its loads.
 #[test]
-fn test_a_borrowed_view_promises_its_descriptor() {
+fn test_a_borrowed_view_states_facts_of_its_descriptor() {
+    use llrm_mir::facts::Fact;
     let program = parsed(&fixture("matmul8.nib"));
     let multiply = function(&program, "multiply");
-    let promised = |parameter| model::Promise { parameter, bytes: 10, unaliased: true, readonly: true };
-    assert_eq!(multiply.promises, multiply.parameters.iter().map(|&one| promised(one)).collect::<Vec<_>>());
+    let stated = |index: usize| -> Vec<Fact> {
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == multiply.id && at == index as i64))
+            .map(|one| one.fact)
+            .collect()
+    };
+    for index in 0..multiply.parameters.len() {
+        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10)], "parameter {index}");
+    }
+}
+
+/// A reference is not null and points at all it borrows; a shared one is
+/// read only. Not that nothing else reaches it: `bump` may write the module
+/// variable `g` it was lent, so no `noalias`.
+#[test]
+fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
+    use llrm_mir::facts::Fact;
+    let source = "struct Pt:\n    mut x: i16\n    y: i16\n\nvar g: Pt = Pt(x=1, y=2)\nvar h: Pt = Pt(x=3, y=4)\n\nfn bump(p: &mut Pt, q: &Pt) -> void:\n    p.x += q.y\n\nfn main() -> i16:\n    bump(g, h)\n    return g.x\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "refs.nib", source));
+    let bump = function(&program, "bump");
+    let stated = |index: i64| -> Vec<Fact> {
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index))
+            .map(|one| one.fact)
+            .collect()
+    };
+    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias]);
+    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias]);
+}
+
+/// `for i in 0..n` adds one to a counter that is below `n`: it cannot wrap,
+/// signed or unsigned. Stated, `nsw` or `nuw` on that add is what makes a
+/// variable bound a counted loop; unstated, the trip count was unknown.
+#[test]
+fn test_a_range_loops_counter_does_not_wrap() {
+    use llrm_mir::facts::Fact;
+    let directory = tempfile::tempdir().unwrap();
+    let stated = |type_name: &str| -> Vec<Fact> {
+        let source = format!("fn total(n: {type_name}) -> {type_name}:\n    let mut s: {type_name} = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n");
+        let program = parsed(&written(&directory, &format!("{type_name}.nib"), &source));
+        let total = function(&program, "total");
+        program.modules[0]
+            .facts
+            .iter()
+            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == total.id))
+            .map(|one| one.fact)
+            .collect()
+    };
+    assert_eq!(stated("i16"), vec![Fact::NoSignedWrap]);
+    assert_eq!(stated("u16"), vec![Fact::NoUnsignedWrap]);
+    // It is the counter's own add of one, not the body's `s += i`.
+    let source = "fn total(n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "which.nib", source));
+    let total = function(&program, "total");
+    let ids: Vec<i64> = program.modules[0].facts.iter().filter_map(|one| match one.subject {
+        llrm_core::hir::facts::Subject::Instruction { function, id } if function == total.id => Some(id),
+        _ => None,
+    }).collect();
+    assert_eq!(ids.len(), 1);
+    let stated = total.blocks.iter().flat_map(|block| &block.instructions).find(|one| one.id == ids[0]).expect("the instruction");
+    assert_eq!(stated.op, llrm_core::hir::model::Op::Add);
+    assert!(matches!(stated.operands[1], llrm_core::hir::model::Operand::Constant(_)), "{:?}", stated.operands);
+}
+
+/// A shared reference is not null and points at all of its struct, so the
+/// load of its field is hoisted above the loop's guard and no register is
+/// saved to hold it: 15 instructions where 17 saved and restored `si`.
+#[test]
+fn test_a_reference_lets_its_field_load_leave_the_loop() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "struct V:\n    mut a: i16\n    b: i16\n\nfn sum(v: &V, n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += v.b\n    return s\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "refsum.nib", source));
+    let module = nib_compile::assembled_from_mir(&program, "sum", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
+    let asm = masm::text(&module).expect("prints");
+    let from = asm.find("_sum proc").expect("the function");
+    let body: Vec<&str> = asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).collect();
+    assert_eq!(body.len(), 15, "{body:?}");
+    assert!(!body.contains(&"push si"), "{body:?}");
+}
+
+/// A loop whose body always returns leaves its counter's increment
+/// unreachable; the fact stated of it named an instruction the function no
+/// longer had, and the program was refused as invalid HIR.
+#[test]
+fn test_a_fact_of_a_pruned_instruction_goes_with_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "fn first(n: i16) -> i16:\n    for i in 0..n:\n        return i\n    return -1\n\nfn main() -> i16:\n    return 0\n";
+    let program = parsed(&written(&directory, "first.nib", source));
+    let first = function(&program, "first");
+    assert!(program.modules[0].facts.iter().all(|one| !matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == first.id)));
 }
 
 /// The rich route ran -O2 whatever `-O` said: `-Os` copied dice's loops as
@@ -1938,4 +2118,44 @@ fn test_the_level_reaches_the_rich_route() {
         std::fs::read(output).expect("the object").len()
     };
     assert!(object("-Os") < object("-O2"));
+}
+
+/// `dst: &mut P` and `src: &P` are stated noalias, so `src.y` is loaded
+/// once, before the loop. Unstated, the loop reloaded it after every store
+/// to `dst.x`.
+#[test]
+fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() {
+    use llrm_mir::facts::Fact;
+    let source = "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "bump.nib", source));
+    let bump = function(&program, "bump");
+    let unaliased = |index: i64| program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index));
+    assert!(unaliased(0) && unaliased(1), "the premise: both are stated noalias");
+    // The memory operands of `bump`'s loop: from the label its backward
+    // jump names to that jump.
+    let looped = |assembly: &str| -> usize {
+        let body = between(assembly, "_bump proc far\n", "_bump endp");
+        let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+        let (head, end) = jump
+            .captures_iter(body)
+            .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+            .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+            .expect("a loop");
+        between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
+    };
+    // Unrolled, the 4-trip loop is gone and there is nothing to count.
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), unroll: false, peel: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
+}
+
+/// examples/league.nib's `main` was refused after #127 made every spiller
+/// product unspillable: "value#23 cannot be spilled and no register is free".
+#[test]
+fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
+    let program = parsed(&fixture("league.nib"));
+    let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
+    assert!(result.is_ok(), "{:?}", result.err());
 }

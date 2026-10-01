@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use llrm_core::hir::facts::{Builder as Facts, Subject};
+use llrm_mir::facts::Fact;
 use llrm_core::hir::model::{
     self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup, Storage, TerminatorKind, TypeKind,
 };
@@ -38,8 +40,12 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     let mut callables: IndexMap<String, h::Callable> = IndexMap::default();
     let mut data = Vec::new();
+    let mut facts = Facts::new("c");
     for object in &objects {
         data.push(data_object(unit, object, keys[&object.key], &keys, &mut callables)?);
+        if let Some(align) = object.align {
+            facts.state(Subject::Object(keys[&object.key]), Fact::Align(align));
+        }
     }
     for symbol in imports {
         let id = keys[&Key::Symbol(symbol.id)];
@@ -55,14 +61,21 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
-        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, proc, at as i64 + 1)?);
+        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, proc, at as i64 + 1)?);
     }
     let debug = described.map(|one| one.finish(|symbol| keys.get(&Key::Symbol(symbol)).copied()));
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
+    for symbol in unit.symbols.values().filter(|one| one.proc()) {
+        if let Some(callable) = callables.iter().find(|one| one.name == symbol.object_name()) {
+            for fact in crate::ow_facts::of_call_class(symbol.call_class) {
+                facts.state(Subject::Callable(callable.id), fact);
+            }
+        }
+    }
     let (types, alias_classes) = types.finished();
-    let module = h::Module { data, callables, alias_classes, debug, ..h::Module::new(1, name, types, functions) };
+    let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
     // Borland's medium model: a call keeps what its contract does not clobber;
     // the compiler's constants go in CONST.
     let preserved = llrm_core::abi::runtime::preserves(&crate::raise_hir::medium_model(String::new(), true, 0));
@@ -215,7 +228,6 @@ fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i
         linkage,
         address: address(space(unit, object.key)),
         segment: Some(object.segment.clone()),
-        align: object.align.map(|one| one as i64),
         ..h::DataObject::new(id, &object.name, object.bytes.iter().map(|&one| i64::from(one)).collect())
     })
 }
@@ -387,6 +399,8 @@ struct Open {
 }
 
 struct Body<'a, 't> {
+    /// The facts the language states of instructions, by instruction id.
+    stated_instructions: Vec<(i64, Fact)>,
     shared: &'a Shared<'a>,
     unit: &'a hir::Unit,
     proc: &'a hir::Proc,
@@ -516,23 +530,13 @@ fn with_destination(parameters: &mut Vec<i64>, destination: i64, in_order: bool)
     }
 }
 
-/// Whether some restrict lvalue names parameter `symbol`.
-fn restricted(unit: &hir::Unit, symbol: i64) -> bool {
-    unit.nodes.values().any(|node| match (node.call.as_str(), &node.args[..]) {
-        ("CGAttr", [inner, attr]) if attr == "3" => {
-            let inner = &unit.nodes[&hir::handle(inner)];
-            inner.call == "CGFEName" && hir::handle(&inner.args[0]) == symbol
-        }
-        _ => false,
-    })
-}
-
 impl<'a, 't> Body<'a, 't> {
     fn function(
         shared: &'a Shared<'a>,
         types: &'t mut Types<'a>,
         callables: &'t mut IndexMap<String, h::Callable>,
         described: &'t mut Option<crate::debug::Described<'a>>,
+        facts: &mut Facts,
         proc: &'a hir::Proc,
         id: i64,
     ) -> R<h::Function> {
@@ -555,6 +559,7 @@ impl<'a, 't> Body<'a, 't> {
             globals: HashMap::new(),
             done: HashMap::new(),
             selects: IndexMap::default(),
+            stated_instructions: Vec::new(),
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
@@ -572,11 +577,12 @@ impl<'a, 't> Body<'a, 't> {
             },
             None => body.ty(&proc.type_)?,
         };
-        let (parameters, promises, homes, struct_homes) = body.frame()?;
+        let (parameters, stated, homes, struct_homes) = body.frame()?;
         for one in &proc.body {
             body.statement(one)?;
         }
         body.finish()?;
+        let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
         let body_widths: HashMap<i64, i64> = parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
         let parameter_bytes = body_widths.values().sum();
         let blocks = body
@@ -590,11 +596,25 @@ impl<'a, 't> Body<'a, 't> {
             abi: Some(h::ProcedureAbi { cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
             calls: body.calls,
             linkage,
-            promises,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
         };
+        for (instruction, fact) in std::mem::take(&mut body_instruction_facts) {
+            facts.state(Subject::Instruction { function: id, id: instruction }, fact);
+        }
+        for (value, fact) in stated {
+            let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
+            facts.state(Subject::Param { function: id, index }, fact);
+        }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
         in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
+        // Every address C computes through a pointer stays inside the object it points into.
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            for (index, operand) in instruction.operands.iter().enumerate() {
+                if matches!(operand, h::Operand::IndirectPlace(_)) {
+                    facts.state(Subject::Operand { function: id, instruction: instruction.id, operand: index as i64 }, Fact::InBounds);
+                }
+            }
+        }
         if let Some(described) = body.described.as_mut() {
             // A parameter as its home: where the function keeps it.
             for &(symbol, handle) in &proc.debug {
@@ -676,6 +696,13 @@ impl<'a, 't> Body<'a, 't> {
         let block = &mut self.blocks[self.current];
         block.instructions.push(made);
         block.instructions.last_mut().expect("just pushed")
+    }
+
+    /// That C promises the result of instruction `id` fits its type.
+    fn state_no_wrap(&mut self, id: i64, promised: bool) {
+        if promised {
+            self.stated_instructions.push((id, Fact::NoSignedWrap));
+        }
     }
 
     /// `op` of `operands`, a value of type `ty`.
@@ -815,9 +842,9 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Each parameter and auto a place; each parameter stored into its own.
     /// A scalar parameter's home is also returned, by place and parameter.
-    fn frame(&mut self) -> R<(Vec<i64>, Vec<h::Promise>, Vec<(i64, i64)>, Vec<i64>)> {
+    fn frame(&mut self) -> R<(Vec<i64>, Vec<(i64, Fact)>, Vec<(i64, i64)>, Vec<i64>)> {
         let mut parameters = Vec::new();
-        let mut promises = Vec::new();
+        let mut stated = Vec::new();
         let mut homes = Vec::new();
         let mut struct_homes = Vec::new();
         let mut stores = Vec::new();
@@ -846,10 +873,8 @@ impl<'a, 't> Body<'a, 't> {
                     stores.push((place, -1, parameter));
                     homes.push((place, parameter));
                     self.slots.insert(format!("y{symbol}"), place);
-                    // C99 6.7.3.1: what a restrict parameter reaches, nothing else in its block does.
-                    if restricted(self.unit, *symbol) {
-                        promises.push(h::Promise { parameter, bytes: 0, unaliased: true, readonly: false });
-                    }
+                    // What the language states of a parameter: C99 6.7.3.1 for restrict.
+                    stated.extend(crate::ow_facts::of_param(self.unit, *symbol).into_iter().map(|fact| (parameter, fact)));
                 }
             }
         }
@@ -881,7 +906,7 @@ impl<'a, 't> Body<'a, 't> {
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
-        Ok((parameters, promises, homes, struct_homes))
+        Ok((parameters, stated, homes, struct_homes))
     }
 
     // ---- statements ----
@@ -1097,6 +1122,7 @@ impl<'a, 't> Body<'a, 't> {
         match tree.call.as_str() {
             "CGCall" => self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
             "CGEval" | "CGVolatile" | "CGAttr" => self.type_of_node(&tree.args[0]),
+            "CGFact" => self.type_of_node(&tree.args[1]),
             "CGFlow" | "CGCompare" => "TY_BOOLEAN".to_owned(),
             _ => tree.args.last().cloned().unwrap_or_default(),
         }
@@ -1287,7 +1313,7 @@ impl<'a, 't> Body<'a, 't> {
                 self.position(join);
                 Got::Value(self.op(Op::Load, truth, vec![Operand::place_ref(flowed)]))
             }
-            ("CGEval", [inner]) | ("CGAttr", [inner, _]) => self.eval(inner)?,
+            ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
             ("CGVolatile", [inner]) => {
                 let got = self.eval(inner)?;
                 Got::Volatile(self.address(got)?.0)
@@ -1365,7 +1391,8 @@ impl<'a, 't> Body<'a, 't> {
         }
         let at = self.int(2, by);
         let result = self.value(self.type_of(pointer));
-        self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).inbounds = true;
+        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).id;
+        self.stated_instructions.push((id, Fact::InBounds));
         result
     }
 
@@ -1438,7 +1465,8 @@ impl<'a, 't> Body<'a, 't> {
                 let bits = self.bits(value).ok_or_else(|| Unsupported(format!("{}: negation of a non-integer", self.name())))?;
                 let nowrap = self.wraps(type_, bits);
                 let result = self.value(ty);
-                self.instruction(Op::Neg, vec![result], vec![value_ref(value)]).nowrap = nowrap;
+                let id = self.instruction(Op::Neg, vec![result], vec![value_ref(value)]).id;
+                self.state_no_wrap(id, nowrap);
                 result
             }
             ("O_COMPLEMENT", false) => {
@@ -1456,10 +1484,44 @@ impl<'a, 't> Body<'a, 't> {
         signed(&self.unit.canonical_type(type_)) && bits >= 16
     }
 
+    /// The index of a pointer add scaled to bytes, `index * size`: the
+    /// compiler's multiply, not an `int` product, so C promises nothing signed
+    /// of it (`a[i]` with `i` past 16383 of a far word array is valid where the
+    /// byte offset passes 32767). An unsigned index promises the offset fits the
+    /// 64K segment an object lives in: the product does not wrap unsigned.
+    /// Stated here, where the scale is made, from the index's C type.
+    fn scaled(&mut self, node: &str) -> R<()> {
+        let tree = self.unit.nodes[&hir::handle(node)].clone();
+        let [op, left, right, type_] = &tree.args[..] else { return Ok(()) };
+        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(&self.unit.canonical_type(type_)) {
+            return Ok(());
+        }
+        let constant = |this: &Self, node: &String| this.unit.nodes[&hir::handle(node)].call == "CGInteger";
+        let (index, size) = match (constant(self, left), constant(self, right)) {
+            (false, true) => (left, right),
+            (true, false) => (right, left),
+            _ => return Ok(()),
+        };
+        let unsigned = !signed(&self.unit.canonical_type(&self.type_of_node(index)));
+        let (a, b) = (self.value_as(index, type_)?, self.value_as(size, type_)?);
+        let ty = self.ty(type_)?;
+        let result = self.value(ty);
+        let (a, b) = if index == left { (a, b) } else { (b, a) };
+        let id = self.instruction(Op::Mul, vec![result], vec![value_ref(a), value_ref(b)]).id;
+        if unsigned {
+            self.stated_instructions.push((id, Fact::NoUnsignedWrap));
+        }
+        self.done.insert(hir::handle(node), Got::Value(result));
+        Ok(())
+    }
+
     fn binary(&mut self, cg_op: &str, left: &str, right: &str, type_: &str) -> R<i64> {
         let canonical = self.unit.canonical_type(type_);
         if matches!(cg_op, "O_PLUS" | "O_MINUS") && !is_float(&canonical) {
             let a_got = self.eval(left)?;
+            if pointers(&canonical) {
+                self.scaled(right)?;
+            }
             let b_got = self.eval(right)?;
             let (a, b) = (self.scalar(a_got)?, self.scalar(b_got)?);
             // Pointer arithmetic: the pointer moved, or two pointers' distance.
@@ -1515,7 +1577,8 @@ impl<'a, 't> Body<'a, 't> {
         let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
         let ty = self.type_of(pointer);
         let result = self.value(ty);
-        self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).inbounds = true;
+        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).id;
+        self.stated_instructions.push((id, Fact::InBounds));
         Ok(result)
     }
 
@@ -1561,7 +1624,8 @@ impl<'a, 't> Body<'a, 't> {
             other => return self.refuse(other.to_owned()),
         };
         let result = self.value(ty);
-        self.instruction(op, vec![result], vec![value_ref(a), value_ref(b)]).nowrap = nowrap;
+        let id = self.instruction(op, vec![result], vec![value_ref(a), value_ref(b)]).id;
+        self.state_no_wrap(id, nowrap);
         Ok(result)
     }
 
@@ -1588,7 +1652,7 @@ impl<'a, 't> Body<'a, 't> {
         let instruction = self.instruction(Op::Call, results, operands);
         instruction.callee = callee.map(str::to_owned);
         let id = instruction.id;
-        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register, promises: Vec::new() });
+        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
     }
 
     /// Inline code as a call of `llrm.ia16.code`, each frame place it names
@@ -1748,7 +1812,7 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
 
 /// An access through `base`, `offset` bytes in, as `ty`.
 fn indirect(base: i64, offset: i64, ty: i64, volatile: bool) -> h::IndirectPlace {
-    h::IndirectPlace { base, offset, r#type: ty, volatile, published: false, inbounds: true, origin: None, allocation: None }
+    h::IndirectPlace { base, offset, r#type: ty, volatile, origin: None, allocation: None }
 }
 
 #[cfg(test)]
@@ -1783,13 +1847,55 @@ mod tests {
         tag[..tag.find(' ').unwrap()].to_owned()
     }
 
+    /// The attributes of the function `@name`, declared or defined.
+    fn attributes(module: &Module, name: &str) -> Vec<llrm_mir::Attribute> {
+        module.global(module.named(name).unwrap()).function().unwrap().attrs.clone()
+    }
+
+    /// `__declspec(noreturn)` and `#pragma aux ... aborts` are in the call
+    /// class; the compile dropped them, and the call fell through to the
+    /// code after it.
+    #[test]
+    fn test_noreturn_and_aborts_are_stated_of_the_callee() {
+        let module = raised("tests/test_noreturn_and_aborts_are_stated_of_the_callee.cgs");
+        let noreturn = llrm_mir::Attribute::Flag("noreturn".to_owned());
+        assert!(attributes(&module, "_die").contains(&noreturn));
+        assert!(attributes(&module, "_quit").contains(&noreturn));
+        assert!(!attributes(&module, "_f").contains(&noreturn));
+    }
+
+    /// `#pragma aux ... parm nomemory modify nomemory` is a routine that
+    /// touches no memory; the compile dropped it and kept both calls.
+    #[test]
+    fn test_nomemory_is_stated_of_the_callee() {
+        let module = raised("tests/test_nomemory_is_stated_of_the_callee.cgs");
+        assert_eq!(attributes(&module, "_sq"), vec![llrm_mir::Attribute::Memory(vec![(None, "none".to_owned())])]);
+    }
+
+    /// The facts C states of `add` hold when it runs: called on three arrays it
+    /// runs, and called with one array as two of its restrict parameters it is
+    /// the caller that broke restrict, which the checked interpreter reports.
+    #[test]
+    fn test_a_restrict_call_on_one_array_is_reported_by_the_checked_run() {
+        use llrm_mir::interpret::{Trap, run_checked};
+        let text = format!(
+            "{}\n@one = global [8 x i16] zeroinitializer\n@two = global [8 x i16] zeroinitializer\n@three = global [8 x i16] zeroinitializer\n\
+             define void @apart() {{\n  call addrspace(1) void @_add(ptr @one, ptr @two, ptr @three)\n  ret void\n}}\n\
+             define void @same() {{\n  call addrspace(1) void @_add(ptr @one, ptr @one, ptr @three)\n  ret void\n}}\n",
+            llrm_mir::print::module(&raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs"))
+        );
+        let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+        assert!(run_checked(&module, "apart", Vec::new(), 10_000).is_ok(), "{:?}", run_checked(&module, "apart", Vec::new(), 10_000));
+        let trapped = run_checked(&module, "same", Vec::new(), 10_000).unwrap_err();
+        assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("noalias parameter")), "{trapped:?}");
+    }
+
     /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
     #[test]
     fn test_restrict_parameters_are_noalias() {
         let module = raised("tests/test_restrict_reaches_mir_as_distinct_noalias_roots.cgs");
         let function = module.global(module.named("_add").unwrap()).function().unwrap();
-        let noalias = Attribute::Flag("noalias".to_owned());
-        assert!(function.parameter_attrs.iter().all(|one| one.contains(&noalias)), "{:?}", function.parameter_attrs);
+        assert!((0..function.parameter_attrs.len()).all(|at| llrm_mir::facts::Facts::param(function, at).no_alias()), "{:?}", function.parameter_attrs);
     }
 
     #[test]
@@ -1811,6 +1917,36 @@ mod tests {
         assert!(text.lines().filter(|one| one.contains("getelementptr")).all(|one| one.contains("getelementptr inbounds")), "{text}");
         let char = tag(&llrm_mir::print::module(&module), "omnipotent char");
         assert!(text.lines().filter(|one| one.contains("load i8")).all(|one| one.ends_with(&format!("!tbaa {char}"))), "{text}");
+    }
+
+    /// `a[i]` with an unsigned `i` was scaled by `mul nsw i16 %i, 2`, poison
+    /// for i >= 16384 though the access of a far word array is valid (#100).
+    /// C promises nothing signed of the multiply that scales an index to bytes; of
+    /// an unsigned index, that it does not wrap unsigned.
+    #[test]
+    fn test_the_multiply_scaling_an_index_states_no_wrap() {
+        let module = raised("unsignedindex.cgs");
+        let text = defined(&module, "_sum");
+        let scales: Vec<&str> = text.lines().filter(|one| one.contains(" = mul ")).collect();
+        assert!(!scales.is_empty(), "the shape that was stated nsw: {text}");
+        assert!(scales.iter().all(|one| !one.contains("nsw") && one.contains("mul nuw i16")), "{scales:#?}");
+    }
+
+    /// The scaling multiply's flag follows the index's C type, however the index
+    /// arrives: an unsigned one through a conversion (`(unsigned)c`) or a sum
+    /// (`u + 1`) is `nuw`; a signed one carries none (#150).
+    #[test]
+    fn test_the_scale_of_an_index_follows_the_indexs_type() {
+        let module = raised("scaledindex.cgs");
+        let scale = |name: &str| {
+            let text = defined(&module, name);
+            let muls: Vec<String> = text.lines().filter(|one| one.contains(" = mul ")).map(str::to_owned).collect();
+            assert_eq!(muls.len(), 1, "{name}: {text}");
+            muls[0].clone()
+        };
+        assert!(scale("_through_a_char").contains("mul nuw i16"), "{}", scale("_through_a_char"));
+        assert!(scale("_through_a_sum").contains("mul nuw i16"), "{}", scale("_through_a_sum"));
+        assert!(!scale("_through_a_signed").contains("nsw") && !scale("_through_a_signed").contains("nuw"), "{}", scale("_through_a_signed"));
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.

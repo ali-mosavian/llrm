@@ -10,6 +10,7 @@ pub mod datalayout;
 pub mod debuginfo;
 pub mod dominators;
 pub mod edit;
+pub mod facts;
 pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;

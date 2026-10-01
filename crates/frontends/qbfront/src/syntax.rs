@@ -39,6 +39,9 @@ pub struct Declaration {
     pub fixed_length: Option<Expr>,
     pub shared: bool,
     pub dynamic: bool,
+    /// Declared `ID AS VOLATILE TYPE`: another agent may change it, so every
+    /// access is ordered.
+    pub volatile: bool,
     pub span: Span,
 }
 
@@ -69,6 +72,15 @@ pub enum FileMode {
     Output,
     Append,
     Binary,
+}
+
+/// Which statement prints: PRINT, LPRINT to the printer, or WRITE, whose items
+/// the runtime separates with commas and quotes strings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrintKind {
+    Print,
+    Lprint,
+    Write,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -353,6 +365,7 @@ pub enum Statement {
         span: Span,
     },
     Print {
+        kind: PrintKind,
         file: Option<Expr>,
         using: Option<Expr>,
         items: Vec<PrintItem>,

@@ -534,11 +534,12 @@ def variants(bases: list[tuple[Shape, Case]], seed: int, per_base: int) -> list[
 
 def cases(quick: bool = False, seed: int = 98) -> list[Case]:
     """Every case; `quick` a sample of them, so each quick case is one the
-    full run (and known.toml) also has."""
+    full run (and shortfalls.txt) also has."""
     every = _all(seed)
     if not quick:
         return every
-    return [c for k, c in enumerate(every) if k % 25 == 0 or "whole" in c.name or c.name.startswith("bp")]
+    return [c for k, c in enumerate(every)
+            if k % 60 == 0 or (c.base is None and "whole" in c.name) or c.name.startswith("bp")]
 
 
 def _all(seed: int) -> list[Case]:

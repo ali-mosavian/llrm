@@ -11,11 +11,11 @@ mod shapes;
 mod tags;
 
 use crate::dialect::Dialect;
-use crate::generated_parser::{EACH, TUPLE};
+use crate::generated_parser::{EACH, ON_SELECTOR, TUPLE};
 use crate::intrinsics::{self, Lowering, ResultClass};
 use crate::syntax::{
     Binary, CaseItem, Declaration, ExitTarget, Expr, FileMode, Haystack, Literal, Module, Parameter,
-    PrintSeparator,
+    PrintKind, PrintSeparator,
     Procedure, ProcedureKind, ResumeTarget, Span, Statement, TypeName, Unary,
 };
 use tags::{Passing, Shape, Slot, Tag};
@@ -61,6 +61,8 @@ struct Type {
 
 #[derive(Clone)]
 struct Variable {
+    /// A BYREF pointee or a variable declared VOLATILE: another agent may write it.
+    volatile: bool,
     place: u32,
     type_id: u32,
     element: Option<u32>,
@@ -89,7 +91,7 @@ enum Operand {
         type_id: u32,
         // A BYREF pointee: an interrupt handler may write it while a loop
         // waits on it (VBDOS IN_KEYSTROKE).
-        published: bool,
+        volatile: bool,
         // An array element: QB promises it stays inside its array.
         inbounds: bool,
     },
@@ -97,7 +99,7 @@ enum Operand {
 
 enum ProjectionBase {
     Place(u32, Vec<Operand>),
-    // Base, published, inbounds.
+    // Base, volatile, inbounds.
     Indirect(u32, bool, bool),
 }
 
@@ -206,6 +208,8 @@ struct Block {
 
 #[derive(Clone)]
 struct Place {
+    /// Declared VOLATILE: every access is ordered.
+    volatile: bool,
     id: u32,
     name: String,
     type_id: u32,
@@ -588,11 +592,15 @@ fn built_from(
             if referenced > 0 {
                 promises.push((value, referenced));
             }
+            if is_array && parameter.declaration.volatile {
+                return compiler.fail(format!("{}: VOLATILE is not supported on an array parameter", parameter.declaration.name));
+            }
             if is_array {
                 compiler.debug_parameter(parameters.len() - 1, &parameter.declaration.name, parameter.declaration.span, parameter_type, true, false);
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
+                        volatile: false,
                         place: 0,
                         type_id: parameter_type,
                         element: Some(parameter_type),
@@ -632,6 +640,7 @@ fn built_from(
                 compiler.variables.insert(
                     compiler.declaration_key(&parameter.declaration)?,
                     Variable {
+                        volatile: parameter.declaration.volatile,
                         place: 0,
                         type_id: parameter_type,
                         element: None,
@@ -671,6 +680,7 @@ fn built_from(
                 fixed_length: None,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span: procedure.span,
             };
             let place = compiler.declare_as(&declaration, "local")?;
@@ -798,6 +808,7 @@ fn detach_results(module: &mut Module, dialect: Dialect) -> BTreeMap<String, Typ
                     fixed_length: None,
                     shared: false,
                     dynamic: array,
+                    volatile: false,
                     span,
                 },
                 by_value: false,
@@ -2167,6 +2178,7 @@ impl Compiler {
                 fixed_length,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span,
             },
             storage,
@@ -2368,9 +2380,13 @@ impl Compiler {
                     },
                 )
             };
+            if declaration.volatile {
+                return self.fail(format!("{}: VOLATILE is not supported on a dynamic array", declaration.name));
+            }
             let descriptor_place = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2395,6 +2411,7 @@ impl Compiler {
             self.variables.insert(
                 key.clone(),
                 Variable {
+                    volatile: false,
                     place: 0,
                     type_id: element,
                     element: Some(element),
@@ -2439,9 +2456,13 @@ impl Compiler {
                     },
                 )
             };
+            if declaration.volatile {
+                return self.fail(format!("{}: VOLATILE is not supported on a dynamic array", declaration.name));
+            }
             let descriptor_place = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor_place,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2463,6 +2484,7 @@ impl Compiler {
             self.variables.insert(
                 key.clone(),
                 Variable {
+                    volatile: false,
                     place: 0,
                     type_id: element,
                     element: Some(element),
@@ -2544,6 +2566,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: declaration.name.clone(),
             type_id,
@@ -2581,6 +2604,7 @@ impl Compiler {
             let descriptor = self.next_place;
             self.next_place += 1;
             self.places.push(Place {
+                volatile: false,
                 id: descriptor,
                 name: format!("{}$descriptor", declaration.name),
                 type_id: descriptor_type,
@@ -2608,9 +2632,15 @@ impl Compiler {
         } else {
             None
         };
+        if declaration.volatile {
+            if let Some(one) = self.places.iter_mut().find(|one| one.id == place) {
+                one.volatile = true;
+            }
+        }
         self.variables.insert(
             key,
             Variable {
+                volatile: declaration.volatile,
                 place,
                 type_id,
                 element: array_element,
@@ -3255,12 +3285,20 @@ impl Compiler {
                     self.emit_runtime_call("B$SSEK", Vec::new(), vec![file, position]);
                 }
                 Statement::Print {
-                    file, using, items, ..
+                    kind, file, using, items, ..
                 } => {
+                    if *kind == PrintKind::Lprint {
+                        self.emit_runtime_call("B$LPRT", Vec::new(), Vec::new());
+                    }
                     if let Some(file) = file {
                         let (file, file_type) = self.expression(file)?;
                         let file = self.convert(file, file_type, INTEGER)?;
                         self.emit_runtime_call("B$CHOU", Vec::new(), vec![file]);
+                    }
+                    // WRITE's preamble tells the runtime to write its items as
+                    // WRITE does; a bare WRITE is only a new line.
+                    if *kind == PrintKind::Write && !items.is_empty() {
+                        self.emit_runtime_call("B$WRIT", Vec::new(), Vec::new());
                     }
                     if let Some(format) = using {
                         let format = self.string_descriptor(format)?;
@@ -3290,6 +3328,8 @@ impl Compiler {
                             }
                         }
                         let term = match item.separator {
+                            // WRITE's commas are the runtime's: its items go as with `;`.
+                            PrintSeparator::Comma if *kind == PrintKind::Write => 'S',
                             PrintSeparator::Comma => 'C',
                             PrintSeparator::Semicolon => 'S',
                             PrintSeparator::End => 'E',
@@ -3405,6 +3445,7 @@ impl Compiler {
                         let place = self.next_place;
                         self.next_place += 1;
                         self.places.push(Place {
+                volatile: false,
                             id: place,
                             name: format!("$input{symbol}"),
                             type_id: BYTE,
@@ -3848,7 +3889,7 @@ impl Compiler {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
-                                    published: false,
+                                    volatile: false,
                                     inbounds: false,
                                 },
                                 value,
@@ -4600,14 +4641,14 @@ impl Compiler {
             Operand::Indirect {
                 base,
                 offset: at,
-                published,
+                volatile,
                 inbounds,
                 ..
             } => Ok(Operand::Indirect {
                 base: *base,
                 offset: at + offset,
                 type_id,
-                published: *published,
+                volatile: *volatile,
                 inbounds: *inbounds,
             }),
             Operand::Value(_) | Operand::Constant(_, _) => {
@@ -4695,7 +4736,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        published: true,
+                        volatile: variable.volatile,
                         inbounds: false,
                     }
                 } else {
@@ -4724,7 +4765,7 @@ impl Compiler {
                             base: pointer,
                             offset: 0,
                             type_id: element,
-                            published: false,
+                            volatile: false,
                             inbounds: true,
                         },
                         element,
@@ -4753,7 +4794,7 @@ impl Compiler {
                         base: pointer,
                         offset: 0,
                         type_id: element,
-                        published: false,
+                        volatile: false,
                         inbounds: true,
                     },
                     element,
@@ -4768,11 +4809,11 @@ impl Compiler {
                         offset,
                         type_id,
                     },
-                    ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
+                    ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                         base,
                         offset,
                         type_id,
-                        published,
+                        volatile,
                         inbounds,
                     },
                 };
@@ -4795,7 +4836,7 @@ impl Compiler {
                 let variable = self.variable(name)?;
                 let base = variable
                     .indirect
-                    .map(|base| ProjectionBase::Indirect(base, true, false))
+                    .map(|base| ProjectionBase::Indirect(base, variable.volatile, false))
                     .unwrap_or_else(|| ProjectionBase::Place(variable.place, Vec::new()));
                 Ok((base, 0, variable.type_id))
             }
@@ -4885,11 +4926,11 @@ impl Compiler {
                 offset,
                 type_id: array_type,
             },
-            ProjectionBase::Indirect(base, published, inbounds) => Operand::Indirect {
+            ProjectionBase::Indirect(base, volatile, inbounds) => Operand::Indirect {
                 base,
                 offset,
                 type_id: array_type,
-                published,
+                volatile,
                 inbounds,
             },
         };
@@ -5242,7 +5283,7 @@ impl Compiler {
                 base: at,
                 offset: 16,
                 type_id: INTEGER,
-                published: false,
+                volatile: false,
                 inbounds: false,
             }],
         );
@@ -5255,7 +5296,7 @@ impl Compiler {
                     base: at,
                     offset: 14,
                     type_id: INTEGER,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -5320,7 +5361,7 @@ impl Compiler {
                 base: descriptor,
                 offset,
                 type_id,
-                published: false,
+                volatile: false,
                 inbounds: false,
             }],
         );
@@ -5437,6 +5478,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: "$fslSegment".into(),
             type_id: INTEGER,
@@ -5620,6 +5662,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$ds{symbol}"),
             type_id: INTEGER,
@@ -6096,7 +6139,7 @@ impl Compiler {
                         base,
                         offset: 0,
                         type_id: variable.type_id,
-                        published: true,
+                        volatile: variable.volatile,
                         inbounds: false,
                     }
                 } else {
@@ -6504,6 +6547,7 @@ impl Compiler {
             fixed_length,
             shared: false,
             dynamic: true,
+            volatile: false,
             span,
         })?;
         let (_, index) = self.hidden(INTEGER)?;
@@ -6543,6 +6587,7 @@ impl Compiler {
                 fixed_length,
                 shared: false,
                 dynamic: true,
+                volatile: false,
                 span,
             },
             self.implicit_storage,
@@ -6616,6 +6661,7 @@ impl Compiler {
                 fixed_length: None,
                 shared: false,
                 dynamic: false,
+                volatile: false,
                 span,
             },
             self.implicit_storage,
@@ -6788,6 +6834,7 @@ impl Compiler {
         self.variables.insert(
             name.clone(),
             Variable {
+                volatile: false,
                 place,
                 type_id,
                 element: None,
@@ -6849,6 +6896,16 @@ impl Compiler {
         name: &str,
         arguments: &[Expr],
     ) -> Result<Option<(Operand, u32)>, SemanticError> {
+        if name == ON_SELECTOR {
+            let (value, type_id) = self.expression(&arguments[0])?;
+            let value = self.convert(value, type_id, INTEGER)?;
+            let number = |value: i64| Operand::Constant(INTEGER, Number::Integer(value));
+            let low = self.computed("lt", BOOLEAN, vec![value.clone(), number(0)]);
+            self.raise_if(low, 5)?;
+            let high = self.computed("gt", BOOLEAN, vec![value.clone(), number(255)]);
+            self.raise_if(high, 5)?;
+            return Ok(Some((value, INTEGER)));
+        }
         let Some(intrinsic) = self.intrinsic(name) else {
             return Ok(None);
         };
@@ -6953,7 +7010,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -6993,7 +7050,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: SINGLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7378,7 +7435,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7507,7 +7564,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7530,7 +7587,7 @@ impl Compiler {
                     base: pointer,
                     offset: 0,
                     type_id: DOUBLE,
-                    published: false,
+                    volatile: false,
                     inbounds: false,
                 }],
             );
@@ -7836,7 +7893,7 @@ impl Compiler {
                         base,
                         offset,
                         type_id,
-                        published,
+                        volatile,
                         inbounds,
                     } => {
                         let pointer_type = self
@@ -7850,7 +7907,7 @@ impl Compiler {
                             base,
                             offset,
                             type_id,
-                            published,
+                            volatile,
                             inbounds,
                         };
                         if self.width(pointer_type) == 4 {
@@ -8016,6 +8073,18 @@ impl Compiler {
         if op == Binary::Power {
             return self.power(left, right);
         }
+        // BC folds a constant subexpression at compile time, to its type: a
+        // SINGLE one is a SINGLE constant, as CONST's is. Run-time arithmetic
+        // keeps the x87's precision. The folder is CONST's own.
+        if matches!(op, Binary::Add | Binary::Subtract | Binary::Multiply | Binary::Divide) {
+            if let (Ok((left_type, left)), Ok((right_type, right))) = (self.constant(left), self.constant(right)) {
+                if matches!(common_type(left_type, right_type, op), Ok(SINGLE | DOUBLE)) {
+                    if let Ok((type_id, Number::Real(value))) = constant_binary(op, left_type, left, right_type, right) {
+                        return Ok((self.floating_literal(&value, type_id)?, type_id));
+                    }
+                }
+            }
+        }
         let comparison = matches!(
             op,
             Binary::Eq
@@ -8130,8 +8199,10 @@ impl Compiler {
         } else {
             binary_name(op)
         };
-        if self.options.checked_division && matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
-            self.division_checked(&left_operand, &right_operand, common, narrow_divmod)?;
+        // Where errors land the processor's trap, which names no statement, is code.
+        if (self.options.checked_division || self.handles_errors || self.module_handled) && matches!(op, Binary::Modulo | Binary::IntegerDivide) && !matches!(common, SINGLE | DOUBLE) {
+            // Where only errors land (no -fsanitize), the zero divisor is the IR's own check.
+            self.division_checked(&left_operand, &right_operand, common, narrow_divmod, self.options.checked_division)?;
             if !narrow_divmod {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
                 return Ok((Operand::Value(result), result_type));
@@ -8177,13 +8248,13 @@ impl Compiler {
     /// and for INTEGER operands (`narrow`, divided as LONG) -32768 by -1,
     /// whose quotient overflows the 16-bit divide. A LONG MIN by -1 wraps in
     /// BC's software divide.
-    fn division_checked(&mut self, dividend: &Operand, divisor: &Operand, type_id: u32, narrow: bool) -> Result<(), SemanticError> {
+    fn division_checked(&mut self, dividend: &Operand, divisor: &Operand, type_id: u32, narrow: bool, zero_too: bool) -> Result<(), SemanticError> {
         let constant = |operand: &Operand| match operand {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
         };
         let long = |value: i64| Operand::Constant(type_id, Number::Integer(value));
-        if constant(divisor).is_none_or(|value| value == 0) {
+        if zero_too && constant(divisor).is_none_or(|value| value == 0) {
             let zero = self.computed("eq", BOOLEAN, vec![divisor.clone(), long(0)]);
             self.raise_if(zero, 11)?;
         }
@@ -8722,6 +8793,7 @@ impl Compiler {
             fixed_length: None,
             shared: false,
             dynamic: false,
+            volatile: false,
             span: crate::syntax::Span {
                 line: 0,
                 start: 0,
@@ -8756,7 +8828,7 @@ impl Compiler {
                     })
             }
             Expr::Field { .. } => {
-                let name = dotted_name(expression).expect("field chain");
+                let Some(name) = dotted_name(expression) else { return self.fail("not a constant expression") };
                 self.constants
                     .get(canonical(&name))
                     .cloned()
@@ -8840,6 +8912,7 @@ impl Compiler {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id,
             name: format!("{prefix}{id}"),
             type_id,
@@ -8864,6 +8937,7 @@ impl Compiler {
         let id = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id,
             name: format!("$stringArg{id}"),
             type_id: STRING,
@@ -8906,6 +8980,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: "b$seg".into(),
             type_id: INTEGER,
@@ -8965,6 +9040,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$float{symbol}"),
             type_id,
@@ -9092,6 +9168,7 @@ impl Compiler {
         let place = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: place,
             name: format!("$string{payload_symbol}$descriptor"),
             type_id: STRING,
@@ -9104,6 +9181,7 @@ impl Compiler {
         let payload = self.next_place;
         self.next_place += 1;
         self.places.push(Place {
+                volatile: false,
             id: payload,
             name: format!("$string{payload_symbol}$payload"),
             type_id: payload_type,
@@ -9494,6 +9572,7 @@ impl Compiler {
     }
 
     fn json(&self) -> String {
+        let mut facts = llrm_hir::facts::Builder::new("qb");
         // A module that handles errors has a statement table, whose rows
         // are code's lines: its instructions say theirs.
         let lined = self.debugging() || (self.options.error_lines && self.functions.iter().any(|one| one.error_handler.is_some()));
@@ -9535,13 +9614,13 @@ impl Compiler {
                             out.push(',');
                         }
                         operand_json(&mut out, operand, function);
+                        if matches!(operand, Operand::Indirect { inbounds: true, .. }) {
+                            facts.state(llrm_hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(instruction.id), operand: operand_index as i64 }, llrm_hir::facts::Fact::InBounds);
+                        }
                     }
                     out.push_str("],\"pure\":false,\"results\":[");
                     numbers(&mut out, &instruction.results);
                     out.push(']');
-                    if instruction.nowrap {
-                        out.push_str(",\"nowrap\":true");
-                    }
                     let line = if lined { self.main_line(instruction.line) } else { 0 };
                     if line != 0 {
                         write!(out, ",\"line\":{line}").unwrap();
@@ -9603,16 +9682,6 @@ impl Compiler {
                     write!(out, "{number}").unwrap();
                 }
                 out.push(']');
-                if !call.fills.is_empty() {
-                    out.push_str(",\"promises\":[");
-                    for (index, (operand, bytes)) in call.fills.iter().enumerate() {
-                        if index != 0 {
-                            out.push(',');
-                        }
-                        write!(out, "{{\"bytes\":{bytes},\"operand\":{operand}}}").unwrap();
-                    }
-                    out.push(']');
-                }
                 out.push('}');
             }
             out.push_str("],\"entry\":1,\"error_handler\":");
@@ -9659,19 +9728,8 @@ impl Compiler {
                 string(&mut out, &place.name);
                 write!(
                     out,
-                    ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{}}}",
-                    place.offset, place.storage, place.symbol, place.type_id
-                )
-                .unwrap();
-            }
-            out.push_str("],\"promises\":[");
-            for (index, (parameter, bytes)) in function.promises.iter().enumerate() {
-                if index != 0 {
-                    out.push(',');
-                }
-                write!(
-                    out,
-                    "{{\"bytes\":{bytes},\"parameter\":{parameter},\"readonly\":false,\"unaliased\":false}}"
+                    ",\"offset\":{},\"storage\":\"{}\",\"symbol\":{},\"type\":{},\"volatile\":{}}}",
+                    place.offset, place.storage, place.symbol, place.type_id, place.volatile
                 )
                 .unwrap();
             }
@@ -9747,9 +9805,6 @@ impl Compiler {
                 out.push(',');
             }
             out.push('{');
-            if object.align > 1 {
-                write!(out, "\"align\":{},", object.align).unwrap();
-            }
             out.push_str("\"bytes\":[");
             for (byte_index, byte) in object.bytes.iter().enumerate() {
                 if byte_index != 0 {
@@ -9788,6 +9843,38 @@ impl Compiler {
             type_json(&mut out, type_);
         }
         out.push(']');
+        // What the language promises of each pointer parameter: it is addressable for the bytes it names.
+        for function in &self.functions {
+            for &(value, bytes) in &function.promises {
+                let index = function.parameters.iter().position(|&one| one == value).expect("a promise of a parameter") as i64;
+                facts.state(llrm_hir::facts::Subject::Param { function: i64::from(function.id), index }, llrm_hir::facts::Fact::Dereferenceable(bytes as u64));
+            }
+        }
+        // What the language promises of a FOR counter's add: it does not wrap.
+        for function in &self.functions {
+            for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
+                facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
+            }
+        }
+        // A call that fills a fixed-length destination: the callee writes its first
+        // bytes before reading any, reads none and keeps no copy of the pointer.
+        for function in &self.functions {
+            for call in &function.calls {
+                for &(operand, bytes) in &call.fills {
+                    let argument = llrm_hir::facts::Subject::Operand { function: i64::from(function.id), instruction: i64::from(call.instruction), operand: operand as i64 };
+                    facts.state(argument, llrm_hir::facts::Fact::NoCapture).state(argument, llrm_hir::facts::Fact::WriteOnly).state(argument, llrm_hir::facts::Fact::Initializes(bytes as u64));
+                }
+            }
+        }
+        // How a word-sized object is placed: on a word.
+        for object in self.data.iter().filter(|object| object.align > 1) {
+            facts.state(llrm_hir::facts::Subject::Object(i64::from(object.id)), llrm_hir::facts::Fact::Align(u64::from(object.align)));
+        }
+        let facts = facts.finish();
+        if !facts.is_empty() {
+            out.push_str(",\"facts\":");
+            out.push_str(&llrm_hir::codec::facts_json(&facts));
+        }
         if self.debugging() {
             out.push_str(",\"debug\":");
             out.push_str(&llrm_hir::codec::debug_json(self.debug.built()));
@@ -9806,7 +9893,7 @@ impl Compiler {
         }
         write!(
             out,
-            "}}],\"runtime\":\"{}\",\"schema\":1,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":4,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -10319,7 +10406,7 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             base,
             offset,
             type_id,
-            published,
+            volatile,
             inbounds,
         } => {
             if let Some(place) = function.allocations.get(base).filter(|_| *inbounds) {
@@ -10327,11 +10414,11 @@ fn operand_json(out: &mut String, operand: &Operand, function: &Function) {
             } else {
                 out.push('{');
             }
-            write!(out, "\"base\":{base},\"inbounds\":{inbounds},\"offset\":{offset},").unwrap();
+            write!(out, "\"base\":{base},\"offset\":{offset},").unwrap();
             if let Some(origin) = function.origins.get(base).filter(|_| *inbounds) {
                 write!(out, "\"origin\":{origin},").unwrap();
             }
-            write!(out, "\"published\":{published},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
+            write!(out, "\"volatile\":{volatile},\"tag\":\"indirect\",\"type\":{type_id}}}").unwrap();
         }
     }
 }

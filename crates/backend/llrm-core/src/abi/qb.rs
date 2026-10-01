@@ -109,6 +109,10 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
     IndexMap::from_iter([
         ("B$BEEP", 0),
         ("B$LNIN", 10),
+        // `void B$LPRT(void)` and `void B$WRIT(void)`: QB45 rt/iolpt.asm and
+        // rt/prnval.asm, FAR, no arguments.
+        ("B$LPRT", 0),
+        ("B$WRIT", 0),
         // Path descriptor, channel, record length -1 and mode; BCOM45 dkopen.asm
         // B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
@@ -195,6 +199,36 @@ fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<runtime::Reg>, Ve
         direct_reads: None,
     };
     Ok((contract, inputs, outputs))
+}
+
+/// The contract and registers of the inline block an intrinsic name spells,
+/// as `llrm_mir::intrinsics::asm` reads it; none for another name.
+pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
+    let block = llrm_mir::intrinsics::asm(name)?;
+    let asm = model::Asm {
+        code: block.code.iter().map(|&byte| i64::from(byte)).collect(),
+        inputs: block.inputs,
+        outputs: block.outputs,
+        clobbers: block.clobbers,
+        memory: block.memory,
+    };
+    Some(_inline_contract(&asm).and_then(|(contract, inputs, outputs)| {
+        let machine = |names: Vec<runtime::Reg>| {
+            names
+                .into_iter()
+                .map(|one| match one {
+                    runtime::Reg::Ax => Ok(Register::AX),
+                    runtime::Reg::Bx => Ok(Register::BX),
+                    runtime::Reg::Cx => Ok(Register::CX),
+                    runtime::Reg::Dx => Ok(Register::DX),
+                    runtime::Reg::Si => Ok(Register::SI),
+                    runtime::Reg::Di => Ok(Register::DI),
+                    other => Err(AbiError(format!("inline assembly passes a value in {}", other.name()))),
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        Ok((contract, Registers { arguments: machine(inputs)?, results: machine(outputs)? }))
+    }))
 }
 
 /// An inline block's call, its arguments in the contract's slot order, each
@@ -937,10 +971,16 @@ pub fn registers(name: &str) -> Option<Registers> {
 
 impl crate::backend::assemble::Abi for HirAbi {
     fn registers(&self, callee: &str) -> Option<Registers> {
+        if let Some(block) = asm_call(callee) {
+            return block.ok().map(|(_, registers)| registers);
+        }
         registers(callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee))
     }
 
     fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String> {
+        if let Some(block) = asm_call(callee) {
+            return block.map(|(contract, _)| contract).map_err(|error| error.0);
+        }
         let cleanup = if pops { model::StackCleanup::Callee } else { model::StackCleanup::Caller };
         let name = callee.strip_prefix(crate::hir::mir::RUNTIME).unwrap_or(callee);
         _contract_keeping(name, cleanup, pushed, self.runtime, &self.preserved).map_err(|error| error.0)
@@ -951,6 +991,76 @@ impl crate::backend::assemble::Abi for HirAbi {
             Some(routine) => routine.to_owned(),
             None => self.objects.get(name).cloned().unwrap_or_else(|| name.to_owned()),
         }
+    }
+}
+
+/// A CPU's target as the backend lowers to it: a call keeps the registers
+/// its callee's contract leaves, and a multiply by a constant costs its
+/// cheapest chain, as `abi` and `arithmetic` lower them.
+pub struct LoweredTarget {
+    machine: std::rc::Rc<dyn llrm_mir::target::Machine>,
+    abi: HirAbi,
+    cpu: &'static crate::backend::cpu::Profile,
+}
+
+impl LoweredTarget {
+    pub fn of(cpu: &'static crate::backend::cpu::Profile, abi: HirAbi) -> Self {
+        Self { machine: cpu.target(), abi, cpu }
+    }
+}
+
+impl llrm_mir::target::Machine for LoweredTarget {
+    fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
+        self.machine.foreign_span(selectors, offsets, width)
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.machine.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.machine.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.machine.call_registers()
+    }
+
+    fn far_access_registers(&self) -> i64 {
+        self.machine.far_access_registers()
+    }
+
+    fn segment_registers(&self) -> i64 {
+        self.machine.segment_registers()
+    }
+
+    fn kept_across(&self, callee: Option<&str>) -> i64 {
+        use crate::backend::assemble::Abi;
+        match callee.map(|name| self.abi.contract(name, false, 0)) {
+            Some(Ok(contract)) => crate::backend::lower::call_keeps(&contract).len() as i64,
+            _ => self.machine.call_registers(),
+        }
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.machine.address_forms()
+    }
+
+    fn multiply_by(&self, factor: i64) -> i64 {
+        use crate::backend::arithmetic;
+        let multiply = arithmetic::immediate_multiply(self.cpu, factor).unwrap_or_else(|_| self.machine.costs().multiply);
+        match arithmetic::cheapest_chain(factor, self.cpu) {
+            Ok(Some((_, clocks))) => clocks.min(multiply),
+            _ => multiply,
+        }
+    }
+
+    fn load_may_trap(&self, width: u64, align: u64) -> bool {
+        self.machine.load_may_trap(width, align)
+    }
+
+    fn port_touches_memory(&self, ports: (i64, i64)) -> bool {
+        self.machine.port_touches_memory(ports)
     }
 }
 
@@ -1628,5 +1738,31 @@ mod tests {
         let contract = HirAbi::of(&program).unwrap().contract("_strlen", false, 2).unwrap();
         assert!(contract.clobbers.contains(&runtime::Reg::Ax));
         assert!(!contract.clobbers.contains(&runtime::Reg::Si) && !contract.clobbers.contains(&runtime::Reg::Di));
+    }
+
+    /// A call keeps what its callee's contract leaves: every call was
+    /// priced as keeping two registers, where B$PEI2 keeps SI alone, a call
+    /// of the program's own keeps none, and a C one keeps SI and DI.
+    #[test]
+    fn test_a_call_keeps_the_registers_its_contract_leaves() {
+        use llrm_mir::target::Machine;
+        let calling = |program: &model::Program| LoweredTarget::of(crate::backend::cpu::profile("486").unwrap(), HirAbi::of(program).unwrap());
+        let qb = calling(&model::Program::new(model::Dialect::Qb45, model::RuntimeProfile::Qb45, Vec::new()));
+        assert_eq!(qb.kept_across(Some(&format!("{}B$PEI2", crate::hir::mir::RUNTIME))), 1);
+        assert_eq!(qb.kept_across(Some("OWN")), 0);
+        let c = calling(&model::Program { preserved: vec!["si".to_owned(), "di".to_owned()], ..model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new()) });
+        assert_eq!(c.kept_across(Some("_strlen")), 2);
+    }
+
+    /// A multiply by a constant costs the chain the backend emits for it
+    /// where that is cheaper: every one was priced as an `imul`.
+    #[test]
+    fn test_a_multiply_by_a_constant_costs_its_chain() {
+        use llrm_mir::target::Machine;
+        let cpu = crate::backend::cpu::profile("486").unwrap();
+        let target = LoweredTarget::of(cpu, HirAbi::of(&model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new())).unwrap());
+        let (_, chain) = crate::backend::arithmetic::cheapest_chain(6, cpu).unwrap().unwrap();
+        assert_eq!(target.multiply_by(6), chain);
+        assert!(target.multiply_by(6) < target.costs().multiply);
     }
 }

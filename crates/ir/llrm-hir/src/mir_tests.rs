@@ -41,7 +41,7 @@ fn a_call_repeats_its_callees_convention() {
     function.values.push(Value { id: 4, r#type: 1 });
     function.blocks[0].instructions.push(call);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
-    let site = |order| CallAbi { instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register, promises: Vec::new() };
+    let site = |order| CallAbi { instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register };
     function.calls = vec![site(vec![1, 0])];
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
@@ -207,7 +207,7 @@ fn an_external_object_is_as_large_as_its_places() {
 fn an_allocation_and_a_place_are_tagged_apart() {
     use crate::model::{AddressKind, IndirectPlace, Place, Storage};
     let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
-    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation });
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
     let instructions = vec![
         Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
         Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
@@ -431,14 +431,19 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     assert!(text.contains(entry), "{text}");
 }
 
-/// A parameter's promise is its LLVM attributes, which LICM and EarlyCSE
+/// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
 /// ask; with none, a view descriptor's loads never left a loop.
 #[test]
-fn a_promise_becomes_its_parameters_attributes() {
-    let mut function = difference();
-    function.promises = vec![crate::model::Promise { parameter: 2, bytes: 10, unaliased: true, readonly: true }];
-    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
-    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) %1)"), "{text}");
+fn the_facts_of_a_parameter_become_its_attributes() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    let second = Subject::Param { function: 1, index: 1 };
+    facts.state(second, Fact::NoAlias).state(second, Fact::ReadOnly).state(second, Fact::Dereferenceable(10)).state(second, Fact::NonNull);
+    program.modules[0].facts = facts.finish();
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("(i16 %0, i16 noalias readonly dereferenceable(10) nonnull %1)"), "{text}");
 }
 
 /// A string comparison compares its callee's sign with zero; it was
@@ -450,7 +455,7 @@ fn a_string_comparison_compares_its_callees_sign() {
     let mut compare = Instruction::new(1, Op::StringGt, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
     compare.callee = Some("B$SCMP".to_owned());
     function.blocks[0].instructions = vec![compare];
-    function.calls = vec![CallAbi { instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register, promises: Vec::new() }];
+    function.calls = vec![CallAbi { instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let emitted = emit(&program(function)).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
@@ -548,11 +553,15 @@ fn a_value_is_emitted_before_a_use_listed_ahead_of_it() {
 /// A FOR loop's step promises its counter fits, and the rich route dropped
 /// the promise: its add reached MIR without `nsw`.
 #[test]
-fn a_nowrap_promise_is_nsw() {
+fn a_no_signed_wrap_fact_is_nsw() {
+    use crate::facts::{Builder, Subject};
     let mut function = difference();
     function.blocks[0].instructions[0].op = Op::Add;
-    function.blocks[0].instructions[0].nowrap = true;
-    let text = llrm_mir::print::module(&emit(&program(function)).remove(0).module);
+    let mut program = program(function);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, llrm_mir::facts::Fact::NoSignedWrap);
+    program.modules[0].facts = facts.finish();
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
     assert!(text.contains("%2 = add nsw i16 %0, %1"), "{text}");
 }
 
@@ -561,13 +570,12 @@ fn a_nowrap_promise_is_nsw() {
 /// size, locals start indeterminate, and a value-less return gives poison.
 #[test]
 fn a_languages_promises_reach_mir() {
-    use crate::model::{AliasClass, IndirectPlace, Place, Promise, Storage};
+    use crate::model::{AliasClass, IndirectPlace, Place, Storage};
     let mut boolean = Type::new(2, "bool", TypeKind::Boolean, 2);
     boolean.signed = Some(false);
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
     let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
-    advance.inbounds = true;
-    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, published: false, inbounds: false, origin: None, allocation: None });
+    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None });
     let instructions = vec![
         advance,
         Instruction::new(2, Op::Load, vec![3], vec![at]),
@@ -577,9 +585,12 @@ fn a_languages_promises_reach_mir() {
     let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
     let mut function = Function::new(1, "f", 1, values, vec![Place::new(1, "t", 2, Storage::Local, 0)], vec![block], 1);
     function.parameters = vec![1];
-    function.promises = vec![Promise { parameter: 1, bytes: 0, unaliased: true, readonly: false }];
     let mut program = program(function);
     program.zeroed_locals = false;
+    program.modules[0].facts = vec![
+        crate::facts::Stated { subject: crate::facts::Subject::Param { function: 1, index: 0 }, fact: llrm_mir::facts::Fact::NoAlias, source: None },
+        crate::facts::Stated { subject: crate::facts::Subject::Instruction { function: 1, id: 1 }, fact: llrm_mir::facts::Fact::InBounds, source: None },
+    ];
     program.modules[0].types.extend([boolean, Type::new(3, "near", TypeKind::Pointer, 2)]);
     program.modules[0].alias_classes = vec![
         AliasClass { name: "root".to_owned(), parent: None, types: Vec::new() },
@@ -601,12 +612,13 @@ fn data_linkage_is_the_languages() {
     use crate::model::{DataLinkage, DataObject};
     let mut program = program(difference());
     let mut exported = DataObject::new(1, "shown", vec![1, 0]);
-    (exported.linkage, exported.align) = (DataLinkage::Exported, Some(2));
+    exported.linkage = DataLinkage::Exported;
     let mut literal = DataObject::new(2, "L", vec![65, 0]);
     (literal.linkage, literal.readonly) = (DataLinkage::Private, true);
     let mut imported = DataObject::new(3, "elsewhere", Vec::new());
     imported.linkage = DataLinkage::External;
     program.modules[0].data = vec![exported, literal, imported];
+    program.modules[0].facts = vec![crate::facts::Stated { subject: crate::facts::Subject::Object(1), fact: llrm_mir::facts::Fact::Align(2), source: None }];
 
     let text = llrm_mir::print::module(&emit(&program).remove(0).module);
     assert!(text.contains("@shown = global [2 x i8] c\"\\01\\00\", align 2\n@L = private constant [2 x i8] c\"A\\00\"\n@elsewhere = external global [0 x i8]\n"), "{text}");
@@ -623,7 +635,7 @@ fn a_call_through_a_functions_address() {
     function.blocks[0].instructions.extend([address, call]);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(5)];
     function.values.extend([Value { id: 4, r#type: 2 }, Value { id: 5, r#type: 1 }]);
-    function.calls = vec![CallAbi { instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register, promises: Vec::new() }];
+    function.calls = vec![CallAbi { instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let mut program = program(function);
     program.modules[0].types.push(Type::new(2, "far", TypeKind::Pointer, 4));
 
@@ -748,4 +760,143 @@ fn resume_next_past_end_sub_continues_at_its_end() {
     // Premise: a call after the last statement row begins.
     assert!(sub.calls.iter().any(|one| one.instruction > last), "the fixture no longer has the shape");
     emits(&program);
+}
+
+/// A stated fact becomes its carrier on what it is stated of, and nowhere
+/// else; `noalias` is spelled only by `llrm_mir::facts`.
+#[test]
+fn a_stated_fact_becomes_its_carrier() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 1 }, Fact::NoAlias);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("(i16 %0, i16 noalias %1)"), "{text}");
+}
+
+/// A fact of a kind it is not stated of was lowered to whatever the subject
+/// was; the verifier refuses it, as it does a subject the module lacks.
+#[test]
+fn a_fact_of_the_wrong_subject_is_refused() {
+    use crate::facts::{Builder, Stated, Subject};
+    use llrm_mir::facts::Fact;
+    let refusal = |subject| {
+        let mut program = program(difference());
+        program.modules[0].facts = vec![Stated { subject, fact: Fact::NoAlias, source: None }];
+        crate::verify::verify(&program).unwrap_err().0
+    };
+    assert!(refusal(Subject::Callable(1)).contains("noalias is not stated of a callable"));
+    assert!(refusal(Subject::Param { function: 1, index: 2 }).contains("noalias is stated of a param the module lacks"));
+    assert!(refusal(Subject::Param { function: 9, index: 0 }).contains("the module lacks"));
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 0 }, Fact::NoAlias);
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).is_ok());
+}
+
+/// Stated facts cross the wire and come back the same, source and all.
+#[test]
+fn stated_facts_survive_the_codec() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("c");
+    facts.state_at(Subject::Param { function: 1, index: 0 }, Fact::NoAlias, 12);
+    program.modules[0].facts = facts.finish();
+    let text = crate::codec::encode(&program, None).unwrap();
+    assert!(text.contains("\"facts\":[{\"fact\":\"noalias\",\"function\":1,\"id\":0,\"source\":\"c:12\",\"subject\":\"param\"}]"), "{text}");
+    assert_eq!(crate::codec::decode(&text).unwrap().modules[0].facts, program.modules[0].facts);
+}
+
+/// Schema 1 had `promises` and `nowrap`, which no longer exist; a program
+/// that says it is schema 1 is refused by its version, not by whichever
+/// field the decoder meets first.
+#[test]
+fn a_program_of_the_old_schema_is_refused_by_its_version() {
+    let mut program = program(difference());
+    program.schema = 1;
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("unsupported HIR schema 1"));
+}
+
+/// The same, as JSON: the old schema's `promises` field was what it was
+/// refused for.
+#[test]
+fn old_json_is_refused_by_its_schema() {
+    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":4", "\"promises\":[],\"schema\":1");
+    assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
+}
+
+/// A fact of a data object the module lacks is refused, as one of a
+/// parameter it lacks is.
+#[test]
+fn an_alignment_of_no_object_is_refused() {
+    use crate::facts::{Stated, Subject};
+    let mut program = program(difference());
+    program.modules[0].facts = vec![Stated { subject: Subject::Object(9), fact: llrm_mir::facts::Fact::Align(2), source: None }];
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("object the module lacks"));
+}
+
+/// What the language promises of a call's pointer argument is stated of that
+/// argument and reaches the call as its attributes: the callee writes the
+/// first bytes before reading any, reads none and keeps no copy.
+#[test]
+fn facts_of_a_call_argument_are_its_call_site_attributes() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::{CallAbi, CallDistance, FloatReturn, StackCleanup};
+    use llrm_mir::facts::Fact;
+    let values = vec![Value { id: 1, r#type: 1 }];
+    let mut call = Instruction::new(1, Op::Call, Vec::new(), vec![Operand::value_ref(1)]);
+    call.callee = Some("B$FILL".to_owned());
+    let block = Block::new(1, vec![call], Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let mut function = Function::new(1, "f", 0, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    function.calls = vec![CallAbi { instruction: 1, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    let mut facts = Builder::new("test");
+    let argument = Subject::Operand { function: 1, instruction: 1, operand: 0 };
+    facts.state(argument, Fact::NoCapture).state(argument, Fact::WriteOnly).state(argument, Fact::Initializes(4));
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("@llrm.qb.B$FILL(i16 nocapture writeonly initializes((0, 4)) %0)"), "{text}");
+}
+
+/// A fact of an operand the instruction lacks is refused.
+#[test]
+fn a_fact_of_an_operand_the_instruction_lacks_is_refused() {
+    use crate::facts::{Stated, Subject};
+    let mut program = program(difference());
+    program.modules[0].facts = vec![Stated { subject: Subject::Operand { function: 1, instruction: 1, operand: 0 }, fact: llrm_mir::facts::Fact::NoCapture, source: None }];
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("operand the module lacks"));
+}
+
+/// An access through a pointer is inbounds when the language says of that
+/// operand that it is; the next access, of the same place, is not.
+#[test]
+fn inbounds_is_a_fact_of_an_operand() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::IndirectPlace;
+    use llrm_mir::facts::Fact;
+    let at = || Operand::IndirectPlace(IndirectPlace { base: 1, offset: 2, r#type: 1, volatile: false, origin: None, allocation: None });
+    let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }];
+    let loads = vec![Instruction::new(1, Op::Load, vec![2], vec![at()]), Instruction::new(2, Op::Load, vec![3], vec![at()])];
+    let block = Block::new(1, loads, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(3, "near", TypeKind::Pointer, 2));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Operand { function: 1, instruction: 1, operand: 0 }, Fact::InBounds);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert_eq!(text.matches("getelementptr inbounds i8, ptr %0, i16 2").count(), 1, "{text}");
+    assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
 }

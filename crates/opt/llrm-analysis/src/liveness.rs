@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{BlockId, Function, Instruction, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
 use llrm_support::hash::HashMap;
@@ -75,6 +75,11 @@ pub fn entry_values(function: &Function) -> BTreeSet<ValueId> {
 
 /// The most values live at once -- anywhere, or in `inside`.
 pub fn pressure(function: &Function, found: Option<&Liveness>, inside: Option<&BTreeSet<i64>>) -> usize {
+    pressure_of(function, found, inside, &|_| true)
+}
+
+/// `pressure`, counting only the values `counted` says.
+pub fn pressure_of(function: &Function, found: Option<&Liveness>, inside: Option<&BTreeSet<i64>>, counted: &dyn Fn(ValueId) -> bool) -> usize {
     let owned;
     let found = match found {
         Some(found) => found,
@@ -89,16 +94,44 @@ pub fn pressure(function: &Function, found: Option<&Liveness>, inside: Option<&B
             continue;
         }
         let mut alive = found.live_out[&id(block)].clone();
-        peak = peak.max(alive.len());
+        let size = |alive: &BTreeSet<ValueId>| alive.iter().filter(|&&one| counted(one)).count();
+        peak = peak.max(size(&alive));
         for op in split(function, block).1.into_iter().rev() {
             if let Some(one) = op.result {
                 alive.remove(&one);
             }
             alive.extend(reads(op));
-            peak = peak.max(alive.len());
+            peak = peak.max(size(&alive));
         }
     }
     peak
+}
+
+/// The values live before each instruction of `block` but its phis, and
+/// those live across it, in order.
+pub fn live_points(function: &Function, found: &Liveness, block: BlockId) -> Vec<(InstId, BTreeSet<ValueId>, BTreeSet<ValueId>)> {
+    let mut alive = found.live_out[&id(block)].clone();
+    let mut points = Vec::new();
+    for &inst in function.block(block).instructions().iter().rev() {
+        let op = function.instruction(inst);
+        if is_phi(op) {
+            continue;
+        }
+        if let Some(one) = op.result {
+            alive.remove(&one);
+        }
+        let across = alive.clone();
+        alive.extend(reads(op));
+        points.push((inst, alive.clone(), across));
+    }
+    points.reverse();
+    points
+}
+
+/// How many values `counted` says are live before each instruction of
+/// `block` but its phis, in order.
+pub fn pressure_points(function: &Function, found: &Liveness, block: BlockId, counted: &dyn Fn(ValueId) -> bool) -> Vec<(InstId, usize)> {
+    live_points(function, found, block).into_iter().map(|(inst, before, _)| (inst, before.iter().filter(|&&one| counted(one)).count())).collect()
 }
 
 /// The edge operands of phis whose results are actually live.

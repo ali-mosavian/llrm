@@ -23,8 +23,7 @@ pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
 /// `SAVED`: callee-saved under the C convention. A Borland caller keeps SI
 /// and DI, not their upper halves, and a caller built here keeps nothing
 /// across a call.
-pub static SAVED: LazyLock<IndexMap<Register, Register>> =
-    LazyLock::new(|| IndexMap::from_iter([(Register::ESI, Register::SI), (Register::EDI, Register::DI)]));
+pub static SAVED: LazyLock<IndexMap<Register, Register>> = LazyLock::new(|| IndexMap::from_iter(llrm_x86_code16::PRESERVED));
 /// `SEGMENTS`.
 pub static SEGMENTS: LazyLock<IndexMap<&'static str, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([("_DATA", ".data"), ("_BSS", ".data?"), ("CONST", ".const")]));
@@ -772,6 +771,10 @@ pub fn _memory(cell: &ir::Mem, names: &IndexMap<(Space, i64), String>) -> Result
                 format!("{}:", target::name_of(address.segment))
             };
             return Ok(format!("{size}{segment}[{registers}{disp}]"));
+        }
+        // A direct address, as `[disp16]`: the offset is unsigned.
+        Space::Literal if registers.is_empty() && address.segment == Register::None => {
+            return Ok(format!("{size}[{}]", address.disp & 0xFFFF));
         }
         Space::Far if address.segment != Register::None => {
             let inside = if registers.is_empty() { address.disp.to_string() } else { format!("{registers}{disp}") };

@@ -26,12 +26,15 @@ use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, induction};
-use llrm_mir::context::{ConstantKind, Context, mask};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use num_bigint::BigInt;
+
+use crate::counting;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 
@@ -84,6 +87,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
 /// The first rule that rewrites `inst`.
 fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
     _mask_scaled(context, function, recurrences, inst)
+        || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
         || _casted_logic(context, function, inst)
@@ -94,6 +98,86 @@ fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTre
         || _offset_chain(context, function, inst)
         || _bitwise_chain(context, function, inst)
         || _identity(context, function, inst)
+        || _inverted_compare(context, function, inst)
+        || _extended_boolean_tested(context, function, inst)
+        || _extended_boolean_negated(context, function, inst)
+}
+
+/// The `i1` `operand` extends, read through `sext` or `zext`, and whether
+/// the extension makes a true all ones.
+fn _extended_boolean(function: &Function, operand: Operand) -> Option<(Operand, bool)> {
+    let made = _definition(function, operand)?;
+    let instruction = function.instruction(made);
+    match instruction.opcode {
+        Opcode::Cast(kind @ (CastOp::SExt | CastOp::ZExt)) => Some((instruction.operands[0], kind == CastOp::SExt)),
+        _ => None,
+    }
+}
+
+/// `icmp ne (sext i1 x), 0` is `x`, and `icmp eq` of it `!x`: Nib's booleans
+/// are eight-bit 0 and -1, tested against zero.
+fn _extended_boolean_tested(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    let Opcode::ICmp(predicate @ (IntPredicate::Ne | IntPredicate::Eq)) = instruction.opcode else { return false };
+    let [extended, zero] = instruction.operands[..] else { return false };
+    if _integer(context, zero) != Some(0) {
+        return false;
+    }
+    let Some((boolean, _)) = _extended_boolean(function, extended) else { return false };
+    if function.operand_type(context, boolean).and_then(|ty| context.types.int_bits(ty)) != Some(1) {
+        return false;
+    }
+    if predicate == IntPredicate::Ne {
+        _forward(function, inst, boolean);
+    } else {
+        let truth = counting::constant(context, &BigInt::from(1), 1);
+        let bit = context.types.int(1);
+        let flipped = function.create_instruction(Opcode::Binary(BinaryOp::Xor), bit, vec![boolean, truth], Flags::default(), None);
+        function.insert(flipped, Position::Before(inst)).expect("a placed compare");
+        let value = Operand::Value(function.instruction(flipped).result.expect("a value"));
+        _forward(function, inst, value);
+    }
+    true
+}
+
+/// `xor (sext i1 x), -1` is `sext (xor i1 x, true)`, and `xor (zext x), 1`
+/// the same zero-extended.
+fn _extended_boolean_negated(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let Some((BinaryOp::Xor, left, right, width)) = _binary(context, function, inst) else { return false };
+    if width == 1 {
+        return false;
+    }
+    let Some(((boolean, sign), number)) = [(left, right), (right, left)].into_iter().find_map(|(one, other)| Some((_extended_boolean(function, one)?, _integer(context, other)?))) else { return false };
+    if number != if sign { mask(width) } else { 1 }
+        || function.operand_type(context, boolean).and_then(|ty| context.types.int_bits(ty)) != Some(1)
+    {
+        return false;
+    }
+    let truth = counting::constant(context, &BigInt::from(1), 1);
+    let bit = context.types.int(1);
+    let flipped = function.create_instruction(Opcode::Binary(BinaryOp::Xor), bit, vec![boolean, truth], Flags::default(), None);
+    function.insert(flipped, Position::Before(inst)).expect("a placed xor");
+    let negated = Operand::Value(function.instruction(flipped).result.expect("a value"));
+    let ty = function.instruction(inst).ty;
+    let kind = if sign { CastOp::SExt } else { CastOp::ZExt };
+    let extended = function.create_instruction(Opcode::Cast(kind), ty, vec![negated], Flags::default(), None);
+    function.insert(extended, Position::Before(inst)).expect("a placed xor");
+    let value = Operand::Value(function.instruction(extended).result.expect("a value"));
+    _forward(function, inst, value);
+    true
+}
+
+/// `xor (icmp P a b), true` is `icmp !P a b` where nothing else reads the
+/// compare: Nib's `if !(i < n): break` branched on the negation, which
+/// hid the exit from every counting pass and cost `setl; neg; xor`.
+fn _inverted_compare(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let Some((BinaryOp::Xor, left, right, 1)) = _binary(context, function, inst) else { return false };
+    let Some((compare, _)) = [(left, right), (right, left)].into_iter().find(|&(_, other)| _integer(context, other) == Some(1)) else { return false };
+    let Some(made) = _definition(function, compare).filter(|_| _single_use(function, compare)) else { return false };
+    let Opcode::ICmp(predicate) = function.instruction(made).opcode else { return false };
+    let operands = function.instruction(made).operands.clone();
+    _replace(function, inst, Opcode::ICmp(predicate.inverse()), operands);
+    true
 }
 
 fn _definition(function: &Function, operand: Operand) -> Option<InstId> {
@@ -299,6 +383,44 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
         _ => return false,
     };
     _replace(function, inst, Opcode::Cast(op), vec![source]);
+    true
+}
+
+/// A byte offset from a constant near address is the constant address,
+/// `inttoptr`, as InstCombine's constant folder makes it: `gep i8, ptr null,
+/// -4` is `inttoptr (i16 -4 to ptr)`. Isel has one form for such an address.
+fn _constant_address(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    // `inttoptr` of a constant is the constant expression.
+    if let (&Opcode::Cast(CastOp::IntToPtr), [Operand::Constant(number)], Some(result)) = (&instruction.opcode, &instruction.operands[..], instruction.result)
+        && matches!(context.types.get(instruction.ty), llrm_mir::types::Type::Pointer(0))
+        && matches!(context.get(*number).kind, ConstantKind::Int(_))
+        && context.types.int_bits(context.get(*number).ty) == Some(16)
+    {
+        let address = context.constant(Constant { ty: instruction.ty, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: *number }) });
+        function.replace_all_uses_with(result, Operand::Constant(address));
+        _erase(function, inst);
+        return true;
+    }
+    let Opcode::GetElementPtr { source } = instruction.opcode else { return false };
+    let [Operand::Constant(base), Operand::Constant(index)] = instruction.operands[..] else { return false };
+    let (Some(result), pointer) = (instruction.result, instruction.ty) else { return false };
+    let near = matches!(context.types.get(pointer), llrm_mir::types::Type::Pointer(0));
+    let (Some(step), Some(8)) = (_integer(context, Operand::Constant(index)), context.types.int_bits(source)) else { return false };
+    let index_ty = context.get(index).ty;
+    let Some(width) = context.types.int_bits(index_ty).filter(|&width| near && width == 16) else { return false };
+    let start = match context.get(base).kind.clone() {
+        ConstantKind::Null | ConstantKind::Zero => 0,
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(value).kind {
+            ConstantKind::Int(bits) if context.get(value).ty == index_ty => bits,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let at = context.int(index_ty, (start.wrapping_add(step) & mask(width)) as i128);
+    let address = context.constant(Constant { ty: pointer, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: at }) });
+    function.replace_all_uses_with(result, Operand::Constant(address));
+    _erase(function, inst);
     true
 }
 

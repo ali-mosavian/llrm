@@ -36,6 +36,7 @@ use std::sync::LazyLock;
 
 use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
+use llrm_mir::facts::Facts;
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
@@ -177,8 +178,7 @@ pub fn seeds(unit: &Unit) -> IndexMap<ValueId, Provenance> {
         .filter(|(_, value)| is_pointer(unit, Operand::Value(**value)))
         .map(|(at, value)| {
             let object = MemoryObject { identity: Some(Identity::Int(at as i64)), ..MemoryObject::new(MemoryKind::Parameter) };
-            let unaliased = function.parameter_attrs.get(at).is_some_and(|attrs| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noalias")));
-            let restrict = if unaliased { BTreeSet::from([Identity::Int(at as i64)]) } else { BTreeSet::new() };
+            let restrict = if Facts::param(function, at).no_alias() { BTreeSet::from([Identity::Int(at as i64)]) } else { BTreeSet::new() };
             (*value, Provenance::one_with_slice(object, 0, 1, 1, 1, restrict).expect("one byte is a slice"))
         })
         .collect()
@@ -419,6 +419,13 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
 fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let mut reads = NONLOCAL.slices.clone();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
+    // A port `ports` left reaching memory reaches it as its device does, by
+    // address: every object, whether the program ever took its address.
+    if matches!(unit.intrinsic(at), Some(llrm_mir::intrinsics::Intrinsic::PortIn | llrm_mir::intrinsics::Intrinsic::PortOut)) {
+        reads.extend(_globals(unit, (0..unit.globals.len()).map(|one| GlobalId(one as u32))));
+        let frames = unit.function.walk().filter(|&(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Alloca { .. }));
+        reads.extend(frames.filter_map(|(_, inst)| memory::object_of(unit, Operand::Value(unit.function.instruction(inst).result?))).map(Slice::whole));
+    }
     let mut writes = reads.clone();
     let Some(globals) = unit.globals_aa else { return Ok((reads, writes)) };
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at);

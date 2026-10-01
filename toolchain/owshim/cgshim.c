@@ -606,10 +606,30 @@ cg_name CGVolatile( cg_name a )
     return( n );
 }
 
+/* The facts the patched front end states, as terms of the language, by
+ * QBFACT_* less QBFACT_BASE (patches/cgen.c.patch). The stream's reader
+ * refuses a version it does not know. */
+#define FACT_VERSION    1
+#define FACT_BASE       0x100
+static const char *FactTerms[] = {
+#define QBFACT( term, code ) [(code) - FACT_BASE] = #term,
+#include "qbfacts.def"
+#undef QBFACT
+};
+
 cg_name CGAttr( cg_name a, cg_sym_attr attr )
 {
     cg_name n = HANDLE( cg_name );
 
+    if( (unsigned)attr >= FACT_BASE ) {
+        unsigned term = (unsigned)attr - FACT_BASE;
+
+        if( term >= sizeof( FactTerms ) / sizeof( FactTerms[0] ) || FactTerms[term] == NULL ) {
+            refuse( "a fact the shim has no term for" );
+        }
+        emit( "n%u CGFact v%u n%u %s", ID( n ), FACT_VERSION, ID( a ), FactTerms[term] );
+        return( n );
+    }
     emit( "n%u CGAttr n%u %u", ID( n ), ID( a ), (unsigned)attr );
     return( n );
 }
