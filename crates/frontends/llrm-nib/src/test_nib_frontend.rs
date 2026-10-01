@@ -2059,7 +2059,8 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
             .expect("a loop");
         between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
     };
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    // Unrolled, the 4-trip loop is gone and there is nothing to count.
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), unroll: false, peel: false, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
     let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
