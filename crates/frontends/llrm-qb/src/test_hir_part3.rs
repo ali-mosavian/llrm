@@ -1585,6 +1585,19 @@ fn test_common_hir_profiles_do_not_become_qb_frontend_options() {
     assert!(syntax("vbdos", "freestanding").contains("unknown QB runtime"));
 }
 
+/// `SCREEN ,` passed the frontend once SCREEN became a count-led row, and
+/// failed in the backend: "runtime call B$CSCN has no complete
+/// stack-cleanup contract". BC's form for it is not audited; refuse it.
+#[test]
+fn test_screen_without_a_mode_is_refused() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "screen.bas", b"SCREEN ,\r\n");
+    for dialect in ["qb45", "pds71", "vbdos"] {
+        let error = qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, dialect), None).expect_err("refused").0;
+        assert!(error.contains("the audited SCREEN form requires one mode"), "{dialect}: {error}");
+    }
+}
+
 const ROW_LOOP: &str = "DEFINT A-Z\r\nDECLARE SUB blit ()\r\nDIM SHARED sp(100), yy(3), xp(3), cd(100)\r\nblit\r\n\
 SUB blit\r\nyp = 0\r\nFOR y = 0 TO 199\r\nDEF SEG = &HA000 + yp\r\nyp = yp + 20\r\nFOR x = 24 TO 295\r\n\
 dn = sp(yy(1) + x - xp(1)) + sp(yy(2) + x - xp(2))\r\nPOKE x, cd(dn)\r\nNEXT x\r\nNEXT y\r\nDEF SEG\r\nEND SUB\r\n";

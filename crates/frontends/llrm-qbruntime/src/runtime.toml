@@ -37,8 +37,9 @@
 #                  LONG or a string descriptor, `default` standing in when
 #                  the source leaves it out -- or "count-led": a presence word
 #                  and an INTEGER per position, then their word count; `arity`
-#                  the source argument counts it accepts, `refuse` what any
-#                  other count gets ({name} is the statement's), `terminates`
+#                  the source argument counts it accepts, `required` the
+#                  positions it may not leave out, `refuse` what any other
+#                  form gets ({name} is the statement's), `terminates`
 #                  when control never comes back
 #   source         the source form that picks it by operand: `form`, and
 #                  `type`, `mbf`, `record` or `family` where the choice
@@ -1806,6 +1807,8 @@ evidence = '''
 names = ["SCREEN"]
 arguments = "count-led"
 arity = [1]
+# `SCREEN ,` is not audited against BC.
+required = [0]
 refuse = "the audited SCREEN form requires one mode"
 
 ["B$WIDT".vbdos]

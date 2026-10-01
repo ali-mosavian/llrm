@@ -633,6 +633,8 @@ pub struct Statement {
     pub names: Vec<String>,
     pub arguments: Arguments,
     pub arity: Vec<usize>,
+    /// Positions the source may not leave out.
+    pub required: Vec<usize>,
     pub terminates: bool,
     pub refuse: String,
 }
@@ -641,7 +643,7 @@ impl Statement {
     fn parse(name: &str, table: &toml::Table) -> Result<Statement, String> {
         let at = |key: &str| format!("{name}.statement.{key}");
         let field = |key: &str| table.get(key).ok_or_else(|| format!("{} is missing", at(key)));
-        if let Some(key) = table.keys().find(|key| !["names", "arguments", "arity", "terminates", "refuse"].contains(&key.as_str())) {
+        if let Some(key) = table.keys().find(|key| !["names", "arguments", "arity", "required", "terminates", "refuse"].contains(&key.as_str())) {
             return Err(format!("{} is not a statement field", at(key)));
         }
         let arguments = match field("arguments")? {
@@ -680,6 +682,18 @@ impl Statement {
             names: strings(field("names")?, &at("names"))?,
             arguments,
             arity,
+            required: table
+                .get("required")
+                .map(|required| {
+                    required
+                        .as_array()
+                        .ok_or_else(|| format!("{} is not a list", at("required")))?
+                        .iter()
+                        .map(|one| usize::try_from(integer(one, &at("required"))?).map_err(|_| format!("{} is negative", at("required"))))
+                        .collect::<Result<_, String>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
             terminates: table.get("terminates").map(|value| boolean(value, &at("terminates"))).transpose()?.unwrap_or(false),
             refuse: string(field("refuse")?, &at("refuse"))?.to_owned(),
         })

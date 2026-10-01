@@ -3839,7 +3839,8 @@ impl Compiler {
                                 "{name} is parsed as a runtime statement but has no audited ABI contract"
                             ));
                         };
-                        if !statement.arity.contains(&arguments.len()) {
+                        let omitted = |index: &usize| arguments.get(*index).is_none_or(|one| matches!(one, Expr::Omitted(_)));
+                        if !statement.arity.contains(&arguments.len()) || statement.required.iter().any(omitted) {
                             return self.fail(statement.refuse.replace("{name}", name));
                         }
                         let operands = match &statement.arguments {
