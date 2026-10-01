@@ -101,10 +101,26 @@ impl Splitter<'_> {
         ((value % Self::modulus(width)) + Self::modulus(width)) % Self::modulus(width)
     }
 
-    /// `operand` as a rest and a constant. Under `exact`, the flag an
-    /// extension needs of each add and sub it is read through: a rest summed
-    /// without wrapping is the whole's, and nothing is read through a multiply.
-    fn split(&mut self, operand: Operand, exact: Option<Flags>) -> Split {
+    fn join(&mut self, kind: BinaryOp, width: u32, first: Option<Operand>, second: Option<Operand>) -> Option<Operand> {
+        let negate = kind == BinaryOp::Sub;
+        match (first, second) {
+            (Some(one), Some(other)) => Some(self.make(Opcode::Binary(kind), width, vec![one, other])),
+            (one, None) => one,
+            (None, Some(other)) if !negate => Some(other),
+            (None, Some(other)) => {
+                let zero = counting::constant(self.context, &BigInt::from(0), width);
+                Some(self.make(Opcode::Binary(BinaryOp::Sub), width, vec![zero, other]))
+            }
+        }
+    }
+
+    fn sum(first: &BigInt, second: &BigInt, kind: BinaryOp) -> BigInt {
+        if kind == BinaryOp::Sub { first - second } else { first + second }
+    }
+
+    /// `operand` as a rest and a constant, modulo its width: add, sub, a
+    /// constant multiply or shift, truncation, and an extension (`extended`).
+    fn split(&mut self, operand: Operand) -> Split {
         let Some(width) = self.width(operand) else { return self.leaf(operand) };
         let Operand::Value(value) = operand else {
             return match integer(self.context, operand) {
@@ -115,27 +131,17 @@ impl Splitter<'_> {
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return self.leaf(operand) };
         let op = self.function.instruction(inst).clone();
         let constant = |this: &Self, one: Operand| integer(this.context, one).map(|bits| BigInt::from(signed(bits, width)));
-        let flagged = exact.is_none_or(|flag| op.flags.contains(flag));
         let split = match op.opcode {
-            Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)) if flagged => {
-                let (first, second) = (self.split(op.operands[0], exact), self.split(op.operands[1], exact));
+            Opcode::Binary(kind @ (BinaryOp::Add | BinaryOp::Sub)) => {
+                let (first, second) = (self.split(op.operands[0]), self.split(op.operands[1]));
                 if first.same && second.same {
                     return self.leaf(operand);
                 }
-                let negate = kind == BinaryOp::Sub;
-                let total = if negate { &first.constant - &second.constant } else { &first.constant + &second.constant };
-                let rest = match (first.rest, second.rest) {
-                    (Some(one), Some(other)) => Some(self.make(Opcode::Binary(kind), width, vec![one, other])),
-                    (one, None) => one,
-                    (None, Some(other)) if !negate => Some(other),
-                    (None, Some(other)) => {
-                        let zero = counting::constant(self.context, &BigInt::from(0), width);
-                        Some(self.make(Opcode::Binary(BinaryOp::Sub), width, vec![zero, other]))
-                    }
-                };
+                let total = Self::sum(&first.constant, &second.constant, kind);
+                let rest = self.join(kind, width, first.rest, second.rest);
                 Split { rest, constant: Self::masked(&total, width), same: false }
             }
-            Opcode::Binary(kind @ (BinaryOp::Mul | BinaryOp::Shl)) if exact.is_none() => {
+            Opcode::Binary(kind @ (BinaryOp::Mul | BinaryOp::Shl)) => {
                 let by = match (kind, constant(self, op.operands[1]), constant(self, op.operands[0])) {
                     (BinaryOp::Mul, Some(by), _) => Some((0, by)),
                     (BinaryOp::Mul, None, Some(by)) => Some((1, by)),
@@ -143,7 +149,7 @@ impl Splitter<'_> {
                     _ => None,
                 };
                 let Some((at, by)) = by else { return self.leaf(operand) };
-                let inner = self.split(op.operands[at], exact);
+                let inner = self.split(op.operands[at]);
                 if inner.same {
                     return self.leaf(operand);
                 }
@@ -151,23 +157,10 @@ impl Splitter<'_> {
                 let rest = inner.rest.map(|rest| self.make(Opcode::Binary(BinaryOp::Mul), width, vec![rest, by_operand]));
                 Split { rest, constant: Self::masked(&(inner.constant * by), width), same: false }
             }
-            Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) => {
-                let wanted = if cast == CastOp::SExt { Flags::NSW } else { Flags::NUW };
-                if exact.is_some_and(|flag| flag != wanted) {
-                    return self.leaf(operand);
-                }
-                let Some(narrow) = self.width(op.operands[0]) else { return self.leaf(operand) };
-                let inner = self.split(op.operands[0], Some(wanted));
-                if inner.same {
-                    return self.leaf(operand);
-                }
-                let constant = if cast == CastOp::SExt { Self::masked(&BigInt::from(signed(u128::try_from(&inner.constant).expect("a word"), narrow)), width) } else { inner.constant };
-                let rest = inner.rest.map(|rest| self.make(Opcode::Cast(cast), width, vec![rest]));
-                Split { rest, constant, same: false }
-            }
+            Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) if self.reads_through(op.operands[0], cast) => self.extended(op.operands[0], cast, width),
             // Truncation commutes with add and mul: the low bits of a rest and a constant.
-            Opcode::Cast(CastOp::Trunc) if exact.is_none() => {
-                let inner = self.split(op.operands[0], None);
+            Opcode::Cast(CastOp::Trunc) => {
+                let inner = self.split(op.operands[0]);
                 if inner.same {
                     return self.leaf(operand);
                 }
@@ -178,6 +171,42 @@ impl Splitter<'_> {
         };
         self.cone.push(inst);
         split
+    }
+
+    /// Whether `extended` can take a constant out of `operand`: it is an add
+    /// or sub the extension's flag (`nsw` for `sext`, `nuw` for `zext`)
+    /// keeps from wrapping.
+    fn reads_through(&self, operand: Operand, cast: CastOp) -> bool {
+        let Operand::Value(value) = operand else { return false };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return false };
+        let op = self.function.instruction(inst);
+        let flag = if cast == CastOp::SExt { Flags::NSW } else { Flags::NUW };
+        matches!(op.opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)) && op.flags.contains(flag)
+    }
+
+    /// `operand` extended by `cast` to `wide`, as a rest and a constant in `wide`:
+    /// the extension goes down to the leaves, `sext(a + b) = sext a + sext b`
+    /// where the add cannot wrap, and a rest summed narrow would wrap where
+    /// the whole does not (LLVM's `distributeExtsAndCloneChain`).
+    fn extended(&mut self, operand: Operand, cast: CastOp, wide: u32) -> Split {
+        let narrow = self.width(operand).expect("an integer");
+        if let Some(bits) = integer(self.context, operand) {
+            let constant = if cast == CastOp::SExt { Self::masked(&BigInt::from(signed(bits, narrow)), wide) } else { BigInt::from(bits) };
+            return Split { rest: None, constant, same: false };
+        }
+        if !self.reads_through(operand, cast) {
+            let rest = self.make(Opcode::Cast(cast), wide, vec![operand]);
+            return Split { rest: Some(rest), constant: BigInt::from(0), same: false };
+        }
+        let Operand::Value(value) = operand else { unreachable!("reads_through saw a value") };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { unreachable!("reads_through saw an instruction") };
+        let op = self.function.instruction(inst).clone();
+        let Opcode::Binary(kind) = op.opcode else { unreachable!("reads_through saw an add or sub") };
+        let (first, second) = (self.extended(op.operands[0], cast, wide), self.extended(op.operands[1], cast, wide));
+        let total = Self::sum(&first.constant, &second.constant, kind);
+        let rest = self.join(kind, wide, first.rest, second.rest);
+        self.cone.push(inst);
+        Split { rest, constant: Self::masked(&total, wide), same: false }
     }
 }
 
@@ -210,12 +239,11 @@ pub fn separated(unit: &mut passes::Unit, analyses: &Analyses) -> bool {
             let index = instruction.operands[1 + at];
             let Some(width) = splitter.width(index) else { continue };
             // The `gep` sign-extends an index narrower than the pointer's.
-            let exact = (width < pointer_bits).then_some(Flags::NSW);
-            let split = splitter.split(index, exact);
+            let split = if width < pointer_bits && splitter.reads_through(index, CastOp::SExt) { splitter.extended(index, CastOp::SExt, pointer_bits) } else if width < pointer_bits { continue } else { splitter.split(index) };
             if split.same {
                 continue;
             }
-            let bytes = if width >= pointer_bits { signed(u128::try_from(Splitter::masked(&split.constant, pointer_bits)).expect("a word"), pointer_bits) } else { signed(u128::try_from(&split.constant).expect("a word"), width) };
+            let bytes = signed(u128::try_from(Splitter::masked(&split.constant, pointer_bits)).expect("a word"), pointer_bits);
             moved += BigInt::from(bytes) * scale;
             indices.push((at, split.rest, width));
         }

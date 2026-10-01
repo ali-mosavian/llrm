@@ -1671,7 +1671,7 @@ fn _recurrences(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>,
             if !loop_.body.contains(&cfg::id(block)) || found.web.contains(&inst) || found.values.contains_key(&result) {
                 continue;
             }
-            if let Some(of) = walk.fold(&found, inst, cfg::id(block), op) {
+            if let Some(of) = walk.fold(&found, cfg::id(block), op) {
                 found.web.insert(inst);
                 found.values.insert(result, of);
                 changed = true;
@@ -1712,7 +1712,7 @@ impl Walk<'_> {
         }
     }
 
-    fn fold(&self, found: &Users, inst: InstId, at: i64, op: &Instruction) -> Option<Recurrence> {
+    fn fold(&self, found: &Users, at: i64, op: &Instruction) -> Option<Recurrence> {
         let unit = self.unit;
         let result = op.result?;
         match op.opcode {
@@ -1741,12 +1741,10 @@ impl Walk<'_> {
                 let from = unit.int_bits(op.operands[0])?;
                 self.rec(found, op.operands[0], from).filter(|_| from > width).map(|of| of.truncated(width))
             }
+            // The header runs once more than the body, on the trip that leaves: past what the count proves.
             Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) if at != self.loop_.header => self.extended(found, op, cast),
             Opcode::Binary(BinaryOp::SDiv) if at != self.loop_.header => self.quotient(op),
-            _ => {
-                let _ = inst;
-                None
-            }
+            _ => None,
         }
     }
 

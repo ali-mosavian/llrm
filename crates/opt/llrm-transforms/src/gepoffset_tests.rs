@@ -205,3 +205,55 @@ b0:
     );
     assert_eq!(before, after);
 }
+
+/// `(x + 3) + y` and `(x + 3) - y` in bytes, kept from wrapping by the flags
+/// their extension needs: the inputs where neither add wraps, with the
+/// ones that made a narrow rest wrap (`x + y` is -129, 127 as a byte).
+fn two_leaves(flag: &str, kind: &str, body: &str) -> (String, String) {
+    let signed = flag == "nsw";
+    let values: Vec<i128> = if signed { vec![-128, -127, -126, -4, -3, -1, 0, 1, 5, 100, 124, 127] } else { vec![0, 1, 2, 3, 5, 100, 128, 200, 250, 252, 255] };
+    let (low, high) = if signed { (-128, 127) } else { (0, 255) };
+    let mut inputs = Vec::new();
+    for &x in &values {
+        for &y in &values {
+            let inner = x + 3;
+            let whole = if kind == "add" { inner + y } else { inner - y };
+            if (low..=high).contains(&inner) && (low..=high).contains(&whole) {
+                inputs.push(vec![x, y]);
+            }
+        }
+    }
+    assert!(inputs.len() > 20);
+    let text = format!(
+        "define i16 @f(i8 %x, i8 %y) {{
+b0:
+  %a = add {flag} i8 %x, 3
+  %s = {kind} {flag} i8 %a, %y
+  {body}
+  %a2 = ptrtoint ptr %p to i16
+  ret i16 %a2
+}}
+"
+    );
+    let (_, after) = checked(&text, &inputs.iter().map(Vec::as_slice).collect::<Vec<_>>());
+    (text, after)
+}
+
+/// A rest summed in the narrow width wraps where the extended whole does
+/// not: `sext(x + 3 + y)` with x = -1, y = -128 is -126, and `sext(x + y) + 3`
+/// was 130. The extension goes to the leaves. (The same sum under the
+/// `gep`'s own extension costs a cast a leaf and is left alone.)
+#[test]
+fn test_a_rest_of_two_leaves_is_summed_after_the_extension() {
+    let (_, kept) = two_leaves("nsw", "add", "%p = getelementptr i16, ptr @g, i8 %s");
+    assert!(!kept.contains("getelementptr i8, ptr @g"), "{kept}");
+    for (flag, kind, body) in [
+        ("nsw", "add", "%e = sext i8 %s to i16\n  %p = getelementptr i16, ptr @g, i16 %e"),
+        ("nsw", "sub", "%e = sext i8 %s to i16\n  %p = getelementptr i16, ptr @g, i16 %e"),
+        ("nuw", "sub", "%e = zext i8 %s to i16\n  %p = getelementptr i16, ptr @g, i16 %e"),
+        ("nuw", "add", "%e = zext i8 %s to i16\n  %p = getelementptr i16, ptr @g, i16 %e"),
+    ] {
+        let (_, after) = two_leaves(flag, kind, body);
+        assert!(after.contains("getelementptr i8, ptr @g, i16 6"), "{flag} {kind} {body}\n{after}");
+    }
+}
