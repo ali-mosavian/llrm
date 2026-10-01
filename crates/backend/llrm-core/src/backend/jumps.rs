@@ -124,8 +124,9 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
             predecessors.entry(*to).or_default().push(block.at);
         }
     }
-    let busy = (!size).then(|| Busy::of(body, &explicit, &predecessors, &natural));
-    let odds = busy.as_ref();
+    let busy = Busy::of(body, &explicit, &predecessors, &natural);
+    // For size, frequency only orders what is the same size either way.
+    let (odds, ties) = if size { (None, Some(&busy)) } else { (Some(&busy), None) };
     let mut order: Vec<LirBlock> = Vec::new();
     let mut done: HashSet<i64> = HashSet::default();
     let mut current: Option<i64> = Some(body.entry);
@@ -185,7 +186,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
         let block = &by_at[&at];
         order.push(block.clone());
         done.insert(at);
-        (current, source) = (_onward(block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds), Some(at));
+        (current, source) = (_onward(block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds, ties), Some(at));
     }
     Ok(body.with_blocks(order))
 }
@@ -244,6 +245,7 @@ pub fn _onward(
     inside: &BTreeSet<i64>,
     by_at: Option<&IndexMap<i64, LirBlock>>,
     odds: Option<&Busy>,
+    ties: Option<&Busy>,
 ) -> Option<i64> {
     let real: Vec<&Semantics> = block
         .insns
@@ -284,6 +286,18 @@ pub fn _onward(
         let likely = |hot: f64, cold: f64| hot > 0.0 && hot >= branchprob::LIKELY * (hot + cold);
         let swap = if diamond { likely(other, one) || (one > other && !likely(one, other)) } else { other > one };
         if swap {
+            targets.reverse();
+        }
+    }
+    // For size, a diamond whose arms keep short jumps in either order is the
+    // same size either way: its likelier arm goes second, into the join.
+    if let (Some(busy), Some(by_at), [Some(first), Some(second)]) = (ties, by_at, targets.as_slice()) {
+        let arm = |at: &i64| by_at.get(at).filter(|arm| arm.succ.len() == 1);
+        if let (Some(one), Some(other)) = (arm(first), arm(second))
+            && one.succ == other.succ
+            && [one, other].into_iter().all(|arm| _arm_bytes(arm).is_some_and(|bytes| bytes + SHORT_JUMP <= SHORT_REACH))
+            && busy.edge(block.at, *first) > busy.edge(block.at, *second)
+        {
             targets.reverse();
         }
     }
@@ -718,6 +732,18 @@ pub fn duplicated_returns(body: LirBody, return_overhead: i64) -> LirBody {
             return body;
         }
     }
+}
+
+/// A short jump's bytes, and the farthest it reaches forward.
+const SHORT_JUMP: i64 = 2;
+const SHORT_REACH: i64 = 127;
+
+/// An arm's bytes but its final jump, as selected; none where an
+/// instruction has no encoding here.
+fn _arm_bytes(block: &LirBlock) -> Option<i64> {
+    let real = _real(block);
+    let body = real.split_last().map_or(&real[..], |(last, rest)| if last.what.as_ref().is_some_and(|what| what.op == Operation::Jump) { rest } else { &real[..] });
+    body.iter().map(|one| select::emit(one.what.as_ref()?, 0, None, false, false, None).map(|made| made.code.len() as i64)).sum()
 }
 
 /// Selected bytes in a source-unowned terminal return block.
