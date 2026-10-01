@@ -25,9 +25,9 @@ struct Effects {
     everything: bool,
 }
 
-/// What a call into code outside the module stands for: it touches the
-/// module variables shared with other objects, and calls back what it can
-/// reach, the entries.
+/// What a call into code outside the module stands for. It names no module
+/// variable, which is private to its object, but it may call back what it
+/// can reach, the entries. The runtime calls back nothing.
 const FOREIGN: &str = "$foreign";
 
 impl Effects {
@@ -84,8 +84,7 @@ fn summaries<'a>(functions: &'a [hir::Function], runtime: &BTreeSet<&str>, entri
         callees.insert(&function.name, called.collect());
         summaries.insert(&function.name, effects);
     }
-    let shared: BTreeSet<u32> = functions.iter().flat_map(|one| &one.places).filter(|one| one.storage == "module" && one.volatile).map(|one| one.symbol).collect();
-    summaries.insert(FOREIGN, Effects { reads: shared.clone(), writes: shared, everything: false });
+    summaries.insert(FOREIGN, Effects::default());
     callees.insert(FOREIGN, entries.clone());
     loop {
         let mut changed = false;
@@ -154,23 +153,15 @@ fn place_of(operand: &hir::Operand) -> Option<u32> {
 }
 
 impl FunctionCompiler<'_> {
-    /// Records the module variables a call of `callee` is lent: what each
-    /// borrowed argument borrows, and what each argument holds.
-    pub(super) fn record_lends(&mut self, callee: &str, arguments: &[Expr], parameters: &[SignatureParameter]) {
-        for (argument, parameter) in arguments.iter().zip(parameters) {
-            let (reached, mutable) = match *parameter {
-                SignatureParameter::Borrowed { mutable, .. } => (self.reach(argument), mutable),
-                // What a value holds may be written through: taken as `&mut`.
-                SignatureParameter::Scalar(type_name) => (self.value_roots(argument, ElementType::Scalar(type_name)), true),
-                SignatureParameter::Owned { struct_id, .. } => (self.value_roots(argument, ElementType::Struct(struct_id)), true),
-                SignatureParameter::Adapter { .. } => continue,
-            };
-            for root in reached.into_iter().filter(|root| root.life == borrows::Life::Module) {
+    /// Records the module variables a call of `callee` is lent.
+    pub(super) fn record_lends(&mut self, callee: &str, arguments: &[Expr], lent: &[borrows::Lent]) {
+        for (argument, borrows::Lent { roots, mutable }) in arguments.iter().zip(lent) {
+            for root in roots.iter().filter(|root| root.life == borrows::Life::Module) {
                 let borrows::BorrowKey::Place(place) = root.owner else {
                     continue;
                 };
                 let symbol = self.places.iter().find(|one| one.id == place).expect("a module place").symbol;
-                self.lends.push(Lend { callee: callee.to_owned(), symbol, name: root.name, mutable, span: argument.span() });
+                self.lends.push(Lend { callee: callee.to_owned(), symbol, name: root.name.clone(), mutable: *mutable, span: argument.span() });
             }
         }
     }

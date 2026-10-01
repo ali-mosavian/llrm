@@ -184,14 +184,15 @@ impl<'a> FunctionCompiler<'a> {
             )?;
         }
         let arguments = &arguments::bind(&signature.name, &formals, arguments.to_vec(), span)?;
+        let lent = self.lent(arguments, &signature.parameters);
+        borrows::check_disjoint(&lent, arguments)?;
         let mut operands: Vec<hir::Operand> = slot.into_iter().collect();
-        let mut borrowed = Vec::new();
         for (argument, parameter) in arguments.iter().zip(&signature.parameters) {
-            let operand = self.argument_operand(argument, parameter, &mut borrowed)?;
+            let operand = self.argument_operand(argument, parameter)?;
             operands.push(operand);
         }
-        self.store_call_borrows(arguments, &signature.parameters, span)?;
-        self.record_lends(&signature.name, arguments, &signature.parameters);
+        self.store_call_borrows(arguments, &signature.parameters, &lent, span)?;
+        self.record_lends(&signature.name, arguments, &lent);
         operands.extend(signature.result_pointer.map(|pointer| self.result_pointer(pointer)));
         let returned = signature.returned(self.types);
         let results = if returned == TypeName::Void { Vec::new() } else { vec![self.value(returned)] };
@@ -210,14 +211,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok(results.first().copied())
     }
 
-    /// What a call passes for `parameter`. `borrowed` holds what each of
-    /// the call's borrows reaches, so that a mutable one aliases nothing.
-    pub(super) fn argument_operand(
-        &mut self,
-        argument: &Expr,
-        parameter: &SignatureParameter,
-        borrowed: &mut Vec<(BTreeSet<borrows::Root>, bool)>,
-    ) -> Result<hir::Operand, Diagnostic> {
+    /// What a call passes for `parameter`.
+    pub(super) fn argument_operand(&mut self, argument: &Expr, parameter: &SignatureParameter) -> Result<hir::Operand, Diagnostic> {
         match parameter {
             // A BASIC procedure takes the near pointer the adapter is.
             SignatureParameter::Adapter { pointer, .. } => {
@@ -248,18 +243,7 @@ impl<'a> FunctionCompiler<'a> {
                 target,
                 pointer,
             } => {
-                let reached = self.reach(argument);
-                let (operand, _) = self.borrow_argument(argument, *mutable, *target, *pointer)?;
-                for (other, other_mutable) in borrowed.iter().filter(|(_, other_mutable)| *mutable || *other_mutable) {
-                    if let Some(shared) = reached.iter().find(|root| other.iter().any(|one| one.owner == root.owner)) {
-                        return Err(Diagnostic::new(
-                            argument.span(),
-                            format!("borrow of {:?} aliases a mutable argument", shared.name),
-                        ));
-                    }
-                }
-                borrowed.push((reached, *mutable));
-                Ok(operand)
+                Ok(self.borrow_argument(argument, *mutable, *target, *pointer)?.0)
             }
         }
     }

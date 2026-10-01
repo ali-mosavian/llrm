@@ -239,15 +239,19 @@ impl FunctionCompiler<'_> {
 
     /// Whether a value of `element` holds a reference.
     pub(super) fn holds_reference(&self, element: ElementType) -> bool {
+        self.holds_reference_where(element, false)
+    }
+
+    /// Whether a value of `element` holds a reference, a `&mut` one when
+    /// `exclusive`.
+    fn holds_reference_where(&self, element: ElementType, exclusive: bool) -> bool {
         match element {
-            ElementType::Scalar(type_name) => {
-                self.types.referent(type_name).is_some()
-                    || self.types.sequence_element(type_name).is_some_and(|element| self.holds_reference(element))
-            }
+            ElementType::Scalar(type_name @ TypeName::Pointer { mutable, .. }) if self.types.referent(type_name).is_some() => mutable || !exclusive,
+            ElementType::Scalar(type_name) => self.types.sequence_element(type_name).is_some_and(|element| self.holds_reference_where(element, exclusive)),
             ElementType::Struct(id) => self
                 .types
                 .structure(id)
-                .is_some_and(|layout| layout.fields.values().any(|field| self.holds_reference(field.type_))),
+                .is_some_and(|layout| layout.fields.values().any(|field| self.holds_reference_where(field.type_, exclusive))),
         }
     }
 
@@ -428,23 +432,33 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Stores what a call passes: it may keep any borrow it is lent, or
-    /// any its by-value arguments hold, in what a `&mut` argument holds.
-    pub(super) fn store_call_borrows(&mut self, arguments: &[Expr], parameters: &[SignatureParameter], span: Span) -> Result<(), Diagnostic> {
-        let lent: BTreeSet<Root> = arguments
+    /// What a call lends through each argument: a borrow lends what it
+    /// reaches, a value the borrows it holds, which it writes through when
+    /// one is `&mut`.
+    pub(super) fn lent(&self, arguments: &[Expr], parameters: &[SignatureParameter]) -> Vec<Lent> {
+        arguments
             .iter()
             .zip(parameters)
-            .flat_map(|(argument, parameter)| match *parameter {
-                SignatureParameter::Borrowed { .. } => self.roots(argument),
-                SignatureParameter::Scalar(type_name) => self.value_roots(argument, ElementType::Scalar(type_name)),
-                SignatureParameter::Owned { struct_id, .. } => self.value_roots(argument, ElementType::Struct(struct_id)),
-                SignatureParameter::Adapter { .. } => BTreeSet::new(),
+            .map(|(argument, parameter)| {
+                let held = |element: ElementType| Lent { roots: self.value_roots(argument, element), mutable: self.holds_reference_where(element, true) };
+                match *parameter {
+                    SignatureParameter::Borrowed { mutable, .. } => Lent { roots: self.reach(argument), mutable },
+                    SignatureParameter::Adapter { .. } => Lent { roots: self.reach(argument), mutable: true },
+                    SignatureParameter::Scalar(type_name) => held(ElementType::Scalar(type_name)),
+                    SignatureParameter::Owned { struct_id, .. } => held(ElementType::Struct(struct_id)),
+                }
             })
-            .collect();
+            .collect()
+    }
+
+    /// Stores what a call is lent: it may keep any of it in what a `&mut`
+    /// argument holds.
+    pub(super) fn store_call_borrows(&mut self, arguments: &[Expr], parameters: &[SignatureParameter], lent: &[Lent], span: Span) -> Result<(), Diagnostic> {
+        let roots: BTreeSet<Root> = lent.iter().flat_map(|one| one.roots.iter().cloned()).collect();
         for (argument, parameter) in arguments.iter().zip(parameters) {
             if let SignatureParameter::Borrowed { mutable: true, target, .. } = *parameter {
                 if self.holds_reference(binding_element(target)) {
-                    self.store_borrow(argument, lent.clone(), span)?;
+                    self.store_borrow(argument, roots.clone(), span)?;
                 }
             }
         }
@@ -459,6 +473,25 @@ impl FunctionCompiler<'_> {
         let roots = self.value_roots(value, element);
         self.store_borrow(&Expr::Name(owner.to_owned(), span), roots, span)
     }
+}
+
+/// What a call lends through one argument: the owners its callee reaches,
+/// and whether it may write them.
+pub(super) struct Lent {
+    pub(super) roots: BTreeSet<Root>,
+    pub(super) mutable: bool,
+}
+
+/// Errs when two of a call's lends reach one owner and either writes it.
+pub(super) fn check_disjoint(lent: &[Lent], arguments: &[Expr]) -> Result<(), Diagnostic> {
+    for (at, one) in lent.iter().enumerate() {
+        for other in lent[..at].iter().filter(|other| one.mutable || other.mutable) {
+            if let Some(shared) = one.roots.iter().find(|root| other.roots.iter().any(|them| them.owner == root.owner)) {
+                return Err(Diagnostic::new(arguments[at].span(), format!("borrow of {:?} aliases a mutable argument", shared.name)));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Errs unless `target` may hold a borrow of each of `roots`.

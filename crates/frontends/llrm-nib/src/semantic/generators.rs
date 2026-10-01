@@ -118,10 +118,10 @@ impl FunctionCompiler<'_> {
             .iter()
             .filter(|one| !scope.contains_key(&one.name))
             .collect();
-        let mut borrowed = Vec::new();
-        for (parameter, argument) in parameters.into_iter().zip(&inferred.passed) {
-            let kind = parameter_kind(self.types, parameter)?;
-            let operand = self.argument_operand(argument, &kind, &mut borrowed)?;
+        let kinds = parameters.iter().map(|one| parameter_kind(self.types, one)).collect::<Result<Vec<_>, _>>()?;
+        borrows::check_disjoint(&self.lent(&inferred.passed, &kinds), &inferred.passed)?;
+        for ((parameter, argument), kind) in parameters.into_iter().zip(&inferred.passed).zip(kinds) {
+            let operand = self.argument_operand(argument, &kind)?;
             let value = self.materialized(operand, kind.hir_type());
             let binding = self.parameter_binding(&parameter.name, &kind, value);
             scope.insert(parameter.name.clone(), binding);

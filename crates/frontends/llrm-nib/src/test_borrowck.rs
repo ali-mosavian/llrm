@@ -239,3 +239,25 @@ fn main() -> i16:
     let interrupted = source.replace("fn main", "@export(\"interrupt16\")\nfn tick() -> void:\n    a[0] = 0\n\nfn main").replace("        unsafe:\n            touch()\n", "");
     assert_eq!(refused_at(&interrupted), "17: \"a\" is lent to \"total\", which may write it");
 }
+
+#[test]
+fn a_value_holding_a_mut_borrow_is_lent_as_one() {
+    // The alias check saw only borrowed arguments: `h` holding `&mut x` went
+    // with `&x`, and `a`, stated noalias, read the 5 written through `h.r`.
+    let source = "\
+struct H:
+    r: &mut i16
+
+fn f(a: &i16, h: H) -> i16:
+    h.r = 5
+    return a
+
+fn main() -> i16:
+    let mut x: i16 = 1
+    print(f(&x, H(r=&mut x)))
+    return 0
+";
+    assert_eq!(refused_at(source), "10: borrow of \"x\" aliases a mutable argument");
+    let shared = source.replace("r: &mut i16", "r: &i16").replace("    h.r = 5\n", "").replace("&mut x", "&x");
+    assert_eq!(output(&shared), "1\n");
+}
