@@ -16,6 +16,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::intervals;
+use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::{machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
@@ -26,7 +27,11 @@ use crate::model::passes::{Exception, LIRTransform};
 const NO_OP: &str = "'NoneType' object has no attribute 'op'";
 
 /// Settle allocated tails and edges after every machine-shaping phase.
-pub struct ControlFlow;
+/// `size`: blocks placed for short code, every block counted once, rather
+/// than by their estimated frequencies (-Os).
+pub struct ControlFlow {
+    pub size: bool,
+}
 
 impl LIRTransform for ControlFlow {
     fn class_name(&self) -> &'static str {
@@ -38,17 +43,17 @@ impl LIRTransform for ControlFlow {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        optimized(&body).map_err(|error| error.0)
+        optimized(&body, self.size).map_err(|error| error.0)
     }
 
     fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        Ok(optimized(&body)?)
+        Ok(optimized(&body, self.size)?)
     }
 }
 
 /// Choose the cheapest common-tail fixed point without adding hot work.
-pub fn optimized(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
-    let mut candidate = placed(&_hoisted(body))?;
+pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
+    let mut candidate = _placed(&_hoisted(body), size)?;
     let baseline = threaded(&candidate);
     // Merging one physical tail may make the condition selecting between its
     // former copies dead; deleting that compare can in turn make predecessor
@@ -74,6 +79,14 @@ pub fn optimized(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
 /// drops the jumps the order made redundant and turns the test into one
 /// branch back to the body.
 pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
+    _placed(body, false)
+}
+
+/// `placed`, for short code where `size`, else by estimated frequency: the
+/// likelier edge falls through, a diamond's likelier arm falls into its
+/// join, an arm leaves its join only for a block before it that reaches the
+/// join `LIKELY`, and a new trace starts at the busiest block left.
+fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
     let mut explicit = Vec::new();
     for block in &body.blocks {
         let mut block = block.clone();
@@ -111,6 +124,8 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
             predecessors.entry(*to).or_default().push(block.at);
         }
     }
+    let busy = (!size).then(|| Busy::of(body, &explicit, &predecessors, &natural));
+    let odds = busy.as_ref();
     let mut order: Vec<LirBlock> = Vec::new();
     let mut done: HashSet<i64> = HashSet::default();
     let mut current: Option<i64> = Some(body.entry);
@@ -131,7 +146,10 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
                 .iter()
                 .filter(|block| !block.cold)
                 .filter_map(|block| predecessors.get(&block.at)?.iter().filter_map(|from| placed_at.get(from)).max().map(|last| (*last, *block)))
-                .max_by_key(|(last, _)| *last)
+                .max_by(|(one, first), (other, second)| match odds {
+                    Some(busy) => busy.frequency(first.at).total_cmp(&busy.frequency(second.at)).then(one.cmp(other)),
+                    None => one.cmp(other),
+                })
                 .map(|(_, block)| block);
             current = Some(nearest.or_else(|| waiting.iter().find(|block| !block.cold).copied()).unwrap_or(waiting[0]).at);
             source = None;
@@ -148,8 +166,17 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
         // A join's other arm goes just before it, once everything reaching the
         // arm is placed: the arm falls into the join and the placed side jumps
         // over it. Left for later, it lands after the return, both of its jumps long.
+        // By frequency, unless the block before it, whose fall-through the
+        // arm takes, reaches the join as `LIKELY` as MachineBlockPlacement
+        // asks: else the shorter layout stands.
+        let before = order.last().filter(|last| last.succ.contains(&at));
         let arm = explicit.iter().find(|one| {
-            one.at != at && !one.cold && !done.contains(&one.at) && one.succ == [at] && predecessors.get(&one.at).is_some_and(|from| from.iter().all(|from| done.contains(from)))
+            one.at != at
+                && !one.cold
+                && !done.contains(&one.at)
+                && one.succ == [at]
+                && predecessors.get(&one.at).is_some_and(|from| from.iter().all(|from| done.contains(from)))
+                && odds.is_none_or(|busy| before.is_none_or(|before| busy.edge(one.at, at) * branchprob::LIKELY / (1.0 - branchprob::LIKELY) >= busy.edge(before.at, at)))
         });
         if let Some(arm) = arm {
             (current, source) = (Some(arm.at), None);
@@ -158,9 +185,54 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
         let block = &by_at[&at];
         order.push(block.clone());
         done.insert(at);
-        (current, source) = (_onward(block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at)), Some(at));
+        (current, source) = (_onward(block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds), Some(at));
     }
     Ok(body.with_blocks(order))
+}
+
+/// Each block's estimated frequency over the final blocks, from the edge
+/// probabilities isel left in `LirBody::odds`.
+pub struct Busy {
+    frequency: IndexMap<i64, f64>,
+    taken: IndexMap<(i64, i64), f64>,
+}
+
+impl Busy {
+    fn of(body: &LirBody, blocks: &[LirBlock], predecessors: &IndexMap<i64, Vec<i64>>, natural: &[Loop]) -> Self {
+        let mut taken = IndexMap::default();
+        for block in blocks {
+            let succ: Vec<i64> = block.succ.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
+            let known: f64 = succ.iter().filter_map(|to| body.odds.probability(block.at, *to)).sum();
+            let unknown = succ.iter().filter(|to| body.odds.probability(block.at, **to).is_none()).count();
+            for to in &succ {
+                // An edge made after isel, as a split one, carries what its block's isel edges do not.
+                let share = match body.odds.probability(block.at, *to) {
+                    Some(probability) => probability,
+                    None => (1.0 - known).max(0.0) / unknown as f64,
+                };
+                taken.insert((block.at, *to), if succ.len() == 1 { 1.0 } else { share });
+            }
+        }
+        let successors: IndexMap<i64, Vec<i64>> = blocks.iter().map(|block| (block.at, block.succ.clone())).collect();
+        let order = branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
+        let cycles: Vec<branchprob::Cycle> = natural.iter().map(|one| branchprob::Cycle { header: one.header, latches: &one.latches, body: &one.body }).collect();
+        let frequency = branchprob::propagated(
+            &order,
+            &|at| predecessors.get(&at).cloned().unwrap_or_default(),
+            &cycles,
+            &|from, to| taken.get(&(from, to)).copied().unwrap_or(0.0),
+        );
+        Self { frequency: frequency.into_iter().collect(), taken }
+    }
+
+    fn frequency(&self, at: i64) -> f64 {
+        self.frequency.get(&at).copied().unwrap_or(0.0)
+    }
+
+    /// How often `from` goes to `to`, per entry.
+    fn edge(&self, from: i64, to: i64) -> f64 {
+        self.frequency(from) * self.taken.get(&(from, to)).copied().unwrap_or(0.0)
+    }
 }
 
 /// The block to place next: where the final jump goes, or else where the branch before it goes.
@@ -171,6 +243,7 @@ pub fn _onward(
     done: &HashSet<i64>,
     inside: &BTreeSet<i64>,
     by_at: Option<&IndexMap<i64, LirBlock>>,
+    odds: Option<&Busy>,
 ) -> Option<i64> {
     let real: Vec<&Semantics> = block
         .insns
@@ -198,6 +271,20 @@ pub fn _onward(
         let join = if passage.is_none() { jump_target } else { passage };
         if arm.is_some_and(|arm| arm.succ.len() == 1 && Some(arm.succ[0]) == join) {
             targets = vec![branch_target, jump_target];
+        }
+    }
+    // By frequency, the likelier edge first. In a diamond short of `LIKELY`
+    // the arm rule keeps both arms before the join, so there the likelier
+    // arm goes second and falls into the join instead of jumping over the
+    // other; `LIKELY` and over, it falls through and the other leaves.
+    if let (Some(busy), [Some(first), Some(second)]) = (odds, targets.as_slice()) {
+        let (one, other) = (busy.edge(block.at, *first), busy.edge(block.at, *second));
+        let join = |at: i64| by_at.and_then(|by_at| by_at.get(&at)).and_then(|arm| (arm.succ.len() == 1).then(|| arm.succ[0]));
+        let diamond = join(*first).is_some() && join(*first) == join(*second);
+        let likely = |hot: f64, cold: f64| hot > 0.0 && hot >= branchprob::LIKELY * (hot + cold);
+        let swap = if diamond { likely(other, one) || (one > other && !likely(one, other)) } else { other > one };
+        if swap {
+            targets.reverse();
         }
     }
     // A cold successor goes last; see mir.MirBlock.cold.
