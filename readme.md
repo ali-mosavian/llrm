@@ -54,8 +54,10 @@ coprocessor is required.
 
 `cargo build --release` builds everything from a fresh checkout, including `jwasm`, `jwlink`
 and the headless DOSBox-X the e2e tests run on, in `target/release`. Their sources are cloned
-under `~/.cache/llrm`. Open Watcom's first bootstrap takes about three minutes; set `$OWROOT`
-to use an existing tree. On Debian or Ubuntu the build needs:
+under `~/.cache/llrm`, one tree per pinned commit, made whole or not at all, so worktrees and
+parallel builds share them safely. Open Watcom's first bootstrap takes about three minutes; set
+`$OWROOT` to use an existing tree. `--no-default-features --features wccq` builds only Open
+Watcom's front end, which the lib tests need (CI does). On Debian or Ubuntu the build needs:
 
 ```sh
 sudo apt install build-essential git autoconf automake libtool libpng-dev libpcap-dev libncurses-dev

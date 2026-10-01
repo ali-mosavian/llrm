@@ -14,6 +14,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
+use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals::{self as ranges, Indexes, Interval};
 use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -1827,7 +1828,7 @@ struct Outcome {
 /// weighted by its loop depth. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
 fn _emitted(body: &LirBody) -> f64 {
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     body.blocks
         .iter()
         .map(|block| {
@@ -1837,7 +1838,7 @@ fn _emitted(body: &LirBody) -> f64 {
                 .filter_map(|one| one.what.as_ref())
                 .map(|what| what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count())
                 .sum();
-            ranges::level(deep.get(&block.at).copied().unwrap_or(0)) * (block.insns.len() + memory) as f64
+            busy.block(block.at) * (block.insns.len() + memory) as f64
         })
         .sum()
 }
@@ -1905,7 +1906,7 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
                 .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value))),
         );
     }
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for (at, (into, out_of)) in moves {
         if impure.contains(&into)
@@ -1914,7 +1915,7 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
         {
             continue;
         }
-        let each = ranges::level(deep.get(&at).copied().unwrap_or(0));
+        let each = busy.block(at);
         for value in [into, out_of] {
             *free.entry(value).or_insert(0.0) += each;
         }
@@ -1932,10 +1933,10 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
 
 /// The memory references spilling these values costs, weighted by loop depth.
 pub fn _traffic(body: &LirBody, spilled: &BTreeSet<u32>) -> f64 {
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut total = 0.0;
     for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+        let each = busy.block(block.at);
         for one in &block.insns {
             for value in one.defines.iter().chain(&one.uses) {
                 if spilled.contains(value) {
@@ -1952,6 +1953,7 @@ pub fn _traffic(body: &LirBody, spilled: &BTreeSet<u32>) -> f64 {
 /// other instructions. The allocator can reach only the first three.
 pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static str, f64> {
     let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut out = std::collections::BTreeMap::new();
     for block in &body.blocks {
         let depth = deep.get(&block.at).copied().unwrap_or(0);
@@ -1970,7 +1972,7 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
                 _ if frame => "int-frame",
                 _ => continue,
             };
-            *out.entry(cause).or_insert(0.0) += ranges::level(depth);
+            *out.entry(cause).or_insert(0.0) += busy.block(block.at);
         }
     }
     out
@@ -1981,13 +1983,13 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
 /// Unpriced, sum_three's unfolded `add di,bx` looked free and the loop grew
 /// an instruction.
 fn _added(before: &LirBody, after: &LirBody) -> f64 {
-    let deep = ranges::depths(after);
+    let busy = Frequency::of(after);
     let was: IndexMap<i64, usize> = before.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
     after
         .blocks
         .iter()
         .map(|block| {
-            ranges::level(deep.get(&block.at).copied().unwrap_or(0))
+            busy.block(block.at)
                 * block.insns.len().saturating_sub(was.get(&block.at).copied().unwrap_or(0)) as f64
         })
         .sum()
@@ -2000,10 +2002,10 @@ fn _slot_traffic(body: &LirBody, frame: &Frame, values: &BTreeSet<u32>) -> f64 {
     if homes.is_empty() {
         return 0.0;
     }
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut total = 0.0;
     for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+        let each = busy.block(block.at);
         for one in &block.insns {
             let Some(what) = &one.what else {
                 continue;
@@ -2031,10 +2033,10 @@ fn _retainable_bases(body: &LirBody, spilled: &BTreeSet<u32>) -> BTreeSet<u32> {
     if stable.is_empty() {
         return BTreeSet::new();
     }
-    let deep = ranges::depths(body);
-    let mut references: IndexMap<u32, i64> = IndexMap::default();
+    let busy = Frequency::of(body);
+    let mut references: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
-        let weight = ranges::PER_LEVEL.pow(deep.get(&block.at).copied().unwrap_or(0));
+        let weight = busy.block(block.at);
         for one in &block.insns {
             let bases: BTreeSet<u32> = match &one.what {
                 Some(what) => what
@@ -2049,12 +2051,12 @@ fn _retainable_bases(body: &LirBody, spilled: &BTreeSet<u32>) -> BTreeSet<u32> {
                 None => BTreeSet::new(),
             };
             for value in stable.intersection(&bases) {
-                *references.entry(*value).or_insert(0) += weight;
+                *references.entry(*value).or_insert(0.0) += weight;
             }
         }
     }
     let repeated: BTreeSet<u32> =
-        references.iter().filter(|(_value, weight)| **weight > 1).map(|(value, _)| *value).collect();
+        references.iter().filter(|(_value, weight)| **weight > 1.0).map(|(value, _)| *value).collect();
     stable.intersection(&repeated).copied().collect()
 }
 
@@ -2118,10 +2120,10 @@ fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 
 /// Discount reads by the target-specific saving from folding them.
 fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile) -> IndexMap<u32, Interval> {
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+        let each = busy.block(block.at);
         for one in &block.insns {
             let discount = _fold_discount(one, profile);
             if discount == 0.0 {

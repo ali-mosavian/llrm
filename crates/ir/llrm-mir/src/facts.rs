@@ -167,6 +167,10 @@ facts! {
         NoCapture no_capture "nocapture" on [Param, Operand];
         WriteOnly write_only "writeonly" on [Operand];
         NoReturn no_return "noreturn" on [Callable];
+        // The result is a three-way compare of the data: its sign says which
+        // is greater, nothing about how often. LLVM knows strcmp's by name
+        // (LibFunc); here the language states it of the routine.
+        ThreeWayCompare three_way_compare "threeway" on [Callable];
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];

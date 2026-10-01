@@ -72,6 +72,9 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
             for fact in crate::ow_facts::of_call_class(symbol.call_class) {
                 facts.state(Subject::Callable(callable.id), fact);
             }
+            if !callable.defined && crate::libfunc::three_way_compare(&callable.name) {
+                facts.state(Subject::Callable(callable.id), llrm_mir::facts::Fact::ThreeWayCompare);
+            }
         }
     }
     let (types, alias_classes) = types.finished();
@@ -1886,6 +1889,15 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
+    }
+
+    /// The C library's strcmp is stated a three-way compare: branchprob
+    /// read `strcmp(a, b) > 0` as a likely `x > 0`.
+    #[test]
+    fn strcmp_is_stated_a_three_way_compare() {
+        let module = raised("threeway.cgs");
+        let callee = module.globals.iter().find(|one| one.name.as_deref() == Some("_strcmp")).and_then(|one| one.function()).expect("strcmp declared");
+        assert!(llrm_mir::facts::Facts::of(&callee.attrs).three_way_compare(), "{}", llrm_mir::print::module(&module));
     }
 
     /// `@name`'s definition as printed.
