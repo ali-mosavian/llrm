@@ -21,12 +21,13 @@ pub struct Dos {
     pub registers: i64,
     pub call_registers: i64,
     pub address_forms: Vec<AddressForm>,
-    /// Registers a far access takes for its selector.
+    /// Registers a far access takes for its offset and selector.
     pub far_access: i64,
 }
 
-/// A far access loads its selector through a general register.
-pub const FAR_ACCESS: i64 = 1;
+/// A far access names its offset and its selector, each through a general
+/// register, besides the values the loop holds.
+pub const FAR_ACCESS: i64 = 2;
 
 impl Default for Dos {
     /// On a 486.
