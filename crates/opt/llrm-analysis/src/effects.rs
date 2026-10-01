@@ -28,12 +28,6 @@ fn declared<'a>(context: &Context, declarations: &'a Declarations, function: &Fu
 }
 
 /// Whether the call `inst` or its callee carries the attribute `flag`.
-/// Whether the call `inst` or its callee is stated to have `fact`.
-pub fn states_fact(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, fact: llrm_mir::facts::Fact) -> bool {
-    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    llrm_mir::facts::Facts::of(&info.attrs).contains(fact) || declared(context, declarations, function, inst).is_some_and(|one| llrm_mir::facts::Facts::of(&one.attrs).contains(fact))
-}
-
 pub fn states(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, flag: &str) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
     has(&info.attrs, flag) || declared(context, declarations, function, inst).is_some_and(|one| has(&one.attrs, flag))

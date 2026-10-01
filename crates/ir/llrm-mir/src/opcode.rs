@@ -230,11 +230,6 @@ impl Flags {
         self.0 |= other.0;
     }
 
-    /// These flags but those of `other`.
-    pub fn without(self, other: Flags) -> Flags {
-        Flags(self.0 & !other.0)
-    }
-
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }

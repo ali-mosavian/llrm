@@ -230,7 +230,10 @@ pub fn dereferenceable(context: &Context, layout: &DataLayout, sizes: &Sizes, fu
         Operand::Block(_) => return false,
     };
     let size = match function.value(value).def {
-        ValueDef::Argument(at) => crate::facts::Facts::param(function, at as usize).dereferenceable(),
+        ValueDef::Argument(at) => function.parameter_attrs[at as usize].iter().find_map(|attr| match attr {
+            Attribute::Int(name, bytes) if name == "dereferenceable" => Some(*bytes),
+            _ => None,
+        }),
         ValueDef::Instruction(inst) => match function.instruction(inst).opcode {
             Opcode::Alloca { allocated, .. } if function.instruction(inst).operands.is_empty() => Some(layout.alloc_size(&context.types, allocated)),
             _ => None,

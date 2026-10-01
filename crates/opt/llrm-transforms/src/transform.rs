@@ -195,19 +195,14 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
     // What a name is rewritten to, and so what it numbers as.
     let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
     let mut gone: BTreeSet<InstId> = BTreeSet::new();
-    // Each leader's flags once the operations it stands for are merged in.
-    let mut merges: IndexMap<InstId, llrm_mir::facts::Facts> = IndexMap::default();
     for &block in function.layout() {
         let here = order[&block];
         let instructions = function.block(block).instructions();
         for (index, &inst) in instructions.iter().enumerate() {
             let op = function.instruction(inst);
-            let Some(mut key) = _computation(op, &swap) else {
+            let Some(key) = _computation(op, &swap) else {
                 continue;
             };
-            // What the language promises of the result is not what it computes: two
-            // adds are one whatever each promises, and the one keeps what both do.
-            key.flags = key.flags.without(llrm_mir::facts::Fact::flag_mask());
             let candidates = seen.entry(key).or_default();
             let first = candidates
                 .iter()
@@ -233,8 +228,6 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
             let (Some(mine), Some(theirs)) = (op.result, function.instruction(earlier).result) else {
                 continue;
             };
-            let so_far = merges.get(&earlier).cloned().unwrap_or_else(|| llrm_mir::facts::Facts::of_flags(function.instruction(earlier).flags));
-            merges.insert(earlier, so_far.merged(&llrm_mir::facts::Facts::of_flags(op.flags)));
             swap.insert(mine, Operand::Value(theirs));
             gone.insert(inst);
         }
@@ -242,11 +235,6 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
 
     if gone.is_empty() {
         return Ok(false);
-    }
-    for (leader, facts) in merges {
-        let mut flags = function.instruction(leader).flags.without(llrm_mir::facts::Fact::flag_mask());
-        flags.insert(facts.flags());
-        function.set_flags(leader, flags);
     }
     // A leader is never itself swapped, so the order is free.
     for (&value, &with) in &swap {
