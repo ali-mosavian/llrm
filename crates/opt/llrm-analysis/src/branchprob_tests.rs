@@ -350,6 +350,7 @@ out:
     assert!(close(odds.frequency.get(&at("head")).copied(), 101.0), "{:?}", odds.frequency);
     assert!(close(odds.frequency.get(&at("body")).copied(), 100.0), "{:?}", odds.frequency);
     assert!(close(odds.frequency.get(&at("out")).copied(), 1.0), "{:?}", odds.frequency);
+}
 
 /// `@f` branching on `compare` of `@callee`'s result, `declared` its declaration.
 fn three_way_branch(declared: &str, callee: &str, compare: &str) -> (Odds, i64, i64) {
