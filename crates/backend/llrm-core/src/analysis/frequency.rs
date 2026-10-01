@@ -77,3 +77,64 @@ impl Frequency {
         self.block(from) * self.taken.get(&(from, to)).copied().unwrap_or(0.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::Frequency;
+    use crate::model::ir::{Operation, Semantics};
+    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    fn insn(at: i64, op: Operation, name: &str) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.to_owned()), ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, 1)), Some(what), Vec::new(), Vec::new()))
+    }
+
+    fn block(at: i64, name: &str, op: Operation, succ: Vec<i64>) -> LirBlock {
+        LirBlock { succ, ..LirBlock::new(at, vec![insn(at, op, name)]) }
+    }
+
+    /// entry 1 -> loop 2 (back to 2, out to 3) -> 3.
+    fn counted(trips: Option<i64>, stay: f64) -> LirBody {
+        let blocks = vec![
+            block(1, "jmp", Operation::Jump, vec![2]),
+            block(2, "jne", Operation::Branch, vec![2, 3]),
+            block(3, "ret", Operation::Return, vec![]),
+        ];
+        let mut body = LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default());
+        for (to, probability) in [(2, stay), (3, 1.0 - stay)] {
+            body.odds.taken.insert((2, to), (probability * BlockOdds::CERTAIN).round() as u32);
+        }
+        body.loop_trip_counts = trips.map(|count| (2, count)).into_iter().collect();
+        body
+    }
+
+    /// Spill weights and the instrument read 10 per loop level, whatever the
+    /// branch said; the loop's heuristic odds make it 32, and a proven count its own.
+    #[test]
+    fn test_a_loop_runs_as_its_odds_and_proven_trips_say_not_ten() {
+        let guessed = Frequency::of(&counted(None, 124.0 / 128.0));
+        assert!((guessed.block(2) - 32.0).abs() < 1e-6 && (guessed.block(3) - 1.0).abs() < 1e-6, "{} {}", guessed.block(2), guessed.block(3));
+        let proven = Frequency::of(&counted(Some(5), 124.0 / 128.0));
+        assert!((proven.block(2) - 5.0).abs() < 1e-6 && (proven.block(3) - 1.0).abs() < 1e-6, "{} {}", proven.block(2), proven.block(3));
+    }
+
+    /// A block almost never reached weighs almost nothing: a branch to it at 1 in a
+    /// million is the cold path 10^depth gave the weight of the code before it.
+    #[test]
+    fn test_a_block_that_is_all_but_never_taken_weighs_nothing() {
+        let blocks = vec![
+            block(1, "jne", Operation::Branch, vec![2, 3]),
+            block(2, "ret", Operation::Return, vec![]),
+            block(3, "ret", Operation::Return, vec![]),
+        ];
+        let mut body = LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default());
+        for (to, probability) in [(2, 1e-6), (3, 1.0 - 1e-6)] {
+            body.odds.taken.insert((1, to), (probability * BlockOdds::CERTAIN).round() as u32);
+        }
+        let busy = Frequency::of(&body);
+        assert!(busy.block(2) < 1e-5 && busy.block(3) > 0.99, "{} {}", busy.block(2), busy.block(3));
+    }
+}
