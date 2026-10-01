@@ -311,6 +311,26 @@ fn test_a_constant_added_to_an_index_is_a_displacement() {
     assert!(got.contains("[bx+si+8]") && !got.contains("add si, 8") && !got.contains("add di, 8"), "{got}");
 }
 
+/// A far pointer of offset zero indexed by a sum of two registers is a base
+/// and an index, `es:[bx+si]`: the sum was added into a third register
+/// first, a `mov` and an `add` a trip in qbdemo's FRACTALEFFECT.
+#[test]
+fn test_a_sum_of_two_registers_is_the_base_and_index_of_a_far_address() {
+    let text = "define i16 @f(i16 %sel, i16 %i, i16 %j) addrspace(1) {
+  %seg = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %seg to ptr addrspace(1)
+  %k = add i16 %i, %j
+  %p = getelementptr inbounds i8, ptr addrspace(1) %far, i16 %k
+  %v = load i8, ptr addrspace(1) %p
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("es:[bx+si]") || got.contains("es:[bx+di]") || got.contains("es:[si+bx]") || got.contains("es:[di+bx]"), "{got}");
+    assert!(!got.lines().any(|line| line.starts_with("add ") && !line.contains("sp")), "{got}");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {

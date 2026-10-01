@@ -1494,6 +1494,14 @@ impl Selector<'_, '_, '_> {
             taken.extend(adds);
             peeled.push((position, scale, index));
         }
+        // An unscaled index that is a sum of two registers nothing else reads
+        // is both: the base and the index of the address.
+        if let [(position, 1, index)] = peeled[..]
+            && let Some((first, second, add)) = self.sum_of(index, width)
+        {
+            peeled = vec![(position, 1, first), (position, 1, second)];
+            taken.push(add);
+        }
         let one = match peeled[..] {
             [(_, scale, index)] => Some((index, scale as i64)),
             _ => None,
@@ -1514,6 +1522,7 @@ impl Selector<'_, '_, '_> {
         }
         let exact = one.is_some_and(|(index, _)| matches!(index, Operand::Value(index) if self.exact.contains(&index)));
         let mut sum: Option<Held> = None;
+        let mut parts: Vec<Held> = Vec::new();
         for (_, scale, index) in peeled {
             let index_ty = function.operand_type(&self.module.context, index).expect("a typed index");
             let mut held = self.held(index, index_ty, at, out)?;
@@ -1536,6 +1545,24 @@ impl Selector<'_, '_, '_> {
                 out.push(insn(at, what));
                 held = scaled;
             }
+            parts.push(held);
+        }
+        // Two registers over a pointer with no register of its own are its
+        // base and its index: `fs:[bx+di]`, not their sum made first.
+        if let [first, second] = parts[..]
+            && self.only_addressed(address)
+        {
+            let two = match pointer.moved(offset as i64) {
+                Pointer::Far { selector, base: None, index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(first), index: Some(second), scale: 1, offset }),
+                Pointer::Global { space, index, offset, base: None, plus: None, .. } => Some(Pointer::Global { space, index, offset, base: Some(first), scale: 1, plus: Some(second) }),
+                _ => None,
+            };
+            if let Some(two) = two {
+                self.pointers.insert(address, two);
+                return Ok(());
+            }
+        }
+        for held in parts {
             sum = Some(match sum {
                 None => held,
                 Some(before) => {
@@ -1703,6 +1730,16 @@ impl Selector<'_, '_, '_> {
         };
         self.promoted.extend(base.map(|base| base.value).into_iter().chain((!dword).then_some(wide.value)));
         Some(scaled)
+    }
+
+    /// The two registers `index` adds, where an add nothing else reads makes it
+    /// at the pointer's index `width`, and that add.
+    fn sum_of(&self, index: Operand, width: u32) -> Option<(Operand, Operand, ValueId)> {
+        let Operand::Value(value) = index else { return None };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return None };
+        let instruction = self.function.instruction(inst);
+        let (Opcode::Binary(BinaryOp::Add), [first @ Operand::Value(_), second @ Operand::Value(_)]) = (&instruction.opcode, &instruction.operands[..]) else { return None };
+        (self.width(instruction.ty).ok()? >= width && self.function.users(value).len() == 1).then_some((*first, *second, value))
     }
 
     /// `index` less the constants added to it at the pointer's index
