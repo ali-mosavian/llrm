@@ -534,7 +534,7 @@ def variants(bases: list[tuple[Shape, Case]], seed: int, per_base: int) -> list[
 
 def cases(quick: bool = False, seed: int = 98) -> list[Case]:
     """Every case; `quick` a sample of them, so each quick case is one the
-    full run (and known.toml) also has."""
+    full run (and shortfalls.txt) also has."""
     every = _all(seed)
     if not quick:
         return every

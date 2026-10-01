@@ -259,7 +259,7 @@ def test_a_case_s_quality_does_not_depend_on_its_batch(tmp_path):
 
 def test_every_quick_case_is_in_the_full_run():
     """--quick drew metamorphic variants of its own, so it reported cases
-    the full run's known.toml never saw as new shortfalls."""
+    the full run's shortfalls.txt never saw as new shortfalls."""
     full = {one.name for one in concurrent.cases()}
     assert {one.name for one in concurrent.cases(quick=True)} <= full
 
@@ -274,10 +274,10 @@ def test_the_ratchet_judges_only_what_the_run_evaluated():
 
 
 def test_writing_known_keeps_what_the_run_did_not_judge(tmp_path, monkeypatch):
-    """A run over one family rewrote known.toml from its own shortfalls and
+    """A run over one family rewrote the shortfalls from its own shortfalls and
     dropped every other family's baseline."""
     import known
-    monkeypatch.setattr(known, "PATH", tmp_path / "known.toml")
+    monkeypatch.setattr(known, "SHORTFALLS", tmp_path / "shortfalls.txt")
     other, mine = ("a", "c", "486-O2", "ivs"), ("b", "c", "486-O2", "ivs")
     known.write({other}, {})
     known.write({mine}, {}, judged={mine})

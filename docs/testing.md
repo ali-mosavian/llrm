@@ -32,8 +32,9 @@ run, as it compiles in emulated DOS). llrm's MIR as the pipeline
 received it and as it left it runs in llrm-mir's interpreter; the linked
 programs run in DOSBox, each with its own time budget.
 
-Quality is a ratchet. `tools/loops/known.toml` lists what falls short today,
-each entry with its issue. The run fails for a shortfall it does not list and
+Quality is a ratchet. `tools/loops/shortfalls.txt` lists what falls short today,
+one line per case, language and check, with its issue; only
+`run.py --write-known` writes it. The run fails for a shortfall it does not list and
 for a listed one that no longer falls short, so a pass may shrink the list,
 never grow it. The checks: induction variables (counted from the decoded
 bytes and by llrm-mir's ScalarEvolution) against a bound derived from the case

@@ -7,7 +7,7 @@ reference compilers. See tools/readme.md.
     uv run --project tools python tools/loops/run.py [--family F] [--config 486-O2] [--dump DIR]
 
 Fails for any wrong answer, any case that falls short and is not in
-known.toml, and any known.toml entry that no longer falls short.
+shortfalls.txt, and any shortfalls.txt entry that no longer falls short.
 """
 
 from __future__ import annotations
@@ -386,7 +386,7 @@ def main() -> int:
     parser.add_argument("--no-dos", action="store_true", help="MIR only")
     parser.add_argument("--no-refs", action="store_true")
     parser.add_argument("--no-validate", action="store_true", help="skip checking the oracle against clang and BC")
-    parser.add_argument("--write-known", action="store_true", help="rewrite known.toml to what falls short now")
+    parser.add_argument("--write-known", action="store_true", help="rewrite shortfalls.txt to what falls short now")
     args = parser.parse_args()
 
     started = time.monotonic()
@@ -554,7 +554,7 @@ def report(cases, langs, configs, result: Result, ratchet, work: Path, seconds: 
     lines += [f"  UNBUILT {one}{tagged(one)}" for one in result.unbuilt]
     lines.append(f"quality: {len(result.short)} shortfalls; {len(ratchet.new)} new, {len(ratchet.fixed)} fixed")
     lines += [f"  NEW {' '.join(one)}" for one in sorted(ratchet.new)]
-    lines += [f"  FIXED {' '.join(one)} (remove it from known.toml)" for one in sorted(ratchet.fixed)]
+    lines += [f"  FIXED {' '.join(one)} (run --write-known)" for one in sorted(ratchet.fixed)]
     lines += [f"  note: {one}" for one in result.notes[:20]]
     text = "\n".join(lines)
     print(text)
