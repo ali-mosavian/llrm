@@ -8,9 +8,9 @@
 //! - a successor every path of which ends in `unreachable`, a `noreturn`
 //!   or a `cold` call (`noreturn::cold`) is all but never taken;
 //! - in a loop, staying in it is taken 124 times to every 4 exits;
-//! - `p == q` on pointers fails (20:12), as does `x == 0`, `x == -1` and
-//!   `x < 0` on integers but truth values, and `x == y` on floats; `isnan`
-//!   is all but never;
+//! - `p == q` on pointers fails (20:12), as do `x == 0`, `x == -1`,
+//!   `x < 0` and `x <= 0` on integers but truth values, and `x == y` on
+//!   floats; `isnan` is all but never;
 //! - a successor that calls, where the other does not, is not taken (67%);
 //! - a successor that returns, where the other does not, is not taken (66%).
 //!
@@ -65,6 +65,9 @@ const OPCODE: (f64, f64) = (20.0, 12.0);
 const ORDERED: (f64, f64) = ((1024 * 1024 - 1) as f64, 1.0);
 const CALL: (f64, f64) = (67.0, 33.0);
 const RETURN: (f64, f64) = (66.0, 34.0);
+/// MachineBlockPlacement's `StaticLikelyProb`: how likely an edge must be
+/// before placement trades the shorter layout for it.
+pub const LIKELY: f64 = 0.8;
 /// LLVM's cap on how many times a loop header runs per entry.
 const LOOP_SCALE: f64 = 4096.0;
 
@@ -185,8 +188,8 @@ fn compared(context: &Context, function: &Function, block: BlockId) -> Option<(H
             let likely = match (predicate, value) {
                 (IntPredicate::Eq, 0 | -1) => false,
                 (IntPredicate::Ne, 0 | -1) => true,
-                (IntPredicate::Slt, 0) | (IntPredicate::Sle, -1) => false,
-                (IntPredicate::Sgt, -1) | (IntPredicate::Sge, 0) => true,
+                (IntPredicate::Slt, 0 | 1) | (IntPredicate::Sle, -1 | 0) => false,
+                (IntPredicate::Sgt, -1 | 0) | (IntPredicate::Sge, 0 | 1) => true,
                 _ => return None,
             };
             Some((Heuristic::Zero, likely, false))

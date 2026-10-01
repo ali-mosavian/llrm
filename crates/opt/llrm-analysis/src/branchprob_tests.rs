@@ -251,3 +251,41 @@ out:
     assert!(close(odds.frequency.get(&at("inner")).copied(), 1024.0));
     assert!(close(odds.frequency.get(&at("out")).copied(), 1.0));
 }
+
+/// LLVM's zero heuristic also takes `x > 0` as likely.
+#[test]
+fn test_a_positive_compare_is_likely() {
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %x) {
+entry:
+  %c = icmp sgt i16 %x, 0
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Zero));
+    assert!(close(odds.probability(at("entry"), at("yes")), 20.0 / 32.0));
+}
+
+/// ... and `x < 1`, that is `x <= 0`, as unlikely.
+#[test]
+fn test_a_below_one_compare_is_unlikely() {
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %x) {
+entry:
+  %c = icmp slt i16 %x, 1
+  br i1 %c, label %yes, label %no
+yes:
+  ret i16 1
+no:
+  ret i16 0
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Zero));
+    assert!(close(odds.probability(at("entry"), at("yes")), 12.0 / 32.0));
+}
