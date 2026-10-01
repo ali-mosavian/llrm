@@ -26,7 +26,7 @@ use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, induction};
-use llrm_mir::context::{ConstantKind, Context, mask};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
@@ -87,6 +87,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
 /// The first rule that rewrites `inst`.
 fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
     _mask_scaled(context, function, recurrences, inst)
+        || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
         || _casted_logic(context, function, inst)
@@ -382,6 +383,44 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
         _ => return false,
     };
     _replace(function, inst, Opcode::Cast(op), vec![source]);
+    true
+}
+
+/// A byte offset from a constant near address is the constant address,
+/// `inttoptr`, as InstCombine's constant folder makes it: `gep i8, ptr null,
+/// -4` is `inttoptr (i16 -4 to ptr)`. Isel has one form for such an address.
+fn _constant_address(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    // `inttoptr` of a constant is the constant expression.
+    if let (&Opcode::Cast(CastOp::IntToPtr), [Operand::Constant(number)], Some(result)) = (&instruction.opcode, &instruction.operands[..], instruction.result)
+        && matches!(context.types.get(instruction.ty), llrm_mir::types::Type::Pointer(0))
+        && matches!(context.get(*number).kind, ConstantKind::Int(_))
+        && context.types.int_bits(context.get(*number).ty) == Some(16)
+    {
+        let address = context.constant(Constant { ty: instruction.ty, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: *number }) });
+        function.replace_all_uses_with(result, Operand::Constant(address));
+        _erase(function, inst);
+        return true;
+    }
+    let Opcode::GetElementPtr { source } = instruction.opcode else { return false };
+    let [Operand::Constant(base), Operand::Constant(index)] = instruction.operands[..] else { return false };
+    let (Some(result), pointer) = (instruction.result, instruction.ty) else { return false };
+    let near = matches!(context.types.get(pointer), llrm_mir::types::Type::Pointer(0));
+    let (Some(step), Some(8)) = (_integer(context, Operand::Constant(index)), context.types.int_bits(source)) else { return false };
+    let index_ty = context.get(index).ty;
+    let Some(width) = context.types.int_bits(index_ty).filter(|&width| near && width == 16) else { return false };
+    let start = match context.get(base).kind.clone() {
+        ConstantKind::Null | ConstantKind::Zero => 0,
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(value).kind {
+            ConstantKind::Int(bits) if context.get(value).ty == index_ty => bits,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let at = context.int(index_ty, (start.wrapping_add(step) & mask(width)) as i128);
+    let address = context.constant(Constant { ty: pointer, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: at }) });
+    function.replace_all_uses_with(result, Operand::Constant(address));
+    _erase(function, inst);
     true
 }
 

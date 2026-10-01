@@ -308,6 +308,10 @@ fn returned(tokens: Vec<Token>, dialect: Dialect) -> Vec<Token> {
 /// becomes `$TUPLE(a, b) = $TUPLE(b, a)`. No source name can spell it.
 pub const TUPLE: &str = "$TUPLE";
 
+/// ON n GOTO|GOSUB's selector: `n` rounded to INTEGER, ERROR 5 raised by the
+/// ON statement itself where it is outside 0..255, so RESUME retries the ON.
+pub const ON_SELECTOR: &str = "$ON";
+
 /// Where the first comma outside parentheses stands in `tokens`.
 fn depth_zero_comma(tokens: &[Token]) -> Option<usize> {
     let mut depth = 0usize;
@@ -1014,6 +1018,7 @@ fn end_print(state: &mut ParseState, has_expression: bool) -> ParseResult {
     }
     if at_named(state, "tkNewLine")
         || at_named(state, "tkColon")
+        || at_named(state, "tkELSE")
         || (has_expression && at_named(state, "tkUSING"))
     {
         return if has_expression {
@@ -1494,15 +1499,41 @@ fn synthesize_statement(
                 && token.span.start >= span.end
                 && matches!(token.kind, TokenKind::Reserved(id) if id == named("tkINPUT"))
         });
-    let Some(descriptor) = (if line_input {
+    // ON n GOTO|GOSUB: the grammar marks which, as the original code
+    // generator read it, and emits no opcode of its own.
+    let on_branch = (keyword == named("tkON")).then(|| {
+        actions.iter().find_map(|action| match action {
+            AstAction::Mark { slot: 1, .. } => Some(false),
+            AstAction::Mark { slot: 2, .. } => Some(true),
+            _ => None,
+        })
+    });
+    let descriptor = if line_input {
         Some(StatementShape::LineInput)
     } else {
         dispatched.or(emitted)
-    }) else {
-        return false;
     };
     let arguments = state.expressions.split_off(expression_base);
     let labels = state.labels.split_off(label_base);
+    if let Some(Some(gosub)) = on_branch {
+        let ([selector], false) = (&arguments[..], labels.is_empty()) else {
+            return false;
+        };
+        state.statements.push(Statement::Select {
+            selector: Expr::Apply {
+                name: ON_SELECTOR.into(),
+                arguments: vec![selector.clone()],
+                span,
+            },
+            arms: on_branch_arms(gosub, labels, span),
+            otherwise: Vec::new(),
+            span,
+        });
+        return true;
+    }
+    let Some(descriptor) = descriptor else {
+        return false;
+    };
     let procedure_references = state
         .procedure_references
         .split_off(procedure_reference_base);
@@ -2099,6 +2130,34 @@ fn synthesize_statement(
     };
     state.statements.push(statement);
     true
+}
+
+/// `ON n GOTO|GOSUB l1, l2, ...` as the SELECT CASE it means: the n-th label,
+/// nothing when n is 0 or past the list.
+fn on_branch_arms(
+    gosub: bool,
+    labels: Vec<(String, Span)>,
+    span: Span,
+) -> Vec<(Vec<CaseItem>, Vec<Statement>)> {
+    let number = |value: i64| Expr::Literal(Literal::Integer(value, TypeName::Integer), span);
+    let mut arms = labels
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, label_span))| {
+            let jump = if gosub {
+                Statement::Call {
+                    name: "GOSUB".into(),
+                    arguments: vec![Expr::Name(label, label_span)],
+                    explicit: false,
+                    span,
+                }
+            } else {
+                Statement::Goto(label, span)
+            };
+            (vec![CaseItem::Value(number(index as i64 + 1))], vec![jump])
+        })
+        .collect::<Vec<_>>();
+    arms
 }
 
 fn block_until_next(state: &mut ParseState) -> Option<Vec<Statement>> {
@@ -3384,6 +3443,41 @@ mod tests {
         assert!(
             matches!(module("gosub firstPart\r\n", Dialect::QuickBasic45).statements[0], Statement::Call { ref name, ref arguments, explicit: false, .. } if name == "GOSUB" && matches!(&arguments[..], [Expr::Name(label, _)] if label == "FIRSTPART"))
         );
+    }
+
+    /// A PRINT item followed by ELSE was refused ("invalid generated-grammar
+    /// statement"): only a new line or colon ended it, not the ELSE of a
+    /// one-line IF. tests/suite/flags.bas did not compile.
+    #[test]
+    fn a_print_item_ends_at_the_else_of_a_one_line_if() {
+        let parsed = module("if r = 0 then print r else print \"b\"\r\n", Dialect::QuickBasic45);
+        assert!(matches!(
+            &parsed.statements[0],
+            Statement::If { then_branch, else_branch, .. }
+                if matches!(then_branch[..], [Statement::Print { .. }]) && matches!(else_branch[..], [Statement::Print { .. }])
+        ));
+    }
+
+    /// ON n GOTO|GOSUB parsed to no statement ("invalid generated-grammar
+    /// statement"): the grammar emitted no opcode for it. tests/suite/jumps.bas
+    /// did not compile.
+    #[test]
+    fn on_goto_and_on_gosub_select_the_nth_label() {
+        for (source, gosub) in [("on k goto one, two, three\r\n", false), ("on k gosub one, two, three\r\n", true)] {
+            let parsed = module(source, Dialect::QuickBasic45);
+            let Statement::Select { arms, .. } = &parsed.statements[0] else { panic!("{source}: {:?}", parsed.statements[0]) };
+            let jumps = arms[..3].iter().map(|(_, body)| &body[0]).collect::<Vec<_>>();
+            assert_eq!(arms.len(), 3, "{source}: one arm a label");
+            for (one, label) in jumps.iter().zip(["ONE", "TWO", "THREE"]) {
+                match one {
+                    Statement::Goto(target, _) if !gosub => assert_eq!(target, label),
+                    Statement::Call { name, arguments, .. } if gosub && name == "GOSUB" => {
+                        assert!(matches!(&arguments[..], [Expr::Name(target, _)] if target == label))
+                    }
+                    other => panic!("{source}: {other:?}"),
+                }
+            }
+        }
     }
 
     #[test]

@@ -1809,6 +1809,74 @@ fn test_inline_assembly_outputs_survive_unrolling() {
     assert!(after.iter().all(|line| line.ends_with(", cx")), "{assembly}");
 }
 
+/// `source` through the rich MIR, as masm.
+fn rich(directory: &tempfile::TempDir, name: &str, source: &str) -> String {
+    let program = parsed(&written(directory, name, source));
+    let module = nib_compile::assembled_from_mir(&program, "main", &llrm_core::driver::Options::of(nib_compile::machine())).unwrap_or_else(|error| panic!("{error}"));
+    masm::text(&module).expect("prints")
+}
+
+/// The rich MIR refused every inline block as "HIR asm": examples/speaker.nib
+/// did not compile. Its bytes stand where it is called, fed and read in the
+/// registers it names: `a` goes to both cx and dx, `b` and 7 are packed into
+/// ax, and `sum` and `high` come out of bx and ch.
+#[test]
+fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = "fn mix(a: u16, b: u8) -> u16:\n    let mut high: u8 = 0\n    unsafe:\n        \
+         asm(cx=a, dx=a, al=b, ah=7, out=(bx=let sum, ch=high), clobbers=[flags]):\n            \
+         mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high)\n\n\
+         fn five() -> u16:\n    return 5\n\n\
+         fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n";
+    assert!(source.contains("asm("), "the shape that was refused");
+    let assembly = rich(&directory, "blocks.nib", source);
+    let mix = between(&assembly, "_mix proc far", "_mix endp");
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
+    let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
+    assert_eq!(found[1], found[2], "{mix}");
+    assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
+}
+
+/// A block that declares `memory` reaches what its pointer inputs point to:
+/// `bytes[3]` is read again after it, and only then.
+#[test]
+fn test_the_rich_mir_reads_memory_again_after_a_block_declaring_it() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let text = "var bytes: u8[4] = [1, 2, 3, 4]\n\n\
+        fn poke() -> u16:\n    let before = u16(bytes[3])\n    unsafe:\n        \
+        let base: *near mut u8 = &mut bytes\n        asm(si=base, clobbers=[memory]):\n            \
+        mov byte ptr [si+3], 7\n    return u16(bytes[3]) + before\n\n\
+        fn main() -> i16:\n    return i16(poke())\n";
+    let mut reads = |text: &str| between(&rich(&directory, "poke.nib", text), "db 0c6h,044h,003h,007h", "retf").contains("byte ptr $var_bytes+3");
+    assert!(reads(text));
+    assert!(!reads(&text.replace("clobbers=[memory]", "clobbers=[]")));
+}
+
+/// Inputs reach the registers they name, whatever order they are written in.
+#[test]
+fn test_the_rich_mir_loads_each_input_into_its_register() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let assembly = rich(&directory, "pair.nib", "fn main() -> i16:\n    unsafe:\n        asm(si=1, di=2, ax=3, clobbers=[]):\n            cli\n    return 0\n");
+    let before = between(&assembly, "_main proc far", "db 0fah");
+    for set in ["mov si, 1", "mov di, 2", "mov ax, 3"] {
+        assert!(before.contains(set), "{set}: {before}");
+    }
+}
+
+/// A block's output is read from its register after a loop is unrolled: each
+/// of the three copies reads cx.
+#[test]
+fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = "fn spin(n: u16) -> u16:\n    let mut total: u16 = 0\n    let mut i: u16 = 0\n    while i < n:\n        \
+         unsafe:\n            asm(bx=i, out=(cx=let got), clobbers=[]):\n                mov cx, bx\n            \
+         total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n";
+    let assembly = rich(&directory, "spin.nib", source);
+    let after: Vec<&str> = assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
+    assert_eq!(after.len(), 3, "{assembly}");
+    assert!(after.iter().all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")), "{assembly}");
+}
+
 #[test]
 fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     // jwlink's `option eliminate` keeps a segment any other references, even

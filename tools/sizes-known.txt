@@ -1,0 +1,3 @@
+# Programs tools/sizes.py builds that do not compile yet, one per line, with
+# the issue. The list may only shrink: tests/test_programs_compile.py fails on
+# a program missing from it that fails, and on one listed that compiles.
