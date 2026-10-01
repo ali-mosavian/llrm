@@ -654,12 +654,12 @@ b0:
         }
     }
 
-    /// Same opcode, but one operand, the flags or the type differs.
+    /// Same opcode, but one operand, a flag that changes what is computed
+    /// (`exact`) or the type differs. A wrap promise does not (gvn_tests).
     #[test]
     fn test_expressions_differing_in_an_operand_flags_or_type_stay() {
         for (first, second) in [
             ("%a = add i16 %x, 1", "%b = add i16 %x, 2"),
-            ("%a = add nsw i16 %x, 1", "%b = add i16 %x, 1"),
             ("%a = udiv exact i16 %x, 2", "%b = udiv i16 %x, 2"),
             ("%a = sext i8 %n to i16", "%b = zext i8 %n to i16"),
         ] {
