@@ -1218,25 +1218,6 @@ fn _recolored_hints(
     }
 }
 
-/// Allocate one evaluated retention plan, or discard that plan.
-fn _assigned_plan(
-    body: &LirBody,
-    pinned: &IndexMap<u32, Register>,
-    reloads: &BTreeSet<u32>,
-    retained: &BTreeSet<u32>,
-    cpu: &Profile,
-    segments: &Segments,
-) -> Result<(Assignment, BTreeSet<u32>), Error> {
-    if !retained.is_empty() {
-        match allocate(body, Some(pinned), Some(reloads), Some(retained), None, cpu.into(), segments) {
-            Ok(got) => return Ok((got, retained.clone())),
-            Err(Error::Unplaced(_)) => {}
-            Err(other) => return Err(other),
-        }
-    }
-    Ok((allocate(body, Some(pinned), Some(reloads), None, None, cpu.into(), segments)?, BTreeSet::new()))
-}
-
 /// Every value that wants a register, dead definitions included.
 fn _values(body: &LirBody) -> Vec<u32> {
     let mut out: BTreeSet<u32> = BTreeSet::new();
@@ -2778,7 +2759,7 @@ mod tests {
     fn test_conflicting_hard_register_assignments_are_unplaceable_not_spills() {
         let body = _one_block(vec![_mov(1, 1, 0), _mov(2, 2, 2), _shl(1, 2, 4)]);
         let message = unplaced(allocated(&body, Some(&pins(&[(1, Register::DX), (2, Register::DX)]))));
-        assert!(message.contains("value#2 cannot be placed"), "{message}");
+        assert!(message.contains("value#2 cannot be spilled"), "{message}");
     }
 
     #[test]
@@ -3101,26 +3082,6 @@ mod tests {
         assert_eq!(found[&2], *target::WORD_BASES);
     }
 
-    #[test]
-    fn test_unallocatable_retention_plan_falls_back_to_ordinary_spilling() {
-        let mut insns: Vec<Insn> =
-            [1u32, 2, 3].iter().zip(1..).map(|(value, at)| _frame_load(at, *value, -2 * i64::from(*value))).collect();
-        for value in [1u32, 2, 3] {
-            let cell = Mem {
-                index: Some(Held { value, width: 2 }),
-                ..Mem::new(Some(Addr::new(Space::Literal, i64::from(value))), 2)
-            };
-            insns.push(_load(3 + i64::from(value), 10 + value, cell, vec![value]));
-        }
-        let body = body_of("retention-fallback", 0, insns);
-
-        let (result, retained) =
-            _assigned_plan(&body, &IndexMap::default(), &values(&[2]), &values(&[1, 3]), cpu::profile("386").expect("386"), &target::BUILT_IN)
-                .expect("allocates");
-
-        assert_eq!(retained, BTreeSet::new());
-        assert!(!result.spilled.contains(&2));
-    }
 
     #[test]
     fn test_repeated_acyclic_stable_address_base_is_a_retention_candidate() {
