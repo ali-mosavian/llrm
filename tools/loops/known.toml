@@ -19,9 +19,5 @@ match = 'Core-O. nib on DOS.*conc[67]_s2_xi_bgnlnpfpn'
 issue = "#109"
 
 [[bug]]
-match = 'on DOS: x_shapenest2_pairjeq3ip1'
-issue = "#111"
-
-[[bug]]
 match = 'nib on DOS: rnd98_0185'
 issue = "#109"
