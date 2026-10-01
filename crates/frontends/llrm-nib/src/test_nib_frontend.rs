@@ -1877,6 +1877,23 @@ fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
     assert!(after.iter().all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")), "{assembly}");
 }
 
+/// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
+/// addrspace(1) value", and a `&mut [T]` view had no raw address ("only a
+/// scalar, struct, or sequence has a raw address") though a `&[T]` did.
+#[test]
+fn test_a_raw_pointer_walks_an_array_and_a_mutable_view() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let walk = "var g: i16[10] = [0] * 10\n\nfn total(n: i16) -> i32:\n    let mut t: i32 = 0\n    let mut p: *far mut i16 = 0\n    let mut e: *far mut i16 = 0\n    unsafe:\n        p = (&mut g)\n        e = p.offset(n)\n    while p != e:\n        unsafe:\n            t += i32(p[0])\n            p = p.offset(1)\n    return t\n\nfn main() -> i16:\n    return i16(total(3))\n";
+    let view = "fn fill(a: &mut [i16]) -> void:\n    let mut p: *far mut i16 = 0\n    unsafe:\n        p = &mut a\n    let mut i: u16 = 0\n    while i < a.len:\n        unsafe:\n            p[0] = i16(i)\n            p = p.offset(1)\n        i += 1\n\nfn main() -> i16:\n    let mut g: i16[3] = [0, 0, 0]\n    fill(&mut g)\n    return g[2]\n";
+    assert!(walk.contains("while p != e") && view.contains("p = &mut a"), "the shapes that were refused");
+    for (name, source) in [("walk.nib", walk), ("view.nib", view)] {
+        rich(&directory, name, source);
+    }
+    let immutable = view.replace("a: &mut [i16]", "a: &[i16]").replace("fill(&mut g)", "fill(&g)");
+    let refused = driver::parsed(&written(&directory, "immutable.nib", &immutable), &Default::default(), None);
+    assert!(refused.is_err(), "a raw &mut of a &[T] view is still refused");
+}
+
 #[test]
 fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     // jwlink's `option eliminate` keeps a segment any other references, even
@@ -1956,11 +1973,12 @@ fn test_a_program_compiles_through_the_rich_mir() {
 }
 
 /// The rich route priced every CPU as a 486, so a 386's dearer far call
-/// did not make evaluating `logic`'s calls pay.
+/// did not make evaluating `logic`'s calls pay. The body is one too dear to
+/// evaluate on a 486 after a complemented boolean folds to one compare.
 #[test]
 fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return a < b && !a == 0 || b == 7\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
+    let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
         let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
@@ -2126,7 +2144,8 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
             .expect("a loop");
         between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
     };
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    // Unrolled, the 4-trip loop is gone and there is nothing to count.
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), unroll: false, peel: false, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
     let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);

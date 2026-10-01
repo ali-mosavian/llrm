@@ -80,15 +80,16 @@ pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, 
     }
     let runtime = crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises)?;
     let (modules, data) = emitted.into_iter().map(|one| (one.module, one.data)).unzip();
-    let mut linked = linked(modules, runtime, options)?;
+    let target = std::rc::Rc::new(crate::abi::qb::LoweredTarget::of(options.cpu()?, crate::abi::qb::HirAbi::of(program)?));
+    let mut linked = linked(modules, runtime, target)?;
     linked.exports.entries = program.entries.iter().cloned().collect();
     Ok((linked, data))
 }
 
-/// `modules` as one program for the machine, linked against `runtime`, a
+/// `modules` as one program for `target`, linked against `runtime`, a
 /// module of declarations alone; each verified.
-pub fn linked(modules: Vec<Module>, runtime: Module, options: &Options) -> Result<Program, String> {
-    let program = Program::new(modules, options.cpu()?.target())?.with_runtime(runtime)?;
+pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llrm_mir::target::Machine>) -> Result<Program, String> {
+    let program = Program::new(modules, target)?.with_runtime(runtime)?;
     verified(&program, "the frontend")?;
     Ok(program)
 }
@@ -100,6 +101,7 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
     llrm_transforms::pipeline::applied(program, &applied)?;
     program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
+    program.modules.iter_mut().try_for_each(crate::backend::selects::lowered)?;
     verified(program, "the pipeline")
 }
 

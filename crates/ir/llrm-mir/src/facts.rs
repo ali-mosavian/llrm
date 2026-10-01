@@ -154,6 +154,9 @@ pub enum Effect {
     Read,
     /// It may write, not read.
     Write,
+    /// It may read and write only memory the program cannot name: a routine
+    /// that ends the program touches nothing a caller's loop could read back.
+    Inaccessible,
 }
 
 facts! {
@@ -185,6 +188,7 @@ impl Fact {
     /// instruction flag.
     pub fn attribute(self) -> Option<Attribute> {
         match self {
+            Fact::Memory(Effect::Inaccessible) => Some(Attribute::Memory(vec![(Some("inaccessiblemem".to_owned()), "readwrite".to_owned())])),
             Fact::Dereferenceable(value) | Fact::Align(value) => Some(Attribute::Int(self.key().to_owned(), value)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
@@ -204,6 +208,7 @@ impl Fact {
             },
             Attribute::Memory(locations) => match locations[..] {
                 [(None, ref access)] => Effect::of_spelling(access).map(Fact::Memory),
+                [(Some(ref location), ref access)] if location == "inaccessiblemem" && access == "readwrite" => Some(Fact::Memory(Effect::Inaccessible)),
                 _ => None,
             },
             _ => None,
@@ -217,7 +222,7 @@ impl Wire for Effect {
     }
 
     fn unwire(value: i64) -> Option<Effect> {
-        [Effect::None, Effect::Read, Effect::Write].into_iter().find(|one| *one as i64 == value)
+        [Effect::None, Effect::Read, Effect::Write, Effect::Inaccessible].into_iter().find(|one| *one as i64 == value)
     }
 }
 
@@ -227,6 +232,7 @@ impl Effect {
             Effect::None => "none",
             Effect::Read => "read",
             Effect::Write => "write",
+            Effect::Inaccessible => "inaccessible",
         }
     }
 
@@ -298,4 +304,13 @@ mod tests {
         assert!(!Facts::of(&[Attribute::Flag("readonly".to_owned())]).no_alias());
     }
 
+    /// A routine that ends the program states `inaccessiblemem`, and a pass
+    /// reads it back as that fact.
+    #[test]
+    fn an_inaccessible_effect_reads_back_from_its_attribute() {
+        let fact = Fact::Memory(Effect::Inaccessible);
+        let attribute = fact.attribute().expect("an attribute");
+        assert_eq!(Fact::of_attribute(&attribute), Some(fact));
+        assert_eq!(Fact::from_wire(fact.key(), fact.wire_value()), Some(fact));
+    }
 }

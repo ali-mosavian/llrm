@@ -178,6 +178,33 @@ fn test_a_double_is_laid_down_in_x87_extended_form() {
     assert_eq!(extended(f64::from_bits(1)), [0, 0, 0, 0, 0, 0, 0, 0x80, 0xCD, 0x3B]);
 }
 
+/// What a call does to memory the program can name, less what it does to
+/// memory it cannot: a routine that ends the program by writing its own
+/// state touches nothing the loop around the call can see.
+#[test]
+fn a_call_to_inaccessible_memory_touches_nothing_nameable() {
+    let module = crate::parse::module(
+        "declare void @stop() noreturn memory(inaccessiblemem: readwrite)
+declare void @any()
+
+define void @f() {
+b0:
+  call void @stop()
+  call void @any()
+  ret void
+}
+",
+    )
+    .expect("a module");
+    let callees = crate::memory::callees(&module);
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, crate::opcode::Opcode::Call(_))).collect::<Vec<_>>();
+    let stop = crate::memory::accessible(&module.context, &callees, function, calls[0]);
+    let any = crate::memory::accessible(&module.context, &callees, function, calls[1]);
+    assert_eq!((stop, any), (crate::memory::Effects::NONE, crate::memory::Effects::ANY));
+    assert!(crate::memory::of(&module.context, &callees, function, calls[0]).writes, "it still writes what it can reach");
+}
+
 fn dominance_problems(text: &str) -> Vec<String> {
     crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}"))).into_iter().filter(|one| one.contains("dominate")).collect()
 }
