@@ -15,12 +15,14 @@ The HIR therefore carries an ordinary `BYREF T` parameter as a near pointer
 to `T`. It does not encode SI, BP, DS, `retf`, or a split LONG. The QB ABI
 adapter and existing lowering own those details.
 
-Dereferencing that pointer is volatile. `IN_KEYSTROKE` is the measured case:
+Dereferencing that pointer is ordinary, as for any variable, unless the
+parameter is declared `AS VOLATILE T`. `IN_KEYSTROKE` is the measured case:
 the VBDOS `/O` loop reloads `[si]` on every back-edge while the keyboard
-interrupt handler owns the matching store. Reusing or hoisting the first read
-hangs while waiting for release. This is the general published-pointee rule
-for QB `BYREF`, not a keyboard-name special case; HIR records it on the
-indirect place and lowering preserves it as an ordered memory access.
+interrupt handler owns the matching store, so its source says
+`keyDown AS VOLATILE INTEGER`. Nothing is assumed: a BYREF the program does not
+declare so is read once by a counted loop (TEXTFILL, the palette loops), and the
+same holds of `DIM` and `DIM SHARED` variables. HIR records `volatile` on the
+place or indirect place and lowering preserves it as an ordered memory access.
 
 A call-site side table records the stack permutation, far-call distance, and
 cleanup owner. Those facts are applied after semantic optimization by emitting
