@@ -2021,7 +2021,7 @@ fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn
 }
 
 /// How wide each value is read or written anywhere, which is how big its slot has to be.
-fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+pub fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
@@ -2064,14 +2064,14 @@ fn _mov(into: Loc, out_of: Loc) -> Semantics {
 }
 
 /// The load that puts a spilled value back for one instruction.
-fn _reload(beside: &Insn, into: u32, cell: &Mem) -> Arc<Insn> {
+pub fn _reload(beside: &Insn, into: u32, cell: &Mem) -> Arc<Insn> {
     let inserted =
         _inserted(beside, _mov(Loc::Held(Held { value: into, width: cell.width }), Loc::Mem(cell.clone())), vec![into], Vec::new());
     _with(&inserted, |made| made.spill_reload = true)
 }
 
 /// The store that puts a spilled value away as soon as it is written.
-fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
+pub fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
         _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width })),

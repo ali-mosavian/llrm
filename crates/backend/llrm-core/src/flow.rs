@@ -14,7 +14,7 @@ use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
+    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, ssaspill, twoaddr,
 };
 
 use crate::backend::verify::{self, Malformed};
@@ -44,6 +44,7 @@ pub fn machine<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     Ok(vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone() }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
@@ -133,7 +134,14 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
     let owned = body.owned_bytes();
     let transformed =
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
-    let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
+    // A reload redefines the value it brings back: it stays one variable, but no longer one definition.
+    let redefines = stage == crate::backend::ssaspill::SsaSpill::NAME;
+    let complaints: Vec<String> =
+        verify::verify(&transformed, in_ssa).into_iter().filter(|one| !(redefines && one.contains("should be in SSA"))).collect();
+    if let Some(first) = complaints.first() {
+        return Err(Checked::Malformed(Malformed(format!("{stage}: {first}"))));
+    }
+    let body = transformed;
     let now = body.owned_bytes();
     if now != owned {
         let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));

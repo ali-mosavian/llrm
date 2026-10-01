@@ -16,7 +16,7 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 
 /// Operations that read their destination.
-const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
+pub const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
 
 pub struct TwoAddress;
 
