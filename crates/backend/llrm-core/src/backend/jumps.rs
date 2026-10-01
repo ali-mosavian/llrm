@@ -215,10 +215,11 @@ impl Busy {
         }
         let successors: IndexMap<i64, Vec<i64>> = blocks.iter().map(|block| (block.at, block.succ.clone())).collect();
         let order = branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
-        let cycles: Vec<branchprob::Cycle> = natural.iter().map(|one| branchprob::Cycle { header: one.header, latches: &one.latches, body: &one.body }).collect();
+        let cycles: Vec<branchprob::Cycle> = natural.iter().map(|one| branchprob::Cycle { header: one.header, latches: &one.latches, body: &one.body, trips: None }).collect();
         let frequency = branchprob::propagated(
             &order,
             &|at| predecessors.get(&at).cloned().unwrap_or_default(),
+            &|at| successors.get(&at).cloned().unwrap_or_default(),
             &cycles,
             &|from, to| taken.get(&(from, to)).copied().unwrap_or(0.0),
         );
