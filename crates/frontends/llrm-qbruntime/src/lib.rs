@@ -11,23 +11,6 @@ use std::sync::LazyLock;
 use llrm_support::hash::IndexMap;
 use llrm_support::pyrepr::{self, Repr};
 
-// The one routine that reads a table laid inline after its own call site.
-// Established from the shipped libraries rather than inferred -- gosub.asm
-// in BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB, read with tools/libdump.py.
-// The implementations differ; the QB form below shows the table protocol:
-//
-//   lds  si,[bp+2]     si = the return address, which IS the table
-//   lodsb              al = the count, si now on the entries
-//   mov  dl,al / shl dx,1 / add dx,si    dx = past the table
-//   mov  cx,[bx+si]    cx = entry[index-1]
-//   cmp  al,bl / jbe   out of range falls through to dx
-//   push bx / push dx  and a far return goes to whichever was chosen
-//
-// So an entry is a two-byte offset into this same segment, the count is one
-// byte in front of them. Selectors 0 or count+1..255 fall through; values
-// above 255 enter B$FrameFC instead. These are normal CFG successors only.
-pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| BTreeSet::from(["B$OGTA"]));
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Reg {
     Ax,
@@ -332,18 +315,16 @@ impl Repr for Contract {
     }
 }
 
-/// Routines whose result is the flags, and the source that says so.
-const FLAGS_RESULTS: [(&str, &str); 1] = [(
-    "B$SCMP",
-    "rt/stcore.asm SCMP: the result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF",
-)];
-
-/// Whether `name`'s result is the flags.
+/// Whether `name`'s result is the flags: the table's `flags_result`.
 pub fn flags_result(name: &str) -> bool {
-    FLAGS_RESULTS.iter().any(|&(routine, _)| routine == name)
+    facts(name).is_some_and(|routine| routine.flags_result)
 }
 
 pub fn worst(name: &str) -> Contract {
+    worst_with(name, flags_result(name))
+}
+
+fn worst_with(name: &str, flags_result: bool) -> Contract {
     Contract {
         name: name.to_owned(),
         cleanup: None,
@@ -363,7 +344,7 @@ pub fn worst(name: &str) -> Contract {
         caller_cleanup: 0,
         i386: false,
         direct_writes: None,
-        flags_result: flags_result(name),
+        flags_result,
         direct_reads: None,
     }
 }
@@ -410,1082 +391,15 @@ pub fn disturbs(routine: &Contract) -> BTreeSet<Reg> {
 pub const SLOTS: [Reg; 11] = Reg::ALL;
 
 // What a routine's contract is under one toolchain, where the routines
-// differ. Keyed by the compiler's own name for itself, which module.py
-// reads off COMENT 0x00 -- the family is a fact about the object, and it
-// reaches this map and nothing else.
-//
-// B$ENRA takes the frame size in cx. Disassembled from the linked image:
-// PDS 7.1's is at 0x1d35 and QuickBASIC 4.5's at 0x211d, both reading cx
-// through `push cx` and `sub sp,cx` before writing it, with no unresolved
-// edge on any path from entry to the `jmp far` that returns. VBDOS's, at
-// 0x397, also reads bx -- `or bx,bx` gates `call 02f7:0002` -- and that
-// helper reaches `call far [di+24h]`, which no disassembly can follow, so
-// VBDOS stays at the worst case.
-//
-// Python fills this across its module body, around `CONTRACTS`; this runs
-// the same statements in the same order.
-pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> = LazyLock::new(
-    || {
-        let mut variants: IndexMap<(&'static str, &'static str), Contract> = IndexMap::default();
-
-        for _family in ["pds71", "vbdos"] {
-            variants.insert(
-                ("B$RETA", _family),
-                Contract {
-                    inputs: Some(BTreeSet::from([
-                        Reg::Ax,
-                        Reg::Bx,
-                        Reg::Cx,
-                        Reg::Dx,
-                        Reg::Si,
-                        Reg::Di,
-                    ])),
-                    evidence: concat!(
-                        "Shipped PDS/VBDOS gosub.asm RETA consumes the runtime frame and saved ",
-                        "continuation, not caller arithmetic flags: DEC sets the tested SF; ",
-                        "JCXZ tests a popped word. The event path enters EXSA, whose first CMP ",
-                        "kills incoming flags (rtenexit.asm 004e/0068). The error path enters ",
-                        "ERR_RG, which reaches XOR BH,BH before further dispatch (erproc.asm ",
-                        "00ad/00c1). All six GP inputs retained conservatively; BP/SP, segments ",
-                        "and direction remain runtime environment. No preservation, cleanup or ",
-                        "ordinary-return claim. Frontend control flow leaves at RETA."
-                    )
-                    .to_owned(),
-                    ..worst("B$RETA")
-                },
-            );
-            for _name in ["B$ONTA", "B$ETT0", "B$ETT1", "B$ETT2"] {
-                variants.insert(
-                    (_name, _family),
-                    Contract {
-                        inputs: Some(BTreeSet::from([
-                            Reg::Ax,
-                            Reg::Bx,
-                            Reg::Cx,
-                            Reg::Dx,
-                            Reg::Si,
-                            Reg::Di,
-                        ])),
-                        evidence: concat!(
-                            "BCL71ENR.LIB/VBDCL10E.LIB evttim.asm: ONTA at 002e/002f ",
-                            "executes OR AX,DX at 003b/003c before every branch or call; ",
-                            "ETT0/1/2 converge on XOR BL,BL at 0023/0024 before EVNT_SET. ",
-                            "Incoming arithmetic flags cannot reach a dependency. Bound inputs ",
-                            "by all six allocatable GP registers; segments, BP/SP and direction ",
-                            "are runtime environment. No transitive preservation, cleanup, ",
-                            "memory or control claim: error paths and indirect dependencies ",
-                            "remain worst-case. See docs/optimizations/event-entry-blocker.md."
-                        )
-                        .to_owned(),
-                        ..worst(_name)
-                    },
-                );
-            }
-        }
-
-        // PDS 7.1 has the same zero-argument clock interface as the independently
-        // audited QB 4.5 and VBDOS libraries.  Keep the profile-specific evidence
-        // here: source lowering asks the shared table, rather than teaching the
-        // frontend a runtime-family exception.
-        variants.insert(
-            ("B$TIMR", "pds71"),
-            Contract {
-                inputs: Some(BTreeSet::from([
-                    Reg::Ax,
-                    Reg::Bx,
-                    Reg::Cx,
-                    Reg::Dx,
-                    Reg::Si,
-                    Reg::Di,
-                ])),
-                cleanup: Some(0),
-                evidence: concat!(
-                    "BCL71ENR.LIB rt/ostimer.asm B$TIMR 0000..0042: balanced BP/SI saves; ",
-                    "DOS GETTIM at 0004; MUL CH at 000a kills incoming arithmetic flags; ",
-                    "the result is stored through BX at 0037..003b and its near pointer ",
-                    "returned in AX by XCHG BX,AX; POP SI/BP / RETF consumes no caller ",
-                    "arguments. Time, memory, x87, errors and GP effects remain conservative."
-                )
-                .to_owned(),
-                ..worst("B$TIMR")
-            },
-        );
-
-        for _one in ["pds71", "qb45"] {
-            _entry(&mut variants, _one);
-        }
-
-        variants.insert(
-        ("B$ENRA", "vbdos"),
-        Contract {
-            inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-            evidence: concat!(
-                "VBDCL10E.LIB rtenexit.asm 0017..0062: saves the far return address, ",
-                "XOR AX,AX at 001f overwrites incoming arithmetic flags, builds the frame ",
-                "using CX, then OR BX,BX selects HFirstAllocBlock. Retain all GP inputs ",
-                "without claiming allocator preservation, cleanup, termination or error ",
-                "behavior. HFirstAllocBlock -> HandleAlloc reaches allocation/compaction ",
-                "dependencies whose effects remain unknown. BP/SP, segments and direction ",
-                "are runtime environment. Only a separately proven BX=0 site narrows this. ",
-                "Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
-            )
-            .to_owned(),
-            ..worst("B$ENRA")
-        },
-    );
-
-        for _name in ["B$SIN4", "B$SIN8", "B$COS4", "B$COS8"] {
-            variants.insert(
-            (_name, "vbdos"),
-            Contract {
-                inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-                cleanup: Some(0),
-                evidence: concat!(
-                    "VBDCL10E.LIB 87btrig.asm SIN4/SIN8 share 005a: ST0 operand, ",
-                    "local BP frame, hardware exits 0093..0096 and 00c3..00c6 restore SP/BP and RETF; ",
-                    "emulator tail B$EMSIN (embtrig.asm 0065) exits 00c8..00cb identically. ",
-                    "COS4/COS8 share 0007 with the same local frame: hardware exits ",
-                    "0040..0043 or 00c3..00c6; emulator tail B$EMCOS (embtrig.asm 0000) ",
-                    "restores SP/BP and RETF at 0061..0064. ",
-                    "All GP inputs are conservatively retained; no preservation, purity, x87 ",
-                    "optimization or error-path guarantee is inferred. Error tails remain unknown."
-                )
-                .to_owned(),
-                ..worst(_name)
-            },
-        );
-        }
-
-        variants.insert(
-            ("B$POW4", "vbdos"),
-            Contract {
-                inputs: Some(BTreeSet::from([
-                    Reg::Ax,
-                    Reg::Bx,
-                    Reg::Cx,
-                    Reg::Dx,
-                    Reg::Si,
-                    Reg::Di,
-                ])),
-                cleanup: Some(0),
-                evidence: concat!(
-                    "VBDCL10E 87btran.asm 00e2: x87 operands, PUSH BP / MOV BP,SP. ",
-                    "FXAM/FNSTSW then AND AL,47h at 00f3 overwrites arithmetic flags ",
-                    "before dispatch. Normal paths join POP BP / RETF at 0089, 0098, ",
-                    "00b3 or 00d8; logarithm/exponential kernel reached by relocated ",
-                    "near jump 010b -> 0038 uses the same frame. Other paths tail ",
-                    "B$RUNERR (overflow/domain); all GP, memory, x87 and error effects ",
-                    "remain conservative. No algebraic replacement or purity claim."
-                )
-                .to_owned(),
-                ..worst("B$POW4")
-            },
-        );
-
-        let pow4 = variants[&("B$POW4", "vbdos")].clone();
-        variants.insert(
-            ("B$POW8", "vbdos"),
-            Contract {
-                name: "B$POW8".to_owned(),
-                evidence: concat!(
-                    "VBDCL10E 87btran.asm PUBDEFs POW4 and POW8 both resolve to ",
-                    "segment 1 offset 00e2: identical entry and dependency graph. "
-                )
-                .to_owned()
-                    + &variants[&("B$POW4", "vbdos")].evidence,
-                ..pow4
-            },
-        );
-
-        for (_name, _evidence) in [
-            (
-                "B$FLOF",
-                concat!(
-                    "loclof.asm 0049 enters 0035 and calls LocateFDB (dvcore.asm 00e2); ",
-                    "XOR SI,SI at 00e6 overwrites arithmetic flags before lookup/dispatch."
-                ),
-            ),
-            (
-                "B$GET3",
-                concat!(
-                    "dvgetput.asm 0043 enters local 00a4 with stacked position words; ",
-                    "its first call is LocateFDB, which overwrites arithmetic flags before lookup."
-                ),
-            ),
-            (
-                "B$GET4",
-                concat!(
-                    "dvgetput.asm 0064 reads the record position and OR CX,CX at 006c ",
-                    "overwrites arithmetic flags before validation and local 00a4 dispatch."
-                ),
-            ),
-            (
-                "B$SACT",
-                concat!(
-                    "farstr stcore.asm entry 01b6 loads the descriptor at BP+0Ah and ",
-                    "CMP word [DI],0 at 01bf overwrites arithmetic flags before string allocation/copy."
-                ),
-            ),
-            (
-                "B$DSG0",
-                concat!(
-                    "rtinit.asm 00de consists only of MOV DS:[relocated global],DS / RETF; ",
-                    "it consumes no GP register or arithmetic flags and has no dependencies."
-                ),
-            ),
-            (
-                "B$PUT3",
-                concat!(
-                    "dvgetput.asm 005d sets AL=5 and joins GET3 at 0048, calling local ",
-                    "00a4; LocateFDB (dvcore.asm 00e2) kills arithmetic flags with XOR SI,SI at 00e6."
-                ),
-            ),
-            (
-                "B$SMID",
-                concat!(
-                    "farstr mid.asm 0000 first calls strutil.asm 0013 with BX=[BP+0Ah]; ",
-                    "OR AX,AX at 0016 kills arithmetic flags before any branch or further call."
-                ),
-            ),
-            (
-                "B$RND0",
-                concat!(
-                    "random.asm 0000 calls local 0033; MUL CX at 003b sets CF/OF, ",
-                    "ADD BX,AX at 0045 sets arithmetic flags before the later ADC. ",
-                    "The straight-line body updates the seed, stores an x87 result, ",
-                    "and returns its address through XCHG BX,AX at 0075."
-                ),
-            ),
-            (
-                "B$ATN4",
-                concat!(
-                    "87btriga.asm 0000 establishes its frame with SUB SP,0Ah at 0003, ",
-                    "overwriting incoming arithmetic flags before any branch or error tail. ",
-                    "The x87 operand and runtime call remain unchanged."
-                ),
-            ),
-            (
-                "B$UBND",
-                concat!(
-                    "dynamic.asm 0133 reads the dimension from [BP+6]; OR DH,DH at 013b ",
-                    "overwrites incoming arithmetic flags before the first branch at 013d. ",
-                    "Descriptor reads, the B$DeLink call and the B$ERR_BS tail remain intact."
-                ),
-            ),
-            (
-                "B$SSEK",
-                concat!(
-                    "dkrandio.asm 0145 calls local 0114 then B$LocateFDB in dvcore.asm ",
-                    "00e2; PUSH saves precede XOR SI,SI at 00e6 and CMP at 00e8, ",
-                    "overwriting incoming arithmetic flags before any branch. Seeking stays a call."
-                ),
-            ),
-            (
-                "B$STRI",
-                concat!(
-                    "farstr strfcn.asm 01a3 loads AL and CX from stack arguments then ",
-                    "calls local 0191, whose OR CX,CX overwrites incoming arithmetic flags ",
-                    "before branching or allocation. String construction stays a call."
-                ),
-            ),
-            (
-                "B$RNZP",
-                concat!(
-                    "random.asm 0079 loads the stack argument at BP+0Ah, XORs its ",
-                    "words at 0081, stores the seed and RETFs at 0088; the straight-line ",
-                    "body reads no incoming arithmetic flag. Randomization stays a call."
-                ),
-            ),
-        ] {
-            variants.insert(
-                (_name, "vbdos"),
-                Contract {
-                    inputs: Some(BTreeSet::from([
-                        Reg::Ax,
-                        Reg::Bx,
-                        Reg::Cx,
-                        Reg::Dx,
-                        Reg::Si,
-                        Reg::Di,
-                    ])),
-                    evidence: "VBDCL10E.LIB: ".to_owned()
-                        + _evidence
-                        + concat!(
-                            " All GP inputs retained; ",
-                            "cleanup, memory, preservation and transitive control/error effects ",
-                            "remain unknown. No runtime operation is replaced."
-                        ),
-                    ..worst(_name)
-                },
-            );
-        }
-
-        for _name in ["B$STR4", "B$STR8"] {
-            variants.insert(
-                (_name, "vbdos"),
-                Contract {
-                    inputs: Some(BTreeSet::from([
-                        Reg::Ax,
-                        Reg::Bx,
-                        Reg::Cx,
-                        Reg::Dx,
-                        Reg::Si,
-                        Reg::Di,
-                    ])),
-                    evidence: concat!(
-                        "VBDCL10E stringfp.asm entries 0000/001e pass AL=4/8 and ",
-                        "BX=BP+6 to string.asm 001e (STR_COMMON). FOUTBX at ifout.asm ",
-                        "0000 overwrites arithmetic flags with CMP at 0003 before ",
-                        "dispatching to floating formatting. Retain all GP inputs. ",
-                        "Wrappers end POP BP / RETF 4 or 8, but the dependency graph ",
-                        "through FOUTBX and StrAlcTmpCopy has unproved stack paths: ",
-                        "cleanup remains unknown, as do all memory/control/error effects. ",
-                        "No preservation or arithmetic replacement is claimed."
-                    )
-                    .to_owned(),
-                    ..worst(_name)
-                },
-            );
-        }
-
-        for _name in ["B$INT4", "B$INT8"] {
-            variants.insert(
-                (_name, "vbdos"),
-                Contract {
-                    inputs: Some(BTreeSet::from([
-                        Reg::Ax,
-                        Reg::Bx,
-                        Reg::Cx,
-                        Reg::Dx,
-                        Reg::Si,
-                        Reg::Di,
-                    ])),
-                    cleanup: Some(0),
-                    evidence: concat!(
-                        "VBDCL10E 87bint.asm: INT4/INT8 share 0016, saving BP/SI/DI; ",
-                        "BX=6 and AX=0400h call emulator.asm segment 2 entry 002a. ",
-                        "CMP BX,0Ch overwrites incoming arithmetic flags. The relocated ",
-                        "table base is 0010; index 6 selects word 001c -> 0637. ",
-                        "Hardware path changes rounding control, FRNDINT, restores control ",
-                        "and RET at 0660. Software path calls 1be3 and 06e2; exception ",
-                        "dispatch includes indirect calls, INT 21h and IRET, so all ",
-                        "control/error/memory/x87 effects remain unknown. Normal wrapper ",
-                        "return restores SI/DI, MOV SP,BP / POP BP / RETF at 0028..002b: ",
-                        "zero caller argument cleanup. No replacement or preservation claim."
-                    )
-                    .to_owned(),
-                    ..worst(_name)
-                },
-            );
-        }
-
-        variants.insert(
-        ("B$PEOS", "vbdos"),
-        Contract {
-            inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-            evidence: concat!(
-                "VBDCL10E.LIB prnval.asm 018f: establishes BP, saves ES/SI, loads FInput ",
-                "and OR AL,AL at 0197 kills incoming arithmetic flags before any branch/call. ",
-                "All GP inputs retained; BP/SP, segments and direction are runtime environment. ",
-                "Terminal input relocates the frame at 019d..01b7; disk/print paths skip it. ",
-                "Cleanup remains unknown, as do all memory, clobber, control and error effects."
-            )
-            .to_owned(),
-            ..worst("B$PEOS")
-        },
-    );
-
-        variants.insert(
-            ("B$EXTS", "vbdos"),
-            Contract {
-                inputs: Some(BTreeSet::from([
-                    Reg::Ax,
-                    Reg::Bx,
-                    Reg::Cx,
-                    Reg::Dx,
-                    Reg::Si,
-                    Reg::Di,
-                ])),
-                direct_inputs: Some(BTreeSet::new()),
-                cleanup: Some(0),
-                evidence: concat!(
-                    "VBDCL10E.LIB rtenexit.asm 012e..0149: CMP BP,[runtime frame] ",
-                    "kills incoming arithmetic flags. Both conditional branches and the ",
-                    "state-clearing path reach RETF at 0149; no pushes, pops or incoming ",
-                    "GP-register dependencies on the ordinary return edge. ",
-                    "Writes globals and [bp-12h]; all GP inputs and unknown memory/clobber/",
-                    "control/error effects retained. Library SHA256 ",
-                    "59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
-                )
-                .to_owned(),
-                ..worst("B$EXTS")
-            },
-        );
-
-        variants.insert(
-            ("B$FEVS", "vbdos"),
-            Contract {
-                inputs: Some(BTreeSet::from([
-                    Reg::Ax,
-                    Reg::Bx,
-                    Reg::Cx,
-                    Reg::Dx,
-                    Reg::Si,
-                    Reg::Di,
-                ])),
-                evidence: concat!(
-                    "VBDCL10E osstmt.asm 01c9: establishes BP, saves SI/DI/DS, then calls ",
-                    "B$RefStringArgLast (farstr/strutil.asm 0010). That helper loads ",
-                    "[bp+6], then OR AX,AX at 0016 overwrites incoming arithmetic flags ",
-                    "before any flag use or further call. All GP inputs and unknown ",
-                    "memory/clobber/control/error effects retained. Cleanup remains unknown ",
-                    "because the transitive dependency audit is incomplete. Library SHA256 ",
-                    "59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
-                )
-                .to_owned(),
-                ..worst("B$FEVS")
-            },
-        );
-
-        variants.insert(
-            ("B$CHOU", "vbdos"),
-            Contract {
-                inputs: Some(BTreeSet::from([
-                    Reg::Ax,
-                    Reg::Bx,
-                    Reg::Cx,
-                    Reg::Dx,
-                    Reg::Si,
-                    Reg::Di,
-                ])),
-                cleanup: Some(2),
-                evidence: concat!(
-                    "VBDCL10E.LIB pr0a.asm 0055: PUSH BP / MOV BP,SP; reads channel at [bp+6], ",
-                    "calls B$ChkFNUM and B$SetFNum, POP BP / RETF 2 at 0061..0064. ",
-                    "All GP inputs and unknown clobber/memory/control/error effects retained; ",
-                    "only the normal-return argument cleanup is established. Library SHA256 ",
-                    "59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
-                )
-                .to_owned(),
-                ..worst("B$CHOU")
-            },
-        );
-
-        for (_name, _cleanup, _evidence) in [
-            (
-                "B$CSCN",
-                None,
-                concat!(
-                    "VBDCL10E gwscreen.asm 0000 calls ScSetup (locate.asm 001c): ",
-                    "POP BX saves the near return, then BP/ES/SI are saved; SHL AX,1 ",
-                    "at 0027 kills incoming arithmetic flags. ScCleanUpParms 000f ",
-                    "restores these saves, pops the far return and count, and advances ",
-                    "SP by twice the count before RETF. Cleanup is variable, not zero. ",
-                    "SCRSTT calls indirect screen handlers; display, alias and error ",
-                    "effects remain unknown."
-                ),
-            ),
-            (
-                "B$WIDT",
-                Some(4),
-                concat!(
-                    "VBDCL10E ioscrn.asm 002b establishes BP and calls EnsureFI, whose ",
-                    "CMP at gwini.asm 0000 kills incoming arithmetic flags. Arguments ",
-                    "at BP+8/+6 feed SWIDTH; normal exit POP BP / RETF 4 at 006d. ",
-                    "Invalid width tails ERR_FC; BIOS/display and error effects unknown."
-                ),
-            ),
-            (
-                "B$SLEP",
-                Some(4),
-                concat!(
-                    "VBDCL10E evtkey.asm 00b3 establishes BP; local 0157 CMP kills ",
-                    "incoming flags. SetKybdInt saves/restores DS/DX/AX/BX/ES across ",
-                    "BIOS/DOS interrupts and RETF at llcevt.asm 005b. SetClockInt ",
-                    "restores its saves and RET at llaevt.asm 00c4. SleepInit 0101 ",
-                    "calls stack-balanced tick conversion 00c9..0100. Event wait ",
-                    "joins POP BP / RETF 4 at 00e6; interrupt/control effects unknown."
-                ),
-            ),
-            (
-                "B$TIMR",
-                Some(0),
-                concat!(
-                    "VBDCL10E ostimer.asm 0000 saves BP/SI, obtains DOS time via INT 21h ",
-                    "and MUL CH at 000a kills incoming arithmetic flags. Both relocated ",
-                    "integer-to-float calls target member 299 entry 0000: PUSH BX / ",
-                    "FILD word [BX] / POP BX / RET. Local arithmetic helper 0043..0063 ",
-                    "balances DX/AX saves. POP SI/BP / RETF at 0040 returns a pointer ",
-                    "to the stored float in AX; time, memory, x87 and errors remain unknown."
-                ),
-            ),
-            (
-                "B$FRI2",
-                Some(2),
-                concat!(
-                    "VBDCL10E stfree.asm 004d saves BP/SI; XOR CX,CX at 0053 kills ",
-                    "incoming flags. FRE selectors join POP SI/BP / RETF 2 at 00b0. ",
-                    "FHCompact/FHByteSize return near; CbCompactHeap (lmem segment 5 ",
-                    "0066..00aa) and GAFC (getactiv 0000..0097) consume their two ",
-                    "internal argument words with RETF 4. Alternate entries 009d/009e ",
-                    "are INC BX, not extra pushes. Heap compaction, aliases and errors ",
-                    "remain unknown; no register preservation inferred."
-                ),
-            ),
-            (
-                "B$STI4",
-                Some(4),
-                concat!(
-                    "VBDCL10E farstr/string.asm 000f reads the long at BP+6 through ",
-                    "STR_COMMON 001e. FOUTBX (ifout.asm 0000) kills incoming flags ",
-                    "with CMP at 0003; integer path returns near at 0050. Common ",
-                    "copy via StrAlcTmpCopy (strutil.asm 01f5..0209) balances its ",
-                    "local saves; public POP BP / RETF 4 at 001a. Formatting, heap ",
-                    "allocation, aliases and errors remain unknown."
-                ),
-            ),
-            (
-                "B$FMKI",
-                Some(2),
-                concat!(
-                    "rt/strnum.asm 005e..0070: SI addresses the word argument at BP+6, ",
-                    "CX=2; StrAlcTmpCopy at strutil.asm 01f5 calls AlcTmpSH, whose CMP ",
-                    "at 0103 overwrites incoming arithmetic flags before dependencies. ",
-                    "Copy returns near; POP SI/BP / RETF 2. Allocation, aliases and errors ",
-                    "remain unknown; no register preservation inferred from local saves."
-                ),
-            ),
-            (
-                "B$FMKL",
-                Some(4),
-                concat!(
-                    "rt/strnum.asm 0073..0085: SI addresses the dword argument at BP+6, ",
-                    "CX=4; StrAlcTmpCopy -> AlcTmpSH overwrites incoming arithmetic flags ",
-                    "at strutil.asm 0103. Near copy return followed by POP SI/BP / RETF 4. ",
-                    "Heap writes, aliases, errors and register clobbers remain unknown."
-                ),
-            ),
-            (
-                "B$FCVI",
-                Some(2),
-                concat!(
-                    "rt/strnum.asm 0024..0041: XOR CH,CH at 0029 replaces incoming ",
-                    "arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. ",
-                    "Helper reads the string through RefString, checks length, copies two ",
-                    "bytes and calls DelTempSH, or tails ERR_FC. Normal POP DI/BP / RETF 2; ",
-                    "temporary deletion, memory writes and errors remain unknown."
-                ),
-            ),
-            (
-                "B$FCVS",
-                Some(2),
-                concat!(
-                    "rt/strnum.asm 0044..005b: XOR CH,CH at 0049 replaces incoming ",
-                    "arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. ",
-                    "Shared conversion helper checks length and copies four bytes, with ",
-                    "RefString and DelTempSH dependencies or ERR_FC. POP DI/BP / RETF 2; ",
-                    "no purity, preservation or error-path guarantee."
-                ),
-            ),
-            (
-                "B$RGHT",
-                Some(4),
-                concat!(
-                    "farstr/strfcn.asm 00c9: RefString first overwrites incoming arithmetic ",
-                    "flags. Reads count at BP+6, computes start from length, then joins ",
-                    "LEFT at 00e9 or 00eb. Substring wrapper 0113 consumes two internal ",
-                    "words with RET 4; shared normal exit is POP BP / RETF 4 at 00f2. ",
-                    "Allocation, temporary deletion and errors remain unknown."
-                ),
-            ),
-            (
-                "B$RTRM",
-                Some(2),
-                concat!(
-                    "farstr/strfcn.asm 0215..0253: RefStringArgLast overwrites arithmetic ",
-                    "flags before branching; reverse space scan uses STD then CLD. Substring ",
-                    "helper 011d returns near; normal exit POP DI/BP / RETF 2. Allocation, ",
-                    "temporary deletion, aliases and errors remain unknown."
-                ),
-            ),
-            (
-                "B$LCAS",
-                Some(2),
-                concat!(
-                    "VBDCL10E farstr/strfcn.asm 01e8..0213: descriptor at BP+6 via ",
-                    "RefStringArgLast; RefString OR AX,AX at strutil.asm 0016 replaces ",
-                    "incoming arithmetic flags. Empty path pops saved DX and joins 0208; ",
-                    "nonempty path copies/allocates through helper 0000 and converts bytes. ",
-                    "The indirect CALL BX is fixed by the 01e9 relocation to B$ToLower ",
-                    "(gwini.asm 00a7..00e0, RETF), balanced by PUSH CS / near CALL. ",
-                    "Both normal paths restore DS/DI/SI/BP then RETF 2 at 020c. ",
-                    "Allocation, aliases, register preservation and error effects remain unknown."
-                ),
-            ),
-            (
-                "B$LNIN",
-                Some(10),
-                concat!(
-                    "rt/lininp.asm 0000..006e: initial CMP at 0004 overwrites arithmetic ",
-                    "flags before terminal/disk dispatch. Both normal paths join string ",
-                    "assignment (six internal words, ASSN RETF 12), InpReset, POP SI/BP ",
-                    "and RETF 10. InpReset is a near reset, not PEOS's frame-relocating ",
-                    "epilogue. FillBuf has indirect device calls; input, alias, control and ",
-                    "error effects remain unknown. Cleanup describes only normal return."
-                ),
-            ),
-            (
-                "B$ERS1",
-                Some(2),
-                concat!(
-                    "rt/recarray.asm 014b..016e reads descriptor [bp+6], XOR CX,CX at ",
-                    "0152 overwrites incoming arithmetic flags. Empty and nonempty paths ",
-                    "join POP SI/BP / RETF 2. Nonempty calls FreePpv with two words ",
-                    "(RETF 4 at lmove.asm 01da), then stack-neutral DeLink at 0075..008f. ",
-                    "FreePpv -> FreeHandle mutates heap state; no alias/preservation claim."
-                ),
-            ),
-            (
-                "B$SCMP",
-                Some(4),
-                concat!(
-                    "farstr/stcore.asm 0280..02b8 reads two descriptors; first RefString ",
-                    "dependency replaces incoming arithmetic flags (strutil.asm 0016 OR AX,AX). ",
-                    "RefStringArgLast is the same reader with [bp+6]. DelStrTemp calls ",
-                    "DelString -> FreeDataPpv for temporaries; near returns are stack neutral. ",
-                    "Comparison saves/reinstates its flags around deletion, then restores ",
-                    "DS/DI/SI/BP and RETF 4. Heap effects and all clobbers remain conservative."
-                ),
-            ),
-            (
-                "B$SCPF",
-                Some(2),
-                concat!(
-                    "farstr/string.asm 01aa..01c0 calls SCPY (0164, RETF 2) then STDL ",
-                    "(0171, RETF 2), each with one internal argument; POP AX/BP / RETF 2 ",
-                    "returns to caller. SCPY -> StrAlcTmpCopySH -> RefString overwrites ",
-                    "incoming flags before conditional work; STDL -> DelString -> FreeDataPpv. ",
-                    "Allocation/freeing and errors remain unknown, not a pure copy."
-                ),
-            ),
-            (
-                "B$FMID",
-                Some(6),
-                concat!(
-                    "farstr/strfcn.asm 00f6..0112 reads descriptor/start/count at [bp+0a/08/06]. ",
-                    "First dependency RefString (strutil.asm 0013) overwrites incoming flags ",
-                    "with OR AX,AX at 0016 before branching; it has no dependencies or stack ",
-                    "adjustments and returns near. The substring wrapper 0113..011c consumes ",
-                    "two internal words with RET 4; public normal return is POP BP / RETF 6. ",
-                    "Invalid ranges tail ERR_FC and allocation/freeing remain unknown effects; ",
-                    "no purity, preservation or error-path guarantee."
-                ),
-            ),
-            (
-                "B$FLEN",
-                Some(2),
-                concat!(
-                    "farstr/stcore.asm 02b9 reads a far-string descriptor at [bp+6]; OR AX,AX ",
-                    "at 02c1 kills incoming arithmetic flags before any branch/dependency. ",
-                    "Empty and nonempty paths join POP BP / RETF 2 at 02f6..02f9. ",
-                    "Temporary strings call FreeDataPpv with two words (RETF 4 at 01da), ",
-                    "which calls FreeHandle (RET at 010c). Freeing may mutate aliased heap ",
-                    "state; no memory or register preservation is claimed."
-                ),
-            ),
-            (
-                "B$RDIM",
-                None,
-                concat!(
-                    "erase.asm 0000 establishes BP and reads descriptor [bp+6]; OR BL,BL ",
-                    "at 0009 kills incoming flags before branches or dependencies. All GP ",
-                    "inputs retained. DIM_COMMON consumes rank-dependent stack arguments, ",
-                    "so cleanup stays unknown unless separately proven at the call site."
-                ),
-            ),
-            (
-                "B$FEOF",
-                Some(2),
-                concat!(
-                    "dvstmt.asm 0073 reads file word [bp+6]; OR BX,BX kills incoming flags. ",
-                    "File and DOS console paths join POP BP / RETF 2 at 0097..009a; ",
-                    "invalid console mode tails ERR_IFN. DOS/device/error effects remain unknown."
-                ),
-            ),
-            (
-                "B$CLOS",
-                None,
-                concat!(
-                    "dvcore.asm 01b4 reads a stack count and file words; JCXZ selects CLOSF ",
-                    "or LocateFDB. CLOSF's CMP at 019f and LocateFDB's XOR SI,SI at 00e6 ",
-                    "kill incoming flags before dependencies. Return restores SP from the advanced ",
-                    "argument cursor at 01e3, so cleanup stays unknown, not zero."
-                ),
-            ),
-            (
-                "B$OPEN",
-                Some(8),
-                concat!(
-                    "dkutil.asm 00c0..00f4 reads four stack words, calls DOS3CHECK and OPENIT, ",
-                    "and restores BP then RETF 8 at 00f1. Other branches tail ERR_AFE or ERR_IFN; ",
-                    "device, allocation and error effects are not established."
-                ),
-            ),
-            (
-                "B$DSKI",
-                Some(2),
-                concat!(
-                    "inpdsk.asm 0016..0060 reads [bp+6], calls ChkFNUM/LocateFDB/EnsureFI, ",
-                    "sets input state, restores SI/BP and RETF 2 at 005e. Other branches tail ",
-                    "ERR_IFN, ERR_RPE or ERR_BFM; no device or error-path guarantees."
-                ),
-            ),
-            (
-                "B$FDR1",
-                None,
-                concat!(
-                    "VBDCL10E rt/dkdir.asm 0003 sets search mode, establishes BP, and ",
-                    "sets DOS DTA (AH=1Ah, DS:DX); TEST at 0014 replaces arithmetic flags ",
-                    "before search dispatch. RefStringArgLast reads BP+6; GET_PATHNAME, ",
-                    "DelTempSH, DOS find-first/find-next, GetZStrLen and StrAlcTmpCopy ",
-                    "perform path, directory and heap work. Shared exit restores DI/SI/BP ",
-                    "then mode-selects RETF or RETF 2 (007e/007f); cleanup remains unknown ",
-                    "rather than assuming the shared mode survives every dependency. ",
-                    "All GP inputs retained; memory, aliases, control and errors unknown."
-                ),
-            ),
-            (
-                "B$FREF",
-                Some(0),
-                concat!(
-                    "dvstmt.asm 0031..0051 walks B$NextFDB, restores SI/BP and RETF. ",
-                    "NextFDB saves AX/BX/CX/DX and calls PpvWalkHeap with two words; ",
-                    "lwalk.asm PpvWalkHeap returns RETF 4 at 0039. No caller arguments."
-                ),
-            ),
-        ] {
-            variants.insert(
-            (_name, "vbdos"),
-            Contract {
-                inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-                cleanup: _cleanup,
-                evidence: "VBDCL10E.LIB: ".to_owned()
-                    + _evidence
-                    + concat!(
-                        " All GP inputs and unknown effects retained; cleanup only where stated. ",
-                        "SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
-                    ),
-                ..worst(_name)
-            },
-        );
-        }
-
-        // Emission-facing interfaces for QB45 routines newly reached by the demo
-        // corpus. These deliberately do not turn into complete contracts: each call
-        // keeps worst-case memory, clobber, control and error effects. The sole claim
-        // needed here is that allocation may reproduce BC's incoming GP state; stack
-        // cleanup is recorded where the runtime's own epilogue makes it fixed.
-        for (_name, _cleanup, _evidence) in [
-            (
-                "B$TIMR",
-                Some(0),
-                concat!(
-                    "rt/ostimer.asm B$TIMR declares no parameters. CALLOS GETTIM supplies ",
-                    "CH/CL/DH/DL, and MUL CH overwrites arithmetic flags before any ",
-                    "conditional use. BCOM45.LIB member 170, offset 0000 ends POP ES/SI/BP ",
-                    "/ RETF at 0041..0044. It consumes no caller argument."
-                ),
-            ),
-            (
-                "B$CSCN",
-                None,
-                concat!(
-                    "rt/gwscreen.asm takes a count-led parameter block entirely on the ",
-                    "stack. B$ScSetup in rt/gwscr.asm pops its near continuation, establishes ",
-                    "BP, reads the count at BP+6, and SHL AX,1 overwrites incoming arithmetic ",
-                    "flags before dispatch. B$ScCleanUpParms removes twice the runtime count; ",
-                    "cleanup is variable rather than zero."
-                ),
-            ),
-            (
-                "B$BLOD",
-                Some(6),
-                concat!(
-                    "rt/bload.asm declares three ParmW stack arguments. Entry establishes BP, ",
-                    "sets AX, loads DX from BP+0Ah and initializes runtime globals before its ",
-                    "first dependency; subsequent branches consume values or flags produced ",
-                    "inside the routine. BCOM45.LIB member 31, offset 0058 ends POP BP / RETF ",
-                    "6 at 009e..009f."
-                ),
-            ),
-            (
-                "B$SCLS",
-                Some(2),
-                concat!(
-                    "rt/gwscr.asm `cProc B$SCLS,<PUBLIC,FAR>` with one `parmW ScnNum`; ",
-                    "`MOV BX,ScnNum` / `INC BX` sets flags before any branch. cEnd is RETF 2. ",
-                    "Out-of-range parameters tail B$ERR_FC."
-                ),
-            ),
-            (
-                "B$INKY",
-                Some(0),
-                concat!(
-                    "rt/stinkey.asm `cProc B$INKY,<FAR,PUBLIC,FORCEFRAME>`, `sd * pascal ",
-                    "B$INKY(void)`: no parameters, descriptor returned in AX. TEST b$IOFLAG ",
-                    "sets flags before any branch. cEnd is RETF; redirected end of input ",
-                    "jumps to B$END instead."
-                ),
-            ),
-            (
-                "B$SCMP",
-                Some(4),
-                concat!(
-                    "rt/stcore.asm `XOR DX,DX` falls into `cProc SCMP,<FAR>,<ES,SI,DI>` with ",
-                    "`parmW psdL` and `parmW psdR`, so RETF 4. The result is the flags of ",
-                    "the comparison, saved across B$STDALCTMP by PUSHF/POPF."
-                ),
-            ),
-            (
-                "B$BSAV",
-                Some(6),
-                concat!(
-                    "rt/bload.asm `cProc B$BSAV,<PUBLIC,FAR>` with three ParmW (pFileName, ",
-                    "Offs, Len), so cEnd is RETF 6. The first instruction writes b$Buf3 ",
-                    "and reads no register; it reads [b$seg]. Disk full tails B$ERR_DFL."
-                ),
-            ),
-            (
-                "B$POW4",
-                Some(0),
-                concat!(
-                    "BCOM45.LIB 87btran.asm 0000: `mov dx,<selector>` / `mov byte [..],0` / ",
-                    "`jmp` into 87bdisp.asm __ctrand2, whose exit at 0028 is a bare RETF: ",
-                    "the operands are on the x87 stack and nothing is on the 8086 stack. ",
-                    "The transcendental dispatch __trandisp2 is `jmp word [bx]`, and ",
-                    "__FF_intrin_err reaches B$RUNERR."
-                ),
-            ),
-        ] {
-            variants.insert(
-                (_name, "qb45"),
-                Contract {
-                    inputs: Some(BTreeSet::from([
-                        Reg::Ax,
-                        Reg::Bx,
-                        Reg::Cx,
-                        Reg::Dx,
-                        Reg::Si,
-                        Reg::Di,
-                    ])),
-                    cleanup: _cleanup,
-                    evidence: concat!(
-                        "QuickBASIC 4.5 runtime source and BCOM45.LIB SHA256 ",
-                        "5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996: "
-                    )
-                    .to_owned()
-                        + _evidence
-                        + concat!(
-                            " All six allocatable GP inputs are retained conservatively; BP/SP, ",
-                            "segments and direction are runtime environment. Unknown memory, ",
-                            "clobber, control and error effects remain unchanged."
-                        ),
-                    ..worst(_name)
-                },
-            );
-        }
-
-        for (_family, _evidence) in [
-            (
-                "qb45",
-                concat!(
-                    "BCOM45.LIB SHA256 5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996, ",
-                    "module of B$SCPY/B$STDL, 0141..0157: PUSH BP / MOV BP,SP, pushes [bp+6] and ",
-                    "calls B$SCPY far, pushes AX and [bp+6] and calls B$STDL far, POP AX/BP / RETF 2."
-                ),
-            ),
-            (
-                "pds71",
-                concat!(
-                    "BCL71ENR.LIB SHA256 873fde67aa6fcf27961ec76d9f57ea8a621f6d16ea064da3312aa8d9e3a8c117, ",
-                    "module of B$SCPY/B$STDL, 0023..0039: the same sequence, POP AX/BP / RETF 2."
-                ),
-            ),
-        ] {
-            variants.insert(
-                ("B$SCPF", _family),
-                Contract {
-                    inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-                    cleanup: Some(2),
-                    evidence: _evidence.to_owned()
-                        + concat!(
-                            " A STRING FUNCTION's result: the descriptor copied to a temporary ",
-                            "and the original released. Allocation, freeing and errors remain unknown."
-                        ),
-                    ..worst("B$SCPF")
-                },
-            );
-        }
-
-        // Read in their source above, and none reaches the program's code: B$SCLS's
-        // one indirect call is the runtime's own viewport vector, B$INKY's other exit
-        // is B$END, and B$POW4's is B$RUNERR, which `raises_error` already says.
-        for _name in ["B$SCLS", "B$INKY", "B$SCMP", "B$BSAV", "B$POW4"] {
-            let one = variants[&(_name, "qb45")].clone();
-            variants.insert(
-                (_name, "qb45"),
-                Contract {
-                    enters_user_code: false,
-                    ..one
-                },
-            );
-        }
-
-        for (_name, _cleanup) in [
-            ("B$PCR4", 4),
-            ("B$PSR4", 4),
-            ("B$PCR8", 8),
-            ("B$PSR8", 8),
-        ] {
-            variants.insert(
-            (_name, "vbdos"),
-            Contract {
-                inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-                cleanup: Some(_cleanup),
-                evidence: concat!(
-                    "rt/prnvalfp.asm: scalar argument pushed by value; entry sets ",
-                    "AL=VT_R4 (4) or VT_R8 (8), AH=terminator, then tails B$PRINT. ",
-                    "VBDCL10E.LIB prnvalfp.asm entries 0000/0006/0012/0018/001e ",
-                    "match; prnval.asm 003d saves the type and 0087 reloads it. ",
-                    "Normal exits select RETF 4 at 009a or RETF 8 at 0094. ",
-                    "Source PRINTX documents the same argument-width cleanup. ",
-                    "Device dispatch and error effects remain unknown; all GP inputs retained. ",
-                    "Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
-                )
-                .to_owned(),
-                ..worst(_name)
-            },
-        );
-        }
-
-        variants.insert(
-        ("B$EXSA", "vbdos"),
-        Contract {
-            inputs: Some(BTreeSet::from([Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-            direct_inputs: Some(BTreeSet::from([Reg::Ax, Reg::Dx])),
-            cleanup: Some(0),
-            evidence: concat!(
-                "VBDCL10E.LIB rtenexit.asm, seg 1:0x68: CMP [bp-12h],0 kills incoming arithmetic flags. ",
-                "Bound inputs by all six allocatable GP registers, not by incomplete helper summaries. ",
-                "The normal exit saves/restores DX:AX, restores the frame at 0x8e..0x97, then jumps ",
-                "through the return address popped at 0x6e/0x72; it removes no caller arguments. ",
-                "BP/SP and segments are the fixed runtime environment. Indirect/error/helper effects ",
-                "remain unknown: no clobber, memory or control guarantee is relaxed."
-            )
-            .to_owned(),
-            ..worst("B$EXSA")
-        },
-    );
-
-        // B$EXSA under PDS 7.1, bounded from the linked image at 0x1d6c. Its
-        // returning path -- `pop word [422h]`/`[424h]`, `lea sp,[bp-6]`, four pops,
-        // `jmp far [422h]` -- reads no register and removes no caller argument, so
-        // cleanup is 0. Its other path is error dispatch, and there the survivors
-        // are what is declared here rather than what is read: bx is fully written
-        // (`mov bl,13h` at 0x19da, `xor bh,bh` at 0x1a63) and ax by the entry
-        // table, but cx survives the arm that skips `mov cx,[41Ch]`, and dx, si and
-        // di are never written on any path before `jmp cx` at 0x1a79 or the `retf`
-        // at 0x1b10. A superset, which costs a copy where it is wrong and cannot
-        // be unsound; the control semantics past that indirect jump stay unknown,
-        // which is what the conservative fields still say.
-        variants.insert(
-        ("B$EXSA", "pds71"),
-        Contract {
-            inputs: Some(BTreeSet::from([Reg::Ax, Reg::Cx, Reg::Dx, Reg::Si, Reg::Di])),
-            direct_inputs: Some(BTreeSet::from([Reg::Ax, Reg::Dx])),
-            cleanup: Some(0),
-            evidence: concat!(
-                "disassembled from the linked image at 0x1d6c: the returning path reads no register ",
-                "and removes no argument; on the error path ax and bx are written before every ",
-                "terminal, and cx, dx, si and di are not. The normal return continuation ",
-                "exports dx:ax to the BASIC caller, so both halves are live at this boundary."
-            )
-            .to_owned(),
-            ..worst("B$EXSA")
-        },
-    );
-
-        // QuickBASIC 4.5's, at 0x20f2: no register read on any reachable path, one
-        // exit, no unresolved edge.
-        variants.insert(
-            ("B$EXSA", "qb45"),
-            Contract {
-                inputs: Some(BTreeSet::from([Reg::Ax, Reg::Dx])),
-                direct_inputs: Some(BTreeSet::from([Reg::Ax, Reg::Dx])),
-                cleanup: Some(0),
-                enters_user_code: false,
-                evidence: concat!(
-                    "disassembled from the linked image at 0x20f2: no register read, one exit; ",
-                    "the normal return continuation exports dx:ax to the BASIC caller"
-                )
-                .to_owned(),
-                ..worst("B$EXSA")
-            },
-        );
-
-        for _family in ["qb45", "pds71", "vbdos"] {
-            for _name in ["B$HARY", "B$LINA"] {
-                variants.insert((_name, _family), CONTRACTS[_name].clone());
-            }
-        }
-
-        for (_family, _library, _offset) in [
-            ("pds71", "BCL71ENR.LIB", "0103"),
-            ("vbdos", "VBDCL10E.LIB", "0127"),
-        ] {
-            variants.insert(
-                ("B$EVK1", _family),
-                Contract {
-                    name: "B$EVK1".to_owned(),
-                    evidence: format!(
-                        "{_library} evtcore.asm PUBDEF: B$EVK1 and B$EVCK both name \
-                     segment 1 offset {_offset}; exact entry aliases in this runtime family. \
-                     Library hashes and scope: docs/optimizations/event-entry-blocker.md. "
-                    ) + &CONTRACTS["B$EVCK"].evidence,
-                    ..CONTRACTS["B$EVCK"].clone()
-                },
-            );
-        }
-
-        // VBDOS's strings are far: B$RefString and B$AlcTmpSH load ES with the
-        // string's segment, and none of these restores it. Otherwise their
-        // VBDCL10E.LIB code has the table's effects, and LMEM's B$FResizePpv,
-        // B$FReallocPpv and B$FreeDataPpv save SI, DI and DS.
-        for (_name, _evidence) in [
-            ("B$SPAC", "strfcn.asm 0182..01a3: PUSH DI around B$AlcTmpSH, which returns the data in ES:DI, then REP STOSB; RETF 2."),
-            ("B$FCHR", "stcore.asm 0264..0280: PUSH DI, B$AlcTmpSH before the range check, the byte stored through ES:DI; RETF 2."),
-            ("B$FASC", "strfcn.asm 004e..0063: B$RefStringArgLast, a byte read through ES:BX, B$DelTempSH; RETF 2."),
-            ("B$LEFT", "strfcn.asm 00dd..00f6: B$RefString, then helper 0113..0181, which saves DI, SI and DS around B$AlcTmpSH or reuse of the top temp; RETF 4."),
-            ("B$LTRM", "strfcn.asm 0232..0254: PUSH DI, B$RefStringArgLast, REPE SCASB through ES:DI, helper 011d; RETF 2."),
-            ("B$SCAT", "stcore.asm 0117..01b1: PUSH SI/DI/DS, B$RefString on both operands, B$AlcTmpSH or B$ReallocTemp; the shared exit at 0099 pops DS/DI/SI and RETF 4."),
-            ("B$SASS", "stcore.asm 0025..00b2: PUSH SI/DI/DS, B$RefString and B$ReallocHandle, which loads ES; POP DS/DI/SI / RETF 4."),
-        ] {
-            let base = CONTRACTS[_name].clone();
-            let mut clobbers = base.clobbers.clone();
-            clobbers.insert(Reg::Es);
-            variants.insert(
-                (_name, "vbdos"),
-                Contract {
-                    clobbers,
-                    evidence: format!("VBDCL10E.LIB {_evidence} ") + &base.evidence,
-                    ..base
-                },
-            );
-        }
-
-        variants
-    },
-);
+// differ: the table's family subtables. Keyed by the compiler's own name for
+// itself, which module.py reads off COMENT 0x00 -- the family is a fact about
+// the object, and it reaches this map and nothing else.
+pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> = LazyLock::new(|| {
+    RUNTIME
+        .iter()
+        .flat_map(|(name, routine)| routine.families.iter().map(move |(family, one)| ((name.as_str(), *family), one.clone())))
+        .collect()
+});
 
 /// A call into the program's own code, by name.
 ///
@@ -1504,54 +418,21 @@ pub fn own(name: &str) -> Contract {
     }
 }
 
-/// Python mutates the module-level `VARIANTS`; this is handed the map
-/// being built.
-fn _entry(variants: &mut IndexMap<(&'static str, &'static str), Contract>, family: &'static str) {
-    variants.insert(
-        ("B$ENRA", family),
-        Contract {
-            inputs: Some(BTreeSet::from([Reg::Cx])),
-            cleanup: Some(0),
-            enters_user_code: false,
-            evidence: concat!(
-                "disassembled from the linked image: `push cx` then `sub sp,cx` before any write, ",
-                "no unresolved edge from entry to the far jump that returns"
-            )
-            .to_owned(),
-            ..worst("B$ENRA")
-        },
-    );
-}
-
 // Which routines write a runtime cell a program names by EXTDEF, where the
-// runtime source settles it. A call to anything else leaves the cell alone,
-// unless it runs the program's own code -- which `enters_user_code` and an
-// error handler say, and the caller asks.
-//
-// b$seg, QuickBASIC 4.5: rt/rtinit.asm writes it three times and nothing else
-// does. B$DSG0 `MOV [b$seg],DS` and B$DSEG `MOV [b$seg],AX`; B$RTCLR
-// `MOV b$seg,DS`, reached through b$clr_disp from clear.asm's B$SCLR (whose
-// CLR_RUN B$RUNL and B$StackReset jump to) and through b$run_disp's
-// B$RTRUNINI from B$IINIT, B$Init and B$RUNINI. abs.asm, peek.asm and
-// bload.asm only read it, and no reference takes its address. ABSOLUTE runs
-// machine code of the program's choosing.
-pub static WRITERS: LazyLock<IndexMap<(&'static str, &'static str), BTreeSet<&'static str>>> =
-    LazyLock::new(|| {
-        IndexMap::from_iter([(
-            ("b$seg", "qb45"),
-            BTreeSet::from([
-                "B$DSEG",
-                "B$DSG0",
-                "B$SCLR",
-                "B$RUNL",
-                "B$StackReset",
-                "B$Init",
-                "B$IINIT",
-                "B$RUNINI",
-                "ABSOLUTE",
-            ]),
-        )])
-    });
+// runtime source settles it: the table's `writes_cells`. A call to anything
+// else leaves the cell alone, unless it runs the program's own code -- which
+// `enters_user_code` and an error handler say, and the caller asks.
+pub static WRITERS: LazyLock<IndexMap<(&'static str, &'static str), BTreeSet<&'static str>>> = LazyLock::new(|| {
+    let mut writers: IndexMap<(&'static str, &'static str), BTreeSet<&'static str>> = IndexMap::default();
+    for (name, routine) in RUNTIME.iter() {
+        for (family, cells) in &routine.writes_cells {
+            for cell in cells {
+                writers.entry((cell.as_str(), *family)).or_default().insert(name.as_str());
+            }
+        }
+    }
+    writers
+});
 
 /// Whether `name` is a runtime cell only a reference naming it reaches: one
 /// `WRITERS` lists, whose address no runtime routine hands out.
@@ -1682,155 +563,14 @@ pub fn handles_errors<'a>(routines: impl IntoIterator<Item = &'a Contract>) -> b
     routines.into_iter().any(|routine| routine.error_handling)
 }
 
-// helpi4.asm is the model the four shipped contracts in calls.py and stack.py
-// were read off, and nothing below contradicts them. cProc's parm declarations
-// give the cleanup directly: cEnd emits `ret <parameter bytes>` under the PL/M
-// convention (inc/cmacros.inc), and parmD is 4 bytes, parmW and parmSD 2
-// (inc/string.inc makes parmSD an alias for parmW).
-// All five print entry points in the corpus set ax to a [terminator|value type]
-// pair and fall into B$PRINT, which pops its own arguments in a hand-written
-// epilogue keyed on that type byte (rt/prnval.asm PRINTX): one word for I2 and
-// SD, two for I4. That epilogue also re-pushes the far return address and RETs,
-// so control does come back to the byte after the call.
-static _PRINT_CLOBBERS: LazyLock<BTreeSet<Reg>> = LazyLock::new(|| {
-    EVERY
-        .difference(&BTreeSet::from([Reg::Bp, Reg::Si, Reg::Sp]))
-        .copied()
-        .collect()
-});
-
-/// Bytes consumed by value by prnval.asm's PRINTX path, not a descriptor pointer.
-pub fn numeric_print_argument(name: &str) -> Option<i64> {
-    if !["B$PEI2", "B$PSI2", "B$PEI4", "B$PSI4", "B$PER4"].contains(&name) {
+/// Stack argument bytes whose bits are values rather than caller pointers:
+/// an established cleanup of a routine the table marks `by_value`.
+pub fn numeric_stack_arguments(name: &str) -> Option<i64> {
+    if !facts(name).is_some_and(|routine| routine.by_value) {
         return None;
     }
     let routine = contract(Some(name));
-    if routine.established {
-        routine.cleanup
-    } else {
-        None
-    }
-}
-
-/// Known scalar stack arguments, whose bits are values rather than caller pointers.
-pub fn numeric_stack_arguments(name: &str) -> Option<i64> {
-    if ["B$MUI4", "B$DVI4", "B$RMI4", "B$CPI4"].contains(&name) {
-        let routine = contract(Some(name));
-        return if routine.established && routine.cleanup == Some(8) {
-            Some(8)
-        } else {
-            None
-        };
-    }
-    numeric_print_argument(name)
-}
-
-const _PRINT_EVIDENCE: &str = concat!(
-    "rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls ",
-    "straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before ",
-    "returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file ",
-    "comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's ",
-    "\"Per convention. (DS, ES, SI, DI, BP preserved.)\" for the same routine, and the conservative reading wins. ",
-    "PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 ",
-    "and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using ",
-    "goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], ",
-    "[VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths ",
-    "reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors ",
-    "referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live ",
-    "descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or ",
-    "Disk full error when flush the buffer if a EOL encountered`."
-);
-
-fn _print(name: &str, cleanup: i64) -> Contract {
-    Contract {
-        name: name.to_owned(),
-        // The stub sets ax itself before jumping to B$PRINT, and BC pushes
-        // the value: nothing here is a register the caller has to have set.
-        inputs: Some(BTreeSet::new()),
-        cleanup: Some(cleanup),
-        control: Control::Returns,
-        enters_user_code: false,
-        raises_error: true,
-        error_handling: false,
-        writes: Memory::Own,
-        reads: Memory::Own,
-        clobbers: _PRINT_CLOBBERS.clone(),
-        established: true,
-        evidence: _PRINT_EVIDENCE.to_owned(),
-        documented: None,
-        direct_inputs: None,
-        clobbers_reached: false,
-        caller_cleanup: 0,
-        i386: false,
-        direct_writes: None,
-        flags_result: false,
-        direct_reads: None,
-    }
-}
-
-// Everything here reaches user BASIC, or leaves without coming back, or both.
-// Their details are recorded for the record; barrier() is the field that
-// matters, and it is true for every one of them.
-// The three whose own implementation is not in the local tree. B$ENRA and
-// B$EXSA are named only by the include files, and B$OGTA only by ulib.inc and
-// rtmint.inc -- extent.py's docstring already says so and this does not repeat
-// the reasoning. What is established about them is established from the frame
-// layout and from measurements of BC's output, not from read code, so
-// everything except the fields named in each citation stays at the worst case.
-// The x87 helpers, all six of them one module -- 87bhelp.asm -- and byte for
-// byte the same object in QuickBASIC 4.5's BCOM45.LIB, PDS 7.1's BCL71ENR.LIB
-// and VBDOS 1.0's VBDCL10E.LIB. They are the one group here established from
-// a disassembly rather than from source: runtime/inc/rtmint.inc declares them
-// and nothing in the 148-file runtime tree defines them, because the math
-// library is not in the source drop. tools/libdump.py is what read them out.
-//
-// Every one of them keeps its own frame (push bp / mov bp,sp ... mov sp,bp /
-// pop bp / retf), takes no argument on the 8086 stack -- the operands are in
-// registers or already on the x87 stack -- and touches no memory but its own
-// scratch below sp. So cleanup is 0 and writes is NONE throughout, and what
-// differs between them is only which registers come back changed.
-/// One of READ's per-type entries.
-///
-/// rt/read.asm: `B$RD<type> only sets the type, [b$VTYP], and then jump to
-/// a common routine, CommRead`. Entry is `pDest = far pointer to the
-/// destination for the data`, so four bytes come off; `cbDest` is a fifth
-/// parameter for SD and FS only, and none of those is here.
-///
-/// It writes through pDest and reads the DATA area, and CommRead reaches
-/// B$ReadVal through the [b$GetOneVal] vector -- so Memory.ANY on both
-/// sides rather than the destination alone. `Uses: per convention` names
-/// nothing preserved. It raises: out of DATA, syntax error, overflow.
-fn _read(name: &str) -> Contract {
-    Contract {
-        name: name.to_owned(),
-        // pDest is a parameter, so nothing arrives in a register.
-        inputs: Some(BTreeSet::new()),
-        cleanup: Some(4),
-        control: Control::Returns,
-        enters_user_code: false,
-        raises_error: true,
-        error_handling: false,
-        writes: Memory::Own,
-        reads: Memory::Own,
-        clobbers: EVERY.clone(),
-        established: true,
-        evidence: concat!(
-            "rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the ",
-            "data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then ",
-            "jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the ",
-            "[b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` ",
-            "names no preserved register. Exceptions: out of DATA, syntax error, overflow."
-        )
-        .to_owned(),
-        documented: None,
-        direct_inputs: None,
-        clobbers_reached: false,
-        caller_cleanup: 0,
-        i386: false,
-        direct_writes: None,
-        flags_result: false,
-        direct_reads: None,
-    }
+    if routine.established { routine.cleanup } else { None }
 }
 
 // Where the rows live. Data, not code: every field is a claim about the
@@ -1840,144 +580,564 @@ fn _read(name: &str) -> Contract {
 // rewrite of one.
 pub const TABLE: &str = include_str!("runtime.toml");
 
-/// One entry per runtime name the corpus calls, read from the table.
-///
-/// B$OGTA's control kind comes from blocks.py rather than being restated
-/// in the table, which is why this is not simply the rows handed back.
-pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Contract>, String> {
-    let text = match path {
-        Some(path) => std::fs::read_to_string(path).map_err(|error| error.to_string())?,
-        None => TABLE.to_owned(),
-    };
-    let rows: toml::Table = text
-        .parse()
-        .map_err(|error: toml::de::Error| error.to_string())?;
-    let mut out = IndexMap::default();
-    for (name, row) in &rows {
-        let row = row
-            .as_table()
-            .ok_or_else(|| format!("{} is not a table", pyrepr::string(name)))?;
-        let field = |key: &str| row.get(key).ok_or_else(|| pyrepr::string(key));
-        let integer = |key: &str| {
-            field(key)?
-                .as_integer()
-                .ok_or_else(|| format!("{} is not an int", pyrepr::string(key)))
-        };
-        let boolean = |key: &str| {
-            field(key)?
-                .as_bool()
-                .ok_or_else(|| format!("{} is not a bool", pyrepr::string(key)))
-        };
-        let string = |key: &str| {
-            field(key)?
-                .as_str()
-                .ok_or_else(|| format!("{} is not a str", pyrepr::string(key)))
-        };
-        let regs = |key: &str| -> Result<BTreeSet<Reg>, String> {
-            field(key)?
-                .as_array()
-                .ok_or_else(|| format!("{} is not a list", pyrepr::string(key)))?
-                .iter()
-                .map(|one| {
-                    Reg::from_value(
-                        one.as_str()
-                            .ok_or_else(|| format!("{one} is not a valid Reg"))?,
-                    )
-                })
-                .collect()
-        };
-        let one = Contract {
-            name: name.clone(),
-            cleanup: if integer("cleanup")? < 0 {
-                None
-            } else {
-                Some(integer("cleanup")?)
-            },
-            control: Control::from_value(string("control")?)?,
-            enters_user_code: boolean("enters_user_code")?,
-            raises_error: boolean("raises_error")?,
-            error_handling: boolean("error_handling")?,
-            writes: Memory::from_name(string("writes")?)?,
-            reads: Memory::from_name(string("reads")?)?,
-            clobbers: regs("clobbers")?,
-            established: boolean("established")?,
-            evidence: string("evidence")?.trim().to_owned(),
-            documented: if row.contains_key("documented") {
-                Some(regs("documented")?)
-            } else {
-                None
-            },
-            inputs: if row.contains_key("inputs") {
-                Some(regs("inputs")?)
-            } else {
-                None
-            },
-            direct_inputs: None,
-            clobbers_reached: false,
-            caller_cleanup: 0,
-            i386: false,
-            direct_writes: if row.contains_key("direct_writes") {
-                Some(Memory::from_name(string("direct_writes")?)?)
-            } else {
-                None
-            },
-            flags_result: flags_result(&name),
-            direct_reads: if row.contains_key("direct_reads") {
-                Some(Memory::from_name(string("direct_reads")?)?)
-            } else {
-                None
-            },
-        };
-        out.insert(
-            name.clone(),
-            if INLINE_TABLE.contains(name.as_str()) {
-                Contract {
-                    control: Control::InlineTable,
-                    ..one
-                }
-            } else {
-                one
-            },
-        );
-    }
-    Ok(out)
+/// The runtime families a table may name, by the compiler's own name for itself.
+pub const FAMILIES: [&str; 3] = ["qb45", "pds71", "vbdos"];
+
+/// Everything the table says about one routine.
+#[derive(Clone, Debug, Default)]
+pub struct Routine {
+    /// Its row, where the table states contract fields for it.
+    pub contract: Option<Contract>,
+    /// Each family's own row.
+    pub families: IndexMap<&'static str, Contract>,
+    pub flags_result: bool,
+    pub calls_program: bool,
+    pub never_returns: bool,
+    pub error_funnel: Option<BTreeSet<Reg>>,
+    pub by_value: bool,
+    pub writes_cells: IndexMap<&'static str, Vec<String>>,
+    /// How a typed source call to it is described.
+    pub call: Option<Call>,
+    pub ends_module: bool,
+    pub requires: Option<Requires>,
+    pub statement: Option<Statement>,
+    pub source: Option<Source>,
 }
 
-pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
-    LazyLock::new(|| _contracts(None).expect("runtime.toml loads"));
+/// How a statement passes one source argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pass {
+    Integer,
+    Long,
+    Descriptor,
+}
 
-// Routines that hand control back to the program. What they write is what
-// the code they call writes, which is anything -- GCC's modref gives up on
-// an indirect call for the same reason. B$CENP ends the program, B$EVCK
-// polls for an event and may run an event GOSUB, B$OEGA and B$RESN are the
-// ON ERROR machinery.
-pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
-    LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
+/// One source argument of a statement, in push order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Argument {
+    pub pass: Pass,
+    /// What is pushed when the source leaves it out.
+    pub default: Option<i64>,
+}
 
-/// Whether a runtime entry never comes back to its caller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Arguments {
+    Each(Vec<Argument>),
+    /// A presence word and an INTEGER per source position, then their word count.
+    CountLed,
+}
+
+/// The QB statements that call a routine: the table's `statement`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Statement {
+    pub names: Vec<String>,
+    pub arguments: Arguments,
+    pub arity: Vec<usize>,
+    /// Positions the source may not leave out.
+    pub required: Vec<usize>,
+    pub terminates: bool,
+    pub refuse: String,
+}
+
+impl Statement {
+    fn parse(name: &str, table: &toml::Table) -> Result<Statement, String> {
+        let at = |key: &str| format!("{name}.statement.{key}");
+        let field = |key: &str| table.get(key).ok_or_else(|| format!("{} is missing", at(key)));
+        if let Some(key) = table.keys().find(|key| !["names", "arguments", "arity", "required", "terminates", "refuse"].contains(&key.as_str())) {
+            return Err(format!("{} is not a statement field", at(key)));
+        }
+        let arguments = match field("arguments")? {
+            toml::Value::String(form) if form == "count-led" => Arguments::CountLed,
+            toml::Value::Array(each) => Arguments::Each(
+                each.iter()
+                    .map(|one| {
+                        let one = one.as_table().ok_or_else(|| format!("{} is not a list of tables", at("arguments")))?;
+                        if let Some(key) = one.keys().find(|key| !["pass", "default"].contains(&key.as_str())) {
+                            return Err(format!("{} is not an argument field", at(key)));
+                        }
+                        let pass = match string(one.get("pass").ok_or_else(|| format!("{} is missing", at("pass")))?, &at("pass"))? {
+                            "INTEGER" => Pass::Integer,
+                            "LONG" => Pass::Long,
+                            "descriptor" => Pass::Descriptor,
+                            other => return Err(format!("{}: {other} is not INTEGER, LONG or descriptor", at("pass"))),
+                        };
+                        let default = one.get("default").map(|value| integer(value, &at("default"))).transpose()?;
+                        Ok(Argument { pass, default })
+                    })
+                    .collect::<Result<_, String>>()?,
+            ),
+            _ => return Err(format!("{} is not a list or \"count-led\"", at("arguments"))),
+        };
+        let arity = match (table.get("arity"), &arguments) {
+            (Some(arity), _) => arity
+                .as_array()
+                .ok_or_else(|| format!("{} is not a list", at("arity")))?
+                .iter()
+                .map(|one| usize::try_from(integer(one, &at("arity"))?).map_err(|_| format!("{} is negative", at("arity"))))
+                .collect::<Result<_, String>>()?,
+            (None, Arguments::Each(each)) => vec![each.len()],
+            (None, Arguments::CountLed) => return Err(format!("{} is missing", at("arity"))),
+        };
+        Ok(Statement {
+            names: strings(field("names")?, &at("names"))?,
+            arguments,
+            arity,
+            required: table
+                .get("required")
+                .map(|required| {
+                    required
+                        .as_array()
+                        .ok_or_else(|| format!("{} is not a list", at("required")))?
+                        .iter()
+                        .map(|one| usize::try_from(integer(one, &at("required"))?).map_err(|_| format!("{} is negative", at("required"))))
+                        .collect::<Result<_, String>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            terminates: table.get("terminates").map(|value| boolean(value, &at("terminates"))).transpose()?.unwrap_or(false),
+            refuse: string(field("refuse")?, &at("refuse"))?.to_owned(),
+        })
+    }
+}
+
+/// The source form that picks a routine by its operand: the table's `source`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Source {
+    pub form: String,
+    pub type_: Option<String>,
+    pub mbf: Option<bool>,
+    pub record: Option<bool>,
+    pub family: Option<String>,
+}
+
+impl Source {
+    fn parse(name: &str, table: &toml::Table) -> Result<Source, String> {
+        let at = |key: &str| format!("{name}.source.{key}");
+        if let Some(key) = table.keys().find(|key| !["form", "type", "mbf", "record", "family"].contains(&key.as_str())) {
+            return Err(format!("{} is not a source field", at(key)));
+        }
+        Ok(Source {
+            form: string(table.get("form").ok_or_else(|| format!("{} is missing", at("form")))?, &at("form"))?.to_owned(),
+            type_: table.get("type").map(|value| string(value, &at("type")).map(str::to_owned)).transpose()?,
+            mbf: table.get("mbf").map(|value| boolean(value, &at("mbf"))).transpose()?,
+            record: table.get("record").map(|value| boolean(value, &at("record"))).transpose()?,
+            family: table.get("family").map(|value| string(value, &at("family")).map(str::to_owned)).transpose()?,
+        })
+    }
+
+    fn matches(&self, form: &str, type_: Option<&str>, mbf: bool, record: bool, family: &str) -> bool {
+        self.form == form
+            && self.type_.as_deref().is_none_or(|one| Some(one) == type_)
+            && self.mbf.is_none_or(|one| one == mbf)
+            && self.record.is_none_or(|one| one == record)
+            && self.family.as_deref().is_none_or(|one| one == family)
+    }
+
+    /// How many operand facts the row names.
+    fn specificity(&self) -> usize {
+        [self.type_.is_some(), self.mbf.is_some(), self.record.is_some(), self.family.is_some()].into_iter().filter(|one| *one).count()
+    }
+}
+
+/// A symbol a call makes the object reference, by one argument's constant value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Requires {
+    pub argument: usize,
+    pub values: Vec<(String, Vec<i64>)>,
+    pub none: Vec<i64>,
+    pub otherwise: String,
+}
+
+impl Requires {
+    /// The symbol a call whose argument is `value` requires; None for a non-constant.
+    pub fn symbol(&self, value: Option<i64>) -> Option<&str> {
+        let Some(value) = value else { return Some(&self.otherwise) };
+        if self.none.contains(&value) {
+            return None;
+        }
+        Some(self.values.iter().find(|(_, values)| values.contains(&value)).map_or(&self.otherwise, |(symbol, _)| symbol))
+    }
+
+    fn parse(name: &str, table: &toml::Table) -> Result<Requires, String> {
+        let at = |key: &str| format!("{name}.requires.{key}");
+        let field = |key: &str| table.get(key).ok_or_else(|| format!("{} is missing", at(key)));
+        let integers = |value: &toml::Value, at: &str| -> Result<Vec<i64>, String> {
+            value.as_array().ok_or_else(|| format!("{at} is not a list"))?.iter().map(|one| integer(one, at)).collect()
+        };
+        if let Some(key) = table.keys().find(|key| !["argument", "values", "none", "otherwise"].contains(&key.as_str())) {
+            return Err(format!("{} is not a requires field", at(key)));
+        }
+        Ok(Requires {
+            argument: usize::try_from(integer(field("argument")?, &at("argument"))?).map_err(|_| format!("{} is negative", at("argument")))?,
+            values: field("values")?
+                .as_table()
+                .ok_or_else(|| format!("{} is not a table", at("values")))?
+                .iter()
+                .map(|(symbol, values)| Ok((symbol.clone(), integers(values, &at("values"))?)))
+                .collect::<Result<_, String>>()?,
+            none: match table.get("none") {
+                Some(none) => integers(none, &at("none"))?,
+                None => Vec::new(),
+            },
+            otherwise: string(field("otherwise")?, &at("otherwise"))?.to_owned(),
+        })
+    }
+}
+
+/// The stack bytes a `Call` matches.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pushed {
+    Exactly(i64),
+    Any,
+    EvenFrom(i64),
+}
+
+impl Pushed {
+    fn parse(value: &toml::Value, at: &str) -> Result<Pushed, String> {
+        if let Some(bytes) = value.as_integer() {
+            return Ok(Pushed::Exactly(bytes));
+        }
+        match string(value, at)?.split_whitespace().collect::<Vec<_>>()[..] {
+            ["any"] => Ok(Pushed::Any),
+            ["even", ">=", least] => least.parse().map(Pushed::EvenFrom).map_err(|_| format!("{at}: {least} is not an int")),
+            _ => Err(format!("{at} is not a number, \"any\" or \"even >= N\"")),
+        }
+    }
+
+    pub fn matches(self, pushed: i64) -> bool {
+        match self {
+            Pushed::Exactly(bytes) => pushed == bytes,
+            Pushed::Any => true,
+            Pushed::EvenFrom(least) => pushed >= least && pushed % 2 == 0,
+        }
+    }
+}
+
+/// How a typed source call to a routine is described: the table's `call`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Call {
+    pub pushed: Pushed,
+    pub family: Option<&'static str>,
+    pub label: bool,
+    pub control: Control,
+    pub enters_user_code: bool,
+    pub error_handling: Option<bool>,
+    pub inputs: BTreeSet<Reg>,
+    pub results: Option<Vec<Reg>>,
+    pub evidence: String,
+}
+
+fn call(name: &str, table: &toml::Table, audits: Option<&toml::Table>) -> Result<Call, String> {
+    let at = |key: &str| format!("{name}.call.{key}");
+    let mut one = Call {
+        pushed: Pushed::Any,
+        family: None,
+        label: false,
+        control: Control::Returns,
+        enters_user_code: false,
+        error_handling: None,
+        inputs: BTreeSet::new(),
+        results: None,
+        evidence: String::new(),
+    };
+    if !table.contains_key("pushed") {
+        return Err(format!("{} is missing", at("pushed")));
+    }
+    for (key, value) in table {
+        let at = at(key);
+        match key.as_str() {
+            "pushed" => one.pushed = Pushed::parse(value, &at)?,
+            "family" => one.family = Some(family(string(value, &at)?).ok_or_else(|| format!("{at} is not a family"))?),
+            "label" => one.label = boolean(value, &at)?,
+            "control" => one.control = Control::from_value(string(value, &at)?)?,
+            "enters_user_code" => one.enters_user_code = boolean(value, &at)?,
+            "error_handling" => one.error_handling = Some(boolean(value, &at)?),
+            "inputs" => one.inputs = regs(value, &at)?,
+            "results" => one.results = Some(strings(value, &at)?.iter().map(|one| Reg::from_value(one)).collect::<Result<_, _>>()?),
+            "evidence" => one.evidence = string(value, &at)?.trim().to_owned(),
+            "audit" => {
+                let named = string(value, &at)?;
+                let text = audits.and_then(|audits| audits.get(named)).ok_or_else(|| format!("{at}: no audit {named}"))?;
+                one.evidence = string(text, &at)?.trim().to_owned();
+            }
+            _ => return Err(format!("{at} is not a call field")),
+        }
+    }
+    Ok(one)
+}
+
+/// The table of evidence texts `call` tables share, not a routine.
+const AUDITS: &str = "audits";
+
+const CONTRACT_FIELDS: [&str; 19] = [
+    "from", "cleanup", "control", "enters_user_code", "raises_error", "error_handling", "writes", "reads", "clobbers",
+    "established", "evidence", "documented", "inputs", "direct_inputs", "clobbers_reached", "caller_cleanup", "i386",
+    "direct_writes", "direct_reads",
+];
+
+fn family(key: &str) -> Option<&'static str> {
+    FAMILIES.into_iter().find(|one| *one == key)
+}
+
+fn boolean(value: &toml::Value, at: &str) -> Result<bool, String> {
+    value.as_bool().ok_or_else(|| format!("{at} is not a bool"))
+}
+
+fn integer(value: &toml::Value, at: &str) -> Result<i64, String> {
+    value.as_integer().ok_or_else(|| format!("{at} is not an int"))
+}
+
+fn string<'a>(value: &'a toml::Value, at: &str) -> Result<&'a str, String> {
+    value.as_str().ok_or_else(|| format!("{at} is not a str"))
+}
+
+fn strings(value: &toml::Value, at: &str) -> Result<Vec<String>, String> {
+    value
+        .as_array()
+        .ok_or_else(|| format!("{at} is not a list"))?
+        .iter()
+        .map(|one| string(one, at).map(str::to_owned))
+        .collect()
+}
+
+fn regs(value: &toml::Value, at: &str) -> Result<BTreeSet<Reg>, String> {
+    strings(value, at)?.iter().map(|one| Reg::from_value(one)).collect()
+}
+
+/// `name`'s entry, or else the entry of a `PREFIX*` table it falls under.
+fn lookup<'a>(routines: &'a IndexMap<String, Routine>, name: &str) -> Option<&'a Routine> {
+    routines.get(name).or_else(|| {
+        routines
+            .iter()
+            .find(|(key, _)| key.strip_suffix('*').is_some_and(|stem| name.starts_with(stem)))
+            .map(|(_, routine)| routine)
+    })
+}
+
+/// One row: `worst()` with the fields it states, or with `from`, the row it
+/// names with them. A row named by `from` is `NAME` or `NAME.family`.
+fn row(name: &str, table: &toml::Table, base: bool, tables: &toml::Table, routines: &IndexMap<String, Routine>, depth: usize) -> Result<Contract, String> {
+    let at = |key: &str| format!("{name}.{key}");
+    let mut one = match table.get("from") {
+        None => worst_with(name, lookup(routines, name).is_some_and(|routine| routine.flags_result)),
+        Some(from) => {
+            let from = string(from, &at("from"))?;
+            if depth > FAMILIES.len() + 8 {
+                return Err(format!("{} does not end", at("from")));
+            }
+            let (source, of) = match from.rsplit_once('.') {
+                Some((source, of)) if family(of).is_some() => (source, Some(of)),
+                _ => (from, None),
+            };
+            let named = tables.get(source).and_then(toml::Value::as_table);
+            let named = match of {
+                Some(of) => named.and_then(|table| table.get(of)).and_then(toml::Value::as_table),
+                None => named,
+            };
+            let named = named.ok_or_else(|| format!("{} names no row {from}", at("from")))?;
+            Contract { name: name.to_owned(), ..row(source, named, of.is_none(), tables, routines, depth + 1)? }
+        }
+    };
+    for (key, value) in table {
+        let at = at(key);
+        match key.as_str() {
+            "from" => {}
+            "cleanup" => one.cleanup = Some(integer(value, &at)?).filter(|bytes| *bytes >= 0),
+            "control" => one.control = Control::from_value(string(value, &at)?)?,
+            "enters_user_code" => one.enters_user_code = boolean(value, &at)?,
+            "raises_error" => one.raises_error = boolean(value, &at)?,
+            "error_handling" => one.error_handling = boolean(value, &at)?,
+            "writes" => one.writes = Memory::from_name(string(value, &at)?)?,
+            "reads" => one.reads = Memory::from_name(string(value, &at)?)?,
+            "clobbers" => one.clobbers = regs(value, &at)?,
+            "established" => one.established = boolean(value, &at)?,
+            "evidence" => {
+                let own = string(value, &at)?.trim();
+                one.evidence = if table.contains_key("from") { format!("{own} {}", one.evidence) } else { own.to_owned() };
+            }
+            "documented" => one.documented = Some(regs(value, &at)?),
+            "inputs" => one.inputs = Some(regs(value, &at)?),
+            "direct_inputs" => one.direct_inputs = Some(regs(value, &at)?),
+            "clobbers_reached" => one.clobbers_reached = boolean(value, &at)?,
+            "caller_cleanup" => one.caller_cleanup = integer(value, &at)?,
+            "i386" => one.i386 = boolean(value, &at)?,
+            "direct_writes" => one.direct_writes = Some(Memory::from_name(string(value, &at)?)?),
+            "direct_reads" => one.direct_reads = Some(Memory::from_name(string(value, &at)?)?),
+            _ if base => {}
+            _ => return Err(format!("{at} is not a contract field")),
+        }
+    }
+    Ok(one)
+}
+
+/// Every routine the table describes, by name, in table order.
 ///
-/// The table's NEVER rows, plus the error funnel: rt/erproc.asm's RTEDEF
-/// macro generates every B$ERR_?? entry as `mov bl,number` falling into
-/// B$RUNERR, whose "transfer of control is either handled by environment
-/// specific ON ERROR handler, or we fatal error" -- never the caller.
+/// A table's contract fields make the routine's row, and its family
+/// subtables that family's own; `row` says how each is filled. Anything else
+/// in it is a fact about the routine, and a key that is neither is refused.
+pub fn load(text: &str) -> Result<IndexMap<String, Routine>, String> {
+    let tables: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
+    let audits = match tables.get(AUDITS) {
+        Some(audits) => Some(audits.as_table().ok_or_else(|| format!("{AUDITS} is not a table"))?),
+        None => None,
+    };
+    let mut routines: IndexMap<String, Routine> = IndexMap::default();
+    for (name, table) in tables.iter().filter(|(name, _)| *name != AUDITS) {
+        let table = table.as_table().ok_or_else(|| format!("{} is not a table", pyrepr::string(name)))?;
+        let mut routine = Routine::default();
+        for (key, value) in table {
+            let at = format!("{name}.{key}");
+            match key.as_str() {
+                "flags_result" => routine.flags_result = boolean(value, &at)?,
+                "calls_program" => routine.calls_program = boolean(value, &at)?,
+                "never_returns" => routine.never_returns = boolean(value, &at)?,
+                "error_funnel" => routine.error_funnel = Some(regs(value, &at)?),
+                "by_value" => routine.by_value = boolean(value, &at)?,
+                "ends_module" => routine.ends_module = boolean(value, &at)?,
+                "requires" => routine.requires = Some(Requires::parse(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?)?),
+                "statement" => routine.statement = Some(Statement::parse(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?)?),
+                "source" => routine.source = Some(Source::parse(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?)?),
+                "call" => routine.call = Some(call(name, value.as_table().ok_or_else(|| format!("{at} is not a table"))?, audits)?),
+                "writes_cells" => {
+                    for (of, cells) in value.as_table().ok_or_else(|| format!("{at} is not a table"))? {
+                        let of = family(of).ok_or_else(|| format!("{at}.{of} is not a family"))?;
+                        routine.writes_cells.insert(of, strings(cells, &at)?);
+                    }
+                }
+                key if family(key).is_some() || CONTRACT_FIELDS.contains(&key) => {}
+                _ => return Err(format!("{at} is not a field")),
+            }
+        }
+        routines.insert(name.clone(), routine);
+    }
+    for (name, table) in tables.iter().filter(|(name, _)| *name != AUDITS) {
+        let table = table.as_table().expect("checked above");
+        let contract = if table.keys().any(|key| CONTRACT_FIELDS.contains(&key.as_str())) {
+            Some(row(name, table, true, &tables, &routines, 0)?)
+        } else {
+            None
+        };
+        let mut families = IndexMap::default();
+        for of in FAMILIES {
+            if let Some(one) = table.get(of) {
+                let one = one.as_table().ok_or_else(|| format!("{name}.{of} is not a table"))?;
+                families.insert(of, row(name, one, false, &tables, &routines, 0)?);
+            }
+        }
+        let routine = &mut routines[name.as_str()];
+        routine.contract = contract;
+        routine.families = families;
+    }
+    let mut statements = BTreeSet::new();
+    for (name, routine) in &routines {
+        for statement in routine.statement.iter().flat_map(|statement| &statement.names) {
+            if !statements.insert(statement) {
+                return Err(format!("{name}: statement {statement} is described twice"));
+            }
+        }
+        if let Some(source) = &routine.source {
+            if let Some((other, _)) = routines.iter().find(|(other, one)| *other != name && one.source.as_ref() == Some(source)) {
+                return Err(format!("{name} and {other} have the same source"));
+            }
+        }
+    }
+    Ok(routines)
+}
+
+pub static RUNTIME: LazyLock<IndexMap<String, Routine>> = LazyLock::new(|| load(TABLE).expect("runtime.toml loads"));
+
+/// What the table says about `name`, directly or through a `PREFIX*` table.
+fn facts(name: &str) -> Option<&'static Routine> {
+    lookup(&RUNTIME, name)
+}
+
+/// One entry per runtime name the table gives a row.
+pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> = LazyLock::new(|| {
+    RUNTIME.iter().filter_map(|(name, routine)| Some((name.clone(), routine.contract.clone()?))).collect()
+});
+
+/// The routines that read a table laid inline after their own call site: the
+/// rows whose control says so.
+pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| {
+    CONTRACTS.iter().filter(|(_, routine)| routine.control == Control::InlineTable).map(|(name, _)| name.as_str()).collect()
+});
+
+/// Routines that hand control back to the program: the table's `calls_program`.
+pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
+    LazyLock::new(|| RUNTIME.iter().filter(|(_, routine)| routine.calls_program).map(|(name, _)| name.as_str()).collect());
+
+/// The contract of a typed source call to `routine` removing `pushed` bytes,
+/// where its `call` table matches: its row under `family` refined by it.
+/// `label` is whether the call is the label form of the routine.
+pub fn typed_call(routine: &str, family: &str, pushed: i64, label: bool) -> Option<Contract> {
+    let call = RUNTIME.get(routine)?.call.as_ref()?;
+    if call.label != label || call.family.is_some_and(|only| only != family) || !call.pushed.matches(pushed) {
+        return None;
+    }
+    let found = per_call(&IndexMap::from_iter([(0, routine.to_owned())]), family, &BTreeSet::new()).swap_remove(&0)?;
+    let evidence = call.evidence.replace("{name}", routine).replace("{pushed}", &pushed.to_string()).replace("{evidence}", &found.evidence);
+    Some(Contract {
+        cleanup: Some(pushed),
+        control: call.control,
+        enters_user_code: call.enters_user_code,
+        error_handling: call.error_handling.unwrap_or(found.error_handling),
+        established: true,
+        inputs: Some(call.inputs.clone()),
+        evidence,
+        ..found
+    })
+}
+
+/// The registers a typed source call to `routine` takes and answers in beside
+/// its stack block, where its `call` table names results.
+pub fn call_registers(routine: &str) -> Option<(Vec<Reg>, Vec<Reg>)> {
+    let call = RUNTIME.get(routine)?.call.as_ref()?;
+    let results = call.results.clone()?;
+    Some((SLOTS.into_iter().filter(|one| call.inputs.contains(one)).collect(), results))
+}
+
+/// The routine a BASIC module body's fallthrough calls: the table's `ends_module`.
+pub fn module_end() -> &'static str {
+    RUNTIME.iter().find(|(_, routine)| routine.ends_module).map(|(name, _)| name.as_str()).expect("runtime.toml names the module end")
+}
+
+/// What a call to `routine` makes the object reference, where the table says.
+pub fn requires(routine: &str) -> Option<&'static Requires> {
+    RUNTIME.get(routine)?.requires.as_ref()
+}
+
+/// The routine QB statement `name` calls, and how.
+pub fn statement(name: &str) -> Option<(&'static str, &'static Statement)> {
+    RUNTIME.iter().find_map(|(routine, one)| {
+        let statement = one.statement.as_ref()?;
+        statement.names.iter().any(|one| one == name).then_some((routine.as_str(), statement))
+    })
+}
+
+/// The routine source form `form` calls for an operand of QB type `type_`,
+/// under MBF or IEEE, with or without a record number, in runtime `family`.
+/// The row naming the most of those wins.
+pub fn routine_for(form: &str, type_: Option<&str>, mbf: bool, record: bool, family: &str) -> Option<&'static str> {
+    RUNTIME
+        .iter()
+        .filter_map(|(name, one)| one.source.as_ref().filter(|source| source.matches(form, type_, mbf, record, family)).map(|source| (name.as_str(), source.specificity())))
+        .fold(None, |best: Option<(&str, usize)>, (name, rank)| if best.is_some_and(|(_, top)| top >= rank) { best } else { Some((name, rank)) })
+        .map(|(name, _)| name)
+}
+
+/// Whether a runtime entry never comes back to its caller: an established
+/// NEVER row, or a routine the table says `never_returns`.
 pub fn never_returns(name: &str) -> bool {
     let folded = name.to_uppercase();
     let known = CONTRACTS.get(&folded);
     known.is_some_and(|known| known.established && known.control == Control::Never)
-        || folded == "B$RUNERR"
-        || folded.starts_with("B$ERR_")
+        || facts(&folded).is_some_and(|routine| routine.never_returns)
 }
 
-// rt/erproc.asm, B$RUNERR's Entry: "[BP] = frame pointer ... [BX] = BASIC
-// or internal error number". What follows walks the BP frame chain to an ON
-// ERROR handler or B$FERROR; neither reads a register its caller left.
-pub static ERROR_FUNNEL_INPUTS: LazyLock<IndexMap<&'static str, BTreeSet<Reg>>> =
-    LazyLock::new(|| {
-        IndexMap::from_iter([
-            ("B$RUNERR", BTreeSet::from([Reg::Bx])),
-            ("B$RUNERRINFO", BTreeSet::from([Reg::Bx])),
-        ])
-    });
+/// The registers each error funnel reads: the table's `error_funnel`.
+pub static ERROR_FUNNEL_INPUTS: LazyLock<IndexMap<&'static str, BTreeSet<Reg>>> = LazyLock::new(|| {
+    RUNTIME.iter().filter_map(|(name, routine)| Some((name.as_str(), routine.error_funnel.clone()?))).collect()
+});
 
 /// What this call can do. A name with no entry -- a user SUB or FUNCTION, a
 /// runtime routine nothing in the corpus has called yet, an indirect call with
@@ -2041,8 +1201,7 @@ mod tests {
     /// Python's `_contracts()`, one `name repr` line each, frozensets sorted.
     #[test]
     fn the_contract_table_matches_python() {
-        let mut got: Vec<String> = _contracts(None)
-            .unwrap()
+        let mut got: Vec<String> = CONTRACTS
             .iter()
             .map(|(name, one)| format!("{name} {}", one.repr()))
             .collect();
@@ -2260,16 +1419,6 @@ mod tests {
         for name in names() {
             assert_eq!(CONTRACTS[&CONTRACTS[&name].name], CONTRACTS[&name]);
         }
-    }
-
-    #[test]
-    fn test_the_inline_table_routines_come_from_blocks() {
-        let reflected: BTreeSet<&str> = CONTRACTS
-            .iter()
-            .filter(|(_, routine)| routine.control == Control::InlineTable)
-            .map(|(name, _)| name.as_str())
-            .collect();
-        assert_eq!(reflected, *INLINE_TABLE);
     }
 
     #[test]
@@ -2539,38 +1688,61 @@ mod tests {
     #[test]
     fn test_every_row_in_the_table_is_loaded() {
         let rows: toml::Table = TABLE.parse().unwrap();
-        assert_eq!(
-            rows.keys().collect::<BTreeSet<_>>(),
-            CONTRACTS.keys().collect::<BTreeSet<_>>(),
-            "the table and what loaded disagree"
-        );
-        for name in ["B$HARY", "B$LINA"] {
-            for family in ["qb45", "pds71", "vbdos"] {
-                assert_eq!(VARIANTS[&(name, family)], CONTRACTS[name]);
-            }
-        }
-        for (name, row) in &rows {
-            let one = &CONTRACTS[name];
+        for (name, one) in CONTRACTS.iter() {
+            let row = rows[name].as_table().unwrap();
             assert_eq!(one.writes.name(), row["writes"].as_str().unwrap());
             assert_eq!(one.reads.name(), row["reads"].as_str().unwrap());
             assert_eq!(
-                one.clobbers
-                    .iter()
-                    .map(|r| r.value())
-                    .collect::<BTreeSet<_>>(),
-                row["clobbers"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|r| r.as_str().unwrap())
-                    .collect::<BTreeSet<_>>()
+                one.clobbers.iter().map(|r| r.value()).collect::<BTreeSet<_>>(),
+                row["clobbers"].as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect::<BTreeSet<_>>()
             );
             assert_eq!(one.established, row["established"].as_bool().unwrap());
-            assert_eq!(
-                one.evidence.trim(),
-                row["evidence"].as_str().unwrap().trim()
-            );
+            assert_eq!(one.evidence.trim(), row["evidence"].as_str().unwrap().trim());
         }
+    }
+
+    /// A misspelt field was silently ignored, leaving the worst case where
+    /// the row meant to narrow it.
+    #[test]
+    fn test_the_loader_refuses_a_malformed_row() {
+        for text in [
+            "[\"B$X\"]\nclobers = [\"ax\"]\n",
+            "[\"B$X\"]\nclobbers = [\"zz\"]\n",
+            "[\"B$X\".qb46]\ncleanup = 0\n",
+            "[\"B$X\".qb45]\nby_value = true\n",
+            "[\"B$X\"]\nfrom = \"B$X\"\n",
+            "[\"B$X\"]\nfrom = \"B$Y.vbdos\"\n",
+            "[\"B$X\".call]\npushed = \"odd\"\n",
+            "[\"B$X\".call]\npushed = 2\naudit = \"nowhere\"\n",
+            "[\"B$X\".requires]\nargument = 1\nvalues = {}\n",
+            "[\"B$X\".statement]\nnames = [\"X\"]\narguments = [{ pass = \"SINGLE\" }]\nrefuse = \"no\"\n",
+            "[\"B$X\".statement]\nnames = [\"X\"]\narguments = []\nrefuse = \"no\"\n\n[\"B$Y\".statement]\nnames = [\"X\"]\narguments = []\nrefuse = \"no\"\n",
+        ] {
+            assert!(load(text).is_err(), "{text}");
+        }
+    }
+
+    /// A family's row is worst() with its own fields, not the routine's row
+    /// with them, and only that family's calls get it.
+    #[test]
+    fn test_a_family_row_applies_over_the_worst_case() {
+        let text = "[\"B$X\"]\ncleanup = 2\nestablished = true\ninputs = []\n\n[\"B$X\".vbdos]\ninputs = [\"bx\"]\n\n[\"B$X\".pds71]\nfrom = \"B$X\"\ncleanup = 4\n";
+        let routines = load(text).unwrap();
+        let routine = &routines["B$X"];
+        assert_eq!(routine.families["vbdos"], Contract { inputs: Some(BTreeSet::from([Reg::Bx])), ..worst("B$X") });
+        assert_eq!(routine.families["pds71"], Contract { cleanup: Some(4), ..routine.contract.clone().unwrap() });
+        assert!(!routine.families.contains_key("qb45"));
+    }
+
+    /// QB 4.5 and PDS 7.1 have no B$ERS1, so a local STRING array is
+    /// erased with B$ERAS there; VBDOS alone uses B$ERS1.
+    #[test]
+    fn test_a_local_string_array_is_erased_by_its_family_routine() {
+        let erase = |type_, family| routine_for("local ERASE", type_, false, false, family);
+        assert_eq!(erase(Some("STRING"), "vbdos"), Some("B$ERS1"));
+        assert_eq!(erase(Some("STRING"), "qb45"), Some("B$ERAS"));
+        assert_eq!(erase(Some("STRING"), "pds71"), Some("B$ERAS"));
+        assert_eq!(erase(None, "vbdos"), Some("B$ERAS"));
     }
 
     #[test]

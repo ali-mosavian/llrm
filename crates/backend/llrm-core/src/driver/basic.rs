@@ -894,7 +894,7 @@ fn size_of(datum: &masm::Datum) -> i64 {
     }
 }
 
-/// Spell BASIC module fallthrough as the runtime's implicit B$CENP.
+/// Spell BASIC module fallthrough as the runtime's implicit module end.
 pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
@@ -905,7 +905,7 @@ pub fn ends_program(body: &lir::LirBody) -> (lir::LirBody, IndexMap<i64, masm::C
             let mut instruction = Arc::clone(instruction);
             if instruction.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
                 exits = true;
-                sites.insert(instruction.at, masm::Callee::new("B$CENP", true));
+                sites.insert(instruction.at, masm::Callee::new(crate::abi::runtime::module_end(), true));
                 let mut replaced = (*instruction).clone();
                 replaced.what = Some(_semantics(Operation::Call, "call", vec![], vec![]));
                 instruction = Arc::new(replaced);
