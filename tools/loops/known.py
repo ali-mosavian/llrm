@@ -1,6 +1,8 @@
 """
-The quality ratchet: known.toml lists every (case, language, configuration,
-check) that falls short today, each with its issue. A run fails for a
+The quality ratchet: shortfalls.txt lists every (case, language, configuration,
+check) that falls short today, each with its issue, one line per (case,
+language, check), written only by `run.py --write-known`. known.toml holds the
+hand-written patterns of known bugs. A run fails for a
 shortfall not listed and for a listed one that no longer falls short, within
 the cases, languages and configurations it ran. A pass PR may shrink the
 list, never grow it.
@@ -13,9 +15,10 @@ from pathlib import Path
 from dataclasses import dataclass
 
 PATH = Path(__file__).resolve().parent / "known.toml"
+SHORTFALLS = Path(__file__).resolve().parent / "shortfalls.txt"
 HEADER = """\
-# What falls short today, per check (tools/loops/run.py). Remove an entry when
-# it no longer falls short; never add one without its issue.
+# What falls short today: case language check issue configuration...
+# Written by tools/loops/run.py --write-known; never add a line without its issue.
 """
 
 
@@ -27,15 +30,15 @@ class Ratchet:
 
 
 def load() -> tuple[set, dict]:
-    if not PATH.exists():
+    if not SHORTFALLS.exists():
         return set(), {}
-    data = tomllib.loads(PATH.read_text())
     entries, issues = set(), {}
-    for one in data.get("short", []):
-        for config in one["configs"]:
-            key = (one["case"], one["lang"], config, one["check"])
-            entries.add(key)
-            issues[(one["case"], one["lang"], one["check"])] = one.get("issue", "")
+    for line in SHORTFALLS.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        case, lang, check, issue, *configs = line.split()
+        entries |= {(case, lang, config, check) for config in configs}
+        issues[(case, lang, check)] = issue
     return entries, issues
 
 
@@ -56,18 +59,15 @@ def compare(short: set, judged: set) -> Ratchet:
 
 
 def write(short: set, issues: dict, judged: set | None = None, default: str = "#98") -> None:
-    """known.toml as `short` stands; entries for checks this run did not
-    evaluate (`judged`) are kept, as are the known bugs."""
+    """shortfalls.txt as `short` stands; entries for checks this run did not
+    evaluate (`judged`) are kept."""
     if judged is not None:
         short = (load()[0] - judged) | short
-    kept = PATH.read_text().split("[[short]]")[0].replace(HEADER, "").strip() if PATH.exists() else ""
     grouped: dict[tuple, set] = {}
     for case, lang, config, check in short:
         grouped.setdefault((case, lang, check), set()).add(config)
-    lines = [HEADER, kept, ""] if kept else [HEADER]
+    lines = [HEADER.rstrip("\n")]
     # the dot example first: issue #98's own evidence
     for (case, lang, check), configs in sorted(grouped.items(), key=lambda kv: (kv[0][0] != "dot", kv[0])):
-        lines += ["[[short]]", f'case = "{case}"', f'lang = "{lang}"', f'check = "{check}"',
-                  "configs = [" + ", ".join(f'"{c}"' for c in sorted(configs)) + "]",
-                  f'issue = "{issues.get((case, lang, check), default)}"', ""]
-    PATH.write_text("\n".join(lines))
+        lines.append(" ".join([case, lang, check, issues.get((case, lang, check), default), *sorted(configs)]))
+    SHORTFALLS.write_text("\n".join(lines) + "\n")
