@@ -62,7 +62,6 @@ impl std::error::Error for Spilled {}
 pub enum Error {
     Unplaced(Unplaced),
     Spilled(Spilled),
-    Impossible(constrain::Impossible),
     Refused(Refused),
     /// `ValueError`, or a call into a module not yet ported.
     Value(String),
@@ -73,7 +72,6 @@ impl fmt::Display for Error {
         match self {
             Self::Unplaced(one) => one.fmt(formatter),
             Self::Spilled(one) => one.fmt(formatter),
-            Self::Impossible(one) => one.fmt(formatter),
             Self::Refused(one) => one.fmt(formatter),
             Self::Value(one) => formatter.write_str(one),
         }
@@ -88,7 +86,6 @@ impl Error {
         let (module, kind) = match self {
             Self::Unplaced(_) => ("qbopt.backend.allocate", "Unplaced"),
             Self::Spilled(_) => ("qbopt.backend.allocate", "Spilled"),
-            Self::Impossible(_) => ("qbopt.backend.constrain", "Impossible"),
             Self::Refused(_) => ("qbopt.backend.frame", "Refused"),
             Self::Value(_) => ("builtins", "ValueError"),
         };
@@ -105,12 +102,6 @@ impl From<Unplaced> for Error {
 impl From<Spilled> for Error {
     fn from(one: Spilled) -> Self {
         Self::Spilled(one)
-    }
-}
-
-impl From<constrain::Impossible> for Error {
-    fn from(one: constrain::Impossible) -> Self {
-        Self::Impossible(one)
     }
 }
 
@@ -1132,7 +1123,7 @@ fn _allocated(
         floor = floor.max(splitkit::_next_value(&body));
         facts = Facts::of(&body, profile, segments, &unspillable, protected);
         placing = None;
-        for (one, register) in constrain::required(&body)? {
+        for (one, register) in constrain::required(&body) {
             fixed.entry(one).or_insert(register);
         }
         wanted = _wanted(&facts.hints, &fixed);
@@ -1622,7 +1613,7 @@ impl RegAlloc {
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });
-        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned))?;
+        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned));
         body = constrained_body;
         let clash: BTreeSet<u32> = fixed
             .keys()
@@ -1639,14 +1630,14 @@ impl RegAlloc {
             body.blocks.iter().flat_map(|block| &block.insns).filter(|one| _unread_move(one)).map(ranges::key).collect();
         body = spiller::_remove_abandoned(&body, &abandoned);
         self.pinned = prefer.clone();
-        self.pinned.extend(constrain::required(&body)?);
+        self.pinned.extend(constrain::required(&body));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
         let start = frame.borrow().saved();
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
         let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
             let mut pins = prefer.clone();
-            pins.extend(constrain::required(candidate)?);
+            pins.extend(constrain::required(candidate));
             let (got, out, spilled) =
                 rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
             Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved() })
@@ -2292,6 +2283,7 @@ mod tests {
 
     use super::*;
     use crate::analysis::intervals::Segment;
+    use crate::backend::regalloc_input::{before_regalloc, through};
     use crate::backend::{cpu, parcopy, select, verify};
     use crate::model::ir::Imm;
 
@@ -3179,7 +3171,7 @@ mod tests {
             Insn::new(0, Some((0, 3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![1], vec![]);
         call.delivers = vec![(Held { value: 1, width: 2 }, Register::AX)];
         let (narrow, pinned) = narrowed(&body_of("dead result", 0, vec![call]), &pins(&[(1, Register::EAX)]));
-        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned)).expect("constrains");
+        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned));
         let insns = lowered.insns();
         assert_eq!(insns.len(), 1);
         assert!(insns[0].defines.is_empty());
@@ -3287,54 +3279,18 @@ mod tests {
             BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX])
         );
     }
-    /// The body `walks10.ll` (ten pointer walks, `-O2 --cpu 386`) has when it
-    /// reaches the register allocator, and the phase itself.
-    fn before_regalloc() -> (LirBody, Box<dyn crate::model::passes::LIRTransform>) {
-        use crate::abi::runtime::{EVERY, Reg as Hard};
-        use crate::backend::constpool::Pool;
-        use crate::backend::{frame, isel};
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir/walks10.ll");
-        let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
-        let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
-        let abi = crate::abi::qb::HirAbi {
-            runtime: crate::hir::model::RuntimeProfile::Freestanding,
-            objects: Default::default(),
-            preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
-        };
-        let cpu = cpu::profile("386").unwrap();
-        let pool = Rc::new(RefCell::new(Pool::new(0)));
-        let name = "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum";
-        let selected = isel::selected(&module, name, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
-        let mut made = frame::of(&selected.body, Some(&selected.calls), "", None).unwrap();
-        made.floor = made.floor.min(-selected.depth);
-        let shared = Rc::new(RefCell::new(made));
-        let pinned = selected.body.pins.clone();
-        let mut body = selected.body;
-        let phases =
-            crate::flow::machine(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN).unwrap();
-        for mut phase in phases {
-            if phase.class_name() == "RegAlloc" {
-                return (body, phase);
-            }
-            body = phase.transform(body).unwrap();
-        }
-        panic!("no RegAlloc phase");
-    }
-
     /// Ten arrays walked by pointer: the loop preheader's parallel copy keeps
     /// a rematerialized `lea` live across the whole group, longer than a
     /// reload's range, so it was spillable; spilling it made the same `lea`
     /// again, a new value every pass, and compilation did not finish (#104).
     #[test]
     fn test_a_reload_stretched_by_a_parallel_copy_is_not_spilled_again() {
-        let (body, mut phase) = before_regalloc();
+        let (body, phases) = before_regalloc("walks10.ll", "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum", "386");
         let longest = body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
         assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");
 
         let before = splitkit::_next_value(&body);
-        let after = phase.transform(body).expect("allocates");
+        let after = through(body, phases).expect("allocates");
         let made = splitkit::_next_value(&after) - before;
         assert!(made < 1000, "{made} values made for ten walks");
     }

@@ -5,7 +5,6 @@
 //! live across that instruction and nothing else, copied in and out.
 
 use std::collections::BTreeSet;
-use std::fmt;
 use std::sync::Arc;
 
 use iced_x86::Register;
@@ -14,18 +13,6 @@ use crate::support::hash::{IndexMap, IndexSet};
 use crate::backend::{spiller, target};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
-
-/// One value an instruction requires in two different registers.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Impossible(pub String);
-
-impl fmt::Display for Impossible {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Impossible {}
 
 /// Whether two requirement names mean the same register at `width`.
 fn _same_register(one: Register, other: Register, width: u32) -> bool {
@@ -65,7 +52,7 @@ fn _declared(widths: &IndexMap<u32, u32>, one: &Insn, value: u32) -> u32 {
 pub fn constrained(
     body: &LirBody,
     pinned: Option<&IndexMap<u32, Register>>,
-) -> Result<(LirBody, IndexMap<u32, Register>), Impossible> {
+) -> (LirBody, IndexMap<u32, Register>) {
     // A pin the caller released is not merged back from `body.pins`.
     let ids = body.pins.keys().chain(pinned.into_iter().flat_map(|given| given.keys())).copied().max();
     let mut pinned: IndexMap<u32, Register> = pinned.unwrap_or(&body.pins).clone();
@@ -124,9 +111,9 @@ pub fn constrained(
             }
             let widths: IndexMap<u32, u32> =
                 one.requires.iter().chain(&one.delivers).map(|(held, _r)| (held.value, held.width)).collect();
-            let wanted: IndexMap<u32, (Register, Vec<(&'static str, usize)>)> = _wanted(&one)?
+            let wanted: Vec<Wanted> = _wanted(&one)
                 .into_iter()
-                .filter(|(value, got)| !_already_there(&pinned, *value, got.0, _declared(&widths, &one, *value)))
+                .filter(|got| !_already_there(&pinned, got.value, got.register, _declared(&widths, &one, got.value)))
                 .collect();
             let given: IndexMap<u32, Register> = _delivered(&one)
                 .into_iter()
@@ -150,9 +137,9 @@ pub fn constrained(
             let mut defines = one.defines.clone();
             let mut uses = one.uses.clone();
             let mut added: IndexMap<(u32, Register), Held> = IndexMap::default();
-            let mut ordered: Vec<(u32, (Register, Vec<(&'static str, usize)>))> = wanted.into_iter().collect();
-            ordered.sort_by_key(|(value, _got)| *value);
-            for (value, (register, places)) in ordered {
+            let mut ordered = wanted;
+            ordered.sort_by_key(|got| got.value);
+            for Wanted { value, register, places } in ordered {
                 let held = Held { value: fresh, width: _declared(&widths, &one, value) };
                 let read_only = places.iter().all(|(side, _)| *side == "source");
                 let key = (value, ir::root(register));
@@ -180,7 +167,12 @@ pub fn constrained(
                     continue;
                 }
                 pins.insert(fresh, register);
-                swap.insert(value, held.value);
+                // An address reads the value, so a copy that is written never renames it.
+                if places.iter().any(|(side, _)| *side == "source") {
+                    swap.insert(value, held.value);
+                } else {
+                    swap.entry(value).or_insert(held.value);
+                }
                 if places.iter().any(|(side, _)| *side == "source") {
                     before.push(_move(&one, held, source(value, held.width)));
                 }
@@ -268,7 +260,7 @@ pub fn constrained(
         }
         blocks.push(block.with_insns(insns));
     }
-    Ok((body.with_blocks(blocks), pins))
+    (body.with_blocks(blocks), pins)
 }
 
 /// Whether `one` redefines `value` or its copy `kept` in `root`, or puts
@@ -283,17 +275,17 @@ fn _disturbs(one: &Insn, value: u32, kept: &Held, root: Register, pins: &IndexMa
 }
 
 /// Where each value the body's instructions require has to live.
-pub fn required(body: &LirBody) -> Result<IndexMap<u32, Register>, Impossible> {
+pub fn required(body: &LirBody) -> IndexMap<u32, Register> {
     let mut out: IndexMap<u32, Register> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
-            for (value, (register, _where)) in _wanted(one)? {
-                out.insert(value, register);
+            for wanted in _wanted(one) {
+                out.insert(wanted.value, wanted.register);
             }
             out.extend(_delivered(one));
         }
     }
-    Ok(out)
+    out
 }
 
 /// Split address-class occurrences from an otherwise general value.
@@ -415,27 +407,37 @@ fn _delivered(one: &Insn) -> IndexMap<u32, Register> {
     one.delivers.iter().map(|(held, register)| (held.value, *register)).collect()
 }
 
-/// Each value this instruction requires somewhere, and where it sits.
-fn _wanted(one: &Insn) -> Result<IndexMap<u32, (Register, Vec<(&'static str, usize)>)>, Impossible> {
-    let mut out: IndexMap<u32, (Register, Vec<(&'static str, usize)>)> = IndexMap::default();
-    for (held, register) in &one.requires {
-        if let Some(found) = out.get(&held.value) {
-            if !_same_register(found.0, *register, held.width) {
-                return Err(Impossible(format!(
-                    "{:#06x}: unsplit input value#{} requires two registers",
-                    one.at, held.value
-                )));
+/// One register an instruction requires a value in, and where that value sits.
+struct Wanted {
+    value: u32,
+    register: Register,
+    places: Vec<(&'static str, usize)>,
+}
+
+/// Each register this instruction requires a value in. A value required in
+/// two registers (read in one, written in another) is two requirements, each
+/// met by a copy of its own.
+fn _wanted(one: &Insn) -> Vec<Wanted> {
+    let mut out: Vec<Wanted> = Vec::new();
+    let mut group = |out: &mut Vec<Wanted>, value: u32, register: Register, width: u32| -> usize {
+        match out.iter().position(|found| found.value == value && _same_register(found.register, register, width)) {
+            Some(at) => at,
+            None => {
+                out.push(Wanted { value, register, places: Vec::new() });
+                out.len() - 1
             }
         }
-        out.insert(held.value, (*register, Vec::new()));
+    };
+    for (held, register) in &one.requires {
+        group(&mut out, held.value, *register, held.width);
     }
     let Some(what) = &one.what else {
-        return Ok(out);
+        return out;
     };
     for (index, operand) in what.sources.iter().enumerate() {
         if let Loc::Held(held) = operand {
-            if let Some(found) = out.get_mut(&held.value) {
-                found.1.push(("source", index));
+            if let Some(found) = out.iter_mut().find(|found| found.value == held.value) {
+                found.places.push(("source", index));
             }
         }
     }
@@ -448,19 +450,13 @@ fn _wanted(one: &Insn) -> Result<IndexMap<u32, (Register, Vec<(&'static str, usi
         let Loc::Held(operand) = &side[place.index] else {
             continue;
         };
-        let (held, mut places) = out.get(&operand.value).cloned().unwrap_or((register, Vec::new()));
-        if !_same_register(held, register, operand.width) {
-            return Err(Impossible(format!(
-                "{:#06x}: value#{} is required in two registers at once",
-                one.at, operand.value
-            )));
+        let at = group(&mut out, operand.value, register, operand.width);
+        out[at].register = register;
+        if !out[at].places.contains(&(side_name, place.index)) {
+            out[at].places.push((side_name, place.index));
         }
-        if !places.contains(&(side_name, place.index)) {
-            places.push((side_name, place.index));
-        }
-        out.insert(operand.value, (register, places));
     }
-    Ok(out)
+    out
 }
 
 /// Values still read by a rewritten instruction's explicit operands.
@@ -603,10 +599,10 @@ mod tests {
         let use_ =
             _insn(semantics(Operation::Move, "mov", vec![held(3, 2)], vec![Loc::Held(result)]), &[3], &[2], 0x110);
         let (split, pins) =
-            constrained(&_body(vec![source, call, use_]), Some(&pinned(&[(2, Register::SI)]))).unwrap();
+            constrained(&_body(vec![source, call, use_]), Some(&pinned(&[(2, Register::SI)])));
         let mut frame = Frame::new(0);
         let (spilled, _) = spiller::spilled(&split, &BTreeSet::from([2]), Some(&mut frame)).unwrap();
-        let assignment = allocated(&spilled, &merged(&pins, &required(&spilled).unwrap()));
+        let assignment = allocated(&spilled, &merged(&pins, &required(&spilled)));
         let placed = allocate::applied(&spilled, &assignment).unwrap();
         let insns = placed.insns();
         let call_index = insns.iter().position(|one| what(one).op == Operation::Call).unwrap();
@@ -621,7 +617,7 @@ mod tests {
         let value = Held { value: 20, width: 2 };
         let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![Loc::Held(value)]), &[], &[20], 0x100);
         call.requires = vec![(value, Register::AX)];
-        let (got, _) = constrained(&_body(vec![call]), None).unwrap();
+        let (got, _) = constrained(&_body(vec![call]), None);
         let result = got.insns().into_iter().find(|one| what(one).op == Operation::Call).unwrap();
         let Loc::Held(source) = what(&result).sources[0] else { panic!("not a value") };
         assert_eq!(source.value, result.uses[0]);
@@ -636,7 +632,7 @@ mod tests {
                 _insn(semantics(Operation::Move, "mov", vec![Loc::Held(value)], vec![imm(0, 2)]), &[1], &[], 0x100);
             let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![]), &[], &[1], 0x108);
             call.requires = registers.iter().map(|register| (value, *register)).collect();
-            let (body, pins) = constrained(&_body(vec![constant, call]), None).unwrap();
+            let (body, pins) = constrained(&_body(vec![constant, call]), None);
             let placed = allocate::applied(&body, &allocated(&body, &pins)).unwrap();
             let zeros: BTreeSet<Register> = placed
                 .insns()
@@ -672,7 +668,7 @@ mod tests {
             0x100,
         );
         instruction.requires = vec![(value, Register::SI)];
-        let (got, pins) = constrained(&_body(vec![instruction]), None).unwrap();
+        let (got, pins) = constrained(&_body(vec![instruction]), None);
         let result = got.insns().last().cloned().unwrap();
         let Some(Loc::Mem(cell)) = what(&result).sources.last() else { panic!("not memory") };
         assert_eq!(cell.base.unwrap().value, result.uses[0]);
@@ -715,9 +711,9 @@ mod tests {
         };
         let use_ =
             _insn(semantics(Operation::Move, "mov", vec![Loc::Mem(far)], vec![imm(7, 2)]), &[], &[segment.id], 0xFCF);
-        let (body, pins) = constrained(&_body(vec![(**load).clone(), use_]), Some(&IndexMap::default())).unwrap();
+        let (body, pins) = constrained(&_body(vec![(**load).clone(), use_]), Some(&IndexMap::default()));
         let (spilled, _) = spiller::spilled(&body, &BTreeSet::from([segment.id]), Some(&mut Frame::new(0))).unwrap();
-        let wanted = merged(&pins, &required(&spilled).unwrap());
+        let wanted = merged(&pins, &required(&spilled));
         let placed = allocate::applied(&spilled, &allocated(&spilled, &wanted)).unwrap();
         let decoded: Vec<iced_x86::Instruction> = placed
             .insns()
@@ -807,7 +803,7 @@ mod tests {
         );
         let cx = pinned(&[(1, Register::CX)]);
         let body = allocate::explicit_selectors(&_body(vec![saved, overwrite, (**read).clone()]), Some(&cx), &target::BUILT_IN);
-        let (body, pins) = constrained(&body, Some(&cx)).unwrap();
+        let (body, pins) = constrained(&body, Some(&cx));
         let placed = allocate::applied(&body, &allocated(&body, &merged(&cx, &pins))).unwrap();
         let insns = placed.insns();
         let restore = what(&insns[insns.len() - 2]);
@@ -832,7 +828,7 @@ mod tests {
     #[test]
     fn test_fixed_input_rematerializes_constant_without_retaining_source() {
         let constant = _insn(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(512, 2)]), &[1], &[], 0x100);
-        let (done, pins) = constrained(&_body(vec![constant, _extend(1, 2)]), None).unwrap();
+        let (done, pins) = constrained(&_body(vec![constant, _extend(1, 2)]), None);
         let prepared = done
             .insns()
             .into_iter()
@@ -855,7 +851,7 @@ mod tests {
         let at = |at: i64, one: Insn| Insn { at, covers: Some((at, at + 2)), ..one };
         let constant = |value: u32, at: i64| _insn(semantics(Operation::Move, "mov", vec![held(value, 2)], vec![imm(7, 2)]), &[value], &[], at);
         let body = _body(vec![constant(1, 0x100), constant(2, 0x102), at(0x104, _extend(1, 8)), at(0x106, _extend(2, 9)), at(0x108, _extend(1, 10))]);
-        let (got, pins) = constrained(&body, None).unwrap();
+        let (got, pins) = constrained(&body, None);
         allocated(&got, &pins);
     }
 
@@ -869,7 +865,7 @@ mod tests {
     /// A shift counts from cl and names it nowhere.
     #[test]
     fn test_a_required_source_is_copied_in_before_the_instruction() {
-        let (got, pins) = constrained(&_body(vec![_shift(7)]), None).unwrap();
+        let (got, pins) = constrained(&_body(vec![_shift(7)]), None);
         assert_eq!(got.blocks[0].insns.len(), 2);
         let (first, then) = (&got.blocks[0].insns[0], &got.blocks[0].insns[1]);
         assert!(what(first).name.as_deref() == Some("mov") && what(first).sources == vec![held(7, 2)]);
@@ -882,7 +878,7 @@ mod tests {
     /// `cwd` writes dx and names it nowhere.
     #[test]
     fn test_a_required_destination_is_copied_out_after_the_instruction() {
-        let (got, pins) = constrained(&_body(vec![_extend(1, 8)]), None).unwrap();
+        let (got, pins) = constrained(&_body(vec![_extend(1, 8)]), None);
         let insns = &got.blocks[0].insns;
         assert_eq!(insns.len(), 3, "{:?}", _shape(&got));
         let last = insns.last().unwrap();
@@ -895,7 +891,7 @@ mod tests {
     /// Two fresh values would name two registers and the tie would be gone.
     #[test]
     fn test_a_tied_source_and_destination_share_one_fresh_value() {
-        let (got, pins) = constrained(&_body(vec![_multiply(1, 2, 3)]), None).unwrap();
+        let (got, pins) = constrained(&_body(vec![_multiply(1, 2, 3)]), None);
         let middle: Vec<_> =
             got.blocks[0].insns.iter().filter(|one| what(one).name.as_deref() == Some("imul")).collect();
         assert_eq!(middle.len(), 1);
@@ -914,7 +910,7 @@ mod tests {
         let repeated = held(7, 4);
         let multiply =
             semantics(Operation::Multiply, "imul", vec![held(8, 4), held(9, 4)], vec![repeated.clone(), repeated.clone()]);
-        let (got, pins) = constrained(&_body(vec![_insn(multiply, &[8, 9], &[7], 0x100)]), None).unwrap();
+        let (got, pins) = constrained(&_body(vec![_insn(multiply, &[8, 9], &[7], 0x100)]), None);
         let multiply = got.insns().into_iter().find(|one| what(one).name.as_deref() == Some("imul")).unwrap();
         let Loc::Held(fixed) = what(&multiply).sources[0] else { panic!("not a value") };
         assert_eq!(pins[&fixed.value], Register::EAX);
@@ -923,14 +919,20 @@ mod tests {
         assert_eq!(uses, BTreeSet::from([fixed.value, 7]));
     }
 
-    /// A value that is both a shift's count and a multiply's high half
-    /// cannot be placed at all.
+    /// `horner` could not compile (#99): `r := idiv hi, v, d` reads v in ax
+    /// and writes the remainder to v in dx, and the value was refused for
+    /// being required in two registers. Each requirement gets a copy.
     #[test]
-    fn test_one_value_required_in_two_registers_is_refused() {
+    fn test_a_value_read_in_one_register_and_written_in_another_gets_a_copy_for_each() {
         let multiply =
             semantics(Operation::Multiply, "imul", vec![held(1, 2), held(7, 2)], vec![held(7, 2), held(3, 2)]);
-        let error = constrained(&_body(vec![_insn(multiply, &[1, 7], &[7, 3], 0x100)]), None).unwrap_err();
-        assert!(error.0.contains("two registers"), "{error}");
+        let (got, pins) = constrained(&_body(vec![_insn(multiply, &[1, 7], &[7, 3], 0x100)]), None);
+        let imul = got.insns().into_iter().find(|one| what(one).name.as_deref() == Some("imul")).unwrap();
+        let (Loc::Held(low), Loc::Held(high)) = (&what(&imul).sources[0], &what(&imul).dests[1]) else { panic!("not values") };
+        assert_eq!((pins[&low.value], pins[&high.value]), (Register::EAX, Register::EDX));
+        assert_ne!(low.value, high.value, "one value cannot be in two registers");
+        let after = got.insns().into_iter().filter(|one| one.defines == vec![7]).count();
+        assert_eq!(after, 1, "the written copy is moved back to the value");
     }
 
     /// PROCS-P-OT crashed rebuilding TWICE's `rep stosw`.
@@ -951,7 +953,7 @@ mod tests {
         );
         let mut fill = Insn::new(0x104, Some((0x104, 0x106)), Some(fill), vec![12, 13], vec![11, 8, 9]);
         fill.requires = vec![(value, Register::AX), (count, Register::CX), (address, Register::DI)];
-        let (got, pins) = constrained(&_body(vec![fill]), None).unwrap();
+        let (got, pins) = constrained(&_body(vec![fill]), None);
         let filled = got.insns().into_iter().find(|one| what(one).op == Operation::Fill).unwrap();
         assert_eq!(what(&filled).sources.len(), 4);
         let roots: BTreeSet<Register> = pins.values().map(|register| ir::root(*register)).collect();
@@ -960,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_the_helper_moves_belong_to_no_parallel_copy() {
-        let (got, _pins) = constrained(&_body(vec![_shift(7)]), None).unwrap();
+        let (got, _pins) = constrained(&_body(vec![_shift(7)]), None);
         assert!(got.blocks[0].insns.iter().all(|one| one.group.is_none()));
         assert_eq!(got.blocks[0].insns[0].covers, Some((0x100, 0x100)), "a helper claims no bytes");
     }
@@ -972,7 +974,7 @@ mod tests {
         let call = semantics(Operation::Call, "call", vec![], vec![]);
         let mut call = Insn::new(0x106, Some((0x106, 0x10B)), Some(call), vec![11], vec![2]);
         call.requires = vec![(Held { value: 2, width: 2 }, Register::CX)];
-        let (got, pins) = constrained(&_body(vec![call]), None).unwrap();
+        let (got, pins) = constrained(&_body(vec![call]), None);
         let insns = &got.blocks[0].insns;
         assert_eq!(insns.len(), 2, "expected one copy before the call");
         let (moved, after) = (&insns[0], &insns[1]);
@@ -987,7 +989,7 @@ mod tests {
             "a later spill must retain the ABI slot"
         );
 
-        let (again, more) = constrained(&got, Some(&pins)).unwrap();
+        let (again, more) = constrained(&got, Some(&pins));
         assert!(again == got && more.is_empty(), "constraining twice is not constraining once");
     }
 
@@ -997,7 +999,7 @@ mod tests {
         let call = semantics(Operation::Call, "call", vec![], vec![]);
         let mut call = Insn::new(0x10, Some((0x10, 0x15)), Some(call), vec![], vec![11]);
         call.requires = vec![(Held { value: 11, width: 2 }, Register::CX)];
-        let (got, pins) = constrained(&_body(vec![call]), Some(&pinned(&[(11, Register::ECX)]))).unwrap();
+        let (got, pins) = constrained(&_body(vec![call]), Some(&pinned(&[(11, Register::ECX)])));
         let insns = &got.blocks[0].insns;
         assert_eq!(insns.len(), 1, "a copy was inserted for a value already there");
         assert_eq!(insns[0].uses, vec![11]);
@@ -1021,7 +1023,7 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let (got, fixed) = constrained(&body, Some(&pinned(&[(2, Register::EAX)]))).unwrap();
+        let (got, fixed) = constrained(&body, Some(&pinned(&[(2, Register::EAX)])));
         assert!(fixed.is_empty(), "a copy was minted for a value already in eax: {fixed:?}");
         assert_eq!(got.insns()[0].uses, vec![2], "the instruction was given a fresh value it did not need");
     }
