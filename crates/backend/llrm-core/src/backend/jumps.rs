@@ -82,8 +82,8 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     _placed(body, false)
 }
 
-/// `placed`, for short code where `size`, else by estimated frequency: the
-/// likelier edge falls through, an arm leaves its join only for a block
+/// `placed`, for short code where `size`, else by estimated frequency: a
+/// `LIKELY` edge falls through, an arm leaves its join only for a block
 /// before it that reaches the join `LIKELY`, and a new trace starts at the
 /// busiest block left.
 fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
@@ -273,10 +273,12 @@ pub fn _onward(
             targets = vec![branch_target, jump_target];
         }
     }
-    // By frequency, the likelier edge first, where the estimate tells them apart.
+    // By frequency, the other edge first where it is `LIKELY`: then the
+    // arm it leaves leaves its join too. Short of that the arm rule keeps
+    // both arms before the join, where the source order serves no worse.
     if let (Some(busy), [Some(first), Some(second)]) = (odds, targets.as_slice()) {
         let (first, second) = (busy.edge(block.at, *first), busy.edge(block.at, *second));
-        if second > first {
+        if second > 0.0 && second >= branchprob::LIKELY * (first + second) {
             targets.reverse();
         }
     }
