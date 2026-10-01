@@ -23,6 +23,7 @@ QB = Path(os.environ.get("LLRM_QB", ROOT / "target" / "release" / "llrm-qb"))
 CASES = {
     # BC's switches, llrm-qb's flags
     "overflow-ops": ("/O /E /X /D", ["-ftrapv"], True),
+    "single-constants": ("/O /E /X", [], True),
     # llrm's own behaviour where BC's is its instruction selection's (docs/frontends/qb/divergences.md)
     "overflow-target-unchanged": ("/O /E /X /D", ["-ftrapv"], False),
 }

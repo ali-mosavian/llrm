@@ -20,3 +20,11 @@ BC checks the overflow flag of the instructions it emits, in an order of its
 choosing: `a = b = c = 20000`, `x = a + b - c` raises no error in BC and
 yields 20000, and raises error 6 in llrm at `a + b`; `x = a + b + c` raises
 in both. Not a rule BC states; llrm checks each operation.
+
+## A constant times a quotient
+
+BC reassociates `c1 * (x / c2)` into `x * (c1 / c2)`, folding `c1 / c2` to a
+SINGLE constant at compile time: `.5 * (w / 7) * 1#` with `w% = -1` is the
+SINGLE -(.5 / 7) in BC and the full-precision quotient in llrm, a last-bit
+difference. llrm folds the constant subexpressions it is given (`(.5 / 7) * w`)
+and does not reassociate. Not pinned: BC's rewrite is its optimizer's.
