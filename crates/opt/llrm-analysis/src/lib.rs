@@ -9,6 +9,7 @@
 
 pub mod alias;
 pub mod avail;
+pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
