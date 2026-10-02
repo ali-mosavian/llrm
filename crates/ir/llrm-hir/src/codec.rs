@@ -140,7 +140,20 @@ plain_record!(Place, None, id => "id", name => "name", r#type => "type", storage
 plain_record!(Value, None, id => "id", r#type => "type");
 plain_record!(DebugType, None, id => "id", kind => "kind", name => "name", target => "target", size => "size",
     reach => "reach", members => "members");
-plain_record!(DebugMember, None, name => "name", r#type => "type", offset => "offset", bit_start => "bit_start", bit_width => "bit_width");
+// A bit field's keys only where it is one: every other member writes as before.
+impl _Plain for model::DebugMember {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("type".to_owned(), self.r#type._plain());
+        out.insert("offset".to_owned(), self.offset._plain());
+        if let (Some(start), Some(width)) = (self.bit_start, self.bit_width) {
+            out.insert("bit_start".to_owned(), start._plain());
+            out.insert("bit_width".to_owned(), width._plain());
+        }
+        Json::Dict(out)
+    }
+}
 plain_record!(DebugParameter, None, argument => "argument", name => "name", r#type => "type");
 plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",

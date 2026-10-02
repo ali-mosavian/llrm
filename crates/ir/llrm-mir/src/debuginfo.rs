@@ -313,6 +313,23 @@ fn listed<'m>(module: &'m Module, name: &str) -> impl Iterator<Item = MetadataId
 mod tests {
     use super::*;
 
+    /// A bit field's member node has its start and width after its offset;
+    /// a member node without them, as every one before them, is no bit
+    /// field. Both survive printing and parsing the module.
+    #[test]
+    fn a_bit_fields_member_round_trips_and_an_older_member_reads_as_none() {
+        let mut module = Module::default();
+        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new() };
+        let int16 = add_type(&mut module, &scalar);
+        let members = vec![Member { name: "x".into(), r#type: int16, offset: 0, bits: None }, Member { name: "f".into(), r#type: int16, offset: 2, bits: Some((3, 5)) }];
+        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, members };
+        add_type(&mut module, &structure);
+        let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
+        let read: Vec<Type> = types(&reparsed).into_iter().filter_map(|id| read_type(&reparsed, id)).collect();
+        let pt = read.iter().find(|one| one.kind == Kind::Struct).expect("the struct");
+        assert_eq!(pt.members.iter().map(|one| one.bits).collect::<Vec<_>>(), [None, Some((3, 5))]);
+    }
+
     /// What is written reads back as it was.
     #[test]
     fn each_record_reads_back() {
