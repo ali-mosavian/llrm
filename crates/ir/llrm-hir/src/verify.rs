@@ -232,6 +232,12 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
             invalid!("duplicate module {}", module.id);
         }
         module_ids.insert(module.id);
+        // A debug member is a bit field with both its first bit and width, or neither.
+        for member in module.debug.iter().flat_map(|one| &one.types).flat_map(|one| &one.members) {
+            if member.bit_start.is_some() != member.bit_width.is_some() {
+                invalid!("{}: debug member {} has a bit field's start or width alone", module.name, member.name);
+            }
+        }
         let data: IndexMap<i64, &model::DataObject> = module.data.iter().map(|one| (one.id, one)).collect();
         if data.len() != module.data.len() {
             invalid!("{}: duplicate data object id", module.name);

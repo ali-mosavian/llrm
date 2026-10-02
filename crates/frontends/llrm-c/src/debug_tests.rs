@@ -85,3 +85,16 @@ fn c_bit_fields_read_with_their_width_and_first_bit() {
         "{shape:#?}"
     );
 }
+
+/// A member with a bit field's first bit but no width is no bit field and
+/// no plain member: the verifier refuses it.
+#[test]
+fn a_debug_member_with_half_a_bit_field_is_refused() {
+    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debugbf.cgs")).expect("reads");
+    let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debugbf").unwrap();
+    assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
+    let member = program.modules[0].debug.as_mut().unwrap().types.iter_mut().flat_map(|one| &mut one.members).find(|one| one.bit_width.is_some()).expect("premise: a bit field");
+    member.bit_width = None;
+    let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+    assert!(why.0.contains("start or width alone"), "{why:?}");
+}
