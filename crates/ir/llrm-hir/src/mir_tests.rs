@@ -974,6 +974,7 @@ fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> Strin
         segmented: vec![false],
         arrays: vec![false],
         defined: false,
+        returns_twice: false,
         symbol: None,
     });
     let mut facts = Builder::new("test");
@@ -1088,6 +1089,63 @@ fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
     assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
 }
 
+/// What the language says of unrolling a loop is `!llvm.loop` on its back
+/// edge's terminator: a count, none, or all.
+#[test]
+fn an_unroll_of_a_terminator_is_loop_metadata() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let text = |copies| {
+        let mut program = program(difference());
+        let mut facts = Builder::new("test");
+        facts.state(Subject::Terminator { function: 1, block: 1 }, Fact::Unroll(copies));
+        program.modules[0].facts = facts.finish();
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        llrm_mir::print::module(&emitted.module)
+    };
+    let counted = text(4);
+    assert!(counted.contains("ret i16 %2, !llvm.loop !"), "{counted}");
+    assert!(counted.contains("\"llvm.loop.unroll.count\", i32 4"), "{counted}");
+    assert!(text(0).contains("llvm.loop.unroll.disable"));
+    assert!(text(u32::MAX).contains("llvm.loop.unroll.full"));
+}
+
+/// A load the language says reads what nothing writes after initialisation
+/// is `!invariant.load`.
+#[test]
+fn an_invariant_load_is_its_metadata() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::IndirectPlace;
+    use llrm_mir::facts::Fact;
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None })]);
+    function.blocks[0].instructions.insert(0, load);
+    function.values.iter_mut().find(|one| one.id == 1).expect("a parameter").r#type = 2;
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "pointer", TypeKind::Pointer, 2));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Invariant);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("!invariant.load !"), "{text}");
+}
+
+/// A fact of a block the function lacks is refused.
+#[test]
+fn a_fact_of_a_terminator_the_function_lacks_is_refused() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Terminator { function: 1, block: 9 }, Fact::Unroll(2));
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("terminator the module lacks"));
+}
+
 /// What a language lets a pass do to a floating operation reaches the
 /// instruction as its fast-math flags: `-on` and alternate math were stated
 /// nowhere, so no float fold could ask.
@@ -1161,4 +1219,31 @@ fn an_assume_of_a_comparison_is_made_on_its_own_truth() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("%2 = icmp slt i16 %0, %1\n  %3 = sext i1 %2 to i16\n  call void @llvm.assume(i1 %2)"), "{text}");
+}
+
+/// A callable that returns twice is a declaration with the attribute, which
+/// the inliner and anything that keeps a value across a call reads; it is
+/// no fact, so the facts builder cannot drop it.
+#[test]
+fn a_callable_that_returns_twice_is_declared_so() {
+    use crate::model::{CallAbi, CallDistance, Callable, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(1)]);
+    call.callee = Some("B$TWICE".to_owned());
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.push(call);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
+    function.calls = vec![CallAbi { instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    let callable = |returns_twice| Callable { id: 1, name: "B$TWICE".to_owned(), result_type: Some(1), parameter_types: vec![1], by_value: vec![true], segmented: vec![false], arrays: vec![false], defined: false, returns_twice, symbol: None };
+    program.modules[0].callables.push(callable(true));
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("declare") && text.contains("returns_twice") && text.contains("@B$TWICE"), "{text}");
+    // It crosses the wire, and a callable that does not says nothing of it.
+    let text = crate::codec::encode(&program, None).expect("encodes");
+    assert!(text.contains("\"returns_twice\":true"), "{text}");
+    assert!(crate::codec::decode(&text).expect("decodes").modules[0].callables[0].returns_twice);
+    program.modules[0].callables[0] = callable(false);
+    assert!(!crate::codec::encode(&program, None).expect("encodes").contains("returns_twice"));
+    assert!(!llrm_mir::print::module(&emit(&program).remove(0).module).contains("returns_twice"));
 }

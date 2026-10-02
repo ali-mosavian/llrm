@@ -259,6 +259,8 @@ struct Tables<'h> {
     fact_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     /// The alignment the language states of an instruction's access.
     accesses: HashMap<(i64, i64), u64>,
+    /// The metadata the language's facts give a block's terminator, by function and block id.
+    terminator_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
 }
@@ -282,12 +284,20 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
 
 /// The metadata `!range` and the like the language's facts give instructions,
 /// and the alignments they state of accesses.
-fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<(HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>)> {
-    let (mut nodes, mut accesses) = (HashMap::new(), HashMap::new());
+fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<FactNodes> {
+    let (mut nodes, mut accesses, mut terminators) = (HashMap::new(), HashMap::new(), HashMap::new());
     let index = crate::facts::Index::of(hir);
     for stated in &hir.facts {
+        if let (Subject::Terminator { function, block }, Fact::Unroll(copies)) = (stated.subject, stated.fact) {
+            terminators.entry((function, block)).or_insert_with(Vec::new).push(("llvm.loop", loop_node(module, copies)));
+            continue;
+        }
         let Subject::Instruction { function, id } = stated.subject else { continue };
         match stated.fact {
+            Fact::Invariant => {
+                module.metadata.push(MetadataNode { distinct: false, operands: Vec::new() });
+                nodes.entry((function, id)).or_insert_with(Vec::new).push(("invariant.load", MetadataId(module.metadata.len() as u32 - 1)));
+            }
             Fact::Align(bytes) => {
                 accesses.insert((function, id), bytes);
             }
@@ -305,7 +315,25 @@ fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &mo
             _ => {}
         }
     }
-    Ok((nodes, accesses))
+    Ok((nodes, accesses, terminators))
+}
+
+/// What `fact_nodes` finds: metadata of instructions, alignments of accesses, metadata of terminators.
+type FactNodes = (HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>, HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>);
+
+/// A loop's `!llvm.loop` node: distinct, naming itself and what it says of unrolling.
+fn loop_node(module: &mut Module, copies: u32) -> MetadataId {
+    let i32 = module.context.types.int(32);
+    let hint = match copies {
+        0 => vec![MetadataOperand::String("llvm.loop.unroll.disable".to_owned())],
+        u32::MAX => vec![MetadataOperand::String("llvm.loop.unroll.full".to_owned())],
+        count => vec![MetadataOperand::String("llvm.loop.unroll.count".to_owned()), MetadataOperand::Constant(module.context.int(i32, i128::from(count)))],
+    };
+    module.metadata.push(MetadataNode { distinct: false, operands: hint });
+    let hint = MetadataId(module.metadata.len() as u32 - 1);
+    let this = MetadataId(module.metadata.len() as u32);
+    module.metadata.push(MetadataNode { distinct: true, operands: vec![MetadataOperand::Node(this), MetadataOperand::Node(hint)] });
+    this
 }
 
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
@@ -347,11 +375,12 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         lines: HashMap::new(),
         fact_nodes: HashMap::new(),
         accesses: HashMap::new(),
+        terminator_nodes: HashMap::new(),
         variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
     match fact_nodes(&mut module, hir, &tables.types) {
-        Ok((nodes, accesses)) => (tables.fact_nodes, tables.accesses) = (nodes, accesses),
+        Ok((nodes, accesses, terminators)) => (tables.fact_nodes, tables.accesses, tables.terminator_nodes) = (nodes, accesses, terminators),
         Err(why) => refused.push((hir.name.clone(), why)),
     }
     match class_tags(&mut module, &hir.alias_classes) {
@@ -403,6 +432,14 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     for one in &hir.facts {
         if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, &data, one) {
             refused.push((hir.name.clone(), why));
+        }
+    }
+    // What changes what the code after a call means is not a fact a pass may drop.
+    for callable in hir.callables.iter().filter(|one| one.returns_twice) {
+        let Some(&reference) = tables.callees.get(&callable.name) else { continue };
+        let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { continue };
+        if let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind {
+            function.attrs.push(Attribute::Flag(RETURNS_TWICE.to_owned()));
         }
     }
     // Initialized once every function its data addresses is declared: one only addressed, far and C's.
@@ -751,7 +788,7 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
     let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
     let (global, parameter) = match stated.subject {
         // A call's arguments' facts are attributes of the call, made with it.
-        Subject::Instruction { .. } | Subject::Operand { .. } => return Ok(()),
+        Subject::Instruction { .. } | Subject::Operand { .. } | Subject::Terminator { .. } => return Ok(()),
         Subject::Object(id) => {
             let Some(&global) = data.get(&id) else { return Ok(()) };
             let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of a data object that is no variable".to_owned()) };
@@ -1093,6 +1130,9 @@ fn interrupted(function: &model::Function) -> bool {
     function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
 }
 
+/// A routine that may return twice, LLVM's attribute: not a fact, since dropping it changes what the code means.
+pub const RETURNS_TWICE: &str = "returns_twice";
+
 /// What the language promises holds, LLVM's intrinsic.
 const ASSUME: &str = "llvm.assume";
 
@@ -1322,6 +1362,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let first = self.b.function.instruction_count();
             self.terminator(&block.terminator)?;
             self.lined(first, line);
+            if let Some(nodes) = self.tables.terminator_nodes.get(&(self.function.id, block.id))
+                && let Some(inst) = self.b.function.terminator(self.b.current().expect("a placed block"))
+            {
+                for &(kind, node) in nodes {
+                    self.b.function.annotate(inst, kind, node);
+                }
+            }
         }
         if block.cold {
             mark_cold(self.b.function, self.blocks[&block.id]);
