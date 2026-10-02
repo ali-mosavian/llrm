@@ -262,6 +262,13 @@ impl Function {
         self.changes.push(Change::Rewritten(inst));
     }
 
+    /// Says the access `inst` is aligned to `align` bytes; any other instruction is left as it is.
+    pub fn set_access_align(&mut self, inst: InstId, bytes: u64) {
+        let (Opcode::Load { align, .. } | Opcode::Store { align, .. }) = &mut self.instructions[inst.0 as usize].opcode else { return };
+        *align = Some(bytes);
+        self.changes.push(Change::Rewritten(inst));
+    }
+
     /// Attaches `node` to `inst` as metadata of `kind`.
     pub fn annotate(&mut self, inst: InstId, kind: &str, node: MetadataId) {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
