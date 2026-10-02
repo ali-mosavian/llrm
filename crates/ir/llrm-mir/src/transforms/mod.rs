@@ -2,23 +2,18 @@
 //! and no machine named (agents.md, the fifth rule).
 
 pub mod inline;
-pub mod instcombine;
 
 use crate::module::Module;
 use crate::passes::{Pass, PassManager};
 
 /// The default pipeline, in order.
-const PIPELINE: &[&str] = &["instcombine", "inline", "instcombine"];
+const PIPELINE: &[&str] = &["inline"];
 
 fn pass(name: &str) -> Result<Pass, String> {
     match name {
-        "inline" => return Ok(Pass::Module(Box::new(inline::Inline))),
-        _ => {}
+        "inline" => Ok(Pass::Module(Box::new(inline::Inline))),
+        _ => Err(format!("no MIR pass {name}")),
     }
-    Ok(Pass::Function(match name {
-        "instcombine" => Box::new(instcombine::InstCombine),
-        _ => return Err(format!("no MIR pass {name}")),
-    }))
 }
 
 /// The module through the pipeline, verified after each pass. As `opt

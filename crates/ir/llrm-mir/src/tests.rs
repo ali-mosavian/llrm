@@ -265,7 +265,7 @@ b0:
 ",
     )
     .expect("parses");
-    let error = crate::transforms::optimized_with(&mut module, &["instcombine"]).unwrap_err();
+    let error = crate::transforms::optimized_with(&mut module, &["inline"]).unwrap_err();
     assert!(error.starts_with("before the first pass:") && error.contains("dominate"), "{error}");
 }
 

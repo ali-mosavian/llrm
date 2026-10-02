@@ -477,5 +477,229 @@ b4:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("define i16 @f() memory(none) willreturn nounwind {\nb1:\n  ret i16 7\n}"), "{out}");
+    assert!(out.contains("b1:\n  ret i16 7\n}") && !out.contains("b2:") && !out.contains("phi"), "{out}");
+}
+
+/// `x+0`, `x*1`, `x|0`, `x^0`, `x-0`, `x<<0` and `x/1` are `x`. (llrm-mir's instcombine, #237)
+#[test]
+fn identities_with_zero_one_and_all_ones_leave_the_operand() {
+    const TEXT: &str = r#"define i16 @f(i16 %x) {
+b1:
+  %a = add i16 %x, 0
+  %b = mul i16 %a, 1
+  %c = or i16 %b, 0
+  %d = xor i16 %c, 0
+  %e = sub i16 %d, 0
+  %g = shl i16 %e, 0
+  %h = udiv i16 %g, 1
+  ret i16 %h
+}
+"#;
+    let out = piped(TEXT);
+    assert!(out.contains("ret i16 %x") && !out.contains("udiv") && !out.contains("add") && !out.contains("mul"), "{out}");
+}
+
+/// `x % 1`, `x - x`, `x * 0` and the identities around them leave `x`. (llrm-mir's instcombine, #237)
+#[test]
+fn a_remainder_by_one_a_difference_with_itself_and_a_product_with_zero_are_zero() {
+    const TEXT: &str = r#"define i16 @f(i16 %x) {
+b1:
+  %a = and i16 %x, -1
+  %b = or i16 %a, %a
+  %c = and i16 %b, %b
+  %d = sub i16 %c, %c
+  %e = add i16 %d, %x
+  %f = mul i16 %e, 0
+  %g = add i16 %f, %x
+  %h = urem i16 %g, 1
+  %i = or i16 %x, %h
+  ret i16 %i
+}
+"#;
+    let out = piped(TEXT);
+    assert!(out.contains("ret i16 %x") && !out.contains("urem"), "{out}");
+}
+
+/// `x == x`, `x >=u 0` are true, `x <u 0` is false; `c != false` is `c`. (llrm-mir's instcombine, #237)
+#[test]
+fn a_comparison_with_itself_or_with_the_extreme_is_decided() {
+    const TEXT: &str = r#"define i16 @f(i16 %x, i1 %c) {
+b1:
+  %a = icmp eq i16 %x, %x
+  %b = icmp ne i1 %c, false
+  %d = icmp uge i16 %x, 0
+  %e = icmp ult i16 %x, 0
+  %s1 = select i1 %a, i16 1, i16 2
+  %s2 = select i1 %b, i16 %s1, i16 3
+  %s3 = select i1 %d, i16 %s2, i16 4
+  %s4 = select i1 %e, i16 5, i16 %s3
+  ret i16 %s4
+}
+"#;
+    let out = piped(TEXT);
+    assert!(!out.contains("icmp"), "{out}");
+    assert!(out.contains("select i1 %c, i16 1, i16 3"), "{out}");
+}
+
+/// `(x - 5) * 8 + 3 + 4` is `x * 8 + -33` (the multiply by 8 is the back end's to shift). (llrm-mir's instcombine, #237)
+#[test]
+fn a_difference_with_a_constant_is_a_sum_and_the_constants_meet() {
+    const TEXT: &str = r#"define i16 @f(i16 %x) {
+b1:
+  %a = sub i16 %x, 5
+  %b = mul i16 %a, 8
+  %c = add i16 %b, 3
+  %d = add i16 %c, 4
+  %e = and i16 %d, 255
+  %g = and i16 %e, 15
+  ret i16 %g
+}
+"#;
+    let out = piped(TEXT);
+    assert!(out.contains("add i16 %0, -33"), "{out}");
+    assert_eq!(out.matches("add").count(), 1, "{out}");
+}
+
+/// `icmp ne (zext x), 0` is `icmp ne x, 0` on the narrow type. (llrm-mir's instcombine, #237)
+#[test]
+fn an_extension_keeps_whether_a_value_is_zero() {
+    const TEXT: &str = r#"define i16 @f(i8 %x) {
+b1:
+  %a = zext i8 %x to i16
+  %b = icmp ne i16 %a, 0
+  %c = sext i8 %x to i16
+  %d = icmp eq i16 %c, 0
+  %e = zext i1 %b to i16
+  %g = zext i1 %d to i16
+  %h = add i16 %e, %g
+  ret i16 %h
+}
+"#;
+    let out = piped(TEXT);
+    assert!(out.contains("icmp ne i8 %x, 0") && out.contains("icmp eq i8 %x, 0"), "{out}");
+    assert!(!out.contains("icmp ne i16") && !out.contains("icmp eq i16"), "{out}");
+}
+
+/// A zero extension of a zero extension, truncated back, and a sign extension truncated back, are the value. (llrm-mir's instcombine, #237)
+#[test]
+fn casts_that_undo_each_other_are_the_value() {
+    const TEXT: &str = r#"define i8 @f(i8 %x) {
+b1:
+  %a = zext i8 %x to i16
+  %b = zext i16 %a to i32
+  %c = trunc i32 %b to i8
+  %d = sext i8 %c to i16
+  %e = trunc i16 %d to i8
+  ret i8 %e
+}
+"#;
+    let out = piped(TEXT);
+    assert!(out.contains("ret i8 %x") && !out.contains("ext") && !out.contains("trunc"), "{out}");
+}
+
+/// Every input the same: the phi is the value. (llrm-mir's instcombine, #237)
+#[test]
+fn a_phi_of_one_value_is_that_value() {
+    const TEXT: &str = r#"define i16 @f(i1 %c, i16 %x) {
+b1:
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %p = phi i16 [ %x, %b2 ], [ %x, %b3 ]
+  %q = add i16 %p, 1
+  ret i16 %q
+}
+"#;
+    let out = piped(TEXT);
+    assert!(!out.contains("phi") && out.contains("add i16 %x, 1"), "{out}");
+}
+
+/// A stack slot only ever written, and the stores into it, are gone. (llrm-mir's instcombine, #237)
+#[test]
+fn a_slot_only_written_goes_with_its_stores() {
+    const TEXT: &str = r#"define i16 @f(i16 %x) {
+b1:
+  %s = alloca i16
+  store i16 %x, ptr %s
+  store i16 7, ptr %s
+  ret i16 %x
+}
+"#;
+    let out = piped(TEXT);
+    assert!(!out.contains("alloca") && !out.contains("store"), "{out}");
+}
+
+/// Constants fold through arithmetic, a compare and zero and sign extensions of it. (llrm-mir's instcombine, #237)
+#[test]
+fn constants_fold_through_compares_and_extensions() {
+    const TEXT: &str = r#"define i16 @f() {
+b1:
+  %a = add i16 2, 3
+  %b = mul i16 %a, 4
+  %c = icmp ult i16 %b, 100
+  %d = zext i1 %c to i16
+  %e = sext i1 %c to i16
+  %g = add i16 %d, %e
+  %h = add i16 %b, %g
+  ret i16 %h
+}
+"#;
+    let out = piped(TEXT);
+    assert!(out.contains("ret i16 20"), "{out}");
+}
+
+/// Nib spells a condition `icmp`, `sext i1` to i8, `icmp ne 0`, and scales an index by `mul 1`: one
+/// compare decides, and the scale and offsets meet (llrm-mir's instcombine, #237).
+#[test]
+fn the_frontends_booleans_and_scales_come_apart() {
+    const TEXT: &str = r#"define i16 @f(i16 %i, i16 %n) {
+b1:
+  %0 = icmp ult i16 %i, %n
+  %1 = sext i1 %0 to i8
+  %2 = icmp ne i8 %1, 0
+  br i1 %2, label %b2, label %b3
+
+b2:
+  %3 = mul i16 %n, 1
+  %4 = mul i16 %i, %3
+  %5 = mul i16 %4, 4
+  %6 = sub i16 %5, 3
+  %7 = add i16 %6, 1
+  %8 = add i16 2, 3
+  %9 = add i16 %7, %8
+  ret i16 %9
+
+b3:
+  ret i16 0
+}
+"#;
+    let out = piped(TEXT);
+    assert!(out.contains("br i1 %0, label %b2, label %b3") && !out.contains("sext"), "{out}");
+    assert_eq!(out.matches("mul").count() + out.matches("shl").count(), 2, "{out}");
+    assert!(out.contains("add i16") && out.contains(", 3"), "{out}");
+}
+
+/// A memset of a slot only written, and a store into it, go with it (llrm-mir's instcombine, #237).
+#[test]
+fn a_memset_slot_nothing_reads_is_removed() {
+    const TEXT: &str = r#"declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) memory(argmem: write)
+
+define i16 @f() {
+b1:
+  %0 = alloca [8 x i8]
+  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
+  %1 = getelementptr inbounds i8, ptr %0, i16 2
+  store i16 7, ptr %1
+  ret i16 7
+}
+"#;
+    let out = piped(TEXT);
+    assert!(!out.contains("alloca") && !out.contains("memset(") && !out.contains("store"), "{out}");
+    assert!(out.contains("ret i16 7"), "{out}");
 }

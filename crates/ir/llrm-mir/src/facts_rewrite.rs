@@ -23,10 +23,9 @@
 //! `gvn::joined` (insertion on an edge) and `loadjoins` (a load cloned into
 //! predecessors) move or insert an instruction with its flags, and are sound
 //! by the argument above; `algebraic` reassociation changes operands and
-//! already clears the flags (`set_flags(.., Flags::default())`). The passes of
-//! `llrm_mir::transforms` that remain (`instcombine`, `function-attrs`, `inline`) are
-//! not run by the compile route (#237); a pass that moves into the route comes
-//! under this audit.
+//! already clears the flags (`set_flags(.., Flags::default())`). The optimiser passes
+//! `llrm-mir` once had were never run by the compile route (#237) and are gone;
+//! a pass added to the route comes under this audit.
 //!
 //! The argument needs one more thing: no reader takes a flag or `!range` off
 //! an instruction to conclude something about its operands, or about another
