@@ -13,7 +13,7 @@ use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::target::Segments;
 use crate::backend::constpool::Pool;
 use crate::backend::isel::{self, Selected};
-use crate::backend::{addressvalues, frame, globals, jumps, masm};
+use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select, ssaspill};
 use crate::flow;
 use crate::model::lir::LirBody;
 use crate::model::ir::{Addr, Space};
@@ -158,14 +158,77 @@ pub struct Machined {
 /// the function is selected again with the allocas below a hole the spill
 /// slots fill, and whichever has fewer two-byte displacements is kept.
 pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let (first, frame) = phased(module, name, abi, pool, target, 0)?;
+    let kept = machined_once(module, name, abi, pool, target)?;
+    // Reported once the choice is made: a rejected candidate is no function's cost.
+    if crate::support::debug::enabled("cost") {
+        llrm_support::debug!("cost", "{}", executed::summary(&kept.body, target.cpu));
+    }
+    Ok(kept)
+}
+
+fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
+    let (first, frame) = cheaper(module, name, abi, pool, target, 0)?;
     let spilled = frame.floor + first.reserve;
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
     }
-    let (second, _) = phased(module, name, abi, pool, target, spilled)?;
+    let (second, _) = cheaper(module, name, abi, pool, target, spilled)?;
     Ok(if far_frame(&second.body) < far { second } else { first })
+}
+
+/// `phased`, with the spiller; and, where the spiller changed the body, without it too: the
+/// one that costs less is kept. The spiller decides on the general registers alone, so where
+/// the allocator's pressure is elsewhere (segment registers, x87 and fixed-register glue) its
+/// spill code can be on top of what the allocator does anyway.
+fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<(Machined, frame::Frame), String> {
+    let candidates = CANDIDATES.with(std::cell::Cell::get);
+    if candidates == Candidates::AllocatorOnly {
+        return phased(module, name, abi, pool, target, hole, false);
+    }
+    let before = ssaspill::changes();
+    let spilled = phased(module, name, abi, pool, target, hole, true)?;
+    if ssaspill::changes() == before || candidates == Candidates::SpillerOnly {
+        return Ok(spilled);
+    }
+    let allocator_alone = phased(module, name, abi, pool, target, hole, false)?;
+    let (kept, rejected) = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
+        (Some(with), Some(without)) if without < with => (allocator_alone, spilled),
+        _ => (spilled, allocator_alone),
+    };
+    let _ = rejected;
+    Ok(kept)
+}
+
+/// Which routes through the machine phases `machined` tries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Candidates {
+    /// The spiller in front of the allocator and the allocator alone, the cheaper kept.
+    Both,
+    SpillerOnly,
+    AllocatorOnly,
+}
+
+thread_local! {
+    static CANDIDATES: std::cell::Cell<Candidates> = const { std::cell::Cell::new(Candidates::Both) };
+}
+
+/// `run` with `machined` trying only `candidates` on this thread.
+pub fn trying<T>(candidates: Candidates, run: impl FnOnce() -> T) -> T {
+    let before = CANDIDATES.with(|one| one.replace(candidates));
+    let done = run();
+    CANDIDATES.with(|one| one.set(before));
+    done
+}
+
+/// What a finished function costs: its encoded bytes where the target optimizes for size,
+/// else the instructions and memory operands it is expected to execute per call.
+fn cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
+    if target.cpu.size {
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::emit(what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+    } else {
+        executed::executed(&made.body).map(|done| done.instructions + done.memory)
+    }
 }
 
 /// The frame operands a one-byte displacement does not reach.
@@ -185,7 +248,7 @@ fn far_frame(body: &LirBody) -> usize {
 }
 
 /// `machined` with `hole` bytes left above the allocas; and the frame.
-fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<(Machined, frame::Frame), String> {
+fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool) -> Result<(Machined, frame::Frame), String> {
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, zeroed, hole);
     let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
@@ -196,7 +259,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments)? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling)? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;

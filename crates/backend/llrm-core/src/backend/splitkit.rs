@@ -612,7 +612,7 @@ fn _last_split(block: &LirBlock) -> i64 {
 }
 
 /// Where `block`'s closing jumps start: a two-way block ends `jcc; jmp`.
-fn _tail(block: &LirBlock) -> usize {
+pub fn _tail(block: &LirBlock) -> usize {
     block.insns.len() - block.insns.iter().rev().take_while(|one| _terminates(one)).count()
 }
 

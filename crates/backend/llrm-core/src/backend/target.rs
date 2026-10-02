@@ -224,6 +224,12 @@ pub fn popped_width(place: &Loc) -> Option<u32> {
     }
 }
 
+/// Whether an x87 comparison reaches the flags through AX: `fnstsw ax; sahf`
+/// follows it, so nothing may live in AX across it.
+pub fn status_through_ax(what: &Semantics) -> bool {
+    what.op == Operation::Compare && what.sources.iter().any(|one| matches!(one, Loc::St(_)) || matches!(one, Loc::Held(held) if held.width == 10))
+}
+
 /// The register a two-address instruction reads and writes as one.
 ///
 /// `add ax,[c]` is one register at two moments; x86 says so by naming the

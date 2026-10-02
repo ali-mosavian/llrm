@@ -1656,6 +1656,12 @@ fn _indexed_source(
 
 /// The spilled source arithmetic or a comparison reads as its memory operand, needing no reload.
 pub fn folded_source(one: &Insn, values: &BTreeSet<u32>) -> Option<Held> {
+    folded_source_in(one, values, true)
+}
+
+/// `folded_source`, for an instruction that `tied` writes the register of its first source (after
+/// two-address lowering) or, not tied, names its result apart (SSA).
+pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Option<Held> {
     if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
         return None;
     }
@@ -1663,14 +1669,14 @@ pub fn folded_source(one: &Insn, values: &BTreeSet<u32>) -> Option<Held> {
     let mut widths: &[u32] = &[2, 4];
     let (left, right) = match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
         (Operation::Binary, name, [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if !matches!(name, Some("add" | "sub" | "and" | "or" | "xor")) || dest != left {
+            if !matches!(name, Some("add" | "sub" | "and" | "or" | "xor")) || (tied && dest != left) {
                 return None;
             }
             (*left, *right)
         }
         (Operation::Compare, Some("cmp"), [], [Loc::Held(left), Loc::Held(right)]) => (*left, *right),
         (Operation::Multiply, Some("imul"), [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if dest != left {
+            if tied && dest != left {
                 return None;
             }
             (*left, *right)
@@ -1804,7 +1810,7 @@ fn _group_source(one: &Insn) -> Option<Held> {
 /// The definition every one of `defining` repeats, if they all do the same.
 /// A split remakes a value where each piece ends, so a remakeable value can
 /// have several definitions that are one.
-fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
+pub fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
     let first = defining.first()?;
     let alike = |one: &Insn| {
         one.what == first.what
@@ -1901,7 +1907,7 @@ fn _literals(body: &LirBody, values: &BTreeSet<u32>, any_width: bool) -> IndexMa
 }
 
 /// Pure addresses cheap enough to recreate at every use.
-fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> {
+pub fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> {
     let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
@@ -2024,7 +2030,7 @@ fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn
 }
 
 /// How wide each value is read or written anywhere, which is how big its slot has to be.
-fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+pub fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
@@ -2067,14 +2073,14 @@ fn _mov(into: Loc, out_of: Loc) -> Semantics {
 }
 
 /// The load that puts a spilled value back for one instruction.
-fn _reload(beside: &Insn, into: u32, cell: &Mem) -> Arc<Insn> {
+pub fn _reload(beside: &Insn, into: u32, cell: &Mem) -> Arc<Insn> {
     let inserted =
         _inserted(beside, _mov(Loc::Held(Held { value: into, width: cell.width }), Loc::Mem(cell.clone())), vec![into], Vec::new());
     _with(&inserted, |made| made.spill_reload = true)
 }
 
 /// The store that puts a spilled value away as soon as it is written.
-fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
+pub fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
         _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width })),

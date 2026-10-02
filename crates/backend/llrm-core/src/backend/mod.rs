@@ -62,6 +62,8 @@ pub mod executed;
 pub mod schedule;
 pub mod select;
 pub mod spiller;
+pub mod ssarepair;
+pub mod ssaspill;
 pub mod spillforward;
 pub mod spillplacement;
 pub mod splitkit;
@@ -80,3 +82,5 @@ pub mod regalloc_input;
 mod regalloc_total_tests;
 #[cfg(test)]
 mod regalloc_fuzz_tests;
+#[cfg(test)]
+mod ssaspill_tests;

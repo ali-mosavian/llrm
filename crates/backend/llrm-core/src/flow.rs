@@ -14,7 +14,7 @@ use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
+    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, ssaspill, twoaddr,
 };
 
 use crate::backend::verify::{self, Malformed};
@@ -33,6 +33,21 @@ pub fn machine<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, true)
+}
+
+/// `machine`, with the spiller in front of the allocator or left out.
+#[allow(clippy::too_many_arguments)]
+pub fn machine_with<'a>(
+    pinned: &IndexMap<u32, Register>,
+    frame: Option<Rc<RefCell<Frame>>>,
+    pool: Option<Rc<RefCell<Pool>>>,
+    calls: Option<&IndexMap<i64, String>>,
+    basic_semantics: bool,
+    cpu: impl Into<ProfileOrName<'a>>,
+    segments: &Segments,
+    spilling: bool,
+) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
     if let Some(frame) = &frame {
@@ -42,8 +57,9 @@ pub fn machine<'a>(
         }
     }
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
-    Ok(vec![
+    let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone() }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
@@ -61,7 +77,11 @@ pub fn machine<'a>(
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
         Box::new(jumps::ControlFlow { cpu: target }),
-    ])
+    ];
+    if !spilling {
+        phases.retain(|phase| phase.class_name() != "SsaSpill");
+    }
+    Ok(phases)
 }
 
 /// The MIR fixed point every driver runs, configured by target and options alone.

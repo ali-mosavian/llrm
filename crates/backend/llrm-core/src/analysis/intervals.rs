@@ -242,8 +242,13 @@ pub fn _graph(blocks: &[LirBlock]) -> Vec<MirBlock> {
 
 /// How deeply each block is nested in loops.
 pub fn depths(body: &LirBody) -> IndexMap<i64, u32> {
+    depths_in(body, &loopy::loops(&_graph(&body.blocks), Some(body.entry)))
+}
+
+/// `depths`, from loops already found.
+pub fn depths_in(body: &LirBody, loops: &[loopy::Loop]) -> IndexMap<i64, u32> {
     let mut out: IndexMap<i64, u32> = body.blocks.iter().map(|block| (block.at, 0)).collect();
-    for found in loopy::loops(&_graph(&body.blocks), Some(body.entry)) {
+    for found in loops {
         for at in &found.body {
             if let Some(depth) = out.get_mut(at) {
                 *depth += 1;

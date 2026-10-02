@@ -16,7 +16,7 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 
 /// Operations that read their destination.
-const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
+pub const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
 
 pub struct TwoAddress;
 
@@ -198,14 +198,20 @@ fn _move(into: Loc, out_of: Loc) -> Semantics {
     Semantics { name: Some("mov".to_owned()), dests: vec![into], sources: vec![out_of], ..Semantics::new(Operation::Move) }
 }
 
+/// Whether `what` writes the register of its first source: x86's two-address form.
+pub fn ties(what: &Semantics) -> bool {
+    !what.dests.is_empty()
+        && !what.sources.is_empty()
+        && (_TIED.contains(&what.op) || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
+}
+
 /// The copy and the fixed instruction, or None where it is already tied.
 fn _untied(one: &Insn, mint: &mut dyn FnMut() -> u32) -> Option<Vec<Arc<Insn>>> {
     let what = one.what.as_ref()?;
     if what.dests.is_empty() || what.sources.is_empty() {
         return None;
     }
-    let multiply = what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2;
-    if !_TIED.contains(&what.op) && !multiply {
+    if !ties(what) {
         return None;
     }
     let (into, first) = (&what.dests[0], &what.sources[0]);
