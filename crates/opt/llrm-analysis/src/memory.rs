@@ -116,11 +116,14 @@ pub struct MemoryObject {
     // NONLOCAL and PARAMETER may reach it. Unaddressed implies uncaptured.
     pub addressed: bool,
     pub captured: bool,
+    /// A `constant` global: writing it is undefined, so nothing changes it,
+    /// wherever its address went.
+    pub constant: bool,
 }
 
 impl MemoryObject {
     pub const fn new(kind: MemoryKind) -> Self {
-        Self { kind, identity: None, generation: 0, extent: None, addressed: true, captured: true }
+        Self { kind, identity: None, generation: 0, extent: None, addressed: true, captured: true, constant: false }
     }
 
     fn key(&self) -> (MemoryKind, &Option<Identity>, i64, Option<i64>) {
@@ -585,7 +588,8 @@ pub fn global_object(unit: &Unit, global: GlobalId) -> Option<MemoryObject> {
         GlobalKind::Function(_) => return None,
     };
     let captured = !unit.globals_aa.is_some_and(|aa| aa.tracked(global));
-    Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, ..MemoryObject::new(MemoryKind::Global) })
+    let constant = matches!(&unit.globals.get(global.0 as usize)?.kind, GlobalKind::Variable(variable) if variable.constant);
+    Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) })
 }
 
 /// An access as the alias queries read it: LLVM's `MemoryLocation`, its
@@ -632,6 +636,12 @@ pub struct MemRef {
 }
 
 impl MemRef {
+    /// Whether every object it may reach is constant, so that no write
+    /// changes it.
+    pub fn unwritable(&self) -> bool {
+        self.provenance.as_ref().is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.constant))
+    }
+
     /// `width` bytes at `pointer`.
     pub fn at(unit: &Unit, pointer: Operand, width: u32) -> Self {
         let space = unit.space(pointer).unwrap_or(0);
@@ -965,7 +975,7 @@ mod tests {
             generation: 0,
             extent: Some(8),
             addressed: true,
-            captured: true,
+            captured: true, constant: false,
         };
         let second = MemoryObject { identity: Some(Identity::Value(2)), ..first.clone() };
         let a = Provenance::one_with_slice(first.clone(), 0, 4, 1, 1, BTreeSet::new()).unwrap();

@@ -8,6 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::context::{ConstantKind, GlobalId};
+use crate::facts::Facts;
+use crate::intrinsics::Intrinsic;
 use crate::memory;
 use crate::module::{Function, InstId, MetadataOperand, Module};
 use crate::opcode::Opcode;
@@ -70,6 +72,28 @@ impl CallGraph {
             callees.insert(id, called);
         }
         Self { callees, unknown, components: Default::default() }
+    }
+}
+
+impl CallGraph {
+    /// Whether `id` can never be entered again while it runs: it is in no cycle of
+    /// calls, and neither it nor what it reaches calls an unbounded pointer or a
+    /// declaration that may call back (not `nocallback`, not an intrinsic): LLVM's
+    /// `addNoRecurseAttrs`.
+    pub fn cannot_reenter(&self, module: &Module, id: GlobalId) -> bool {
+        if self.recursive(id) {
+            return false;
+        }
+        let mut over = self.reachable(id);
+        over.insert(id);
+        over.into_iter().all(|at| {
+            let global = module.global(at);
+            let Some(function) = global.function() else { return true };
+            if function.is_declaration() {
+                return Facts::of(&function.attrs).no_callback() || global.name.as_deref().and_then(Intrinsic::named).is_some_and(|one| !matches!(one, Intrinsic::Code | Intrinsic::Asm));
+            }
+            !self.calls_unknown(at)
+        })
     }
 }
 

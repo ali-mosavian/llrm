@@ -1148,8 +1148,6 @@ mod tests {
         assert!(loop_.iter().filter(|one| one.contains("ptr [")).all(two_registers), "{loop_:#?}");
     }
 
-    /// Rotation consumed the syntax that proved crc's counts, so the instrument
-    /// guessed nine in ten and read 1505 executed instructions instead of 1356.
     /// `name`'s listing of `function`, compiled from tests/fixtures/c/`name`.cgs.
     fn listing_of(name: &str, function: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).unwrap();
@@ -1173,6 +1171,22 @@ mod tests {
         assert_eq!((reads(&relaxed, "_counter"), reads(&relaxed, "_seen")), (1, 1), "{relaxed}");
     }
 
+    /// A const object is read once across a call or a store: writing it is
+    /// undefined, wherever its address went. An extern const was a plain
+    /// global, and no analysis read `constant` as unwritable, so each was
+    /// read again after `ext()`, `keep(tbl)` or `*p = 1`.
+    #[test]
+    fn test_a_const_object_is_read_once_across_a_call_or_a_store() {
+        let reads = |function: &str, name: &str| listing_of("constobj", function).lines().filter(|one| one.contains(&format!("ptr {name}"))).count();
+        assert_eq!(reads("_ext_plain", "_ev"), 2, "premise: a plain extern is read again after a call");
+        assert_eq!(reads("_ext_const", "_ek"), 1);
+        assert_eq!(reads("_table", "_tbl"), 1);
+        assert_eq!(reads("_escaped", "_tbl"), 1);
+        assert_eq!(reads("_stored", "_tbl"), 1);
+    }
+
+    /// Rotation consumed the syntax that proved crc's counts, so the instrument
+    /// guessed nine in ten and read 1505 executed instructions instead of 1356.
     #[test]
     fn test_rotation_keeps_provable_trip_counts() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/crc.cgs");
@@ -1437,6 +1451,22 @@ mod tests {
         use llrm_core::driver::flags::Level;
         assert_eq!(cleanups(Level::Os), ["pop cx", "pop cx", "pop cx"]);
         assert_eq!(cleanups(Level::O2), ["add sp, 2", "add sp, 4"]);
+    }
+
+    /// A C function that calls nothing came out of the compile with no word
+    /// that nothing re-enters it: `norecurse` was inferred where no compiler ran.
+    #[test]
+    fn test_a_leaf_function_comes_out_of_the_compile_norecurse() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/halve.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let directory = std::env::temp_dir().join(format!("llrm-c-norecurse-{}", std::process::id()));
+        super::selected(&text, "halve", Some(&directory), &llrm_core::driver::Options::of(machine)).expect("selects");
+        let mut stages = std::fs::read_dir(&directory).unwrap().flatten().map(|one| one.path()).filter(|one| one.extension().is_some_and(|ext| ext == "ll")).collect::<Vec<_>>();
+        stages.sort_by_key(|one| one.file_name().map(std::ffi::OsStr::to_owned));
+        let last = std::fs::read_to_string(stages.last().expect("a stage")).unwrap();
+        std::fs::remove_dir_all(&directory).ok();
+        let defined = last.lines().filter(|line| line.starts_with("define")).collect::<Vec<_>>();
+        assert!(!defined.is_empty() && defined.iter().all(|line| line.contains("norecurse")), "{defined:?}");
     }
 
     /// bcc -O makes fabs the x87 instruction; llrm-c called the library's:

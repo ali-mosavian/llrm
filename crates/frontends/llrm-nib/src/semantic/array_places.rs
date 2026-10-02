@@ -269,6 +269,10 @@ impl FunctionCompiler<'_> {
                 Store::One(place, value) => {
                     self.emit("store", Vec::new(), vec![place, value], None);
                 }
+                Store::Bytes { destination, source, count } => {
+                    let (to, from) = (self.projected_place(&destination, 0, TypeName::U16), self.projected_place(&source, 0, TypeName::U16));
+                    self.emit("copy_bytes", Vec::new(), vec![to, from, hir::Operand::Constant(type_id(TypeName::U16), i64::from(count))], None);
+                }
                 Store::Run { destination, element, count, source } => self.emit_run(&destination, element, count, source, span)?,
             }
         }

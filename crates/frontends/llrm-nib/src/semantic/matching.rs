@@ -438,7 +438,7 @@ impl FunctionCompiler<'_> {
         match field.type_ {
             ElementType::Scalar(type_name) => {
                 let value = self.value(type_name);
-                let place = self.projected_place(view, field.offset, type_name);
+                let place = self.field_place(view, field.offset, type_name);
                 self.emit("load", vec![value], vec![place.clone()], None);
                 Subject::Scalar(hir::Operand::Value(value), type_name, view.pointer.map(|_| place))
             }

@@ -41,7 +41,7 @@ use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::transforms::inline::{carries, splice};
+use llrm_mir::splice::{carries, splice};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
 

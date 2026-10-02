@@ -82,7 +82,7 @@ impl FunctionCompiler<'_> {
         }
         let pointer = self.value(*type_name);
         self.emit("load", vec![pointer], vec![field.clone()], None);
-        AssignmentPlace::Scalar(hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false }, target)
+        AssignmentPlace::Scalar(hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false, member: None }, target)
     }
 
     /// Whether assigning `value` to a place holding the reference `reference`

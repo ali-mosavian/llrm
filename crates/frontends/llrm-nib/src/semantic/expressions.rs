@@ -106,7 +106,7 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 }
                 Ok(TypedOperand {
-                    operand: Some(hir::Operand::Constant(BOOL, if *value { -1 } else { 0 })),
+                    operand: Some(hir::Operand::Constant(BOOL, i64::from(*value))),
                     type_name: TypeName::Bool,
                 })
             }
@@ -156,7 +156,7 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
-                                inbounds: false,
+                                inbounds: false, member: None,
                             }],
                             None,
                         );
@@ -209,7 +209,7 @@ impl<'a> FunctionCompiler<'a> {
                     if expected.is_some_and(|one| one != target) {
                         return Err(type_mismatch(*span, expected.expect("checked"), target));
                     }
-                    let through = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false };
+                    let through = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false, member: None };
                     let result = self.value(target);
                     self.emit("load", vec![result], vec![through], None);
                     return Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target });

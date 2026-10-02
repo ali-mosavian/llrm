@@ -97,6 +97,10 @@ impl Machine for Dos {
         SEGMENT_REGISTERS
     }
 
+    fn two_address(&self) -> bool {
+        true
+    }
+
     fn address_registers(&self) -> i64 {
         (word_bases().len() + WORD_INDEXES.len()) as i64
     }

@@ -1,106 +1,106 @@
 emitted/demo-deedlines define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @ACTIONS() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @ACTIONS3D() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-emitted/demo-deedlines define cc1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+emitted/demo-deedlines define cc1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 emitted/demo-deedlines define cc1000 void @COPPER() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @CREATEOBJECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-deedlines define cc1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
 emitted/demo-deedlines define cc1000 void @CYCLEBLOBS() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @DEEDLINESAX(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind
-emitted/demo-deedlines define cc1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-deedlines define cc1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/demo-deedlines define cc1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-deedlines define cc1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
 emitted/demo-deedlines define cc1000 void @GETMAP(ptr %0) addrspace(1)
-emitted/demo-deedlines define cc1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none) norecurse
 emitted/demo-deedlines define cc1000 void @INITCROSFADEPICS(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
-emitted/demo-deedlines define cc1000 void @KEYACTION() addrspace(1) memory(readwrite, argmem: none) willreturn nounwind
+emitted/demo-deedlines define cc1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc1000 void @KEYACTION() addrspace(1) memory(readwrite, argmem: none) willreturn nounwind norecurse
 emitted/demo-deedlines define cc1000 void @LOAD3DRECORD() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @LOADOBJECT(ptr %0) addrspace(1)
 emitted/demo-deedlines define cc1000 void @LOADQBINSIDE() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @LOADRECORD() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-emitted/demo-deedlines define cc1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
-emitted/demo-deedlines define cc1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none) norecurse
 emitted/demo-deedlines define cc1000 void @PLASMABLOBS() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+emitted/demo-deedlines define cc1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 emitted/demo-deedlines define cc1000 void @PREHISTORICODE() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @RGBLIGHTS() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+emitted/demo-deedlines define cc1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 emitted/demo-deedlines define cc1000 void @SAVERECORD() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-deedlines define cc1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-deedlines define cc1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read) norecurse
 emitted/demo-deedlines define cc1000 void @SPHEREMAPLASMA() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @SUCKING() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+emitted/demo-deedlines define cc1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 emitted/demo-deedlines define cc1000 void @ZOOMDISTORT() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-deedlines define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-oimad define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-oimad define cc1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) willreturn
+emitted/demo-oimad define cc1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
 emitted/demo-oimad define cc1000 void @INIT() addrspace(1) memory(readwrite, argmem: none)
 emitted/demo-oimad define cc1000 void @PLAYMUSIC() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-oimad define cc1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-oimad define cc1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
 emitted/demo-oimad define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-qbdemo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-qbdemo define cc1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none)
-emitted/demo-qbdemo define cc1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+emitted/demo-qbdemo define cc1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
+emitted/demo-qbdemo define cc1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 emitted/demo-qbdemo define cc1000 void @FRACLINE2(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-qbdemo define cc1000 void @FRACTALEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-qbdemo define cc1000 void @OHCANADA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-qbdemo define cc1000 void @PLASMA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-qbdemo define cc1000 void @RENDER(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-qbdemo define cc1000 void @SHADEBOBEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none)
+emitted/demo-qbdemo define cc1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
 emitted/demo-qbdemo define cc1000 void @UNWHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
 emitted/demo-qbdemo define cc1000 void @WHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/demo-qbdemo define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-control define internal i16 @step(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-control define internal i16 @count(i16 %0) addrspace(1) memory(none) nounwind
-emitted/nib-descriptors define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-control define internal i16 @step(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-control define internal i16 @count(i16 %0) addrspace(1) memory(none) nounwind norecurse
+emitted/nib-descriptors define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-descriptors define internal i8 @first(ptr %0) addrspace(1)
 emitted/nib-descriptors define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-attributes define internal i8 @inverted(i8 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-attributes define internal i8 @inverted(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-attributes define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic.array_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
+emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic.array_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) %0, i16 %1) addrspace(1)
-emitted/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-emitted/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+emitted/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 emitted/nib-examples-basic-sortlib define cc1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-basic-sortlib define cc1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-examples-basic-sortlib define cc1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-basic-sortlib define cc1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) %0, ptr addrspace(1) %1) addrspace(1) memory(argmem: read) willreturn
+emitted/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) %0, ptr addrspace(1) %1) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-borrows define internal void @best(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-emitted/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn
+emitted/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn norecurse
 emitted/nib-examples-borrows define internal void @word(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i16 %2) addrspace(1)
 emitted/nib-examples-borrows define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-csv define internal void @trimmed(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-csv define internal void @field(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i16 %2) addrspace(1)
 emitted/nib-examples-csv define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-dice define internal i32 @Dice.iter(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-dice define internal i32 @Rolls.next(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn
+emitted/nib-examples-dice define internal i32 @Dice.iter(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-dice define internal i32 @Rolls.next(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn norecurse
 emitted/nib-examples-dice define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-digits define internal void @digit(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 3)) %0, i8 %1) addrspace(1) memory(argmem: write) willreturn
+emitted/nib-examples-digits define internal void @digit(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 3)) %0, i8 %1) addrspace(1) memory(argmem: write) willreturn norecurse
 emitted/nib-examples-digits define internal void @parse(ptr addrspace(1) nocapture writeonly %0, ptr %1) addrspace(1)
-emitted/nib-examples-digits define internal i32 @first_even(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-examples-digits define internal i32 @first_even(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-digits define internal void @report(ptr %0) addrspace(1)
 emitted/nib-examples-digits define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-easing define internal i16 @linear(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-easing define internal i16 @ease_in(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-easing define internal i16 @ease_out(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-easing define internal i16 @Slide.at(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
+emitted/nib-examples-easing define internal i16 @linear(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-easing define internal i16 @ease_in(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-easing define internal i16 @ease_out(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-easing define internal i16 @Slide.at(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-easing define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-easing define internal i16 @main$smooth(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-easing define internal i16 @main.$lambda2(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-easing define internal i16 @$call14(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-easing define internal i16 @main$smooth(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-easing define internal i16 @main.$lambda2(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-easing define internal i16 @$call14(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-entries define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
-emitted/nib-examples-entries define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-entries define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-entries define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-emitted/nib-examples-entries define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write)
+emitted/nib-examples-entries define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) norecurse
 emitted/nib-examples-entries define internal void @std.io.File.open(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 emitted/nib-examples-entries define internal void @std.io.File.create(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-entries define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
@@ -113,34 +113,34 @@ emitted/nib-examples-entries define internal void @load_entries(ptr addrspace(1)
 emitted/nib-examples-entries define internal void @$main(ptr addrspace(1) nocapture %0) addrspace(1) memory(readwrite, argmem: write)
 emitted/nib-examples-entries define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-entries define internal i8 @string.eq(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1)
-emitted/nib-examples-entries define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-examples-entries define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-generic_types define internal i32 @store(ptr addrspace(1) nocapture %0, i16 %1) addrspace(1)
 emitted/nib-examples-generic_types define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn
-emitted/nib-examples-generic_types define internal i16 @"larger[i16]"(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-generic_types define internal i8 @"larger[u8]"(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn norecurse
+emitted/nib-examples-generic_types define internal i16 @"larger[i16]"(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-generic_types define internal i8 @"larger[u8]"(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-generic_types define internal i32 @"Stack.top[i16]"(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-gradebook define internal void @curve(ptr addrspace(1) nocapture %0, i16 %1) addrspace(1)
-emitted/nib-examples-gradebook define internal i16 @average(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-examples-gradebook define internal i16 @average(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-gradebook define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-greeting define internal ptr @shout(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-greeting define internal ptr @label(ptr nocapture readnone %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-greeting define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-interop-main define i16 @_weight(i16 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-interop-main define i16 @_weight(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-interop-main define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-inventory define internal i16 @stocked(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-examples-inventory define internal i16 @stocked(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-inventory define internal void @restock(ptr addrspace(1) nocapture %0, ptr nocapture %1, i16 %2) addrspace(1)
 emitted/nib-examples-inventory define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-laps define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-league define internal i16 @Team.points(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-league define internal i16 @Team.played(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-league define internal void @Team.record(ptr addrspace(1) nocapture %0, i16 %1, i16 %2) addrspace(1) memory(argmem: readwrite) willreturn
+emitted/nib-examples-league define internal i16 @Team.points(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-league define internal i16 @Team.played(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-league define internal void @Team.record(ptr addrspace(1) nocapture %0, i16 %1, i16 %2) addrspace(1) memory(argmem: readwrite) willreturn norecurse
 emitted/nib-examples-league define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-league define internal i32 @"best[i16]"(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-level define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
-emitted/nib-examples-level define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-level define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-level define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-emitted/nib-examples-level define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write)
+emitted/nib-examples-level define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) norecurse
 emitted/nib-examples-level define internal void @std.io.File.open(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 emitted/nib-examples-level define internal void @std.io.File.create(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-level define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
@@ -162,9 +162,9 @@ emitted/nib-examples-level define internal void @"written[Face]"(ptr addrspace(1
 emitted/nib-examples-level define internal void @"written[Node]"(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
 emitted/nib-examples-level define internal void @"written[Plane]"(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
-emitted/nib-examples-logfile define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-logfile define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-logfile define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-emitted/nib-examples-logfile define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write)
+emitted/nib-examples-logfile define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) norecurse
 emitted/nib-examples-logfile define internal void @std.io.File.open(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.create(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
@@ -178,38 +178,38 @@ emitted/nib-examples-logfile define internal void @Log.drop(ptr addrspace(1) noc
 emitted/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1) addrspace(1)
 emitted/nib-examples-logfile define internal void @$main(ptr addrspace(1) nocapture %0) addrspace(1) memory(readwrite, argmem: write)
 emitted/nib-examples-logfile define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-mandel define internal i16 @escape(i32 %0, i32 %1) addrspace(1) memory(none) nounwind
+emitted/nib-examples-mandel define internal i16 @escape(i32 %0, i32 %1) addrspace(1) memory(none) nounwind norecurse
 emitted/nib-examples-mandel define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-meter define internal void @Player.hit(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn
-emitted/nib-examples-meter define internal void @Player.heal(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn
-emitted/nib-examples-meter define internal i8 @Player.award(ptr addrspace(1) nocapture %0, i32 %1, i32 %2) addrspace(1) memory(argmem: readwrite) willreturn
+emitted/nib-examples-meter define internal void @Player.hit(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+emitted/nib-examples-meter define internal void @Player.heal(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+emitted/nib-examples-meter define internal i8 @Player.award(ptr addrspace(1) nocapture %0, i32 %1, i32 %2) addrspace(1) memory(argmem: readwrite) willreturn norecurse
 emitted/nib-examples-meter define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-meter define internal void @i32.checked_add(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn
-emitted/nib-examples-meter define internal void @i32.checked_mul(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn
-emitted/nib-examples-meter define internal i8 @u8.saturating_add(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-meter define internal i8 @u8.saturating_sub(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-modules-main define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-modules-main define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-modules-main define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-meter define internal void @i32.checked_add(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn norecurse
+emitted/nib-examples-meter define internal void @i32.checked_mul(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn norecurse
+emitted/nib-examples-meter define internal i8 @u8.saturating_add(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-meter define internal i8 @u8.saturating_sub(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-modules-main define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-modules-main define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-modules-main define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-modules-main define internal ptr @report.describe(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-modules-main define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-modules-report define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-modules-report define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-modules-report define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-modules-report define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-modules-report define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-modules-report define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-modules-report define internal ptr @describe(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-modules-shapes-geometry define internal i32 @Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-modules-shapes-geometry define internal i8 @side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-modules-shapes-geometry define internal i16 @secret() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-pascal-levels define cc1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-modules-shapes-geometry define internal i32 @Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-modules-shapes-geometry define internal i8 @side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-modules-shapes-geometry define internal i16 @secret() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-pascal-levels define cc1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-pascal-levels define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-pipeline define internal void @Source.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-pipeline define internal i32 @number(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-examples-pipeline define internal i32 @number(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-pipeline define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-pipeline define internal i32 @$state3.next(ptr addrspace(1) nocapture %0) addrspace(1)
 emitted/nib-examples-pipeline define internal i32 @$state2.next(ptr addrspace(1) nocapture %0) addrspace(1)
 emitted/nib-examples-pipeline define internal void @$state1.next(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
 emitted/nib-examples-pipeline define internal void @$state0.next(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-emitted/nib-examples-planets define internal double @root(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) nounwind
+emitted/nib-examples-planets define internal double @root(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
 emitted/nib-examples-planets define internal void @report(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-planets define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-readings define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
@@ -220,34 +220,34 @@ emitted/nib-examples-readings define internal void @"report[$state0]"(ptr addrsp
 emitted/nib-examples-readings define internal i32 @$state0.next(ptr addrspace(1) nocapture %0) addrspace(1)
 emitted/nib-examples-roster define internal void @Player.new(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1, i16 %2) addrspace(1)
 emitted/nib-examples-roster define internal ptr @Player.display(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-roster define internal ptr @Player.grade(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
+emitted/nib-examples-roster define internal ptr @Player.grade(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-roster define internal ptr addrspace(1) @best(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-roster define internal void @sign_up(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) %2, i16 %3) addrspace(1)
 emitted/nib-examples-roster define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-sequences define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-sequences define internal i16 @head(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) willreturn
+emitted/nib-examples-sequences define internal i16 @head(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) willreturn norecurse
 emitted/nib-examples-sequences define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-settings define internal i16 @digits(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-examples-settings define internal i16 @digits(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-settings define internal void @show(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1)
 emitted/nib-examples-settings define internal ptr @keep(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1)
 emitted/nib-examples-settings define internal i16 @each_setting(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-settings define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-shapes define internal i32 @area(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-shapes define internal i16 @columns(i8 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-shapes define internal i32 @area(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-shapes define internal i16 @columns(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-shapes define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-tally define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-tally define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-tally define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-tally define internal i8 @Card.eq(ptr addrspace(1) nocapture readonly %0, ptr addrspace(1) nocapture readonly %1) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-tally define internal i8 @u8.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-tally define internal i16 @Card.hash(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-examples-tally define internal i16 @u8.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-tally define internal i8 @Suit.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-examples-tally define internal i16 @Suit.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-tally define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-tally define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-tally define internal i8 @Card.eq(ptr addrspace(1) nocapture readonly %0, ptr addrspace(1) nocapture readonly %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-tally define internal i8 @u8.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-tally define internal i16 @Card.hash(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-examples-tally define internal i16 @u8.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-tally define internal i8 @Suit.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-tally define internal i16 @Suit.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-tally define internal i8 @string.eq(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1)
-emitted/nib-examples-tally define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
-emitted/nib-fixed define internal i16 @product(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-fixed define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-examples-tally define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-fixed define internal i16 @product(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-fixed define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-fixed define internal i32 @fixed_literals() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-fixed define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-matmul define internal i32 @matmul(i32 %0) addrspace(1) memory(readwrite, argmem: none)
@@ -260,138 +260,138 @@ emitted/nib-nbody define internal i32 @nbody(i32 %0) addrspace(1) memory(readwri
 emitted/nib-nbody define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-operators define internal i16 @mix(i16 %0, i16 %1, i8 %2) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-operators define internal i32 @shifts(i32 %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-operators define internal i8 @logic(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-operators define internal i32 @widen(i8 %0, i8 %1, i8 %2) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-operators define internal i16 @narrow(i32 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-operators define internal i16 @filled(i16 %0) addrspace(1) memory(none) nounwind
+emitted/nib-operators define internal i8 @logic(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-operators define internal i32 @widen(i8 %0, i8 %1, i8 %2) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-operators define internal i16 @narrow(i32 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-operators define internal i16 @filled(i16 %0) addrspace(1) memory(none) nounwind norecurse
 emitted/nib-operators define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-012871c466-fixed_conversions define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @calculate() addrspace(1) memory(none) willreturn
-emitted/nib-port-09f13c1fd3-program define internal i16 @value() addrspace(1) memory(none) nounwind
-emitted/nib-port-0a274de619-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @calculate() addrspace(1) memory(none) willreturn norecurse
+emitted/nib-port-09f13c1fd3-program define internal i16 @value() addrspace(1) memory(none) nounwind norecurse
+emitted/nib-port-0a274de619-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-0dd10e2baf-program define internal i16 @value() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-0f0ea5d775-fixed define internal i32 @scaled(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-0f0ea5d775-fixed define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-0f0ea5d775-fixed define internal i32 @scaled(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-0f0ea5d775-fixed define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-142081b438-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-142081b438-sum_three define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-1612cdc943-array_descriptor define internal i16 @describe() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-1ad27d52f7-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
-emitted/nib-port-1ad27d52f7-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none)
+emitted/nib-port-1612cdc943-array_descriptor define internal i16 @describe() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-1ad27d52f7-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-port-1ad27d52f7-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-port-1e1c384b31-array_descriptor define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-1f4ff075d2-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-23678aa4c1-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-2649564070-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-2649564070-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-270245f7f4-data define internal ptr addrspace(1) @data(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn
-emitted/nib-port-270245f7f4-data define internal i16 @main() addrspace(1) memory(none) willreturn
-emitted/nib-port-2a5998c235-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-2b4829fcb5-program define internal i32 @value() addrspace(1) memory(none) nounwind
+emitted/nib-port-1f4ff075d2-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-23678aa4c1-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-2649564070-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-2649564070-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-270245f7f4-data define internal ptr addrspace(1) @data(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/nib-port-270245f7f4-data define internal i16 @main() addrspace(1) memory(none) willreturn norecurse
+emitted/nib-port-2a5998c235-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-2b4829fcb5-program define internal i32 @value() addrspace(1) memory(none) nounwind norecurse
 emitted/nib-port-35d6ba2f1c-nested_fill define internal i32 @value(i16 %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-35d6ba2f1c-nested_fill define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-384d498129-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-384d498129-program define internal float @value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-39bd3ae69c-stride define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-port-384d498129-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-384d498129-program define internal float @value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-39bd3ae69c-stride define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-port-39bd3ae69c-stride define internal i32 @update(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-39bd3ae69c-stride define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-3c1f11c2bf-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-3c1f11c2bf-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-3c965b9cba-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-3c965b9cba-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-3ddae8b12b-program define internal float @value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-4015a1b4dc-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-41ba295c8c-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
-emitted/nib-port-41ba295c8c-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none)
+emitted/nib-port-3c1f11c2bf-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-3c1f11c2bf-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-3c965b9cba-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-3c965b9cba-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-3ddae8b12b-program define internal float @value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-4015a1b4dc-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-41ba295c8c-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-port-41ba295c8c-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-port-42b216fbfe-program define internal i16 @at(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0, i8 %1) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-42b216fbfe-program define internal i16 @value() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-4c2d94ef2a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-4cac9c5f9a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-4e93b9bcff-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-51aae8f3b1-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-51aae8f3b1-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-4c2d94ef2a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-4cac9c5f9a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-4e93b9bcff-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-51aae8f3b1-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-51aae8f3b1-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-5512c47efe-integers define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-55f54f6102-stride define internal i32 @update() addrspace(1) memory(none) nounwind
-emitted/nib-port-55f54f6102-stride define internal i16 @main() addrspace(1) memory(none) nounwind
-emitted/nib-port-5d52f40c1b-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-5d52f40c1b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-55f54f6102-stride define internal i32 @update() addrspace(1) memory(none) nounwind norecurse
+emitted/nib-port-55f54f6102-stride define internal i16 @main() addrspace(1) memory(none) nounwind norecurse
+emitted/nib-port-5d52f40c1b-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-5d52f40c1b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-6099ac928e-first define internal i8 @first(ptr %0) addrspace(1)
 emitted/nib-port-6099ac928e-first define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-6492137244-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
-emitted/nib-port-6492137244-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none)
+emitted/nib-port-6492137244-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-port-6492137244-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-port-6de4aefee1-frame_fill define internal i32 @value(i16 %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-6de4aefee1-frame_fill define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-73b974ec8a-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-793c84b102-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-793c84b102-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-7a6aaf9361-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-7a6aaf9361-program define internal i16 @value() addrspace(1) memory(none) nounwind
-emitted/nib-port-7aa595768b-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
+emitted/nib-port-73b974ec8a-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-793c84b102-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-793c84b102-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-7a6aaf9361-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-7a6aaf9361-program define internal i16 @value() addrspace(1) memory(none) nounwind norecurse
+emitted/nib-port-7aa595768b-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
 emitted/nib-port-7aa595768b-program define internal i16 @value() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-7e8dc3411a-array_borrow define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-7e8dc3411a-array_borrow define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-7fee86e38f-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-827d15bba8-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-827d15bba8-program define internal i16 @value() addrspace(1) memory(none) nounwind
-emitted/nib-port-89addbb6f9-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-89addbb6f9-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-89e9533f4b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-7fee86e38f-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-827d15bba8-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-827d15bba8-program define internal i16 @value() addrspace(1) memory(none) nounwind norecurse
+emitted/nib-port-89addbb6f9-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-89addbb6f9-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-89e9533f4b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-8e668f1cc0-array_borrow define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-8e668f1cc0-array_borrow define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-8f0c954087-settled define internal i16 @value(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-port-9331410238-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-9331410238-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-94ac148ba8-priced_fill define internal i32 @value(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-94ac148ba8-priced_fill define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-9776f3f9e7-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
+emitted/nib-port-9776f3f9e7-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
 emitted/nib-port-9776f3f9e7-program define internal i32 @value() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-9889e7418c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-9b306a719b-struct_view define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
-emitted/nib-port-9b306a719b-struct_view define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none)
-emitted/nib-port-9db4dc95b0-struct_array_borrow define internal void @nudge(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn
-emitted/nib-port-9db4dc95b0-struct_array_borrow define internal void @update(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-emitted/nib-port-9db4dc95b0-struct_array_borrow define internal i16 @calculate() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
-emitted/nib-port-9e4fe4d79b-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
-emitted/nib-port-9e4fe4d79b-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none)
+emitted/nib-port-9889e7418c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-9b306a719b-struct_view define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-port-9b306a719b-struct_view define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) norecurse
+emitted/nib-port-9db4dc95b0-struct_array_borrow define internal void @nudge(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+emitted/nib-port-9db4dc95b0-struct_array_borrow define internal void @update(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/nib-port-9db4dc95b0-struct_array_borrow define internal i16 @calculate() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/nib-port-9e4fe4d79b-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-port-9e4fe4d79b-python_slice define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-port-a49c675285-settled define internal i32 @value(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-b605ff2aca-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-port-b605ff2aca-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-b605ff2aca-program define internal double @half(double %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-port-b605ff2aca-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-b6f45f072e-program define internal i16 @at(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0, i8 %1) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-b6f45f072e-program define internal i16 @value() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-bc7b38a2c9-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-bc7b38a2c9-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-c0a583f56f-priced_unroll define internal i32 @value(i16 %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-c0a583f56f-priced_unroll define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-c10b6470a4-dictionary define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-c10b6470a4-dictionary define internal i16 @count() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-c10b6470a4-dictionary define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-c10b6470a4-dictionary define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-c25dc48fc2-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-d87b415216-struct_values define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-dc2d8cd94c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-c10b6470a4-dictionary define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-c10b6470a4-dictionary define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-c25dc48fc2-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-d87b415216-struct_values define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-dc2d8cd94c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-defb4773d9-array_borrow define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-defb4773d9-array_borrow define internal i16 @calculate() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-e888c9b41b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-e892f791bd-slice_loop define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none)
-emitted/nib-port-ea42ea699b-fixed_i32 define internal i32 @product(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-ea42ea699b-fixed_i32 define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-e888c9b41b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-e892f791bd-slice_loop define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) norecurse
+emitted/nib-port-ea42ea699b-fixed_i32 define internal i32 @product(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-ea42ea699b-fixed_i32 define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-ea42ea699b-fixed_i32 define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-port-ed1778f9a8-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-f48dd639fc-aggregate_literals define internal i32 @calculate() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-port-ff17c89419-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-port-ed1778f9a8-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-f48dd639fc-aggregate_literals define internal i32 @calculate() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-port-ff17c89419-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-ff5222e4ad-comprehension define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-primitives define internal i8 @bool_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i8 @char_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i8 @i8_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i8 @u8_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i16 @i16_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i16 @u16_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i32 @i32_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i32 @u32_value() addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal float @f32_value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-primitives define internal double @f64_value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-primitives define internal i32 @unsigned_divide(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i16 @unsigned_remainder(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal i8 @unsigned_less(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal float @float_product(float %0, float %1) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-primitives define internal void @nothing() addrspace(1) memory(none) willreturn nounwind
+emitted/nib-primitives define internal i8 @bool_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i8 @char_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i8 @i8_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i8 @u8_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i16 @i16_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i16 @u16_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i32 @i32_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i32 @u32_value() addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal float @f32_value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-primitives define internal double @f64_value() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i32 @unsigned_divide(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i16 @unsigned_remainder(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal i8 @unsigned_less(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal float @float_product(float %0, float %1) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-primitives define internal void @nothing() addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-ranked define internal i16 @trace(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-ranked define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-ranked define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
@@ -403,28 +403,28 @@ emitted/nib-runtime define void @N$ECNV() addrspace(1) memory(readwrite, argmem:
 emitted/nib-runtime define void @N$ESHF() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define void @N$EBND() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define void @N$EKEY() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-runtime define internal ptr @heap.header(ptr %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-runtime define internal i16 @heap.size_of(ptr %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn
-emitted/nib-runtime define internal ptr @heap.next(ptr %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-runtime define internal ptr @heap.previous(ptr %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-runtime define internal i16 @heap.class_of(i16 %0) addrspace(1) memory(none) nounwind
+emitted/nib-runtime define internal ptr @heap.header(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-runtime define internal i16 @heap.size_of(ptr %0) addrspace(1) memory(read, argmem: none, inaccessiblemem: none) willreturn norecurse
+emitted/nib-runtime define internal ptr @heap.next(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-runtime define internal ptr @heap.previous(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-runtime define internal i16 @heap.class_of(i16 %0) addrspace(1) memory(none) nounwind norecurse
 emitted/nib-runtime define internal i16 @heap.rounded(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-runtime define internal void @heap.unlink(ptr %0) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
-emitted/nib-runtime define internal void @heap.insert(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+emitted/nib-runtime define internal void @heap.unlink(ptr %0) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/nib-runtime define internal void @heap.insert(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-runtime define internal ptr @heap.fit(i16 %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define internal void @heap.grow(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-runtime define internal void @heap.trim(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+emitted/nib-runtime define internal void @heap.trim(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-runtime define internal ptr @heap.allocate(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-runtime define internal void @heap.release(ptr %0) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+emitted/nib-runtime define internal void @heap.release(ptr %0) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-runtime define internal i8 @heap.resize(ptr nocapture %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-runtime define internal ptr @buffers.flags(ptr %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-runtime define internal ptr @buffers.length(ptr %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-runtime define internal ptr @buffers.capacity(ptr %0) addrspace(1) memory(none) willreturn nounwind
-emitted/nib-runtime define internal void @buffers.copy(ptr nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, i16 %2) addrspace(1) memory(argmem: readwrite)
-emitted/nib-runtime define internal i8 @buffers.fits(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-runtime define internal ptr @buffers.flags(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-runtime define internal ptr @buffers.length(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-runtime define internal ptr @buffers.capacity(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-runtime define internal void @buffers.copy(ptr nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, i16 %2) addrspace(1) memory(argmem: readwrite) norecurse
+emitted/nib-runtime define internal i8 @buffers.fits(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-runtime define internal ptr @buffers.allocate(i16 %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define ptr @N$BRES(ptr %0, i16 %1, i16 %2) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-runtime define void @N$BDRP(ptr %0) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+emitted/nib-runtime define void @N$BDRP(ptr %0) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-runtime define ptr @N$BGRW(ptr %0, i16 %1, i16 %2) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-runtime define i16 @N$BSHR(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define ptr @N$BCLN(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: read)
@@ -433,8 +433,8 @@ emitted/nib-runtime define internal ptr @strings.append_bytes(ptr %0, ptr addrsp
 emitted/nib-runtime define ptr @N$TAPP(ptr %0, ptr %1) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-runtime define ptr @N$TCAT(ptr %0, ptr %1) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-runtime define ptr @N$VCPY(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-runtime define i8 @N$VCMP(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, inaccessiblemem: none)
-emitted/nib-runtime define internal ptr @format.scratch_at(i16 %0) addrspace(1) memory(none) willreturn nounwind
+emitted/nib-runtime define i8 @N$VCMP(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-runtime define internal ptr @format.scratch_at(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-runtime define internal void @format.put(ptr addrspace(1) %0, i16 %1) addrspace(1)
 emitted/nib-runtime define internal void @format.put_text(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-runtime define internal void @format.pad(i16 %0) addrspace(1) memory(readwrite, argmem: none)
@@ -443,7 +443,7 @@ emitted/nib-runtime define internal void @format.close(i16 %0) addrspace(1) memo
 emitted/nib-runtime define internal void @format.field(ptr addrspace(1) %0, i16 %1) addrspace(1)
 emitted/nib-runtime define internal void @format.word(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-runtime define internal void @format.number(ptr %0, i16 %1) addrspace(1)
-emitted/nib-runtime define internal i16 @format.written(ptr nocapture writeonly %0, i32 %1, i8 %2) addrspace(1) memory(argmem: write)
+emitted/nib-runtime define internal i16 @format.written(ptr nocapture writeonly %0, i32 %1, i8 %2) addrspace(1) memory(argmem: write) norecurse
 emitted/nib-runtime define internal void @format.integer(i32 %0, i8 %1) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define internal void @format.signed(i32 %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define void @N$PI1(i8 %0) addrspace(1) memory(readwrite, argmem: none)
@@ -459,41 +459,41 @@ emitted/nib-runtime define void @N$PC(i8 %0) addrspace(1) memory(readwrite, argm
 emitted/nib-runtime define void @N$PS(ptr %0) addrspace(1)
 emitted/nib-runtime define void @N$PV(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-runtime define void @N$PN() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-runtime define void @N$PFLD(i8 %0, i8 %1, i8 %2, i8 %3) addrspace(1) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind
+emitted/nib-runtime define void @N$PFLD(i8 %0, i8 %1, i8 %2, i8 %3) addrspace(1) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
 emitted/nib-runtime define void @N$PBEG() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-runtime define ptr @N$PEND() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn nounwind
-emitted/nib-runtime define internal void @floats.assign(ptr nocapture writeonly %0, i16 %1) addrspace(1) memory(argmem: write)
-emitted/nib-runtime define internal void @floats.copy(ptr nocapture writeonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite)
-emitted/nib-runtime define internal void @floats.shift(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite)
-emitted/nib-runtime define internal void @floats.multiply(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite)
-emitted/nib-runtime define internal void @floats.add(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite)
-emitted/nib-runtime define internal void @floats.subtract(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite)
-emitted/nib-runtime define internal i8 @floats.compare(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: read)
-emitted/nib-runtime define internal i8 @floats.beyond(ptr nocapture readonly %0, ptr nocapture readonly %1, i8 %2) addrspace(1) memory(argmem: read)
-emitted/nib-runtime define internal i16 @floats.put(ptr nocapture writeonly %0, i16 %1, i8 %2) addrspace(1) memory(argmem: write) willreturn
-emitted/nib-runtime define internal i16 @floats.put_text(ptr nocapture %0, i16 %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none)
+emitted/nib-runtime define ptr @N$PEND() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse
+emitted/nib-runtime define internal void @floats.assign(ptr nocapture writeonly %0, i16 %1) addrspace(1) memory(argmem: write) norecurse
+emitted/nib-runtime define internal void @floats.copy(ptr nocapture writeonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) norecurse
+emitted/nib-runtime define internal void @floats.shift(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) norecurse
+emitted/nib-runtime define internal void @floats.multiply(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) norecurse
+emitted/nib-runtime define internal void @floats.add(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) norecurse
+emitted/nib-runtime define internal void @floats.subtract(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) norecurse
+emitted/nib-runtime define internal i8 @floats.compare(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: read) norecurse
+emitted/nib-runtime define internal i8 @floats.beyond(ptr nocapture readonly %0, ptr nocapture readonly %1, i8 %2) addrspace(1) memory(argmem: read) norecurse
+emitted/nib-runtime define internal i16 @floats.put(ptr nocapture writeonly %0, i16 %1, i8 %2) addrspace(1) memory(argmem: write) willreturn norecurse
+emitted/nib-runtime define internal i16 @floats.put_text(ptr nocapture %0, i16 %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) norecurse
 emitted/nib-runtime define internal i32 @floats.digits(ptr nocapture %0, i16 %1, i8 %2, i8 %3, ptr nocapture writeonly %4) addrspace(1)
 emitted/nib-runtime define internal void @floats.print_float(ptr addrspace(1) nocapture %0, i16 %1, i16 %2, i16 %3, i16 %4) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-runtime define internal i16 @floats.decimal(ptr nocapture %0, i16 %1, ptr nocapture readonly %2, i16 %3, i16 %4) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none)
+emitted/nib-runtime define internal i16 @floats.decimal(ptr nocapture %0, i16 %1, ptr nocapture readonly %2, i16 %3, i16 %4) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) norecurse
 emitted/nib-runtime define void @N$PR8(double %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define void @N$PR4(float %0) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-sum define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-sum define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-sum define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(read, inaccessiblemem: none)
+emitted/nib-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-sum_three define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-addrm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-arith define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-arrays define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-arridx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-arrprm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-arrprm define cc1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn
-emitted/qb-arrprm define cc1000 void @FILLPTS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn
+emitted/qb-arrprm define cc1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn norecurse
+emitted/qb-arrprm define cc1000 void @FILLPTS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn norecurse
 emitted/qb-arrudt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-arrudt define cc1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-bools define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-byref2 define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-byref2 define cc1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn
-emitted/qb-byref2 define cc1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn
+emitted/qb-byref2 define cc1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/qb-byref2 define cc1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/qb-chain define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-cmpof define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-cmpord define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
@@ -520,7 +520,7 @@ emitted/qb-nots define internal cc1000 void @__main() addrspace(1) memory(readwr
 emitted/qb-press define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-pressx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-procs define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-procs define cc1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
+emitted/qb-procs define cc1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/qb-procs define cc1000 void @REPORT(ptr %0, ptr nocapture readonly %1) addrspace(1)
 emitted/qb-rcflip define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-rcflip define cc1000 void @RAMP() addrspace(1) memory(readwrite, argmem: none)
@@ -532,110 +532,110 @@ emitted/qb-stride define internal cc1000 void @__main() addrspace(1) memory(read
 emitted/qb-subexp define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-udt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 emitted/qb-wendgo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-wendgo define cc1000 void @TURN() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn
+emitted/qb-wendgo define cc1000 void @TURN() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
 optimized/demo-deedlines define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @ACTIONS() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @ACTIONS3D() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-optimized/demo-deedlines define cc1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+optimized/demo-deedlines define cc1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
+optimized/demo-deedlines define cc1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
 optimized/demo-deedlines define cc1000 void @COPPER() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @CREATEOBJECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-deedlines define cc1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
 optimized/demo-deedlines define cc1000 void @CYCLEBLOBS() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @DEEDLINESAX(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind
-optimized/demo-deedlines define cc1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-deedlines define cc1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/demo-deedlines define cc1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+optimized/demo-deedlines define cc1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
 optimized/demo-deedlines define cc1000 void @GETMAP(ptr %0) addrspace(1)
-optimized/demo-deedlines define cc1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none) willreturn norecurse
 optimized/demo-deedlines define cc1000 void @INITCROSFADEPICS(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
-optimized/demo-deedlines define cc1000 void @KEYACTION() addrspace(1) willreturn memory(readwrite, argmem: none) nounwind
+optimized/demo-deedlines define cc1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+optimized/demo-deedlines define cc1000 void @KEYACTION() addrspace(1) willreturn memory(readwrite, argmem: none) nounwind norecurse
 optimized/demo-deedlines define cc1000 void @LOAD3DRECORD() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @LOADOBJECT(ptr %0) addrspace(1)
 optimized/demo-deedlines define cc1000 void @LOADQBINSIDE() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @LOADRECORD() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-optimized/demo-deedlines define cc1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
-optimized/demo-deedlines define cc1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/demo-deedlines define cc1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
+optimized/demo-deedlines define cc1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none) norecurse
 optimized/demo-deedlines define cc1000 void @PLASMABLOBS() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+optimized/demo-deedlines define cc1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
 optimized/demo-deedlines define cc1000 void @PREHISTORICODE() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @RGBLIGHTS() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+optimized/demo-deedlines define cc1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 optimized/demo-deedlines define cc1000 void @SAVERECORD() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-deedlines define cc1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
+optimized/demo-deedlines define cc1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read) norecurse
 optimized/demo-deedlines define cc1000 void @SPHEREMAPLASMA() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @SUCKING() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none)
+optimized/demo-deedlines define cc1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 optimized/demo-deedlines define cc1000 void @ZOOMDISTORT() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-deedlines define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-oimad define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-oimad define cc1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) willreturn memory(readwrite, argmem: read)
+optimized/demo-oimad define cc1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) willreturn memory(readwrite, argmem: read) norecurse
 optimized/demo-oimad define cc1000 void @INIT() addrspace(1) memory(readwrite, argmem: none)
 optimized/demo-oimad define cc1000 void @PLAYMUSIC() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-oimad define cc1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-oimad define cc1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
 optimized/demo-oimad define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-qbdemo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-qbdemo define cc1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none)
-optimized/demo-qbdemo define cc1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+optimized/demo-qbdemo define cc1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) willreturn norecurse
+optimized/demo-qbdemo define cc1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 optimized/demo-qbdemo define cc1000 void @FRACLINE2(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-qbdemo define cc1000 void @FRACTALEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-qbdemo define cc1000 void @OHCANADA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-qbdemo define cc1000 void @PLASMA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-qbdemo define cc1000 void @RENDER(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-qbdemo define cc1000 void @SHADEBOBEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none)
+optimized/demo-qbdemo define cc1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) willreturn norecurse
 optimized/demo-qbdemo define cc1000 void @UNWHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
 optimized/demo-qbdemo define cc1000 void @WHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/demo-qbdemo define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-control define internal i16 @step(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-control define internal i16 @count(i16 %0) addrspace(1) memory(none) nounwind
-optimized/nib-descriptors define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-control define internal i16 @step(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-control define internal i16 @count(i16 %0) addrspace(1) memory(none) nounwind norecurse
+optimized/nib-descriptors define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-descriptors define internal i8 @first(ptr %0) addrspace(1)
 optimized/nib-descriptors define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-attributes define internal i8 @inverted(i8 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-attributes define internal i8 @inverted(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-attributes define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic.array_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
+optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic.array_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) %0, i16 %1) addrspace(1)
-optimized/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-optimized/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
+optimized/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
 optimized/nib-examples-basic-sortlib define cc1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-basic-sortlib define cc1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none)
+optimized/nib-examples-basic-sortlib define cc1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none) willreturn norecurse
 optimized/nib-examples-basic-sortlib define cc1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) %0, ptr addrspace(1) %1) addrspace(1) memory(argmem: read) willreturn
+optimized/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) %0, ptr addrspace(1) %1) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-borrows define internal void @best(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
-optimized/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none)
+optimized/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none) norecurse
 optimized/nib-examples-borrows define internal void @word(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i16 %2) addrspace(1)
 optimized/nib-examples-borrows define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-csv define internal void @trimmed(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-csv define internal void @field(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i16 %2) addrspace(1)
 optimized/nib-examples-csv define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-dice define internal i32 @Dice.iter(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-dice define internal i32 @Rolls.next(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn
+optimized/nib-examples-dice define internal i32 @Dice.iter(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-dice define internal i32 @Rolls.next(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn norecurse
 optimized/nib-examples-dice define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-digits define internal void @digit(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 3)) %0, i8 %1) addrspace(1) memory(argmem: write) willreturn
+optimized/nib-examples-digits define internal void @digit(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 3)) %0, i8 %1) addrspace(1) memory(argmem: write) willreturn norecurse
 optimized/nib-examples-digits define internal void @parse(ptr addrspace(1) nocapture writeonly %0, ptr %1) addrspace(1)
-optimized/nib-examples-digits define internal i32 @first_even(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-examples-digits define internal i32 @first_even(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-examples-digits define internal void @report(ptr %0) addrspace(1)
 optimized/nib-examples-digits define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-easing define internal i16 @linear(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-easing define internal i16 @ease_in(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-easing define internal i16 @ease_out(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-easing define internal i16 @Slide.at(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
+optimized/nib-examples-easing define internal i16 @linear(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-easing define internal i16 @ease_in(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-easing define internal i16 @ease_out(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-easing define internal i16 @Slide.at(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-easing define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-easing define internal i16 @main$smooth(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-easing define internal i16 @main.$lambda2(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-easing define internal i16 @$call14(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-easing define internal i16 @main$smooth(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-easing define internal i16 @main.$lambda2(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-easing define internal i16 @$call14(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-entries define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
-optimized/nib-examples-entries define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-entries define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-entries define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-optimized/nib-examples-entries define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn
+optimized/nib-examples-entries define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn norecurse
 optimized/nib-examples-entries define internal void @std.io.File.open(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 optimized/nib-examples-entries define internal void @std.io.File.create(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-entries define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
@@ -648,34 +648,34 @@ optimized/nib-examples-entries define internal void @load_entries(ptr addrspace(
 optimized/nib-examples-entries define internal void @$main(ptr addrspace(1) nocapture %0) addrspace(1) memory(readwrite, argmem: write)
 optimized/nib-examples-entries define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-entries define internal i8 @string.eq(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1)
-optimized/nib-examples-entries define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-examples-entries define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-examples-generic_types define internal i32 @store(ptr addrspace(1) nocapture %0, i16 %1) addrspace(1)
 optimized/nib-examples-generic_types define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-examples-generic_types define internal i16 @"larger[i16]"(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-generic_types define internal i8 @"larger[u8]"(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-generic_types define internal void @"first[i16]"(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-examples-generic_types define internal i16 @"larger[i16]"(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-generic_types define internal i8 @"larger[u8]"(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-generic_types define internal i32 @"Stack.top[i16]"(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-gradebook define internal void @curve(ptr addrspace(1) nocapture %0, i16 %1) addrspace(1)
-optimized/nib-examples-gradebook define internal i16 @average(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-examples-gradebook define internal i16 @average(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-examples-gradebook define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-greeting define internal ptr @shout(ptr %0) addrspace(1)
 optimized/nib-examples-greeting define internal ptr @label(ptr %0, i16 %1) addrspace(1)
 optimized/nib-examples-greeting define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-interop-main define i16 @_weight(i16 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-interop-main define i16 @_weight(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-interop-main define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-inventory define internal i16 @stocked(ptr addrspace(1) nocapture readonly %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-examples-inventory define internal i16 @stocked(ptr addrspace(1) nocapture readonly %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-examples-inventory define internal void @restock(ptr addrspace(1) nocapture %0, ptr %1, i16 %2) addrspace(1)
 optimized/nib-examples-inventory define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-laps define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-league define internal i16 @Team.points(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-league define internal i16 @Team.played(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-league define internal void @Team.record(ptr addrspace(1) nocapture %0, i16 %1, i16 %2) addrspace(1) memory(argmem: readwrite) willreturn
+optimized/nib-examples-league define internal i16 @Team.points(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-league define internal i16 @Team.played(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-league define internal void @Team.record(ptr addrspace(1) nocapture %0, i16 %1, i16 %2) addrspace(1) memory(argmem: readwrite) willreturn norecurse
 optimized/nib-examples-league define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-league define internal i32 @"best[i16]"(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-level define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
-optimized/nib-examples-level define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-level define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-level define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-optimized/nib-examples-level define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn
+optimized/nib-examples-level define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn norecurse
 optimized/nib-examples-level define internal void @std.io.File.open(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 optimized/nib-examples-level define internal void @std.io.File.create(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-level define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
@@ -697,9 +697,9 @@ optimized/nib-examples-level define internal void @"written[Face]"(ptr addrspace
 optimized/nib-examples-level define internal void @"written[Node]"(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
 optimized/nib-examples-level define internal void @"written[Plane]"(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) nocapture readonly %2) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.os.write(ptr addrspace(1) %0, i16 %1) addrspace(1)
-optimized/nib-examples-logfile define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-logfile define internal i32 @std.io.error(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-logfile define internal void @std.io.named(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-optimized/nib-examples-logfile define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn
+optimized/nib-examples-logfile define internal void @std.io.opened(ptr addrspace(1) nocapture writeonly initializes((0, 1), (2, 4)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn norecurse
 optimized/nib-examples-logfile define internal void @std.io.File.open(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, i8 %2) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.io.File.create(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-logfile define internal void @std.io.File.write_raw(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, ptr addrspace(1) %2, i16 %3) addrspace(1)
@@ -710,41 +710,41 @@ optimized/nib-examples-logfile define internal void @std.io.File.drop(ptr addrsp
 optimized/nib-examples-logfile define internal void @Log.create(ptr addrspace(1) nocapture %0, ptr %1) addrspace(1)
 optimized/nib-examples-logfile define internal void @Log.write(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-logfile define internal void @Log.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn
+optimized/nib-examples-logfile define internal void @keep_open(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) nocapture %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
 optimized/nib-examples-logfile define internal void @$main(ptr addrspace(1) nocapture %0) addrspace(1) memory(readwrite, argmem: write)
 optimized/nib-examples-logfile define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-mandel define internal i16 @escape(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-mandel define internal i16 @escape(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-mandel define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-meter define internal void @Player.hit(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-examples-meter define internal void @Player.heal(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-examples-meter define internal i8 @Player.award(ptr addrspace(1) nocapture %0, i32 %1, i32 %2) addrspace(1) memory(argmem: readwrite) willreturn
+optimized/nib-examples-meter define internal void @Player.hit(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-examples-meter define internal void @Player.heal(ptr addrspace(1) nocapture %0, i8 %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-examples-meter define internal i8 @Player.award(ptr addrspace(1) nocapture %0, i32 %1, i32 %2) addrspace(1) memory(argmem: readwrite) willreturn norecurse
 optimized/nib-examples-meter define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-meter define internal void @i32.checked_add(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn
-optimized/nib-examples-meter define internal void @i32.checked_mul(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn
-optimized/nib-examples-meter define internal i8 @u8.saturating_add(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-meter define internal i8 @u8.saturating_sub(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-modules-main define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-modules-main define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-modules-main define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-meter define internal void @i32.checked_add(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn norecurse
+optimized/nib-examples-meter define internal void @i32.checked_mul(ptr addrspace(1) nocapture writeonly initializes((0, 1)) %0, i32 %1, i32 %2) addrspace(1) memory(argmem: write) willreturn norecurse
+optimized/nib-examples-meter define internal i8 @u8.saturating_add(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-meter define internal i8 @u8.saturating_sub(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-modules-main define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-modules-main define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-modules-main define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-modules-main define internal ptr @report.describe(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-modules-main define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-modules-report define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-modules-report define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-modules-report define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-modules-report define internal i32 @shapes.geometry.Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-modules-report define internal i8 @shapes.geometry.side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-modules-report define internal i16 @shapes.geometry.secret() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-modules-report define internal ptr @describe(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-modules-shapes-geometry define internal i32 @Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-modules-shapes-geometry define internal i8 @side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-modules-shapes-geometry define internal i16 @secret() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-pascal-levels define cc1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-modules-shapes-geometry define internal i32 @Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-modules-shapes-geometry define internal i8 @side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-modules-shapes-geometry define internal i16 @secret() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-pascal-levels define cc1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-pascal-levels define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-pipeline define internal void @Source.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-pipeline define internal i32 @number(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-examples-pipeline define internal i32 @number(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-examples-pipeline define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-pipeline define internal i32 @$state3.next(ptr addrspace(1) nocapture %0) addrspace(1)
 optimized/nib-examples-pipeline define internal i32 @$state2.next(ptr addrspace(1) nocapture %0) addrspace(1)
 optimized/nib-examples-pipeline define internal void @$state1.next(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
 optimized/nib-examples-pipeline define internal void @$state0.next(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1) addrspace(1)
-optimized/nib-examples-planets define internal double @root(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
+optimized/nib-examples-planets define internal double @root(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
 optimized/nib-examples-planets define internal void @report(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-planets define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-readings define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
@@ -755,34 +755,34 @@ optimized/nib-examples-readings define internal void @"report[$state0]"(ptr addr
 optimized/nib-examples-readings define internal i32 @$state0.next(ptr addrspace(1) nocapture %0) addrspace(1)
 optimized/nib-examples-roster define internal void @Player.new(ptr addrspace(1) nocapture writeonly %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1, i16 %2) addrspace(1)
 optimized/nib-examples-roster define internal ptr @Player.display(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-roster define internal ptr @Player.grade(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
+optimized/nib-examples-roster define internal ptr @Player.grade(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-roster define internal ptr addrspace(1) @best(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-roster define internal void @sign_up(ptr addrspace(1) nocapture %0, ptr addrspace(1) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) %2, i16 %3) addrspace(1)
 optimized/nib-examples-roster define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-sequences define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-sequences define internal i16 @head(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-examples-sequences define internal i16 @head(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-examples-sequences define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-settings define internal i16 @digits(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-examples-settings define internal i16 @digits(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-examples-settings define internal void @show(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1)
 optimized/nib-examples-settings define internal ptr @keep(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1)
 optimized/nib-examples-settings define internal i16 @each_setting(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-settings define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-shapes define internal i32 @area(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-shapes define internal i16 @columns(i8 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-shapes define internal i32 @area(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-shapes define internal i16 @columns(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-shapes define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-tally define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-tally define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-tally define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-tally define internal i8 @Card.eq(ptr addrspace(1) nocapture readonly %0, ptr addrspace(1) nocapture readonly %1) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-tally define internal i8 @u8.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-tally define internal i16 @Card.hash(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-examples-tally define internal i16 @u8.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-tally define internal i8 @Suit.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-examples-tally define internal i16 @Suit.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-tally define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-tally define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-tally define internal i8 @Card.eq(ptr addrspace(1) nocapture readonly %0, ptr addrspace(1) nocapture readonly %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-tally define internal i8 @u8.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-tally define internal i16 @Card.hash(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-examples-tally define internal i16 @u8.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-tally define internal i8 @Suit.eq(i8 %0, i8 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-tally define internal i16 @Suit.hash(i8 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-tally define internal i8 @string.eq(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1)
-optimized/nib-examples-tally define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
-optimized/nib-fixed define internal i16 @product(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-fixed define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-examples-tally define internal i16 @string.hash(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
+optimized/nib-fixed define internal i16 @product(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-fixed define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-fixed define internal i32 @fixed_literals() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-fixed define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-matmul define internal i32 @matmul(i32 %0) addrspace(1) memory(readwrite, argmem: none)
@@ -793,133 +793,133 @@ optimized/nib-matmul_fixed define internal i32 @matmul(i32 %0) addrspace(1) memo
 optimized/nib-matmul_fixed define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-nbody define internal i32 @nbody(i32 %0) addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-nbody define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-operators define internal i16 @mix(i16 %0, i16 %1, i8 %2) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-operators define internal i16 @mix(i16 %0, i16 %1, i8 %2) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-operators define internal i32 @shifts(i32 %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-operators define internal i8 @logic(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-operators define internal i32 @widen(i8 %0, i8 %1, i8 %2) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-operators define internal i16 @narrow(i32 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-operators define internal i16 @filled(i16 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-operators define internal i8 @logic(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-operators define internal i32 @widen(i8 %0, i8 %1, i8 %2) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-operators define internal i16 @narrow(i32 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-operators define internal i16 @filled(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-operators define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-port-012871c466-fixed_conversions define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-09f13c1fd3-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-0a274de619-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @describe(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-port-07b28a50ec-borrowed_descriptor define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-09f13c1fd3-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-0a274de619-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-0dd10e2baf-program define internal i16 @value() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-0f0ea5d775-fixed define internal i32 @scaled(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-0f0ea5d775-fixed define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-0f0ea5d775-fixed define internal i32 @scaled(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-0f0ea5d775-fixed define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-142081b438-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-port-142081b438-sum_three define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-1612cdc943-array_descriptor define internal i16 @describe() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-1ad27d52f7-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
-optimized/nib-port-1ad27d52f7-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind
+optimized/nib-port-1612cdc943-array_descriptor define internal i16 @describe() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-1ad27d52f7-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
+optimized/nib-port-1ad27d52f7-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind norecurse
 optimized/nib-port-1e1c384b31-array_descriptor define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-1f4ff075d2-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-23678aa4c1-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-2649564070-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-2649564070-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-270245f7f4-data define internal ptr addrspace(1) @data(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-port-270245f7f4-data define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-2a5998c235-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-2b4829fcb5-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-35d6ba2f1c-nested_fill define internal i32 @value(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-35d6ba2f1c-nested_fill define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-384d498129-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-384d498129-program define internal float @value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-39bd3ae69c-stride define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-port-1f4ff075d2-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-23678aa4c1-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-2649564070-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-2649564070-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-270245f7f4-data define internal ptr addrspace(1) @data(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-port-270245f7f4-data define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-2a5998c235-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-2b4829fcb5-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-35d6ba2f1c-nested_fill define internal i32 @value(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-35d6ba2f1c-nested_fill define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-384d498129-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-384d498129-program define internal float @value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-39bd3ae69c-stride define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-port-39bd3ae69c-stride define internal i32 @update(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-port-39bd3ae69c-stride define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-3c1f11c2bf-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-3c1f11c2bf-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-3ddae8b12b-program define internal float @value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-41ba295c8c-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
-optimized/nib-port-41ba295c8c-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind
+optimized/nib-port-3c1f11c2bf-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-3c1f11c2bf-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-3ddae8b12b-program define internal float @value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-41ba295c8c-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
+optimized/nib-port-41ba295c8c-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind norecurse
 optimized/nib-port-42b216fbfe-program define internal i16 @at(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0, i8 %1) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-port-42b216fbfe-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-4c2d94ef2a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-4cac9c5f9a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-4e93b9bcff-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-51aae8f3b1-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-51aae8f3b1-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-42b216fbfe-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-4c2d94ef2a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-4cac9c5f9a-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-4e93b9bcff-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-51aae8f3b1-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-51aae8f3b1-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-5512c47efe-integers define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-55f54f6102-stride define internal i32 @update() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-55f54f6102-stride define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-55f54f6102-stride define internal i32 @update() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-55f54f6102-stride define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-6099ac928e-first define internal i8 @first(ptr %0) addrspace(1)
 optimized/nib-port-6099ac928e-first define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-6492137244-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
-optimized/nib-port-6492137244-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind
-optimized/nib-port-6de4aefee1-frame_fill define internal i32 @value(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-6de4aefee1-frame_fill define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-73b974ec8a-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-793c84b102-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-793c84b102-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-7a6aaf9361-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-7a6aaf9361-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-7aa595768b-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
+optimized/nib-port-6492137244-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
+optimized/nib-port-6492137244-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind norecurse
+optimized/nib-port-6de4aefee1-frame_fill define internal i32 @value(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-6de4aefee1-frame_fill define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-73b974ec8a-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-793c84b102-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-793c84b102-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-7a6aaf9361-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-7a6aaf9361-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-7aa595768b-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
 optimized/nib-port-7aa595768b-program define internal i16 @value() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-port-7e8dc3411a-array_borrow define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-port-7e8dc3411a-array_borrow define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-7fee86e38f-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-827d15bba8-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-827d15bba8-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-89addbb6f9-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-89addbb6f9-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-89e9533f4b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-7e8dc3411a-array_borrow define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-7fee86e38f-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-827d15bba8-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-827d15bba8-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-89addbb6f9-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-89addbb6f9-program define internal i8 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-89e9533f4b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-8e668f1cc0-array_borrow define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-port-8e668f1cc0-array_borrow define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-port-8f0c954087-settled define internal i16 @value(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-port-9331410238-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-9331410238-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-94ac148ba8-priced_fill define internal i32 @value(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-port-94ac148ba8-priced_fill define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-9776f3f9e7-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-9776f3f9e7-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-9889e7418c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-9b306a719b-struct_view define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
-optimized/nib-port-9b306a719b-struct_view define internal i16 @main() addrspace(1) willreturn memory(none) nounwind
-optimized/nib-port-9db4dc95b0-struct_array_borrow define internal void @nudge(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-port-9db4dc95b0-struct_array_borrow define internal void @update(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(readwrite, argmem: read, inaccessiblemem: none)
-optimized/nib-port-9db4dc95b0-struct_array_borrow define internal i16 @calculate() addrspace(1) willreturn memory(none) nounwind
-optimized/nib-port-9e4fe4d79b-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
-optimized/nib-port-9e4fe4d79b-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind
+optimized/nib-port-9776f3f9e7-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-9776f3f9e7-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-9889e7418c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-9b306a719b-struct_view define internal i32 @total(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
+optimized/nib-port-9b306a719b-struct_view define internal i16 @main() addrspace(1) willreturn memory(none) nounwind norecurse
+optimized/nib-port-9db4dc95b0-struct_array_borrow define internal void @nudge(ptr addrspace(1) nocapture %0) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-port-9db4dc95b0-struct_array_borrow define internal void @update(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/nib-port-9db4dc95b0-struct_array_borrow define internal i16 @calculate() addrspace(1) willreturn memory(none) nounwind norecurse
+optimized/nib-port-9e4fe4d79b-python_slice define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
+optimized/nib-port-9e4fe4d79b-python_slice define internal i16 @main() addrspace(1) willreturn memory(none) nounwind norecurse
 optimized/nib-port-a49c675285-settled define internal i32 @value(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-b605ff2aca-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-port-b605ff2aca-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-b605ff2aca-program define internal double @half(double %0) addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-port-b605ff2aca-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-b6f45f072e-program define internal i16 @at(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0, i8 %1) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-port-b6f45f072e-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-c0a583f56f-priced_unroll define internal i32 @value(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-c0a583f56f-priced_unroll define internal i16 @main() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-b6f45f072e-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-c0a583f56f-priced_unroll define internal i32 @value(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-c0a583f56f-priced_unroll define internal i16 @main() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-c10b6470a4-dictionary define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-port-c10b6470a4-dictionary define internal i16 @count() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-c10b6470a4-dictionary define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-c10b6470a4-dictionary define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-d87b415216-struct_values define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-dc2d8cd94c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-c10b6470a4-dictionary define internal i8 @i16.eq(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-c10b6470a4-dictionary define internal i16 @i16.hash(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-d87b415216-struct_values define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-dc2d8cd94c-program define internal i32 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-defb4773d9-array_borrow define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-port-defb4773d9-array_borrow define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-e888c9b41b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-e892f791bd-slice_loop define internal i16 @main() addrspace(1) willreturn memory(none) nounwind
-optimized/nib-port-ea42ea699b-fixed_i32 define internal i32 @product(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-ea42ea699b-fixed_i32 define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-defb4773d9-array_borrow define internal i16 @calculate() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-e888c9b41b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-e892f791bd-slice_loop define internal i16 @main() addrspace(1) willreturn memory(none) nounwind norecurse
+optimized/nib-port-ea42ea699b-fixed_i32 define internal i32 @product(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-ea42ea699b-fixed_i32 define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-ea42ea699b-fixed_i32 define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-port-ed1778f9a8-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-f48dd639fc-aggregate_literals define internal i32 @calculate() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-port-ff17c89419-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-port-ed1778f9a8-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-f48dd639fc-aggregate_literals define internal i32 @calculate() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-port-ff17c89419-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-port-ff5222e4ad-comprehension define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-primitives define internal i8 @bool_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i8 @char_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i8 @i8_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i8 @u8_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i16 @i16_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i16 @u16_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i32 @i32_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i32 @u32_value() addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal float @f32_value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-primitives define internal double @f64_value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-primitives define internal i32 @unsigned_divide(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i16 @unsigned_remainder(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal i8 @unsigned_less(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal float @float_product(float %0, float %1) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-primitives define internal void @nothing() addrspace(1) memory(none) willreturn nounwind
+optimized/nib-primitives define internal i8 @bool_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i8 @char_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i8 @i8_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i8 @u8_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i16 @i16_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i16 @u16_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i32 @i32_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i32 @u32_value() addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal float @f32_value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-primitives define internal double @f64_value() addrspace(1) willreturn memory(read, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-primitives define internal i32 @unsigned_divide(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i16 @unsigned_remainder(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal i8 @unsigned_less(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal float @float_product(float %0, float %1) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-primitives define internal void @nothing() addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-ranked define internal i16 @trace(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-ranked define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(10) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-ranked define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
@@ -931,28 +931,28 @@ optimized/nib-runtime define void @N$ECNV() addrspace(1) memory(readwrite, argme
 optimized/nib-runtime define void @N$ESHF() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-runtime define void @N$EBND() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-runtime define void @N$EKEY() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-runtime define internal ptr @heap.header(ptr %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-runtime define internal i16 @heap.size_of(ptr nocapture readonly %0) addrspace(1) willreturn memory(argmem: read)
-optimized/nib-runtime define internal ptr @heap.next(ptr %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-runtime define internal ptr @heap.previous(ptr %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-runtime define internal i16 @heap.class_of(i16 %0) addrspace(1) memory(none) nounwind
+optimized/nib-runtime define internal ptr @heap.header(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-runtime define internal i16 @heap.size_of(ptr nocapture readonly %0) addrspace(1) willreturn memory(argmem: read) norecurse
+optimized/nib-runtime define internal ptr @heap.next(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-runtime define internal ptr @heap.previous(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-runtime define internal i16 @heap.class_of(i16 %0) addrspace(1) memory(none) nounwind norecurse
 optimized/nib-runtime define internal i16 @heap.rounded(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-runtime define internal void @heap.unlink(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none)
-optimized/nib-runtime define internal void @heap.insert(ptr %0, i16 %1) addrspace(1) memory(readwrite, inaccessiblemem: none)
+optimized/nib-runtime define internal void @heap.unlink(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/nib-runtime define internal void @heap.insert(ptr %0, i16 %1) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
 optimized/nib-runtime define internal ptr @heap.fit(i16 %0) addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-runtime define internal void @heap.grow(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-runtime define internal void @heap.trim(ptr %0, i16 %1) addrspace(1) memory(readwrite, inaccessiblemem: none)
+optimized/nib-runtime define internal void @heap.trim(ptr %0, i16 %1) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
 optimized/nib-runtime define internal ptr @heap.allocate(i16 %0) addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-runtime define internal void @heap.release(ptr %0) addrspace(1) memory(readwrite, inaccessiblemem: none)
+optimized/nib-runtime define internal void @heap.release(ptr %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
 optimized/nib-runtime define internal i8 @heap.resize(ptr %0, i16 %1) addrspace(1)
-optimized/nib-runtime define internal ptr @buffers.flags(ptr %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-runtime define internal ptr @buffers.length(ptr %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-runtime define internal ptr @buffers.capacity(ptr %0) addrspace(1) memory(none) willreturn nounwind
-optimized/nib-runtime define internal void @buffers.copy(ptr nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, i16 %2) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-runtime define internal i8 @buffers.fits(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-runtime define internal ptr @buffers.flags(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-runtime define internal ptr @buffers.length(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-runtime define internal ptr @buffers.capacity(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-runtime define internal void @buffers.copy(ptr nocapture writeonly %0, ptr addrspace(1) nocapture readonly %1, i16 %2) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-runtime define internal i8 @buffers.fits(i16 %0, i16 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-runtime define internal ptr @buffers.allocate(i16 %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-runtime define ptr @N$BRES(ptr %0, i16 %1, i16 %2) addrspace(1)
-optimized/nib-runtime define void @N$BDRP(ptr %0) addrspace(1) memory(readwrite, inaccessiblemem: none)
+optimized/nib-runtime define void @N$BDRP(ptr %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
 optimized/nib-runtime define ptr @N$BGRW(ptr %0, i16 %1, i16 %2) addrspace(1)
 optimized/nib-runtime define i16 @N$BSHR(ptr nocapture %0, i16 %1) addrspace(1)
 optimized/nib-runtime define ptr @N$BCLN(ptr nocapture %0, i16 %1) addrspace(1) memory(readwrite, argmem: read)
@@ -961,8 +961,8 @@ optimized/nib-runtime define internal ptr @strings.append_bytes(ptr %0, ptr addr
 optimized/nib-runtime define ptr @N$TAPP(ptr %0, ptr nocapture %1) addrspace(1)
 optimized/nib-runtime define ptr @N$TCAT(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-runtime define ptr @N$VCPY(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-runtime define i8 @N$VCMP(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) willreturn memory(read, inaccessiblemem: none)
-optimized/nib-runtime define internal ptr @format.scratch_at(i16 %0) addrspace(1) memory(none) willreturn nounwind
+optimized/nib-runtime define i8 @N$VCMP(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
+optimized/nib-runtime define internal ptr @format.scratch_at(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-runtime define internal void @format.put(ptr addrspace(1) %0, i16 %1) addrspace(1)
 optimized/nib-runtime define internal void @format.put_text(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-runtime define internal void @format.pad(i16 %0) addrspace(1) memory(readwrite, argmem: none)
@@ -971,7 +971,7 @@ optimized/nib-runtime define internal void @format.close(i16 %0) addrspace(1) me
 optimized/nib-runtime define internal void @format.field(ptr addrspace(1) %0, i16 %1) addrspace(1)
 optimized/nib-runtime define internal void @format.word(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-runtime define internal void @format.number(ptr %0, i16 %1) addrspace(1)
-optimized/nib-runtime define internal i16 @format.written(ptr nocapture writeonly %0, i32 %1, i8 %2) addrspace(1) memory(argmem: write)
+optimized/nib-runtime define internal i16 @format.written(ptr nocapture writeonly %0, i32 %1, i8 %2) addrspace(1) memory(argmem: write) norecurse
 optimized/nib-runtime define internal void @format.integer(i32 %0, i8 %1) addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-runtime define internal void @format.signed(i32 %0) addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-runtime define void @N$PI1(i8 %0) addrspace(1) memory(readwrite, argmem: none)
@@ -987,41 +987,41 @@ optimized/nib-runtime define void @N$PC(i8 %0) addrspace(1) memory(readwrite, ar
 optimized/nib-runtime define void @N$PS(ptr %0) addrspace(1)
 optimized/nib-runtime define void @N$PV(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-runtime define void @N$PN() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-runtime define void @N$PFLD(i8 %0, i8 %1, i8 %2, i8 %3) addrspace(1) willreturn memory(write, argmem: none, inaccessiblemem: none) nounwind
+optimized/nib-runtime define void @N$PFLD(i8 %0, i8 %1, i8 %2, i8 %3) addrspace(1) willreturn memory(write, argmem: none, inaccessiblemem: none) nounwind norecurse
 optimized/nib-runtime define void @N$PBEG() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-runtime define ptr @N$PEND() addrspace(1) willreturn memory(readwrite, argmem: none, inaccessiblemem: none) nounwind
-optimized/nib-runtime define internal void @floats.assign(ptr nocapture writeonly initializes((0, 2)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn
-optimized/nib-runtime define internal void @floats.copy(ptr nocapture writeonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-runtime define internal void @floats.shift(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-runtime define internal void @floats.multiply(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-runtime define internal void @floats.add(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-runtime define internal void @floats.subtract(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) willreturn
-optimized/nib-runtime define internal i8 @floats.compare(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-runtime define internal i8 @floats.beyond(ptr nocapture readonly %0, ptr nocapture readonly %1, i8 %2) addrspace(1) memory(argmem: read) willreturn
-optimized/nib-runtime define internal i16 @floats.put(ptr nocapture writeonly %0, i16 %1, i8 %2) addrspace(1) memory(argmem: write) willreturn
-optimized/nib-runtime define internal i16 @floats.put_text(ptr nocapture %0, i16 %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none)
+optimized/nib-runtime define ptr @N$PEND() addrspace(1) willreturn memory(readwrite, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/nib-runtime define internal void @floats.assign(ptr nocapture writeonly initializes((0, 2)) %0, i16 %1) addrspace(1) memory(argmem: write) willreturn norecurse
+optimized/nib-runtime define internal void @floats.copy(ptr nocapture writeonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-runtime define internal void @floats.shift(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-runtime define internal void @floats.multiply(ptr nocapture %0, i16 %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-runtime define internal void @floats.add(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-runtime define internal void @floats.subtract(ptr nocapture %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: readwrite) willreturn norecurse
+optimized/nib-runtime define internal i8 @floats.compare(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-runtime define internal i8 @floats.beyond(ptr nocapture readonly %0, ptr nocapture readonly %1, i8 %2) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/nib-runtime define internal i16 @floats.put(ptr nocapture writeonly %0, i16 %1, i8 %2) addrspace(1) memory(argmem: write) willreturn norecurse
+optimized/nib-runtime define internal i16 @floats.put_text(ptr nocapture %0, i16 %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none) norecurse
 optimized/nib-runtime define internal i32 @floats.digits(ptr nocapture %0, i16 %1, i8 %2, i8 %3, ptr nocapture writeonly %4) addrspace(1)
 optimized/nib-runtime define internal void @floats.print_float(ptr addrspace(1) nocapture %0, i16 %1, i16 %2, i16 %3, i16 %4) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-runtime define internal i16 @floats.decimal(ptr nocapture writeonly %0, i16 %1, ptr nocapture readonly %2, i16 %3, i16 %4) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none)
+optimized/nib-runtime define internal i16 @floats.decimal(ptr nocapture writeonly %0, i16 %1, ptr nocapture readonly %2, i16 %3, i16 %4) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none) norecurse
 optimized/nib-runtime define void @N$PR8(double %0) addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-runtime define void @N$PR4(float %0) addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-sum define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-sum define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-sum define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) willreturn memory(read, inaccessiblemem: none)
+optimized/nib-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-sum_three define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-addrm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-arith define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-arrays define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-arridx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-arrprm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-arrprm define cc1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none)
-optimized/qb-arrprm define cc1000 void @FILLPTS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none)
+optimized/qb-arrprm define cc1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none) norecurse
+optimized/qb-arrprm define cc1000 void @FILLPTS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none) norecurse
 optimized/qb-arrudt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-arrudt define cc1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-bools define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-byref2 define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-byref2 define cc1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn
-optimized/qb-byref2 define cc1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn
+optimized/qb-byref2 define cc1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/qb-byref2 define cc1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/qb-chain define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-cmpof define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-cmpord define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
@@ -1041,7 +1041,7 @@ optimized/qb-nestud define cc1000 void @INSIDE() addrspace(1) memory(readwrite, 
 optimized/qb-nots define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-press define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-procs define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-procs define cc1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn
+optimized/qb-procs define cc1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/qb-procs define cc1000 void @REPORT(ptr %0, ptr nocapture readonly %1) addrspace(1)
 optimized/qb-rcflip define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-rcflip define cc1000 void @RAMP() addrspace(1) memory(readwrite, argmem: none)
@@ -1053,4 +1053,4 @@ optimized/qb-stride define internal cc1000 void @__main() addrspace(1) memory(re
 optimized/qb-subexp define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-udt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
 optimized/qb-wendgo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-wendgo define cc1000 void @TURN() addrspace(1) willreturn memory(readwrite, argmem: none, inaccessiblemem: none) nounwind
+optimized/qb-wendgo define cc1000 void @TURN() addrspace(1) willreturn memory(readwrite, argmem: none, inaccessiblemem: none) nounwind norecurse

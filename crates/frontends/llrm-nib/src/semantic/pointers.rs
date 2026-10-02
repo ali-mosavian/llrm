@@ -97,7 +97,7 @@ impl FunctionCompiler<'_> {
     /// The address of a sequence's first element, from its data pointer.
     fn data_address(&mut self, data: u32, element: ElementType, pointer_id: u32) -> hir::Operand {
         let result = self.value_type(pointer_id);
-        let first = hir::Operand::IndirectPlace { base: data, offset: 0, type_id: element.id(), inbounds: false };
+        let first = hir::Operand::IndirectPlace { base: data, offset: 0, type_id: element.id(), inbounds: false, member: None };
         self.emit("address", vec![result], vec![first], None);
         hir::Operand::Value(result)
     }
@@ -340,7 +340,7 @@ impl FunctionCompiler<'_> {
                 let whole = self.local_place("$far", pointer_id, 4, true);
                 self.emit("store", Vec::new(), vec![hir::Operand::Place(whole), pointer], None);
                 let offset = self.value(near);
-                let low = hir::Operand::ProjectedPlace { place: whole, indices: Vec::new(), offset: 0, type_id: type_id(near) };
+                let low = hir::Operand::ProjectedPlace { place: whole, indices: Vec::new(), offset: 0, type_id: type_id(near), member: None };
                 self.emit("load", vec![offset], vec![low], None);
                 TypedOperand { operand: Some(hir::Operand::Value(offset)), type_name: near }
             }
@@ -348,7 +348,7 @@ impl FunctionCompiler<'_> {
                 let far = self.types.raw_pointer(target, name, mutable);
                 let base = self.materialized(pointer, pointer_id);
                 let moved = self.value(far);
-                let place = hir::Operand::IndirectPlace { base, offset: 0, type_id: target.id(), inbounds: false };
+                let place = hir::Operand::IndirectPlace { base, offset: 0, type_id: target.id(), inbounds: false, member: None };
                 self.emit("address", vec![moved], vec![place], None);
                 TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name: far }
             }

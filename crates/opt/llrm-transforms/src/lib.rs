@@ -22,6 +22,7 @@ pub mod floatfold;
 pub mod floatloop;
 pub mod globalopt;
 pub mod fold;
+pub mod splitcopy;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;

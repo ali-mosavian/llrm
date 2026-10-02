@@ -234,7 +234,9 @@ fn normalized(value: Scalar, type_: &model::Type) -> Outcome<Scalar> {
         }
         // A word copy of an aggregate carries its addresses.
         TypeKind::Integer if matches!(value, Scalar::Address(_)) => Ok(value),
-        // Widened as `movsx` widens it: the all-ones `true` is -1.
+        // An unsigned boolean's `true` is one, as C's; any other widens as
+        // `movsx` widens it, the all-ones `true` being -1.
+        TypeKind::Boolean if type_.signed == Some(false) => Ok(Scalar::Int(i128::from(wrap(value.whole()?, type_.width * 8, false) != 0))),
         TypeKind::Boolean => Ok(Scalar::Int(wrap(value.whole()?, type_.width * 8, true))),
         TypeKind::Integer => Ok(Scalar::Int(integer(value.whole()?, type_))),
         _ => fail(format!(
@@ -720,6 +722,28 @@ impl<'p> Machine<'p> {
             Op::Load => {
                 let value = self.scalar(activation, &operands[0])?;
                 return self.define(activation, instruction, vec![value]);
+            }
+            Op::CopyBytes => {
+                let (to, from) = (self.location(activation, &operands[0])?, self.location(activation, &operands[1])?);
+                let Operand::Constant(model::Constant { value: model::Number::Int(bytes), .. }) = &operands[2] else {
+                    return fail("copy_bytes without a constant byte count");
+                };
+                let (to_range, from_range) = (span(&to, *bytes as usize)?, span(&from, *bytes as usize)?);
+                let (data, held): (Vec<u8>, Vec<_>) = {
+                    let cells = from.memory.borrow();
+                    let held = cells
+                        .pointers
+                        .iter()
+                        .filter(|((offset, width), _)| from.offset <= *offset && offset + width <= from.offset + bytes)
+                        .map(|((offset, width), address)| ((offset - from.offset, *width), address.clone()))
+                        .collect();
+                    (cells.bytes[from_range].to_vec(), held)
+                };
+                let mut cells = to.memory.borrow_mut();
+                cells.bytes[to_range].copy_from_slice(&data);
+                cells.pointers.retain(|(offset, width), _| !(to.offset < offset + width && *offset < to.offset + bytes));
+                cells.pointers.extend(held.into_iter().map(|((offset, width), address)| ((to.offset + offset, width), address)));
+                return Ok(());
             }
             Op::Store => {
                 let value = self.scalar(activation, &operands[1])?;

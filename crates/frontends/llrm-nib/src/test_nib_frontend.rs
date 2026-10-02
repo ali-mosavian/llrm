@@ -41,6 +41,68 @@ fn refused(source: &Path) -> String {
     driver::parsed(source, &Default::default(), None).expect_err("the frontend refuses").0
 }
 
+/// A tag is within the tags its enum has, stated once of the tag's member, not of each load:
+/// every load of it, as many as the program makes, carries `!range` in the emitted MIR
+/// with no instruction fact from the frontend. A load a later change forgets to tag no
+/// longer loses the fact.
+#[test]
+fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
+    use llrm_core::hir::facts::Subject;
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "shape.nib", "enum Shape:\n    circle(radius: i16)\n    square(side: i16)\n    tri(base: i16, height: i16)\n\nfn area(shape: &Shape) -> i16:\n    match shape:\n        .circle(r):\n            return r * r * 3\n        .square(s):\n            return s * s\n        .tri(b, h):\n            return b * h // 2\n\nfn sides(shape: &Shape) -> i16:\n    match shape:\n        .circle(_):\n            return 0\n        .square(_):\n            return 4\n        .tri(_, _):\n            return 3\n\nfn main() -> i16:\n    let a = Shape.square(side=4)\n    return area(a) + sides(a)\n");
+    let program = parsed(&source);
+    let module = &program.modules[0];
+    let fields: Vec<_> = module.facts.iter().filter(|one| matches!(one.subject, Subject::Field { .. })).collect();
+    assert_eq!(fields.len(), 1, "one statement for the one enum");
+    assert!(module.facts.iter().all(|one| !(matches!(one.subject, Subject::Instruction { .. }) && matches!(one.fact, llrm_mir::facts::Fact::Range(bounds) if bounds.hi == 2))), "no load is stated of its own");
+    let emitted = hir::mir::emit(&program);
+    let text: String = emitted.iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    let tag_loads: Vec<&str> = text.lines().filter(|one| one.contains("load i8")).collect();
+    assert!(tag_loads.len() >= 2, "{text}");
+    assert!(tag_loads.iter().all(|one| one.contains("!range")), "{text}");
+}
+
+/// A fact stated once of any member, not only a tag, reaches every load and store of it,
+/// through a reference and through a local: each field access names its member.
+#[test]
+fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
+    use llrm_core::hir::facts::Subject;
+    use llrm_mir::facts::{Bounds, Fact};
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "pair.nib", "struct P:\n    mut a: i16\n    mut b: i16\n\nfn bump(p: &mut P) -> void:\n    p.b = p.b + 1\n\nfn main() -> i16:\n    let mut q = P(a=1, b=2)\n    q.b = q.b + 5\n    bump(q)\n    return q.b + q.a\n");
+    let mut program = parsed(&source);
+    let owner = program.modules[0].types.iter().find(|one| one.name == "P").expect("the struct P").id;
+    // The accesses of member b, as the frontend wrote them: loads and stores, by reference and by place.
+    let member_of = |operand: &model::Operand| match operand {
+        model::Operand::ProjectedPlace(one) => one.member,
+        model::Operand::IndirectPlace(one) => one.member,
+        _ => None,
+    };
+    let (mut loads, mut stores, mut reference, mut local) = (0, 0, 0, 0);
+    for function in &program.modules[0].functions {
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            let Some(member) = instruction.operands.first().and_then(member_of).filter(|one| one.owner == owner && one.offset == 2) else { continue };
+            let _ = member;
+            match instruction.op {
+                model::Op::Store => stores += 1,
+                _ => loads += 1,
+            }
+            match instruction.operands[0] {
+                model::Operand::IndirectPlace(_) => reference += 1,
+                _ => local += 1,
+            }
+        }
+    }
+    assert!(loads >= 3 && stores >= 2 && reference >= 2 && local >= 3, "loads {loads} stores {stores} reference {reference} local {local}");
+    program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Range(Bounds { lo: 0, hi: 100 }), source: None });
+    program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Align(2), source: None });
+    let text: String = hir::mir::emit(&program).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    let ranged = text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count();
+    let aligned_loads = text.lines().filter(|one| one.contains("load i16") && one.contains("align 2")).count();
+    let aligned_stores = text.lines().filter(|one| one.contains("store i16") && one.contains("align 2")).count();
+    assert_eq!((ranged, aligned_loads, aligned_stores), (loads, loads, stores), "{text}");
+}
+
 /// Every Nib program's emitted MIR lints clean: `lint::poison` called each stated
 /// wrap `poison` and each array filled an element at a time "stored after use",
 /// so `hir-mir` and the corpus tool dropped 56 of 124 programs, `sum_three` among them.
@@ -55,20 +117,13 @@ fn the_mir_of_sum_three_lints_clean() {
 
 /// An enum value is built whole: every byte of it is written, the payload of a
 /// variant without one zero, so that a value flowing as one integer has no
-/// undefined bytes (#290). Until then `lint::poison` finds the load that reads
-/// them in these programs.
+/// undefined bytes (#290); `lint::poison` finds a load that reads them.
 fn lint_of(name: &str) -> Vec<String> {
     let program = parsed(&PathBuf::from(env!("LLRM_ROOT")).join(name));
     hir::mir::emit(&program).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
 }
 
 #[test]
-fn the_enum_values_of_digits_still_read_unstored_bytes() {
-    assert!(lint_of("examples/digits.nib").iter().any(|one| one.starts_with("@first_even: load uses")), "the finding went away: enable the test below and delete this one");
-}
-
-#[test]
-#[ignore = "#290: nib-borrowck-fix makes an enum value write all its bytes"]
 fn the_enum_values_of_digits_write_all_their_bytes() {
     assert_eq!(lint_of("examples/digits.nib"), Vec::<String>::new());
 }
@@ -2269,6 +2324,63 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     assert!(!body.contains(", 0\n"), "{body}");
 }
 
+/// Nib's `true` is one, as C's. It was -1, so a bool C handed over (1)
+/// was not equal to a Nib `true`: `b == t` compared the bytes. Run on the
+/// HIR executor and on the optimized MIR at -O0 and -O2, each a bit of
+/// the score.
+#[test]
+fn test_a_bool_is_equal_to_any_other_true_whoever_stored_it() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+struct S:
+    mut flag: bool
+
+fn main() -> i16:
+    let mut b: bool = false
+    let t: bool = true
+    let mut s = S(flag=false)
+    unsafe:
+        let p: *far mut bool = &mut b
+        let r = p.cast[u8]()
+        r[0] = 1
+        let q: *far mut bool = &mut s.flag
+        let u = q.cast[u8]()
+        u[0] = 1
+    let c: bool = 3 > 2
+    let n: bool = !b
+    let mut score: i16 = 0
+    if b == t:
+        score += 1
+    if b == true:
+        score += 2
+    if b != false:
+        score += 4
+    if s.flag == t:
+        score += 8
+    if b == c:
+        score += 16
+    if n == false:
+        score += 32
+    if !n == b:
+        score += 64
+    return score
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "booleans.nib", source));
+    let held = llrm_core::hir::execute::run(&program, "main", &[]).expect("runs").value;
+    assert_eq!(held, Some(llrm_core::hir::model::Number::Int(127)), "the HIR executor");
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    for optimize in [false, true] {
+        let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
+        let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+        let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+        llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+        let score = interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        assert!(matches!(score, Val::Int { bits: 127, .. }), "optimize {optimize}: {score:?}");
+    }
+}
+
 /// A view's descriptor holds the data's pointer. The optimizer took a call
 /// of `first_even(values)` to read only the descriptor, and dropped the
 /// array's stores before it: the digits example printed "first even 0" on
@@ -2298,4 +2410,191 @@ fn main() -> i16:
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 8, .. })), "{result:?}");
+}
+
+/// A payload-less variant stored only its tag, so the other bytes of the
+/// enum were undefined where the whole value then flowed as one integer:
+/// returned, compared, copied into a struct compared bytewise. The MIR
+/// interpreter reads an unwritten byte as poison, which a copy of the whole
+/// value carries to the tag read after it.
+#[test]
+fn test_an_enum_value_is_written_whole() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+fn first_even(a: i16, b: i16) -> Option[i16]:
+    if a % 2 == 0:
+        return .some(a)
+    if b % 2 == 0:
+        return .some(b)
+    return .none
+
+fn main() -> i16:
+    let x = first_even(1, 3)
+    let y = x
+    match y:
+        .some(n):
+            return n
+        .none:
+            return 7
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "enum.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
+}
+
+/// An enum too large for a register moves by memory copy and a match reads
+/// the tag first, so its `.none` leaves the payload bytes unwritten: it
+/// copies and matches right, and costs no zero-fill.
+#[test]
+fn test_a_large_enum_value_copied_and_matched_stays_correct() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+enum Box:
+    empty
+    full(a: i16, b: i16, c: i16)
+
+fn make(n: i16) -> Box:
+    if n > 0:
+        return .full(n, n, n)
+    return .empty
+
+fn main() -> i16:
+    let x = make(0)
+    let y = x
+    match y:
+        .full(a, b, c):
+            return a + b + c
+        .empty:
+            return 7
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "large.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
+}
+
+/// `small`'s byte sits at offset 2 and byte 3 is never written, yet an enum
+/// is copied as raw i16 words: the word at offset 2 is poison, and so is the
+/// payload read from the copy.
+#[test]
+fn test_a_small_payload_of_a_large_enum_survives_a_copy() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+enum E:
+    small(a: u8)
+    big(a: i16, b: i16, c: i16)
+
+fn make() -> E:
+    return .small(7)
+
+fn main() -> i16:
+    let x = make()
+    let y = x
+    match y:
+        .small(a):
+            if a == 7:
+                return 7
+            return 1
+        .big(a, b, c):
+            return 2
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "small.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
+}
+
+/// A struct copies its fields, and its enum field's bytes were two words of
+/// a payload `small` never wrote: the copied tag read poison.
+#[test]
+fn test_a_struct_holding_an_enum_copies_it_byte_for_byte() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+enum E:
+    small(a: u8)
+    big(a: i16, b: i16, c: i16)
+
+struct Holder:
+    tag: u8
+    value: E
+
+fn make() -> Holder:
+    return Holder(tag=1, value=.small(7))
+
+fn main() -> i16:
+    let x = make()
+    let y = x
+    match y.value:
+        .small(a):
+            if a == 7:
+                return 7
+            return 1
+        .big(a, b, c):
+            return 2
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "test_a_struct_holding_an_enum_copies_it_byte_for_byte.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
+}
+
+/// An enum of 40 bytes was copied as words past the byte-copy limit, and its
+/// `small` variant's byte shared a word with one never written.
+#[test]
+fn test_an_enum_past_the_unrolled_copy_keeps_its_small_payload() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+enum E:
+    small(a: u8)
+    big(a: i16, b: i16, c: i16, d: i16, e: i16, f: i16, g: i16, h: i16, i: i16, j: i16, k: i16, l: i16, m: i16, n: i16, o: i16, p: i16, q: i16, r: i16, s: i16)
+
+fn make() -> E:
+    return .small(7)
+
+fn main() -> i16:
+    let x = make()
+    let y = x
+    match y:
+        .small(a):
+            if a == 7:
+                return 7
+            return 1
+        .big(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s):
+            return 2
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "test_an_enum_past_the_unrolled_copy_keeps_its_small_payload.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
