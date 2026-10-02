@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchMandel"
 c = "bench_mandel"
 nib = "bench_mandel"
+
+[gaps]
+bas = "#365 no shift operators"

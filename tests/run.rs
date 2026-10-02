@@ -30,10 +30,11 @@ fn test_every_program_under_tests_run_prints_its_out() {
 }
 
 /// A benchmark that exists in one language is a language gap, not a benchmark: every one has
-/// all three variants, its `.out` and its `bench.toml`. The gaps below are real ones, each with its reason.
+/// all three variants, its `.out` and its `bench.toml`. A variant may be missing, or use an idiom
+/// instead of the real thing, only when bench.toml's `[gaps]` names the language with the issue
+/// that tracks the gap (`nib = "#362 no array over 64K"`).
 #[test]
 fn test_every_benchmark_exists_in_basic_c_and_nib() {
-    const GAPS: &[(&str, &str)] = &[("huge", "nib")]; // Nib has no array over 64K and no allocator for one
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench");
     let mut dirs = Vec::new();
     for entry in std::fs::read_dir(&root).unwrap().flatten() {
@@ -45,15 +46,28 @@ fn test_every_benchmark_exists_in_basic_c_and_nib() {
         }
     }
     assert!(dirs.len() >= 20, "premise: the benchmarks are found: {dirs:?}");
-    let mut missing = Vec::new();
+    let issue = regex::Regex::new(r"^#\d+\b").unwrap();
+    let (mut missing, mut unexplained) = (Vec::new(), Vec::new());
     for dir in dirs {
         let name = dir.file_name().unwrap().to_str().unwrap().to_owned();
-        for extension in ["bas", "c", "nib", "out", "toml"] {
-            let file = if extension == "toml" { dir.join("bench.toml") } else { dir.join(format!("{name}.{extension}")) };
-            if !file.exists() && !GAPS.contains(&(name.as_str(), extension)) {
-                missing.push(file.strip_prefix(&root).unwrap().display().to_string());
+        let toml = std::fs::read_to_string(dir.join("bench.toml")).ok().and_then(|text| text.parse::<toml::Table>().ok());
+        let Some(toml) = toml else {
+            missing.push(format!("{name}/bench.toml"));
+            continue;
+        };
+        let gaps = toml.get("gaps").and_then(|one| one.as_table()).cloned().unwrap_or_default();
+        for (language, extension) in [("bas", "bas"), ("c", "c"), ("nib", "nib")] {
+            let named = gaps.get(language).and_then(|one| one.as_str()).is_some_and(|text| issue.is_match(text));
+            if gaps.contains_key(language) && !named {
+                unexplained.push(format!("{name}: [gaps] {language} has no issue number"));
+            }
+            if !dir.join(format!("{name}.{extension}")).exists() && !named {
+                missing.push(format!("{name}/{name}.{extension}"));
             }
         }
+        if !dir.join(format!("{name}.out")).exists() {
+            missing.push(format!("{name}/{name}.out"));
+        }
     }
-    assert!(missing.is_empty(), "missing: {missing:?}");
+    assert!(missing.is_empty() && unexplained.is_empty(), "missing: {missing:?}; {unexplained:?}");
 }

@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchHisto"
 c = "bench_histo"
 nib = "bench_histo"
+
+[gaps]
+bas = "#364 no unsigned types"

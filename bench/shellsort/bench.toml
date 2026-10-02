@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchShellsort"
 c = "bench_shellsort"
 nib = "bench_shellsort"
+
+[gaps]
+bas = "#364 no unsigned types"

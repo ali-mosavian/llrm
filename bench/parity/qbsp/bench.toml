@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchQbsp"
 c = "bench_qbsp"
 nib = "bench_qbsp"
+
+[gaps]
+nib = "#368 no i16 literal 0x8000"

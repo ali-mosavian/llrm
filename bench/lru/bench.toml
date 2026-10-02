@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchLru"
 c = "bench_lru"
 nib = "bench_lru"
+
+[gaps]
+bas = "#366 no far pointers or struct pointers"
