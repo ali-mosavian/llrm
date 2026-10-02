@@ -17,7 +17,7 @@ use crate::backend::twoaddr::TwoAddress;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::parcopy::ParallelCopy;
 use crate::backend::{target, verify};
-use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
@@ -355,7 +355,6 @@ fn complaints(done: &LirBody) -> Vec<String> {
     out
 }
 
-
 /// What a body does, run: the generator's body in values, and the allocator's
 /// in registers and frame cells, must store the same things.
 mod run {
@@ -626,14 +625,14 @@ fn allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), String> {
         phases.push(Box::new(ParallelCopy));
     }
     if std::env::var_os("FUZZ_SHOW").is_some() {
-        eprintln!("{}", crate::tools::stages::lir_stage("input", &[(body.name.clone(), body.clone())]));
+        eprintln!("{}", crate::backend::lirtext::lir_stage("input", &[(body.name.clone(), body.clone())]));
     }
     let mut now = body;
     for phase in &mut phases {
         now = phase.transform(now).map_err(|error| format!("{}: {error}\n{}", phase.name(), notes.join("\n")))?;
     }
     if std::env::var_os("FUZZ_SHOW").is_some() {
-        eprintln!("{}", crate::tools::stages::lir_stage("allocated", &[(now.name.clone(), now.clone())]));
+        eprintln!("{}", crate::backend::lirtext::lir_stage("allocated", &[(now.name.clone(), now.clone())]));
         for block in &now.blocks {
             eprintln!("BLOCK {:#x} succ {:x?} last {:?}", block.at, block.succ, block.insns.last().and_then(|one| one.what.as_ref()).map(|what| (&what.name, what.target)));
         }
@@ -669,7 +668,7 @@ fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), Stri
     }
     for phase in &mut phases {
         if std::env::var_os("FUZZ_SHOW").is_some() {
-            eprintln!("{}", crate::tools::stages::lir_stage(&format!("before {}", phase.name()), &[(now.name.clone(), now.clone())]));
+            eprintln!("{}", crate::backend::lirtext::lir_stage(&format!("before {}", phase.name()), &[(now.name.clone(), now.clone())]));
         }
         now = phase.transform(now).map_err(|error| format!("{}: {error}\n{}", phase.name(), notes.join("\n")))?;
     }

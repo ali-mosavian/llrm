@@ -85,10 +85,6 @@ impl Lanes {
         self.0 = 0;
     }
 
-    pub fn len(&self) -> usize {
-        self.0.count_ones() as usize
-    }
-
     pub fn is_empty(&self) -> bool {
         self.0 == 0
     }
@@ -97,20 +93,12 @@ impl Lanes {
         self.0 & !other.0 == 0
     }
 
-    pub fn is_superset(&self, other: &Self) -> bool {
-        other.is_subset(self)
-    }
-
     pub fn is_disjoint(&self, other: &Self) -> bool {
         self.0 & other.0 == 0
     }
 
     pub fn iter(&self) -> Iter {
         Iter(self.0)
-    }
-
-    pub fn first(&self) -> Option<&'static Lane> {
-        self.iter().next()
     }
 
     // The set operations as `BTreeSet` spells them, yielding lanes in order.
@@ -124,10 +112,6 @@ impl Lanes {
 
     pub fn intersection(&self, other: &Self) -> Iter {
         Iter(self.0 & other.0)
-    }
-
-    pub fn symmetric_difference(&self, other: &Self) -> Iter {
-        Iter(self.0 ^ other.0)
     }
 
     // The same operations as sets, without an iterator between.

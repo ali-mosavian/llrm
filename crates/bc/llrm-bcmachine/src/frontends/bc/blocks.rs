@@ -731,10 +731,6 @@ pub fn _close(module: &Module, run: &[Insn], mapped: &CodeMap) -> Block {
     Block { at: run[0].at, end: last.end(), insns: run.to_vec(), ends, succ }
 }
 
-pub fn block_at(blocks: &[Block], offset: usize) -> Option<&Block> {
-    blocks.iter().find(|block| block.at <= offset && offset < block.end)
-}
-
 /// `b[lo:hi]` for non-negative bounds: clamped, and empty where `hi < lo`.
 fn slice(b: &[u8], lo: usize, hi: usize) -> &[u8] {
     let hi = hi.min(b.len());

@@ -5,9 +5,6 @@ pub use llrm_qbruntime as runtime;
 pub use llrm_x86_code16::machine;
 
 pub mod inputscan;
-pub mod linkunit;
 pub mod nib;
-pub mod nativecalls;
 pub mod profile;
 pub mod qb;
-

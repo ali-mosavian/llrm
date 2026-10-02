@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every stage dump -- MIR after each pass, LIR, emitted assembly -- for the OMF
+# Every MIR stage dump for the OMF
 # corpus and the Nib examples, so a representation change is judged by
 # `diff -r` against the tree from before it. Refusals are recorded, not fatal.
 #
@@ -20,12 +20,12 @@ record() {
     echo "$status" >"$dir/status"
 }
 
-for object in "$root"/tests/fixtures/omf/*.obj; do
-    name=$(basename "$object" .obj)
-    record "$out/omf/$name" "$bin/llrm-omf" "$object" --dump "$out/omf/$name" --quiet
-done
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
+for object in "$root"/tests/fixtures/omf/*.obj; do
+    name=$(basename "$object" .obj)
+    LLRM_MIR_STAGES="$out/omf/$name" record "$out/omf/$name" "$bin/llrm-omf" "$object" -o "$scratch/$name.obj"
+done
 for source in "$root"/examples/*.nib; do
     name=$(basename "$source" .nib)
     record "$out/nib/$name" "$bin/llrm-nib" "$source" -o "$scratch/$name.obj" --dump "$out/nib/$name"

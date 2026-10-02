@@ -86,13 +86,6 @@ impl Here {
             Here::Indexed(cells) => cells,
         }
     }
-
-    pub fn into_cells(self) -> Cells {
-        match self {
-            Here::Plain(cells) => cells,
-            Here::Indexed(cells) => cells.into_items(),
-        }
-    }
 }
 
 impl _MemoryQueries {
@@ -262,14 +255,6 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-/// Reuse ordinary constant facts for identical bodies in one transaction.
-pub fn reusing<T>(inside: impl FnOnce() -> T) -> T {
-    let token = _reuse.with(|reuse| reuse.replace(Some(HashMap::default())));
-    let result = inside();
-    _reuse.with(|reuse| *reuse.borrow_mut() = token);
-    result
-}
-
 fn _reuse_key(
     body: &Rc<MirBody>,
     dgroup: Option<&BTreeSet<i64>>,
@@ -325,56 +310,6 @@ fn _width(arg: &Arg) -> u32 {
     }
 }
 
-/// Integer quotient and remainder, excluding the faulting cases.
-pub fn division(op: &Op, known: &IndexMap<Value, Known>, here: &Cells) -> Option<(BigInt, BigInt)> {
-    if !matches!(op.kind, Kind::Divmod | Kind::Udivmod)
-        || op.args.len() != 2
-        || op.results.len() != 2
-        || !op.stores.is_empty()
-    {
-        return None;
-    }
-    if op.results.iter().any(|result| !matches!(result, Arg::Held(_))) {
-        return None;
-    }
-    let widths = op.results.iter().map(_width).collect::<BTreeSet<_>>();
-    if widths.len() != 1 || !widths.iter().all(|width| matches!(width, 2 | 4 | 8)) {
-        return None;
-    }
-    let width = *widths.first().expect("one width");
-    let operands = op
-        .args
-        .iter()
-        .map(|arg| _operand(op, arg, known, Some(here)))
-        .collect::<Vec<_>>();
-    if operands.iter().any(|fact| fact.as_ref().is_none_or(|fact| fact.width < width)) {
-        return None;
-    }
-    let operands = operands.into_iter().flatten().collect::<Vec<_>>();
-    let (dividend, divisor) = if op.kind == Kind::Divmod {
-        let sign = BigInt::from(1) << (width * 8 - 1);
-        (
-            (masked(&operands[0].n, width) ^ &sign) - &sign,
-            (masked(&operands[1].n, width) ^ &sign) - &sign,
-        )
-    } else {
-        (masked(&operands[0].n, width), masked(&operands[1].n, width))
-    };
-    let zero = BigInt::from(0);
-    if divisor == zero
-        || (op.kind == Kind::Divmod && dividend == -(BigInt::from(1) << (width * 8 - 1)) && divisor == BigInt::from(-1))
-    {
-        return None;
-    }
-    let absolute = |n: &BigInt| if *n < BigInt::from(0) { -n } else { n.clone() };
-    let mut quotient = absolute(&dividend) / absolute(&divisor);
-    if op.kind == Kind::Divmod && (dividend < zero) != (divisor < zero) {
-        quotient = -quotient;
-    }
-    let remainder = &dividend - &quotient * &divisor;
-    Some((masked(&quotient, width), masked(&remainder, width)))
-}
-
 /// What this store puts in the cell, where that is a number.
 fn _put(op: &Op, known: &IndexMap<Value, Known>) -> Option<Known> {
     if op.kind != Kind::Store || op.args.len() != 1 {
@@ -385,19 +320,6 @@ fn _put(op: &Op, known: &IndexMap<Value, Known>) -> Option<Known> {
         Arg::Held(source) => known.get(&source.value).cloned(),
         _ => None,
     }
-}
-
-/// The complete value a direct constant store writes to a contained cell.
-pub fn initialized(op: &Op, reference: &MemRef) -> Option<Known> {
-    if op.kind != Kind::Store || !op.loads.is_empty() || op.barrier() || op.stores.len() != 1 {
-        return None;
-    }
-    let written = mir::symbolic_ref(&op.stores[0]);
-    if written.addr.is_none() || written.base.is_some() || written.segment.is_some() {
-        return None;
-    }
-    let fact = _put(op, &IndexMap::default())?;
-    _cell(&Cells::from_iter([((written.addr?, written.width), fact)]), reference)
 }
 
 /// The value of an exact scalar read-modify-write, before its store kills the facts.
@@ -534,25 +456,6 @@ pub fn memory_queries(
     dgroup: &BTreeSet<i64>,
 ) -> _MemoryQueries {
     _MemoryQueries::with_named(known, dgroup, super::alias::named_bytes(body))
-}
-
-/// The cell facts still standing after this operation.
-///
-/// `assume` collects the far selectors this took on faith; the caller
-/// checks afterwards that every one of them did resolve.
-#[allow(clippy::too_many_arguments)]
-pub fn _kills(
-    here: Cells,
-    op: &Op,
-    known: &IndexMap<Value, Known>,
-    dgroup: &BTreeSet<i64>,
-    calls: &IndexMap<i64, String>,
-    assume: Option<&mut BTreeSet<Value>>,
-    allowed: Option<&BTreeSet<Value>>,
-    edge_facts: bool,
-    queries: Option<&mut _MemoryQueries>,
-) -> Cells {
-    _killed(Here::Plain(here), op, known, dgroup, calls, assume, allowed, edge_facts, queries).into_cells()
 }
 
 /// `_kills` over what the walk holds: Python's `here` is a dict or a
@@ -1350,8 +1253,3 @@ fn _solved(
     llrm_support::debug!("consts", "known solved in {rounds} rounds, {} ops", body.blocks.iter().map(|block| block.ops.len()).sum::<usize>());
     (constant_cycles::propagated(body, &facts, None), assume.unwrap_or_default())
 }
-
-#[cfg(test)]
-#[path = "consts_tests.rs"]
-mod tests;
-

@@ -16,14 +16,6 @@ thread_local! {
     static RESULTS: RefCell<Option<Results>> = const { RefCell::new(None) };
 }
 
-/// Run `inside` with analyses shared between its passes.
-pub fn scoped<T>(inside: impl FnOnce() -> T) -> T {
-    let outer = RESULTS.with(|results| results.replace(Some(Results::default())));
-    let result = inside();
-    RESULTS.with(|results| *results.borrow_mut() = outer);
-    result
-}
-
 /// `compute`'s answer for `body` in context `key`, found once per scope.
 pub fn cached<K: Eq + 'static, R: 'static>(body: &Rc<MirBody>, key: K, compute: impl FnOnce() -> R) -> Rc<R> {
     let slot = (TypeId::of::<R>(), Rc::as_ptr(body) as usize);

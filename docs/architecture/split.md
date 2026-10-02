@@ -80,9 +80,9 @@ datatype and every pass module rather than relying on convention.
 - `tests/test_rule5.py` -- walks the AST of every pass for `Register`,
   `ROOT`, `AVAILABLE`, `ir.Reg` and the rest, with an allow-list that only
   ever shrinks. A name joining it needs a reason in writing.
-- `tools/stages.py` -- dumps MIR between passes and the machine form once,
-  where lowering happens. It used to print an `asm` and an `lir` view beside
-  every stage, which said a pass has a machine form. It does not.
+- `LLRM_MIR_STAGES=DIR` -- dumps MIR between passes; `ISEL_DUMP=1` prints
+  the machine form once, after selection, through each machine phase. A pass
+  has no machine form.
 
 ## Where the line is broken today
 

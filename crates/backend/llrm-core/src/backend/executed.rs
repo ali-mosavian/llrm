@@ -10,7 +10,7 @@ use crate::analysis::loops;
 use crate::backend::cpu::Profile;
 use crate::model::ir::{Addr, Loc, Operation, Space};
 use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::{IndexMap, IndexSet};
+use crate::support::hash::IndexSet;
 
 /// Expected per call: instructions executed, and memory operands they touch;
 /// of those instructions, the integer allocator's reloads, spill stores and

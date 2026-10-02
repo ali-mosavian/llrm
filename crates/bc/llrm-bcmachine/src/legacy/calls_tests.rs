@@ -8,7 +8,7 @@ use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind};
 use super::*;
 use crate::frontends::bc::blocks::{code_map, instructions, partition};
 use crate::frontends::bc::declen::decode;
-use crate::legacy::lift::FIXUP;
+use crate::model::ir::lift::FIXUP;
 use crate::objectfile::testing::{bare, fixtures, loaded};
 
 /// helpers' `hx`.

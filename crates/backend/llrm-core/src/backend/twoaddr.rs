@@ -12,7 +12,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 use crate::analysis::intervals as ranges;
 use crate::backend::{allocate, coalesce, spiller};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
 /// Operations that read their destination.

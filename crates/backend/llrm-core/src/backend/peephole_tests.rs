@@ -443,7 +443,7 @@ fn test_constant_push_fusion_stops_at_boundaries() {
     for barrier in ["relocation", "block", "instruction"] {
         let mut first =
             insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
-        let mut second = Insn { at: 3, covers: Some((3, 6)), ..first.clone() };
+        let second = Insn { at: 3, covers: Some((3, 6)), ..first.clone() };
         match barrier {
             "relocation" => {
                 first.what.as_mut().unwrap().sources = vec![Loc::Imm(Imm {

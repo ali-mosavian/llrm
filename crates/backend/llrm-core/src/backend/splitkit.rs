@@ -12,7 +12,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
-use crate::analysis::intervals::{self as ranges, Indexes, Interval, Segment};
+use crate::analysis::intervals::{self as ranges, Indexes, Segment};
 use crate::analysis::loops;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::{allocate, spiller};
@@ -924,50 +924,6 @@ pub fn per_block(body: &LirBody, value: u32, live: (&allocate::Live, &allocate::
         .collect()
 }
 
-/// `value`'s interval divided at `region`: the piece inside and the rest,
-/// each weighted as `intervals::weights` weighs a whole range.
-pub fn divided(body: &LirBody, index: &Indexes, whole: &Interval, region: &Region, fresh: u32) -> (Interval, Interval) {
-    let spans = region.segments(body, index);
-    let (mut inside, mut outside) = (Vec::new(), Vec::new());
-    for one in &whole.segments {
-        let mut cursor = one.start;
-        let mut cuts: Vec<Segment> = spans.iter().filter(|span| span.overlaps(one)).copied().collect();
-        cuts.sort_by_key(|span| span.start);
-        for span in cuts {
-            let (start, end) = (span.start.max(one.start), span.end.min(one.end));
-            if cursor < start {
-                outside.push(Segment { start: cursor, end: start });
-            }
-            inside.push(Segment { start, end });
-            cursor = end;
-        }
-        if cursor < one.end {
-            outside.push(Segment { start: cursor, end: one.end });
-        }
-    }
-    let deep = ranges::depths(body);
-    let (mut within, mut without) = (0.0, 0.0);
-    for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
-        for (at, one) in block.insns.iter().enumerate() {
-            if !(one.defines.contains(&whole.value) || one.uses.contains(&whole.value)) {
-                continue;
-            }
-            if region.covers(block.at, at) {
-                within += each;
-            } else {
-                without += each;
-            }
-        }
-    }
-    let weighed = |value: u32, segments: Vec<Segment>, references: f64| {
-        let mut made = Interval::new(value, ranges::_merged(segments));
-        made.weight = references / (made.size() + ranges::GRACE) as f64;
-        made
-    };
-    (weighed(fresh, inside, within), weighed(whole.value, outside, without))
-}
-
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_splitkit.py`.
@@ -980,7 +936,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     use super::{carved, loop_bases, Region};
-    use crate::analysis::intervals::{self, Indexes};
+    use crate::analysis::intervals::{self};
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
     use crate::analysis::frequency::Frequency;
     use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};

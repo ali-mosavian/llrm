@@ -252,7 +252,7 @@ impl Selector<'_, '_, '_> {
                 (Loc::Held(low), Loc::Held(high))
             }
         };
-        let mut flags = |selector: &mut Self, name: &str, sources: [Loc; 2], out: &mut Vec<Arc<Insn>>| {
+        let flags = |selector: &mut Self, name: &str, sources: [Loc; 2], out: &mut Vec<Arc<Insn>>| {
             let into = selector.fresh_held(4);
             selector.put(semantics(Operation::Binary, name, vec![Loc::Held(into)], sources.to_vec()), at, out);
             into

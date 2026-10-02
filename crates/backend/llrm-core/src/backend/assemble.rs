@@ -272,7 +272,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
         if std::env::var_os("ISEL_DUMP").is_some() {
-            println!("{}", crate::tools::stages::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));
+            println!("{}", crate::backend::lirtext::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));
         }
     }
     let frame = frame.borrow().clone();

@@ -182,10 +182,6 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
         }
         self.spans.get(bucket).map(|spans| (spans, *span))
     }
-
-    pub fn into_items(self) -> IndexMap<K, V> {
-        self.items
-    }
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -203,4 +199,3 @@ impl<K, V, B: Bucket> Deref for CellMap<K, V, B> {
         &self.items
     }
 }
-

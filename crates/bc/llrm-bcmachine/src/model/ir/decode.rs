@@ -13,7 +13,7 @@ use llrm_x86_code16::machine::{Machine, PortMemory};
 use crate::frontends::bc::blocks::{Block, CodeMap, code_map, partition as block_partition};
 use crate::frontends::bc::declen::Insn;
 use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};
-use crate::legacy::lift::{FIXUP, classify_with as classify};
+use crate::model::ir::lift::{FIXUP, classify_with as classify};
 use crate::objectfile::module::Module;
 use crate::support::hash::IndexMap;
 

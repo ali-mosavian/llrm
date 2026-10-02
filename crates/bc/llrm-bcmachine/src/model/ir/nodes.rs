@@ -11,9 +11,8 @@ use std::sync::LazyLock;
 
 use super::{Effects, RESTORE_IDIOM, Semantics, TABLE_DATA, UNMODELLED, barrier};
 
-
 use crate::frontends::bc::declen::Insn;
-use crate::legacy::lift::Decoded;
+use crate::model::ir::lift::Decoded;
 
 /// An instruction with no long-pair or call idiom attached to it.
 ///
@@ -272,9 +271,8 @@ mod tests {
         Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, pinned, span,
     };
     use crate::frontends::bc::declen::decode;
-    use crate::legacy::lift::{Decoded, Kind};
+    use crate::model::ir::lift::{Decoded, Kind};
     use crate::model::ir::{Effects, RESTORE_IDIOM, TABLE_DATA, UNMODELLED, barrier};
-    
 
     fn insn(at: usize) -> crate::frontends::bc::declen::Insn {
         let mut bytes = vec![0x90; at];

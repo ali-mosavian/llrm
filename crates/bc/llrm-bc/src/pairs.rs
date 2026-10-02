@@ -1,7 +1,7 @@
 //! Which consecutive nodes are the halves of one BC long: the fact the long
 //! recognizer and the carving of DGROUP share. Adapted from llrm-core's
 //! `pairs` (shapes over values) and `raising_longs` (`_constant_stores`,
-//! `arguments`), found here over nodes by `legacy::lift`'s classification.
+//! `arguments`), found here over nodes by `model::ir::lift`'s classification.
 //!
 //! BC keeps a long in AX:DX or CX:BX, low word first; each half's memory
 //! operand names two bytes, the high half's the two above the low's.
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use iced_x86::{Code, Register};
 use llrm_bcmachine::frontends::bc::blocks::Block;
-use llrm_bcmachine::legacy::lift::{self, Decoded, Kind as Lifted};
+use llrm_bcmachine::model::ir::lift::{self, Decoded, Kind as Lifted};
 use llrm_bcmachine::model::ir::Loc;
 use llrm_bcmachine::model::ir::nodes::{Long, Node, span};
 use llrm_bcmachine::objectfile::module::{Addr, Space};

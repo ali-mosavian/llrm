@@ -12,10 +12,8 @@ rebuild after an edit takes about 30 seconds.
 Tests assert program behavior, representation invariants, or a named regression.
 Exact corpus totals and coverage shares are measurements; keep those in the
 reporting tools and documentation, not as assertions that fail when fixtures or
-the pipeline change. The legacy machine arm remains tested while it ships, but
-tests must not feed raised MIR directly to its layout/allocator and call that the
-production path. Current integration tests go through MIR optimization, lowering,
-LIR allocation, and object writing.
+the pipeline change. Integration tests go through MIR optimization, instruction
+selection, LIR allocation, and object writing.
 
 ## Every program compiles
 

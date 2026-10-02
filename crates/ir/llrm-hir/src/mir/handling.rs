@@ -183,7 +183,7 @@ fn reaches(function: &model::Function, handlers: &[i64]) -> (BTreeSet<i64>, BTre
 fn resumed(function: &model::Function, mut body: BTreeSet<i64>, rows: &[Statement], raises: &dyn Fn(&str) -> bool) -> BTreeSet<i64> {
     let mut raising = vec![false; rows.len()];
     for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
-        let Some(callee) = instruction.callee.as_deref().filter(|one| raises(one)) else { continue };
+        let Some(_callee) = instruction.callee.as_deref().filter(|one| raises(one)) else { continue };
         if let Some(row) = rows.partition_point(|one| one.instruction <= instruction.id).checked_sub(1) {
             raising[row] = true;
         }

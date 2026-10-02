@@ -48,9 +48,6 @@ impl Flag {
 
 pub const ALL: Flag = Flag(Flag::CF.0 | Flag::PF.0 | Flag::AF.0 | Flag::ZF.0 | Flag::SF.0 | Flag::OF.0);
 
-/// The three whose value widening changes.
-pub const DIVERGENT: Flag = Flag(Flag::ZF.0 | Flag::PF.0 | Flag::AF.0);
-
 /// `CLOBBERS`: a call does not itself write a flag, but its callee does.
 pub const CLOBBERS: [FlowControl; 3] = [FlowControl::Call, FlowControl::IndirectCall, FlowControl::Interrupt];
 
@@ -100,27 +97,6 @@ pub fn live_in(blocks: &[Block]) -> IndexMap<usize, Flag> {
         }
     }
     live
-}
-
-/// The flags something reads after `offset`, without them being rewritten first.
-pub fn live_after(block: &Block, offset: usize, live: &IndexMap<usize, Flag>) -> Flag {
-    let mut out = if block.leaves() { ALL } else { Flag::NONE };
-    for successor in &block.succ {
-        out |= live.get(successor).copied().unwrap_or(ALL);
-    }
-
-    let (mut needed, mut written) = (Flag::NONE, Flag::NONE);
-    for insn in &block.insns {
-        if insn.at < offset {
-            continue;
-        }
-        needed |= Flag(insn.reads() & ALL.0) & !written;
-        written |= written_by(insn);
-        if written == ALL {
-            return needed;
-        }
-    }
-    needed | (out & !written)
 }
 
 impl BitOr for Flag {

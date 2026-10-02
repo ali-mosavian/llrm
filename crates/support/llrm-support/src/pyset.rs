@@ -93,10 +93,6 @@ impl<T: PyHash + PartialEq> PySet<T> {
         self.used
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.used == 0
-    }
-
     /// `set_add_entry`.
     pub fn add(&mut self, key: T) {
         let hash = key.py_hash();

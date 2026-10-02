@@ -1,6 +1,5 @@
 //! Ports of `qbopt/model`.
 
-pub mod execute;
 pub mod floating;
 pub use llrm_bcmachine::model::ir;
 pub mod lir;

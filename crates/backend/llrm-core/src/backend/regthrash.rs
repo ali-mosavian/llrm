@@ -27,22 +27,6 @@ use crate::model::passes::LIRTransform;
 // recomputing it per candidate costs more than going round again.
 pub const ROUNDS: usize = 8;
 
-pub struct RegThrash;
-
-impl LIRTransform for RegThrash {
-    fn class_name(&self) -> &'static str {
-        "RegThrash"
-    }
-
-    fn name(&self) -> &str {
-        "regthrash"
-    }
-
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        Ok(thrashed(body))
-    }
-}
-
 pub fn thrashed(body: LirBody) -> LirBody {
     let mut body = body;
     for _round in 0..ROUNDS {

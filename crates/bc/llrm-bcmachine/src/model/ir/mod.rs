@@ -16,6 +16,7 @@ use iced_x86::Register;
 use crate::support::pyrepr::{self, Repr};
 
 pub mod decode;
+pub mod lift;
 pub mod nodes;
 pub mod semantics;
 mod root;

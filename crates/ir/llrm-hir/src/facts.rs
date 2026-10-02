@@ -105,11 +105,6 @@ impl Subject {
         }
     }
 
-    /// The function of a parameter or instruction.
-    pub fn function(self) -> Option<i64> {
-        self.fields().0
-    }
-
     /// The subject of `kind` with these fields; none where one is missing.
     pub fn of(kind: Kind, function: Option<i64>, id: Option<i64>, part: Option<i64>) -> Option<Subject> {
         Some(match kind {

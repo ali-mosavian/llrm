@@ -216,7 +216,7 @@ pub fn concatenated(body: &LirBody) -> LirBody {
             let (high_push, low_push, wide_pop) =
                 (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]), Arc::clone(&insns[index + 2]));
             if high_push.op.as_ref().map(|op| op.kind) != Some(mir::Kind::Concat)
-                || [&high_push, &low_push, &wide_pop].into_iter().any(|one| (one.what.is_none()
+                || [&high_push, &low_push, &wide_pop].into_iter().any(|one| one.what.is_none()
                 || !one.clobbers.is_empty()
                 || !one.clobbers_high.is_empty()
                 || !one.requires.is_empty()
@@ -226,7 +226,7 @@ pub fn concatenated(body: &LirBody) -> LirBody {
                 || one.symbol == Some(true)
                 || one.frame_adjust
                 || one.spill_reload
-                || one.spill_store))
+                || one.spill_store)
             {
                 continue;
             }
@@ -326,7 +326,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
         let mut insns = block.insns.clone();
         for index in 0..insns.len().saturating_sub(1) {
             let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
-            if [&pushed, &popped].into_iter().any(|one| (one.what.is_none()
+            if [&pushed, &popped].into_iter().any(|one| one.what.is_none()
                 || !one.clobbers.is_empty()
                 || !one.clobbers_high.is_empty()
                 || !one.requires.is_empty()
@@ -336,7 +336,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
                 || one.symbol == Some(true)
                 || one.frame_adjust
                 || one.spill_reload
-                || one.spill_store)) {
+                || one.spill_store) {
                 continue;
             }
             if pushed.at != popped.at
@@ -407,10 +407,6 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
 pub fn extensions(body: &LirBody) -> LirBody {
     peep::extensions(body, &Facts::new(body, None))
 }
-
-
-
-
 
 /// Materialize a call's literal once when both stack and register need it (`peephole.peep`).
 pub fn pushed_constants(body: &LirBody) -> LirBody {
@@ -495,8 +491,6 @@ pub fn transferred(body: &LirBody) -> LirBody {
     peep::transferred(body, &Facts::new(body, None))
 }
 
-
-
 /// Select direct register or memory forms for a dword's high word.
 ///
 /// A spilled value's high-half extraction can reach allocated LIR as
@@ -550,7 +544,7 @@ fn _register_high_extract(
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
     let (pushed, discarded, kept) = (&parts[0], &parts[1], &parts[2]);
-    if parts.iter().any(|one| (one.what.is_none()
+    if parts.iter().any(|one| one.what.is_none()
                 || !one.clobbers.is_empty()
                 || !one.clobbers_high.is_empty()
                 || !one.requires.is_empty()
@@ -560,7 +554,7 @@ fn _register_high_extract(
                 || one.symbol == Some(true)
                 || one.frame_adjust
                 || one.spill_reload
-                || one.spill_store)) {
+                || one.spill_store) {
         return Ok(None);
     }
     let (Some(first), Some(second), Some(third)) = (&pushed.what, &discarded.what, &kept.what) else {
@@ -652,7 +646,7 @@ fn _selected_register_high_extract(
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
     let (moved, shift) = (&parts[0], &parts[1]);
-    if parts.iter().any(|one| (one.what.is_none()
+    if parts.iter().any(|one| one.what.is_none()
                 || !one.clobbers.is_empty()
                 || !one.clobbers_high.is_empty()
                 || !one.requires.is_empty()
@@ -662,7 +656,7 @@ fn _selected_register_high_extract(
                 || one.symbol == Some(true)
                 || one.frame_adjust
                 || one.spill_reload
-                || one.spill_store)) {
+                || one.spill_store) {
         return Ok(None);
     }
     let (Some(first), Some(second)) = (&moved.what, &shift.what) else {
@@ -833,12 +827,6 @@ pub fn shuttles(body: &LirBody) -> LirBody {
 pub fn restored_copies(body: &LirBody) -> LirBody {
     peep::restored_copies(body, &Facts::new(body, None))
 }
-
-
-
-
-
-
 
 /// One allocated operand with aliases of `before` renamed to `after`.
 pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
@@ -1147,26 +1135,15 @@ pub fn overwritten(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-
 /// Fold a load, an operation and a store into one memory operation (`peephole.peep`).
 pub fn fused(body: &LirBody) -> LirBody {
     peep::fused(body, &Facts::new(body, None))
 }
 
-
-
-
-
-
-
 /// Load a far pointer's two words with one les (lds, lfs, lgs) (`peephole.peep`).
 pub fn far_loads(body: &LirBody) -> LirBody {
     peep::far_loads(body, &Facts::new(body, None))
 }
-
-
-
-
 
 /// Replace a dead temporary's shift with a scaled 67h LEA.
 ///

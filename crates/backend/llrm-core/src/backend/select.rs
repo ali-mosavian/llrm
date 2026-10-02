@@ -362,20 +362,6 @@ pub fn _code(name: &str) -> Option<Code> {
     CODES.get(name).copied()
 }
 
-pub fn _width_of(what: &Loc) -> Option<i64> {
-    match what {
-        Loc::Reg(one) => width_of(one.register),
-        Loc::Imm(one) => {
-            if one.width == 2 || one.width == 4 {
-                Some(i64::from(one.width))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 pub fn _remapped(register: Register, r#where: Option<&RegisterMap>) -> Register {
     r#where.and_then(|map| map.get(&register)).copied().unwrap_or(register)
 }
@@ -823,27 +809,6 @@ pub fn restore_of(wide: Register, low: Register, high: Register, at: u64) -> Opt
     Some(Emitted::new(out))
 }
 
-/// calls.py's own restore idiom, built from the encoder above.
-pub static RESTORE: LazyLock<IndexMap<i64, Vec<u8>>> = LazyLock::new(|| {
-    [
-        (0, restore_of(Register::EAX, Register::AX, Register::DX, 0)),
-        (1, restore_of(Register::ECX, Register::CX, Register::BX, 0)),
-    ]
-    .into_iter()
-    .filter_map(|(pair, made)| made.map(|made| (pair, made.code)))
-    .collect()
-});
-
-/// One absorbable runtime call as the instructions that replace it.
-///
-/// `fields` comes back in the order the instructions were emitted; the
-/// fixups they pair with are `absorbed_fixups`. `Err` is Python's `str`
-/// answer.
-pub fn absorbed(site: &machine::CallSite, live: ir::Flag, restore: bool) -> Result<Emitted, String> {
-    let made = machine::absorb(site, live, restore)?;
-    Ok(Emitted { fields: made.relocations.iter().map(|&(r#where, _field)| r#where).collect(), ..Emitted::new(made.code) })
-}
-
 /// A divide emitted from the operation's own operands.
 ///
 /// `Err(reason)` is Python's `str` answer. calls.assemble's ValueError,
@@ -909,21 +874,6 @@ pub fn divides(op: &mir::Op, seats: (Register, Register), restore: bool) -> Resu
     let relocated: Vec<(usize, usize)> = reads.iter().map(|&index| (index, index)).collect();
     let made = raised(machine::assemble(&mut steps, &relocated));
     Ok(Emitted { fields: made.relocations.iter().map(|&(r#where, _which)| r#where).collect(), ..Emitted::new(made.code) })
-}
-
-/// Which fixup each of an absorbed site's fields names, in the same order.
-///
-/// The same relocations `absorbed` reads the offsets from.
-pub fn absorbed_fixups(site: &machine::CallSite, live: ir::Flag, restore: bool) -> Vec<usize> {
-    match machine::absorb(site, live, restore) {
-        Ok(made) => made.relocations.iter().map(|&(_where, field)| field).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-/// The idiom that puts a widened value's halves back where BC reads them.
-pub fn restore(pair: i64) -> Option<Emitted> {
-    RESTORE.get(&pair).map(|made| Emitted::new(made.clone()))
 }
 
 /// `idiv` or `div` by a register.
@@ -1004,9 +954,6 @@ pub fn pop_segment(one: Register, width: i64, at: u64) -> Option<Emitted> {
     let code = _code(&format!("POP{}_{named}", if width == 4 { "D" } else { "W" }))?;
     _assemble(&raised(create_reg(code, one)), at, true)
 }
-
-/// The string stores BC emits to clear an array.
-pub const STRING: [&str; 3] = ["stosb", "stosw", "stosd"];
 
 /// `rep stosw` and its kind, at this pass's own 16-bit address size.
 pub fn fill(name: &str, at: u64, repeated: bool) -> Option<Emitted> {

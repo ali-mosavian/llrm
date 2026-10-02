@@ -12,3 +12,7 @@ llrm-mir = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-transforms = { workspace = true }
 llrm-x86-code16 = { workspace = true }
+
+[dev-dependencies]
+iced-x86 = { workspace = true }
+llrm-bcmachine = { workspace = true }

@@ -229,24 +229,6 @@ fn _global(place: &model::Place, symbols: &_Symbols) -> MemoryObject {
     }
 }
 
-/// The objects code outside `module` reaches by name only, with that name:
-/// no pointer holds them, yet any callee this module cannot see may read or
-/// write them.
-pub fn named_externals(module: &model::Module) -> Vec<(String, MemoryObject)> {
-    let symbols = _Symbols::new(module);
-    let name = |symbol: i64| module.data.iter().find(|one| one.id == symbol).map(|one| one.name.clone());
-    module
-        .functions
-        .iter()
-        .flat_map(|function| &function.places)
-        .filter(|place| place.storage == model::Storage::External)
-        .filter_map(|place| Some((name(place.symbol)?, _global(place, &symbols))))
-        .filter(|(_, object_)| !object_.addressed)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 /// `memory.Provenance.one(object_, low, high)`.
 /// The first `width` bytes of `object_`, a frame cell at `offset`.
 fn _frame_ref(object_: MemoryObject, offset: i64, width: i64) -> Result<MemRef, InvalidHIR> {

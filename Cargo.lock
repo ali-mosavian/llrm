@@ -208,7 +208,9 @@ dependencies = [
 name = "llrm-bcdriver"
 version = "0.1.0"
 dependencies = [
+ "iced-x86",
  "llrm-bc",
+ "llrm-bcmachine",
  "llrm-core",
  "llrm-mir",
  "llrm-omf",
