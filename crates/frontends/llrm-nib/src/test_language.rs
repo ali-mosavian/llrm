@@ -3328,7 +3328,7 @@ fn the_runtime_routines_state_what_they_touch() {
 /// a dword, so a 486 reads each of its dwords whole; the layout put a
 /// `u8` before an `i32` array and left the array odd.
 #[test]
-fn a_module_variable_states_its_alignment_and_the_listing_keeps_it() {
+fn a_module_variable_states_its_alignment() {
     let source = "var flag: u8 = 1\nvar words: i32[4] = [1, 2, 3, 4]\nvar pair: i16 = 5\n\nfn main() -> i16:\n    print(words[1] + i32(flag) + i32(pair))\n    return 0\n";
     let hir = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
     let facts: serde_json::Value = serde_json::from_str(&hir).expect("JSON");
