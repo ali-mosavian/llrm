@@ -43,6 +43,8 @@ pub struct DataObject {
     pub readonly: bool,
     /// The callable whose far address its bytes hold, when they hold one.
     pub code: Option<u32>,
+    /// A huge object's segment of its own, the first of as many as it fills.
+    pub segment: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -230,7 +232,7 @@ impl Program {
         out.push_str("],\"data\":[");
         for (index, object) in self.data.iter().enumerate() {
             comma(&mut out, index);
-            write!(out, "{{\"address\":\"near\",\"bytes\":[").unwrap();
+            write!(out, "{{\"address\":\"{}\",\"bytes\":[", if object.segment.is_some() { "huge" } else { "near" }).unwrap();
             bytes(&mut out, &object.bytes);
             write!(
                 out,
@@ -239,6 +241,10 @@ impl Program {
             )
             .unwrap();
             string(&mut out, &object.name);
+            if let Some(segment) = &object.segment {
+                out.push_str(",\"segment\":");
+                string(&mut out, segment);
+            }
             write!(out, ",\"readonly\":{},\"relocations\":[", object.readonly).unwrap();
             if let Some(callable) = object.code {
                 write!(out, "{{\"addend\":0,\"address\":\"far\",\"at\":0,\"code\":true,\"target\":{callable}}}").unwrap();

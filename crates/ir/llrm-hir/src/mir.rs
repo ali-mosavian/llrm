@@ -304,6 +304,8 @@ struct Tables<'h> {
     callables: HashMap<&'h str, &'h model::Callable>,
     /// Each data object's global, by its id: a place's symbol.
     data: HashMap<i64, ConstantId>,
+    /// The huge data objects, by id: their places are reached through huge pointers.
+    huge: std::collections::HashSet<i64>,
     /// Each callee's function and its declared type, by HIR name.
     callees: HashMap<String, ConstantId>,
     /// Each callee's calling convention, which its calls repeat.
@@ -436,6 +438,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
         data: HashMap::new(),
+        huge: hir.data.iter().filter(|one| one.address == AddressKind::Huge).map(|one| one.id).collect(),
         callees: HashMap::new(),
         conventions: HashMap::new(),
         tags: Tags::new(&mut module),
@@ -704,6 +707,11 @@ fn relocations(object: &model::DataObject) -> Emit<Vec<&model::DataRelocation>> 
     Ok(out)
 }
 
+/// The address space of a data object's global: far data's, a huge object's too.
+fn data_space(address: AddressKind) -> u32 {
+    if matches!(address, AddressKind::Far | AddressKind::Huge) { FAR } else { 0 }
+}
+
 /// A data object's global, its initializer set once every global exists;
 /// an external `[n x i8]` when its type is refused.
 fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<TypeId>) -> GlobalId {
@@ -718,7 +726,7 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
     let constant = object.readonly && (ty.is_some() || object.linkage == model::DataLinkage::External);
     let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant, initializer: None, align: None };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
-    module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { FAR } else { 0 };
+    module.globals[global.0 as usize].address_space = data_space(object.address);
     global
 }
 
@@ -745,7 +753,7 @@ fn data_initializer(module: &mut Module, object: &model::DataObject, size: i64, 
             };
             (target, space)
         } else {
-            (data[&relocation.target], if objects[&relocation.target].address == AddressKind::Far { FAR } else { 0 })
+            (data[&relocation.target], data_space(objects[&relocation.target].address))
         };
         let mut address = target;
         if relocation.addend != 0 {
@@ -972,6 +980,7 @@ fn place_space(module: &mut Module, tables: &Tables, function: &model::Function,
         let place = function.places.iter().find(|one| one.id == id).ok_or("a copy of an unknown place")?;
         match place.storage {
             Storage::Local | Storage::Parameter => Ok(0),
+            _ if tables.huge.contains(&place.symbol) => Ok(HUGE),
             _ => match module.context.types.get(module.context.get(tables.data[&place.symbol]).ty) {
                 Type::Pointer(space) => Ok(*space),
                 _ => Err("a data object that is no pointer".to_owned()),
@@ -1759,7 +1768,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 Ok(self.offset(area, place.offset, false))
             }
             _ => {
-                let global = Value::Constant(self.tables.data[&place.symbol]);
+                let mut global = Value::Constant(self.tables.data[&place.symbol]);
+                if self.tables.huge.contains(&place.symbol) {
+                    let huge = self.b.context.types.ptr(HUGE);
+                    global = self.b.cast(CastOp::AddrSpaceCast, global, huge, "");
+                }
                 Ok(self.offset(global, place.offset, false))
             }
         }

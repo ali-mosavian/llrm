@@ -335,6 +335,8 @@ pub struct Static {
     pub annotation: TypeAnnotation,
     pub value: Expr,
     pub span: Span,
+    /// `huge var`: far data of its own, which may pass 64K.
+    pub huge: bool,
 }
 
 /// `import a.b` or `import a.b as c`.

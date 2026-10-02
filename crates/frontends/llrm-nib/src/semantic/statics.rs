@@ -1,8 +1,14 @@
 //! Module variables (section 14): a `var` is data in DGROUP holding its
-//! initial value, which every function names as a place of its own.
+//! initial value, which every function names as a place of its own; a
+//! `huge var` is far data of its own.
 
 use super::*;
 use crate::syntax::{Module, Static};
+
+/// `name` as an assembler identifier: each other character an underscore.
+fn identifier(name: &str) -> String {
+    name.chars().map(|one| if one.is_ascii_alphanumeric() { one } else { '_' }).collect()
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct StaticLayout {
@@ -16,6 +22,8 @@ pub(super) struct StaticLayout {
     /// What the object's address is a multiple of: its element's width, up
     /// to a dword, or a struct's two bytes.
     pub(super) align: u32,
+    /// `huge var`: only indexed, since no view or far pointer reaches past 64K.
+    pub(super) huge: bool,
 }
 
 /// The module variables an `interrupt16` function names. A variable that
@@ -64,7 +72,7 @@ impl TypeRegistry {
 
     /// Lays out each module variable as writable data, its value encoded;
     /// those in `shared` are volatile.
-    pub(super) fn register_statics(&mut self, statics: &[Static], shared: &BTreeSet<String>, literals: &mut LiteralPool) -> Result<(), Diagnostic> {
+    pub(super) fn register_statics(&mut self, statics: &[Static], shared: &BTreeSet<String>, module_name: &str, literals: &mut LiteralPool) -> Result<(), Diagnostic> {
         for declared in statics {
             let (binding, type_id, element, dims) = match &declared.annotation {
                 TypeAnnotation::Value(spec) => match self.resolve_element(spec, declared.span)? {
@@ -82,16 +90,33 @@ impl TypeRegistry {
             let mut bytes = vec![0; (count * self.width(element.id())) as usize];
             self.encode(&mut bytes, 0, &declared.value, element, &dims, declared.span)?;
             let extent = bytes.len() as u32;
-            let symbol = literals.object(&format!("$var_{}", declared.name), bytes, false);
+            if declared.huge && dims.is_empty() {
+                return Err(Diagnostic::new(declared.span, "only an array is 'huge var'"));
+            }
+            if !declared.huge && extent > 0xFFFF {
+                return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's 64K: declare it 'huge var'", declared.name)));
+            }
+            let segment = declared.huge.then(|| format!("{}_{}_HUGE", identifier(module_name), declared.name));
+            let symbol = literals.object(&format!("$var_{}", declared.name), bytes, false, segment);
             let volatile = shared.contains(&declared.name);
             let align = self.alignment_of(element);
-            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align });
+            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align, huge: declared.huge });
         }
         Ok(())
     }
 }
 
 impl FunctionCompiler<'_> {
+    /// Whether `operand` is a place in a huge module variable.
+    pub(super) fn in_huge(&self, operand: &hir::Operand) -> bool {
+        let place = match operand {
+            hir::Operand::Place(place) | hir::Operand::ArrayElement(place, _) | hir::Operand::ProjectedPlace { place, .. } => *place,
+            _ => return false,
+        };
+        let symbol = self.places.iter().find(|one| one.id == place && one.storage == "module").map(|one| one.symbol);
+        symbol.is_some_and(|symbol| self.types.statics.values().any(|one| one.huge && one.symbol == symbol))
+    }
+
     /// Each module variable, named in the outermost scope.
     pub(super) fn bind_statics(&mut self) {
         let statics: Vec<(String, StaticLayout)> = self.types.statics.iter().map(|(name, one)| (name.clone(), *one)).collect();

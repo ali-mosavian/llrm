@@ -1,0 +1,17 @@
+# Two arrays of 20000 i32s (80000 bytes each) in huge memory: one read into the other.
+huge var a: i32[20000] = [0] * 20000
+huge var b: i32[20000] = [0] * 20000
+
+fn bench_copy1d() -> i32:
+    let mut t: i32 = 0
+    for i in 0..20000:
+        a[i] = i32(i)
+    for i in 0..20000:
+        b[i] = a[i] * 2 + 1
+    for i in 0..20000:
+        t += b[i]
+    return t
+
+fn main() -> i16:
+    print(bench_copy1d())
+    return 0

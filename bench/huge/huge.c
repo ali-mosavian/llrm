@@ -1,4 +1,4 @@
-/* 200x201 short array (80400 bytes) in __huge memory; Nib has no huge arrays. */
+/* 200x201 short array (80400 bytes) in __huge memory */
 extern void report(long value);
 
 short __huge h[200][201];
