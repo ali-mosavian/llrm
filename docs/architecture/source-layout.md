@@ -37,9 +37,8 @@ phases. The rest is grouped by responsibility:
 | Module | Responsibility |
 | --- | --- |
 | `hir` | The HIR interpreter, and `llrm-hir` re-exported |
-| `model` | LIR, decoded IR, floating semantics, phase interfaces, and what the backend still reads of the old MIR |
-| `analysis` | Loops, intervals, regions and alias facts the backend reads |
-| `optimize` | What the backend still reads of the old MIR passes |
+| `model` | LIR, decoded IR and phase interfaces |
+| `analysis` | Loops, intervals and block frequency over LIR |
 | `backend` | Instruction selection, allocation, frame/layout, peepholes, object writing |
 | `abi` | Runtime contracts (`llrm-qbruntime`, as `abi::runtime`) and the QB runtime ABI (`abi::qb`) |
 | `frontends::bc` | `llrm-bcmachine`'s BC decoding, re-exported |

@@ -220,9 +220,7 @@ Between integer and float types, conversions are also implicit, as in C.
   `u8 + u16` is `u16`, and `i8 < u16` is rejected.
 
 An integer literal takes the type of the other operand when it fits, and its
-own type otherwise: `int`, else `i32`, else `u32`, as C types a hex constant.
-So `0x7FFF` is `int`, `0x8000` is `i32`, and `0xB8000000` is `u32`; a literal
-that fits none is an error that names its width. A constant
+own type otherwise: `int`, or `i32` if it does not fit `int`. A constant
 declared without a type is a literal, and arithmetic on literals folds to a
 literal: with `const LIMIT = 300`, `LIMIT - 1` meets a `u16` as a `u16`, and
 `300 + 0` does not fit a `u8`. A constant declared with a type has that type,
@@ -676,19 +674,7 @@ first element, to walk with `offset`.
 `p.cast[U]()` is the same address as a `*U`, `p.far()` a near pointer's
 place with DGROUP's segment, and `p.near()`, in `unsafe`, a far pointer's
 offset alone, for a place the program vouches is in DGROUP. `0` is the null pointer of any type, which
-`p.is_null()` tests.
-
-In `unsafe`, an integer literal is also a raw pointer. A far or huge pointer is
-32 bits, the segment in the high word and the offset in the low one, so a
-literal that fits `u32` is its seg:off: `0xB8000000` is B800:0000, as C's
-`(char far *)0xB8000000L`. A near pointer takes a literal that fits `u16`, as
-its offset. No other integer converts to a pointer.
-
-```text
-unsafe:
-    let screen: *far mut u8 = 0xB8000000
-    screen[2] = 0x41                    # B800:0002
-``` Raw pointers compare with `==` and `!=`; near ones,
+`p.is_null()` tests. Raw pointers compare with `==` and `!=`; near ones,
 offsets in one segment, are also ordered.
 
 `size_of[T]()` is the bytes a `T` takes as laid out, packing and `@repr`

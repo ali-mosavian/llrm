@@ -12,7 +12,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::analysis::frequency::Frequency;
-use crate::analysis::regions;
+use crate::backend::overlap;
 use crate::backend::allocate::{Live, live};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
@@ -192,7 +192,7 @@ fn _stable(cell: &Mem) -> bool {
 }
 
 fn _reached(cell: &Mem) -> Option<Addr> {
-    // regions reads a based address as reaching its whole region.
+    // overlap reads a based address as reaching its whole region.
     let indexed = cell.base.is_some() || cell.index.is_some();
     if !indexed {
         return cell.addr;
@@ -228,7 +228,7 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
     if what.dests.iter().any(|dest| {
         matches!(dest, Loc::Mem(dest) if dest.addr.is_none()
             // Rust-only endpoint overflow reads as "may overlap".
-            || regions::addresses(_reached(dest), dest.width, _reached(cell), cell.width, None).unwrap_or(true))
+            || overlap::may_overlap(_reached(dest), dest.width, _reached(cell), cell.width))
     }) {
         return true;
     }

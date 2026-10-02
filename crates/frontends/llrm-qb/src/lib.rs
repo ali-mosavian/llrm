@@ -37,7 +37,4 @@ mod test_runtime_model;
 #[cfg(test)]
 mod test_pipeline;
 #[cfg(test)]
-mod test_cellmap;
-
-#[cfg(test)]
 mod callconv_tests;
