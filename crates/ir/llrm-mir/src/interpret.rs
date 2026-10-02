@@ -661,7 +661,7 @@ impl<'m> Machine<'m> {
 
 /// An integer or float operation on two values, as LLVM defines it: the
 /// interpreter's and constant folding's one answer.
-pub(crate) fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
+pub fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
     if let (Val::Float(kind, x), Val::Float(_, y)) = (&a, &b) {
         return Ok(float_binary(op, *kind, *x, *y));
     }

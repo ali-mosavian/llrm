@@ -283,7 +283,7 @@ impl TypeRegistry {
         Self {
             types: vec![
                 plain_type(VOID, "void", "void", 0, None, "none"),
-                plain_type(BOOL, "bool", "boolean", 1, None, "none"),
+                plain_type(BOOL, "bool", "boolean", 1, Some(false), "none"),
                 plain_type(CHAR, "char", "integer", 1, Some(false), "none"),
                 plain_type(I8, "i8", "integer", 1, Some(true), "none"),
                 plain_type(U8, "u8", "integer", 1, Some(false), "none"),

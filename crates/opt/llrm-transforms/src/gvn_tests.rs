@@ -496,3 +496,38 @@ b0:
         assert_eq!(after.matches(&format!("load i16, ptr addrspace({space})")).count() == 2, reloaded, "space {space}\n{after}");
     }
 }
+
+/// Two pointers a constructor returns are apart: a store through one does
+/// not change what the other holds, so a second read of the other is the
+/// first. A callee that states its result `noalias` is a constructor; one that
+/// does not may return the same object twice, and the read stays.
+#[test]
+fn test_a_noalias_result_is_apart_from_every_other_object() {
+    for (attribute, reloaded) in [("noalias ", false), ("", true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"
+
+declare {attribute}ptr @make()
+
+define i16 @f() {{
+b0:
+  %p = call ptr @make()
+  %q = call ptr @make()
+  store i16 1, ptr %p
+  %a = load i16, ptr %q
+  store i16 2, ptr %p
+  %b = load i16, ptr %q
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let mut module = parsed(&text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr %q").count() == 2, reloaded, "{attribute:?}\n{after}");
+    }
+}

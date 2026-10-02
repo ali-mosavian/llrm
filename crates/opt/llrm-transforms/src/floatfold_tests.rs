@@ -248,3 +248,58 @@ fn test_a_float_cell_is_kept_across_a_call_that_cannot_write_it() {
     assert!(summarized(&mut module, FloatFold).contains("ret float 3.000000e+00"));
     assert_eq!(results(&module, &[&[]]), before);
 }
+
+/// `body` over `double %x`, through the compilers' pipeline, as text. The
+/// function is internal and called from @main, so it is neither dropped nor
+/// inlined away.
+fn through_the_pipeline(body: &str) -> String {
+    use llrm_mir::program::Program;
+    let text = format!("{DOS}define internal double @f(double %x) {{\nb1:\n{body}\n}}\n\ndefine double @main(double %x) {{\nb0:\n  %r = call double @f(double %x)\n  ret double %r\n}}\n");
+    let mut module = parsed(&text);
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| {
+        program.exports.entries.insert("main".to_owned());
+        crate::pipeline::applied(program, &crate::pipeline::Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    printed(&module)
+}
+
+/// What the language lets a floating operation lose, each rule only under its flag, in
+/// the pipeline the compilers run: a division by a constant a multiply by its reciprocal
+/// (`arcp`), two constants of a chain one (`reassoc`), a zero's sign unobserved (`nsz`),
+/// no NaN or infinity (`nnan`, `ninf`). Without the flag the instruction stays:
+/// `x / 3.0` differs from `x * (1/3.0)` in its last bit, `x * 0.0` is NaN for a NaN,
+/// `x + 0.0` is +0.0 for -0.0. The rules were in `instcombine`, which no compiler runs.
+#[test]
+fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation() {
+    let said = |body: &str| through_the_pipeline(body);
+    let stays = |body: &str, kept: &str| {
+        let text = said(body);
+        assert!(text.contains(kept), "{kept} gone\n{text}");
+    };
+    // arcp
+    let arcp = said("  %r = fdiv arcp double %x, 3.0\n  ret double %r");
+    assert!(arcp.contains("fmul arcp double %0, 0x3FD5555555555555") || arcp.contains("fmul arcp double %x, 0x3FD5555555555555"), "{arcp}");
+    stays("  %r = fdiv double %x, 3.0\n  ret double %r", "fdiv double");
+    // reassoc, both operations
+    let chain = |first: &str, second: &str| format!("  %a = fadd {first} double %x, 1.0\n  %r = fadd {second} double %a, 2.0\n  ret double %r");
+    let both = said(&chain("reassoc", "reassoc"));
+    assert!(both.contains("fadd reassoc double") && both.contains("3.000000e+00") && both.matches("fadd").count() == 1, "{both}");
+    assert_eq!(said(&chain("reassoc", "")).matches("fadd").count(), 2);
+    assert_eq!(said(&chain("", "reassoc")).matches("fadd").count(), 2);
+    // nsz
+    assert!(!said("  %r = fadd nsz double %x, 0.0\n  ret double %r").contains("fadd"));
+    stays("  %r = fadd double %x, 0.0\n  ret double %r", "fadd double");
+    assert!(!said("  %r = fadd double %x, -0.0\n  ret double %r").contains("fadd"));
+    // nnan and nsz make x * 0 a zero; each alone does not
+    assert!(!said("  %r = fmul nnan nsz double %x, 0.0\n  ret double %r").contains("fmul"));
+    stays("  %r = fmul nnan double %x, 0.0\n  ret double %r", "fmul");
+    stays("  %r = fmul nsz double %x, 0.0\n  ret double %r", "fmul");
+    // nnan and ninf make x - x a zero and x / x a one
+    assert!(!said("  %r = fsub nnan ninf double %x, %x\n  ret double %r").contains("fsub"));
+    assert!(!said("  %r = fdiv nnan ninf double %x, %x\n  ret double %r").contains("fdiv"));
+    stays("  %r = fsub nnan double %x, %x\n  ret double %r", "fsub");
+    // a multiply by one needs no flag
+    assert!(!said("  %r = fmul double 1.0, %x\n  ret double %r").contains("fmul"));
+}
