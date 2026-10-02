@@ -29,6 +29,16 @@ class HeaderTests(unittest.TestCase):
         self.assertEqual(self.read("PRINT 1\n' known: #9\n"), {})
 
 
+class ExampleTests(unittest.TestCase):
+    def test_a_mask_hides_only_what_varies(self):
+        """ticker prints its busy-loop count, a machine speed: 2483958 spins one run, another the next."""
+        got = run_tests.masked(["tick 9: 2483958 spins", "36 ticks"], r"\d+(?= spins)")
+        self.assertEqual(got, ["tick 9: N spins", "36 ticks"])
+
+    def test_without_a_mask_the_output_is_untouched(self):
+        self.assertEqual(run_tests.masked(["12 spins"], ""), ["12 spins"])
+
+
 class DiffTests(unittest.TestCase):
     def test_a_program_that_printed_nothing_is_a_difference(self):
         """A run that produced no output must not read as a pass."""

@@ -82,6 +82,8 @@ class Job:
     libs: tuple[str, ...] = ()  # more libraries to link, by DOS path
     library: str = ""  # the runtime library, where the toolchain's own is not it
     args: str = ""  # the program's command line
+    objects: tuple[Path, ...] = ()  # more objects to link with an obj job's
+    files: tuple[Path, ...] = ()  # files the program reads, copied beside it under their upper-case names
 
 
 @dataclass
@@ -130,11 +132,16 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     for job in jobs:
         u = job.stem.upper()
         libraries = "+".join([job.library or tools.library, *job.libs])
-        link = f"{tools.link} /NOE {u}.OBJ,{u}.EXE,,{libraries}; > {u}.LNK"
+        more = "".join(f"+{u}X{at}.OBJ" for at in range(len(job.objects)))
+        link = f"{tools.link} /NOE {u}.OBJ{more},{u}.EXE,,{libraries}; > {u}.LNK"
+        for data in job.files:
+            shutil.copy(data, work / data.name.upper())
         if job.kind == "exe":
             shutil.copy(job.path, work / f"{u}.EXE")
         elif job.kind == "obj":
             shutil.copy(job.path, work / f"{u}.OBJ")
+            for at, extra in enumerate(job.objects):
+                shutil.copy(extra, work / f"{u}X{at}.OBJ")
             building.append(link)
         else:
             (work / f"{u}.BAS").write_bytes(crlf(job.path.read_bytes()))

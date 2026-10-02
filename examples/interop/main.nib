@@ -1,3 +1,4 @@
+# link: geometry.c
 # Calls a C library through cdecl16, and exports the rule it calls back.
 
 @repr("c16", pack=1)

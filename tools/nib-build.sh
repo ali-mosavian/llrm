@@ -13,8 +13,8 @@ source=$1
 output=${2:-${source%.*}.exe}
 level=${3:--O2}
 shift $(($# < 3 ? $# : 3))
+bin=${LLRM_BIN:-$root/target/release}
 toolchain=${TOOLCHAIN:-$HOME/work/other/d32x/toolchains/native/bin}
-bin=$root/target/release
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/nib-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT

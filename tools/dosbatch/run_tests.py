@@ -1,4 +1,4 @@
-"""
+r"""
 tests/run: compile each program with llrm, run them all in one DOSBox launch,
 diff stdout with NAME.out.
 
@@ -8,6 +8,9 @@ A header comment holds a program's settings:
 
     ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486)
     ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime
+    ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib)
+    ' data: values.dat         a file the program reads, copied beside it
+    ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
 
 A known program that passes fails the run: remove its mark.
@@ -15,6 +18,7 @@ A known program that passes fails the run: remove its mark.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import argparse
@@ -29,10 +33,11 @@ import dosbatch  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 RUN = ROOT / "tests" / "run"
+EXAMPLES = ROOT / "examples"
 DEFAULT_FLAGS = ["-O2", "--cpu", "486"]
-KEYS = ("flags", "known", "bc", "diverges", "dialect")
+KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "mask")
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
-COMPILERS = {".bas": ["llrm-qb"]}
+COMPILERS = {".bas": ["llrm-qb"], ".nib": []}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
 
 
@@ -42,10 +47,17 @@ class Program:
     flags: list[str]
     known: str | None
     dialect: str = "qb45"
+    link: tuple[str, ...] = ()
+    data: tuple[str, ...] = ()
+    mask: str = ""
 
     @property
     def name(self) -> str:
         return f"{self.source.parent.name}/{self.source.stem}"
+
+    @property
+    def stem(self) -> str:
+        return self.source.stem
 
 
 def header(source: Path) -> dict[str, str]:
@@ -62,10 +74,11 @@ def header(source: Path) -> dict[str, str]:
 
 def discover(selected: list[str]) -> list[Program]:
     programs = []
-    for source in sorted(RUN.glob("*/*")):
+    for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*"))]:
         if source.suffix in COMPILERS and source.with_suffix(".out").exists():
             settings = header(source)
-            programs.append(Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known"), settings.get("dialect", "qb45")))
+            programs.append(Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known"),
+                                    settings.get("dialect", "qb45"), tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", "")))
     if selected:
         programs = [p for p in programs if p.source.parent.name in selected or p.source.stem in selected or p.name in selected]
     return programs
@@ -73,6 +86,11 @@ def discover(selected: list[str]) -> list[Program]:
 
 def lines(text: str) -> list[str]:
     return [one.rstrip() for one in text.replace("\r\n", "\n").split("\n") if one.strip()]
+
+
+def masked(output: list[str], mask: str) -> list[str]:
+    """`output` with each match of `mask` (the text that varies run to run) read as N."""
+    return [re.sub(mask, "N", one) for one in output] if mask else output
 
 
 def first_difference(want: list[str], got: list[str]) -> str:
@@ -94,6 +112,37 @@ def compile_one(program: Program, obj: Path) -> str | None:
     return None
 
 
+def data_files(program: Program) -> tuple[Path, ...]:
+    return tuple(program.source.parent / one for one in program.data)
+
+
+def build(program: Program, work: Path, stem: str) -> Job | str:
+    """The job that runs `program`, or why it did not build."""
+    if program.source.suffix == ".nib":
+        exe = work / f"{stem}.exe"
+        extras = [str(program.source.parent / one) for one in program.link]
+        done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(program.source), str(exe), *program.flags[:1], *extras],
+                              capture_output=True, text=True, timeout=300, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN)})
+        if done.returncode != 0 or not exe.exists():
+            return "build: " + (done.stderr or done.stdout).strip()[-600:]
+        try:
+            dosbatch.check_loads(exe)
+        except dosbatch.TooBig as error:
+            return f"build: {error}"
+        return Job(stem, "exe", exe, files=data_files(program))
+    obj = work / f"{stem}.obj"
+    if problem := compile_one(program, obj):
+        return problem
+    extras = []
+    for at, one in enumerate(program.link):
+        extra = work / f"{stem}L{at}.obj"
+        done = subprocess.run([str(BIN / "llrm-nib"), str(program.source.parent / one), "-o", str(extra), "-O2"], capture_output=True, text=True, timeout=300)
+        if done.returncode != 0 or not extra.exists():
+            return f"build {one}: " + (done.stderr or done.stdout).strip()[-600:]
+        extras.append(extra)
+    return Job(stem, "obj", obj, objects=tuple(extras), files=data_files(program))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
@@ -108,21 +157,22 @@ def main() -> int:
     objs.mkdir(parents=True, exist_ok=True)
     stems = {p.name: f"T{at:03d}" for at, p in enumerate(programs)}
     with ThreadPoolExecutor() as pool:
-        failed = dict(zip((p.name for p in programs), pool.map(lambda p: compile_one(p, objs / f"{stems[p.name]}.obj"), programs)))
+        built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
     ran = {}
     for dialect, tools in TOOLS.items():
-        jobs = [Job(stems[p.name], "obj", objs / f"{stems[p.name]}.obj") for p in programs if p.dialect == dialect and not failed[p.name]]
+        jobs = [built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]
         if jobs:
             ran |= dosbatch.run(jobs, work / dialect, tools=tools)
     bad = passed = known = 0
     for program in programs:
-        problem = failed[program.name]
+        problem = built[program.name] if isinstance(built[program.name], str) else None
         if not problem:
             result = ran[stems[program.name]]
             if result.status != "ok":
                 problem = f"{result.status}: {result.detail}"
             else:
-                problem = first_difference(lines(program.source.with_suffix(".out").read_text()), lines(result.text))
+                got = masked(lines(result.text), program.mask)
+                problem = first_difference(lines(program.source.with_suffix(".out").read_text()), got)
         if problem and program.known:
             known += 1
             print(f"KNOWN {program.name} ({program.known}): {problem}")
