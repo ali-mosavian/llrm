@@ -2018,7 +2018,7 @@ mod tests {
     #[test]
     fn test_noreturn_and_aborts_are_stated_of_the_callee() {
         let module = raised("tests/test_noreturn_and_aborts_are_stated_of_the_callee.cgs");
-        let noreturn = llrm_mir::Attribute::Flag("noreturn".to_owned());
+        let noreturn = llrm_mir::facts::Fact::NoReturn.carrier();
         assert!(attributes(&module, "_die").contains(&noreturn));
         assert!(attributes(&module, "_quit").contains(&noreturn));
         assert!(!attributes(&module, "_f").contains(&noreturn));
