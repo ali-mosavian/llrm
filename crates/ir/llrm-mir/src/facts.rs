@@ -25,6 +25,8 @@ pub enum Kind {
     /// One operand of an instruction: a call argument, or a place.
     Operand,
     Object,
+    /// The terminator of a block: a loop's back edge carries what the language says of the loop.
+    Terminator,
 }
 
 macro_rules! facts {
@@ -165,6 +167,8 @@ facts! {
     flags {
         // Of a routine, its result: a pointer to memory nothing else names.
         NoAlias no_alias "noalias" on [Param, Callable];
+        // The load reads what nothing writes after it is initialised.
+        Invariant invariant "invariant" on [Instruction];
         ReadOnly read_only "readonly" on [Param];
         NonNull non_null "nonnull" on [Param];
         NoCapture no_capture "nocapture" on [Param, Operand];
@@ -179,6 +183,8 @@ facts! {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
         Align(u64) align "align" on [Param, Object, Instruction];
         Initializes(u64) initializes "initializes" on [Operand];
+        // Of a loop's back edge: most copies the language lets be made. 0 forbids, `u32::MAX` is all.
+        Unroll(u32) unroll "unroll" on [Terminator];
     }
     custom {
         Memory(Effect) memory "memory" on [Callable];
@@ -202,9 +208,15 @@ impl Fact {
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             // A range wants the width of what it bounds: `typed_attribute`.
-            Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds => None,
+            Fact::Invariant | Fact::Unroll(_) | Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
+    }
+
+    /// Whether it is carried as metadata (`!range`, `!llvm.loop`) or by the width of
+    /// what it bounds, where it is neither an attribute nor an instruction flag.
+    pub fn is_metadata(self) -> bool {
+        matches!(self, Fact::Range(_) | Fact::Invariant | Fact::Unroll(_))
     }
 
     /// Whether, stated of a routine, it is of the routine's result.
@@ -359,7 +371,7 @@ mod tests {
         for fact in Fact::examples() {
             match fact.attribute() {
                 Some(attribute) => assert_eq!(Fact::of_attribute(&attribute), Some(fact), "{}", fact.key()),
-                None if fact.key() == "range" => {}
+                None if fact.is_metadata() => {}
                 None => assert!(Fact::of_flags(fact.flags()).contains(&fact), "{} is a flag", fact.key()),
             }
             assert!(Fact::is_named(fact.key()));

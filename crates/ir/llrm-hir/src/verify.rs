@@ -204,6 +204,7 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
                 })
             }),
             Subject::Object(id) => module.data.iter().any(|one| one.id == id),
+            Subject::Terminator { function: id, block } => function(id).is_some_and(|one| one.blocks.iter().any(|b| b.id == block)),
         };
         if !found {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));

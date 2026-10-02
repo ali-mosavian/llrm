@@ -1042,3 +1042,60 @@ fn a_range_survives_the_codec() {
     assert_eq!(back.modules[0].facts, program.modules[0].facts);
     assert!(crate::codec::decode(&text.replace("\"second\":7", "\"second\":-9")).is_err());
 }
+
+/// What the language says of unrolling a loop is `!llvm.loop` on its back
+/// edge's terminator: a count, none, or all.
+#[test]
+fn an_unroll_of_a_terminator_is_loop_metadata() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let text = |copies| {
+        let mut program = program(difference());
+        let mut facts = Builder::new("test");
+        facts.state(Subject::Terminator { function: 1, block: 1 }, Fact::Unroll(copies));
+        program.modules[0].facts = facts.finish();
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        llrm_mir::print::module(&emitted.module)
+    };
+    let counted = text(4);
+    assert!(counted.contains("ret i16 %2, !llvm.loop !"), "{counted}");
+    assert!(counted.contains("\"llvm.loop.unroll.count\", i32 4"), "{counted}");
+    assert!(text(0).contains("llvm.loop.unroll.disable"));
+    assert!(text(u32::MAX).contains("llvm.loop.unroll.full"));
+}
+
+/// A load the language says reads what nothing writes after initialisation
+/// is `!invariant.load`.
+#[test]
+fn an_invariant_load_is_its_metadata() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::IndirectPlace;
+    use llrm_mir::facts::Fact;
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None })]);
+    function.blocks[0].instructions.insert(0, load);
+    function.values.iter_mut().find(|one| one.id == 1).expect("a parameter").r#type = 2;
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "pointer", TypeKind::Pointer, 2));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Invariant);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("!invariant.load !"), "{text}");
+}
+
+/// A fact of a block the function lacks is refused.
+#[test]
+fn a_fact_of_a_terminator_the_function_lacks_is_refused() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Terminator { function: 1, block: 9 }, Fact::Unroll(2));
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("terminator the module lacks"));
+}
