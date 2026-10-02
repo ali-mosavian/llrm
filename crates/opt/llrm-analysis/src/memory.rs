@@ -959,12 +959,27 @@ pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
     }
 }
 
+/// What a load or store does to the bytes it addresses, and it touches no
+/// others: volatile or not, as LLVM's. None for any other instruction.
+/// The one statement of it: `Accesses`, `unmodeled_write` and
+/// `effects::unmodeled` all ask here (#257 regressed where one did not).
+pub fn own_bytes(opcode: &Opcode) -> Option<llrm_mir::memory::Effects> {
+    match opcode {
+        Opcode::Load { .. } => Some(llrm_mir::memory::Effects { reads: true, writes: false }),
+        Opcode::Store { .. } => Some(llrm_mir::memory::Effects { reads: false, writes: true }),
+        _ => None,
+    }
+}
+
 /// Whether `inst` may write memory beyond what its own access says:
 /// effects.rs's `unmodeled_write`. A call writes what its callee may, as
-/// its attributes and the callee's state it; a load or store, volatile
-/// or not, writes only what it addresses.
+/// its attributes and the callee's state it; a load or store only what
+/// it addresses (`own_bytes`).
 pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
     let instruction = unit.function.instruction(inst);
+    if own_bytes(&instruction.opcode).is_some() {
+        return false;
+    }
     match &instruction.opcode {
         Opcode::Call(info) | Opcode::Invoke(info) => {
             let callee = instruction.operands.last().and_then(|&one| match one {

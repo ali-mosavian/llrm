@@ -26,7 +26,7 @@ use crate::cfg;
 use crate::alias::{self, Effect, Procedure, Summary};
 use crate::consts::Calls;
 use crate::manager::{Annotated, CallEffects};
-use crate::memory::{MemRef, Unit, unmodeled_write};
+use crate::memory::{MemRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
 use crate::regions::{displaced_span, overlapping};
@@ -121,11 +121,13 @@ impl Accesses {
         let mut touched = IndexMap::default();
         for (_, inst) in function.walk() {
             let reference = || references.get(&inst).cloned().into_iter().collect::<Vec<_>>();
-            let found = match &function.instruction(inst).opcode {
-                // A volatile access touches only its own bytes, as LLVM's: its order
-                // against other volatile accesses is the passes', which never move one.
-                Opcode::Load { .. } => (Some(reference()), Some(Vec::new())),
-                Opcode::Store { .. } => (Some(Vec::new()), Some(reference())),
+            let opcode = &function.instruction(inst).opcode;
+            let found = match opcode {
+                // Its order against other volatile accesses is the passes', which never move one.
+                _ if let Some(own) = own_bytes(opcode) => {
+                    let touched = |does: bool| Some(if does { reference() } else { Vec::new() });
+                    (touched(own.reads), touched(own.writes))
+                }
                 Opcode::Call(info) | Opcode::Invoke(info) => {
                     let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
                     let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);

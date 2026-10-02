@@ -46,6 +46,7 @@ fn call_effects(context: &Context, declarations: &Declarations, function: &Funct
 /// What an instruction may do to memory its operands do not name.
 fn unmodeled(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> Effects {
     match function.instruction(inst).opcode {
+        ref opcode if crate::memory::own_bytes(opcode).is_some() => Effects::NONE,
         Opcode::Call(_) | Opcode::Invoke(_) => call_effects(context, declarations, function, inst, |location| location != Some("argmem")),
         _ => Effects::NONE,
     }
