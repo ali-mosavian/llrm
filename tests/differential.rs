@@ -21,3 +21,8 @@ fn run(script: &str) {
 fn test_llrm_qb_prints_what_bc_does_under_each_programs_switches() {
     run("run_differential.py");
 }
+
+#[test]
+fn test_conformance_cases_print_their_expected_output_on_their_own_runtime() {
+    run("run_conformance.py");
+}

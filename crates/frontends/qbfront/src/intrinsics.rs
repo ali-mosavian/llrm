@@ -272,7 +272,7 @@ pub fn find(name: &str, dialect: Dialect) -> Option<&'static Intrinsic> {
 }
 
 /// Every function keyword, as spelled, with the dialects it is one in: QB
-/// 4.5's from its help index (compat/qb45/coverage.toml), then PDS 7.1's
+/// 4.5's from its help index (tests/differential/conformance/qb45/coverage.toml), then PDS 7.1's
 /// and VBDOS's own additions. FINANCE.LIB's functions are a library's.
 pub static KEYWORDS: &[(&str, u8)] = &[
     ("ABS", ALL), ("ASC", ALL), ("ATN", ALL), ("CDBL", ALL), ("CHR$", ALL), ("CINT", ALL),
@@ -315,7 +315,7 @@ mod tests {
     /// list lacked would read as an implicit variable.
     #[test]
     fn keywords_hold_every_function_of_qb45s_help() {
-        let index = include_str!("../compat/qb45/coverage.toml");
+        let index = include_str!("../../../../tests/differential/conformance/qb45/coverage.toml");
         let titles = index.lines().filter_map(|line| line.strip_prefix("title = \"")?.strip_suffix('"'));
         let mut missing = Vec::new();
         for title in titles.filter(|one| one.ends_with("Function QuickSCREEN") || one.ends_with("Functions QuickSCREEN")) {

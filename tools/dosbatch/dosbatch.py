@@ -22,6 +22,8 @@ from dataclasses import dataclass
 ROOT = Path(__file__).resolve().parents[2]
 BIN = Path(os.environ.get("LLRM_BIN", ROOT / "target" / "release"))
 QB45 = Path(os.environ.get("QB45_DIR", Path.home() / "work/42-labs/mini-qb/dosbox/qb45"))
+PDS71 = Path(os.environ.get("PDS71_DIR", Path.home() / "work/other/d32x/toolchains/pds71"))
+VBDOS = Path(os.environ.get("VBDOS_DIR", Path.home() / "work/other/d32x/toolchains/vbdos"))
 DOSBOX = Path(os.environ.get("DOSBOX_BIN", BIN / "dosbox-x"))
 CONF = """\
 [sdl]
@@ -48,6 +50,21 @@ nosound=true
 LOAD_LIMIT = 560_000
 
 
+@dataclass(frozen=True)
+class Toolchain:
+    """A Microsoft BASIC install, mounted as V:, and the runtime library its programs link."""
+
+    mount: Path
+    bc: str
+    link: str
+    library: str
+
+
+QB45_TOOLS = Toolchain(QB45, r"V:\BC", r"V:\LINK", r"V:\LIB\BCOM45.LIB")
+PDS71_TOOLS = Toolchain(PDS71, r"V:\BINB\BC", r"V:\BINB\LINK", r"V:\LIB\BCL71ENR.LIB")
+VBDOS_TOOLS = Toolchain(VBDOS, r"V:\BIN\BC", r"V:\BIN\LINK", r"V:\LIB\VBDCL10E.LIB")
+
+
 class TooBig(Exception):
     pass
 
@@ -62,6 +79,9 @@ class Job:
     path: Path
     budget_ms: int | None = None
     switches: str = "/O /FPi"  # BC's, for a bas job
+    libs: tuple[str, ...] = ()  # more libraries to link, by DOS path
+    library: str = ""  # the runtime library, where the toolchain's own is not it
+    args: str = ""  # the program's command line
 
 
 @dataclass
@@ -98,30 +118,32 @@ def read_dos(workdir: Path, name: str) -> str:
     return ""
 
 
-def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000) -> dict[str, Result]:
+def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    head = [f"mount c {work}", f"mount v {QB45}", r"set LIB=V:\LIB", "c:"]
+    head = [f"mount c {work}", f"mount v {tools.mount}", r"set LIB=V:\LIB", "c:"]
     building = []
     for job in jobs:
         u = job.stem.upper()
+        libraries = "+".join([job.library or tools.library, *job.libs])
+        link = f"{tools.link} /NOE {u}.OBJ,{u}.EXE,,{libraries}; > {u}.LNK"
         if job.kind == "exe":
             shutil.copy(job.path, work / f"{u}.EXE")
         elif job.kind == "obj":
             shutil.copy(job.path, work / f"{u}.OBJ")
-            building.append(f"V:\\LINK /NOE {u}.OBJ,{u}.EXE,,V:\\LIB\\BCOM45.LIB; > {u}.LNK")
+            building.append(link)
         else:
             (work / f"{u}.BAS").write_bytes(crlf(job.path.read_bytes()))
-            building.append(f"V:\\BC {job.switches} {u}.BAS,{u}.OBJ; > {u}.BCO")
-            building.append(f"V:\\LINK {u}.OBJ,{u}.EXE,,V:\\LIB\\BCOM45.LIB; > {u}.LNK")
+            building.append(f"{tools.bc} {job.switches} {u}.BAS,{u}.OBJ; > {u}.BCO")
+            building.append(link.replace(" /NOE", "", 1))
     script = [f":ms {build_ms}", *head, *building, "."]
     for job in jobs:
         u = job.stem.upper()
-        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {u}.EXE > {u}.TXT", "."]
+        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {u}.EXE {job.args} > {u}.TXT", "."]
     (work / "job.conf").write_text(CONF)
     (work / "jobs.txt").write_text("\n".join(script) + "\n")
     events = work / "events.txt"
