@@ -1020,6 +1020,19 @@ pub fn fill(name: &str, at: u64, repeated: bool) -> Option<Emitted> {
     _assemble(&raised(make(BITNESS, prefix).map_err(|error| error.to_string())), at, true)
 }
 
+/// `movs{b,w,d}`, with `rep` where it repeats: `over:si`, ds where none, to
+/// `es:di`.
+pub fn copy(name: &str, over: Register, at: u64, repeated: bool) -> Option<Emitted> {
+    let make = match name {
+        "movsb" => Instruction::with_movsb,
+        "movsw" => Instruction::with_movsw,
+        "movsd" => Instruction::with_movsd,
+        _ => return None,
+    };
+    let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
+    _assemble(&raised(make(BITNESS, over, prefix).map_err(|error| error.to_string())), at, true)
+}
+
 /// The shifts and rotates.
 pub const SHIFTS: [&str; 8] = ["shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "sal"];
 
@@ -1824,6 +1837,14 @@ pub fn emit(
     }
     if op == Operation::Fill && matches!(sources.len(), 3 | 4) {
         return fill(name, at, sources.len() == 4);
+    }
+    if op == Operation::Copy && matches!(sources.len(), 4 | 5) {
+        // The source is read through ds unless its segment says otherwise.
+        let over = match &sources[sources.len() - 2] {
+            Loc::Reg(one) if one.register != Register::DS => one.register,
+            _ => Register::None,
+        };
+        return copy(name, over, at, sources.len() == 5);
     }
     if op == Operation::Nothing && name.is_empty() {
         return Some(Emitted::new(Vec::new()));

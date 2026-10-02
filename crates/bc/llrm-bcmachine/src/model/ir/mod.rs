@@ -275,6 +275,8 @@ pub enum Operation {
     Pop,
     Leave,
     Fill,
+    /// A string move, `movs`: cells from `ds:si` to `es:di`.
+    Copy,
     Jump,
     Branch,
     Escape,
@@ -292,7 +294,7 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Move,
         Self::Exchange,
         Self::Address,
@@ -307,6 +309,7 @@ impl Operation {
         Self::Pop,
         Self::Leave,
         Self::Fill,
+        Self::Copy,
         Self::Jump,
         Self::Branch,
         Self::Escape,
@@ -339,6 +342,7 @@ impl Operation {
             Self::Pop => "pop",
             Self::Leave => "leave",
             Self::Fill => "fill",
+            Self::Copy => "copy",
             Self::Jump => "jump",
             Self::Branch => "branch",
             Self::Escape => "escape",
@@ -672,6 +676,7 @@ impl Operation {
             Self::Pop => "POP",
             Self::Leave => "LEAVE",
             Self::Fill => "FILL",
+            Self::Copy => "COPY",
             Self::Jump => "JUMP",
             Self::Branch => "BRANCH",
             Self::Escape => "ESCAPE",

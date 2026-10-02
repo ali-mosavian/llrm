@@ -406,10 +406,13 @@ def main() -> int:
     parser.add_argument("--inline", action="store_true", help="let the compiler inline the functions under test: correctness only, no shortfalls")
     parser.add_argument("--no-dos", action="store_true", help="MIR only")
     parser.add_argument("--no-refs", action="store_true")
+    parser.add_argument("--stale-ok", action="store_true", help="run with frontends older than the sources: bisecting with another tree's binaries")
     parser.add_argument("--no-validate", action="store_true", help="skip checking the oracle against clang and BC")
     parser.add_argument("--write-known", action="store_true", help="rewrite shortfalls.txt to what falls short now")
     args = parser.parse_args()
 
+    if not args.stale_ok and (stale := build.stale_binaries()):
+        parser.error("the frontends are not the sources':\n  " + "\n  ".join(stale))
     started = time.monotonic()
     stamp = build.binaries_stamp()
     cases = families.load(args.family, quick=args.quick, seed=args.seed)

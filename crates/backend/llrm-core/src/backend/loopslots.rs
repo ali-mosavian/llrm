@@ -449,7 +449,7 @@ fn spares(one: &Insn, at: i64) -> bool {
     let Some(what) = one.what.as_ref() else {
         return false;
     };
-    if matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape | Operation::Fill | Operation::Restore) {
+    if matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape | Operation::Fill | Operation::Copy | Operation::Restore) {
         return false;
     }
     what.dests.iter().all(|place| match place {

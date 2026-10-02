@@ -1427,6 +1427,59 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
+    /// A based pointer, `segment :> offset` (Watcom's binary O_CONVERT): the
+    /// far pointer of `offset` in `segment`, which is a segment's symbol (as
+    /// `__segname` names one), a far pointer whose selector it takes (a
+    /// function's, for `_CODE`), or a selector's value.
+    fn based(&mut self, offset: &str, segment: &str) -> R<i64> {
+        let near = self.value_as(offset, "TY_NEAR_POINTER")?;
+        let far = self.types.pointer(FAR);
+        let dword = self.types.int(4, false);
+        let selector = match self.segment_symbol(segment) {
+            // DGROUP's: the near pointer made far, as any near pointer is.
+            Some(symbol) if self.unit.grouped(symbol) => return Ok(self.op(Op::Convert, far, vec![value_ref(near)])),
+            // Another segment's selector: its symbol is an empty object placed in it.
+            Some(symbol) => {
+                let (name, key) = (symbol.name.clone(), Key::Symbol(symbol.id));
+                let Some(&object) = self.shared.keys.get(&key) else { return self.refuse(format!("segment {name} is no object here")) };
+                let place = self.global(object);
+                let pointer = self.address_of(place);
+                let whole = self.op(Op::Convert, dword, vec![value_ref(pointer)]);
+                let high = self.constant(dword, Number::Int(0xFFFF_0000u32.into()));
+                self.op(Op::And, dword, vec![value_ref(whole), value_ref(high)])
+            }
+            None => {
+                let got = self.eval(segment)?;
+                let value = self.scalar(got)?;
+                match self.space(value) {
+                    Some(FAR | HUGE) => {
+                        let whole = self.op(Op::Convert, dword, vec![value_ref(value)]);
+                        let high = self.constant(dword, Number::Int(0xFFFF_0000u32.into()));
+                        self.op(Op::And, dword, vec![value_ref(whole), value_ref(high)])
+                    }
+                    Some(_) => return self.refuse("a near pointer as a based pointer's segment"),
+                    None => {
+                        let wide = self.resized(value, false, dword);
+                        let sixteen = self.constant(dword, Number::Int(16.into()));
+                        self.op(Op::Shl, dword, vec![value_ref(wide), value_ref(sixteen)])
+                    }
+                }
+            }
+        };
+        let word = self.types.int(2, false);
+        let low = self.op(Op::Convert, word, vec![value_ref(near)]);
+        let low = self.resized(low, false, dword);
+        let joined = self.op(Op::Or, dword, vec![value_ref(selector), value_ref(low)]);
+        Ok(self.op(Op::Convert, far, vec![value_ref(joined)]))
+    }
+
+    /// The segment a `__segname` names: its `.NAME` symbol.
+    fn segment_symbol(&self, node: &str) -> Option<&hir::Symbol> {
+        let tree = self.unit.nodes.get(&hir::handle(node))?;
+        let ("CGFEName", [symbol, _]) = (tree.call.as_str(), tree.args.as_slice()) else { return None };
+        self.unit.symbols.get(&hir::handle(symbol)).filter(|one| one.name.starts_with('.') && !one.proc())
+    }
+
     /// A bit field's value, in its unit's type.
     fn read_bits(&mut self, got: Got) -> R<i64> {
         let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field read of a non-field") };
@@ -1672,6 +1725,9 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     fn binary(&mut self, cg_op: &str, left: &str, right: &str, type_: &str) -> R<i64> {
+        if cg_op == "O_CONVERT" {
+            return self.based(left, right);
+        }
         let canonical = self.unit.canonical_type(type_);
         if matches!(cg_op, "O_PLUS" | "O_MINUS") && !is_float(&canonical) {
             let a_got = self.eval(left)?;
@@ -2085,6 +2141,26 @@ mod tests {
         assert!(run_checked(&module, "apart", Vec::new(), 10_000).is_ok(), "{:?}", run_checked(&module, "apart", Vec::new(), 10_000));
         let trapped = run_checked(&module, "same", Vec::new(), 10_000).unwrap_err();
         assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("noalias parameter")), "{trapped:?}");
+    }
+
+    /// `__based` pointers were refused (the binary O_CONVERT of a segment and
+    /// an offset). One in DGROUP reads its object; one in the code segment or
+    /// in a segment holding an object of the unit is that segment's far pointer.
+    #[test]
+    fn test_based_pointers_are_far_pointers_into_their_segment() {
+        let module = raised("based.cgs");
+        let read = llrm_mir::interpret::run(&module, "_read_data", Vec::new(), 10_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        assert_eq!(read, llrm_mir::interpret::Val::Int { bits: 42, width: 16 });
+    }
+
+    /// A segment the unit places nothing in still has a selector: its
+    /// `__segname` symbol, an empty object in that segment, whose far
+    /// address the based pointer takes its selector from.
+    #[test]
+    fn test_a_based_pointer_takes_its_segments_selector() {
+        let module = raised("basednone.cgs");
+        let text = defined(&module, "_read_elsewhere");
+        assert!(text.contains("ptrtoint ptr addrspace(1) @_.ELSEWHERE"), "{text}");
     }
 
     /// `fixture`'s HIR program.

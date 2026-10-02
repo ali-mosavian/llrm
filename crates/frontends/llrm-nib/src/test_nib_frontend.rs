@@ -117,20 +117,13 @@ fn the_mir_of_sum_three_lints_clean() {
 
 /// An enum value is built whole: every byte of it is written, the payload of a
 /// variant without one zero, so that a value flowing as one integer has no
-/// undefined bytes (#290). Until then `lint::poison` finds the load that reads
-/// them in these programs.
+/// undefined bytes (#290); `lint::poison` finds a load that reads them.
 fn lint_of(name: &str) -> Vec<String> {
     let program = parsed(&PathBuf::from(env!("LLRM_ROOT")).join(name));
     hir::mir::emit(&program).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
 }
 
 #[test]
-fn the_enum_values_of_digits_still_read_unstored_bytes() {
-    assert!(lint_of("examples/digits.nib").iter().any(|one| one.starts_with("@first_even: load uses")), "the finding went away: enable the test below and delete this one");
-}
-
-#[test]
-#[ignore = "#290: nib-borrowck-fix makes an enum value write all its bytes"]
 fn the_enum_values_of_digits_write_all_their_bytes() {
     assert_eq!(lint_of("examples/digits.nib"), Vec::<String>::new());
 }
@@ -2417,4 +2410,78 @@ fn main() -> i16:
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 8, .. })), "{result:?}");
+}
+
+/// A payload-less variant stored only its tag, so the other bytes of the
+/// enum were undefined where the whole value then flowed as one integer:
+/// returned, compared, copied into a struct compared bytewise. The MIR
+/// interpreter reads an unwritten byte as poison, which a copy of the whole
+/// value carries to the tag read after it.
+#[test]
+fn test_an_enum_value_is_written_whole() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+fn first_even(a: i16, b: i16) -> Option[i16]:
+    if a % 2 == 0:
+        return .some(a)
+    if b % 2 == 0:
+        return .some(b)
+    return .none
+
+fn main() -> i16:
+    let x = first_even(1, 3)
+    let y = x
+    match y:
+        .some(n):
+            return n
+        .none:
+            return 7
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "enum.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
+}
+
+/// An enum too large for a register moves by memory copy and a match reads
+/// the tag first, so its `.none` leaves the payload bytes unwritten: it
+/// copies and matches right, and costs no zero-fill.
+#[test]
+fn test_a_large_enum_value_copied_and_matched_stays_correct() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+enum Box:
+    empty
+    full(a: i16, b: i16, c: i16)
+
+fn make(n: i16) -> Box:
+    if n > 0:
+        return .full(n, n, n)
+    return .empty
+
+fn main() -> i16:
+    let x = make(0)
+    let y = x
+    match y:
+        .full(a, b, c):
+            return a + b + c
+        .empty:
+            return 7
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "large.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
