@@ -601,3 +601,19 @@ did not come from qbopt and are not comparable to a row above without care.
 |---|---|---|---|
 | bitwise, additive | 1.96 | 1.37 | 1.0 |
 | multiply, divide | 5.62 | 3.27 | 1.0 |
+
+## `tools/sizes.py` program set: new baseline
+
+The program set changed with the bench rewrite (#354, #355, #361: `tests/run/qb`,
+`examples`, `bench/NAME/` in BASIC, C and Nib), so totals from before commit
+`9a84d038` are not comparable. Totals over every program of the set at that
+commit, `--cpu 486`, code bytes, estimated executed instructions and memory
+operands per call, summed (a cost estimate, not a timing):
+
+| level | programs measured | bytes | instructions | memory operands |
+|---|---:|---:|---:|---:|
+| -O2 | 182 | 318302 | 10574687 | 2135121 |
+| -Os | 188 | 301233 | 13789733 | 2601869 |
+
+Programs that do not compile (`known:` headers, #358) are not in the totals; six
+more compile at -Os than at -O2.

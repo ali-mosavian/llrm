@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchMatmul"
 c = "bench_matmul"
 nib = "bench_matmul"
+
+[gaps]
+bas = "#364 no unsigned types"

@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchSieve"
 c = "bench_sieve"
 nib = "bench_sieve"
+
+[gaps]
+bas = "#364 no unsigned types"

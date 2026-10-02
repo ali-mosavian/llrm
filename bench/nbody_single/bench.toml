@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchNbodySingle"
 c = "bench_nbody_single"
 nib = "bench_nbody_single"
+
+[gaps]
+nib = "#367 module variables must be integer, char or bool"

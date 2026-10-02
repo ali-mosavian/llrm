@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchNbodyFixed"
 c = "bench_nbody_fixed"
 nib = "bench_nbody_fixed"
+
+[gaps]
+nib = "#363 no truncating integer divide"

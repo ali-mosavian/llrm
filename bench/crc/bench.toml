@@ -5,3 +5,6 @@ repetitions = 1
 bas = "BenchCrc"
 c = "bench_crc"
 nib = "bench_crc"
+
+[gaps]
+bas = "#364 no unsigned types"
