@@ -205,6 +205,10 @@ facts! {
         NoCapture no_capture "nocapture" on [Param, Operand];
         WriteOnly write_only "writeonly" on [Operand];
         NoReturn no_return "noreturn" on [Callable];
+        // Every loop of it that does nothing observable ends: the language says
+        // so of every loop, as LLVM's function-level `mustprogress`. C's promise is
+        // per loop (C11 6.8.5p6), as `llvm.loop.mustprogress`, not this.
+        MustProgress must_progress "mustprogress" on [Callable];
         // Of a routine: it raises nothing, comes back, calls nothing of the module, is rare.
         NoUnwind no_unwind "nounwind" on [Callable];
         WillReturn will_return "willreturn" on [Callable];
