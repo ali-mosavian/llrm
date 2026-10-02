@@ -432,7 +432,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 if let Some(flag) = flag {
-                    let live = hir::Operand::Constant(BOOL, if matches!(value, Expr::Zero(_)) { 0 } else { -1 });
+                    let live = hir::Operand::Constant(BOOL, i64::from(!matches!(value, Expr::Zero(_))));
                     self.emit("store", Vec::new(), vec![flag, live], None);
                 }
                 if let Some(storage) = reinitialized {

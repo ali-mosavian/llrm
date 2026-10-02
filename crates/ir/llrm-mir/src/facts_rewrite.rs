@@ -102,6 +102,7 @@ impl Fact {
             | Fact::Invariant
             | Fact::Unroll(_)
             | Fact::MustProgress
+            | Fact::NoRecurse
             | Fact::Range(_) => true,
         }
     }

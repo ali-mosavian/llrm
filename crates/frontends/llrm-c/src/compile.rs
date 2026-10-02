@@ -1439,6 +1439,22 @@ mod tests {
         assert_eq!(cleanups(Level::O2), ["add sp, 2", "add sp, 4"]);
     }
 
+    /// A C function that calls nothing came out of the compile with no word
+    /// that nothing re-enters it: `norecurse` was inferred where no compiler ran.
+    #[test]
+    fn test_a_leaf_function_comes_out_of_the_compile_norecurse() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/halve.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let directory = std::env::temp_dir().join(format!("llrm-c-norecurse-{}", std::process::id()));
+        super::selected(&text, "halve", Some(&directory), &llrm_core::driver::Options::of(machine)).expect("selects");
+        let mut stages = std::fs::read_dir(&directory).unwrap().flatten().map(|one| one.path()).filter(|one| one.extension().is_some_and(|ext| ext == "ll")).collect::<Vec<_>>();
+        stages.sort_by_key(|one| one.file_name().map(std::ffi::OsStr::to_owned));
+        let last = std::fs::read_to_string(stages.last().expect("a stage")).unwrap();
+        std::fs::remove_dir_all(&directory).ok();
+        let defined = last.lines().filter(|line| line.starts_with("define")).collect::<Vec<_>>();
+        assert!(!defined.is_empty() && defined.iter().all(|line| line.contains("norecurse")), "{defined:?}");
+    }
+
     /// bcc -O makes fabs the x87 instruction; llrm-c called the library's:
     /// a double pushed, a far call, eight bytes cleaned, 29 times in QCport.
     #[test]
