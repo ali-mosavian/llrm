@@ -163,17 +163,6 @@ pub struct MemRef {
 }
 
 impl MemRef {
-    /// Whether its exclusions cover the frame bytes `[disp, disp + width)`;
-    /// with no `disp`, a frame cell at no fixed place, whether they cover
-    /// the whole frame.
-    pub fn spares(&self, disp: Option<i64>, width: u32) -> bool {
-        let (whole, size) = WHOLE_FRAME;
-        let (low, high) = match disp {
-            Some(disp) => (disp, disp + i64::from(width)),
-            None => (whole.disp, whole.disp + i64::from(size)),
-        };
-        self.excludes.iter().any(|(start, size)| start.space == Space::Frame && start.disp <= low && high <= start.disp + i64::from(*size))
-    }
 
     pub fn new(addr: Option<Addr>, width: u32) -> Self {
         Self {
@@ -266,9 +255,6 @@ pub struct Const {
 }
 
 impl Const {
-    pub fn new(n: impl Into<BigInt>, width: u32) -> Self {
-        Self { n: n.into(), width }
-    }
 }
 
 /// Direct port of `qbopt.model.mir:Symbol`.
@@ -352,48 +338,6 @@ pub enum Arg {
     FrameSelector(FrameSelector),
     Cell(Cell),
     Opaque(Opaque),
-}
-
-/// What one selected node computes, as MIR says it.
-///
-/// Direct port of `qbopt.model.mir:_kind_of`.  The mnemonic is consulted
-/// here and in the closed `BY_NAME` table only.  For moves, source and result
-/// operands decide copy versus load versus store exactly as the Python port
-/// does.
-pub fn kind_of(what: &Semantics, args: &[Arg], results: &[Arg]) -> Kind {
-    let name = what.name.as_deref().unwrap_or("");
-    match what.op {
-        Operation::Binary | Operation::Unary => by_name(name).unwrap_or(Kind::Opaque),
-        Operation::Move => {
-            if results.iter().any(|one| matches!(one, Arg::Cell(_))) {
-                Kind::Store
-            } else if args.iter().any(|one| matches!(one, Arg::Cell(_))) {
-                Kind::Load
-            } else {
-                Kind::Copy
-            }
-        }
-        Operation::Multiply => Kind::Mul,
-        Operation::Divide => Kind::Div,
-        Operation::Compare => by_name(name).unwrap_or(Kind::Sub),
-        Operation::Extend => Kind::Convert,
-        Operation::Address => Kind::Address,
-        Operation::Push => Kind::Arg,
-        Operation::Pop => Kind::Result,
-        Operation::Jump => Kind::Jump,
-        Operation::Branch => Kind::Branch,
-        Operation::Call => Kind::Call,
-        Operation::Return => Kind::Return,
-        Operation::Escape => Kind::Escape,
-        Operation::Nothing => Kind::Nothing,
-        Operation::Restore => Kind::Join,
-        Operation::FloatLoad => Kind::Fload,
-        Operation::FloatStore => Kind::Fstore,
-        Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary => {
-            by_name(name).unwrap_or(Kind::Opaque)
-        }
-        _ => Kind::Opaque,
-    }
 }
 
 pub const WHOLE_FRAME: (Addr, u32) = (Addr::new(Space::Frame, -(1 << 15)), 1 << 16);
@@ -657,57 +601,6 @@ impl fmt::Display for Kind {
     }
 }
 
-// Direct port of `qbopt.model.mir:_BY_NAME`.  `_kind_of` is the one place
-// which reads these selected mnemonic spellings; MIR itself carries `Kind`.
-const BY_NAME: [(&str, Kind); 40] = [
-    ("add", Kind::Add),
-    ("adc", Kind::AddCarry),
-    ("inc", Kind::Increment),
-    ("sub", Kind::Sub),
-    ("sbb", Kind::SubBorrow),
-    ("dec", Kind::Decrement),
-    ("cmp", Kind::Sub),
-    ("and", Kind::And),
-    ("test", Kind::And),
-    ("or", Kind::Or),
-    ("xor", Kind::Xor),
-    ("not", Kind::Not),
-    ("neg", Kind::Neg),
-    ("shl", Kind::Shl),
-    ("sal", Kind::Shl),
-    ("shr", Kind::Shr),
-    ("sar", Kind::Sar),
-    ("imul", Kind::Mul),
-    ("mul", Kind::Mul),
-    ("idiv", Kind::Div),
-    ("div", Kind::Div),
-    ("fadd", Kind::Fadd),
-    ("faddp", Kind::Fadd),
-    ("fsub", Kind::Fsub),
-    ("fsubp", Kind::Fsub),
-    ("fsubr", Kind::Fsub),
-    ("fsubrp", Kind::Fsub),
-    ("fmul", Kind::Fmul),
-    ("fmulp", Kind::Fmul),
-    ("fdiv", Kind::Fdiv),
-    ("fdivp", Kind::Fdiv),
-    ("fdivr", Kind::Fdiv),
-    ("fdivrp", Kind::Fdiv),
-    ("fchs", Kind::Fneg),
-    ("fabs", Kind::Fabs),
-    ("fsqrt", Kind::Fsqrt),
-    ("fcom", Kind::Fcompare),
-    ("fcomp", Kind::Fcompare),
-    ("fcompp", Kind::Fcompare),
-    ("ftst", Kind::Fcompare),
-];
-
-fn by_name(name: &str) -> Option<Kind> {
-    BY_NAME
-        .iter()
-        .find_map(|(spelling, kind)| (*spelling == name).then_some(*kind))
-}
-
 /// Python's ordered `dict`, with mapping equality.
 ///
 /// `Phi.incoming` and `Op.merges` are dictionaries: equality does not depend
@@ -798,10 +691,6 @@ pub enum OpCode {
 }
 
 impl OpCode {
-    /// The inert source-ownership operation used by MIR transforms.
-    pub const fn nothing() -> Self {
-        Self::Operation(Operation::Nothing)
-    }
 }
 
 /// Lowering's identity baseline while general floating allocation is
@@ -902,58 +791,7 @@ pub struct Raising {
 }
 
 impl Op {
-    /// Constructs Python's five-required-field `Op` form with every later
-    /// field set to its dataclass default.
-    pub fn new(
-        at: i64,
-        op: impl Into<Option<OpCode>>,
-        name: impl Into<String>,
-        defines: Vec<Value>,
-        uses: Vec<Value>,
-    ) -> Self {
-        Self {
-            at,
-            op: op.into(),
-            name: name.into(),
-            defines,
-            uses,
-            array: None,
-            memory_values: Vec::new(),
-            floating: None,
-            floating_origin: None,
-            loads: Vec::new(),
-            stores: Vec::new(),
-            source_backed: false,
-            kind: Kind::Opaque,
-            stack: None,
-            test: None,
-            merges: OrderedMap::new(),
-            args: Vec::new(),
-            results: Vec::new(),
-            raised: None,
-            target: None,
-            cases: Vec::new(),
-            source: None,
-            id: OpId(0),
-            symbol: None,
-            args_known: true,
-            memory_complete: false,
-            reads_complete: false,
-            volatile: false,
-            opaque_defs: Some(BTreeSet::new()),
-            opaque_uses: Some(BTreeSet::new()),
-            absorbed: Vec::new(),
-            indirect: false,
-            exits: Vec::new(),
-            nowrap: false,
-            raising: None,
-        }
-    }
 
-    /// Python `Op.barrier`.
-    pub const fn barrier(&self) -> bool {
-        matches!(self.op, Some(OpCode::Operation(Operation::Barrier))) || self.volatile
-    }
 }
 
 /// Where definitions meet on CFG edges.  Direct port of `qbopt.model.mir:Phi`.
@@ -1034,13 +872,6 @@ const _: () = {
     const fn frozen<T: Sync>() {}
     frozen::<MirBody>();
 };
-
-/// Python `rewritten`.
-pub fn rewritten(op: &Op) -> bool {
-    op.raised
-        .as_ref()
-        .is_some_and(|raised| (&op.args, &op.results) != (&raised.0, &raised.1))
-}
 
 /// Python `_outside`: the frame's bytes no range in `reach` covers, as exclusions.
 pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {

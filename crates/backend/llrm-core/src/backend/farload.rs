@@ -188,20 +188,10 @@ mod tests {
     use super::selected;
     use crate::model::ir::{self, Addr, Loc, Mem, Operation, Semantics, Space};
     use crate::model::lir::Insn;
-    use crate::model::mir::{self, Arg, Cell, Kind, MemRef, Op, OpCode, Value};
 
-    fn typed_ref(space: Space, disp: i64) -> MemRef {
-        MemRef { typed: Some(("pointer4".to_owned(), false)), ..MemRef::new(Some(Addr::new(space, disp)), 2) }
-    }
-
-    fn load(at: i64, value: Value, r#ref: MemRef, cell: Mem, uses: Vec<u32>) -> Arc<Insn> {
-        let destination = ir::Held { value: value.id, width: 2 };
-        let mut op = Op::new(at, Some(OpCode::Operation(Operation::Move)), "mov", vec![value], Vec::new());
-        op.loads = vec![r#ref.clone()];
-        op.kind = Kind::Load;
-        op.args = vec![Arg::Cell(Cell { r#ref })];
-        op.results = vec![Arg::Held(mir::Held { value, width: 2 })];
-        let mut one = Insn::new(
+    fn load(at: i64, value: u32, cell: Mem, uses: Vec<u32>) -> Arc<Insn> {
+        let destination = ir::Held { value, width: 2 };
+        Arc::new(Insn::new(
             at,
             Some((at, at)),
             Some(Semantics {
@@ -210,30 +200,22 @@ mod tests {
                 sources: vec![Loc::Mem(cell)],
                 ..Semantics::new(Operation::Move)
             }),
-            vec![value.id],
+            vec![value],
             uses,
-        );
-        one.op = Some(Arc::new(op));
-        Arc::new(one)
+        ))
     }
 
     #[test]
     fn test_adjacent_words_are_one_far_load_only_when_the_high_word_is_a_selector() {
         // qcport's dynamic far-struct fields emitted two loads per far pointer.
-        let (first_value, second_value) = (Value::new(1, 1), Value::new(2, 1));
-        let first_ref = typed_ref(Space::Far, 4);
-        let second_ref = typed_ref(Space::Far, 6);
-        let cell = |r#ref: &MemRef| Mem {
+        let cell = |disp: i64| Mem {
             base: Some(ir::Held { value: 10, width: 2 }),
             selector: Some(ir::Held { value: 11, width: 2 }),
-            ..Mem::new(r#ref.addr, 2)
+            ..Mem::new(Some(Addr::new(Space::Far, disp)), 2)
         };
         let values = |cell: &Mem| ir::values(&Loc::Mem(cell.clone())).iter().map(|one| one.value).collect();
-        let (first_cell, second_cell) = (cell(&first_ref), cell(&second_ref));
-        let original = vec![
-            load(1, first_value, first_ref, first_cell.clone(), values(&first_cell)),
-            load(2, second_value, second_ref, second_cell.clone(), values(&second_cell)),
-        ];
+        let (first_cell, second_cell) = (cell(4), cell(6));
+        let original = vec![load(1, 1, first_cell.clone(), values(&first_cell)), load(2, 2, second_cell.clone(), values(&second_cell))];
 
         let selected = selected(&original, &BTreeSet::from([2]));
 
@@ -249,14 +231,9 @@ mod tests {
     #[test]
     fn test_fixed_far_pointer_load_defers_fusion_until_after_allocation() {
         // indexed.lru_use's fixed parameter pair became an eager LES.
-        let values = [Value::new(1, 1), Value::new(2, 1)];
-        let load = |at: i64, value: Value, displacement: i64| {
-            let r#ref = typed_ref(Space::Frame, displacement);
-            let cell = Mem::new(r#ref.addr, 2);
-            load(at, value, r#ref, cell, Vec::new())
-        };
+        let load = |at: i64, value: u32, displacement: i64| load(at, value, Mem::new(Some(Addr::new(Space::Frame, displacement)), 2), Vec::new());
 
-        let original = vec![load(1, values[0], 4), load(2, values[1], 6)];
+        let original = vec![load(1, 1, 4), load(2, 2, 6)];
 
         assert_eq!(selected(&original, &BTreeSet::from([2])), original);
     }

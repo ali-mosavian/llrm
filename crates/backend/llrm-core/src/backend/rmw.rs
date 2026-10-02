@@ -452,14 +452,9 @@ mod tests {
     use super::selected;
     use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
     use crate::model::lir::Insn;
-    use crate::model::mir::Op;
 
     fn _insn(at: i64, what: Semantics, defines: Vec<u32>, uses: Vec<u32>, volatile: bool) -> Arc<Insn> {
-        let mut op = Op::new(at, None, "", Vec::new(), Vec::new());
-        op.volatile = volatile;
-        let mut one = Insn::new(at, Some((at, at)), Some(what), defines, uses);
-        one.op = Some(Arc::new(op));
-        Arc::new(one)
+        Arc::new(Insn { volatile, ..Insn::new(at, Some((at, at)), Some(what), defines, uses) })
     }
 
     fn _users(insns: &[Arc<Insn>]) -> IndexMap<u32, i64> {
@@ -602,13 +597,4 @@ mod tests {
         assert_eq!(selected(&insns, &_users(&insns)), insns);
     }
 
-    #[test]
-    fn test_volatile_update_without_a_mir_op_retains_its_explicit_load_and_store() {
-        let insns: Vec<Arc<Insn>> = _chain("add", true, true)
-            .iter()
-            .map(|one| Arc::new(Insn { op: None, volatile: one.op.as_ref().is_some_and(|op| op.volatile), ..Insn::clone(one) }))
-            .collect();
-
-        assert_eq!(selected(&insns, &_users(&insns)), insns);
-    }
 }

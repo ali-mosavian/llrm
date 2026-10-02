@@ -429,7 +429,7 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
             Vec::new(),
             Vec::new(),
         );
-        jump.op = beside.op.clone();
+        jump.call = beside.call.clone();
         made.push(LirBlock { succ: vec![outside], ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)]) });
         // A phi in the target now arrives from the bridge.
         if let Some(target) = by_at.get_mut(&outside) {
@@ -471,7 +471,7 @@ fn _copy(beside: &Insn, into: u32, out_of: u32, width: u32) -> Arc<Insn> {
         vec![into],
         vec![out_of],
     );
-    made.op = beside.op.clone();
+    made.call = beside.call.clone();
     Arc::new(made)
 }
 

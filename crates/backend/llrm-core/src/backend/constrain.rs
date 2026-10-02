@@ -541,7 +541,7 @@ fn _move(beside: &Insn, into: Held, out_of: Loc) -> Arc<Insn> {
         vec![into.value],
         uses,
     );
-    made.op = beside.op.clone();
+    made.call = beside.call.clone();
     Arc::new(made)
 }
 
