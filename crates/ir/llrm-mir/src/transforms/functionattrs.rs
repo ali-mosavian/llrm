@@ -50,7 +50,7 @@ impl ModulePass for FunctionAttrs {
                 }
             }
             if !memory::returns(&function.attrs) && returns(context, metadata, &callees, function, quiet) {
-                added.push(Attribute::Flag("willreturn".to_owned()));
+                added.extend(crate::facts::Fact::WillReturn.attribute());
             }
             if quiet && !function.attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "norecurse")) {
                 added.push(Attribute::Flag("norecurse".to_owned()));
@@ -82,35 +82,9 @@ fn recurses_never(module: &Module, graph: &crate::callgraph::CallGraph, id: Glob
     over.into_iter().all(|at| {
         let GlobalKind::Function(function) = &module.globals[at.0 as usize].kind else { return true };
         if function.is_declaration() {
-            return function.attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "nocallback")) || module.globals[at.0 as usize].name.as_deref().and_then(crate::intrinsics::Intrinsic::named).is_some_and(|one| !matches!(one, crate::intrinsics::Intrinsic::Code | crate::intrinsics::Intrinsic::Asm));
+            return crate::facts::Facts::of(&function.attrs).no_callback() || module.globals[at.0 as usize].name.as_deref().and_then(crate::intrinsics::Intrinsic::named).is_some_and(|one| !matches!(one, crate::intrinsics::Intrinsic::Code | crate::intrinsics::Intrinsic::Asm));
         }
         !graph.calls_unknown(at)
-    })
-}
-
-/// Whether `one` has an edge out: a loop with none never ends, whatever marks it.
-fn exits(function: &Function, one: &crate::loops::Loop) -> bool {
-    !one.latches.is_empty() && one.blocks.iter().any(|&block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
-}
-
-/// Whether the loop `latch` closes carries `llvm.loop.mustprogress`.
-fn must_progress(metadata: &[MetadataNode], function: &Function, latch: BlockId) -> bool {
-    let Some(branch) = function.terminator(latch) else { return false };
-    let Some((_, node)) = function.instruction(branch).metadata.iter().find(|(kind, _)| kind == "llvm.loop") else { return false };
-    let Some(node) = metadata.get(node.0 as usize) else { return false };
-    node.operands.iter().any(|one| match one {
-        MetadataOperand::Node(id) => metadata.get(id.0 as usize).is_some_and(|property| matches!(property.operands.first(), Some(MetadataOperand::String(name)) if name == "llvm.loop.mustprogress")),
-        _ => false,
-    })
-}
-
-/// Whether `function` does nothing a loop that never ended could be seen by:
-/// no volatile access and no call that writes.
-fn unobserved(context: &Context, callees: &Callees, function: &Function) -> bool {
-    function.walk().all(|(_, inst)| match &function.instruction(inst).opcode {
-        Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => !volatile,
-        Opcode::Call(_) | Opcode::Invoke(_) => !memory::of(context, callees, function, inst).writes,
-        _ => true,
     })
 }
 
@@ -169,9 +143,11 @@ fn accesses(context: &Context, layout: &crate::datalayout::DataLayout, callees: 
 
 /// Whether `function` always comes back: every callee does, and every loop
 /// leaves once a counter stepping by one reaches its bound, or the language
-/// promises it (`mustprogress`) of a function that cannot re-enter itself
-/// and does nothing observable: a loop of such a function that never ended
-/// would be undefined.
+/// promises it of a function that cannot re-enter itself and does nothing
+/// observable: a loop of such a function that never ended would be undefined.
+/// The promise is of every loop (`mustprogress` on the function) or of each
+/// loop it names (`llvm.loop.mustprogress`, as C11 6.8.5p6 gives only the loops
+/// whose controlling expression is not constant: `for (;;)` hangs).
 fn returns(context: &Context, metadata: &[MetadataNode], callees: &Callees, function: &Function, norecurse: bool) -> bool {
     let calls_return = function.walk().all(|(_, inst)| match &function.instruction(inst).opcode {
         Opcode::Call(info) => memory::returns(&info.attrs) || memory::callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.returns),
@@ -181,9 +157,6 @@ fn returns(context: &Context, metadata: &[MetadataNode], callees: &Callees, func
     if !calls_return {
         return false;
     }
-    // The promise is the language's, of every loop (`mustprogress` on the function) or
-    // of each loop it names (`llvm.loop.mustprogress`, as C11 6.8.5p6 gives only the
-    // loops whose controlling expression is not constant: `for (;;)` hangs).
     let promised = norecurse && unobserved(context, callees, function);
     let tree = DominatorTree::new(function);
     let loops = LoopInfo::new(function, &tree);
@@ -192,5 +165,31 @@ fn returns(context: &Context, metadata: &[MetadataNode], callees: &Callees, func
     }
     let evolution = Evolution::new(context, function, &loops);
     loops.loops.iter().all(|one| crate::scalarevolution::counted(context, function, &tree, &evolution, one).is_some() || (promised && exits(function, one) && one.latches.iter().all(|&latch| must_progress(metadata, function, latch))))
+}
+
+/// Whether `one` has an edge out: a loop with none never ends, whatever marks it.
+fn exits(function: &Function, one: &crate::loops::Loop) -> bool {
+    !one.latches.is_empty() && one.blocks.iter().any(|&block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
+}
+
+/// Whether the loop `latch` closes carries `llvm.loop.mustprogress`.
+fn must_progress(metadata: &[MetadataNode], function: &Function, latch: BlockId) -> bool {
+    let Some(branch) = function.terminator(latch) else { return false };
+    let Some((_, node)) = function.instruction(branch).metadata.iter().find(|(kind, _)| kind == "llvm.loop") else { return false };
+    let Some(node) = metadata.get(node.0 as usize) else { return false };
+    node.operands.iter().any(|one| match one {
+        MetadataOperand::Node(id) => metadata.get(id.0 as usize).is_some_and(|property| matches!(property.operands.first(), Some(MetadataOperand::String(name)) if name == "llvm.loop.mustprogress")),
+        _ => false,
+    })
+}
+
+/// Whether `function` does nothing a loop that never ended could be seen by:
+/// no volatile access and no call that writes.
+fn unobserved(context: &Context, callees: &Callees, function: &Function) -> bool {
+    function.walk().all(|(_, inst)| match &function.instruction(inst).opcode {
+        Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => !volatile,
+        Opcode::Call(_) | Opcode::Invoke(_) => !memory::of(context, callees, function, inst).writes,
+        _ => true,
+    })
 }
 
