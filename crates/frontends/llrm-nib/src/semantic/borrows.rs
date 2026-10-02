@@ -412,7 +412,7 @@ impl FunctionCompiler<'_> {
 
     /// Errs unless every borrow `expression` returns roots in a parameter:
     /// a local would be gone when the caller reads it.
-    pub(super) fn check_returned_borrows(&self, expression: &Expr, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_returned_borrows(&mut self, expression: &Expr, span: Span) -> Result<(), Diagnostic> {
         let roots = match (self.signature.view, self.signature.slot) {
             (Some(_), _) => self.roots(expression),
             (None, Some(struct_id)) => self.value_roots(expression, ElementType::Struct(struct_id)),
@@ -420,7 +420,10 @@ impl FunctionCompiler<'_> {
         };
         match roots.iter().find(|one| !Life::Lent.may_hold(one)) {
             Some(local) => Err(Diagnostic::new(span, format!("a returned borrow of {:?} would dangle; only a borrowed parameter's can be returned", local.name))),
-            None => Ok(()),
+            None => {
+                self.keep_lent(&roots);
+                Ok(())
+            }
         }
     }
 
@@ -550,6 +553,9 @@ impl FunctionCompiler<'_> {
             }
             if matches!(target.life, Life::Frame | Life::Scope(_)) {
                 self.held.entry(target.owner).or_default().extend(roots.iter().cloned());
+            } else {
+                // What outlives the call keeps what it is given.
+                self.keep_lent(&roots);
             }
         }
         Ok(())

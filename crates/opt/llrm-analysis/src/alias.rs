@@ -38,7 +38,7 @@ use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::facts::Facts;
 use llrm_mir::memory::Effects;
-use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
+use llrm_mir::module::{InstId, Linkage, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
@@ -143,6 +143,16 @@ fn nonnull(provenance: &Provenance) -> bool {
 /// as LLVM's `isKnownNonZero` reads a pointer's underlying object instead
 /// of solving every pointer; `None` where only the whole solve can say.
 pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
+    // A parameter the language states non-null, as a reference is; or
+    // dereferenceable in a near space, where null holds no object (DGROUP's
+    // first bytes are the runtime's); a far one may be 0000:0000.
+    if let ValueDef::Argument(at) = unit.function.value(value).def {
+        let facts = Facts::param(unit.function, at as usize);
+        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(0)));
+        if facts.non_null() || near && facts.dereferenceable().is_some_and(|bytes| bytes > 0) {
+            return Some(true);
+        }
+    }
     if let Some(seed) = seeds(unit).get(&value) {
         return Some(nonnull(seed));
     }
