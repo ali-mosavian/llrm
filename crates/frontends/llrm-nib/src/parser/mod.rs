@@ -194,7 +194,12 @@ impl Parser {
                     consts.last().map(|one| one.name.clone())
                 }
                 TokenKind::Var => {
-                    statics.push(self.static_variable()?);
+                    statics.push(self.static_variable(false)?);
+                    statics.last().map(|one| one.name.clone())
+                }
+                TokenKind::Identifier(qualifier) if qualifier == "huge" && matches!(self.tokens.get(self.at + 1).map(|one| &one.kind), Some(TokenKind::Var)) => {
+                    self.bump();
+                    statics.push(self.static_variable(true)?);
                     statics.last().map(|one| one.name.clone())
                 }
                 _ => {
@@ -284,8 +289,8 @@ impl Parser {
         Ok(Const { name, value, span })
     }
 
-    /// `var NAME: T = value`, the `var` next.
-    fn static_variable(&mut self) -> Result<Static, Diagnostic> {
+    /// `var NAME: T = value`, the `var` next; `huge` when `huge var`.
+    fn static_variable(&mut self, huge: bool) -> Result<Static, Diagnostic> {
         let span = self.bump().span;
         let (name, _) = self.identifier("expected a variable name")?;
         self.expect(|kind| matches!(kind, TokenKind::Colon), "a module variable declares its type")?;
@@ -293,7 +298,7 @@ impl Parser {
         self.expect(|kind| matches!(kind, TokenKind::Equal), "a module variable requires a compile-time value")?;
         let value = self.expression(0)?;
         self.line_end()?;
-        Ok(Static { name, annotation, value, span })
+        Ok(Static { name, annotation, value, span, huge })
     }
 
     /// `@name(arguments)` lines before a declaration.

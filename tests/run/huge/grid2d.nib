@@ -1,0 +1,16 @@
+# 100x201 i32s (80400 bytes) in huge memory, walked in memory order.
+huge var g: i32[100, 201] = [[0] * 201] * 100
+
+fn bench_grid2d() -> i32:
+    let mut t: i32 = 0
+    for r in 0..100:
+        for c in 0..201:
+            g[r, c] = i32(r) * 1000 + i32(c)
+    for r in 0..100:
+        for c in 0..201:
+            t += g[r, c] & 255
+    return t
+
+fn main() -> i16:
+    print(bench_grid2d())
+    return 0

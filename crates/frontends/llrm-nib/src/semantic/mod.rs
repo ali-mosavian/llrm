@@ -138,14 +138,14 @@ impl LiteralPool {
             _ => unreachable!("only floats enter the constant pool"),
         };
         self.floats.insert((type_name, bits), id);
-        self.data.push(hir::DataObject { id, name, bytes, readonly: true, code: None });
+        self.data.push(hir::DataObject { id, name, bytes, readonly: true, code: None, segment: None });
         id
     }
 
-    /// Data of its own: a module variable's.
-    fn object(&mut self, name: &str, bytes: Vec<u8>, readonly: bool) -> u32 {
+    /// Data of its own: a module variable's, huge in `segment` if given.
+    fn object(&mut self, name: &str, bytes: Vec<u8>, readonly: bool, segment: Option<String>) -> u32 {
         let id = self.data.len() as u32 + 1;
-        self.data.push(hir::DataObject { id, name: name.into(), bytes, readonly, code: None });
+        self.data.push(hir::DataObject { id, name: name.into(), bytes, readonly, code: None, segment });
         id
     }
 
@@ -170,6 +170,7 @@ impl LiteralPool {
             bytes,
             readonly: true,
             code: None,
+            segment: None,
         });
         id
     }
@@ -181,7 +182,7 @@ impl LiteralPool {
             return found.id;
         }
         let id = self.data.len() as u32 + 1;
-        self.data.push(hir::DataObject { id, name: format!("$address_{name}"), bytes: vec![0; 4], readonly: true, code: Some(callable) });
+        self.data.push(hir::DataObject { id, name: format!("$address_{name}"), bytes: vec![0; 4], readonly: true, code: Some(callable), segment: None });
         id
     }
 }
@@ -1339,7 +1340,7 @@ fn program(
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;
     let mut literals = LiteralPool::default();
-    types.register_statics(&module.statics, &statics::shared(module), &mut literals)?;
+    types.register_statics(&module.statics, &statics::shared(module), module_name, &mut literals)?;
     let declared: Vec<Function> = module.functions.iter().map(|one| types.with_owner_generics(one)).collect();
     let (generators, functions): (Vec<&Function>, Vec<&Function>) = declared
         .iter()
@@ -1689,6 +1690,8 @@ struct FunctionCompiler<'a> {
     lends: Vec<modref::Lend>,
     /// The statement being compiled, where a scope it ends drops its owners.
     statement_span: Span,
+    /// Whether the statement takes an address in a huge module variable.
+    huge_address: bool,
     /// Changes to borrowed owners, refused if a holder is used after one.
     conflicts: Vec<liveness::Conflict>,
     /// Module variables borrowed across a call, lent to it if the holder is
@@ -1775,6 +1778,7 @@ impl<'a> FunctionCompiler<'a> {
             reseatable: BTreeSet::new(),
             lends: Vec::new(),
             statement_span: Span::new(0, 0, 0),
+            huge_address: false,
             conflicts: Vec::new(),
             across: Vec::new(),
             references: Vec::new(),

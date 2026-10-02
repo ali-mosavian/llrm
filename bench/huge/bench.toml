@@ -4,6 +4,4 @@ repetitions = 1
 [region]
 bas = "BenchHuge"
 c = "bench_huge"
-
-[gaps]
-nib = "#362 no array over 64K"
+nib = "bench_huge"

@@ -2421,3 +2421,36 @@ fn test_textfill_compiles_at_o2() {
         assert!(text.contains("byte ptr es:["), "{text}");
     }
 }
+
+/// A `huge var` array past 64K is C's `__huge` global: one far object, each
+/// element reached through a huge pointer at an i32 offset. A module array
+/// had no way past 64K (#362).
+#[test]
+fn test_a_huge_module_array_is_a_far_object_indexed_through_a_huge_pointer() {
+    let source = "huge var a: i32[30000] = [0] * 30000\n\nfn fill() -> void:\n    for i in 0..30000:\n        a[i] = i32(i) + 5\n";
+    let directory = tempfile::tempdir().unwrap();
+    let text = emitted_text(&parsed(&written(&directory, "long1d.nib", source)));
+    assert!(text.contains("@$var_a = internal addrspace(1) global [120000 x i8] zeroinitializer"), "{text}");
+    let fill = defined(&text, "fill");
+    let cast = Regex::new(r"(%\d+) = addrspacecast ptr addrspace\(1\) @\$var_a to ptr addrspace\(3\)").unwrap();
+    let base = &cast.captures(fill).unwrap_or_else(|| panic!("{fill}"))[1];
+    assert!(fill.contains(&format!("getelementptr inbounds i32, ptr addrspace(3) {base}, i32 %")), "{fill}");
+}
+
+/// A plain `var` past 64K does not fit DGROUP.
+#[test]
+fn test_a_module_array_past_64k_needs_huge() {
+    let directory = tempfile::tempdir().unwrap();
+    let error = refused(&written(&directory, "big.nib", "var a: i32[30000] = [0] * 30000\n"));
+    assert!(error.contains("huge var"), "{error}");
+}
+
+/// A view of a huge array was a far pointer, whose 16-bit offset wraps at
+/// 64K: the callee read the wrong elements.
+#[test]
+fn test_a_huge_module_array_is_not_borrowed() {
+    let source = "huge var a: i32[30000] = [0] * 30000\n\nfn first(xs: &[i32]) -> i32:\n    return xs[0]\n\nfn main() -> i16:\n    print(first(a))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let error = refused(&written(&directory, "view.nib", source));
+    assert!(error.contains("only indexed"), "{error}");
+}

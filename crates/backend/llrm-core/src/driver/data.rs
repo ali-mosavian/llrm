@@ -28,7 +28,7 @@ impl Placed {
                 None => segments.push((segment.clone(), vec![name])),
             }
         }
-        let far = hir.data.iter().filter(|one| one.address == model::AddressKind::Far);
+        let far = hir.data.iter().filter(|one| matches!(one.address, model::AddressKind::Far | model::AddressKind::Huge));
         Self { segments, private: far.filter_map(|one| one.segment.clone()).collect() }
     }
 
