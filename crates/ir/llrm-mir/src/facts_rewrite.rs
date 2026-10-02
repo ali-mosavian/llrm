@@ -86,7 +86,13 @@ impl Fact {
             | Fact::Memory(_)
             | Fact::NoSignedWrap
             | Fact::NoUnsignedWrap
-            | Fact::InBounds => true,
+            | Fact::InBounds
+            | Fact::Inline(_)
+            | Fact::Reassoc
+            | Fact::NoNaNs
+            | Fact::NoInfs
+            | Fact::NoSignedZeros
+            | Fact::AllowReciprocal => true,
         }
     }
 }
