@@ -1168,6 +1168,8 @@ mod tests {
 
     /// toolchain/owshim/build.sh hardcoded macOS ARM64's defines and clang, so no wccq
     /// could be built on any other host and llrm-c refused every C file.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
     #[test]
     fn test_wccq_built_here_records_the_committed_stream() {
         let root = Path::new(env!("LLRM_ROOT"));
@@ -1180,6 +1182,8 @@ mod tests {
 
     /// A long double global got its initializer as a double, 8 bytes, while
     /// code loads it as 10 bytes: `gld` read 1.07e-49 and took two bytes of `after`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
     #[test]
     fn test_a_long_double_initializer_is_ten_bytes() {
         let directory = tempfile::tempdir().unwrap();
