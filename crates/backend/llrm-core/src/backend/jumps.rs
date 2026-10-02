@@ -63,7 +63,7 @@ impl ControlFlow<'_> {
         if crate::support::debug::enabled("blocks") {
             let frequency = crate::analysis::frequency::Frequency::of(&placed);
             for block in &placed.blocks {
-                llrm_support::debug!("blocks", "{} {:#06x} freq {}", placed.name, block.at, frequency.block(block.at));
+                llrm_support::debug!("blocks", "{} {:#06x} freq {} insns {}", placed.name, block.at, frequency.block(block.at), block.insns.len());
             }
         }
         Ok(placed)

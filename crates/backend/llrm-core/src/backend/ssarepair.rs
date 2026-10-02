@@ -206,3 +206,50 @@ pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, 
         .collect();
     body.with_blocks(rebuilt)
 }
+
+/// `body` without the phis that name one value: a phi whose arguments are all
+/// one value `x` (or itself) is `x`, and every use of it reads `x`. Removing one
+/// can make another trivial, so this runs to a fixed point.
+pub fn simplified(body: &LirBody) -> LirBody {
+    let mut body = body.clone();
+    loop {
+        let mut rename: IndexMap<u32, u32> = IndexMap::default();
+        for block in &body.blocks {
+            for phi in block.phis.iter().filter(|phi| !body.pins.contains_key(&phi.result)) {
+                let mut others = phi.incoming.iter().map(|(_, value)| *value).filter(|value| *value != phi.result);
+                if let Some(only) = others.next().filter(|first| others.all(|value| value == *first)) {
+                    rename.insert(phi.result, only);
+                }
+            }
+        }
+        if rename.is_empty() {
+            return body;
+        }
+        // A chain of trivial phis reads through to its end.
+        let ends: IndexMap<u32, u32> = rename
+            .keys()
+            .map(|value| {
+                let mut at = rename[value];
+                while let Some(next) = rename.get(&at).filter(|next| **next != *value) {
+                    at = *next;
+                }
+                (*value, at)
+            })
+            .collect();
+        let blocks = body
+            .blocks
+            .iter()
+            .map(|block| {
+                let insns = block.insns.iter().map(|one| if one.uses.iter().any(|value| ends.contains_key(value)) { spiller::_renamed(one, &ends) } else { Arc::clone(one) }).collect();
+                let phis = block
+                    .phis
+                    .iter()
+                    .filter(|phi| !ends.contains_key(&phi.result))
+                    .map(|phi| Phi { result: phi.result, incoming: phi.incoming.iter().map(|(from, value)| (*from, ends.get(value).copied().unwrap_or(*value))).collect() })
+                    .collect();
+                LirBlock { phis, ..block.with_insns(insns) }
+            })
+            .collect();
+        body = body.with_blocks(blocks);
+    }
+}

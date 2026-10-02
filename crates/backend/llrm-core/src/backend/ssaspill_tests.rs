@@ -60,3 +60,18 @@ fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
         assert_eq!(width, 4, "value#{value} is stored in a {width}-byte slot");
     }
 }
+
+/// A phi whose arguments are all one value stayed a value of its own: SsaSpill
+/// held it apart from the value it renames, stored it to a slot on every
+/// iteration and spilled the original around it (deedlines PLASMABLOBS' 160-trip
+/// loop, +7.2% executed instructions).
+#[test]
+fn test_spilling_leaves_no_phi_that_names_one_value() {
+    let trivial = |body: &LirBody| {
+        body.blocks.iter().flat_map(|block| &block.phis).filter(|phi| phi.incoming.iter().all(|(_, value)| *value == phi.incoming[0].1)).count()
+    };
+    let (body, mut phases) = before_phase(Calls::C, "trivialphi.ll", "_bench_shellsort", "486", "SsaSpill");
+    assert!(trivial(&body) > 0, "premise: the input has a phi of one value");
+    let spilled = phases[0].transform(body).expect("spills");
+    assert_eq!(trivial(&spilled), 0);
+}

@@ -361,6 +361,8 @@ struct Edits {
 }
 
 pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<LirBody, String> {
+    let simple = ssarepair::simplified(body);
+    let body = &simple;
     let flow = Flow::of(body);
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let machine = Machine::of(&confined);
