@@ -599,6 +599,10 @@ pub fn _instruction(
         // Its operands are the registers the instruction names in its opcode.
         return Ok(vec![format!("{}{name}", if what.sources.len() == 4 { "rep " } else { "" })]);
     }
+    if what.op == Operation::Copy {
+        // Its operands are the registers the instruction names in its opcode.
+        return Ok(vec![format!("{}{name}", if what.sources.len() == 5 { "rep " } else { "" })]);
+    }
     let dests = what.dests.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
     let last = |items: &[String]| items[items.len() - 1].clone();
@@ -828,6 +832,17 @@ mod tests {
 
     fn ax() -> Loc {
         Loc::Reg(ir::Reg { register: Register::AX, width: 2 })
+    }
+
+    /// A string move prints as the instruction it is: `rep` where it has a count.
+    #[test]
+    fn test_a_string_move_prints_with_rep_where_it_repeats() {
+        let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
+        let semantics = |sources: Vec<Loc>| Semantics { name: Some("movsw".to_owned()), sources, ..Semantics::new(Operation::Copy) };
+        let repeated = semantics(vec![held(1), held(2), held(3), held(4), held(5)]);
+        let single = semantics(vec![held(2), held(3), held(4), held(5)]);
+        assert_eq!(_instruction(&repeated, &no_names(), 0).unwrap(), ["rep movsw"]);
+        assert_eq!(_instruction(&single, &no_names(), 0).unwrap(), ["movsw"]);
     }
 
     /// `lea bx,[bp-20]` for `&n` at bp-10: lower carries the displacement in

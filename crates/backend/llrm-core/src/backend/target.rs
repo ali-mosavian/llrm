@@ -108,6 +108,28 @@ pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
             out.insert(Occurrence::new("dest", 1), Register::EDI);
         }
     }
+    // A string move reads cx cells from ds:si to es:di, leaving si and di
+    // past them and cx empty; a single move has no count. The segments are
+    // the last two sources, each in its register where an operand.
+    if what.op == Operation::Copy && matches!(what.sources.len(), 4 | 5) {
+        let first = what.sources.len() - 4;
+        if first == 1 {
+            out.insert(Occurrence::new("source", 0), Register::ECX);
+        }
+        out.insert(Occurrence::new("source", first), Register::ESI);
+        out.insert(Occurrence::new("source", first + 1), Register::EDI);
+        if matches!(what.sources[first + 2], Loc::Held(_)) {
+            out.insert(Occurrence::new("source", first + 2), Register::DS);
+        }
+        if matches!(what.sources[first + 3], Loc::Held(_)) {
+            out.insert(Occurrence::new("source", first + 3), Register::ES);
+        }
+        out.insert(Occurrence::new("dest", 1), Register::ESI);
+        out.insert(Occurrence::new("dest", 2), Register::EDI);
+        if first == 1 {
+            out.insert(Occurrence::new("dest", 3), Register::ECX);
+        }
+    }
     // Port I/O moves al; a port not written as an immediate is dx.
     if what.op == Operation::Barrier && matches!(what.name.as_deref(), Some("in" | "out")) {
         if !matches!(what.sources[0], Loc::Imm(_)) {
@@ -594,6 +616,36 @@ mod tests {
         use llrm_mir::target::Machine;
         let restricted: BTreeSet<Register> = WORD_BASES.union(&WORD_INDEXES).copied().collect();
         assert_eq!(llrm_x86_code16::Dos::default().address_registers(), restricted.len() as i64);
+    }
+
+    /// A string move reads cx cells from ds:si to es:di and leaves si, di
+    /// and cx past them: the rep form pins all three and both segments, the
+    /// single one has no count.
+    #[test]
+    fn test_a_string_move_names_its_registers() {
+        let held = |value: u32| Loc::Held(ir::Held { value, width: 2 });
+        let repeated = semantics(
+            Operation::Copy,
+            "movsw",
+            vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6), held(7)],
+            vec![held(1), held(2), held(3), held(4), held(8)],
+        );
+        let wanted = requirements(&repeated);
+        let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
+        assert_eq!((at("source", 0), at("source", 1), at("source", 2)), (Some(Register::ECX), Some(Register::ESI), Some(Register::EDI)));
+        assert_eq!((at("source", 3), at("source", 4)), (Some(Register::DS), Some(Register::ES)));
+        assert_eq!((at("dest", 1), at("dest", 2), at("dest", 3)), (Some(Register::ESI), Some(Register::EDI), Some(Register::ECX)));
+        let single = semantics(
+            Operation::Copy,
+            "movsw",
+            vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)],
+            vec![held(2), held(3), reg(Register::DS, 2), held(8)],
+        );
+        let wanted = requirements(&single);
+        let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
+        assert_eq!((at("source", 0), at("source", 1), at("source", 2), at("source", 3)), (Some(Register::ESI), Some(Register::EDI), None, Some(Register::ES)));
+        assert_eq!(at("dest", 3), None);
+        assert!(reads(&repeated).contains_key(&Register::ECX) && writes(&repeated).contains_key(&Register::ECX));
     }
 
     fn reg(register: Register, width: u32) -> Loc {

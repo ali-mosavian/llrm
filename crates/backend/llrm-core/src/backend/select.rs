@@ -1020,6 +1020,18 @@ pub fn fill(name: &str, at: u64, repeated: bool) -> Option<Emitted> {
     _assemble(&raised(make(BITNESS, prefix).map_err(|error| error.to_string())), at, true)
 }
 
+/// `movs{b,w,d}`, with `rep` where it repeats: `ds:si` to `es:di`.
+pub fn copy(name: &str, at: u64, repeated: bool) -> Option<Emitted> {
+    let make = match name {
+        "movsb" => Instruction::with_movsb,
+        "movsw" => Instruction::with_movsw,
+        "movsd" => Instruction::with_movsd,
+        _ => return None,
+    };
+    let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
+    _assemble(&raised(make(BITNESS, Register::None, prefix).map_err(|error| error.to_string())), at, true)
+}
+
 /// The shifts and rotates.
 pub const SHIFTS: [&str; 8] = ["shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "sal"];
 
@@ -1824,6 +1836,9 @@ pub fn emit(
     }
     if op == Operation::Fill && matches!(sources.len(), 3 | 4) {
         return fill(name, at, sources.len() == 4);
+    }
+    if op == Operation::Copy && matches!(sources.len(), 4 | 5) {
+        return copy(name, at, sources.len() == 5);
     }
     if op == Operation::Nothing && name.is_empty() {
         return Some(Emitted::new(Vec::new()));

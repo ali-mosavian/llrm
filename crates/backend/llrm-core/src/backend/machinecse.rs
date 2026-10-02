@@ -151,7 +151,7 @@ fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, 
 /// Explicit and declared physical writes, or None for an opaque boundary.
 fn _written(one: &Insn) -> Option<Lanes> {
     let what = one.what.as_ref()?;
-    if [Operation::Barrier, Operation::Call, Operation::Return, Operation::Fill, Operation::Leave].contains(&what.op) {
+    if [Operation::Barrier, Operation::Call, Operation::Return, Operation::Fill, Operation::Copy, Operation::Leave].contains(&what.op) {
         return None;
     }
     let mut writes = Lanes::new();

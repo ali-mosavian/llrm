@@ -845,3 +845,20 @@ fn near_counted_return() {
 fn test_an_immediate_too_wide_raises_the_same_text_on_every_compiler() {
     assert_eq!(i32_of(1 << 40), Err("out of range integral type conversion attempted".to_owned()));
 }
+
+/// A string move is `movs` with the width in its name, and `rep` where it
+/// repeats; 16-bit code spells the dword form with the operand-size prefix.
+#[test]
+fn test_a_string_move_encodes_by_width_and_repeat() {
+    let decoded = |name: &str, repeated: bool| {
+        let code = made(copy(name, 0, repeated)).code;
+        let one = decoded(&code, 0);
+        (one.mnemonic(), one.has_rep_prefix(), code.len())
+    };
+    assert_eq!(decoded("movsb", false), (Mnemonic::Movsb, false, 1));
+    assert_eq!(decoded("movsw", false), (Mnemonic::Movsw, false, 1));
+    assert_eq!(decoded("movsd", false), (Mnemonic::Movsd, false, 2));
+    assert_eq!(decoded("movsw", true), (Mnemonic::Movsw, true, 2));
+    assert_eq!(decoded("movsd", true), (Mnemonic::Movsd, true, 3));
+    assert!(copy("movsq", 0, false).is_none());
+}
