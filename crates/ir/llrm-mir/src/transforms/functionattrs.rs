@@ -28,7 +28,7 @@ impl ModulePass for FunctionAttrs {
         let mut changed = Vec::new();
         for id in graph.bottom_up() {
             // A cycle of calls proves nothing about itself.
-            if graph.reaches(id, id) {
+            if graph.recursive(id) {
                 continue;
             }
             let quiet = recurses_never(module, &graph, id);
@@ -74,7 +74,7 @@ impl ModulePass for FunctionAttrs {
 /// not bound, or one outside the module that may call back (a declaration not
 /// `nocallback`), as LLVM's `addNoRecurseAttrs`.
 fn recurses_never(module: &Module, graph: &crate::callgraph::CallGraph, id: GlobalId) -> bool {
-    if graph.reaches(id, id) {
+    if graph.recursive(id) {
         return false;
     }
     let mut over = graph.reachable(id);

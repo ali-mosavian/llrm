@@ -52,3 +52,22 @@ fn test_a_cycle_is_unbounded_and_an_undefined_callee_makes_the_bound_a_floor() {
     assert!(matches!(usage.bound("shell"), Bound::AtLeast(4, ref named) if named.contains("B$PRINT")), "{:?}", usage.bound("shell"));
     assert!(usage.report().contains("unbounded (recursion)") && usage.report().contains(">= 4 (and B$PRINT)"));
 }
+
+/// Every runtime helper is a callee shared by many: walking each path
+/// took time exponential in a chain of diamonds, 2^30 paths here. Each bound
+/// is its frame and the deepest of its callees', memoized.
+#[test]
+fn test_a_chain_of_diamonds_thirty_deep_is_settled_at_once() {
+    let mut procedures = Vec::new();
+    for level in 0..30 {
+        let (next_left, next_right) = (format!("l{}", level + 1), format!("r{}", level + 1));
+        let callees: Vec<&str> = if level == 29 { vec!["end"] } else { vec![next_left.as_str(), next_right.as_str()] };
+        procedures.push(procedure(&format!("l{level}"), 2, 0, &callees));
+        procedures.push(procedure(&format!("r{level}"), 2, 0, &callees));
+    }
+    procedures.push(procedure("end", 0, 0, &[]));
+    procedures.push(procedure("top", 0, 0, &["l0", "r0"]));
+    let usage = Usage::of(&[module(procedures)]);
+    // Each level: far return 4 + push bp 2 + 2 locals = 8; the end and the top, with no frame, 4.
+    assert_eq!(usage.bound("top"), Bound::Bytes(4 + 30 * 8 + 4));
+}

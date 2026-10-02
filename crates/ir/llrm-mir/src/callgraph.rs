@@ -19,6 +19,8 @@ pub struct CallGraph<N = GlobalId> {
     callees: BTreeMap<N, BTreeSet<N>>,
     /// The functions with a call whose callee is neither named nor listed.
     unknown: BTreeSet<N>,
+    /// Each function's strongly connected component, found once.
+    components: std::cell::OnceCell<BTreeMap<N, (usize, bool)>>,
 }
 
 /// A function of a program: its module's index and its id there.
@@ -67,7 +69,7 @@ impl CallGraph {
             }
             callees.insert(id, called);
         }
-        Self { callees, unknown }
+        Self { callees, unknown, components: Default::default() }
     }
 }
 
@@ -90,11 +92,16 @@ impl CallGraph<Defined> {
                 callees.insert((at, id), called);
             }
         }
-        Self { callees, unknown }
+        Self { callees, unknown, components: Default::default() }
     }
 }
 
 impl<N: Copy + Ord> CallGraph<N> {
+    /// What `function` calls directly.
+    pub fn callees_of(&self, function: N) -> Vec<N> {
+        self.callees.get(&function).into_iter().flatten().copied().collect()
+    }
+
     /// Every function `from` reaches, through its calls and theirs.
     pub fn reachable(&self, from: N) -> BTreeSet<N> {
         let mut seen = BTreeSet::new();
@@ -138,6 +145,80 @@ impl<N: Copy + Ord> CallGraph<N> {
             }
         }
         order
+    }
+
+    /// A graph of these calls alone, as `new` makes of a module's.
+    pub fn from_edges(callees: BTreeMap<N, BTreeSet<N>>) -> Self {
+        Self { callees, unknown: BTreeSet::new(), components: Default::default() }
+    }
+
+    /// Each node's component and whether it is a cycle: more than one node,
+    /// or a call to itself. Tarjan's, iteratively: the one answer to "does
+    /// this call itself, and through whom".
+    fn components(&self) -> &BTreeMap<N, (usize, bool)> {
+        self.components.get_or_init(|| {
+            let (mut index, mut stack, mut next) = (BTreeMap::<N, usize>::new(), Vec::<N>::new(), 0);
+            let (mut low, mut on, mut found) = (BTreeMap::<N, usize>::new(), BTreeSet::<N>::new(), BTreeMap::<N, (usize, bool)>::new());
+            let mut components = 0;
+            let nodes: BTreeSet<N> = self.callees.iter().flat_map(|(from, to)| std::iter::once(*from).chain(to.iter().copied())).collect();
+            for &root in &nodes {
+                if index.contains_key(&root) {
+                    continue;
+                }
+                let mut work = vec![(root, 0_usize)];
+                while let Some((at, done)) = work.pop() {
+                    if done == 0 {
+                        index.insert(at, next);
+                        low.insert(at, next);
+                        next += 1;
+                        stack.push(at);
+                        on.insert(at);
+                    }
+                    let out: Vec<N> = self.callees.get(&at).into_iter().flatten().copied().collect();
+                    if let Some(&to) = out.get(done) {
+                        work.push((at, done + 1));
+                        if !index.contains_key(&to) {
+                            work.push((to, 0));
+                        } else if on.contains(&to) {
+                            let lowest = low[&at].min(index[&to]);
+                            low.insert(at, lowest);
+                        }
+                        continue;
+                    }
+                    if let Some(&(parent, _)) = work.last() {
+                        let lowest = low[&parent].min(low[&at]);
+                        low.insert(parent, lowest);
+                    }
+                    if low[&at] == index[&at] {
+                        let mut members = Vec::new();
+                        while let Some(one) = stack.pop() {
+                            on.remove(&one);
+                            members.push(one);
+                            if one == at {
+                                break;
+                            }
+                        }
+                        let cyclic = members.len() > 1 || self.callees.get(&at).is_some_and(|to| to.contains(&at));
+                        for one in members {
+                            found.insert(one, (components, cyclic));
+                        }
+                        components += 1;
+                    }
+                }
+            }
+            found
+        })
+    }
+
+    /// Whether `function` can call itself: it is in a cycle of calls.
+    pub fn recursive(&self, function: N) -> bool {
+        self.components().get(&function).is_some_and(|one| one.1)
+    }
+
+    /// Whether `one` and `other` are in one cycle of calls.
+    pub fn together(&self, one: N, other: N) -> bool {
+        let components = self.components();
+        matches!((components.get(&one), components.get(&other)), (Some(a), Some(b)) if a.1 && a.0 == b.0)
     }
 
     /// Whether `from` calls `to`, directly or not.
