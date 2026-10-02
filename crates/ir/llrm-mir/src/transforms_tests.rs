@@ -941,3 +941,43 @@ b4:
     let out = through(&["loop-deletion", "simplifycfg"], text);
     assert!(out.contains("define i16 @f() {\nb1:\n  ret i16 7\n}"), "{out}");
 }
+
+/// `body` over `double %x`, through instcombine, as one function's text.
+fn floated(body: &str) -> String {
+    through(&["instcombine"], &format!("define double @f(double %x) {{\nb1:\n{body}\n}}\n"))
+}
+
+/// What the language lets a floating operation lose, each rule only under its flag: a division by a
+/// constant a multiply by its reciprocal (`arcp`), two constants of a chain one (`reassoc`), a
+/// zero's sign unobserved (`nsz`), no NaN or infinity (`nnan`, `ninf`). Without the flag the
+/// instruction stays: `x / 4.0` differs from `x * 0.25` only for a reciprocal that rounds, `x * 0.0`
+/// is NaN for a NaN, `x + 0.0` is +0.0 for -0.0.
+#[test]
+fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation() {
+    let stays = |body: &str| {
+        let text = floated(body);
+        assert!(text.contains(body.lines().next().unwrap().trim()), "{text}");
+    };
+    // arcp
+    assert!(floated("  %r = fdiv arcp double %x, 3.0\n  ret double %r").contains("fmul arcp double %x, 0x3FD5555555555555"), "{}", floated("  %r = fdiv arcp double %x, 3.0\n  ret double %r"));
+    stays("  %r = fdiv double %x, 3.0\n  ret double %r");
+    // reassoc, both operations
+    let chain = |first: &str, second: &str| format!("  %a = fadd {first} double %x, 1.0\n  %r = fadd {second} double %a, 2.0\n  ret double %r");
+    assert!(floated(&chain("reassoc", "reassoc")).contains("fadd reassoc double %x, 3.0"), "{}", floated(&chain("reassoc", "reassoc")));
+    assert!(floated(&chain("reassoc", "")).contains("fadd double %a, 2.0"), "{}", floated(&chain("reassoc", "")));
+    assert!(floated(&chain("", "reassoc")).contains("fadd reassoc double %a, 2.0"), "{}", floated(&chain("", "reassoc")));
+    // nsz
+    assert_eq!(floated("  %r = fadd nsz double %x, 0.0\n  ret double %r"), "define double @f(double %x) {\nb1:\n  ret double %x\n}\n");
+    stays("  %r = fadd double %x, 0.0\n  ret double %r");
+    assert!(floated("  %r = fadd double %x, -0.0\n  ret double %r").contains("ret double %x"));
+    // nnan and nsz make x * 0 a zero; each alone does not
+    assert!(floated("  %r = fmul nnan nsz double %x, 0.0\n  ret double %r").contains("ret double 0.0"), "{}", floated("  %r = fmul nnan nsz double %x, 0.0\n  ret double %r"));
+    stays("  %r = fmul nnan double %x, 0.0\n  ret double %r");
+    stays("  %r = fmul nsz double %x, 0.0\n  ret double %r");
+    // nnan and ninf make x - x a zero and x / x a one
+    assert!(floated("  %r = fsub nnan ninf double %x, %x\n  ret double %r").contains("ret double 0.0"));
+    assert!(floated("  %r = fdiv nnan ninf double %x, %x\n  ret double %r").contains("ret double 1.0"));
+    stays("  %r = fsub nnan double %x, %x\n  ret double %r");
+    // the multiply by one needs no flag
+    assert!(floated("  %r = fmul double 1.0, %x\n  ret double %r").contains("ret double %x"));
+}
