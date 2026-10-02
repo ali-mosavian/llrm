@@ -265,7 +265,19 @@ b0:
 ",
     )
     .expect("parses");
-    let error = crate::transforms::optimized_with(&mut module, &["instcombine"]).unwrap_err();
+    struct Idle;
+    impl crate::passes::FunctionPass for Idle {
+        fn name(&self) -> &'static str {
+            "idle"
+        }
+
+        fn run(&mut self, _: &mut crate::passes::Unit, _: &mut crate::passes::Analyses) -> crate::passes::PreservedAnalyses {
+            crate::passes::PreservedAnalyses::all()
+        }
+    }
+    let mut manager = crate::passes::PassManager { verify_each: true, ..Default::default() };
+    manager.add(Idle);
+    let error = manager.run_module(&mut module, std::rc::Rc::new(crate::target::Neutral)).unwrap_err();
     assert!(error.starts_with("before the first pass:") && error.contains("dominate"), "{error}");
 }
 
