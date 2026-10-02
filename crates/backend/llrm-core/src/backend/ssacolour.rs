@@ -18,8 +18,8 @@ use iced_x86::Register;
 use crate::analysis::{intervals as ranges, loops};
 use crate::backend::allocate::{self, _whole};
 use crate::backend::target::{self, Segments};
-use crate::backend::twoaddr;
-use crate::model::ir::{Loc, Operation};
+use crate::backend::{coalesce, twoaddr};
+use crate::model::ir::{Held, Loc, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -66,21 +66,119 @@ fn wishes(body: &LirBody) -> IndexMap<u32, Register> {
     out
 }
 
+/// The registers each value used as an address half may take there, over all its uses.
+fn addressing(body: &LirBody) -> IndexMap<u32, BTreeSet<Register>> {
+    let bx: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
+    let indexes: BTreeSet<Register> = target::WORD_INDEXES.iter().map(|one| _whole(*one)).collect();
+    let bases: BTreeSet<Register> = target::ADDRESSING.iter().map(|one| _whole(*one)).filter(|one| *one != Register::EBP).collect();
+    let mut out: IndexMap<u32, BTreeSet<Register>> = IndexMap::default();
+    let mut note = |value: u32, allowed: &BTreeSet<Register>| {
+        let entry = out.entry(value).or_insert_with(|| allowed.clone());
+        let narrowed: BTreeSet<Register> = entry.intersection(allowed).copied().collect();
+        if !narrowed.is_empty() {
+            *entry = narrowed;
+        }
+    };
+    let pair: BTreeSet<Register> = bx.union(&indexes).copied().collect();
+    for one in body.insns() {
+        let Some(what) = &one.what else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            let Loc::Mem(cell) = place else { continue };
+            let word = |held: &Option<Held>| held.filter(|held| held.width == 2);
+            match (word(&cell.base), word(&cell.index)) {
+                (Some(base), None) => note(base.value, if cell.addr.is_some_and(|addr| addr.space == Space::Frame) { &indexes } else { &bases }),
+                (Some(base), Some(index)) => {
+                    note(base.value, &pair);
+                    note(index.value, &pair);
+                }
+                (None, Some(index)) => note(index.value, &indexes),
+                (None, None) => {}
+            }
+        }
+    }
+    out
+}
+
+/// Each value a phi, a copy or a tie names, with every value they join it to.
+fn webs(body: &LirBody) -> IndexMap<u32, BTreeSet<u32>> {
+    let mut root: IndexMap<u32, u32> = IndexMap::default();
+    fn find(root: &mut IndexMap<u32, u32>, value: u32) -> u32 {
+        let parent = *root.entry(value).or_insert(value);
+        if parent == value {
+            return value;
+        }
+        let top = find(root, parent);
+        root.insert(value, top);
+        top
+    }
+    let mut join = |root: &mut IndexMap<u32, u32>, a: u32, b: u32| {
+        let (a, b) = (find(root, a), find(root, b));
+        root.insert(a, b);
+    };
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (_, value) in &phi.incoming {
+                join(&mut root, phi.result, *value);
+            }
+        }
+        // A copy, and a tied result with its first source, cost nothing in one register.
+        for one in &block.insns {
+            if let Some((into, out_of)) = coalesce::_copy(one) {
+                join(&mut root, into, out_of);
+            } else if let Some(what) = one.what.as_ref().filter(|what| twoaddr::ties(what)) {
+                if let (Some(Loc::Held(first)), [made]) = (what.sources.first(), &one.defines[..]) {
+                    join(&mut root, *made, first.value);
+                }
+            }
+        }
+    }
+    let values: Vec<u32> = root.keys().copied().collect();
+    let mut groups: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
+    for value in &values {
+        let top = find(&mut root, *value);
+        groups.entry(top).or_default().insert(*value);
+    }
+    values.iter().map(|value| (*value, groups[&find(&mut root, *value)].clone())).collect()
+}
+
 /// A register for each value of `body` that wants one: `skip` names those that do not.
 pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, fixed: &IndexMap<u32, Register>, segments: &Segments) -> IndexMap<u32, Register> {
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let general: Vec<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
-    // A value any register holds leaves the byte registers to the values only they hold: those
-    // have no other home, while an address role is met by a copy where the value acts.
+    // A value any register holds takes first the registers the fewest confined values may take.
     let bytes_first: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
+    let demand = |register: &Register| confined.values().filter(|class| class.iter().any(|one| _whole(*one) == *register)).count();
     let mut roomy: Vec<Register> = general.clone();
-    roomy.sort_by_key(|register| bytes_first.contains(register));
+    roomy.sort_by_key(demand);
     // A byte value lives in a register with byte halves; an address role is met
     // where the value acts, by a copy if need be, so it only orders the choice.
     let bytes = &bytes_first;
+    // A value of no class of its own prefers its phi web's: the web joins in one register
+    // where no copy separates it, and its first member is coloured before its uses are seen.
+    // An address half's registers are a preference too: a copy meets the role, but in a loop it runs each time.
+    let mut leaning: IndexMap<u32, BTreeSet<Register>> = addressing(body);
+    for (value, class) in &confined {
+        leaning.insert(*value, class.iter().map(|one| _whole(*one)).collect());
+    }
+    let mut web = webs(body);
+    for value in leaning.keys() {
+        web.entry(*value).or_insert_with(|| BTreeSet::from([*value]));
+    }
+    let joined: IndexMap<u32, Vec<Register>> = web
+        .iter()
+        .filter(|(value, _)| !confined.contains_key(*value))
+        .filter_map(|(value, members)| {
+            let classes: Vec<&BTreeSet<Register>> = members.iter().filter_map(|member| leaning.get(member)).collect();
+            let shared: Vec<Register> = roomy.iter().copied().filter(|register| !classes.is_empty() && classes.iter().all(|class| class.contains(register))).collect();
+            (!shared.is_empty()).then_some((*value, shared))
+        })
+        .collect();
     let class_of = |value: u32| -> Vec<Register> {
         match confined.get(&value) {
-            None => roomy.clone(),
+            None => {
+                let first: Vec<Register> = joined.get(&value).cloned().unwrap_or_default();
+                first.iter().chain(roomy.iter().filter(|register| !first.contains(register))).copied().collect()
+            }
             Some(class) => {
                 let mut out: Vec<Register> = Vec::new();
                 for register in target::order(Some(class), segments) {
