@@ -268,6 +268,10 @@ impl MemorySSA<'_> {
     /// the earlier memory version, rejecting any possibly aliasing write
     /// on the way, including writes carried by loop backedges.
     pub fn unchanged(&self, earlier: InstId, later: InstId, memory: &MemRef) -> bool {
+        // A load of what is written once, then never, reads what any earlier access of it did.
+        if llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, later) {
+            return true;
+        }
         let boundary = self.at(earlier).defining;
         boundary.is_some_and(|boundary| self.frontier(later, memory, Some(boundary), None, None) == BTreeSet::from([boundary]))
     }
@@ -326,6 +330,9 @@ impl MemorySSA<'_> {
     /// A translated address applies outside the destination; its prefix must
     /// still be checked against the original phi-based address.
     pub fn available_on_edge(&self, earlier: InstId, later: InstId, predecessor: i64, memory: &MemRef, edge_memory: Option<&MemRef>) -> bool {
+        if llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, later) {
+            return true;
+        }
         let source = self.at(earlier);
         let boundary = if source.kind == Kind::Def { Some(source.id) } else { source.defining };
         boundary.is_some_and(|boundary| self.frontier(later, memory, Some(boundary), Some(predecessor), edge_memory) == BTreeSet::from([boundary]))

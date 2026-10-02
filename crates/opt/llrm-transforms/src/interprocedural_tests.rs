@@ -210,7 +210,7 @@ fn test_a_body_s_attributes_are_stated_on_its_declarations() {
     let mut program = Program::new(vec![double, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
     stamped_all(&mut program, &mut modules).unwrap();
-    assert!(printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind\n"), "{}", printed(&program.modules[1]));
+    assert!(printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind norecurse\n"), "{}", printed(&program.modules[1]));
 }
 
 /// Per module, a call to another module's body that always returns one
@@ -370,13 +370,13 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn {",
-            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn {",
-            "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind {",
-            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn {",
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn norecurse {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn norecurse {",
+            "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn norecurse {",
             "define internal void @hides(ptr %p) {",
-            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn {",
+            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn norecurse {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse {",
         ],
         "{text}"
     );
@@ -712,4 +712,165 @@ fn the_corpus_is_stamped_as_it_was() {
     let expected = include_str!("interprocedural_stamped.txt");
     let changed = found.lines().zip(expected.lines()).find(|(one, other)| one != other);
     assert!(found == expected, "first difference: {changed:?}; {} lines, expected {}", found.lines().count(), expected.lines().count());
+}
+
+/// Which defined functions of `text` the stamp gives `fact`.
+fn stamped_with(text: &str, fact: &str) -> Vec<String> {
+    let mut module = parsed(text);
+    crate::testing::stamped(&mut module).unwrap();
+    let mut found = printed(&module)
+        .lines()
+        .filter(|line| line.starts_with("define") && line.split(" {").next().unwrap_or_default().split_whitespace().any(|word| word == fact))
+        .filter_map(|line| line.split('@').nth(1).and_then(|rest| rest.split('(').next()).map(str::to_owned))
+        .collect::<Vec<_>>();
+    found.sort();
+    found
+}
+
+/// A function that nothing can enter while it runs says so: a leaf, one that
+/// calls a `nocallback` declaration or an intrinsic. Not one that calls itself,
+/// its mutual caller, an unbounded pointer, a declaration that may call back, or
+/// anything reaching those. The stamp the compilers run was never given this:
+/// the first inference lived where no compile reaches.
+#[test]
+fn the_stamp_infers_norecurse_where_nothing_can_reenter() {
+    let text = "declare void @quiet() nocallback
+declare void @loud()
+declare i16 @llvm.smax.i16(i16, i16)
+
+define void @leaf() {
+b0:
+  ret void
+}
+
+define void @calls_quiet() {
+b0:
+  call void @quiet()
+  ret void
+}
+
+define void @calls_loud() {
+b0:
+  call void @loud()
+  ret void
+}
+
+define i16 @calls_intrinsic(i16 %c) {
+b0:
+  %m = call i16 @llvm.smax.i16(i16 %c, i16 0)
+  ret i16 %m
+}
+
+define void @self() {
+b0:
+  call void @self()
+  ret void
+}
+
+define void @ping() {
+b0:
+  call void @pong()
+  ret void
+}
+
+define void @pong() {
+b0:
+  call void @ping()
+  ret void
+}
+
+define void @pointer(ptr %p) {
+b0:
+  call void %p()
+  ret void
+}
+
+define void @listed(ptr %p) {
+b0:
+  call void %p(), !callees !0
+  ret void
+}
+
+define void @through() {
+b0:
+  call void @pointer(ptr null)
+  ret void
+}
+
+!0 = !{ptr @leaf}
+";
+    assert_eq!(stamped_with(text, "norecurse"), ["calls_intrinsic", "calls_quiet", "leaf", "listed"]);
+}
+
+fn spin(attrs: &str, load: &str, marks: &str) -> String {
+    format!(
+        "define i16 @spin(ptr %p) {attrs} {{
+b0:
+  br label %b1
+
+b1:
+  %v = {load} i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %b1, label %b2, !llvm.loop !0
+
+b2:
+  ret i16 0
+}}
+
+{marks}"
+    )
+}
+
+/// A loop no counter bounds ended only where the language says it must, of
+/// every loop (`mustprogress` on the function) or of the loop (C11 6.8.5p6:
+/// clang marks each loop whose controlling expression is not constant). An
+/// observable loop (a volatile load) may legally run forever, and so may a loop
+/// no language marks.
+#[test]
+fn the_stamp_takes_the_languages_word_that_a_loop_ends() {
+    let marked = "!0 = distinct !{!0, !1}\n!1 = !{!\"llvm.loop.mustprogress\"}\n";
+    let unmarked = "!0 = distinct !{!0}\n";
+    let ends = |text: String| stamped_with(&text, "willreturn") == ["spin"];
+    assert!(ends(spin("mustprogress", "load", unmarked)), "the language says so of every loop");
+    assert!(ends(spin("", "load", marked)), "the loop says so");
+    assert!(!ends(spin("", "load", unmarked)), "no promise: an uncounted loop may not end");
+    assert!(!ends(spin("mustprogress", "load volatile", unmarked)), "an observable loop may run forever");
+    assert!(!ends(spin("", "load volatile", marked)));
+}
+
+/// `for (;;)` hangs: only a loop whose controlling expression is not constant may
+/// be assumed to end, so a function with one is never `willreturn`, whatever
+/// else is marked, and a loop with no edge out never ends however it is marked.
+#[test]
+fn a_loop_with_no_exit_is_never_taken_to_end() {
+    let function = |second: &str| {
+        format!(
+            "define void @f(ptr %p) {{
+b0:
+  br label %first
+
+first:
+  %v = load i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %first, label %next, !llvm.loop !0
+
+next:
+  br label %second
+
+second:
+{second}
+done:
+  ret void
+}}
+
+!0 = distinct !{{!0, !1}}
+!1 = !{{!\"llvm.loop.mustprogress\"}}
+!2 = distinct !{{!2, !1}}
+"
+        )
+    };
+    let conditional = "  %w = load i16, ptr %p\n  %again = icmp ne i16 %w, 0\n  br i1 %again, label %second, label %done, !llvm.loop !2\n";
+    let forever = "  %w = load i16, ptr %p\n  br label %second, !llvm.loop !2\n";
+    assert_eq!(stamped_with(&function(conditional), "willreturn"), ["f"], "both loops marked, both leave");
+    assert!(stamped_with(&function(forever), "willreturn").is_empty(), "an unconditional loop, even one something marked");
 }
