@@ -2,7 +2,6 @@
 
 use std::rc::Rc;
 
-use llrm_core::model::passes::O2;
 use llrm_core::objectfile::{cvinfo, omf};
 
 use super::compile as qb_compile;
@@ -19,7 +18,7 @@ fn object(source: &str, includes: &[(&str, &str)], dialect: &str, runtime: &str,
     let frontend = qb_driver::Frontend { debug, includes: vec![directory.path().to_path_buf()], ..qb_driver::Frontend::new(dialect, runtime) };
     let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{dialect}: {error}"));
     let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-    let bytes = qb_compile::object_bytes_by(&program, &path, None, &O2(), qb_compile::Route::Selected, &codegen).expect("compiles");
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
     omf::parse(&bytes).expect("parses")
 }
 
@@ -92,10 +91,10 @@ fn a_local_is_where_its_code_keeps_it() {
         let frontend = qb_driver::Frontend { debug: true, own_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
         let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-        let bytes = qb_compile::object_bytes_by(&program, &path, None, &O2(), qb_compile::Route::Selected, &codegen).expect("compiles");
+        let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
         let info = cvinfo::parse(&omf::parse(&bytes).expect("parses"));
         let local = info.procedures.iter().flat_map(|one| &one.locals).find(|one| one.name == "k").expect("k is described");
-        let listing = super::test_hir::rich_listing(&program);
+        let listing = super::test_hir::listing(&program);
         let store = format!("mov word ptr [bp{:+}], 12345", local.bp_offset);
         assert!(listing.contains(&store), "own frames {own_frames}: no {store:?} in\n{listing}");
     }

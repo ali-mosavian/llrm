@@ -16,7 +16,7 @@ emit() {
 }
 for source in "$root"/tests/suite/*.bas; do
   name=qb-$(basename "$source" .bas)
-  if "$root/target/release/llrm-qb" "$source" --dump-hir "$out/$name.json" --mir >/dev/null 2>"$out/$name.frontend"; then
+  if "$root/target/release/llrm-qb" "$source" --dump-hir "$out/$name.json" >/dev/null 2>"$out/$name.frontend"; then
     emit "$name"
   else
     echo "frontend fails: $name"

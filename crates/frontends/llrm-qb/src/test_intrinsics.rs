@@ -4,7 +4,6 @@
 use std::path::Path;
 
 use llrm_core::hir::model::Program;
-use llrm_core::model::passes::O2;
 
 use super::compile as qb_compile;
 use super::driver as qb_driver;
@@ -57,10 +56,8 @@ fn str_of_every_numeric_type_compiles() {
         for (type_name, routine) in [("LONG", "B$STI4"), ("SINGLE", "B$STR4"), ("DOUBLE", "B$STR8")] {
             let program = parsed(&format!("DIM r AS {type_name}\nr = 1.5\nPRINT STR$(r)\n"), dialect).expect("parses");
             assert!(callees(&program).contains(&routine), "{dialect} {type_name}: the premise, STR$ calls {routine}");
-            for route in [qb_compile::Route::Selected, qb_compile::Route::Lowered] {
-                qb_compile::object_bytes_by(&program, Path::new("str.bas"), None, &O2(), route, &codegen)
-                    .unwrap_or_else(|error| panic!("{dialect} {type_name} {route:?}: {error}"));
-            }
+            qb_compile::object_bytes(&program, Path::new("str.bas"), None, &codegen)
+                .unwrap_or_else(|error| panic!("{dialect} {type_name}: {error}"));
         }
     }
 }

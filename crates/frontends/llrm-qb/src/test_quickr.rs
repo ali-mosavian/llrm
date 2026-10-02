@@ -459,7 +459,7 @@ fn quickr_keeps_the_runtime_frame_where_the_runtime_needs_it() {
 fn a_module_handler_keeps_procedures_on_the_runtime_frame() {
     let source = "ON ERROR GOTO h\nDIM k AS INTEGER\nFOR k = 0 TO 2\ns k\nNEXT\nPRINT \"done\"; k\nEND\n\
         h:\nRESUME NEXT\nSUB s (d AS INTEGER)\nDIM a AS INTEGER\na = 10 \\ d\nPRINT a\nEND SUB\n";
-    let listing = super::test_hir::rich_listing(&quickr_program(source));
+    let listing = super::test_hir::listing(&quickr_program(source));
     assert!(super::test_hir::between(&listing, "S proc", "S endp").contains("B$ENRA"), "{listing}");
 }
 
@@ -568,13 +568,14 @@ fn module_listing(source: &str, dialect: &str) -> String {
 
 #[test]
 fn private_procedures_are_near_and_not_public() {
+    // Recursive, so the pipeline cannot inline ADD away.
     let source = "PRINT add&(40, 2); pub&(1)\n\
-        PRIVATE FUNCTION add& (a AS LONG, b AS LONG)\nadd& = a + b\nEND FUNCTION\n\
+        PRIVATE FUNCTION add& (a AS LONG, b AS LONG)\nIF a > 0 THEN add& = add&(a - 1, b + 1) ELSE add& = b\nEND FUNCTION\n\
         FUNCTION pub& (x AS LONG)\npub& = x + 1\nEND FUNCTION\n";
     let listing = module_listing(source, "quickr");
     assert!(listing.contains("ADD proc near") && listing.contains("PUB proc far"), "{listing}");
     assert!(!listing.contains("public ADD") && listing.contains("public PUB"), "{listing}");
-    assert!(listing.contains("call ADD") && listing.contains("call far ptr PUB"), "{listing}");
+    assert!(listing.contains("call ADD\n") && !listing.contains("call far ptr ADD"), "{listing}");
     // A near return address puts the first of two parameters at bp+6, not bp+8.
     let add = super::test_hir::between(&listing, "ADD proc near", "ADD endp");
     assert!(add.contains("[bp+6]") && add.contains("[bp+4]") && add.contains("ret 4"), "{add}");
@@ -582,9 +583,10 @@ fn private_procedures_are_near_and_not_public() {
 
 #[test]
 fn a_private_procedure_on_the_runtime_frame_stays_far() {
-    let source = "s\nPRIVATE SUB s\nDIM t AS STRING\nt = \"x\"\nEND SUB\n";
+    let source = "s\ns\nPRIVATE SUB s\nDIM t AS STRING\nt = INKEY$\nPRINT t\nIF t = \"\" THEN s\nEND SUB\n";
     let listing = module_listing(source, "quickr");
     assert!(listing.contains("S proc far") && !listing.contains("public S"), "{listing}");
+    assert!(listing.contains("call far ptr S"), "{listing}");
 }
 
 #[test]

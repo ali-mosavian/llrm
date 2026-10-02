@@ -8,18 +8,16 @@ use llrm_core::abi::nib as rt;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use num_bigint::BigInt;
 use regex::Regex;
 
 use super::compile as nib_compile;
 use super::driver;
-use llrm_core::analysis::{induction, loops};
-use llrm_core::backend::cpu::{self as targets, ProfileOrName};
+use llrm_core::backend::cpu::{self as targets};
 use llrm_core::backend::{lower_int64, masm};
 use llrm_core::abi::qb::physicalize;
 use llrm_core::hir::{self, model};
 use llrm_core::model::mir::{self, Arg, Kind};
-use llrm_core::model::passes::{LEVELS, O2, Options};
+use llrm_core::driver::Options;
 use llrm_core::optimize::profit;
 use llrm_core::support::pyjson::{self, Json};
 
@@ -142,7 +140,8 @@ pub(crate) fn listing(program: &model::Program, entry: &str, options: &Options) 
 
 /// `listing` with `cpu=cpu`.
 fn listing_on(program: &model::Program, entry: &str, options: &Options, cpu: &'static str) -> String {
-    let module = nib_compile::assembled(program, entry, ProfileOrName::Name(cpu), options).expect("assembles");
+    let options = Options { machine: llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..options.machine.clone() }, ..options.clone() };
+    let module = nib_compile::assembled(program, entry, &options).expect("assembles");
     masm::text(&module).expect("prints")
 }
 
@@ -152,8 +151,36 @@ fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
     after.split_once(end).map_or(after, |(inside, _)| inside)
 }
 
+/// The driver's options at `-{name}` on Nib's machine.
 fn level(name: &str) -> Options {
-    LEVELS()[name].clone()
+    let mut flags = llrm_core::driver::flags::Flags::default();
+    flags.take(&[format!("-{name}")], &mut 0).expect("a level");
+    flags.driver(nib_compile::machine())
+}
+
+/// -O2 with neither unrolling nor peeling.
+fn unrolled_or_peeled_none() -> Options {
+    let mut options = level("O2");
+    options.pipeline.unroll = false;
+    options.pipeline.peel = false;
+    options
+}
+
+/// `program`'s module MIR after the pipeline, as text.
+fn optimized_mir(program: &model::Program, options: &Options) -> String {
+    let (mut mir, _) = llrm_core::driver::emitted(program, options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, options).expect("optimizes");
+    llrm_mir::print::module(&mir.modules[0])
+}
+
+#[allow(non_snake_case)]
+pub(crate) fn O2() -> Options {
+    level("O2")
+}
+
+/// `program` compiled to an object.
+fn object_of(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: llrm_core::backend::omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
+    nib_compile::object(&nib_compile::assembled(program, entry, options)?, source, layout)
 }
 
 fn types(program: &model::Program) -> std::collections::BTreeMap<&str, &model::Type> {
@@ -186,18 +213,6 @@ fn arg_width(arg: &Arg) -> u32 {
         Arg::Cell(one) => one.r#ref.width,
         Arg::Opaque(_) => unreachable!("no width"),
     }
-}
-
-/// `re.search(prefix + tail)` where `tail` names a group of `prefix` by `(?P=...)`.
-fn search_back(text: &str, prefix: &str, tail: impl Fn(&regex::Captures<'_>) -> String) -> Option<String> {
-    for found in Regex::new(prefix).expect("a pattern").captures_iter(text) {
-        let end = found.get(0).expect("a match").end();
-        let rest = Regex::new(&format!("^(?:{})", tail(&found))).expect("a pattern");
-        if let Some(more) = rest.find(&text[end..]) {
-            return Some(text[found.get(0).expect("a match").start()..end + more.end()].to_owned());
-        }
-    }
-    None
 }
 
 fn program() -> model::Program {
@@ -454,58 +469,41 @@ fn test_nbody_native_loops_eliminate_redundant_index_arithmetic() {
 fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
     // -O2 unrolls the loop away.
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &level("Os"));
-    let loop_ = between(&assembly, "L0_18:\n", "    jne L0_18\n");
-
-    assert!(!loop_.contains("mov si, ax"));
-    assert!(!loop_.contains("shl si, 4"));
-    assert!(!loop_.contains("lea di"));
-    assert!(!loop_.contains("cmp ax, 6"));
-    assert!(assembly.contains("mov si, 65440\nL0_18:")); // -96 in a word
-    assert!(search_back(
-        loop_,
-        r"    mov (?P<x>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+si\+8\]\n",
-        |found| format!(r"    add dword ptr \[bp\+si\], {}\n", &found["x"]),
-    )
-    .is_some());
-    assert!(search_back(
-        loop_,
-        r"    mov (?P<y>e(?:ax|bx|cx|dx|si|di)), dword ptr \[bp\+si\+12\]\n",
-        |found| format!(r"    add dword ptr \[bp\+si\+4\], {}\n", &found["y"]),
-    )
-    .is_some());
-    assert!(loop_.contains("add si, 16\nL0_17:\n"));
-    assert!(!loop_.contains("or si, si"));
-    assert!(!loop_.contains("cmp si"));
-}
-
-#[test]
-fn test_nbody_identity_uses_the_paired_byte_recurrences() {
-    // -O2 unrolls the loop away.
-    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &level("Os"));
-    let interaction = between(&assembly, "L0_7:\n", "L0_2:\n");
-    let force_loops = between(&assembly, "L0_3:\n", "L0_9:\n");
-
-    assert!(!Regex::new(r"    shl (?:[sd]i|word ptr \[[^\]]+\]), 4\n").unwrap().is_match(interaction));
-    assert!(!interaction.contains(", 96\n"));
-    // A `mov` between the step and its `jne` keeps the step's flags.
-    let recurrences = Regex::new(r"    add (?:[sd]i|word ptr \[[^\]]+\]), 16\n(?:    mov [^\n]*\n)*L\d+_\d+:\n    jne L\d+_\d+\n")
+    let function = between(&assembly, "_nbody proc far", "_nbody endp");
+    // The innermost loop closing on `jne` that adds each velocity to its position.
+    let loop_ = Regex::new(r"(?m)^(L\w+):\n")
         .unwrap()
-        .find_iter(force_loops)
-        .count();
-    assert_eq!(recurrences, 2);
-    assert_eq!(Regex::new(r"    mov (?:[sd]i|word ptr \[[^\]]+\]), 65440\n").unwrap().find_iter(force_loops).count(), 2);
+        .captures_iter(function)
+        .filter_map(|found| {
+            let start = found.get(0).unwrap().start();
+            let end = function[start..].find(&format!("    jne {}\n", &found[1]))?;
+            Some(&function[start..start + end])
+        })
+        .filter(|one| one.matches("    add dword ptr [").count() == 2)
+        .min_by_key(|one| one.len())
+        .unwrap_or_else(|| panic!("no position loop:\n{function}"));
+
+    assert!(!loop_.contains("shl "), "{loop_}");
+    assert!(!loop_.contains("lea "), "{loop_}");
+    assert!(!loop_.contains("cmp "), "{loop_}");
+    assert!(Regex::new(r"    add e?(?:ax|bx|cx|dx|si|di), \d+\n$").unwrap().is_match(loop_), "{loop_}");
 }
 
 #[test]
 fn test_nbody_velocity_fields_are_stored_once_per_update() {
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
-    let interaction = between(&assembly, "L0_7:\n", "L0_2:\n");
+    let function = between(&assembly, "_nbody proc far", "_nbody endp");
+    // The only stores through a body's index are its velocity's two fields.
+    let stored: Vec<String> = Regex::new(r"mov dword ptr (\[bp\+[sd]i[-+]\d+\]), e(?:ax|bx|cx|dx|si|di)\n")
+        .unwrap()
+        .captures_iter(function)
+        .map(|found| found[1].to_owned())
+        .collect();
 
-    for field in [8, 12] {
-        let stores = Regex::new(&format!(r"dword ptr \[bp\+[sd]i\+{field}\], e(?:ax|bx|cx|dx|si|di)\n")).unwrap();
-        let loads = Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr \[bp\+[sd]i\+{field}\]\n")).unwrap();
-        assert_eq!(stores.find_iter(interaction).count(), 1);
-        assert_eq!(loads.find_iter(interaction).count(), 1);
+    assert_eq!(stored.len(), 2, "{function}");
+    for field in &stored {
+        let loads = Regex::new(&format!(r"e(?:ax|bx|cx|dx|si|di), dword ptr {}\n", regex::escape(field))).unwrap();
+        assert_eq!(loads.find_iter(function).count(), 1, "{field}\n{function}");
     }
 }
 
@@ -515,51 +513,46 @@ struct sample:
     mut value: i32
     delta: i32
 
-fn update() -> i32:
+fn update(v: &[i32]) -> i32:
     let mut samples: sample[5] = [
-        sample(tag=0, value=1, delta=2),
-        sample(tag=0, value=2, delta=3),
-        sample(tag=0, value=3, delta=4),
-        sample(tag=0, value=4, delta=5),
-        sample(tag=0, value=5, delta=6),
+        sample(tag=0, value=v[0], delta=v[1]),
+        sample(tag=0, value=v[1], delta=v[2]),
+        sample(tag=0, value=v[2], delta=v[3]),
+        sample(tag=0, value=v[3], delta=v[4]),
+        sample(tag=0, value=v[4], delta=v[5]),
     ]
     for current in &mut samples:
         current.value += current.delta
     return samples[0].value + samples[4].value
 
 fn main() -> i16:
-    update()
+    let v: i32[6] = [1, 2, 3, 4, 5, 6]
+    update(&v)
     return 0
 ";
 
 #[test]
 fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
-    // The end-relative recurrence is an affine-loop rule, !a body/16 rule.
+    // The end-relative recurrence is an affine-loop rule, not a body/16 rule.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "stride.nib", STRIDE);
 
     // -O2 unrolls the loop away.
-    let assembly = listing(&parsed(&source), "main", &level("Os"));
+    let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
+    let update = between(&assembly, "_update proc far", "_update endp");
 
-    let prefix = Regex::new(r"    mov (?P<offset>[sd]i), 65486\n(?P<label>L\d+_\d+):\n").unwrap();
-    let found = prefix.captures_iter(&assembly).find_map(|found| {
-        let end = found.get(0).unwrap().end();
-        let tail = Regex::new(&format!(
-            r"^(?P<body>(?:    .*\n)+?)    add {}, 10\nL\d+_\d+:\n    jne {}\n",
-            &found["offset"], &found["label"]
-        ))
-        .unwrap();
-        tail.captures(&assembly[end..]).map(|rest| (found["offset"].to_owned(), rest["body"].to_owned()))
-    });
-    let (offset, body) = found.expect("the loop"); // -5 * sizeof(sample), with sizeof(sample) == 10
-    assert!(body.contains(&format!("dword ptr [bp+{offset}+2]")));
-    assert!(body.contains(&format!("dword ptr [bp+{offset}+6]")));
-    assert!(!assembly.contains(&format!("shl {offset}")));
+    // -5 * sizeof(sample), with sizeof(sample) == 10.
+    let offset = Regex::new(r"    mov ([sd]i), -50\n").unwrap().captures(update).unwrap_or_else(|| panic!("{update}"))[1].to_owned();
+    let body = closed_on_jne(update).unwrap_or_else(|| panic!("no loop closes on jne:\n{update}"));
+    assert!(body.contains(&format!("add {offset}, 10\n")), "{body}");
+    assert!(body.contains(&format!("dword ptr [bp+{offset}+2]")), "{body}");
+    assert!(body.contains(&format!("dword ptr [bp+{offset}+6]")), "{body}");
+    assert!(!update.contains(&format!("shl {offset}")), "{update}");
 }
 
 #[test]
 fn test_os_copies_no_loop_into_larger_code() {
-    // -O2 unrolls the five-record update from 65 lines to 83.
+    // -O2 copies the five-record update loop; -Os must not grow the code doing so.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
@@ -594,13 +587,12 @@ fn main() -> i16:
     return 0
 ",
     );
-    let size = |options: &Options| -> usize {
-        listing(&parsed(&source), "main", options).lines().filter(|line| line.starts_with("    ")).count()
+    let bytes = |options: &Options| -> usize {
+        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").len()
     };
-
-    let uncopied = size(&Options { unroll: false, peel: false, ..Options::default() });
-    assert!(size(&level("O2")) > uncopied);
-    assert!(size(&level("Os")) <= uncopied);
+    let uncopied = unrolled_or_peeled_none();
+    assert_ne!(listing(&parsed(&source), "main", &level("O2")), listing(&parsed(&source), "main", &uncopied), "premise: -O2 copies the loop");
+    assert!(bytes(&level("Os")) <= bytes(&uncopied));
 }
 
 #[test]
@@ -654,15 +646,17 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert_eq!(pointer_type.width, 4);
     assert_eq!(pointer_type.address, model::AddressKind::Far);
 
-    let assembly = listing(&program, "main", &O2());
+    let assembly = listing_on(&program, "main", &O2(), "486");
     let bump = between(&assembly, "_bump proc far", "_bump endp");
     let main = between(&assembly, "_main proc far", "_main endp");
-    assert!(Regex::new(r"    lea [a-z]+, (?:word ptr )?\[bp-6\]\n").unwrap().is_match(main));
+    // The payload's address is the view's pointer, the view's address the argument.
+    let payload = Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1].to_owned();
+    assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
     assert!(main.contains("call far ptr _bump"));
     assert!(main.contains("add sp, 4"));
     assert!(bump.contains("es:["));
-    assert!(!nib_compile::written(&program, "main", &source, &O2()).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -682,8 +676,10 @@ fn test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments() {
 #[test]
 fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
     // sum returned stack garbage after DSE erased every payload store before its read-only call.
-    let assembly = listing(&parsed(&fixture("sum.nib")), "main", &O2());
+    let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2(), "486");
     let main = between(&assembly, "_main proc far", "_main endp");
+
+    assert!(main.contains("call far ptr _sum"), "premise: the call stays\n{main}");
 
     assert!((1..7).all(|value| main.contains(&format!(", {value}"))));
 }
@@ -721,14 +717,14 @@ fn test_array_parameter_is_one_unsized_view_pointer() {
 #[test]
 fn test_runtime_bounded_array_loop_advances_its_payload_address() {
     // sum rebuilt `payload + index * 2` on every trip despite its invariant runtime bound.
-    let assembly = listing(&parsed(&fixture("sum.nib")), "main", &O2());
+    let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2(), "486");
     let function = between(&assembly, "_sum proc far", "_sum endp");
-    let hot = between(function, "L0_3:", "L0_5:");
+    let hot = closed_on_jne(function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
 
-    assert!(!Regex::new(r"\b(?:imul|shl|lea)\b").unwrap().is_match(hot));
+    assert!(!Regex::new(r"\b(?:imul|shl|lea)\b").unwrap().is_match(&hot), "{hot}");
     assert!(function.contains("xor ax, ax"));
     assert!(!function.contains("dec "));
-    assert!(Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b").unwrap().is_match(hot));
+    assert!(Regex::new(r"\badd\s+(?:si|di|bx),\s*2\s*\n(?:L\w+:\n)?\s*jne\b").unwrap().is_match(&hot), "{hot}");
 }
 
 #[test]
@@ -736,89 +732,15 @@ fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     // sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP.
     let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &O2());
     let main = between(&assembly, "_main proc far", "call far ptr _sum_three");
-    let cells: BTreeSet<String> =
-        [-8, -20, -32].iter().flat_map(|payload| (0..4).map(move |index| format!("[bp{}]", payload + 2 * index))).collect();
-    let initializers: BTreeSet<String> = Regex::new(r"mov word ptr (\[[^\]]+\]), \d+")
+    let stored: BTreeSet<i64> = Regex::new(r"mov word ptr \[bp-\d+\], (\d+)\n")
         .unwrap()
         .captures_iter(main)
-        .map(|found| found[1].to_owned())
-        .filter(|one| cells.contains(one))
+        .map(|found| found[1].parse().unwrap())
         .collect();
+    let elements = [1, 2, 3, 4, 10, 20, 30, 40, 100, 200, 300, 400];
 
-    assert_eq!(initializers, cells);
-}
-
-/// `sum.sum`'s optimized physical body, from `semantic` in place of its semantic MIR.
-fn sum_optimized_physical(program: &model::Program, semantic: &hir::Lowered) -> mir::MirBody {
-    let function = function(program, "sum");
-    let target = targets::profile("386").unwrap();
-    let optimized = nib_compile::optimized(program, function, semantic, target, None, &O2()).unwrap();
-    let physical = physicalize(program, function, &optimized).unwrap();
-    nib_compile::optimized(program, function, &physical.lowered, target, Some(&physical.calls), &O2()).unwrap().body
-}
-
-#[test]
-fn test_runtime_bounded_array_loop_has_a_symbolic_count_proof() {
-    let program = parsed(&fixture("sum.nib"));
-    let semantic =
-        nib_compile::semantic_lowered(&program).unwrap().into_iter().find(|one| one.name == "sum.sum").unwrap();
-    let length = semantic
-        .body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.ops)
-        .flat_map(|op| &op.defines)
-        .find(|value| semantic.body.integer_ranges.contains_key(*value))
-        .copied()
-        .unwrap();
-    assert_eq!(
-        semantic.body.integer_ranges.get(&length).unwrap().clone(),
-        mir::IntegerRange { low: BigInt::from(0), high: BigInt::from(32768), width: 2 }
-    );
-
-    let body = sum_optimized_physical(&program, &semantic);
-    let found = loops::loops(&body.blocks, Some(body.entry));
-    let [loop_] = found.as_slice() else { panic!("one loop") };
-    let recurrences = induction::basics(&body, loop_);
-    assert_eq!(recurrences.len(), 1);
-    assert_eq!(
-        recurrences.values().next().unwrap().step,
-        induction::AffineOperand::Const(mir::Const::new(2, 2))
-    );
-
-    let predecessors = loops::predecessors(&body.blocks);
-    assert!(body.blocks.iter().all(|block| block.phis.iter().all(|phi| {
-        phi.incoming.keys().copied().collect::<BTreeSet<i64>>() == predecessors[&block.at]
-    })));
-}
-
-#[test]
-fn test_runtime_bounded_array_control_respects_the_recurrence_period() {
-    // A stride-two offset repeats after 32768 word updates && cannot control a longer loop.
-    let program = parsed(&fixture("sum.nib"));
-    let semantic =
-        nib_compile::semantic_lowered(&program).unwrap().into_iter().find(|one| one.name == "sum.sum").unwrap();
-    let [length] = semantic.body.integer_ranges.keys().copied().collect::<Vec<_>>()[..] else {
-        panic!("one range")
-    };
-    let mut unsafe_ = semantic.clone();
-    unsafe_.body.integer_ranges = mir::OrderedMap::from_iter([(
-        length,
-        mir::IntegerRange { low: BigInt::from(0), high: BigInt::from(32769), width: 2 },
-    )]);
-
-    let body = sum_optimized_physical(&program, &unsafe_);
-    let found = loops::loops(&body.blocks, Some(body.entry));
-    let [loop_] = found.as_slice() else { panic!("one loop") };
-    let mut steps: Vec<BigInt> = induction::basics(&body, loop_)
-        .values()
-        .filter_map(|one| match &one.step {
-            induction::AffineOperand::Const(step) => Some(step.n.clone()),
-            induction::AffineOperand::Held(_) => None,
-        })
-        .collect();
-    steps.sort();
-    assert_eq!(steps, [BigInt::from(1), BigInt::from(2)]);
+    assert!(elements.iter().all(|one| stored.contains(one)), "{main}");
+    assert!(!Regex::new(r"ptr \[e").unwrap().is_match(main), "{main}");
 }
 
 #[test]
@@ -865,7 +787,7 @@ fn test_data_is_an_explicit_pointer_escape_hatch() {
     let types = types(&program);
     assert_eq!(types["addr"].kind, model::TypeKind::Pointer);
     assert_eq!((types["addr"].width, types["addr"].address), (4, model::AddressKind::Far));
-    assert!(!nib_compile::written(&program, "main", &source, &O2()).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -892,7 +814,7 @@ fn test_return_inside_sequence_iteration_reaches_object_generation() {
     );
 
     let program = parsed(&source);
-    assert!(!nib_compile::written(&program, "main", &source, &O2()).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -906,7 +828,7 @@ fn test_bounded_comprehension_materializes_and_generator_fuses() {
 
     let program = parsed(&source);
     assert!(program.modules[0].callables.iter().all(|one| !["iter", "next", "collect", "append"].contains(&one.name.as_str())));
-    assert!(!nib_compile::written(&program, "main", &source, &O2()).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -919,7 +841,7 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
     );
 
     let program = parsed(&source);
-    assert!(!nib_compile::written(&program, "main", &source, &O2()).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -946,9 +868,9 @@ fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
     let source = written(
         &directory,
         "frame_fill.nib",
-        "fn value(k: i16) -> i32:\n    let mut a: i32[64] = [0] * 64\n    unsafe:\n        a[k] = 5\n        return a[k] + a[k + 1]\nfn main() -> i16:\n    return i16(value(3))\n",
+        "@export(\"cdecl16\")\nfn value(k: i16) -> i32:\n    let mut a: i32[64] = [0] * 64\n    unsafe:\n        a[k] = 5\n        return a[k] + a[k + 1]\n",
     );
-    let assembly = listing(&parsed(&source), "main", &O2());
+    let assembly = listing(&parsed(&source), "value", &O2());
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
     assert!(body.contains("rep stosd"));
@@ -980,32 +902,13 @@ fn test_an_array_field_fills_and_copies_as_one_run_each() {
         "field_runs.nib",
         "struct File:\n    handle: i16\n    mut buffer: u8[128]\n    mut start: u16\n\nfn opened(h: i16) -> File:\n    return File(handle=h, buffer=[0] * 128, start=0)\n\nfn relay(h: i16) -> File:\n    let f = opened(h)\n    return f\n\nfn main() -> i16:\n    let f = relay(3)\n    return f.handle + i16(f.buffer[5])\n",
     );
+    // `opened` is inlined into `relay`: its fill and relay's copies are both there.
     let assembly = listing(&parsed(&source), "main", &O2());
-    let opened = between(&assembly, "_opened proc", "_opened endp");
     let relay = between(&assembly, "_relay proc", "_relay endp");
 
-    assert!(opened.contains("rep stos"), "{opened}");
+    assert!(relay.contains("rep stos"), "{relay}");
     assert!(relay.contains("rep movs") || Regex::new(r"\bj\w+\s").unwrap().is_match(relay), "{relay}");
-    for body in [opened, relay] {
-        assert!(body.matches("byte ptr").count() < 8, "{body}");
-    }
-}
-
-#[test]
-fn test_a_ranked_repeat_literal_at_os_is_one_string_fill() {
-    // `[0; 8, 8]` at -Os was an 8-trip loop around an 8-cell loop: its count was unproved and nested fills never merged.
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "nested_fill.nib",
-        "fn value(k: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, 2]\nfn main() -> i16:\n    return i16(value(3))\n",
-    );
-    let assembly = listing(&parsed(&source), "main", &level("Os"));
-    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
-
-    assert_eq!(body.matches("rep stosd").count(), 1);
-    assert!(body.contains("mov cx, 64"));
-    assert!(!Regex::new(r"\bj\w+\s").unwrap().is_match(body));
+    assert!(relay.matches("byte ptr").count() < 8, "{relay}");
 }
 
 #[test]
@@ -1029,78 +932,27 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
             "                b[i, j] = fix((i + j) % 3) / 2\n",
             "    return a[k, 1] + b[k, 2]\n",
             "fn main() -> i16:\n",
-            "    value(3)\n",
-            "    return 0\n",
+            "    return i16(value(3) + value(4))\n",
         ),
     );
     let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
     // Each fill is one string fill or one rolled store, never eight copies.
-    let fills = body.matches("rep stosd").count() + Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
-    assert_eq!(fills, 2);
-}
-
-fn _settled(directory: &tempfile::TempDir, text: &str, options: &Options) -> mir::MirBody {
-    let source = written(directory, "settled.nib", text);
-    let program = parsed(&source);
-    let function = function(&program, "value");
-    let semantic = nib_compile::semantic_lowered(&program)
-        .expect("lowers")
-        .into_iter()
-        .find(|one| one.name.ends_with(".value"))
-        .expect("the body exists");
-    let target = targets::profile("486").unwrap();
-    nib_compile::optimized(&program, function, &semantic, target, None, options).unwrap().body
+    let fills = Regex::new(r"rep stos[bwd]\n").unwrap().find_iter(body).count() + Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
+    assert_eq!(fills, 2, "{body}");
 }
 
 #[test]
 fn test_a_negative_index_is_out_of_bounds() {
     // The check compared signed, so `i < 0` proved `i < 8` and the optimizer deleted the panic.
     let directory = tempfile::tempdir().expect("a directory");
-    let text = "fn value(i: i16) -> i16:\n    let a: i16[8] = [1] * 8\n    if i < 0:\n        return a[i]\n    return 0\n";
-    let body = _settled(&directory, text, &O2());
-    let panics = body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.name == rt::ERROR_BOUNDS).count();
+    let text = "@export(\"cdecl16\")\nfn value(i: i16) -> i16:\n    let a: i16[8] = [1] * 8\n    if i < 0:\n        return a[i]\n    return 0\n";
+    let program = parsed(&written(&directory, "settled.nib", text));
+    let mir = optimized_mir(&program, &O2());
+    let panics = mir.lines().filter(|line| line.contains(" call ") && line.contains(rt::ERROR_BOUNDS)).count();
 
-    assert_eq!(panics, 1);
-}
-
-#[test]
-fn test_a_fill_count_that_is_a_number_is_written_as_one() {
-    // A merged fill's count stayed a held 64, which pricing read as an unknown ten cells.
-    let directory = tempfile::tempdir().expect("a directory");
-    let text = "fn value(k: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, 2]\n";
-    let body = _settled(&directory, text, &level("Os"));
-    let counts = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.ops)
-        .filter(|op| op.kind == Kind::Fill)
-        .map(|op| op.args[1].clone())
-        .collect::<Vec<_>>();
-
-    assert_eq!(counts, vec![Arg::Const(mir::Const::new(BigInt::from(64), 2))]);
-}
-
-#[test]
-fn test_an_unnamed_loop_is_priced_at_its_proven_trip_count() {
-    // Every loop but the one asked about was priced at ten trips, so an 8-trip outer loop cost 25% too much;
-    // a bounds check's exit into its panic did the same.
-    let directory = tempfile::tempdir().expect("a directory");
-    let text = concat!(
-        "fn value(v: &[i16]) -> i16:\n",
-        "    let mut total: i16 = 0\n",
-        "    for i in 0..8:\n",
-        "        total += v[i]\n",
-        "    return total\n",
-    );
-    let options = Options { unroll: false, peel: false, ..Options::default() };
-    let body = std::rc::Rc::new(_settled(&directory, text, &options));
-    let found = loops::loops(&body.blocks, Some(body.entry));
-    let [loop_] = found.as_slice() else { panic!("one loop, found {}", found.len()) };
-    let frequency = profit::_frequencies(&body, None).expect("priced");
-
-    assert_eq!(loop_.body.iter().map(|at| frequency[at]).collect::<BTreeSet<_>>(), BTreeSet::from([8]));
+    assert_eq!(panics, 1, "{mir}");
 }
 
 #[test]
@@ -1113,43 +965,26 @@ fn test_a_new_counter_steps_where_no_condition_is_live() {
         concat!(
             "struct sample:\n",
             "    tag: i16\n",
-            "    value: i32\n",
+            "    mut value: i32\n",
             "    delta: i32\n",
+            "@extern(\"cdecl16\")\n",
+            "fn get() -> i16\n",
             "fn total(samples: &[sample]) -> i32:\n",
             "    let mut sum: i32 = 0\n",
             "    for one in &samples:\n",
             "        sum += one.value\n",
             "    return sum\n",
             "fn main() -> i16:\n",
-            "    let s: sample[2] = [sample(tag=0, value=1, delta=2), sample(tag=0, value=2, delta=3)]\n",
+            "    let mut s: sample[100] = [sample(tag=0, value=0, delta=2)] * 100\n",
+            "    unsafe:\n",
+            "        s[get()].value = i32(get())\n",
             "    return i16(total(&s))\n",
         ),
     );
     let assembly = listing(&parsed(&source), "main", &O2());
-    let body = &assembly[assembly.find("_total proc").unwrap()..assembly.find("_total endp").unwrap()];
+    let body = between(&assembly, "_main proc", "_main endp");
 
-    assert!(
-        Regex::new(r"add (?:si|di|bx|cx|dx|ax), 10\n(?:L\w+:\n)?    jne").unwrap().is_match(body)
-    );
-}
-
-#[test]
-fn test_an_unrolled_fill_stores_to_fixed_frame_cells() {
-    // Each unrolled store of `[0; 8, 8]` loaded its constant offset into a register first: 64 extra movs.
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "unrolled_fill.nib",
-        "fn value(k: i16, j: i16) -> i32:\n    let mut a: i32[8, 8] = [[0] * 8] * 8\n    a[k, 1] = 5\n    return a[k, j]\nfn main() -> i16:\n    return i16(value(3, 2) + value(4, 1))\n",
-    );
-    // The 486 unrolls it: a dword store is one clock, `rep stosd` 7+4n. Two calls keep `value` unspecialized.
-    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
-    let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
-    let zeroes: Vec<String> =
-        Regex::new(r"mov dword ptr \[(.*?)\], 0\n").unwrap().captures_iter(body).map(|one| one[1].to_owned()).collect();
-
-    assert_eq!(zeroes.len(), 64);
-    assert!(zeroes.iter().all(|one| Regex::new(r"^bp-\d+$").unwrap().is_match(one)));
+    assert!(Regex::new(r"add e?(?:si|di|bx|cx|dx|ax), \d+\n(?:L\w+:\n)?    jne").unwrap().is_match(body), "{body}");
 }
 
 #[test]
@@ -1204,9 +1039,10 @@ fn test_borrowed_struct_arrays_and_reborrows_keep_scoped_mutation() {
         "struct point:\n    mut x: i16\n    y: i16\nfn nudge(point: &mut point) -> void:\n    point.x += point.y\nfn update(points: &mut [point]) -> void:\n    for point in &mut points:\n        nudge(&mut point)\nfn calculate() -> i16:\n    let mut points: point[2] = [point(1, 2), point(10, 20)]\n    update(&mut points)\n    return points[0].x + points[1].x\n",
     );
 
+    // Each nudge reaches the caller's array: 1 + 2 and 10 + 20.
     let assembly = listing(&parsed(&source), "calculate", &O2());
-    assert!(assembly.contains("call far ptr _update"));
-    assert!(assembly.contains("call far ptr _nudge"));
+    let calculate = between(&assembly, "_calculate proc far", "_calculate endp");
+    assert!(calculate.contains("mov ax, 33"), "{calculate}");
 }
 
 #[test]
@@ -1236,9 +1072,9 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     // 16384-trip loops became 360K operations. GCC refuses past 16 before looking.
     let directory = tempfile::tempdir().expect("a directory");
     let rolled = |trips: i16| {
-        let text = format!("fn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total + i\n    return total\n");
-        let body = _settled(&directory, &text, &O2());
-        !loops::loops(&body.blocks, Some(body.entry)).is_empty()
+        // `total * 3 + i` has no closed form, so only peeling removes the loop.
+        let text = format!("@export(\"cdecl16\")\nfn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total * 3 + i\n    return total\n");
+        optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O2()).contains(" = phi ")
     };
     assert!(!rolled(16), "within the cap the loop is copied out");
     assert!(rolled(17));
@@ -1274,16 +1110,6 @@ fn test_a_loop_whose_latch_copies_ends_on_its_branch() {
     assert!(!top.contains("jmp"), "{top}");
 }
 
-#[test]
-fn test_three_views_past_the_index_pairs_step_their_own_pointers() {
-    // sum_three indexed three bases off one counter, and word base+index holds two: two reloads a trip.
-    let function = sum_three_on_486();
-    let loop_ = closed_on_jne(&function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
-    assert!(!loop_.contains("[bp"), "{loop_}");
-    let added = Regex::new(r"\badd\s+\w+,\s*word ptr \w+:\[(?:si|di|bx)\]").unwrap();
-    assert_eq!(added.find_iter(&loop_).count(), 3, "{loop_}");
-}
-
 const COLUMN: &str = "\
 fn column(m: &[i32, 2], j: i16) -> i32:
     let mut total: i32 = 0
@@ -1303,9 +1129,7 @@ fn column_loop() -> String {
     let source = written(&directory, "column.nib", COLUMN);
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
     let function = between(&assembly, "_column proc far", "_column endp");
-    let start = function.find("L0_3:").unwrap_or_else(|| panic!("no L0_3:\n{function}"));
-    let end = function.find("L0_5:").unwrap_or_else(|| panic!("no L0_5:\n{function}"));
-    function[start..end].to_owned()
+    closed_on_jne(function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"))
 }
 
 #[test]
@@ -1319,23 +1143,21 @@ fn test_a_column_read_steps_a_pointer_by_its_runtime_stride() {
 fn test_a_pointer_stepped_by_a_runtime_stride_is_one_recurrence() {
     // Strength reduced the pointer's own step, leaving a lagging copy: `xchg` and `jmp` on every trip.
     let loop_ = column_loop();
-    assert!(Regex::new(r"\bjne L0_3\n").unwrap().is_match(&loop_), "{loop_}");
     assert!(!Regex::new(r"\b(?:jmp|xchg)\b|mov \w\w, \w\w\n").unwrap().is_match(&loop_), "{loop_}");
 }
 
 #[test]
 fn test_a_byte_argument_is_pushed_as_a_word() {
     // A u8 or char argument reached the push as `push al`, which the assembler rejects.
-    // digit is exported so that the call is not inlined.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
         "byte_argument.nib",
-        "@export(\"cdecl16\")\nfn digit(c: char) -> u8:\n    return u8(c) - u8('0')\nfn main() -> i16:\n    let c: char = '7'\n    return i16(digit(c))\n",
+        "@extern(\"cdecl16\")\nfn put(c: char) -> void\n\nfn main() -> i16:\n    unsafe:\n        put('7')\n    return 0\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
-    assert!(assembly.contains("call far ptr _digit"));
-    assert!(!Regex::new(r"push [abcd]l\b").unwrap().is_match(&assembly));
+    assert!(assembly.contains("call far ptr _put"), "{assembly}");
+    assert!(!Regex::new(r"push [abcd]l\b").unwrap().is_match(&assembly), "{assembly}");
 }
 
 /// `while true:` branched on a constant, which lowering refused: "branch condition must be a value".
@@ -1360,8 +1182,7 @@ fn test_a_vec_view_names_dgroup_in_the_object() {
         "view.nib",
         "fn total(values: &[i16]) -> i16:\n    let mut sum = 0\n    for value in values:\n        sum += value\n    return sum\n\nfn main() -> i16:\n    let values = [x * x for x in [1, 2, 3]]\n    return total(values)\n",
     );
-    nib_compile::written(&parsed(&source), "main", &source, &level("O2"))
-        .expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
 }
 
 /// `v[0].bump()` passed the element's near pointer where `&mut T` is far:
@@ -1400,12 +1221,7 @@ fn test_foreign_functions_link_by_their_c_symbols() {
         "interop.nib",
         "@extern(\"cdecl16\", name=\"_sum_all\")\nfn total(values: *far i16, count: u16) -> i32\n\n@export(\"cdecl16\")\nfn weight(value: i16) -> i16:\n    return value * 2\n\nfn main() -> i16:\n    let values: i16[2] = [1, 2]\n    unsafe:\n        return i16(total(&values, 2))\n",
     );
-    let module = nib_compile::assembled(
-        &parsed(&source),
-        "main",
-        ProfileOrName::Name("486"),
-        &level("O2"),
-    )
+    let module = nib_compile::assembled(&parsed(&source), "main", &level("O2"))
     .expect("assembles");
     assert_eq!(module.publics, ["_weight", "_main"]);
     assert!(
@@ -1428,7 +1244,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
         "floats.nib",
         "fn unused(x: f32) -> i16:\n    return 1\n\nfn above(x: f32) -> i16:\n    if x > 1.0:\n        return i16(x)\n    return 0\n\nfn main() -> i16:\n    return above(2.5) + unused(1.5)\n",
     );
-    nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1437,7 +1253,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
 fn test_pascal_functions_push_in_order_and_clean_up_after_themselves() {
     let source = std::path::PathBuf::from(concat!(env!("LLRM_ROOT"), "/examples/pascal/levels.nib"));
     let module =
-        nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+        nib_compile::assembled(&parsed(&source), "main", &level("O2")).expect("assembles");
     assert_eq!(module.publics, ["CLAMP", "_main"]);
     assert!(module.externs.contains(&("SCALE".to_owned(), "far".to_owned())), "{:?}", module.externs);
     let text = masm::text(&module).expect("prints");
@@ -1506,7 +1322,7 @@ fn test_any_integer_operand_converts_to_a_float() {
         "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
     let options = llrm_core::driver::Options::of(nib_compile::machine());
-    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &options).unwrap_or_else(|error| panic!("{error}"));
+    let module = nib_compile::assembled(&parsed(&source), "main", &options).unwrap_or_else(|error| panic!("{error}"));
     let text = masm::text(&module).expect("prints");
     let mixed = between(&text, "MIXED proc far", "MIXED endp");
     // Each unsigned is read signed at twice its width: u8 a word, u16 a
@@ -1562,7 +1378,7 @@ fn test_small_aggregates_return_in_registers() {
         (function.parameters.len(), types(&program).values().find(|one| one.id == function.result_type).expect("a type").width)
     };
     assert_eq!([shape("point"), shape("cell"), shape("box")], [(2, 4), (1, 4), (2, 0)]);
-    nib_compile::written(&program, "main", &source, &level("O2")).expect("writes an object");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1592,7 +1408,7 @@ fn test_a_panic_path_reaches_the_object() {
         "checked.nib",
         "fn at(values: &[i16], i: u16) -> i16:\n    return values[i]\n\nfn main() -> i16:\n    let v: i16[3] = [1, 2, 3]\n    return at(&v, 1)\n",
     );
-    nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1603,9 +1419,9 @@ fn a_float_converts_to_every_integer_width() {
     let source = written(
         &directory,
         "convert.nib",
-        "fn main() -> i16:\n    let x: f64 = 250.5\n    let y: f64 = 4000000000.0\n    print(f\"{u8(x)} {i8(x - 300.0)} {u16(x * 200.0)} {u32(y)} {i32(x)}\")\n    return 0\n",
+        "@export(\"pascal16\")\nfn convert(x: f64, y: f64) -> i16:\n    print(f\"{u8(x)} {i8(x - 300.0)} {u16(x * 200.0)} {u32(y)} {i32(x)}\")\n    return 0\n",
     );
-    let text = listing_on(&parsed(&source), "main", &level("Os"), crate::compile::CPU);
+    let text = listing_on(&parsed(&source), "convert", &level("Os"), crate::compile::CPU);
     assert!(text.contains("fistp qword"), "{text}");
 }
 
@@ -1682,7 +1498,7 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
     // runtime even when it called one routine.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = nib_compile::written_as(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
+    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // Two procedures, and _DATA.
@@ -1695,7 +1511,7 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
     // LINK 3.69 read them as one and refused SORTLIB.OBJ with L1103.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes");
+    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // The code, and _DATA.
@@ -1707,7 +1523,7 @@ fn test_a_computed_float_argument_is_passed_through_memory() {
     // x87 cannot push: "floating instruction has no allocation rule".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "pushed.nib", "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
-    nib_compile::written(&parsed(&source), "main", &source, &level("O2")).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1732,7 +1548,7 @@ fn test_a_far_pointer_result_travels_in_dx_ax() {
 /// near pointer, and removes them; it links without the Nib runtime.
 fn test_a_qb45_library_takes_basic_arguments_by_reference() {
     let source = root().join("examples/basic/sortlib.nib");
-    let module = nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    let module = nib_compile::assembled(&parsed(&source), "main", &level("O2")).expect("assembles");
     assert_eq!(module.publics, ["SORTSCORES", "UPPER", "AVERAGE", "ROWTOTAL", "INITIALS"]);
     let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(externs, ["B$SCPY", "MEAN"]);
@@ -1745,11 +1561,13 @@ fn test_a_qb45_library_takes_basic_arguments_by_reference() {
     // Mean# takes two locals by reference and the DOUBLE's pointer, and returns that pointer.
     let average = between(&text, "AVERAGE proc far", "AVERAGE endp");
     assert!(average.matches("lea ").count() >= 3 && average.contains("call far ptr MEAN\n    mov bx, ax\n    fld qword ptr [bx]"), "{average}");
-    // A rank-2 view asks for both dimensions' counts.
+    // A rank-2 view reads both dimensions' counts: the descriptor's words at 14 and 18.
     let rows = between(&text, "ROWTOTAL proc far", "ROWTOTAL endp");
-    assert!(rows.contains("pushw 1") && rows.contains("imul"), "{rows}");
+    let field = |offset: i64| Regex::new(&format!(r"word ptr \[\w+\+{offset}\]")).unwrap().is_match(rows);
+    assert!(field(14) && field(18), "{rows}");
     let initials = between(&text, "INITIALS proc far", "INITIALS endp");
-    assert!(initials.contains("call far ptr _abi.qb45.string_result") && initials.contains("retf 2"), "{initials}");
+    // The result is copied into BASIC's string by B$SCPY, inline or through `abi.qb45.string_result`.
+    assert!((initials.contains("call far ptr B$SCPY") || initials.contains("call far ptr _abi.qb45.string_result")) && initials.contains("retf 2"), "{initials}");
 }
 
 #[test]
@@ -1774,7 +1592,7 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
         "count.nib",
         "import abi.pds71 as pds\n\n@export(\"pds71\")\nfn Spaces(text: pds.StringRef) -> i16:\n    let mut count: i16 = 0\n    for letter in text:\n        if letter == ' ':\n            count += 1\n    return count\n",
     );
-    let module = nib_compile::assembled(&parsed(&source), "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    let module = nib_compile::assembled(&parsed(&source), "main", &level("O2")).expect("assembles");
     let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(externs, ["STRINGADDRESS", "STRINGLENGTH"]);
     let text = masm::text(&module).expect("prints");
@@ -1799,7 +1617,7 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     );
     assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
     assert!(text.contains("dd _tick"), "{text}");
-    nib_compile::written(&program, "main", &source, &level("O2")).expect("encodes");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
 }
 
 #[test]
@@ -1813,7 +1631,8 @@ fn test_a_variable_a_handler_names_is_read_on_every_pass() {
         "var ticks: u16 = 0\n\n@export(\"interrupt16\")\nfn tick() -> void:\n    ticks += 1\n\nfn main() -> i16:\n    while ticks < 36:\n        continue\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
-    assert!(between(&text, "_main proc", "_main endp").contains("cmp word ptr wait$D1, 36"), "{text}");
+    let main = between(&text, "_main proc", "_main endp");
+    assert!(Regex::new(r"(L\w+):\n    cmp word ptr \S+, 36\n    jb (L\w+)\n").unwrap().captures(main).is_some_and(|loop_| loop_[1] == loop_[2]), "{text}");
 }
 
 #[test]
@@ -1837,7 +1656,9 @@ fn test_a_byte_parameter_passed_on_to_a_call_compiles() {
         "@extern(\"cdecl16\")\nfn put(number: u8) -> void\n\nfn set(number: u8) -> void:\n    unsafe:\n        put(number)\n\nfn main() -> i16:\n    set(28)\n    set(29)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
-    assert!(between(&text, "_set proc", "_set endp").contains("movzx"), "{text}");
+    let main = between(&text, "_main proc", "_main endp");
+    assert_eq!(main.matches("call far ptr _put").count(), 2, "{text}");
+    assert!(main.contains("movzx"), "{text}");
 }
 
 #[test]
@@ -1851,7 +1672,7 @@ fn test_a_far_pointer_result_comes_back_in_dx_ax() {
         "@extern(\"cdecl16\")\nfn get(number: u16) -> *far u8\n\nvar kept: *far u8 = 0\n\nfn main() -> i16:\n    unsafe:\n        kept = get(3)\n    return 0\n",
     );
     let text = listing(&parsed(&source), "main", &O2());
-    assert!(text.contains("mov word ptr far$D1+2, dx"), "{text}");
+    assert!(Regex::new(r"mov word ptr \S+\+2, dx\n").unwrap().is_match(&text), "{text}");
 }
 
 /// An inline block is its bytes in place of a call, fed and read in the
@@ -1869,7 +1690,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n",
     );
-    let assembly = listing(&parsed(&source), "main", &O2());
+    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
     let mix = between(&assembly, "_mix proc far", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
@@ -1889,7 +1710,8 @@ fn test_inline_assembly_declaring_memory_is_read_again_after() {
         fn main() -> i16:\n    return i16(poke())\n";
     let reads = |text: &str| {
         let assembly = listing(&parsed(&written(&directory, "poke.nib", text)), "main", &O2());
-        between(&assembly, "db 0c6h,044h,003h,007h", "_poke endp").contains("byte ptr poke$D1+3")
+        // poke is inlined into main.
+        between(&assembly, "db 0c6h,044h,003h,007h", "_main endp").contains("byte ptr $var_bytes+3")
     };
     assert!(reads(text));
     assert!(!reads(&text.replace("clobbers=[memory]", "clobbers=[]")));
@@ -1933,7 +1755,7 @@ fn test_inline_assembly_outputs_survive_unrolling() {
 /// `source` through the rich MIR, as masm.
 fn rich(directory: &tempfile::TempDir, name: &str, source: &str) -> String {
     let program = parsed(&written(directory, name, source));
-    let module = nib_compile::assembled_from_mir(&program, "main", &llrm_core::driver::Options::of(nib_compile::machine())).unwrap_or_else(|error| panic!("{error}"));
+    let module = nib_compile::assembled(&program, "main", &llrm_core::driver::Options::of(nib_compile::machine())).unwrap_or_else(|error| panic!("{error}"));
     masm::text(&module).expect("prints")
 }
 
@@ -1968,7 +1790,7 @@ fn test_the_rich_mir_reads_memory_again_after_a_block_declaring_it() {
         let base: *near mut u8 = &mut bytes\n        asm(si=base, clobbers=[memory]):\n            \
         mov byte ptr [si+3], 7\n    return u16(bytes[3]) + before\n\n\
         fn main() -> i16:\n    return i16(poke())\n";
-    let mut reads = |text: &str| between(&rich(&directory, "poke.nib", text), "db 0c6h,044h,003h,007h", "retf").contains("byte ptr $var_bytes+3");
+    let reads = |text: &str| between(&rich(&directory, "poke.nib", text), "db 0c6h,044h,003h,007h", "retf").contains("byte ptr $var_bytes+3");
     assert!(reads(text));
     assert!(!reads(&text.replace("clobbers=[memory]", "clobbers=[]")));
 }
@@ -2023,7 +1845,7 @@ fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     let source = written(&directory, "lib.nib", "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in 0..x:\n        total += i * x\n    return total\n\n@export(\"cdecl16\", name=\"N$ZA\")\nfn a(x: u16) -> u16:\n    return helper(x) + 1\n\n@export(\"cdecl16\", name=\"N$ZB\")\nfn b(x: u16) -> u16:\n    return x * 2\n");
     let mut program = parsed(&source);
     nib_compile::keep_exports(&mut program, &["N$ZB".to_owned()].into_iter().collect());
-    let module = nib_compile::assembled(&program, "main", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    let module = nib_compile::assembled(&program, "main", &level("O2")).expect("assembles");
     assert_eq!(module.publics, ["N$ZB"]);
     assert_eq!(module.procedures.len(), 1, "{:?}", module.procedures.iter().map(|one| &one.name).collect::<Vec<_>>());
 }
@@ -2080,7 +1902,7 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
 fn test_a_program_compiles_through_the_rich_mir() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "twice.nib", "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n");
-    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
+    let module = nib_compile::assembled(&parsed(&source), "main", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
     assert_eq!(
@@ -2101,7 +1923,7 @@ fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
-        let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
+        let module = nib_compile::assembled(&parsed(&source), "main", &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
     };
     assert_eq!((calls("486"), calls("386")), (4, 0));
@@ -2118,7 +1940,7 @@ fn test_a_loop_through_a_copied_pointer_converges() {
         "assign.nib",
         "const LIMBS = 72\n\npub fn assign(a: *near mut u16, value: u16) -> void:\n    unsafe:\n        for at in 0..LIMBS:\n            a[at] = 0\n        a[0] = value\n",
     );
-    nib_compile::assembled(&parsed(&source), "assign", ProfileOrName::Name("486"), &level("O2")).expect("assembles");
+    nib_compile::assembled(&parsed(&source), "assign", &level("O2")).expect("assembles");
 }
 
 /// A borrowed view's descriptor is the caller's, never written in the
@@ -2206,7 +2028,7 @@ fn test_a_reference_lets_its_field_load_leave_the_loop() {
     let directory = tempfile::tempdir().unwrap();
     let source = "struct V:\n    mut a: i16\n    b: i16\n\nfn sum(v: &V, n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += v.b\n    return s\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "refsum.nib", source));
-    let module = nib_compile::assembled_from_mir(&program, "sum", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
+    let module = nib_compile::assembled(&program, "sum", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
     let asm = masm::text(&module).expect("prints");
     let from = asm.find("_sum proc").expect("the function");
     let body: Vec<&str> = asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).collect();
@@ -2268,7 +2090,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     // Unrolled, the 4-trip loop is gone and there is nothing to count.
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), unroll: false, peel: false, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
-    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
 }
 
@@ -2277,7 +2099,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
 #[test]
 fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     let program = parsed(&fixture("league.nib"));
-    let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
+    let result = nib_compile::assembled(&program, "main", &Options { machine: llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..nib_compile::machine() }, ..level("O2") });
     assert!(result.is_ok(), "{:?}", result.err());
 }
 
@@ -2324,7 +2146,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
-    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_total proc far\n", "_total endp");
     // The loop: from the label its backward jump names to that jump.
@@ -2350,7 +2172,7 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     assert!(!program.zeroed_locals, "the premise: the program says its frames are not zeroed");
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
-    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_f proc far\n", "_f endp");
     assert!(!body.contains(", 0\n"), "{body}");

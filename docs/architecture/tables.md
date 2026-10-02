@@ -2,7 +2,7 @@
 
 Survey of the rich route (2026-09-27, at `af576024`): which code states facts
 that belong in a description, from which the code could be read or generated.
-The old `--legacy` route is left out; it is to be deleted, not converted.
+The old route, since deleted, is left out.
 
 About 11k lines of production code qualify, 13k with the Nib parser, plus
 8.2k lines of generated tests. Seven descriptions cover them, each replacing

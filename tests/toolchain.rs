@@ -136,11 +136,9 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     assert_eq!(std::fs::read_to_string(dir.join("OUT.TXT")).unwrap(), "5\r\n");
 }
 
-/// llrm-c's two routes, the old MIR's (--opt) and the rich MIR's through
-/// isel (the default), run each parity fixture to bench/parity/expected.json's
-/// value: the gate for retiring the old route.
+/// llrm-c runs each parity fixture to bench/parity/expected.json's value.
 #[test]
-fn test_c_parity_fixtures_agree_on_both_routes() {
+fn test_c_parity_fixtures_compute_their_expected_values() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
@@ -161,21 +159,19 @@ fn test_c_parity_fixtures_agree_on_both_routes() {
     for (number, name) in names.iter().enumerate() {
         let start = parity.join(format!("{name}-start.asm"));
         run("jwasm", &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{name}_s.obj"), start.to_str().unwrap()]);
-        for (route, flags) in [("O", &["--opt"][..]), ("I", &[][..])] {
-            let program = format!("P{number}{route}");
-            let source = parity.join(format!("{name}.cgs"));
-            run("llrm-c", &[&[source.to_str().unwrap()][..], flags, &["-o", &format!("{program}.obj")]].concat());
-            run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", &format!("{name}_s.obj"), "file", &format!("{program}.obj"), "op", "quiet"]);
-            autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
-            runs.push((name.clone(), route, program));
-        }
+        let program = format!("P{number}");
+        let source = parity.join(format!("{name}.cgs"));
+        run("llrm-c", &[source.to_str().unwrap(), "-o", &format!("{program}.obj")]);
+        run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", &format!("{name}_s.obj"), "file", &format!("{program}.obj"), "op", "quiet"]);
+        autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
+        runs.push((name.clone(), program));
     }
     std::fs::write(dir.join("dosbox.conf"), autoexec + "exit\n").unwrap();
     run("dosbox-x", &["-nolog", "-exit", "-conf", dir.join("dosbox.conf").to_str().unwrap()]);
-    for (name, route, program) in runs {
+    for (name, program) in runs {
         let bytes = std::fs::read(dir.join(format!("{program}.BIN"))).unwrap_or_default();
         let value = bytes.get(..4).map(|word| i64::from(i32::from_le_bytes(word.try_into().unwrap())));
-        assert_eq!(value, expected[&name].as_i64(), "{name} {route}");
+        assert_eq!(value, expected[&name].as_i64(), "{name}");
     }
 }
 

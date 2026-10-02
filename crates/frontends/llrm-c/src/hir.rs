@@ -16,11 +16,9 @@ use llrm_core::support::pyrepr::{self, Repr, Tuple};
 // fe_attr (bld/cg/h/cg.h)
 pub const FE_PROC: i64 = 0x1;
 pub const FE_CONSTANT: i64 = 0x10;
-pub const FE_VOLATILE: i64 = 0x800;
 pub const FE_ADDR_TAKEN: i64 = 0x400;
 /// INIT `sw`: Watcom's -oa, relaxed alias checking.
 pub const CGSW_GEN_RELAX_ALIAS: i64 = 0x0020_0000;
-pub const FE_INTERNAL: i64 = 0x1000;
 pub const FE_GLOBAL: i64 = 0x4;
 pub const FE_IMPORT: i64 = 0x8;
 pub const PRIVATE: i64 = 0x40; // a segment of its own, outside DGROUP
@@ -157,14 +155,6 @@ impl Symbol {
 
     pub fn constant(&self) -> bool {
         self.attr & FE_CONSTANT != 0
-    }
-
-    pub fn volatile(&self) -> bool {
-        self.attr & FE_VOLATILE != 0
-    }
-
-    pub fn internal(&self) -> bool {
-        self.attr & FE_INTERNAL != 0
     }
 
     pub fn exported(&self) -> bool {
@@ -643,39 +633,4 @@ fn from_hex(text: &str) -> Vec<u8> {
                 .unwrap_or_else(|_| panic!("ValueError: non-hexadecimal number found in fromhex()"))
         })
         .collect()
-}
-
-/// The unit, one fact per line, for a stage dump.
-pub fn text(made: &Unit) -> String {
-    let mut out = vec![format!("target 0x{:x}", made.target)];
-    for one in made.segments.values() {
-        out.push(format!(
-            "segment {} {} attr=0x{:x} items={}",
-            one.id,
-            one.name,
-            one.attr,
-            one.items.repr()
-        ));
-    }
-    for one in made.symbols.values() {
-        out.push(format!("symbol {}", one.repr()));
-    }
-    for proc in &made.procs {
-        out.push(format!(
-            "proc {} {} parms={} autos={}",
-            made.symbols[&proc.symbol].object_name(),
-            proc.type_,
-            proc.parms.repr(),
-            proc.autos.repr()
-        ));
-        for one in &proc.body {
-            out.push(format!(
-                "  {}: {} {}",
-                one.line,
-                one.call,
-                one.args.join(" ")
-            ));
-        }
-    }
-    out.join("\n") + "\n"
 }

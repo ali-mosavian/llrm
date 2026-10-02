@@ -2,7 +2,7 @@
 //! executable, plus `tools/modernstages.py`'s `--dump DIR`.
 //!
 //! ```text
-//! llrm-nib SOURCE [--entry ENTRY] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy] [OPTIONS]
+//! llrm-nib SOURCE [--entry ENTRY] [--dump DIR] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them. Without
@@ -12,34 +12,29 @@
 //! name, for a linker that drops unreferenced ones (jwlink's `option
 //! eliminate`); Microsoft LINK wants each name defined once. With
 //! `--used-by`, only the exports those objects name stay exported, and the
-//! rest is dropped with whatever only they call. `--legacy` compiles through
-//! the old MIR, for a program the rich MIR refuses.
+//! rest is dropped with whatever only they call.
 
 use std::path::PathBuf;
 
 use super::compile as nib;
 use super::driver;
 use super::nibstages;
-use llrm_core::backend::cpu::ProfileOrName;
 use llrm_core::backend::masm;
 use llrm_core::backend::omfwrite::CodeLayout;
 use llrm_core::driver::{self as codegen, flags::{self, Flags}};
-use llrm_core::model::passes::Options;
 
 fn usage() -> String {
-    format!("usage: llrm-nib [-h] [--entry ENTRY] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] [--legacy] {} source", flags::USAGE)
+    format!("usage: llrm-nib [-h] [--entry ENTRY] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] {} source", flags::USAGE)
 }
 
 struct Arguments {
     source: PathBuf,
     flags: Flags,
     entry: String,
-    options: Options,
     dump: Option<PathBuf>,
     layout: CodeLayout,
     used_by: Vec<PathBuf>,
     frontend: super::Frontend,
-    legacy: bool,
     /// The target, the built-in DOS on `nib::CPU` unless `--machine` names
     /// another, and the pipeline.
     codegen: codegen::Options,
@@ -50,7 +45,6 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut layout = CodeLayout::OneSegment;
     let mut used_by = Vec::new();
     let mut frontend = super::Frontend::default();
-    let mut legacy = false;
     let mut at = 0;
     while at < argv.len() {
         if flags.take(argv, &mut at)? {
@@ -75,7 +69,6 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
-            "--legacy" => legacy = true,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -85,7 +78,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let source = source.ok_or("the following arguments are required: source")?;
     frontend.debug = flags.debug;
     let codegen = flags.driver(flags.machine(nib::machine())?);
-    Ok(Arguments { source, options: flags.legacy(), flags, entry, dump, layout, used_by, frontend, legacy, codegen })
+    Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen })
 }
 
 /// The symbols `objects` import.
@@ -120,11 +113,7 @@ pub fn main(argv: &[String]) -> i32 {
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
-        let module = if args.legacy {
-            nib::assembled(&program, &args.entry, ProfileOrName::Name(nib::CPU), &args.options)?
-        } else {
-            nib::assembled_from_mir(&program, &args.entry, &args.codegen)?
-        };
+        let module = nib::assembled(&program, &args.entry, &args.codegen)?;
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {

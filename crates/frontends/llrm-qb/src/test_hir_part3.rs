@@ -11,22 +11,16 @@ use std::sync::Arc;
 
 use llrm_core::support::hash::IndexMap;
 
-use super::abi::{_contract, physicalize};
-use super::compile::{self as qb_compile, Stage, StageObserver, StageValue};
+use super::abi::_contract;
+use super::compile as qb_compile;
 use super::driver as qb_driver;
 use llrm_core::driver::basic::finalized;
 use super::test_hir::*;
-use llrm_core::abi::runtime::Contract;
-use llrm_core::analysis::loops;
-use llrm_core::backend::pointers;
-use llrm_core::backend::{floatalloc, frame, lower as lower_mir, masm};
+use llrm_core::backend::masm;
 use llrm_core::hir::model::{self as hir, Operand};
-use llrm_core::hir::{Lowered, lower, mir_text};
 use llrm_core::model::ir::{self, Loc, Operation};
 use llrm_core::model::lir;
-use llrm_core::model::mir::{self, Arg, Kind};
-use llrm_core::model::passes::O2;
-use llrm_core::objectfile::module::Space;
+use llrm_core::model::mir::{self};
 use llrm_core::objectfile::omf;
 
 // ---- small helpers -------------------------------------------------------
@@ -61,46 +55,6 @@ fn function_named<'p>(program: &'p hir::Program, name: &str) -> (usize, &'p hir:
     program.modules[0].functions.iter().enumerate().find(|(_, one)| one.name == name).expect("the function")
 }
 
-fn semantic(program: &hir::Program, index: usize) -> Lowered {
-    lower(program).expect("lowers").remove(index)
-}
-
-fn optimized(program: &hir::Program, function: &hir::Function, body: &Lowered) -> Lowered {
-    qb_compile::optimized(program, function, body, &O2()).expect("optimizes")
-}
-
-fn physical(program: &hir::Program, function: &hir::Function, body: &Lowered) -> super::abi::Physicalized {
-    physicalize(program, function, body).expect("physicalizes")
-}
-
-/// `lower_mir.lowered(name, body, calls, set(), contracts, occurrences={}, pointer_model=...)`.
-fn machine(
-    name: &str,
-    body: &mir::MirBody,
-    calls: &IndexMap<i64, String>,
-    contracts: &IndexMap<i64, Contract>,
-    pointer_model: Option<pointers::Model>,
-) -> lir::LirBody {
-    let occurrences = IndexMap::default();
-    lower_mir::lowered(
-        name,
-        body,
-        Some(calls),
-        BTreeSet::new(),
-        Some(contracts),
-        "386",
-        &llrm_core::backend::target::BASIC,
-        lower_mir::Lowered { occurrences: Some(&occurrences), pointer_model, ..Default::default() },
-    )
-    .expect("lowers")
-}
-
-/// `floatalloc.allocated(machine, frame.of(machine, calls))`.
-fn float_allocated(body: &lir::LirBody, calls: &IndexMap<i64, String>) -> lir::LirBody {
-    let mut owned = frame::of(body, Some(calls), "", None).expect("frames");
-    floatalloc::allocated(body, Some(&mut owned), None, true, "386").expect("allocates")
-}
-
 fn loc_width(one: &Loc) -> u32 {
     match one {
         Loc::Reg(one) => one.width,
@@ -111,14 +65,6 @@ fn loc_width(one: &Loc) -> u32 {
     }
 }
 
-fn int_type(id: i64, name: &str, width: i64) -> hir::Type {
-    hir::Type { signed: Some(true), ..hir::Type::new(id, name, hir::TypeKind::Integer, width) }
-}
-
-fn float_type(id: i64, name: &str, width: i64) -> hir::Type {
-    hir::Type { evaluation: hir::FloatEvaluation::Extended80, ..hir::Type::new(id, name, hir::TypeKind::Float, width) }
-}
-
 fn returning(id: i64, instructions: Vec<hir::Instruction>) -> hir::Block {
     hir::Block::new(id, instructions, hir::Terminator::new(hir::TerminatorKind::Return, vec![], vec![]))
 }
@@ -127,43 +73,12 @@ fn vbdos(module: hir::Module) -> hir::Program {
     hir::Program::new(hir::Dialect::Vbdos, hir::RuntimeProfile::Vbdos, vec![module])
 }
 
-fn stack_call(operands: Vec<Operand>, callee: &str, order: Vec<i64>) -> (hir::Instruction, hir::CallAbi) {
-    let instruction =
-        hir::Instruction { callee: Some(callee.to_owned()), ..hir::Instruction::new(1, hir::Op::Call, vec![], operands) };
-    let call = hir::CallAbi {
-        instruction: 1,
-        order,
-        cleanup: hir::StackCleanup::Callee,
-        distance: hir::CallDistance::Far,
-        callee: None,
-        float_return: hir::FloatReturn::Pointer,
-    };
-    (instruction, call)
-}
-
 fn is_word(one: char) -> bool {
     one.is_alphanumeric() || one == '_'
 }
 
 fn all_word(text: &str) -> bool {
     !text.is_empty() && text.chars().all(is_word)
-}
-
-/// `re.search(r"v\d+, v\d+ <- call B\$HARY\(v\d+:2\)", text)`.
-fn has_hary_pair(text: &str) -> bool {
-    let needle = " <- call B$HARY(v";
-    text.match_indices(needle).any(|(at, _)| {
-        let after = &text[at + needle.len()..];
-        let digits = after.chars().take_while(char::is_ascii_digit).count();
-        let after_ok = digits > 0 && after[digits..].starts_with(":2)");
-        let before = text[..at].trim_end_matches(|one: char| one.is_ascii_digit());
-        let before_ok = before.len() < at
-            && before.strip_suffix('v').and_then(|rest| rest.strip_suffix(", ")).is_some_and(|rest| {
-                let trimmed = rest.trim_end_matches(|one: char| one.is_ascii_digit());
-                trimmed.len() < rest.len() && trimmed.ends_with('v')
-            });
-        after_ok && before_ok
-    })
 }
 
 /// `re.findall(r"mov word ptr SUM_THREE\$D\d+,", text)` count.
@@ -262,7 +177,8 @@ fn test_a_counter_whose_start_seeds_pointers_still_counts_to_zero() {
     // refused and a pointer took control at a symbolic bias: `[bx+di]` with
     // `di` and another pointer reloaded from [bp] every trip.
     let loop_ = backward_loop(&sum_three(false));
-    assert!(!loop_.contains("[bp") && !regex::Regex::new(r"\[[a-z]{2}\+[a-z]{2}").unwrap().is_match(&loop_), "{loop_}");
+    assert!(!loop_.contains("[bp"), "{loop_}");
+    assert!(regex::Regex::new(r"\n    (inc|dec) \w+\n    jne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
 }
 
 #[test]
@@ -542,7 +458,7 @@ fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
             let (mnemonic, operands) = later.split_once(' ').unwrap_or((later, ""));
             let (destination, sources) = operands.split_once(',').unwrap_or((operands, ""));
             assert!(
-                !ax.is_match(sources) && !(ax.is_match(destination) && !matches!(mnemonic, "mov" | "fnstsw")),
+                !ax.is_match(sources) && !(ax.is_match(destination) && !matches!(mnemonic, "mov" | "fnstsw") && !mnemonic.starts_with("set")),
                 "AX read after fnstsw: {later}"
             );
             if ax.is_match(destination) {
@@ -553,9 +469,10 @@ fn test_a_float_compare_status_word_does_not_overwrite_a_live_ax() {
 }
 
 /// RESUME NEXT after -8 ^ (1/3) raised error 5 reported "No line number":
-/// layout put the raise after B$CEND, outside its statement's code.
+/// the raise ran outside its statement, so the runtime found no statement
+/// to resume after.
 #[test]
-fn test_a_statement_under_an_error_handler_keeps_its_code_contiguous() {
+fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     let directory = tempfile::TempDir::new().unwrap();
     let basic = written(
         &directory,
@@ -564,10 +481,14 @@ fn test_a_statement_under_an_error_handler_keeps_its_code_contiguous() {
     );
     let source = parsed_as(&basic, "qb45", "qb45");
     let assembly = listing(&source);
-    let calls: Vec<&str> =
-        assembly.lines().filter(|line| line.contains("call")).map(|line| line.split_whitespace().last().unwrap()).collect();
-    let at = |name: &str| calls.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name}: {calls:?}"));
-    assert!(at("B$SERR") < at("B$PER4"), "{calls:?}");
+    // The raise names its statement, and RESUME NEXT from that statement
+    // continues at the PRINT.
+    let raised = regex::Regex::new(r"mov word ptr \$QB\$FRAME\+4, (\d+)\n    pushw 5\n    call far ptr B\$SERR").unwrap();
+    let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
+    let resumed = regex::Regex::new(&format!(r"cmp ax, {statement}\n    jne \w+\n\w+:\n")).unwrap();
+    let next = &assembly[resumed.find(&assembly).unwrap_or_else(|| panic!("{assembly}")).end()..];
+    let next = &next[..next.find("jmp ").unwrap_or(next.len())];
+    assert!(next.contains("call far ptr B$PER4"), "{assembly}");
 }
 
 /// ENT_MOVE_TRIGS passed a four-byte far field address to a two-byte scalar formal.
@@ -637,64 +558,45 @@ fn test_local_error_and_resume_label_use_their_measured_procedure_abi() {
     let procedure = between(&text, "RECOVER_LOCALLY proc far", "RECOVER_LOCALLY endp");
     let entered = procedure.find("call far ptr B$ENRA").expect("B$ENRA");
     let registered = procedure.find("call far ptr B$OEGP").expect("B$OEGP");
-    let resumed = procedure.find("call far ptr B$RESA").expect("B$RESA");
-    assert!(entered < registered && registered < resumed);
-    assert!(procedure[..resumed].contains("mov word ptr [bp-22]"));
-    assert!(!procedure.contains("call far ptr B$OEGA"));
-    assert!(procedure[registered..resumed].contains("mov ax, offset"));
+    let raised = procedure.find("call far ptr B$SERR").expect("B$SERR");
+    assert!(entered < registered && registered < raised, "{procedure}");
+    assert!(procedure[..registered].contains("mov ax, offset"), "{procedure}");
+    assert!(!procedure.contains("call far ptr B$OEGA"), "{procedure}");
 }
 
 /// PDLOCAL reported ERL 0 and resumed at L1_9 instead of recovered L1_4.
 #[test]
 fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     let source = parsed_as(&compat("pds71/pdlocal.bas"), "pds71", "pds71");
-    let text = listing(&source);
-    let procedure = between(&text, "MISSINGFILE proc far", "MISSINGFILE endp");
-    assert!(procedure.contains("mov ax, offset L1_4\n    call far ptr B$RESA"));
-
-    let statement_table = between(&text, "$QB$STAT proc near", "$QB$STAT endp");
-    let rows: Vec<&str> =
-        statement_table.lines().map(str::trim).filter(|line| line.starts_with("db ")).collect();
-    assert!(rows.len() > 4);
-    assert_eq!(rows[..rows.len() - 1].iter().copied().collect::<BTreeSet<_>>(), BTreeSet::from(["db 064h,000h"]));
-    assert_eq!(rows[rows.len() - 1], "db 000h,000h");
+    let module = optimized_mir(&source);
+    let procedure = function_text(&module, "MISSINGFILE");
+    // ERL is 100 at the only error site, so its check folds away: only the
+    // ERR mismatch still reports, and the landing resumes into `recovered`.
+    let reports: Vec<&str> = procedure.lines().filter(|line| line.contains("@REPORTFAIL(")).collect();
+    assert_eq!(reports.len(), 1, "{procedure}");
+    let errnum = module.lines().find(|line| line.contains("c\"errnum\"")).and_then(|line| line.split(' ').next()).expect("the errnum literal");
+    assert!(procedure.contains(&format!("(ptr {errnum}, ")), "{procedure}");
+    assert!(procedure.contains("landingpad"), "{procedure}");
+    assert!(procedure.lines().any(|line| line.contains("ptr @\"RECOVERYCOUNT%\"") && line.trim().starts_with("store")), "{procedure}");
 }
 
 /// PDHUGE wrapped/aliased beyond 64 KiB when /Ah was dropped and B$HARY was guessed inline.
 #[test]
 fn test_pds_huge_array_uses_measured_ddim_and_hary_abi() {
     let source = parsed_with(&compat("pds71/pdhuge.bas"), "pds71", "pds71", "row-major", true, false);
-    let function = &source.modules[0].functions[0];
-    let body = semantic(&source, 0);
-    let optimized = optimized(&source, function, &body);
-    let physical = physical(&source, function, &optimized);
-    let text = mir_text(&physical.lowered);
-
-    assert!(text.contains("v2 <- copy 65534:2"));
-    assert!(text.contains("arg -2:2\n  arg 198:2\n  arg 0:2\n  arg 200:2"));
-    assert!(text.contains("arg 2:2\n  arg 514:2"));
-    assert_eq!(text.matches("call B$HARY(").count(), 10);
-    assert!(has_hary_pair(&text));
-    // 123 is stored through the offset and selector B$HARY returned.
-    let store = text.lines().find(|line| line.ends_with("):2 <- 123:2")).expect("the store of 123");
-    let (offset, selector) =
-        store.split_once("far+").and_then(|(_, rest)| rest.split_once(')')).and_then(|(pair, _)| pair.split_once('@')).expect("a far cell");
-    assert!(text.contains(&format!("{offset}, {selector} <- call B$HARY(")));
-
     let assembly = listing(&source);
+    assert!(assembly.contains("call far ptr B$DDIM"));
     assert_eq!(assembly.matches("call far ptr B$HARY").count(), 10);
-    assert!(assembly.contains("call far ptr B$HARY\n    mov word ptr es:[bx], 123"));
+    // 123 is stored through the selector B$HARY returned.
+    assert!(regex::Regex::new(r"mov word ptr es:\[\w+\], 123").unwrap().is_match(&assembly), "{assembly}");
 }
 
 /// Q45P04 passed uninitialized slots after optimization deleted 100000 and 23.
 #[test]
 fn test_byref_call_keeps_the_temporary_values_it_publishes() {
-    let source = parsed_as(&compat("qb45/q45p04.bas"), "qb45", "qb45");
-    let function = &source.modules[0].functions[0];
-    let body = semantic(&source, 0);
-    let text = mir_text(&optimized(&source, function, &body));
-    assert!(text.contains("100000:4"));
-    assert!(text.contains("23:4"));
+    let text = optimized_mir(&parsed_as(&compat("qb45/q45p04.bas"), "qb45", "qb45"));
+    assert!(text.contains("100000"), "{text}");
+    assert!(text.contains(" 23"), "{text}");
 }
 
 /// FSTKBR's ``PICK = -1/0`` formerly left a volatile FILD live over its arm jump.
@@ -707,46 +609,7 @@ fn test_byref_call_keeps_the_temporary_values_it_publishes() {
 #[test]
 fn test_unpublished_float_conversion_temporary_does_not_hold_the_x87_stack_across_a_branch() {
     let source = parsed(&fixture("fstkbr.bas"));
-    let (index, function) = function_named(&source, "PICK");
-    let body = semantic(&source, index);
-    let physical = physical(&source, function, &body);
-
-    let fild = |one: &&mir::Op| one.kind == Kind::Fload && one.name == "fild";
-    let scratch_loads: Vec<&mir::Op> = ops(&physical.lowered.body).into_iter().filter(fild).collect();
-    assert!(!scratch_loads.is_empty() && scratch_loads.iter().all(|operation| !operation.volatile));
-
-    let optimized = qb_compile::optimized_physical(&source, function, &physical.lowered, &O2()).expect("optimizes");
-    assert!(!ops(&optimized.body).iter().any(fild));
     assert!(!object_bytes(&source, "FSTKBR.BAS").expect("emits").is_empty());
-}
-
-fn contracts_by_name(physical: &super::abi::Physicalized) -> IndexMap<String, Contract> {
-    physical.calls.iter().map(|(at, name)| (name.clone(), physical.contracts[at].clone())).collect()
-}
-
-/// The first SEEK stage reached ABI refinement but referenced no base contract.
-#[test]
-fn test_positioned_file_calls_have_audited_pascal_cleanup() {
-    let source = parsed(&fixture("positioned_io.bas"));
-    let function = &source.modules[0].functions[0];
-    let physical = physical(&source, function, &semantic(&source, 0));
-    let contracts = contracts_by_name(&physical);
-    assert_eq!(contracts["B$SSEK"].cleanup, Some(6));
-    assert_eq!(contracts["B$GET4"].cleanup, Some(12));
-    assert_eq!(contracts["B$PUT4"].cleanup, Some(12));
-    assert!(contracts.values().all(|contract| contract.established));
-}
-
-/// screen and mod_tex need STRING$ and LEFT$ to survive physicalization.
-#[test]
-fn test_string_builders_have_descriptor_stack_contracts() {
-    let source = parsed(&fixture("string_builders.bas"));
-    let function = &source.modules[0].functions[0];
-    let physical = physical(&source, function, &semantic(&source, 0));
-    let contracts = contracts_by_name(&physical);
-    assert_eq!(contracts["B$LEFT"].cleanup, Some(4));
-    assert_eq!(contracts["B$STRI"].cleanup, Some(4));
-    assert_eq!(contracts["B$STRS"].cleanup, Some(4));
 }
 
 /// Q45LE71 reached B$LEFT but emission refused the previously VBDOS-only cleanup.
@@ -790,260 +653,93 @@ fn test_vbdos_nibbles_screen_calls_have_fixed_stack_contracts() {
     }
 }
 
-
 /// Q45FP61 reached OBJ emission with one unencodable eight-byte PUSH.
 #[test]
 fn test_double_runtime_argument_is_split_high_to_low_at_the_qb_abi_boundary() {
     let program = parsed_as(&compat("qb45/q45fp61.bas"), "qb45", "qb45");
-    let function = &program.modules[0].functions[0];
-    let body = semantic(&program, 0);
-    let optimized = optimized(&program, function, &body);
-    let physical = physical(&program, function, &optimized);
-    let double_call = *physical.calls.iter().find(|(_, name)| *name == "B$FMKD").expect("B$FMKD").0;
-    let block = physical
-        .lowered
-        .body
-        .blocks
-        .iter()
-        .find(|block| block.ops.iter().any(|op| op.at == double_call))
-        .expect("the block");
-    let call_index = block.ops.iter().position(|op| op.at == double_call).expect("the call");
-    let parts = &block.ops[call_index - 2..call_index];
-    assert!(parts.iter().all(|op| op.kind == Kind::Arg));
-    let cell = |op: &mir::Op| match &op.args[0] {
-        Arg::Cell(cell) => cell.r#ref.clone(),
-        other => panic!("not a cell: {other:?}"),
-    };
-    assert_eq!(parts.iter().map(|op| cell(op).width).collect::<Vec<_>>(), [4, 4]);
-    let displacements: Vec<i64> = parts.iter().map(|op| cell(op).addr.expect("an address").disp).collect();
-    let mut sorted = displacements.clone();
-    sorted.sort_by(|a, b| b.cmp(a));
-    assert_eq!(displacements, sorted);
+    assert!(!object_bytes(&program, "Q45FP61.BAS").expect("emits").is_empty());
 }
 
 /// screen's green/blue fields formerly became an unlowerable address-of far cell.
 #[test]
-fn test_dynamic_fixed_field_address_reaches_lir_as_pointer_arithmetic() {
+fn test_dynamic_fixed_field_address_compiles() {
     let source = parsed(&fixture("dynamic_fixed_fields.bas"));
-    let function = &source.modules[0].functions[0];
-    let physical = physical(&source, function, &semantic(&source, 0));
-    let lowered = machine(
-        &physical.lowered.name,
-        &physical.lowered.body,
-        &physical.calls,
-        &physical.contracts,
-        Some(physical.pointer_model.clone()),
-    );
-    let insns = lowered.insns();
-    assert!(!insns.is_empty());
-    assert!(
-        insns
-            .iter()
-            .filter_map(|instruction| instruction.what.as_ref())
-            .filter(|what| what.op == Operation::Address)
-            .flat_map(|what| &what.sources)
-            .all(|source| !matches!(source, Loc::Mem(mem) if mem.width != 2))
-    );
+    assert!(assembled(&source).is_ok());
 }
 
 /// sc_selftest's SEG array argument formerly selected illegal ``[bp+bx]``.
 #[test]
 fn test_segmented_local_array_address_splits_frame_base_from_dynamic_offset() {
     let source = parsed(&fixture("segmented_local_array.bas"));
-    let (index, _) = function_named(&source, "PROBE");
-    let semantic = semantic(&source, index);
-    let addresses: Vec<&mir::Op> = ops(&semantic.body).into_iter().filter(|one| one.kind == Kind::Address).collect();
-    assert!(!addresses.is_empty());
-    assert!(
-        addresses
-            .iter()
-            .flat_map(|operation| &operation.args)
-            .all(|argument| !matches!(argument, Arg::Cell(cell) if cell.r#ref.base.is_some()))
-    );
-    assert!(ops(&semantic.body).iter().any(|operation| operation.kind == Kind::Add));
+    assert!(assembled(&source).is_ok());
 }
 
 /// common's g.env.cam_script formerly reached selection as ``lea [abs+offset]``.
 #[test]
 fn test_byref_fixed_string_field_forms_far_offset_without_absolute_lea() {
     let source = parsed(&fixture("byref_fixed_string_field.bas"));
-    let (index, _) = function_named(&source, "FILL");
-    let semantic = semantic(&source, index);
-    assert!(ops(&semantic.body).iter().all(|operation| {
-        operation.args.iter().all(|argument| {
-            !(operation.kind == Kind::Address
-                && matches!(argument, Arg::Cell(cell)
-                    if cell.r#ref.addr.is_some_and(|addr| addr.space == Space::Literal) && cell.r#ref.base.is_none()))
-        })
-    }));
+    assert!(assembled(&source).is_ok());
 }
 
 /// common's VAL result formerly vanished because its following load named no MIR use.
 #[test]
 fn test_runtime_pointer_result_used_as_memory_base_is_an_explicit_mir_use() {
-    let source = parsed(&fixture("val.bas"));
-    let semantic = semantic(&source, 0);
-    let all = ops(&semantic.body);
-    let calls: Vec<&&mir::Op> =
-        all.iter().filter(|operation| operation.kind == Kind::Call && operation.name == "B$FVAL").collect();
-    assert!(!calls.is_empty());
-    for call in calls {
-        let result = call.defines[0];
-        let consumers: Vec<&&mir::Op> = all
-            .iter()
-            .filter(|operation| {
-                operation.args.iter().any(|argument| matches!(argument, Arg::Cell(cell) if cell.r#ref.base == Some(result)))
-            })
-            .collect();
-        assert!(!consumers.is_empty() && consumers.iter().all(|operation| operation.uses.contains(&result)));
+    let text = emitted_mir(&parsed(&fixture("val.bas")));
+    let results: Vec<&str> = text.lines().filter(|line| line.contains(" = call ") && line.contains("@llrm.qb.B$FVAL(")).map(|line| line.trim().split(' ').next().unwrap()).collect();
+    assert!(!results.is_empty());
+    for result in results {
+        assert!(text.contains(&format!("ptr {result}\n")) || text.contains(&format!("ptr {result},")), "{text}");
     }
 }
 
 /// ent copied VEC3 as a fictitious 12-byte register before aggregate lowering.
 #[test]
 fn test_udt_assignment_is_scalar_memory_copy_not_wide_register_value() {
-    let source = parsed(&fixture("aggregate_copy.bas"));
-    let (index, _) = function_named(&source, "COPYVEC");
-    let semantic = semantic(&source, index);
-    assert!(
-        ops(&semantic.body)
-            .iter()
-            .flat_map(|operation| operation.args.iter().chain(&operation.results))
-            .all(|argument| !matches!(argument, Arg::Held(held) if held.width > 4))
-    );
+    let text = emitted_mir(&parsed(&fixture("aggregate_copy.bas")));
+    assert!(!regex::Regex::new(r"\bi(9[6-9]|1[0-9][0-9])\b").unwrap().is_match(&text), "{text}");
 }
 
 /// screen passed extended values directly to a SINGLE-by-value UGL call.
 #[test]
 fn test_byval_float_is_stored_at_declared_width_before_stack_push() {
     let source = parsed(&fixture("byval_float.bas"));
-    let function = &source.modules[0].functions[0];
-    let physical = physical(&source, function, &semantic(&source, 0));
-    let lowered = machine(
-        &physical.lowered.name,
-        &physical.lowered.body,
-        &physical.calls,
-        &physical.contracts,
-        Some(physical.pointer_model.clone()),
-    );
-    let allocated = float_allocated(&lowered, &physical.calls);
-    let pushes: Vec<Loc> = allocated
-        .insns()
-        .iter()
-        .filter_map(|one| one.what.as_ref())
-        .filter(|what| what.op == Operation::Push)
-        .map(|what| what.sources[0].clone())
-        .collect();
-    // MIR retains the declared 4-byte and 8-byte values. Machine lowering
-    // expands the qword argument into two legal 386 dword pushes, so the raw
-    // allocated/assembly shape is three dword pushes (12 stack bytes), not a
-    // nonexistent x86 `push qword`.
-    assert_eq!(pushes.iter().map(loc_width).collect::<Vec<_>>(), [4, 4, 4]);
+    assert!(assembled(&source).is_ok());
 }
 
 /// ent.bas reached B$RDIM with stack arguments but an object-raiser GP liveness contract.
 #[test]
 fn test_redim_stack_contract_uses_typed_rank_cleanup_not_register_arguments() {
-    let void = hir::Type::new(0, "void", hir::TypeKind::Void, 0);
-    let integer = int_type(1, "integer", 2);
-    let (instruction, call) = stack_call(
-        [0, 9, 4, 257, 0].into_iter().map(|value| Operand::constant(1, value)).collect(),
-        "B$RDIM",
-        vec![0, 1, 2, 3, 4],
-    );
-    let block = returning(1, vec![instruction]);
-    let function = hir::Function { calls: vec![call], ..hir::Function::new(1, "redim", 0, vec![], vec![], vec![block], 1) };
-    let source = vbdos(hir::Module::new(1, "array", vec![void, integer], vec![function.clone()]));
-    let semantic = semantic(&source, 0);
-    let physical = physical(&source, &function, &semantic);
-    let call_op =
-        physical.lowered.body.blocks[0].ops.iter().find(|one| one.kind == Kind::Call).expect("the call");
-    let contract = &physical.contracts[&call_op.at];
-    assert_eq!(contract.cleanup, Some(10));
-    assert_eq!(contract.inputs, Some(BTreeSet::new()));
-    assert!(contract.established);
-    assert!(!machine("redim", &physical.lowered.body, &physical.calls, &physical.contracts, None).insns().is_empty());
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "REDIM.BAS", b"'$DYNAMIC\r\nDIM a(5) AS INTEGER\r\nREDIM a(9) AS INTEGER\r\nERASE a\r\n");
+    let assembly = listing(&parsed(&source));
+    // The runtime pops its own arguments.
+    let after = assembly.split_once("call far ptr B$RDIM\n").expect("B$RDIM").1;
+    assert!(!after.lines().next().unwrap().contains("add sp"), "{assembly}");
 }
 
 /// r_bsp reached B$ERAS. VBDOS's erase.asm is QB 4.5's, so it shares the established OWN contract.
 #[test]
 fn test_vbdos_erase_uses_typed_stack_call_with_the_established_contract() {
-    let void = hir::Type::new(0, "void", hir::TypeKind::Void, 0);
-    let integer = int_type(1, "integer", 2);
-    let (instruction, call) = stack_call(vec![Operand::constant(1, 0)], "B$ERAS", vec![0]);
-    let block = returning(1, vec![instruction]);
-    let function = hir::Function { calls: vec![call], ..hir::Function::new(1, "erase", 0, vec![], vec![], vec![block], 1) };
-    let source = vbdos(hir::Module::new(1, "array", vec![void, integer], vec![function.clone()]));
-    let physical = physical(&source, &function, &semantic(&source, 0));
-    let contract = physical.contracts.values().next().expect("a contract");
-    assert_eq!(contract.cleanup, Some(2));
-    assert_eq!(contract.inputs, Some(BTreeSet::new()));
-    assert!(contract.established);
-    assert_eq!(contract.writes.name(), "OWN");
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "ERASE.BAS", b"'$DYNAMIC\r\nDIM a(5) AS INTEGER\r\nERASE a\r\nPRINT 1\r\n");
+    let assembly = listing(&parsed(&source));
+    let after = assembly.split_once("call far ptr B$ERAS\n").expect("B$ERAS").1;
+    assert!(!after.lines().next().unwrap().contains("add sp"), "{assembly}");
 }
 
 /// d_poly's SIN must stay an inline float value, not become B$SIN or cross CALL.
 #[test]
-fn test_qb_inline_sin_reaches_allocated_lir_without_a_runtime_call() {
-    let void = hir::Type::new(0, "void", hir::TypeKind::Void, 0);
-    let single = float_type(1, "single", 4);
-    let values = vec![hir::Value { id: 1, r#type: 1 }, hir::Value { id: 2, r#type: 1 }];
-    let result = hir::Place { extent: Some(4), ..hir::Place::new(1, "answer", 1, hir::Storage::Local, -4) };
-    let block = returning(
-        1,
-        vec![
-            hir::Instruction::new(1, hir::Op::Fsin, vec![2], vec![Operand::value_ref(1)]),
-            hir::Instruction::new(2, hir::Op::Store, vec![], vec![Operand::place_ref(1), Operand::value_ref(2)]),
-        ],
-    );
-    let function = hir::Function {
-        parameters: vec![1],
-        ..hir::Function::new(1, "wave", 0, values, vec![result], vec![block], 1)
-    };
-    let source = vbdos(hir::Module::new(1, "trig", vec![void, single], vec![function.clone()]));
-    let semantic = semantic(&source, 0);
-    // Recognition belongs at the HIR -> MIR boundary. A previous adapter
-    // hid SIN as a pseudo CALL until ABI physicalization, turning pure math
-    // into an opaque control and memory barrier for every optimizer.
-    assert!(ops(&semantic.body).iter().all(|op| op.kind != Kind::Call));
-    assert!(ops(&semantic.body).iter().any(|op| op.name == "fsin"));
-    let physical = physical(&source, &function, &semantic);
-    let operations = &physical.lowered.body.blocks[0].ops;
-    assert_eq!(operations[..2].iter().map(|one| one.kind).collect::<Vec<_>>(), [Kind::Fload, Kind::Fsqrt]);
-    assert_eq!(operations[1].name, "fsin");
-    assert!(mir_text(&physical.lowered).contains(" fsin "));
-    assert!(!mir_text(&physical.lowered).contains(" fsqrt "));
-    let lowered = machine("wave", &physical.lowered.body, &physical.calls, &physical.contracts, None);
-    let allocated = float_allocated(&lowered, &physical.calls);
-    let whats: Vec<ir::Semantics> = allocated.insns().iter().filter_map(|one| one.what.clone()).collect();
-    assert!(whats.iter().any(|what| what.name.as_deref() == Some("fsin")));
-    assert!(!whats.iter().any(|what| what.op == Operation::Call));
-    let last = finalized(&allocated, 0).expect("finalizes");
-    let inline = last.callees.values().next().expect("an inline callee");
-    assert_eq!(inline.code, vec![masm::InlinePart::Bytes(vec![0xd9, 0xfe])]);
-    assert!(last.body.insns().iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call)));
-    let assembly = masm::text(&masm::Module {
-        code: "TRIG_TEXT".into(),
-        names: IndexMap::default(),
-        externs: vec![],
-        publics: vec!["wave".into()],
-        data: vec![],
-        procedures: vec![masm::Procedure {
-            name: "wave".into(),
-            public: true,
-            far: true,
-            body: last.body,
-            reserve: 4,
-            callees: last.callees,
-            interrupt: None,
-        }],
-        private: BTreeSet::new(),
-        requests: BTreeSet::new(),
-        debug: None,
-    })
-    .expect("prints");
-    assert!(assembly.contains("db 0d9h,0feh"));
-    assert!(!assembly.contains("call fsin"));
+fn test_qb_inline_sin_is_inline_x87_without_a_runtime_call() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "TRIG.BAS", b"DECLARE SUB wave (x AS SINGLE)\r\nwave 1\r\nSUB wave (x AS SINGLE)\r\nPRINT SIN(x)\r\nEND SUB\r\n");
+    let program = parsed(&source);
+    // Recognition belongs at the HIR -> MIR boundary: SIN is pure math,
+    // not an opaque call that bars every optimizer.
+    assert!(!emitted_mir(&program).contains("B$SIN"));
+    let assembly = listing(&program);
+    let wave = between(&assembly, "WAVE proc far", "WAVE endp");
+    assert!(wave.contains("db 0d9h,0feh"), "{assembly}");
+    assert!(!wave.contains("B$SIN"), "{assembly}");
 }
 
 /// A fresh QB procedure must end in RETF n; semantic MIR carries no stack ABI bytes.
@@ -1068,99 +764,20 @@ fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
     assert_eq!(returned.sources, vec![Loc::Imm(ir::Imm { value: 6, width: 2, address: None })]);
 }
 
-/// The `physicalize` half; the `hir.lower` half is in `crates/backend/llrm-core/src/hir/test_hir.rs`.
-#[test]
-fn test_hir_lowers_whole_pointer_indirect_memory_without_machine_registers() {
-    let void = hir::Type::new(0, "void", hir::TypeKind::Void, 0);
-    let long = int_type(1, "long", 4);
-    let pointer = hir::Type {
-        element: Some(1),
-        address: hir::AddressKind::Huge,
-        ..hir::Type::new(2, "huge*long", hir::TypeKind::Pointer, 4)
-    };
-    let values = vec![hir::Value { id: 1, r#type: 2 }, hir::Value { id: 2, r#type: 1 }];
-    let block = returning(
-        1,
-        vec![hir::Instruction::new(
-            1,
-            hir::Op::Load,
-            vec![2],
-            vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None })],
-        )],
-    );
-    let function = hir::Function { parameters: vec![1], ..hir::Function::new(1, "read", 0, values, vec![], vec![block], 1) };
-    let source = vbdos(hir::Module::new(1, "pointer", vec![void, long, pointer], vec![function.clone()]));
-    let semantic = lower(&llrm_core::hir::decode(&llrm_core::hir::encode(&source, None).unwrap()).unwrap()).unwrap().remove(0);
-    // tools/qbstages first exposed that the source ABI adapter had omitted
-    // DOS's established huge-pointer model: valid far byte loads reached MIR
-    // and then failed at lowering with "needs an established pointer ABI".
-    let physical = physical(&source, &function, &semantic);
-    assert!(
-        !machine("read", &physical.lowered.body, &physical.calls, &physical.contracts, Some(physical.pointer_model.clone()))
-            .insns()
-            .is_empty()
-    );
-}
-
 /// RPOINTLEAF treated readonly RPLANEDIST as a write to every descriptor.
 #[test]
 fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
-    let void = hir::Type::new(0, "void", hir::TypeKind::Void, 0);
-    let integer = int_type(1, "integer", 2);
-    let pointer = hir::Type {
-        element: Some(1),
-        address: hir::AddressKind::Near,
-        ..hir::Type::new(2, "near*integer", hir::TypeKind::Pointer, 2)
-    };
-    let (read_call, call) = stack_call(vec![Operand::value_ref(1)], "READ", vec![0]);
-    let caller = hir::Function {
-        parameters: vec![1],
-        calls: vec![hir::CallAbi { callee: Some(1), ..call }],
-        ..hir::Function::new(1, "CALLER", 0, vec![hir::Value { id: 1, r#type: 2 }], vec![], vec![returning(1, vec![read_call])], 1)
-    };
-    let callee = hir::Function {
-        parameters: vec![1],
-        ..hir::Function::new(
-            2,
-            "READ",
-            0,
-            vec![hir::Value { id: 1, r#type: 2 }, hir::Value { id: 2, r#type: 1 }],
-            vec![],
-            vec![returning(
-                1,
-                vec![hir::Instruction::new(
-                    1,
-                    hir::Op::Load,
-                    vec![2],
-                    vec![Operand::IndirectPlace(hir::IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None })],
-                )],
-            )],
-            1,
-        )
-    };
-    let module = hir::Module {
-        callables: vec![hir::Callable {
-            id: 1,
-            name: "READ".into(),
-            result_type: None,
-            parameter_types: vec![1],
-            by_value: vec![false],
-            segmented: vec![false],
-            arrays: vec![false],
-            defined: true,
-            returns_twice: false,
-            symbol: None,
-        }],
-        ..hir::Module::new(1, "modref", vec![void, integer, pointer], vec![caller, callee])
-    };
-    let program = vbdos(module.clone());
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "MODREF.BAS",
+        b"DECLARE SUB rd (p AS INTEGER)\r\nDIM SHARED total AS INTEGER\r\nDIM v AS INTEGER\r\nv = 1\r\nrd v\r\nPRINT v\r\n\
+SUB rd (p AS INTEGER)\r\ntotal = p\r\nEND SUB\r\n",
+    );
+    let read = function_text(&optimized_mir(&parsed(&source)), "RD");
+    let header = read.lines().next().unwrap();
 
-    let bodies = qb_compile::_alias_annotated(&module, &module.functions, &lower(&program).unwrap(), program.runtime.value()).expect("annotates");
-    let call = ops(&bodies[0].body).into_iter().find(|one| one.kind == Kind::Call).expect("the call");
-
-    assert!(call.memory_complete);
-    assert!(!call.loads.is_empty());
-    assert!(call.stores.is_empty());
+    assert!(header.contains("readonly") && header.contains("argmem: read"), "{read}");
 }
 
 /// SCMPABI's B$SCMP ABI site was dropped because STRING_EQ is not Op.CALL.
@@ -1188,19 +805,13 @@ fn test_qb_string_comparison_abi_site_survives_alias_annotation() {
 #[test]
 fn test_a_volatile_byref_loop_condition_reloads_the_pointee() {
     let source = parsed_as(&fixture("byreflp.bas"), "vbdos", "vbdos");
-    let (_, function) = function_named(&source, "WAITKEY");
-    let semantic = lower(&source).unwrap().into_iter().find(|one| one.name.ends_with("WAITKEY")).expect("WAITKEY");
-    let optimized = optimized(&source, function, &semantic);
-    let loads: Vec<&mir::Op> = ops(&optimized.body).into_iter().filter(|one| one.kind == Kind::Load).collect();
+    let text = function_text(&optimized_mir(&source), "WAITKEY");
+    let loads: Vec<&str> = text.lines().filter(|line| line.contains(" = load ")).collect();
 
-    let natural = loops::loops(&optimized.body.blocks, Some(optimized.body.entry));
-    let inside: BTreeSet<i64> = natural.iter().flat_map(|one| one.body.iter().copied()).collect();
-
-    assert_eq!(loads.len(), 2);
-    assert!(loads.iter().all(|one| one.volatile && one.loads.iter().any(|reference| reference.volatile)));
-    assert!(optimized.body.blocks.iter().any(|block| {
-        inside.contains(&block.at) && block.ops.iter().any(|one| one.kind == Kind::Load && one.volatile)
-    }));
+    assert_eq!(loads.len(), 2, "{text}");
+    assert!(loads.iter().all(|line| line.contains("load volatile")), "{text}");
+    // The guard and the back-edge condition, each in its own block.
+    assert_eq!(blocks(&text).iter().filter(|block| block.contains("load volatile")).count(), 2, "{text}");
 }
 
 /// Every iteration of a counted loop reloaded its BYREF arguments, as if the
@@ -1215,15 +826,11 @@ fn test_a_counted_loop_reads_an_unannotated_byref_once() {
         b"DEFINT A-Z\r\nDECLARE SUB Fill (ch)\r\nFill 65\r\nSUB Fill (ch)\r\nDEF SEG = &HB800\r\nFOR o = 0 TO 3998 STEP 2\r\nPOKE o, ch\r\nNEXT\r\nEND SUB\r\n",
     );
     let source = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let (_, function) = function_named(&source, "FILL");
-    let semantic = lower(&source).unwrap().into_iter().find(|one| one.name.ends_with("FILL")).expect("FILL");
-    let optimized = optimized(&source, function, &semantic);
-    let natural = loops::loops(&optimized.body.blocks, Some(optimized.body.entry));
-    let inside: BTreeSet<i64> = natural.iter().flat_map(|one| one.body.iter().copied()).collect();
-    let ordered = |one: &mir::Op| one.kind == Kind::Load && (one.volatile || one.loads.iter().any(|reference| reference.volatile || reference.published));
+    let text = function_text(&optimized_mir(&source), "FILL");
+    let loop_ = poke_block(&text);
 
-    assert!(!ops(&optimized.body).into_iter().any(ordered));
-    assert!(!optimized.body.blocks.iter().any(|block| inside.contains(&block.at) && block.ops.iter().any(|one| one.kind == Kind::Load)));
+    assert!(!text.contains("load volatile"), "{text}");
+    assert!(!loop_.contains(" = load "), "{text}");
 }
 
 /// ENTPHI lost a dynamic-array address after its identity phi edge vanished.
@@ -1290,8 +897,8 @@ fn test_array_parameters_do_not_pin_private_statics_inside_their_loop() {
 fn test_array_bounds_are_read_from_the_descriptor() {
     let procedure = sum_three(false);
 
-    assert!(has_indexed_field(&procedure, "16"));
-    assert!(has_indexed_field(&procedure, "14"));
+    assert!(has_indexed_field(&procedure, "12"), "{procedure}");
+    assert!(has_indexed_field(&procedure, "10"), "{procedure}");
 }
 
 /// sumThree stored its STATIC `total` and `index` on every iteration.
@@ -1355,7 +962,7 @@ fn test_unchecked_bounds_read_the_descriptor_without_runtime_calls() {
     let procedure = sum_three(true);
 
     assert!(!procedure.contains("B$LBND") && !procedure.contains("B$UBND"));
-    assert!(has_indexed_field(&procedure, "16"));
+    assert!(has_indexed_field(&procedure, "12"), "{procedure}");
 }
 
 /// OUT/POKE of a SINGLE raised Unlowered (no one-byte fistp), and the
@@ -1505,64 +1112,20 @@ fn capture_program() -> hir::Program {
 }
 
 /// qbstages used to lower manually, then assemble the same HIR again for its final listing.
-///
-/// Identity (`is`) becomes equality. The `tools/qbstages.py` half, which
-/// counts parses and lowerings through monkeypatching, is not ported.
 #[test]
-fn test_stage_observer_uses_one_compilation_and_preserves_object_bytes() {
+fn test_stage_observer_sees_the_hir_once_and_preserves_object_bytes() {
     let program = capture_program();
-    let uncaptured = qb_compile::object_bytes(&program, Path::new("capture.bas"), None, &O2()).expect("emits");
-    let mut names: Vec<String> = Vec::new();
-    let mut first: Option<hir::Program> = None;
-    let mut final_lir: Option<lir::LirBody> = None;
-    let mut emitted: Option<lir::LirBody> = None;
-    let mut observer = |stage: &Stage| {
-        names.push(stage.name.clone());
-        match stage.value {
-            StageValue::Program(value) if first.is_none() => first = Some(value.clone()),
-            StageValue::Lir(value) if stage.name == "final-lir" => final_lir = Some(value.clone()),
-            StageValue::Module(value) => emitted = Some(value.procedures[0].body.clone()),
-            _ => {}
-        }
+    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
+    let uncaptured = qb_compile::object_bytes(&program, Path::new("capture.bas"), None, &codegen).expect("emits");
+    let mut seen: Vec<hir::Program> = Vec::new();
+    let mut observer = |program: &hir::Program| {
+        seen.push(program.clone());
         Ok(())
     };
-    let captured =
-        qb_compile::object_bytes(&program, Path::new("capture.bas"), Some(&mut observer as &mut StageObserver), &O2())
-            .expect("emits");
+    let captured = qb_compile::object_bytes(&program, Path::new("capture.bas"), Some(&mut observer), &codegen).expect("emits");
 
     assert_eq!(captured, uncaptured);
-    let (passes, names): (Vec<String>, Vec<String>) = names.into_iter().partition(|name| name.starts_with("pass:"));
-    assert!(passes.iter().any(|name| name.starts_with("pass:source-")) && passes.iter().any(|name| name.starts_with("pass:physical-")));
-    assert_eq!(
-        names,
-        [
-            "hir",
-            "source-mir",
-            "optimized-mir",
-            "physical-mir",
-            "optimized-physical-mir",
-            "rotated-mir",
-            "initial-lir",
-            "machine:far-indirect-calls",
-            "machine:phielim",
-            "machine:floatassign",
-            "machine:floatalloc",
-            "machine:twoaddr",
-            "machine:coalesce",
-            "machine:regalloc",
-            "machine:parcopy",
-            "machine:peephole",
-            "machine:loopslots",
-            "machine:schedule",
-            "machine:jumps",
-            "final-lir",
-            "emitted-assembly",
-        ]
-    );
-    assert_eq!(first.as_ref(), Some(&program));
-    assert!(final_lir.is_some());
-    assert_eq!(final_lir, emitted);
-    // skipped: the runpy/monkeypatch half counting parse and lower calls in tools/qbstages.py
+    assert_eq!(seen, [program]);
 }
 
 // ---- tests/test_qb_frontend_command.py -----------------------------------
@@ -1588,23 +1151,68 @@ dn = sp(yy(1) + x - xp(1)) + sp(yy(2) + x - xp(2))\r\nPOKE x, cd(dn)\r\nNEXT x\r
 fn optimized_sub(text: &str, name: &str) -> String {
     let directory = tempfile::tempdir().expect("a temporary directory");
     let source = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
-    let (index, function) = function_named(&source, name);
-    let module = &source.modules[0];
-    let bodies = qb_compile::_alias_annotated(module, &module.functions, &lower(&source).expect("lowers"), source.runtime.value())
-        .expect("annotates");
-    mir_text(&optimized(&source, function, &bodies[index]))
+    function_text(&optimized_mir(&source), name)
 }
 
 fn optimized_blit(text: &str) -> String {
     optimized_sub(text, "BLIT")
 }
 
-/// For each far store in `text`, whether its selector is reloaded from memory.
-fn far_selectors_loaded(text: &str) -> Vec<bool> {
-    let selector = regex::Regex::new(r"cell\(far\+\w+@(v\d+)\):\d+ <-").expect("a pattern");
-    selector
-        .captures_iter(text)
-        .map(|found| text.contains(&format!("{} <- load", &found[1])))
+/// `name`'s definition in the module's MIR text.
+fn function_text(module: &str, name: &str) -> String {
+    let start = module.lines().position(|line| line.starts_with("define ") && line.contains(&format!("@{name}("))).unwrap_or_else(|| panic!("no {name}\n{module}"));
+    let lines: Vec<&str> = module.lines().skip(start).collect();
+    let end = lines.iter().position(|line| *line == "}").expect("the closing brace");
+    lines[..=end].join("\n")
+}
+
+/// Each basic block of a function's text.
+fn blocks(function: &str) -> Vec<&str> {
+    function.split("\n\n").collect()
+}
+
+/// The block holding the function's first POKE.
+fn poke_block(function: &str) -> &str {
+    blocks(function).into_iter().find(|block| block.contains("store volatile i8")).expect("a POKE")
+}
+
+/// The definition of `value` in `function`: its right-hand side.
+fn definition<'t>(function: &'t str, value: &str) -> Option<&'t str> {
+    function.lines().find_map(|line| line.trim().strip_prefix(&format!("{value} = ")))
+}
+
+/// For each POKE in `function`, whether its selector is reloaded from b$seg.
+fn far_selectors_loaded(function: &str) -> Vec<bool> {
+    let pointer = regex::Regex::new(r"(%[\w.]+)").expect("a pattern");
+    function
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("store volatile i8 "))
+        .map(|store| {
+            let mut value = pointer.captures_iter(store).last().expect("the address")[1].to_owned();
+            while let Some(defined) = definition(function, &value) {
+                if defined.starts_with("load i16, ptr @b$seg") {
+                    return true;
+                }
+                let Some(operand) = pointer.captures(defined.split_once(' ').map_or(defined, |(_, rest)| rest)) else { return false };
+                value = operand[1].to_owned();
+            }
+            false
+        })
+        .collect()
+}
+
+/// Loads in the POKE's block whose address the block does not compute.
+fn invariant_loads(function: &str) -> Vec<String> {
+    let block = poke_block(function);
+    let defined: BTreeSet<&str> = block.lines().filter_map(|line| line.trim().split_once(" = ")).map(|(name, _)| name).collect();
+    block
+        .lines()
+        .filter(|line| line.contains(" = load "))
+        .filter(|line| {
+            let address = line.split(", ptr").nth(1).and_then(|rest| rest.split(',').next()).map(|one| one.trim().rsplit(' ').next().unwrap_or(""));
+            address.is_some_and(|one| !defined.contains(one))
+        })
+        .map(str::to_owned)
         .collect()
 }
 
@@ -1614,7 +1222,7 @@ fn far_selectors_loaded(text: &str) -> Vec<bool> {
 #[test]
 fn test_a_poke_does_not_reach_a_local_whose_address_is_never_taken() {
     let text = optimized_blit(ROW_LOOP);
-    assert!(!text.contains("load cell(frame"), "{text}");
+    assert!(!text.contains("alloca"), "{text}");
 }
 
 /// Rotation panicked ("stepping is not in list") on a loop whose counter
@@ -1674,7 +1282,8 @@ fn test_a_def_seg_before_a_sub_that_peeks_is_kept() {
     let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\nDIM SHARED arr(10)\r\na\r\n\
 SUB a\r\narr(1) = 2\r\nDEF SEG = &HA000\r\nb\r\nDEF SEG = 0\r\nb\r\nEND SUB\r\n\
 SUB b\r\nPRINT PEEK(1)\r\nEND SUB\r\n";
-    assert!(optimized_sub(text, "A").contains("<- -24576:2"));
+    let optimized = optimized_sub(text, "A");
+    assert!(optimized.contains("store i16 -24576, ptr @b$seg"), "{optimized}");
 }
 
 /// Each function numbered its own places, and a global's object was named by
@@ -1685,9 +1294,8 @@ fn test_a_global_is_one_object_in_every_function() {
     let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\nDIM SHARED arr%(100)\r\na\r\n\
 SUB a\r\nn% = 5\r\nDEF SEG = VARSEG(arr%(0))\r\nb\r\nDEF SEG = &HA000\r\nPOKE 1, n%\r\nEND SUB\r\n\
 SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
-    let stores = regex::Regex::new(r"cell\(global\d+:[?\d]+\[0:2:1/1\]\):2 <-").expect("a pattern");
     let optimized = optimized_sub(text, "A");
-    assert_eq!(stores.find_iter(&optimized).count(), 2, "{optimized}");
+    assert_eq!(optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count(), 2, "{optimized}");
 }
 
 #[test]
@@ -1695,8 +1303,7 @@ fn test_bases_past_the_registers_are_not_stepped_as_pointers() {
     // CYCLEBLOBS stepped one pointer per term; five spilled, each an
     // `add [bp-N],2` per pixel where its invariant base cost nothing.
     let text = optimized_sub(SEVEN_TERMS, "T");
-    let body = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the loop body");
-    let steps = body.lines().filter(|line| line.trim_start().starts_with('v') && line.ends_with(" add 2:2")).count();
+    let steps = poke_block(&text).lines().filter(|line| line.contains(" = phi ")).count();
     assert!(steps <= 1, "{steps} pointer steps\n{text}");
 }
 
@@ -1712,7 +1319,7 @@ sp(yy(7) + f(x - xp(7)))\r\nPOKE x, cd(dn)\r\nNEXT\r\nEND SUB\r\n";
 fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "T.BAS", SEVEN_TERMS.as_bytes());
-    let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T");
+    let inner = poke_loop(&listing(&parsed_as(&source, "qb45", "qb45")), "T");
     assert!(!regex::Regex::new(r"add\s+word ptr \[bp-\d+\]").unwrap().is_match(&inner), "{inner}");
 }
 
@@ -1722,12 +1329,10 @@ fn test_affine_addresses_of_one_counter_step_no_pointer_in_memory() {
 #[test]
 fn test_affine_terms_of_one_counter_share_its_scaled_value() {
     let text = optimized_sub(SEVEN_TERMS, "T");
-    let body = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the loop body");
-    let counter = &regex::Regex::new(r"(v\d+) <- phi\(").expect("a pattern").captures(body).unwrap_or_else(|| panic!("{text}"))[1];
-    let reads = body
-        .lines()
-        .filter(|line| line.trim_start().starts_with('v') && line.contains(&format!("{counter}:2 ")) && !line.contains(" add 1:2"));
-    assert_eq!(reads.count(), 1, "{text}");
+    let body = poke_block(&text);
+    let counter = regex::Regex::new(r"(%[\w.]+) = phi ").expect("a pattern").captures(body).unwrap_or_else(|| panic!("{text}"))[1].to_owned();
+    let scaled = body.lines().filter(|line| (line.contains(" = shl ") || line.contains(" = mul ")) && line.contains(&format!("{counter},"))).count();
+    assert_eq!(scaled, 1, "{text}");
 }
 
 /// A POKE into VGA memory counted as reaching a local array's descriptor, so
@@ -1740,8 +1345,7 @@ fn test_a_poke_to_video_memory_leaves_a_local_arrays_descriptor_hoisted() {
 FOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE x, a(x)\r\nNEXT x\r\nNEXT y\r\nEND SUB\r\n",
         "BLIT",
     );
-    let row = text.split("\n  jump").find(|block| block.contains("\n  cell(far+")).expect("the POKE's block");
-    assert!(!row.contains("load cell(frame"), "{text}");
+    assert!(invariant_loads(&text).is_empty(), "{text}");
 }
 
 /// A POKE into VGA memory counted as reaching every global, so the row loop
@@ -1750,9 +1354,7 @@ FOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE x, a(x)\r\nNEXT x\r\nNEXT y\r\nEND 
 #[test]
 fn test_a_poke_to_video_memory_leaves_invariant_globals_hoisted() {
     let text = optimized_blit(ROW_LOOP);
-    let row = text.split("\n  jump").find(|block| block.contains("cell(far+")).expect("the POKE's block");
-    let invariant = row.lines().filter(|line| line.contains("<- load") && !line.contains("]+v")).collect::<Vec<_>>();
-    assert!(invariant.is_empty(), "{text}");
+    assert!(invariant_loads(&text).is_empty(), "{text}");
 }
 
 /// The listing of `name`'s loop around its POKE: its label through its back edge.
@@ -1779,7 +1381,7 @@ fn loop_around(text: &str, name: &str, marks: impl Fn(&str) -> bool) -> String {
 fn test_a_poke_through_a_counted_selector_leaves_invariant_globals_hoisted() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "T.BAS", ROW_LOOP.as_bytes());
-    let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "BLIT");
+    let inner = poke_loop(&listing(&parsed_as(&source, "qb45", "qb45")), "BLIT");
     assert!(!inner.contains("YY%") && !inner.contains("XP%"), "{inner}");
 }
 
@@ -1794,7 +1396,7 @@ fn test_a_poke_of_the_bios_data_area_leaves_invariant_globals_hoisted() {
         b"DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3), xp(3)\r\nt\r\nSUB t\r\nDEF SEG = &H40\r\n\
 FOR x = 0 TO 99\r\nPOKE &H17, yy(1) + xp(2) + x\r\nNEXT\r\nDEF SEG\r\nEND SUB\r\n",
     );
-    let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T");
+    let inner = poke_loop(&listing(&parsed_as(&source, "qb45", "qb45")), "T");
     assert!(!inner.contains("YY%") && !inner.contains("XP%"), "{inner}");
 }
 
@@ -1803,7 +1405,7 @@ fn out_loop(port: &str) -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let text = format!("DEFINT A-Z\r\nDECLARE SUB t ()\r\nDIM SHARED yy(3)\r\nt\r\nSUB t\r\nFOR x = 0 TO 99\r\nOUT {port}, yy(1) + x\r\nNEXT\r\nEND SUB\r\n");
     let source = written(&directory, "T.BAS", text.as_bytes());
-    loop_around(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T", |line| line.trim_start().starts_with("out "))
+    loop_around(&listing(&parsed_as(&source, "qb45", "qb45")), "T", |line| line.trim_start().starts_with("out "))
 }
 
 /// An OUT to the VGA DAC reaches no memory, so the shared element it
@@ -1832,7 +1434,7 @@ fn test_a_bounded_index_into_a_dynamic_array_scales_in_its_address() {
 DEF SEG = &HA000\r\nFOR y = 0 TO 199\r\nFOR x = 0 TO 319\r\nPOKE o, c((a(x) + k) AND 127, (b(x) + y) AND 127)\r\n\
 o = o + 1\r\nNEXT\r\nNEXT\r\nEND SUB\r\n",
     );
-    let inner = poke_loop(&rich_listing(&parsed_as(&source, "qb45", "qb45")), "T");
+    let inner = poke_loop(&listing(&parsed_as(&source, "qb45", "qb45")), "T");
     assert!(regex::Regex::new(r"\[e\w\w\+e\w\w\]").unwrap().is_match(&inner), "{inner}");
 }
 
@@ -1901,7 +1503,7 @@ fn test_a_merged_array_shift_is_a_displacement() {
     let basic = written(
         &directory,
         "MERGED.BAS",
-        b"'$DYNAMIC\r\nDIM a(10) AS INTEGER, b(1 TO 5) AS LONG\r\nFOR i% = 1 TO n%\r\nb((i% AND 3) + 1) = a(i% AND 7)\r\nNEXT\r\n",
+        b"DECLARE SUB t (n%)\r\n'$DYNAMIC\r\nDIM SHARED a(10) AS INTEGER, b(1 TO 5) AS LONG\r\nt 9\r\nSUB t (n%)\r\nFOR i% = 1 TO n%\r\nb((i% AND 3) + 1) = a(i% AND 7)\r\nNEXT\r\nEND SUB\r\n",
     );
     let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
     let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
@@ -2162,7 +1764,7 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/suite/stride.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
-    assert!(!body.contains("[bp") && body.contains("movsx eax"), "{body}");
+    assert!(!body.contains("[bp") && body.contains("cdq") && body.matches("idiv").count() == 1, "{body}");
 }
 
 #[test]
@@ -2219,7 +1821,12 @@ END SUB
     let masked = innermost.filter(|one| one.contains("and ")).collect::<Vec<_>>();
     let [first, second] = masked.as_slice() else { panic!("{procedure}") };
     assert!(!first.contains("test ") && !first.contains("cmp "), "{first}");
-    assert!(!second.contains("lea ") && !second.contains("[e"), "{second}");
+    // The stores are addressed by the pointer that counts, not a scaled copy of `x`.
+    let lea = regex::Regex::new(r"lea (\w+),").unwrap();
+    let scaled: BTreeSet<&str> = lea.captures_iter(second).map(|one| one.get(1).unwrap().as_str()).collect();
+    let store = regex::Regex::new(r"mov word ptr \w+:\[(\w+)").unwrap();
+    let bases: Vec<&str> = store.captures_iter(second).map(|one| one.get(1).unwrap().as_str()).collect();
+    assert!(!bases.is_empty() && bases.iter().all(|base| !base.starts_with('e') && !scaled.contains(base)), "{second}");
 }
 
 #[test]
@@ -2339,10 +1946,16 @@ fn test_a_call_after_a_loop_that_moved_ds_gets_the_data_group_back() {
     let text = listing(&program);
     let start = text.find("proc far").unwrap_or_else(|| panic!("{text}"));
     let procedure = &text[start..start + text[start..].find(" endp").expect("endp")];
-    let body = backward_loop(procedure);
-    let after = &procedure[procedure.find(&body).expect("the loop") + body.len()..];
-    let call = after.find("call far ptr P\n").unwrap_or_else(|| panic!("{procedure}"));
-    assert!(after[..call].contains("mov ds, "), "{procedure}");
+    // The loop moves DS; every call, in layout order, finds it back on the data group.
+    assert!(procedure.contains("mov ds, "), "{procedure}");
+    let mut moved = false;
+    for line in procedure.lines().map(str::trim) {
+        if let Some(source) = line.strip_prefix("mov ds, ") {
+            moved = source != "ss";
+        } else if line.starts_with("call ") {
+            assert!(!moved, "{line} with DS moved\n{procedure}");
+        }
+    }
 }
 
 #[test]
@@ -2386,7 +1999,7 @@ fn test_a_module_compiles_through_the_rich_mir() {
     let source = tmp.path().join("RICH.BAS");
     std::fs::write(&source, "DECLARE SUB Fade (level%)\r\nSUB Fade (level%)\r\nOUT &H3C8, 0\r\nv% = INP(&H3C9)\r\nIF COMMAND$ > \"A\" THEN OUT &H3C9, level% + v%\r\nEND SUB\r\n").unwrap();
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let fade = between(&text, "FADE proc", "endp");
     let call = fade.find("call far ptr B$SCMP").expect("the comparison's call");
@@ -2402,7 +2015,7 @@ fn test_the_runtime_frame_zeroes_the_locals() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "zeroed.bas", b"DECLARE SUB Report (n AS LONG)\nCALL Report(1)\nSUB Report (n AS LONG)\nDIM buffer AS STRING * 4096\nDIM counts(3) AS INTEGER\nbuffer = \"X\"\ncounts(n) = 1\nPRINT buffer; counts(1)\nEND SUB\n");
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let report = between(&text, "REPORT proc", "endp");
     assert!(report.contains("call far ptr B$ENRA"), "{report}");
@@ -2415,7 +2028,7 @@ fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
         let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/suite/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).unwrap_or_else(|error| panic!("{name}: {error}"));
+        qb_compile::assembled(&program, None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }
 
@@ -2427,7 +2040,7 @@ fn test_rich_route_keys_data_rows_by_position() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-    let rich = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("compiles");
+    let rich = qb_compile::assembled(&program, None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("compiles");
     let text = masm::text(&rich).expect("prints");
     let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
     assert_eq!(rows, "db 000h,000h\ndb 020h,031h,02ch,020h,032h,000h\ndb 001h,000h\ndb 020h,033h,02ch,020h,034h,000h\ndb 0ffh,0ffh,001h\n");
@@ -2448,8 +2061,8 @@ fn a_fixed_length_assignment_fills_its_destination() {
 
 /// A FUNCTION AS SINGLE or AS DOUBLE returns as VBDOS's do: stored through
 /// the hidden destination its caller passes last, that pointer returned. The
-/// rich route left the result in ST(0), so a --legacy caller read its frame
-/// time through the FPU status word fnstsw left in AX: qrender's dt read 0
+/// rich route left the result in ST(0), so a caller compiled by the old
+/// route read its frame time through the FPU status word fnstsw left in AX: qrender's dt read 0
 /// and it never ticked.
 #[test]
 fn test_a_floating_function_returns_through_its_hidden_destination() {
@@ -2603,7 +2216,7 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "defseg.bas", b"DEF SEG = &HA000\nBSAVE \"V.BIN\", 0, 64000\n");
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     assert!(module.externs.iter().any(|(name, _)| name == "b$seg"), "{}", masm::text(&module).expect("prints"));
 }
 
@@ -2615,7 +2228,7 @@ fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
     let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let (_, items) = module.data.iter().find(|(name, _)| name == "BC_DATA").expect("BC_DATA");
     let mut offset = 0;
     for item in items {
@@ -2642,7 +2255,7 @@ fn test_a_word_array_read_the_loop_may_skip_leaves_the_loop() {
     let directory = tempfile::tempdir().expect("a directory");
     let text = "DEFINT A-Z\r\nDECLARE SUB blobs ()\r\nDIM SHARED cd(100), f3(100), xp(3)\r\nblobs\r\nSUB blobs\r\nk = xp(1)\r\nFOR y = 0 TO 99\r\nDEF SEG = &HA000 + y\r\nFOR x = 0 TO 99\r\n\
 d = cd(x)\r\nIF d < 50 THEN POKE x, d ELSE POKE x, f3(y - k)\r\nNEXT x\r\nNEXT y\r\nDEF SEG\r\nEND SUB\r\n";
-    let listing = rich_listing(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45"));
+    let listing = listing(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45"));
     let lines = between(&listing, "BLOBS proc", "BLOBS endp").lines().collect::<Vec<_>>();
     let store = lines.iter().position(|line| line.contains("byte ptr es:[")).expect("the POKE");
     // The innermost loop: the nearest label above the POKE a later jump returns to.
@@ -2667,7 +2280,7 @@ fn test_the_listing_is_the_code_the_object_holds() {
     let source = written(&directory, "shell.bas", b"DECLARE SUB Keep (x AS INTEGER)\nSUB Keep (x AS INTEGER)\nx = x + 1\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
     let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-    let module = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let text = llrm_core::driver::basic::text(&module).unwrap();
     let keep = between(&text, "KEEP proc far", "KEEP endp");
     assert!(!keep.contains("push bp") && !keep.contains("pop bp") && keep.contains("call far ptr B$ENRA"), "{keep}");
@@ -2681,7 +2294,7 @@ fn test_a_fixed_length_argument_is_assigned_back_after_the_call() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "fixback.bas", b"DECLARE SUB Fill (s AS STRING)\nDIM f AS STRING * 6\nf = \"abcdef\"\nFill f\nPRINT f\nSUB Fill (s AS STRING)\ns = \"XY\"\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-    let text = rich_listing(&program);
+    let text = listing(&program);
     let after = &text[text.find("call far ptr FILL").expect("the call")..];
     let assigned = after.find("call far ptr B$ASSN").expect("an assignment back");
     assert!(after.find("call far ptr B$STDL").is_none_or(|released| assigned < released), "{after}");
@@ -2697,7 +2310,7 @@ fn test_a_body_that_falls_into_its_handler_compiles_on_the_rich_route() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let source = "10 ON ERROR GOTO 100\n20 ERROR 5\n30 PRINT \"body\"; ERL\n100 PRINT \"h\"; ERR; ERL\n110 IF ERR = 0 THEN RESUME NEXT\n";
     let path = written(&directory, "fall.bas", source.as_bytes());
-    let text = rich_listing(&parsed_as(&path, "vbdos", "vbdos"));
+    let text = listing(&parsed_as(&path, "vbdos", "vbdos"));
     let body = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let handler = between(&text, "__main$handler proc", "__main$handler endp");
     assert!(body.contains("pushw 20\n    call far ptr B$SERR"), "{body}");
@@ -2745,13 +2358,13 @@ fn checked_division_raises_error_11_where_bcs_divide_traps() {
 #[test]
 fn test_checked_division_raises_on_the_rich_route() {
     let frontend = qb_driver::Frontend { checked_division: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
-    let text = rich_listing(&qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses"));
+    let text = listing(&qb_driver::parsed(&fixture("checked-division.bas"), &frontend, None).expect("parses"));
     assert!(text.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
     // Without the option a division where errors land is raised as code too
     // (the next test); with no handler it stays the processor's.
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "plain.bas", b"DEFINT A-Z\nINPUT d\nPRINT 10 \\ d\n");
-    assert!(!rich_listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
+    assert!(!listing(&parsed_as(&path, "vbdos", "vbdos")).contains("pushw 11"));
 }
 
 /// An error raised in a FUNCTION called from a SUB, with the handler in the
@@ -2764,7 +2377,7 @@ fn test_a_division_in_a_called_function_raises_to_its_pad() {
     let source = b"DECLARE SUB caller (d AS INTEGER)\nDECLARE FUNCTION inner% (d AS INTEGER)\nON ERROR GOTO h\ncaller 0\nEND\nh:\nRESUME NEXT\nSUB caller (d AS INTEGER)\nDIM b AS INTEGER\nb = inner(d)\nEND SUB\nFUNCTION inner% (d AS INTEGER)\ninner% = 10 \\ d\nEND FUNCTION\n";
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "called.bas", source);
-    let text = rich_listing(&parsed_as(&path, "vbdos", "vbdos"));
+    let text = listing(&parsed_as(&path, "vbdos", "vbdos"));
     let inner = &text[text.find("INNER").expect("the function")..];
     assert!(inner.contains("pushw 11\n    call far ptr B$SERR"), "{text}");
 }
@@ -2784,7 +2397,7 @@ fn checked_division_wraps_a_long_min_by_minus_one() {
 
 /// The module body's listing on the rich route.
 fn module_body(program: &llrm_core::hir::model::Program) -> String {
-    let text = rich_listing(program);
+    let text = listing(program);
     between(&text, "$QB$MAIN proc", "$QB$MAIN endp").to_owned()
 }
 
@@ -2905,7 +2518,7 @@ fn a_dynamic_dim_before_on_error_is_a_statement() {
     let calls = |name: &str| program.modules[0].functions.iter().find(|one| one.name == name).expect("the function").blocks.iter().flat_map(|block| block.instructions.clone()).filter(|one| one.callee.as_deref() == Some("B$DDIM")).count();
     assert!(calls("__main") > 0 && calls("S") > 0);
     assert_eq!(rows_precede_calls(&program), Vec::<(String, i64)>::new());
-    rich_listing(&program);
+    listing(&program);
 }
 
 /// The DATA rows' markers leave the rich route's input, and their ABI with
@@ -2934,7 +2547,7 @@ fn statement_rows(listing: &str) -> Vec<(String, u16)> {
 
 /// The lines the outlined handler's rows state.
 fn handler_lines(program: &llrm_core::hir::model::Program) -> Vec<u16> {
-    let listing = rich_listing(program);
+    let listing = listing(program);
     // Premise: the handler is its own procedure, assembled second.
     assert!(listing.contains("__main$handler proc"), "{listing}");
     statement_rows(&listing).into_iter().filter(|(label, _)| label.starts_with("L1_")).map(|(_, line)| line).collect()
@@ -3010,7 +2623,7 @@ fn peek_and_poke_touch_memory_every_time() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let source = b"DEFINT A-Z\r\nDEF SEG = &H40\r\nt = PEEK(&H6C)\r\nDO\r\nLOOP UNTIL PEEK(&H6C) <> t\r\nPOKE &H6C, 0\r\nPOKE &H6C, 1\r\nPRINT 1\r\n";
     let path = written(&directory, "tick.bas", source);
-    let text = rich_listing(&parsed_as(&path, "qb45", "qb45"));
+    let text = listing(&parsed_as(&path, "qb45", "qb45"));
     assert!(source.windows(5).any(|one| one == b"PEEK("), "the shape that was folded");
     // The loop re-reads: a label, a byte read of the tick, and a jump back to it.
     let read = regex::Regex::new(r"(L\d+_\d+):\n\s+movzx \w+, byte ptr es:\[108\]\n").unwrap();

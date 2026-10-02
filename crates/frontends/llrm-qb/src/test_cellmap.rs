@@ -4,128 +4,13 @@
 //! Python's lru_cache of a write's alias classes; Rust's `alias_class` is a
 //! field copy and has no such cache.
 
-use std::cell::Cell;
-use std::path::{Path, PathBuf};
-use std::thread::LocalKey;
-
-use llrm_core::analysis::cellmap::{VERIFIED, VERIFYING};
 use llrm_core::analysis::alias::{_key_bucket, _key_place, _keys_overlap, _kill, ASKED, CellKey};
-use llrm_core::analysis::avail::DEAD_OVERLAPS;
 use llrm_core::analysis::cellmap::CellMap;
-use llrm_core::analysis::consts::MAY_OVERLAP;
-use llrm_core::analysis::regions::{PICKED, displaced_buckets, overlap_bucket, overlap_span, overlapping};
-use crate::{compile as qb_compile, driver as qb_driver};
-use llrm_core::model::memory::{Identity, MemoryKind, MemoryObject, OBJECT_ALIASES};
-use llrm_core::model::passes::O2;
+use llrm_core::analysis::regions::{displaced_buckets, overlap_bucket, overlap_span, overlapping};
+use llrm_core::model::memory::{Identity, MemoryKind, MemoryObject};
 use llrm_core::model::mir::{MemRef, Value};
 use llrm_core::objectfile::module::{Addr, Space};
 use llrm_core::support::hash::IndexMap;
-
-fn written(directory: &tempfile::TempDir, name: &str, lines: &[String]) -> PathBuf {
-    let path = directory.path().join(name);
-    std::fs::write(&path, format!("{}\r\n", lines.join("\r\n"))).expect("writes the source");
-    path
-}
-
-fn cells_program(directory: &tempfile::TempDir, scalars: usize) -> PathBuf {
-    let total = (0..scalars).map(|k| format!("x{k}")).collect::<Vec<_>>().join(" + ");
-    let mut lines = vec!["DEFINT A-Z".to_owned(), "DIM a(10)".to_owned()];
-    lines.extend((0..scalars).map(|k| format!("x{k} = {k}")));
-    lines.extend(["FOR i = 0 TO 10: a(i) = i: NEXT".to_owned(), format!("PRINT {total} + a(3)")]);
-    written(directory, "CELLS.BAS", &lines)
-}
-
-fn loop_program(directory: &tempfile::TempDir, scalars: usize) -> PathBuf {
-    let mut lines = vec!["DEFINT A-Z".to_owned(), "DIM a(10)".to_owned(), "FOR j = 1 TO 3".to_owned()];
-    lines.extend((0..scalars).map(|k| format!("x{k} = x{k} + j: a(j) = x{k}")));
-    lines.extend([
-        "NEXT".to_owned(),
-        format!("PRINT {}", (0..scalars).map(|k| format!("x{k}")).collect::<Vec<_>>().join(" + ")),
-    ]);
-    written(directory, "LOOP.BAS", &lines)
-}
-
-fn elements_program(directory: &tempfile::TempDir, elements: usize) -> PathBuf {
-    let mut lines = vec!["DEFINT A-Z".to_owned(), format!("DIM a({elements})")];
-    lines.extend((0..elements).map(|k| format!("a({k}) = {k}")));
-    lines.push(format!("PRINT {}", (0..elements).map(|k| format!("a({k})")).collect::<Vec<_>>().join(" + ")));
-    written(directory, "ELEMENTS.BAS", &lines)
-}
-
-fn compiled(basic: &Path) -> Vec<u8> {
-    let program = qb_driver::parsed(basic, &qb_driver::Frontend::new("qb45", "qb45"), None)
-        .unwrap_or_else(|error| panic!("{}: {error}", basic.display()));
-    qb_compile::object_bytes(&program, Path::new(basic.file_name().expect("a file")), None, &O2()).expect("compiles")
-}
-
-/// What `counter` counted while compiling `basic`.
-fn counted(counter: &'static LocalKey<Cell<usize>>, basic: &Path) -> usize {
-    counter.with(|count| count.set(0));
-    compiled(basic);
-    counter.with(Cell::get)
-}
-
-#[test]
-fn a_store_is_not_tested_against_every_known_cell() {
-    // deedlines compiled for 45 minutes: each store asked may_overlap of
-    // every constant cell, 285K questions here for 24 scalars.
-    let directory = tempfile::TempDir::new().unwrap();
-    let asked = counted(&MAY_OVERLAP, &cells_program(&directory, 24));
-    assert!(asked < 50_000, "{asked}");
-}
-
-#[test]
-fn dead_stores_do_not_test_every_overwritten_cell() {
-    // dead_stores was 44% of deedlines' compile: each access tested every
-    // cell overwritten below it, 17K overlap tests here for 24 scalars.
-    let directory = tempfile::TempDir::new().unwrap();
-    let asked = counted(&DEAD_OVERLAPS, &loop_program(&directory, 24));
-    assert!(asked < 5_000, "{asked}");
-}
-
-#[test]
-fn a_direct_store_asks_only_the_cells_it_meets() {
-    // matmul.nib's array cells name no object, so the object index skipped
-    // none of them: every store into the frame asked may_overlap of every
-    // cell there, 60K questions here for 24 elements.
-    let directory = tempfile::TempDir::new().unwrap();
-    let asked = counted(&MAY_OVERLAP, &elements_program(&directory, 24));
-    assert!(asked < 10_000, "{asked}");
-}
-
-#[test]
-fn a_write_does_not_ask_alias_of_every_bucket() {
-    // Picking the buckets a write reaches asked objects_may_alias of every
-    // bucket for every store: 145K questions here, 27M in 5 min of deedlines.
-    let directory = tempfile::TempDir::new().unwrap();
-    let asked = counted(&OBJECT_ALIASES, &cells_program(&directory, 24));
-    assert!(asked < 50_000, "{asked}");
-}
-
-#[test]
-fn picking_buckets_does_not_grow_with_the_cells_held() {
-    // Cached per pair, picking buckets still scanned every bucket held: 327
-    // calls a write for 96 scalars, 19M scans in 5 min of deedlines' consts.
-    let directory = tempfile::TempDir::new().unwrap();
-    let basic = cells_program(&directory, 96);
-    PICKED.with(|picked| picked.set((0, 0)));
-    compiled(&basic);
-    let (writes, scanned) = PICKED.with(Cell::get);
-    assert!(writes > 0 && scanned < 100 * writes, "{scanned} / {writes}");
-}
-
-#[test]
-fn skipped_buckets_hold_no_cell_the_store_reaches() {
-    // The index only skips work: every cell it leaves untested, in consts
-    // and dead stores alike, is one the exact test says the write cannot reach.
-    let directory = tempfile::TempDir::new().unwrap();
-    VERIFYING.with(|on| on.set(true));
-    VERIFIED.with(|checked| checked.set(0));
-    compiled(&cells_program(&directory, 8));
-    compiled(&loop_program(&directory, 8));
-    VERIFYING.with(|on| on.set(false));
-    assert!(VERIFIED.with(Cell::get) > 0);
-}
 
 #[test]
 fn an_alias_store_kills_what_the_pairwise_scan_killed() {
@@ -179,7 +64,7 @@ fn a_displaced_store_kills_what_the_full_scan_killed() {
         (state >> 33) % below
     };
     let values = [Value::new(0, 0), Value::new(1, 0)];
-    let mut reference = |random: &mut dyn FnMut(u64) -> u64| {
+    let reference = |random: &mut dyn FnMut(u64) -> u64| {
         let space = [Space::Frame, Space::Segment, Space::Far][random(3) as usize];
         let mut addr = Addr::new(space, random(32) as i64 - 8);
         addr.index = random(2) as i64;

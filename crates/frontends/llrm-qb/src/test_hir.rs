@@ -13,7 +13,6 @@ use super::compile::{self as qb_compile, CompileError};
 use super::driver as qb_driver;
 use llrm_core::backend::masm;
 use llrm_core::hir::model::Program;
-use llrm_core::model::passes::O2;
 use llrm_core::objectfile::omf;
 
 pub(super) fn root() -> PathBuf {
@@ -42,21 +41,18 @@ pub(super) fn fixture(name: &str) -> PathBuf {
     root().join("crates/frontends/qbfront/fixtures").join(name)
 }
 
+fn codegen() -> llrm_core::driver::Options {
+    llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())
+}
+
 /// `qb_compile.assembled(program)`.
 pub(super) fn assembled(program: &Program) -> Result<masm::Module, CompileError> {
-    qb_compile::assembled(program, None, &O2())
+    qb_compile::assembled(program, None, &codegen())
 }
 
 /// `masm.text(qb_compile.assembled(program))`.
 pub(super) fn listing(program: &Program) -> String {
     masm::text(&assembled(program).expect("assembles")).expect("prints")
-}
-
-/// `listing` on the default route: the rich MIR, selected by isel.
-pub(super) fn rich_listing(program: &Program) -> String {
-    let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-    let module = qb_compile::assembled_by(program, None, &O2(), qb_compile::Route::Selected, &codegen).expect("assembles");
-    masm::text(&module).expect("prints")
 }
 
 /// The module's MIR as the front end emits it, as text.
@@ -76,7 +72,7 @@ pub(super) fn optimized_mir(program: &Program) -> String {
 
 /// `qb_compile.object_bytes(program, name)`.
 pub(super) fn object_bytes(program: &Program, name: &str) -> Result<Vec<u8>, CompileError> {
-    qb_compile::object_bytes(program, Path::new(name), None, &O2())
+    qb_compile::object_bytes(program, Path::new(name), None, &codegen())
 }
 
 /// `omf.parse(qb_compile.object_bytes(program, name))`.

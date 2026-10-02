@@ -32,7 +32,7 @@ pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options:
     write(&output.join("03-hir.json"), &hir::encode(&program, Some(2)).map_err(|error| error.to_string())?)?;
     let stages = output.join("mir");
     std::fs::create_dir_all(&stages).map_err(|error| error.to_string())?;
-    nib::assembled_from_mir(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() })?;
+    nib::assembled(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() })?;
     write(
         &output.join("README.txt"),
         "Nib frontend stage dumps\n========================\n\n\

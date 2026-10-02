@@ -37,7 +37,7 @@ add() {
 }
 qb() {
   local name=$1 source=$2; shift 2
-  if "$bin/llrm-qb" "$source" "$@" --dump-hir "$work/$name.json" --mir >/dev/null 2>"$work/$name.frontend"; then
+  if "$bin/llrm-qb" "$source" "$@" --dump-hir "$work/$name.json" >/dev/null 2>"$work/$name.frontend"; then
     add "$name" "$work/$name.json" "$bin/llrm-qb" "$source" "$@"
   else
     echo "frontend fails: $name"

@@ -4,14 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use llrm_core::hir::lower::Lowered;
 use llrm_core::hir::model::{self, Number, Operand, Storage, TypeKind};
-use llrm_core::model::ir::{Operation, Space};
-use llrm_core::model::mir::{Arg, Cell, Const, Held, Kind, MemRef, Op, OpCode, Value};
-
-/// A run of zero stores this long or longer becomes a fill: from here the
-/// fill's fixed setup is smaller code than the stores it replaces.
-pub(super) const FILL_BYTES: i64 = 16;
 
 /// The local place a leading entry store of zero writes, if it is one.
 fn zeroed_place(instruction: &model::Instruction, places: &[model::Place]) -> Option<i64> {
@@ -139,81 +132,4 @@ fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, types: &std::co
         }
     }
     span
-}
-
-/// A frame store of constant zero, as its address and width.
-fn zero_store(op: &Op) -> Option<(i64, i64)> {
-    let [Arg::Const(value)] = op.args.as_slice() else { return None };
-    let [cell] = op.stores.as_slice() else { return None };
-    let addr = cell.addr?;
-    let frame = cell.space == Some(Space::Frame) && addr.space == Space::Frame && cell.base.is_none();
-    (op.kind == Kind::Store && frame && value.n == 0.into()).then_some((addr.disp, i64::from(cell.width)))
-}
-
-/// `body` with each run of at least FILL_BYTES contiguous leading zero
-/// stores in its entry block made one word fill.
-pub(super) fn filled(body: &Lowered) -> Lowered {
-    let mut lowered = body.clone();
-    let entry = lowered.body.entry;
-    let Some(block) = lowered.body.blocks.iter_mut().find(|block| block.at == entry) else {
-        return lowered;
-    };
-    let leading = block.ops.iter().take_while(|op| op.kind == Kind::Nothing || zero_store(op).is_some()).count();
-    let mut stores: Vec<(i64, i64, usize)> = block.ops[..leading]
-        .iter()
-        .enumerate()
-        .filter_map(|(index, op)| zero_store(op).map(|(disp, width)| (disp, width, index)))
-        .collect();
-    stores.sort();
-    let mut runs: Vec<Vec<(i64, i64, usize)>> = Vec::new();
-    for store in stores {
-        match runs.last_mut() {
-            Some(run) if run.last().is_some_and(|last| last.0 + last.1 == store.0) => run.push(store),
-            _ => runs.push(vec![store]),
-        }
-    }
-    let mut fresh = body
-        .body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.ops)
-        .flat_map(|op| op.defines.iter().chain(&op.uses))
-        .map(|value| (value.id, value.variable))
-        .fold((0, 0), |most, (id, variable)| (most.0.max(id), most.1.max(variable)));
-    let mut replaced: BTreeSet<usize> = BTreeSet::new();
-    let mut made: Vec<Op> = Vec::new();
-    for run in runs {
-        let bytes: i64 = run.iter().map(|store| store.1).sum();
-        // Whole words go to the fill; an odd last byte keeps its store.
-        let words: Vec<_> = run.iter().take_while(|store| store.1 == 2).collect();
-        let covered: i64 = words.iter().map(|store| store.1).sum();
-        if bytes < FILL_BYTES || covered < FILL_BYTES {
-            continue;
-        }
-        let first = &block.ops[words[0].2];
-        let at = first.at;
-        fresh = (fresh.0 + 1, fresh.1 + 1);
-        let address = Held { value: Value { id: fresh.0, at, flags: false, variable: fresh.1, version: 1 }, width: 2 };
-        let mut cell = first.stores[0].clone();
-        cell.width = 2;
-        let mut lea = Op::new(at, OpCode::Operation(Operation::Address), "lea", vec![address.value], vec![]);
-        lea.kind = Kind::Address;
-        lea.args = vec![Arg::Cell(Cell { r#ref: cell })];
-        lea.results = vec![Arg::Held(address.clone())];
-        let mut fill = Op::new(at, OpCode::Operation(Operation::Fill), Kind::Fill.as_str(), vec![], vec![address.value]);
-        fill.kind = Kind::Fill;
-        fill.args = vec![Arg::Const(Const::new(0, 2)), Arg::Const(Const::new(covered / 2, 2)), Arg::Held(address.clone())];
-        // Every cell it writes, so alias analysis still sees each object.
-        fill.stores = words.iter().flat_map(|store| block.ops[store.2].stores.clone()).collect::<Vec<MemRef>>();
-        fill.source_backed = false;
-        made.extend([lea, fill]);
-        replaced.extend(words.iter().map(|store| store.2));
-    }
-    if made.is_empty() {
-        return lowered;
-    }
-    let kept: Vec<Op> =
-        block.ops.iter().enumerate().filter(|(index, _)| !replaced.contains(index)).map(|(_, op)| op.clone()).collect();
-    block.ops = made.into_iter().chain(kept).collect();
-    lowered
 }

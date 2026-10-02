@@ -43,7 +43,7 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     let threshold = if inlined { llrm_transforms::inline::Threshold::default() } else { llrm_transforms::inline::Threshold::new(0) };
     let pipeline = llrm_transforms::pipeline::Options { inline: threshold, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(crate::compile::machine()) };
-    let module = crate::compile::assembled_from_mir(&program, "main", &options).expect("compiles");
+    let module = crate::compile::assembled(&program, "main", &options).expect("compiles");
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment).expect("writes")).expect("parses")
 }
 
