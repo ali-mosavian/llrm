@@ -16,7 +16,7 @@ enum Shown {
 use Shown::{By, Unread};
 
 const COVERAGE: &[(&str, Shown)] = &[
-    ("noalias", By(&["a_stated_fact_becomes_its_carrier", "test_restrict_parameters_are_noalias", "noalias_parameters_are_disjoint_and_plain_ones_may_alias"])),
+    ("noalias", By(&["a_stated_fact_becomes_its_carrier", "test_restrict_parameters_are_noalias", "noalias_parameters_are_disjoint_and_plain_ones_may_alias", "test_a_noalias_result_is_apart_from_every_other_object"])),
     ("readonly", By(&["test_a_load_from_a_readonly_noalias_parameter_leaves_past_a_store"])),
     ("readnone", By(&["a_readnone_or_memory_none_callee_touches_nothing"])),
     ("nonnull", By(&["a_frame_object_is_nonnull_and_a_parameter_is_not"])),
