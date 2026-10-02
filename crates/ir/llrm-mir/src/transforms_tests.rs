@@ -1102,3 +1102,45 @@ fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation()
     // the multiply by one needs no flag
     assert!(floated("  %r = fmul double 1.0, %x\n  ret double %r").contains("ret double %x"));
 }
+
+/// C11 6.8.5p6 lets only a loop whose controlling expression is not constant be
+/// assumed to end, so clang marks each such loop (`llvm.loop.mustprogress`), never
+/// the function: `for (;;) {}` hangs. A function whose every uncounted loop is marked
+/// is `willreturn`; one with a `for (;;)` among them is not, however the rest are marked.
+#[test]
+fn test_willreturn_needs_every_uncounted_loop_marked_and_for_forever_is_never_marked() {
+    let willreturn = |text: &str| through(&["function-attrs"], text).lines().find(|line| line.starts_with("define")).is_some_and(|line| line.contains("willreturn"));
+    let function = |second: &str, marks: &str| {
+        format!(
+            "define void @f(ptr %p) {{
+b0:
+  br label %first
+
+first:
+  %v = load i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %first, label %next, !llvm.loop !0
+
+next:
+  br label %second
+
+second:
+{second}
+done:
+  ret void
+}}
+
+!0 = distinct !{{!0, !1}}
+!1 = !{{!\"llvm.loop.mustprogress\"}}
+{marks}"
+        )
+    };
+    let counted = "  %w = load i16, ptr %p\n  %again = icmp ne i16 %w, 0\n  br i1 %again, label %second, label %done, !llvm.loop !2\n";
+    let forever = "  %w = load i16, ptr %p\n  br label %second, !llvm.loop !2\n";
+    let marked = "!2 = distinct !{!2, !1}\n";
+    let unmarked = "!2 = distinct !{!2}\n";
+    assert!(willreturn(&function(counted, marked)), "both loops marked");
+    assert!(!willreturn(&function(counted, unmarked)), "the second is not");
+    assert!(!willreturn(&function(forever, marked)), "an unconditional loop is no loop a language promises ends, even if some pass marked it");
+    assert!(!willreturn(&function(forever, unmarked)));
+}
