@@ -1559,7 +1559,7 @@ impl Compiler {
         } else {
             BTreeSet::new()
         };
-        let reads = assignment::unassigned_reads(&self.blocks, &tracked, &assigns_all, entries);
+        let reads = assignment::unassigned_reads(&self.blocks, &tracked, &assigns_all, entries, assignment::Named::Assigns);
         let warnings: Vec<String> = reads
             .into_iter()
             .map(|(place, instruction)| {
@@ -1580,7 +1580,7 @@ impl Compiler {
         let scalar = |place: &Place| integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE);
         let locals: Vec<Place> = self.places.iter().filter(|place| place.storage == "local").cloned().collect();
         let tracked = locals.iter().filter(|place| scalar(place)).map(|place| place.id).collect();
-        let unassigned: BTreeSet<u32> = assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries)
+        let unassigned: BTreeSet<u32> = assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries, assignment::Named::MayRead)
             .into_iter()
             .map(|(place, _)| place)
             .collect();

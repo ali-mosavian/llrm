@@ -531,14 +531,30 @@ fn a_runtime_framed_procedure_keeps_no_zero_stores() {
     assert!(entry(&laid_out) < entry(&program));
 }
 
+/// The memsets procedure `name` of `source` makes on the rich route, as
+/// compiled: its own-frame locals laid out, then the pipeline.
+fn fills(source: &str, name: &str) -> Vec<String> {
+    let program = compiled(source).unwrap_or_else(|error| panic!("{error}"));
+    let laid_out = super::zero_fill::laid_out(&program, |module, function| !super::compile::_inline_frame(&program, module, function));
+    let mir = super::test_hir::optimized_mir(&laid_out);
+    let start = mir.find(&format!("@{name}(")).expect("the procedure");
+    let body = &mir[start..mir[start..].find("\n}").map_or(mir.len(), |end| start + end)];
+    body.lines().filter(|line| line.contains("call void @llvm.memset")).map(str::to_owned).collect()
+}
+
+/// QuickrBASIC zeroes every local, but a BYREF pass counted as assigning
+/// it: EXT read stack garbage from a, b and c, never zeroed. Two zeroed
+/// records are one block, and one fill clears it.
 #[test]
 fn a_large_zeroed_block_is_one_fill() {
-    let large = "SUB s\nDIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\nPRINT a; b; c\nEND SUB\n";
-    let code = procedure_listing(large, "quickr", "S");
-    assert!(code.contains("rep stosd") && code.contains("mov cx, 6"), "{code}");
-    // Below FILL_BYTES the stores stay: the fill's setup would be larger.
-    let small = procedure_listing("SUB s\nDIM a AS INTEGER\nPRINT a\nEND SUB\n", "quickr", "S");
-    assert!(!small.contains("stos"), "{small}");
+    let doubles = "DECLARE SUB ext (x AS DOUBLE, y AS DOUBLE, z AS DOUBLE)\nSUB s\nDIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\next a, b, c\nEND SUB\n";
+    let each = fills(doubles, "S");
+    assert_eq!(each.len(), 3, "{each:?}");
+    assert!(each.iter().all(|one| one.contains("i8 0, i16 8,")), "{each:?}");
+    let records = "TYPE v\nx AS DOUBLE\ny AS DOUBLE\nEND TYPE\nDECLARE SUB ext (p AS v, q AS v)\nSUB s\nDIM a AS v, b AS v\next a, b\nEND SUB\n";
+    let block = fills(records, "S");
+    assert_eq!(block.len(), 1, "{block:?}");
+    assert!(block[0].contains("i8 0, i16 32,"), "{block:?}");
 }
 
 /// The whole listing of `source`, compiled as `dialect`.
