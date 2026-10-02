@@ -511,7 +511,7 @@ fn _proven(
         } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
             // An ordered test by more than one: promised not to wrap past the
             // bound, the counter reaches it in the distance divided by the step.
-            if !_promised(function, update, &step, _unsigned(test)) || (shape.posttested && !entered) {
+            if !_promised(function, update, &step, _unsigned(test), _signed(&start, facts, width).as_ref()) || (shape.posttested && !entered) {
                 continue;
             }
             entry_guarded = shape.posttested;
@@ -521,7 +521,7 @@ fn _proven(
             continue;
         } else {
             entry_guarded = shape.posttested;
-            let promised = _promised(function, update, &step, _unsigned(test));
+            let promised = _promised(function, update, &step, _unsigned(test), _signed(&start, facts, width).as_ref());
             let found = _unit_maximum(unit, loop_, width, begin.as_ref(), limit.as_ref(), &step, test, inbounds, promised);
             if found.is_none() && _inclusive(test) {
                 continue;
@@ -776,13 +776,17 @@ fn _compared(unit: &Unit, icmp: &Instruction, tested: &BTreeMap<ValueId, bool>) 
 }
 
 /// Whether the step `update` makes is promised not to wrap as `unsigned` or signed integers.
-fn _promised(function: &Function, update: ValueId, step: &BigInt, unsigned: bool) -> bool {
+/// A counter that starts at or above zero and only goes up without a signed wrap stays in
+/// `0 ..= signed max`, where a signed sum is the unsigned one: `nsw` there is `nuw` too, as
+/// LLVM's SCEV infers it. `start` is the counter's signed start where known.
+fn _promised(function: &Function, update: ValueId, step: &BigInt, unsigned: bool, start: Option<&BigInt>) -> bool {
     let Some(inst) = defining(function, update) else { return false };
     let op = function.instruction(inst);
     let upward = step > &BigInt::from(0);
     let stated = llrm_mir::facts::Facts::of_flags(op.flags);
+    let climbing = stated.no_signed_wrap() && start.is_some_and(|start| start >= &BigInt::from(0));
     match op.opcode {
-        Opcode::Binary(BinaryOp::Add) if unsigned => upward && stated.no_unsigned_wrap(),
+        Opcode::Binary(BinaryOp::Add) if unsigned => upward && (stated.no_unsigned_wrap() || climbing),
         Opcode::Binary(BinaryOp::Sub) if unsigned => !upward && stated.no_unsigned_wrap(),
         Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => stated.no_signed_wrap(),
         _ => false,

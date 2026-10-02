@@ -687,3 +687,13 @@ b0:
     assert_eq!(found.get(&parsed.value("m")), Some(&(8.into(), 0.into())));
     assert_eq!(found.get(&parsed.value("u")), None);
 }
+
+/// A parameter the language states `nonnull` is non-null at its definition;
+/// the same pointer unstated may be null.
+#[test]
+fn a_nonnull_parameter_is_nonnull_by_definition() {
+    let parsed = Parsed::new("define void @f(ptr nonnull %p, ptr %q) {\nb0:\n  ret void\n}\n");
+    let unit = parsed.unit();
+    assert_eq!(nonnull_by_definition(&unit, parsed.value("p")), Some(true));
+    assert_eq!(nonnull_by_definition(&unit, parsed.value("q")), Some(false));
+}

@@ -1897,3 +1897,39 @@ b3:
     );
     assert!(parsed.counted(false).is_empty());
 }
+
+/// `i = start; while i ule n { i = add FLAGS i, 1 }`, 8 bits.
+fn climbing(start: &str, flags: &str) -> Parsed {
+    Parsed::new(&format!(
+        "define i8 @f(i8 %a, i8 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ {start}, %b0 ], [ %next, %b2 ]
+  %c = icmp ule i8 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add {flags} i8 %i, 1
+  br label %b1
+
+b3:
+  ret i8 %i
+}}
+"
+    ))
+}
+
+/// A counter that starts at or above zero and climbs without a signed wrap
+/// cannot wrap unsigned either, whatever it is compared with: a signed FOR counter from 0
+/// by 1 is `nuw`, and an unsigned `<=` against it counts. Without the inference an inclusive
+/// unsigned test of a counter that may wrap past the maximum may never end, so no count.
+#[test]
+fn test_a_signed_counter_from_zero_climbing_is_also_unsigned_nowrap() {
+    assert_eq!(climbing("0", "nsw").counted(false).len(), 1, "nsw from 0");
+    assert_eq!(climbing("0", "nuw").counted(false).len(), 1, "nuw from 0 (as before)");
+    assert_eq!(climbing("0", "").counted(false).len(), 0, "no promise");
+    assert_eq!(climbing("%a", "nsw").counted(false).len(), 0, "nsw from a value that may be negative");
+    assert_eq!(climbing("-1", "nsw").counted(false).len(), 0, "nsw from below zero");
+}

@@ -771,3 +771,147 @@ fn main() -> i16:
         "1\ndrop 1\n2\ndrop 2\n3\ndrop 3\ndrop 4\ndrop 3\ndrop 4\n7\ndrop 7\ndrop 9\ndrop 8\n7\ndrop 7\n9\ndrop 9\ndrop 8\n5\ndrop 5\ndrop 6\ndrop 5\ndrop 6\n"
     );
 }
+
+#[test]
+fn a_native_enums_tag_is_stated_to_hold_only_its_variants() {
+    // The tag was loaded and compared against each variant in turn, the
+    // last arm's test as live as the first: nothing said the tag has no
+    // other value.
+    let source = "\
+enum Shape:
+    dot
+    line(i16)
+    box(i16, i16)
+
+fn area(s: &Shape) -> i16:
+    match s:
+        .dot:
+            return 0
+        .line(n):
+            return n
+        .box(w, h):
+            return w * h
+
+fn main() -> i16:
+    let s = Shape.box(2, 3)
+    print(area(s))
+    return 0
+";
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let ranges: Vec<(i64, i64)> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "range" && one["subject"] == "instruction").map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap())).collect();
+    // One per tag load: each arm's test.
+    assert!(ranges.len() >= 2 && ranges.iter().all(|one| *one == (0, 2)), "{ranges:?}");
+}
+
+/// The `nocapture` facts the program states, as `function.ordinal` of each
+/// parameter, by the parameter's index in the function's HIR.
+fn uncaptured(source: &str) -> Vec<String> {
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}: {}", error.span.line, error.message))).expect("JSON");
+    let facts = hir["modules"][0]["facts"].as_array().cloned().unwrap_or_default();
+    let name = |id: i64| hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["id"].as_i64() == Some(id)).map(|one| one["name"].as_str().unwrap().to_owned()).unwrap();
+    let mut found: Vec<String> = facts
+        .iter()
+        .filter(|one| one["fact"] == "nocapture" && one["subject"] == "param")
+        .map(|one| format!("{}.{}", name(one["function"].as_i64().unwrap()), one["id"]))
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn a_borrow_the_function_does_not_keep_is_nocapture() {
+    // `&T` and `&mut T` stated no `nocapture`: a function may return a
+    // borrowed parameter or store it where the caller keeps it. The checker
+    // knows where each borrow goes, so the facts follow from it.
+    let source = "\
+fn read(a: &i16) -> i16:
+    return a
+
+fn pick(a: &i16, b: &i16) -> &i16:
+    return a
+
+fn stash(out: &mut vec[&i16], x: &i16) -> void:
+    out.push(x)
+
+fn through(x: &i16) -> void:
+    let mut keep: vec[&i16] = []
+    stash(keep, x)
+
+fn reads_through(x: &i16) -> i16:
+    return read(x)
+
+fn main() -> i16:
+    let a: i16 = 1
+    let b: i16 = 2
+    let mut out: vec[&i16] = []
+    let p = pick(a, b)
+    print(read(a) + reads_through(a))
+    print(p)
+    stash(out, a)
+    through(a)
+    return 0
+";
+    // read.0, pick.1 (b), stash.0 (out is only pushed to), reads_through.0
+    assert_eq!(uncaptured(source), ["pick.1", "read.0", "reads_through.0", "stash.0"]);
+    // A view is a borrow too: returning a slice of it keeps it; summing it does not.
+    let views = "\
+fn tail(xs: &[i16]) -> &[i16]:
+    return &xs[1:]
+
+fn sum(xs: &[i16]) -> i16:
+    let mut s: i16 = 0
+    for x in xs:
+        s += x
+    return s
+
+fn main() -> i16:
+    let a: i16[3] = [1, 2, 3]
+    print(sum(a))
+    print(sum(tail(a)))
+    return 0
+";
+    assert_eq!(uncaptured(views), ["sum.0"]);
+    // A generator's frame outlives its call; a raw pointer goes where nothing follows it.
+    let escapes = "\
+fn walk(v: &[i16]) -> iter[i16]:
+    for x in v:
+        yield x
+
+fn address(x: &i16) -> void:
+    unsafe:
+        let p: *far i16 = &x
+
+fn main() -> i16:
+    let a: i16[2] = [1, 2]
+    let it = walk(a)
+    return 0
+";
+    // Only the frame's own `next(self)`, which keeps nothing of itself.
+    assert_eq!(uncaptured(escapes), ["$state0.next.0"]);
+}
+
+#[test]
+fn an_owned_aggregate_parameter_is_unaliased() {
+    // The caller copies a by-value struct for the call, so the callee's
+    // pointer reaches nothing else; none was stated, and a store through a
+    // borrow could not be told apart from a store to the copy.
+    let source = "\
+struct P:
+    mut x: i16
+    y: i16
+
+fn take(p: P, q: &mut P) -> i16:
+    q.x = 5
+    return p.x
+
+fn main() -> i16:
+    let mut a = P(x=1, y=2)
+    let mut b = P(x=3, y=4)
+    print(take(a, b))
+    return 0
+";
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let take = hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["name"] == "take").unwrap()["id"].as_i64().unwrap();
+    let noalias: Vec<i64> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "noalias" && one["function"].as_i64() == Some(take)).map(|one| one["id"].as_i64().unwrap()).collect();
+    assert_eq!(noalias, [0, 1]);
+}
