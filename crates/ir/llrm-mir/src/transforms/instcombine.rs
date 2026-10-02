@@ -6,13 +6,14 @@
 
 use crate::context::{Constant, ConstantKind, Context, mask, signed};
 use crate::dominators::DominatorTree;
+use crate::facts::Facts;
 use crate::edit::Position;
 use crate::interpret::{self, Val};
 use crate::memory::Callees;
 use crate::module::{InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
-use crate::types::{Type, TypeId};
+use crate::types::{FloatKind, Type, TypeId};
 
 pub struct InstCombine;
 
@@ -88,6 +89,47 @@ fn int(operand: Operand, context: &Context) -> Option<(u128, u32)> {
     }
 }
 
+/// A floating constant's value and format.
+fn float(context: &Context, operand: Operand) -> Option<(FloatKind, f64)> {
+    match value(context, operand)? {
+        Val::Float(FloatKind::Float, bits) => Some((FloatKind::Float, f64::from(f32::from_bits(bits as u32)))),
+        Val::Float(kind, bits) => Some((kind, f64::from_bits(bits))),
+        _ => None,
+    }
+}
+
+/// A floating constant's bits in `kind`.
+fn float_constant(context: &mut Context, ty: TypeId, kind: FloatKind, number: f64) -> Operand {
+    let bits = if kind == FloatKind::Float { u64::from((number as f32).to_bits()) } else { number.to_bits() };
+    Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Float(bits) }))
+}
+
+/// The operand `op` of a floating operation leaves as it is, or the number it
+/// makes of any operand, as the flags let it: InstSimplify's floating rules.
+/// A zero's sign (`nsz`), a NaN (`nnan`) and an infinity (`ninf`) are what
+/// the plain rules cannot give up.
+fn float_simplified(unit: &mut Unit, inst: InstId) -> Option<Operand> {
+    let function = &*unit.function;
+    let instruction = function.instruction(inst);
+    let Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)) = instruction.opcode else { return None };
+    let (a, b, ty) = (instruction.operands[0], instruction.operands[1], instruction.ty);
+    let facts = Facts::of_flags(instruction.flags);
+    let right = float(unit.context, b);
+    let Type::Float(kind) = *unit.context.types.get(ty) else { return None };
+    let (zero, negative_zero) = (|number: f64| number == 0.0 && number.is_sign_positive(), |number: f64| number == 0.0 && number.is_sign_negative());
+    match (op, right) {
+        // x + -0.0 and x - +0.0 are x; the other zero turns -0.0 into +0.0.
+        (BinaryOp::FAdd, Some((_, number))) if negative_zero(number) || (zero(number) && facts.no_signed_zeros()) => Some(a),
+        (BinaryOp::FSub, Some((_, number))) if zero(number) || (negative_zero(number) && facts.no_signed_zeros()) => Some(a),
+        (BinaryOp::FMul | BinaryOp::FDiv, Some((_, number))) if number == 1.0 => Some(a),
+        // 0 * x is NaN for a NaN or an infinity, and -0 for a negative x.
+        (BinaryOp::FMul, Some((_, number))) if number == 0.0 && facts.no_nans() && facts.no_signed_zeros() => Some(float_constant(unit.context, ty, kind, 0.0)),
+        (BinaryOp::FSub, _) if a == b && facts.no_nans() && facts.no_infs() => Some(float_constant(unit.context, ty, kind, 0.0)),
+        (BinaryOp::FDiv, _) if a == b && facts.no_nans() && facts.no_infs() => Some(float_constant(unit.context, ty, kind, 1.0)),
+        _ => None,
+    }
+}
+
 /// A value that already exists and equals `inst`'s: InstSimplify.
 fn simplified(unit: &mut Unit, tree: &DominatorTree, inst: InstId) -> Option<Operand> {
     let ty = unit.function.instruction(inst).ty;
@@ -106,6 +148,7 @@ fn simplified(unit: &mut Unit, tree: &DominatorTree, inst: InstId) -> Option<Ope
                 return constant(unit.context, ty, folded);
             }
             match op {
+                BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv => float_simplified(unit, inst),
                 BinaryOp::Add | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Sub | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if is(b, 0) => Some(a),
                 BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv if is(b, 1) => Some(a),
                 BinaryOp::Mul | BinaryOp::And if is(b, 0) => Some(b),
@@ -189,7 +232,7 @@ fn combined(unit: &mut Unit, inst: InstId) -> bool {
     match instruction.opcode {
         // A constant goes to the right of an operation that commutes, and of
         // a comparison, its predicate swapped.
-        Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) | Opcode::ICmp(_)
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::FAdd | BinaryOp::FMul) | Opcode::ICmp(_)
             if constant_operand(operands[0]) && !constant_operand(operands[1]) =>
         {
             if let Opcode::ICmp(predicate) = instruction.opcode {
@@ -225,6 +268,28 @@ fn combined(unit: &mut Unit, inst: InstId) -> bool {
             unit.function.set_operand(inst, 0, inner.operands[0]);
             unit.function.set_operand(inst, 1, folded);
             unit.function.set_flags(inst, Flags::default());
+            true
+        }
+        // A division by a constant is a multiply by its reciprocal, where the
+        // language lets the quotient differ in its last bit.
+        Opcode::Binary(BinaryOp::FDiv) if Facts::of_flags(instruction.flags).allow_reciprocal() => {
+            let Some((kind, divisor)) = float(context, operands[1]).filter(|(_, divisor)| divisor.is_finite() && *divisor != 0.0) else { return false };
+            let reciprocal = float_constant(unit.context, ty, kind, 1.0 / divisor);
+            let multiply = unit.function.create_instruction(Opcode::Binary(BinaryOp::FMul), ty, vec![operands[0], reciprocal], instruction.flags, None);
+            replaced(unit, inst, multiply)
+        }
+        // (x op c1) op c2 is x op (c1 op c2), where the language lets sums and
+        // products regroup.
+        Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FMul)) if Facts::of_flags(instruction.flags).reassoc() && constant_operand(operands[1]) => {
+            let Some((_, inner)) = defined(operands[0]) else { return false };
+            if inner.opcode != Opcode::Binary(op) || !constant_operand(inner.operands[1]) || !Facts::of_flags(inner.flags).reassoc() {
+                return false;
+            }
+            let (Some(c1), Some(c2)) = (value(context, inner.operands[1]), value(context, operands[1])) else { return false };
+            let Some(folded) = interpret::binary(op, instruction.flags, c1, c2).ok().and_then(|one| constant(unit.context, ty, one)) else { return false };
+            unit.function.set_operand(inst, 0, inner.operands[0]);
+            unit.function.set_operand(inst, 1, folded);
+            unit.function.set_flags(inst, instruction.flags.intersect(inner.flags));
             true
         }
         // An extension keeps whether a value is zero.

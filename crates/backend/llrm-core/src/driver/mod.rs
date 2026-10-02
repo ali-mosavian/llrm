@@ -100,6 +100,11 @@ fn spill_model(program: &Program) {
 /// its promises describe; and each module's data objects' globals, by the
 /// objects' ids.
 pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
+    // Whichever frontend made it, a program is checked before it is lowered.
+    // Dominance alone, not `llrm_hir::verify::verify`: llrm-c's HIR does not pass the rest yet (#224).
+    for function in program.modules.iter().flat_map(|module| &module.functions) {
+        llrm_hir::dominance::check(function).map_err(|why| format!("{}: {why}", function.name))?;
+    }
     let emitted = crate::hir::mir::emit(program);
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
@@ -126,6 +131,7 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
     llrm_transforms::pipeline::applied(program, &applied)?;
+    program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped);
     program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
     program.modules.iter_mut().try_for_each(crate::backend::selects::lowered)?;
     if llrm_support::debug::enabled("spillmodel") {
