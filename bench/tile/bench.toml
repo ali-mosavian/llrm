@@ -1,0 +1,7 @@
+description = "Blit a 40x25 window out of a wrapping 64x64 tile, summing the pixels"
+repetitions = 1
+
+[region]
+bas = "BenchTile"
+c = "bench_tile"
+nib = "bench_tile"
