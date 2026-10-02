@@ -1,3 +1,4 @@
+# data: values.dat
 # Section 18's complete example: `name=value` lines from VALUES.DAT, read
 # through std.io, parsed, and summed up.
 

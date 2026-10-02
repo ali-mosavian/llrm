@@ -1,3 +1,4 @@
+# link: levels.asm
 # Mixer levels: a Pascal assembly library measures, clamps and scales them,
 # calling back into the rule this program exports.
 
