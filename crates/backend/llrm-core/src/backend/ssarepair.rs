@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::analysis::{intervals as ranges, loops};
+use crate::analysis::loops;
 use crate::backend::{allocate, spiller};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
@@ -30,7 +30,7 @@ fn reloads(one: &Insn, redefined: &BTreeSet<u32>) -> Option<u32> {
 /// `body` in SSA again: every value in `redefined` has one definition per name.
 pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, BTreeSet<u32>>) -> LirBody {
     let (live_in, _) = allocate::live(body);
-    let graph = ranges::_graph(&body.blocks);
+    let graph = &body.blocks;
     let doms = loops::dominators(&graph, Some(body.entry));
     let idom = loops::immediate_dominators(&graph, Some(body.entry));
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();

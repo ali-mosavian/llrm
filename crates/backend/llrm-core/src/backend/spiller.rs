@@ -2439,7 +2439,7 @@ mod tests {
             middle.call = (between != "call listing nothing").then(|| {
                 Arc::new(crate::model::lir::CallMemory {
                     effects: llrm_mir::memory::Effects::ANY,
-                    private: if spared { vec![crate::model::mir::WHOLE_FRAME] } else { vec![] },
+                    private: if spared { vec![crate::model::lir::WHOLE_FRAME] } else { vec![] },
                 })
             });
             middle.clobbers = BTreeSet::from([Register::EAX]);

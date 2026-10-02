@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::support::bits::Bits;
 use crate::support::hash::IndexMap;
 
-use crate::model::mir::MirBlock;
+use crate::model::lir::LirBlock;
 
 /// All these walks read of a block: where it is and where it goes.
 pub trait Node {
@@ -20,7 +20,7 @@ pub trait Node {
     fn succ(&self) -> &[i64];
 }
 
-impl Node for MirBlock {
+impl Node for LirBlock {
     fn at(&self) -> i64 {
         self.at
     }

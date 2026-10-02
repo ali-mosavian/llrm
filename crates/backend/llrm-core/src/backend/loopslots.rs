@@ -22,7 +22,6 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::analysis::frequency::Frequency;
-use crate::analysis::intervals::_graph;
 use crate::analysis::loops::{self, Loop};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
@@ -466,12 +465,12 @@ fn spares(one: &Insn, at: i64) -> bool {
 
 /// `body` with each loop-invariant reload moved to where its loop is entered.
 pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
-    let graph = _graph(&body.blocks);
+    let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
     let (live_into, _, _) = liveness::live_into(body);
     let mut blocks = body.blocks.clone();
-    let mut found = loops::loops(&graph, Some(body.entry));
+    let mut found = loops::loops(graph, Some(body.entry));
     found.sort_by_key(|one| one.body.len());
     let mut taken = BTreeSet::<i64>::new();
     for one in &found {
@@ -534,9 +533,9 @@ pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
 
 /// `body` with each loop's spill slots in the registers it leaves free.
 pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
-    let graph = _graph(&body.blocks);
+    let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
-    let mut found = loops::loops(&graph, Some(body.entry));
+    let mut found = loops::loops(graph, Some(body.entry));
     // Innermost first: it runs most often.
     found.sort_by_key(|one| one.body.len());
     let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();

@@ -60,8 +60,8 @@ pub fn summary(body: &LirBody, cpu: &Profile) -> String {
 
 /// `None` for control flow with no finite profile-free estimate.
 pub fn executed(body: &LirBody) -> Option<Executed> {
-    let graph = crate::analysis::intervals::_graph(&body.blocks);
-    if !loops::irreducible(&graph, Some(body.entry)).is_empty() {
+    let graph = &body.blocks;
+    if !loops::irreducible(graph, Some(body.entry)).is_empty() {
         return None;
     }
     let frequency = Frequency::of(body);

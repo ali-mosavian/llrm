@@ -400,7 +400,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
-    let loops = crate::analysis::loops::loops(&ranges::_graph(&body.blocks), Some(body.entry));
+    let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let machine = Machine::of(&confined);

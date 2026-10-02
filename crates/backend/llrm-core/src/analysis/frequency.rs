@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::branchprob;
 
-use crate::analysis::{intervals, loops};
+use crate::analysis::loops;
 use crate::model::lir::{LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -42,7 +42,7 @@ impl Frequency {
                 predecessors.entry(*to).or_default().push(block.at);
             }
         }
-        let natural = loops::loops(&intervals::_graph(blocks), Some(body.entry));
+        let natural = loops::loops(&blocks, Some(body.entry));
         let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
         let cycles: Vec<branchprob::Cycle> = natural
             .iter()

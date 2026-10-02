@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::analysis::intervals::_graph;
 use crate::analysis::loops;
 use crate::backend::{liveness, target};
 use crate::backend::peephole::{_register_effects, id};
@@ -84,7 +83,7 @@ pub fn after(one: &Insn, zero: Roots) -> Roots {
 
 /// Before each instruction, by `id`, the roots whose upper half is zero.
 pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
-    let graph = _graph(&body.blocks);
+    let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let mut into: IndexMap<i64, Roots> =
         body.blocks.iter().map(|block| (block.at, if block.at == body.entry { 0 } else { ALL })).collect();
@@ -142,7 +141,7 @@ pub fn extended(block: &LirBlock, roots: Roots) -> LirBlock {
 /// every way in may take it: one successor, and those lanes dead there
 /// unless `held` says no value lives in them.
 pub fn preheaded(body: &LirBody, wanted: &IndexMap<i64, Roots>, held: bool) -> (LirBody, IndexMap<i64, Roots>) {
-    let graph = _graph(&body.blocks);
+    let graph = &body.blocks;
     let found = loops::loops(&graph, Some(body.entry));
     let predecessors = loops::predecessors(&graph);
     let exits = liveness::dead_at_exit(body);
@@ -206,7 +205,7 @@ fn unheld(one: &Insn) -> Roots {
 /// leaves that half alone, or before the first cell of a block no
 /// preheader proves.
 pub fn established(body: &LirBody) -> LirBody {
-    let graph = _graph(&body.blocks);
+    let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
     let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
         body.blocks.iter().filter(|block| inside.contains(&block.at)).all(|block| block.insns.iter().all(|one| disturbed(one) & roots == 0))

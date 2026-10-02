@@ -612,7 +612,7 @@ impl Selector<'_, '_, '_> {
                 }
             }
         }
-        self.private = crate::model::mir::outside(&reach);
+        self.private = crate::model::lir::outside(&reach);
         self.allocas = self.depth;
         if self.zeroed {
             let prezeroed = self.prezeroed();

@@ -15,7 +15,6 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops::{self as loopy, Loop};
-use crate::analysis::intervals;
 use crate::analysis::frequency::Frequency;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
@@ -102,7 +101,7 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
     let after: IndexMap<i64, i64> = body.blocks.windows(2).map(|pair| (pair[0].at, pair[1].at)).collect();
     let frequency = Frequency::of(body);
     let mut odds = body.odds.clone();
-    let irreducible = |blocks: &[LirBlock]| !loopy::irreducible(&intervals::_graph(blocks), Some(body.entry)).is_empty();
+    let irreducible = |blocks: &[LirBlock]| !loopy::irreducible(blocks, Some(body.entry)).is_empty();
     let reducible = !irreducible(&body.blocks);
     let mut blocks: Vec<LirBlock> = body.blocks.clone();
     for (index, parent) in body.blocks.iter().enumerate() {
@@ -224,7 +223,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
         return Ok(body.with_blocks(explicit));
     }
     let by_at: IndexMap<i64, LirBlock> = explicit.iter().map(|block| (block.at, block.clone())).collect();
-    let natural = loopy::loops(&intervals::_graph(&explicit), Some(body.entry));
+    let natural = loopy::loops(&explicit, Some(body.entry));
     let tests = _tests(&natural, body.entry, &by_at);
     // loops() is innermost first.  A block in nested loops follows the nearest
     // loop's trace before an exit from it; the outer trace resumes afterwards.
@@ -372,7 +371,7 @@ pub fn _onward(
             targets.reverse();
         }
     }
-    // A cold successor goes last; see mir.MirBlock.cold.
+    // A cold successor goes last; see `LirBlock::cold`.
     if let Some(by_at) = by_at {
         targets.sort_by_key(|target| target.is_some_and(|at| by_at.get(&at).is_some_and(|block| block.cold)));
     }

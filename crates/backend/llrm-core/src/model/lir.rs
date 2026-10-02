@@ -7,12 +7,32 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::model::ir::{Addr, Held, Operation, Semantics};
+use crate::model::ir::{Addr, Held, Operation, Semantics, Space};
 
 use crate::support::hash::IndexMap;
 
-use super::mir;
 use crate::support::pyrepr::{self, Repr};
+
+/// Every byte a 16-bit frame can address, below and above BP.
+pub const WHOLE_FRAME: (Addr, u32) = (Addr::new(Space::Frame, -(1 << 15)), 1 << 16);
+
+/// The frame's bytes no range in `reach` covers.
+pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
+    let (start, size) = WHOLE_FRAME;
+    let (low, high) = (start.disp, start.disp + i64::from(size));
+    let mut out = Vec::new();
+    let mut at = low;
+    for &(start, end) in reach {
+        if start > at {
+            out.push((Addr::new(Space::Frame, at), (start - at) as u32));
+        }
+        at = at.max(end);
+    }
+    if at < high {
+        out.push((Addr::new(Space::Frame, at), (high - at) as u32));
+    }
+    out
+}
 
 /// What a call may read and write: its effects, as `llrm_mir::memory::of`
 /// answers, and the frame bytes it cannot reach, those of the allocas
@@ -33,19 +53,19 @@ impl CallMemory {
     /// Whether no byte of the frame is reachable from it.
     #[must_use]
     pub fn spares_the_frame(&self) -> bool {
-        self.private.contains(&mir::WHOLE_FRAME)
+        self.private.contains(&WHOLE_FRAME)
     }
 
     /// Whether the frame bytes at `disp`, `width` long, are private to the
     /// caller; with no `disp`, whether the whole frame is.
     #[must_use]
     pub fn spares(&self, disp: Option<i64>, width: u32) -> bool {
-        let (whole, size) = mir::WHOLE_FRAME;
+        let (whole, size) = WHOLE_FRAME;
         let (low, high) = match disp {
             Some(disp) => (disp, disp + i64::from(width)),
             None => (whole.disp, whole.disp + i64::from(size)),
         };
-        self.private.iter().any(|(start, size)| start.space == crate::objectfile::module::Space::Frame && start.disp <= low && high <= start.disp + i64::from(*size))
+        self.private.iter().any(|(start, size)| start.space == Space::Frame && start.disp <= low && high <= start.disp + i64::from(*size))
     }
 }
 
@@ -214,7 +234,7 @@ pub struct LirBlock {
     pub insns: Vec<Arc<Insn>>,
     pub succ: Vec<i64>,
     pub phis: Vec<Phi>,
-    // See mir.MirBlock.cold.
+    /// Laid out after the hot code: every path from it ends in `unreachable`, isel finds.
     pub cold: bool,
 }
 
