@@ -20,7 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{BlockId, Function, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::facts::Facts;
 use llrm_mir::types::Type;
@@ -33,6 +33,8 @@ use crate::noreturn;
 /// Why a block's successors have the probabilities they do.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Heuristic {
+    /// The program says: `!prof` branch weights.
+    Declared,
     Unreachable,
     Loop,
     Pointer,
@@ -75,7 +77,7 @@ const LOOP_SCALE: f64 = 4096.0;
 /// `function`'s odds. `declarations` are its module's globals; `trips` each
 /// loop's header and the trips induction proves it, which stand in for the
 /// heuristic's 31 in 32.
-pub fn estimated(context: &Context, declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>) -> Odds {
+pub fn estimated(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>) -> Odds {
     let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
     let cold = noreturn::cold(context, declarations, function, &terminal);
     let mut odds = Odds::default();
@@ -87,7 +89,7 @@ pub fn estimated(context: &Context, declarations: &Declarations, function: &Func
                 odds.taken.insert((id(block), *only), 1.0);
             }
             _ => {
-                let (heuristic, weights) = weighed(context, declarations, function, shape, &cold, block, &successors);
+                let (heuristic, weights) = weighed(context, metadata, declarations, function, shape, &cold, block, &successors);
                 let total: f64 = weights.iter().sum();
                 for (to, weight) in successors.iter().zip(&weights) {
                     *odds.taken.entry((id(block), *to)).or_default() += weight / total;
@@ -100,8 +102,40 @@ pub fn estimated(context: &Context, declarations: &Declarations, function: &Func
     odds
 }
 
+/// The `!prof` `branch_weights` on `block`'s terminator, one per successor, in
+/// the order the terminator names them (a `br`'s true target then its
+/// false, a `switch`'s default then its cases). LLVM's
+/// `BranchProbabilityInfo::calcMetadataWeights`: a program's word comes before
+/// every heuristic. Weights that do not match the successors, or sum to
+/// nothing, say nothing.
+fn declared(context: &Context, metadata: &[MetadataNode], function: &Function, block: BlockId, successors: usize) -> Option<Vec<f64>> {
+    let last = function.instruction(function.terminator(block)?);
+    let (_, node) = last.metadata.iter().find(|(kind, _)| kind == "prof")?;
+    let mut operands = metadata.get(node.0 as usize)?.operands.iter();
+    let Some(MetadataOperand::String(name)) = operands.next() else { return None };
+    if name != "branch_weights" {
+        return None;
+    }
+    let weights = operands
+        .map(|one| match one {
+            MetadataOperand::Constant(at) => match context.get(*at).kind {
+                ConstantKind::Int(bits) => Some(bits as f64),
+                ConstantKind::Zero => Some(0.0),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let named = last.operands.iter().filter(|one| matches!(one, Operand::Block(_))).count();
+    let distinct = function.successors(block).len();
+    (weights.len() == named && distinct == successors && named == successors && weights.iter().sum::<f64>() > 0.0).then_some(weights)
+}
+
 /// The first heuristic that tells `block`'s successors apart, and their weights.
-fn weighed(context: &Context, declarations: &Declarations, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
+fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
+    if let Some(weights) = declared(context, metadata, function, block, successors.len()) {
+        return (Heuristic::Declared, weights);
+    }
     let split = |favoured: &dyn Fn(i64) -> bool, (yes, no): (f64, f64)| -> Option<Vec<f64>> {
         let count = successors.iter().filter(|&&at| favoured(at)).count();
         if count == 0 || count == successors.len() {

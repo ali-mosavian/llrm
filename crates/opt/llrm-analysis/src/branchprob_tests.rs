@@ -8,7 +8,7 @@ use crate::testing::{DOS, function, parsed};
 fn estimate(text: &str) -> (Odds, impl Fn(&str) -> i64 + use<>) {
     let module = parsed(&format!("{DOS}{text}"));
     let function = function(&module, "f");
-    let odds = estimated(&module.context, &module.globals, function, &Shape::of(function), &BTreeMap::new());
+    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::new());
     let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
     (odds, move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1)
 }
@@ -296,7 +296,7 @@ fn estimate_counted(text: &str, header: &str, trips: i64) -> (Odds, impl Fn(&str
     let function = function(&module, "f");
     let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
     let at = move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1;
-    let odds = estimated(&module.context, &module.globals, function, &Shape::of(function), &BTreeMap::from([(at(header), trips)]));
+    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::from([(at(header), trips)]));
     (odds, at)
 }
 
@@ -471,4 +471,48 @@ fn test_a_counted_loops_exits_share_by_their_odds() {
     assert!(close(frequency.get(&2).copied(), 4.0), "premise: the trips decide the loop: {:?}", frequency.get(&2));
     assert!(close(frequency.get(&3).copied(), 0.375), "{frequency:?}");
     assert!(close(frequency.get(&4).copied(), 0.625), "{frequency:?}");
+}
+
+fn weighted_branch(weights: &str, then_cold: bool) -> (Odds, i64, i64) {
+    let body = if then_cold { "  call void @abort()\n  unreachable\n" } else { "  ret i16 1\n" };
+    let (odds, at) = estimate(&format!(
+        "declare void @abort()
+
+define i16 @f(i16 %x) {{
+entry:
+  %c = icmp eq i16 %x, 7
+  br i1 %c, label %then, label %else, !prof !0
+
+then:
+{body}
+else:
+  ret i16 2
+}}
+
+!0 = !{{!\"branch_weights\", {weights}}}
+"
+    ));
+    (odds, at("then"), at("else"))
+}
+
+/// A program's `!prof` weights come before every heuristic: 1 to 2 is a third
+/// and two thirds where the heuristics call the branch even, so a frontend
+/// that knows a path is rare could not say so.
+#[test]
+fn test_branch_weights_set_the_odds_before_any_heuristic() {
+    let (odds, then, other) = weighted_branch("i32 1, i32 2", false);
+    let entry = odds.by.keys().next().copied().expect("a branch");
+    assert_eq!(odds.by.get(&entry), Some(&Heuristic::Declared));
+    assert!(close(odds.taken.get(&(entry, then)).copied(), 1.0 / 3.0), "{odds:?}");
+    assert!(close(odds.taken.get(&(entry, other)).copied(), 2.0 / 3.0), "{odds:?}");
+}
+
+/// Weights that do not name every successor say nothing: the heuristics decide.
+#[test]
+fn test_branch_weights_that_do_not_fit_the_successors_are_ignored() {
+    let (odds, ..) = weighted_branch("i32 1, i32 2, i32 3", false);
+    let entry = odds.by.keys().next().copied().expect("a branch");
+    assert_ne!(odds.by.get(&entry), Some(&Heuristic::Declared));
+    let (odds, ..) = weighted_branch("i32 0, i32 0", false);
+    assert_ne!(odds.by.get(&entry), Some(&Heuristic::Declared), "weights of nothing");
 }
