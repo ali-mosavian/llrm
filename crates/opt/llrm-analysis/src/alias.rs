@@ -30,7 +30,7 @@
 //! its `memory_complete` flag: a call's effect is a side table.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -1578,6 +1578,13 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
                 got = Some(foreign);
             }
+        }
+        // An access the language says is at a fixed address names linear
+        // memory, whatever its pointer was made from.
+        // The frontend states it only where the target says the address is outside
+        // the program; where the selector is a constant here, the target is asked again.
+        if reference.space == llrm_mir::datalayout::FIXED_SPACE && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
+            got = Some(regions::fixed_provenance());
         }
         Ok(MemRef { provenance: got, ..reference.clone() })
     };
