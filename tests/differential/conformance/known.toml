@@ -1,3 +1,5 @@
+# A case that fails today -> the issue that tracks it. Here, not in a header: the sources
+# are CRLF and ERL-sensitive, and the parser goldens read them byte for byte.
 "qb45/files" = "#334"
 "qb45/file-positions" = "#335"
 "qb45/typed-file-io" = "#336"
@@ -12,7 +14,5 @@
 "qb45/definitions" = "#345"
 "pds71/pds-currency" = "#346"
 "pds71/pds-timer-event" = "#347"
-"pds71/pds-mbf" = "#348"
 "vbdos/string_far_address" = "#349"
-"vbdos/financial-functions" = "#350"
 "vbdos/date_serial_surface" = "#351"

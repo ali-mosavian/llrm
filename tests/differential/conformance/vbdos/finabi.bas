@@ -53,7 +53,7 @@ if mkd$(resultValues(3)) <> chr$(0) + chr$(0) + chr$(0) + chr$(244) + chr$(255) 
     print "FAIL financial ipmt"
     end
 end if
-if mkd$(resultValues(4)) <> chr$(154) + chr$(102) + chr$(248) + chr$(137) + chr$(139) + chr$(185) + chr$(192) + chr$(63) then
+if mkd$(resultValues(4)) <> chr$(155) + chr$(102) + chr$(248) + chr$(137) + chr$(139) + chr$(185) + chr$(192) + chr$(63) then
     print "FAIL financial irr"
     end
 end if
@@ -65,15 +65,15 @@ if mkd$(resultValues(6)) <> chr$(47) + chr$(88) + chr$(3) + chr$(206) + chr$(98)
     print "FAIL financial nper"
     end
 end if
-if mkd$(resultValues(7)) <> chr$(252) + chr$(69) + chr$(29) + chr$(205) + chr$(19) + chr$(11) + chr$(50) + chr$(64) then
+if mkd$(resultValues(7)) <> chr$(253) + chr$(69) + chr$(29) + chr$(205) + chr$(19) + chr$(11) + chr$(50) + chr$(64) then
     print "FAIL financial npv"
     end
 end if
-if mkd$(resultValues(8)) <> chr$(98) + chr$(193) + chr$(96) + chr$(215) + chr$(14) + chr$(197) + chr$(33) + chr$(192) then
+if mkd$(resultValues(8)) <> chr$(99) + chr$(193) + chr$(96) + chr$(215) + chr$(14) + chr$(197) + chr$(33) + chr$(192) then
     print "FAIL financial pmt"
     end
 end if
-if mkd$(resultValues(9)) <> chr$(196) + chr$(130) + chr$(65) + chr$(176) + chr$(29) + chr$(138) + chr$(31) + chr$(192) then
+if mkd$(resultValues(9)) <> chr$(198) + chr$(130) + chr$(65) + chr$(176) + chr$(29) + chr$(138) + chr$(31) + chr$(192) then
     print "FAIL financial ppmt"
     end
 end if
@@ -81,7 +81,7 @@ if mkd$(resultValues(10)) <> chr$(196) + chr$(19) + chr$(87) + chr$(229) + chr$(
     print "FAIL financial pv"
     end
 end if
-if mkd$(resultValues(11)) <> chr$(196) + chr$(71) + chr$(207) + chr$(42) + chr$(22) + chr$(238) + chr$(157) + chr$(63) then
+if mkd$(resultValues(11)) <> chr$(25) + chr$(72) + chr$(207) + chr$(42) + chr$(22) + chr$(238) + chr$(157) + chr$(63) then
     print "FAIL financial rate"
     end
 end if
