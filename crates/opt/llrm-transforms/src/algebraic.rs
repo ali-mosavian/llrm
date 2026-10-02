@@ -98,6 +98,8 @@ fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTre
         || _offset_chain(context, function, inst)
         || _bitwise_chain(context, function, inst)
         || _identity(context, function, inst)
+        || _decided(context, function, inst)
+        || _selected(context, function, inst)
         || _inverted_compare(context, function, inst)
         || _extended_boolean_tested(context, function, inst)
         || _extended_boolean_negated(context, function, inst)
@@ -584,7 +586,7 @@ fn _identity(context: &mut Context, function: &mut Function, inst: InstId) -> bo
 }
 
 /// The operand `inst` equals by an identity: `x + 0`, `x - 0`, `x | 0`,
-/// `x ^ 0`, a shift by 0, `x * 1` and `x & -1` are `x`; `x * 0` and `x & 0`
+/// `x ^ 0`, a shift by 0, `x * 1`, `x / 1` and `x & -1` are `x`; `x * 0` and `x & 0`
 /// are 0, and `x | -1` is -1.
 pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<Operand> {
     let (op, left, right, width) = _binary(context, function, inst)?;
@@ -595,13 +597,51 @@ pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<
         let all = mask(width);
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if number == 0 => Some(kept),
-            BinaryOp::Mul if number == 1 => Some(kept),
+            BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv if number == 1 => Some(kept),
             BinaryOp::And if number == all => Some(kept),
             BinaryOp::Mul | BinaryOp::And if number == 0 => Some(other),
             BinaryOp::Or if number == all => Some(other),
             _ => None,
         }
     })
+}
+
+/// `x % 1` is 0, a comparison of a value with itself is decided by its predicate,
+/// and `x >= 0` or `x < 0` unsigned is true or false.
+fn _decided(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    let answer = match instruction.opcode {
+        Opcode::Binary(BinaryOp::URem | BinaryOp::SRem) if _integer(context, instruction.operands[1]) == Some(1) => Some(0),
+        Opcode::ICmp(predicate) => {
+            let (left, right) = (instruction.operands[0], instruction.operands[1]);
+            if left == right && matches!(left, Operand::Value(_)) {
+                Some(u128::from(matches!(predicate, IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle)))
+            } else {
+                match predicate {
+                    IntPredicate::Uge if _integer(context, right) == Some(0) => Some(1),
+                    IntPredicate::Ult if _integer(context, right) == Some(0) => Some(0),
+                    _ => None,
+                }
+            }
+        }
+        _ => None,
+    };
+    let Some(bits) = answer else { return false };
+    let decided = _constant(context, function, inst, bits);
+    _forward(function, inst, decided);
+    true
+}
+
+/// A `select` on a constant condition is the arm it chooses.
+fn _selected(context: &Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Select {
+        return false;
+    }
+    let Some(bits) = _integer(context, instruction.operands[0]) else { return false };
+    let chosen = instruction.operands[if bits & 1 == 1 { 1 } else { 2 }];
+    _forward(function, inst, chosen);
+    true
 }
 
 /// Put a loop-carried operand at the root of an integer `add` tree:

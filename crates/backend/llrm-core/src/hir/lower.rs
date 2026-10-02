@@ -804,6 +804,7 @@ impl<'a> _Scope<'a> {
                 indices,
                 offset: field_offset,
                 r#type: type_id,
+                ..
             }) => {
                 let place = self.places[place_id];
                 let root = self.types[&place.r#type];
@@ -895,7 +896,7 @@ impl<'a> _Scope<'a> {
                     },
                 }))
             }
-            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, origin, allocation }) => {
+            model::Operand::IndirectPlace(model::IndirectPlace { base, offset, r#type: type_id, volatile, origin, allocation, .. }) => {
                 let inbounds = &self.promised_inbounds(one);
                 let type_ = self.types[type_id];
                 // The owning descriptor names the allocation, as a symbol.
@@ -1073,6 +1074,7 @@ impl<'a> _Scope<'a> {
                         volatile: false,
                         origin: None,
                         allocation: None,
+                        member: None,
                     }),
                     before,
                 )
@@ -1090,6 +1092,9 @@ impl<'a> _Scope<'a> {
         // Where a block local's bytes are live: not code here.
         if matches!(instruction.op, model::Op::LifetimeStart | model::Op::LifetimeEnd) {
             return Ok(Vec::new());
+        }
+        if instruction.op == model::Op::CopyBytes {
+            return Err(InvalidHIR(format!("{} is not lowered by the legacy route", instruction.op)));
         }
         self.current = instruction.id;
         self.operands_at = instruction.operands.iter().map(|one| one as *const model::Operand as usize).collect();

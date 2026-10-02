@@ -151,7 +151,7 @@ impl<'a> FunctionCompiler<'a> {
                     base: pointer,
                     offset: descriptor::dim(word),
                     type_id: U16,
-                    inbounds: false,
+                    inbounds: false, member: None,
                 }],
                 None,
             );

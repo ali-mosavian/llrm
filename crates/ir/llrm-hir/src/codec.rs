@@ -164,11 +164,38 @@ plain_record!(ValueRef, Some("value"), value => "value");
 plain_record!(Constant, Some("constant"), r#type => "type", value => "value");
 plain_record!(PlaceRef, Some("place"), place => "place");
 plain_record!(ArrayElement, Some("array_element"), place => "place", indices => "indices");
-plain_record!(ProjectedPlace, Some("projection"), place => "place", indices => "indices", offset => "offset",
-    r#type => "type");
-plain_record!(IndirectPlace, Some("indirect"), base => "base", offset => "offset", r#type => "type",
-    volatile => "volatile", origin => "origin",
-    allocation => "allocation");
+// The member an access is, only where a frontend says: every other access writes as before.
+impl _Plain for model::ProjectedPlace {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("place".to_owned(), self.place._plain());
+        out.insert("indices".to_owned(), self.indices._plain());
+        out.insert("offset".to_owned(), self.offset._plain());
+        out.insert("type".to_owned(), self.r#type._plain());
+        if let Some(member) = &self.member {
+            out.insert("member".to_owned(), member._plain());
+        }
+        out.insert("tag".to_owned(), Json::Str("projection".to_owned()));
+        Json::Dict(out)
+    }
+}
+impl _Plain for model::IndirectPlace {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("base".to_owned(), self.base._plain());
+        out.insert("offset".to_owned(), self.offset._plain());
+        out.insert("type".to_owned(), self.r#type._plain());
+        out.insert("volatile".to_owned(), self.volatile._plain());
+        out.insert("origin".to_owned(), self.origin._plain());
+        out.insert("allocation".to_owned(), self.allocation._plain());
+        if let Some(member) = &self.member {
+            out.insert("member".to_owned(), member._plain());
+        }
+        out.insert("tag".to_owned(), Json::Str("indirect".to_owned()));
+        Json::Dict(out)
+    }
+}
+plain_record!(Member, None, owner => "owner", offset => "offset");
 plain_record!(DescriptorPlace, Some("descriptor"), base => "base", field => "field", r#type => "type");
 plain_record!(Asm, None, code => "code", inputs => "inputs", outputs => "outputs", clobbers => "clobbers",
     memory => "memory");
@@ -757,6 +784,7 @@ impl _FromMade for crate::facts::Stated {
 }
 
 made_records!(
+    Member,
     CellWriters,
     RuntimePromises,
     Type,
@@ -947,6 +975,7 @@ static PROJECTED_PLACE: _Record = _Record {
         ("indices", indices!(), true),
         ("offset", _Hint::Int, true),
         ("type", _Hint::Int, true),
+        ("member", OPTIONAL_MEMBER, false),
     ],
     build: |args| {
         _object(model::ProjectedPlace {
@@ -954,9 +983,18 @@ static PROJECTED_PLACE: _Record = _Record {
             indices: _required(args, "indices")?,
             offset: _required(args, "offset")?,
             r#type: _required(args, "type")?,
+            member: _default(args, "member", None)?,
         })
     },
 };
+
+static MEMBER: _Record = _Record {
+    name: "Member",
+    fields: &[("owner", _Hint::Int, true), ("offset", _Hint::Int, true)],
+    build: |args| _object(model::Member { owner: _required(args, "owner")?, offset: _required(args, "offset")? }),
+};
+
+const OPTIONAL_MEMBER: _Hint = _Hint::Union(&[_Hint::Record(&MEMBER), _Hint::NoneType]);
 
 static INDIRECT_PLACE: _Record = _Record {
     name: "IndirectPlace",
@@ -967,6 +1005,7 @@ static INDIRECT_PLACE: _Record = _Record {
         ("volatile", _Hint::Bool, false),
         ("origin", OPTIONAL_INT, false),
         ("allocation", OPTIONAL_INT, false),
+        ("member", OPTIONAL_MEMBER, false),
     ],
     build: |args| {
         _object(model::IndirectPlace {
@@ -976,6 +1015,7 @@ static INDIRECT_PLACE: _Record = _Record {
             volatile: _default(args, "volatile", false)?,
             origin: _default(args, "origin", None)?,
             allocation: _default(args, "allocation", None)?,
+            member: _default(args, "member", None)?,
         })
     },
 };

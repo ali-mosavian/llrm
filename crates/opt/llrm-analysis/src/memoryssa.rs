@@ -170,6 +170,14 @@ fn located(reference: &MemRef) -> Option<Location> {
     reference.pointer.map(|pointer| Location { pointer, bytes: u64::from(reference.width) })
 }
 
+/// Whether `writes`, what an instruction writes (`None`: anything), may
+/// change a byte of `cell`, each write asked `clobbers`: the one answer to
+/// it, so that the rules hold everywhere. Nothing changes a constant
+/// object, nor what an `invariant` read reads (`memory::invariant_load`).
+pub fn changes(cell: &MemRef, invariant: bool, writes: Option<&[MemRef]>, clobbers: impl Fn(&MemRef) -> bool) -> bool {
+    !invariant && !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
+}
+
 /// Whether writing `store` may change a byte of `cell`: `regions` leaves
 /// it open and `pointerfacts` cannot place them apart.
 pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cell: &MemRef, store: &MemRef) -> bool {
@@ -267,6 +275,8 @@ impl MemorySSA<'_> {
 
     fn frontier(&self, site: InstId, memory: &MemRef, boundary: Option<usize>, edge: Option<i64>, edge_memory: Option<&MemRef>) -> BTreeSet<usize> {
         let block = self.at(site).block;
+        // A load of what is written once, then never: no write changes what it reads.
+        let invariant = llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
         let mut seen = BTreeSet::new();
         let mut found = BTreeSet::new();
@@ -299,7 +309,7 @@ impl MemorySSA<'_> {
                         _ => memory,
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
-                    if written.as_ref().is_none_or(|stores| stores.iter().any(|store| may_clobber(&self.unit, None, queried, store))) {
+                    if changes(queried, invariant, written.as_deref(), |store| may_clobber(&self.unit, None, queried, store)) {
                         found.insert(current);
                     } else {
                         pending.push(access.defining);

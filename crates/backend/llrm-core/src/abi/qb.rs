@@ -1034,6 +1034,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.segment_registers()
     }
 
+    fn two_address(&self) -> bool {
+        self.machine.two_address()
+    }
+
     fn address_registers(&self) -> i64 {
         self.machine.address_registers()
     }

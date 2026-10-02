@@ -34,11 +34,13 @@ pub struct Room {
     pub segments: i64,
     /// The registers an address's pointer and index must be held in.
     pub addresses: i64,
+    /// Whether a result is made in its first operand's register.
+    pub two_address: bool,
 }
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
-        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers(), addresses: outer.target().address_registers() }
+        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers(), addresses: outer.target().address_registers(), two_address: outer.target().two_address() }
     }
 
     pub fn priced(&self) -> bool {
@@ -133,6 +135,23 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
     let Some(Operand::Value(pointer)) = address else { return 0 };
     let read = address_values(function, *pointer);
     read.iter().filter(|value| !live.contains(value)).count() as i64 + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
+}
+
+/// The register a result takes besides those live before it: where it is made in
+/// its first operand's, an operand that stays live must first be copied, and the
+/// copy lives with the second operand, which the operation reads. `sub cx, di`
+/// after `mov cx, dx` holds both `dx` and `cx`: a 7th value where six registers
+/// held six. A commutative operation takes either operand's; one of them dying
+/// is enough. A shift is two-address too: `sar r, imm` makes its result in the first operand's register.
+pub fn copied(function: &Function, inst: InstId, past: &BTreeSet<ValueId>, room: Room, counted: &dyn Fn(ValueId) -> bool) -> i64 {
+    let op = function.instruction(inst);
+    let (Opcode::Binary(kind), Some(result), [first, second]) = (&op.opcode, op.result, &op.operands[..]) else { return 0 };
+    if !room.two_address || !counted(result) {
+        return 0;
+    }
+    let stays = |operand: &Operand| matches!(operand, Operand::Value(value) if past.contains(value));
+    let tied = if matches!(kind, BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) { !(matches!(first, Operand::Value(_)) && !stays(first)) && !(matches!(second, Operand::Value(_)) && !stays(second)) } else { stays(first) };
+    i64::from(tied)
 }
 
 /// The values an access takes its address from: its pointer, or where the
@@ -422,7 +441,7 @@ pub fn sites(
             inst,
             addresses: Point { registers: room.addresses, residents: if room.addresses > 0 { routed(&before) } else { Vec::new() } },
             segments: Point { registers: room.segments, residents: held(&before) },
-            before: Point { registers: room.registers - transient(inst, &before), residents: residents(before) },
+            before: Point { registers: room.registers - transient(inst, &before) - copied(function, inst, &past, room, counted), residents: residents(before) },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
         })
         .collect()

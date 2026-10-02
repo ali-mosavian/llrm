@@ -238,6 +238,10 @@ const FLOAT: u32 = 10;
 /// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
 
+/// The most load and store pairs a memcpy expands to, as LLVM's x86 MaxStoresPerMemcpy;
+/// past it, `rep movs`.
+const MEMCPY_MOVES: i64 = 8;
+
 /// The bytes of a constant memset's `rep stosb` through es:di, as
 /// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
 /// the count, the fill, and DI's save in the frame.
@@ -2523,6 +2527,7 @@ impl Selector<'_, '_, '_> {
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
+                Some(Intrinsic::MemCpy) => self.memcpy(arguments, at, out),
                 Some(Intrinsic::Unary(function)) => {
                     let Some(&(_, name)) = FLOAT_FUNCTIONS.iter().find(|(one, _)| *one == function) else { return refuse(format!("{function:?}")) };
                     let a = self.float(arguments[0], at, out)?;
@@ -2840,6 +2845,118 @@ impl Selector<'_, '_, '_> {
         let each = if dwords > 1 { 4 } else { 8 };
         let setup = if dwords > 1 { 6 } else { 0 };
         setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
+    }
+
+    /// A memcpy, as LLVM's getMemcpy lowers one: a constant length in at
+    /// most `MEMCPY_MOVES` pairs, each a load into a register and a store
+    /// from it, widest first, where only the bytes it names are read; else
+    /// `rep movsd` through es:di, the tail by `movsw` and `movsb`, as `memset`
+    /// does its fill.
+    fn memcpy(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let &[destination, source, length, volatile] = arguments else { return refuse("a memcpy of other than four operands") };
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
+        let constant = self.constant(length, 2);
+        if let Some(length) = constant
+            && length / 4 + (length % 4).count_ones() as i64 <= MEMCPY_MOVES
+        {
+            let mut offset = 0;
+            for width in [4, 2, 1] {
+                while length - offset >= i64::from(width) {
+                    let held = self.fresh_held(width);
+                    let load = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(from.moved(offset), width))]);
+                    let store = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(to.moved(offset), width))], vec![Loc::Held(held)]);
+                    out.push(Arc::new(Insn { volatile, ..insn_of(at, load) }));
+                    out.push(Arc::new(Insn { volatile, ..insn_of(at, store) }));
+                    offset += i64::from(width);
+                }
+            }
+            return Ok(());
+        }
+        let mut put = |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+        // Each side's cell address in a register, as `memset` takes its destination's.
+        let mut through = |this: &mut Self, pointer: Pointer, out: &mut Vec<Arc<Insn>>| match pointer {
+            Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } => base,
+            _ => {
+                let held = this.fresh_held(2);
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, this.address(pointer, held)) }));
+                held
+            }
+        };
+        let (mut si, mut di) = (through(self, from, out), through(self, to, out));
+        // The source is read through its own segment, the destination's is es.
+        let source_segment = match from {
+            Pointer::Far { selector, .. } => Loc::Held(selector),
+            Pointer::Frame { .. } => Loc::Reg(Reg { register: Register::SS, width: 2 }),
+            _ => Loc::Reg(Reg { register: Register::DS, width: 2 }),
+        };
+        let es = Loc::Reg(Reg { register: Register::ES, width: 2 });
+        let destination_segment = match to {
+            Pointer::Far { selector, .. } => Loc::Held(selector),
+            _ => {
+                let source = if matches!(to, Pointer::Frame { .. }) { Register::SS } else { Register::DS };
+                put(semantics(Operation::Push, "push", vec![], vec![es.clone()]), out);
+                put(semantics(Operation::Push, "push", vec![], vec![Loc::Reg(Reg { register: source, width: 2 })]), out);
+                put(semantics(Operation::Pop, "pop", vec![es.clone()], vec![]), out);
+                es.clone()
+            }
+        };
+        // Each part: the cells moved, how many (none for one), and their width.
+        let mut parts: Vec<(&str, Option<Loc>)> = Vec::new();
+        match constant {
+            Some(length) => {
+                let imm = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+                match length / 4 {
+                    0 => {}
+                    1 => parts.push(("movsd", None)),
+                    bulk => parts.push(("movsd", Some(imm(bulk)))),
+                }
+                let mut tail = length % 4;
+                for (name, width) in [("movsw", 2), ("movsb", 1)] {
+                    if tail >= width {
+                        parts.push((name, None));
+                        tail -= width;
+                    }
+                }
+            }
+            None => {
+                let ty = self.function.operand_type(&self.module.context, length).expect("a typed length");
+                let counted = self.held(length, ty, at, out)?;
+                let (bulk, tail) = (self.fresh_held(2), self.fresh_held(2));
+                let imm = |value: i64, width: u32| Loc::Imm(Imm { value, width, address: None });
+                put(semantics(Operation::Binary, "shr", vec![Loc::Held(bulk)], vec![Loc::Held(counted), imm(2, 1)]), out);
+                put(semantics(Operation::Binary, "and", vec![Loc::Held(tail)], vec![Loc::Held(counted), imm(3, 2)]), out);
+                parts.extend([("movsd", Some(Loc::Held(bulk))), ("movsb", Some(Loc::Held(tail)))]);
+            }
+        }
+        for (name, count) in parts {
+            let (si_after, di_after) = (self.fresh_held(2), self.fresh_held(2));
+            let what = match count {
+                None => semantics(
+                    Operation::Copy,
+                    name,
+                    vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after)],
+                    vec![Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment.clone()],
+                ),
+                Some(count) => {
+                    let counted = self.fresh_held(2);
+                    put(semantics(Operation::Move, "mov", vec![Loc::Held(counted)], vec![count]), out);
+                    let emptied = self.fresh_held(2);
+                    semantics(
+                        Operation::Copy,
+                        name,
+                        vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after), Loc::Held(emptied)],
+                        vec![Loc::Held(counted), Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment.clone()],
+                    )
+                }
+            };
+            put(what, out);
+            (si, di) = (si_after, di_after);
+        }
+        if !matches!(to, Pointer::Far { .. }) {
+            put(semantics(Operation::Pop, "pop", vec![Loc::Reg(Reg { register: Register::ES, width: 2 })], vec![]), out);
+        }
+        Ok(())
     }
 
     /// A memset, as LLVM's getMemset lowers one: a constant byte over a

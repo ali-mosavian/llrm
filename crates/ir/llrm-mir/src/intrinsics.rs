@@ -24,6 +24,10 @@ pub enum Intrinsic {
     /// nearest, ties to even.
     LRint,
     MemSet,
+    /// `llvm.memcpy`: as many bytes from its second argument to its first as
+    /// its third says, byte for byte. A byte the source never wrote stays
+    /// only that byte undefined; the two do not overlap.
+    MemCpy,
     LifetimeStart,
     LifetimeEnd,
     /// `llvm.assume`: its condition holds here, which a pass may use and no
@@ -211,7 +215,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 31] = [
+const TABLE: [Spec; 32] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -259,6 +263,15 @@ const TABLE: [Spec; 31] = [
         parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Int(8), &[]), (Slot::Any(1), &[]), (Slot::Int(1), &["immarg"])],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "write")],
+    },
+    Spec {
+        name: "llvm.memcpy",
+        intrinsic: Intrinsic::MemCpy,
+        overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "readwrite")],
     },
     Spec {
         name: "llvm.assume",

@@ -262,6 +262,15 @@ pub fn invariant(context: &Context, layout: &DataLayout, function: &Function, po
     facts.no_alias() && facts.read_only()
 }
 
+/// Whether the load `inst` reads memory nothing writes once it is initialised: the language says
+/// so of the load (`!invariant.load`) or of what it reads (`invariant`). Every pass that asks
+/// what may clobber a load asks this first.
+pub fn invariant_load(context: &Context, layout: &DataLayout, function: &Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    matches!(instruction.opcode, Opcode::Load { volatile: false, .. })
+        && (Facts::of_instruction(function, inst).invariant() || invariant(context, layout, function, instruction.operands[0]))
+}
+
 /// Whether the call `inst` always comes back, as it or its callee says.
 pub fn call_returns(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
     let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };

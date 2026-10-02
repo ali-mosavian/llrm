@@ -166,7 +166,7 @@ impl FunctionCompiler<'_> {
             base: descriptor,
             offset: 0,
             type_id: U16,
-            inbounds: false,
+            inbounds: false, member: None,
         };
         self.emit("load", vec![length], vec![place], None);
         (data, hir::Operand::Value(length))

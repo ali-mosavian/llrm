@@ -785,9 +785,8 @@ fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     let program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
     let emitted = llrm_hir::mir::emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
-    let mut module = emitted.module;
-    // As the pipeline folds the frontend's `icmp ne (sext i1 %c), 0` to `%c`.
-    llrm_mir::transforms::optimized_with(&mut module, &["instcombine"]).expect("optimizes");
+    // The assumption is made on the comparison's own `i1`, before any pass.
+    let module = emitted.module;
     let layout = llrm_mir::datalayout::DataLayout::default();
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
     let unit = Unit::of(&module, &layout, function);

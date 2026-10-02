@@ -56,6 +56,8 @@ pub enum Operand {
         indices: Vec<Operand>,
         offset: u32,
         type_id: u32,
+        /// The member of an aggregate type this is: the type and the member's offset in it.
+        member: Option<(u32, u32)>,
     },
     IndirectPlace {
         base: u32,
@@ -63,6 +65,8 @@ pub enum Operand {
         type_id: u32,
         // An array element: the language promises it stays inside its array.
         inbounds: bool,
+        /// The member of an aggregate type this is: the type and the member's offset in it.
+        member: Option<(u32, u32)>,
     },
     DescriptorPlace {
         base: u32,
@@ -450,12 +454,17 @@ fn operands(out: &mut String, values: &[Operand]) {
                 indices,
                 offset,
                 type_id,
+                member,
             } => {
                 write!(out, "{{\"indices\":[").unwrap();
                 operands(out, indices);
+                write!(out, "],").unwrap();
+                if let Some((owner, at)) = member {
+                    write!(out, "\"member\":{{\"offset\":{at},\"owner\":{owner}}},").unwrap();
+                }
                 write!(
                     out,
-                    "],\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}"
+                    "\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}"
                 )
                 .unwrap();
             }
@@ -464,11 +473,18 @@ fn operands(out: &mut String, values: &[Operand]) {
                 offset,
                 type_id,
                 inbounds: _,
-            } => write!(
-                out,
-                "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
-            )
-            .unwrap(),
+                member,
+            } => {
+                write!(out, "{{\"base\":{base},").unwrap();
+                if let Some((owner, at)) = member {
+                    write!(out, "\"member\":{{\"offset\":{at},\"owner\":{owner}}},").unwrap();
+                }
+                write!(
+                    out,
+                    "\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
+                )
+                .unwrap()
+            }
             Operand::DescriptorPlace {
                 base,
                 field,
