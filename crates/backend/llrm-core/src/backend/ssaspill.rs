@@ -87,6 +87,7 @@ impl LIRTransform for SsaSpill {
                 Ok((assigned, pins)) => {
                     *self.assigned.borrow_mut() = pins;
                     self.left_ssa = true;
+                    llrm_support::debug!("ssaassign", "{}: assigned", out.name);
                     return Ok(assigned);
                 }
                 Err(why) => {
@@ -280,15 +281,20 @@ impl<'a> Machine<'a> {
         self.confined.get(&value).map(|class| class.iter().map(|one| _whole(*one)).filter(|one| self.general.contains(one)).collect())
     }
 
-    /// Whether `held` fits `room` registers, and the `acting` values among it, which an
-    /// instruction needs in their class registers just now, satisfy Hall's condition.
-    /// A value waiting in another register costs a copy to act, not a place.
+    /// Whether `held` fits `room` registers, and its values satisfy Hall's condition
+    /// over the classes: a byte value always (no other register has a byte half), an
+    /// address role only for the `acting` values, which an instruction needs in it
+    /// just now (a value waiting in another register costs a copy to act, not a place).
     fn fits(&self, held: &BTreeSet<u32>, acting: &BTreeSet<u32>, room: usize) -> bool {
         if held.len() > room {
             return false;
         }
+        let bytes: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
         self.classes.iter().all(|class| {
-            held.iter().filter(|value| acting.contains(*value) && self.class(**value).is_some_and(|mine| mine.is_subset(class))).count() <= class.len()
+            let counted = |value: &u32| {
+                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || mine.is_subset(&bytes)))
+            };
+            held.iter().filter(|value| counted(value)).count() <= class.len()
         })
     }
 }

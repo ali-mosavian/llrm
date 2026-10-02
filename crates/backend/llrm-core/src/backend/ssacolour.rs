@@ -70,12 +70,14 @@ fn wishes(body: &LirBody) -> IndexMap<u32, Register> {
 pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, fixed: &IndexMap<u32, Register>, segments: &Segments) -> IndexMap<u32, Register> {
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let general: Vec<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
-    // A value any register holds leaves the address registers to the values only they hold, the scarcest last.
+    // A value any register holds leaves the byte registers to the values only they hold: those
+    // have no other home, while an address role is met by a copy where the value acts.
+    let bytes_first: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
     let mut roomy: Vec<Register> = general.clone();
-    roomy.sort_by_key(|register| (target::WORD_INDEXES.iter().any(|one| _whole(*one) == *register), target::ADDRESSING.iter().any(|one| _whole(*one) == *register)));
+    roomy.sort_by_key(|register| bytes_first.contains(register));
     // A byte value lives in a register with byte halves; an address role is met
     // where the value acts, by a copy if need be, so it only orders the choice.
-    let bytes: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
+    let bytes = &bytes_first;
     let class_of = |value: u32| -> Vec<Register> {
         match confined.get(&value) {
             None => roomy.clone(),
