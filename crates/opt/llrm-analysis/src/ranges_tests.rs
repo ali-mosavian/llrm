@@ -662,6 +662,46 @@ fn an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
     }
 }
 
+/// A `range` a callee states of its result, or a parameter states of itself,
+/// bounded nothing: no analysis read it. `LEN` (0 to 32767), `INSTR`, the
+/// runtime's counts and every frontend's stated range were dropped on the way
+/// to the pass that would have used them.
+#[test]
+fn a_stated_range_bounds_a_parameter_and_a_call_result() {
+    let parsed = Parsed::new(
+        "define range(i16 0, 100) i16 @len(ptr %p) {
+b0:
+  ret i16 0
+}
+
+declare i16 @plain(ptr)
+
+define i16 @f(i16 range(i16 -5, 6) %x, ptr %p) {
+b0:
+  %n = call i16 @len(ptr %p)
+  %m = call i16 @plain(ptr %p)
+  %o = call range(i16 1, 3) i16 @plain(ptr %p)
+  %c = icmp slt i16 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %n
+
+b2:
+  ret i16 %m
+}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        let at = &scoped[&cfg::id(parsed.block("b2"))];
+        assert_eq!(at.get(&parsed.value("x")), Some(&interval(0, 5, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("n")), Some(&interval(0, 99, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("o")), Some(&interval(1, 2, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("m")), None, "a call with no range says nothing");
+    }
+}
+
 /// What a block assumes bounds a value in the blocks it dominates, as the
 /// branch of a check does, in loops and out; not in its own block.
 #[test]

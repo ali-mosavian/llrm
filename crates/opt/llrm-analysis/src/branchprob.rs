@@ -20,7 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{BlockId, Function, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::facts::Facts;
 use llrm_mir::types::Type;
@@ -33,6 +33,10 @@ use crate::noreturn;
 /// Why a block's successors have the probabilities they do.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Heuristic {
+    /// The program says: `!prof` branch weights.
+    Declared,
+    /// An invoke's unwind edge is all but never taken.
+    Invoke,
     Unreachable,
     Loop,
     Pointer,
@@ -75,7 +79,7 @@ const LOOP_SCALE: f64 = 4096.0;
 /// `function`'s odds. `declarations` are its module's globals; `trips` each
 /// loop's header and the trips induction proves it, which stand in for the
 /// heuristic's 31 in 32.
-pub fn estimated(context: &Context, declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>) -> Odds {
+pub fn estimated(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>) -> Odds {
     let terminal = noreturn::terminal_sites(context, declarations, function, &BTreeSet::new());
     let cold = noreturn::cold(context, declarations, function, &terminal);
     let mut odds = Odds::default();
@@ -87,7 +91,7 @@ pub fn estimated(context: &Context, declarations: &Declarations, function: &Func
                 odds.taken.insert((id(block), *only), 1.0);
             }
             _ => {
-                let (heuristic, weights) = weighed(context, declarations, function, shape, &cold, block, &successors);
+                let (heuristic, weights) = weighed(context, metadata, declarations, function, shape, &cold, block, &successors);
                 let total: f64 = weights.iter().sum();
                 for (to, weight) in successors.iter().zip(&weights) {
                     *odds.taken.entry((id(block), *to)).or_default() += weight / total;
@@ -100,8 +104,53 @@ pub fn estimated(context: &Context, declarations: &Declarations, function: &Func
     odds
 }
 
+/// What an invoke's normal edge weighs against its unwind edge's one.
+const INVOKE_NORMAL: f64 = 1048575.0;
+
+/// The `!prof` `branch_weights` on `block`'s terminator, one per target it
+/// names, in the order it names them (a `br`'s true target then its false, a
+/// `switch`'s default then its cases), summed into each distinct successor:
+/// cases that share a body weigh together, as LLVM's `calcMetadataWeights`
+/// has it. Weights that do not name every target, or sum to nothing, say
+/// nothing.
+fn declared(context: &Context, metadata: &[MetadataNode], function: &Function, block: BlockId, successors: &[i64]) -> Option<Vec<f64>> {
+    let last = function.instruction(function.terminator(block)?);
+    let (_, node) = last.metadata.iter().find(|(kind, _)| kind == "prof")?;
+    let mut operands = metadata.get(node.0 as usize)?.operands.iter();
+    let Some(MetadataOperand::String(name)) = operands.next() else { return None };
+    if name != "branch_weights" {
+        return None;
+    }
+    let weights = operands
+        .map(|one| match one {
+            MetadataOperand::Constant(at) => match context.get(*at).kind {
+                ConstantKind::Int(bits) => Some(bits as f64),
+                ConstantKind::Zero => Some(0.0),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let targets = last.operands.iter().filter_map(|one| if let Operand::Block(target) = one { Some(id(*target)) } else { None }).collect::<Vec<_>>();
+    if weights.len() != targets.len() || weights.iter().sum::<f64>() <= 0.0 {
+        return None;
+    }
+    Some(successors.iter().map(|to| targets.iter().zip(&weights).filter(|(target, _)| *target == to).map(|(_, weight)| weight).sum()).collect())
+}
+
 /// The first heuristic that tells `block`'s successors apart, and their weights.
-fn weighed(context: &Context, declarations: &Declarations, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
+fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
+    if let Some(weights) = declared(context, metadata, function, block, successors) {
+        return (Heuristic::Declared, weights);
+    }
+    if let Some(last) = function.terminator(block).map(|one| function.instruction(one))
+        && matches!(last.opcode, Opcode::Invoke(_))
+        && let [Operand::Block(_), Operand::Block(_)] = last.operands.iter().filter(|one| matches!(one, Operand::Block(_))).copied().collect::<Vec<_>>()[..]
+        && successors.len() == 2
+    {
+        // LLVM's `calcInvokeHeuristics`: the unwind edge is taken 1 time in 2^20.
+        return (Heuristic::Invoke, vec![INVOKE_NORMAL, 1.0]);
+    }
     let split = |favoured: &dyn Fn(i64) -> bool, (yes, no): (f64, f64)| -> Option<Vec<f64>> {
         let count = successors.iter().filter(|&&at| favoured(at)).count();
         if count == 0 || count == successors.len() {
