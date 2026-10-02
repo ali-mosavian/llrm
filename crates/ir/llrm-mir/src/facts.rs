@@ -167,6 +167,9 @@ facts! {
         NoCapture no_capture "nocapture" on [Param, Operand];
         WriteOnly write_only "writeonly" on [Operand];
         NoReturn no_return "noreturn" on [Callable];
+        // Every loop of it that does nothing observable ends: the language says
+        // so (C11 6.8.5), as LLVM's `mustprogress`.
+        MustProgress must_progress "mustprogress" on [Callable];
         // The result is a three-way compare of the data: its sign says which
         // is greater, nothing about how often. LLVM knows strcmp's by name
         // (LibFunc); here the language states it of the routine.

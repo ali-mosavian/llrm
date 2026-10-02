@@ -1031,3 +1031,34 @@ b0:
     found.sort();
     assert_eq!(found, ["calls_intrinsic", "calls_quiet", "leaf", "listed"]);
 }
+
+fn spin(attrs: &str, load: &str) -> String {
+    format!(
+        "define i16 @spin(ptr %p) {attrs} {{
+b0:
+  br label %b1
+
+b1:
+  %v = {load} i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %b1, label %b2
+
+b2:
+  ret i16 0
+}}
+"
+    )
+}
+
+/// A loop no counter bounds ended only where the language says it must: C11
+/// lets a loop that does nothing observable be assumed to end, and
+/// `mustprogress` is that promise. `willreturn` waited for a counted bound
+/// and so was never inferred for `while (*p)`; an observable loop (a volatile
+/// load) may legally run forever and stays unmarked.
+#[test]
+fn test_function_attrs_takes_mustprogress_for_a_loop_it_cannot_count() {
+    let willreturn = |text: &str| through(&["function-attrs"], text).lines().find(|line| line.starts_with("define")).is_some_and(|line| line.contains("willreturn"));
+    assert!(willreturn(&spin("mustprogress", "load")));
+    assert!(!willreturn(&spin("", "load")), "no promise: an uncounted loop may not end");
+    assert!(!willreturn(&spin("mustprogress", "load volatile")), "an observable loop may run forever");
+}

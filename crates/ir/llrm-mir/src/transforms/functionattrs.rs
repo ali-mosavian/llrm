@@ -49,7 +49,7 @@ impl ModulePass for FunctionAttrs {
                     added.push(Attribute::Memory(vec![(Some("argmem".to_owned()), access(arguments).to_owned())]));
                 }
             }
-            if !memory::returns(&function.attrs) && returns(context, &callees, function) {
+            if !memory::returns(&function.attrs) && returns(context, &callees, function, quiet) {
                 added.push(Attribute::Flag("willreturn".to_owned()));
             }
             if quiet && !function.attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "norecurse")) {
@@ -85,6 +85,16 @@ fn recurses_never(module: &Module, graph: &crate::callgraph::CallGraph, id: Glob
             return function.attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "nocallback")) || module.globals[at.0 as usize].name.as_deref().and_then(crate::intrinsics::Intrinsic::named).is_some_and(|one| !matches!(one, crate::intrinsics::Intrinsic::Code | crate::intrinsics::Intrinsic::Asm));
         }
         !graph.calls_unknown(at)
+    })
+}
+
+/// Whether `function` does nothing a loop that never ended could be seen by:
+/// no volatile access and no call that writes.
+fn unobserved(context: &Context, callees: &Callees, function: &Function) -> bool {
+    function.walk().all(|(_, inst)| match &function.instruction(inst).opcode {
+        Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => !volatile,
+        Opcode::Call(_) | Opcode::Invoke(_) => !memory::of(context, callees, function, inst).writes,
+        _ => true,
     })
 }
 
@@ -142,8 +152,11 @@ fn accesses(context: &Context, layout: &crate::datalayout::DataLayout, callees: 
 }
 
 /// Whether `function` always comes back: every callee does, and every loop
-/// leaves once a counter stepping by one reaches its bound.
-fn returns(context: &Context, callees: &Callees, function: &Function) -> bool {
+/// leaves once a counter stepping by one reaches its bound, or the language
+/// promises it (`mustprogress`) of a function that cannot re-enter itself
+/// and does nothing observable: a loop of such a function that never ended
+/// would be undefined.
+fn returns(context: &Context, callees: &Callees, function: &Function, norecurse: bool) -> bool {
     let calls_return = function.walk().all(|(_, inst)| match &function.instruction(inst).opcode {
         Opcode::Call(info) => memory::returns(&info.attrs) || memory::callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.returns),
         Opcode::Invoke(_) => false,
@@ -151,6 +164,9 @@ fn returns(context: &Context, callees: &Callees, function: &Function) -> bool {
     });
     if !calls_return {
         return false;
+    }
+    if norecurse && crate::facts::Facts::of(&function.attrs).must_progress() && unobserved(context, callees, function) {
+        return true;
     }
     let tree = DominatorTree::new(function);
     let loops = LoopInfo::new(function, &tree);
