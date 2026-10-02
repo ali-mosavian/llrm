@@ -34,10 +34,11 @@ from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 RUN = ROOT / "tests" / "run"
 EXAMPLES = ROOT / "examples"
+BENCH = ROOT / "bench"
 DEFAULT_FLAGS = ["-O2", "--cpu", "486"]
 KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "mask")
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
-COMPILERS = {".bas": ["llrm-qb"], ".nib": []}
+COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
 
 
@@ -53,11 +54,17 @@ class Program:
 
     @property
     def name(self) -> str:
-        return f"{self.source.parent.name}/{self.source.stem}"
+        return f"{self.source.parent.name}/{self.source.name}"
 
     @property
     def stem(self) -> str:
         return self.source.stem
+
+    @property
+    def out(self) -> Path:
+        """NAME.out beside the source, or for bench/NAME/ and a directory of variants, the one NAME.out they all print."""
+        own = self.source.with_suffix(".out")
+        return own if own.exists() else self.source.parent / f"{self.source.parent.name}.out"
 
 
 def header(source: Path) -> dict[str, str]:
@@ -74,11 +81,13 @@ def header(source: Path) -> dict[str, str]:
 
 def discover(selected: list[str]) -> list[Program]:
     programs = []
-    for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*"))]:
-        if source.suffix in COMPILERS and source.with_suffix(".out").exists():
+    for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*")), *sorted(BENCH.glob("*/*"))]:
+        if source.suffix in COMPILERS:
             settings = header(source)
-            programs.append(Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known"),
-                                    settings.get("dialect", "qb45"), tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", "")))
+            program = Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known"),
+                              settings.get("dialect", "qb45"), tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", ""))
+            if program.out.exists():
+                programs.append(program)
     if selected:
         programs = [p for p in programs if p.source.parent.name in selected or p.source.stem in selected or p.name in selected]
     return programs
@@ -104,7 +113,7 @@ def first_difference(want: list[str], got: list[str]) -> str:
 
 def compile_one(program: Program, obj: Path) -> str | None:
     tool, *rest = COMPILERS[program.source.suffix]
-    dialect = ["--dialect", program.dialect, "--runtime", program.dialect]
+    dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
     done = subprocess.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)],
                           capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not obj.exists():
@@ -133,6 +142,14 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     obj = work / f"{stem}.obj"
     if problem := compile_one(program, obj):
         return problem
+    if program.source.suffix == ".c":
+        exe = work / f"{stem}.exe"
+        try:
+            dosbatch.link_c(obj, exe, work)
+            dosbatch.check_loads(exe)
+        except (dosbatch.BuildError, dosbatch.TooBig) as error:
+            return f"link: {error}"
+        return Job(stem, "exe", exe, files=data_files(program))
     extras = []
     for at, one in enumerate(program.link):
         extra = work / f"{stem}L{at}.obj"
@@ -172,7 +189,7 @@ def main() -> int:
                 problem = f"{result.status}: {result.detail}"
             else:
                 got = masked(lines(result.text), program.mask)
-                problem = first_difference(lines(program.source.with_suffix(".out").read_text()), got)
+                problem = first_difference(lines(program.out.read_text()), got)
         if problem and program.known:
             known += 1
             print(f"KNOWN {program.name} ({program.known}): {problem}")

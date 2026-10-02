@@ -39,7 +39,10 @@ def _run(command: list[str], cwd: Path | None = None) -> None:
 
 
 def assemble(source: Path, obj: Path, *defines: str) -> None:
-    _run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
+    try:
+        dosbatch.assemble(source, obj, *defines)
+    except dosbatch.BuildError as error:
+        raise CompileError(str(error))
 
 
 def check_loads(exe: Path) -> None:
@@ -50,12 +53,10 @@ def check_loads(exe: Path) -> None:
 
 
 def link_c(obj: Path, exe: Path, work: Path) -> None:
-    crt, ext = work / "CRT.OBJ", work / "EXT.OBJ"
-    if not crt.exists():
-        assemble(HERE / "runtime" / "crt.asm", crt)
-        assemble(HERE / "runtime" / "ext.asm", ext)
-    _run([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj),
-          "file", str(ext)])
+    try:
+        dosbatch.link_c(obj, exe, work)
+    except dosbatch.BuildError as error:
+        raise CompileError(str(error))
 
 
 def link_nib(obj: Path, exe: Path, work: Path, opt: str) -> None:
