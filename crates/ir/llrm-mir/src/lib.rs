@@ -11,6 +11,8 @@ pub mod debuginfo;
 pub mod dominators;
 pub mod edit;
 pub mod facts;
+#[cfg(test)]
+mod facts_coverage;
 pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;
