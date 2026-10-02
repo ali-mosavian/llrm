@@ -349,16 +349,17 @@ impl FunctionCompiler<'_> {
         }
         let variant = layout.variant(name, span)?.clone();
         // An enum that fits a register or a pair flows on as one integer,
-        // returned, compared or copied whole, and every byte of it is
-        // written: what the variant leaves (padding, another variant's
-        // payload) is zeroed, the tag's store widened over the bytes after
-        // it where they are among them. A larger one is copied word by word,
-        // and a match reads the tag and the active variant's fields alone: the
-        // word holding the tag is written whole, the rest of the payload not.
+        // returned or compared whole, and every byte of it is written: what
+        // the variant leaves (padding, another variant's payload) is zeroed,
+        // the tag's store widened over the bytes after it where they are
+        // among them. A larger one is copied byte for byte up to
+        // `BYTE_COPY`, and past it word by word, where only the word holding
+        // the tag is written whole: a match reads the tag, then the active
+        // variant's fields.
         let width = self.types.width(destination.struct_id);
         let whole = width <= 4;
         let mut covered = vec![!whole; width as usize];
-        if !whole {
+        if !whole && width > BYTE_COPY {
             let tag_end = self.types.width(type_id(layout.tag));
             covered[tag_end.min(2) as usize..2.min(width) as usize].fill(false);
         }

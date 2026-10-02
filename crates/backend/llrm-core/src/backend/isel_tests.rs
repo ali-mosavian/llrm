@@ -650,6 +650,26 @@ define i16 @f(i16 %a) addrspace(1) {
     assert_eq!(listing(text, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "pop bp", "retf"]);
 }
 
+/// A memcpy of a constant length is loads and stores, widest first, each
+/// through a register: no string move, and a byte not named is not read.
+#[test]
+fn test_a_small_memcpy_is_moves_widest_first() {
+    let text = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f() addrspace(1) {
+  %a = alloca [7 x i8]
+  %b = alloca [7 x i8]
+  store i16 3, ptr %a
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 7, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}
+";
+    let moves = listing(text, "f").into_iter().filter(|one| one.starts_with("mov") && one.contains('[')).collect::<Vec<_>>();
+    assert!(moves.iter().any(|one| one.contains("dword ptr")), "{moves:?}");
+    assert!(moves.iter().any(|one| one.contains("byte ptr")), "{moves:?}");
+    assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
+}
+
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest
 /// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
 /// `stosb`, as the old route's `_fill`.
