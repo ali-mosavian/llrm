@@ -446,7 +446,8 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     out.extend(made);
     let mut split = body.with_blocks(out);
     for (&(source, outside), &bridge) in &bridged {
-        split.odds.redirected(source, outside, bridge);
+        let succ = &body.blocks.iter().find(|one| one.at == source).expect("a bridged edge's block").succ;
+        split.odds.rerouted(source, succ, outside, &[(bridge, 1.0)]);
     }
     Some((split, moved))
 }

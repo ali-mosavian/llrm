@@ -355,11 +355,41 @@ impl BlockOdds {
         self.taken.get(&(from, to)).map(|one| f64::from(*one) / Self::CERTAIN)
     }
 
-    /// `from`'s edge to `old`, made to go through `new`: the edge it replaces
-    /// keeps its odds, and stays recorded so that undoing the split finds them.
-    pub fn redirected(&mut self, from: i64, old: i64, new: i64) {
-        if let Some(one) = self.taken.get(&(from, old)).copied() {
-            self.taken.insert((from, new), one);
+    /// `from`'s edge to `to` among its successors `succ`: as isel stated it,
+    /// or an even part of what its stated edges leave the unstated ones.
+    pub fn chance(&self, from: i64, succ: &[i64], to: i64) -> f64 {
+        let succ: BTreeSet<i64> = succ.iter().copied().collect();
+        if !succ.contains(&to) {
+            return 0.0;
+        }
+        if succ.len() == 1 {
+            return 1.0;
+        }
+        if let Some(stated) = self.probability(from, to) {
+            return stated;
+        }
+        let known: f64 = succ.iter().filter_map(|one| self.probability(from, *one)).sum();
+        let unknown = succ.iter().filter(|one| self.probability(from, **one).is_none()).count();
+        (1.0 - known).max(0.0) / unknown as f64
+    }
+
+    /// `from`'s edge to `old`, among its successors `succ`, replaced by edges
+    /// to `into`, each at `old`'s chance times its share. Every edge `from`
+    /// had is stated first, implicit ones included, so each reads the same
+    /// whatever its successors become; the old edge stays recorded so that
+    /// undoing a split finds it.
+    pub fn rerouted(&mut self, from: i64, succ: &[i64], old: i64, into: &[(i64, f64)]) {
+        let before: Vec<(i64, f64)> = succ.iter().map(|to| (*to, self.chance(from, succ, *to))).collect();
+        let through = self.chance(from, succ, old);
+        let fixed = |probability: f64| (probability * Self::CERTAIN).round().min(f64::from(u32::MAX)) as u32;
+        for (to, probability) in &before {
+            self.taken.insert((from, *to), fixed(*probability));
+        }
+        // Only a successor's edge adds to what an edge brings: an entry kept
+        // for an edge `from` no longer has is no part of it.
+        let had = |to: i64| before.iter().find(|(one, _)| *one == to && to != old).map_or(0.0, |(_, probability)| *probability);
+        for (to, share) in into {
+            self.taken.insert((from, *to), fixed(had(*to) + through * share));
         }
     }
 }
