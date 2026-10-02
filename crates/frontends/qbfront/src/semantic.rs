@@ -5019,8 +5019,8 @@ impl Compiler {
         if indices.is_empty() {
             return self.fail("array element requires at least one subscript");
         }
-        if matches!(address, "split_huge" | "checked") {
-            // PDS /Ah and /D do not inline descriptor arithmetic. BC evaluates
+        if address == "checked" {
+            // PDS /D does not inline descriptor arithmetic. BC evaluates
             // source subscripts, pushes them so record 0's is last, then the
             // rank, supplies the near descriptor in BX, and B$HARY returns ES:BX.
             // Keep both returned words explicit until CONCAT makes the whole
@@ -5067,7 +5067,10 @@ impl Compiler {
             let (index, index_type) = self.subscript(index)?;
             subscripts.push(self.convert(index, index_type, offset_type)?);
         }
-        let linear = Some(self.element_number(descriptor, &subscripts, offset_type)?);
+        // A huge array's offset at +0Ah wraps at 64K, so its lower bounds
+        // are subtracted here and its elements counted from the data at +0.
+        let huge = address == "split_huge";
+        let linear = Some(self.element_number(descriptor, &subscripts, offset_type, huge)?);
         let bytes = self.value(offset_type);
         self.emit(
             "mul",
@@ -5141,16 +5144,25 @@ impl Compiler {
 
     /// The element number of `subscripts`, one per source dimension, from
     /// the descriptor's counts: record 0's subscript is the most significant.
-    /// The lower bounds are already in the adjusted offset at +0Ah.
+    /// The lower bounds are in the adjusted offset at +0Ah, else `lower`
+    /// subtracts each.
     fn element_number(
         &mut self,
         descriptor: u32,
         subscripts: &[Operand],
         offset_type: u32,
+        lower: bool,
     ) -> Result<Operand, SemanticError> {
         let mut linear: Option<Operand> = None;
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
-            let subscript = subscripts[dimension].clone();
+            let mut subscript = subscripts[dimension].clone();
+            if lower {
+                let bound = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
+                let bound = self.convert(Operand::Value(bound), INTEGER, offset_type)?;
+                let from = self.value(offset_type);
+                self.emit("sub", vec![from], vec![subscript, bound]);
+                subscript = Operand::Value(from);
+            }
             linear = Some(match linear {
                 None => subscript,
                 Some(previous) => {

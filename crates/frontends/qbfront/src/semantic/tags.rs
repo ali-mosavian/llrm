@@ -168,9 +168,9 @@ mod tests {
     }
 
     /// The constants each call to `callee` pushes, first pushed first.
-    fn pushed(source: &str, row_major: bool, huge: bool, callee: &str) -> Vec<Vec<Option<i64>>> {
+    fn pushed(source: &str, row_major: bool, checked: bool, callee: &str) -> Vec<Vec<Option<i64>>> {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, huge_arrays: huge, ..Options::default() })
+        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, checked_arrays: checked, ..Options::default() })
             .unwrap_or_else(|error| panic!("{}", error.message));
         let mut found = Vec::new();
         for function in &compiler.functions {
@@ -205,7 +205,7 @@ mod tests {
     /// were pushed reversed, pairing a(1, 4)'s 1 with the second dimension's
     /// record. BC pushes 1, 4, and 4, 1 under /R.
     #[test]
-    fn test_a_huge_element_pushes_its_subscripts_as_bc_does() {
+    fn test_a_checked_element_pushes_its_subscripts_as_bc_does() {
         let subscripts = |row_major| pushed(TWO_BY_THREE, row_major, true, "B$HARY")[0][..3].to_vec();
         assert_eq!(subscripts(false), [Some(1), Some(4), Some(2)]);
         assert_eq!(subscripts(true), [Some(4), Some(1), Some(2)]);
