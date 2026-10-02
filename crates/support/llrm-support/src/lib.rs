@@ -4,6 +4,7 @@ pub mod bits;
 pub mod codepage;
 pub mod debug;
 pub mod diagnostic;
+pub mod graph;
 pub mod hash;
 pub mod pyjson;
 pub mod pypath;

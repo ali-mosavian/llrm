@@ -231,6 +231,12 @@ def references(cases: list[Case], config: build.Config, work: Path, result: Resu
                 quality.facts(one) for one in loops if one.name.rsplit("#", 1)[0].lstrip("_") == case.symbol]
 
 
+def lacks_references(args, langs: list[str]) -> bool:
+    """Whether a run builds no Open Watcom or gcc-ia16 loops, which `judge` takes
+    as no reference meeting any bound: every ivs reads as ivs-ideal."""
+    return bool(args.no_refs or args.inline or "c" not in langs)
+
+
 def _far(case: Case) -> bool:
     return any(a.ptr != "near" for a in case.arrays)
 
@@ -251,7 +257,15 @@ def reference_meets(result: Result, case: str, config: str, bound: int) -> bool:
     return False
 
 
-def judge(cases: list[Case], langs: list[str], configs: list, result: Result) -> None:
+def ivs_kind(result: Result, case: str, config: str, bound: int, references: bool) -> str | None:
+    """`ivs` where a reference compiler met `bound` on the loop, else `ivs-ideal`;
+    None where no reference was built, as a case then reads ideal for want of a bar."""
+    if not references:
+        return None
+    return "ivs" if reference_meets(result, case, config, bound) else "ivs-ideal"
+
+
+def judge(cases: list[Case], langs: list[str], configs: list, result: Result, references: bool = True) -> None:
     configs = [one for one in configs if not one.inline]
     by_name = {c.name: c for c in cases}
     for case in cases:
@@ -273,13 +287,14 @@ def judge(cases: list[Case], langs: list[str], configs: list, result: Result) ->
                 if fits and all(w.ivs is not None for w in wants):
                     bound = max(w.ivs for w in wants)
                     # a bound no reference compiler met on the same loop is an ideal
-                    kind = "ivs" if reference_meets(result, case.name, config.tag, bound) else "ivs-ideal"
-                    result.judged |= {(*key, kind), (*key, "mir-" + kind)}
-                    if max(f.ivs for f in facts) > bound:
-                        result.short.add((*key, kind))
-                    counted = result.mir_ivs.get(key)
-                    if counted and max(counted) > bound:
-                        result.short.add((*key, "mir-" + kind))
+                    kind = ivs_kind(result, case.name, config.tag, bound, references)
+                    if kind:
+                        result.judged |= {(*key, kind), (*key, "mir-" + kind)}
+                        if max(f.ivs for f in facts) > bound:
+                            result.short.add((*key, kind))
+                        counted = result.mir_ivs.get(key)
+                        if counted and max(counted) > bound:
+                            result.short.add((*key, "mir-" + kind))
                 if fits and all(w.invariant_loads == 0 for w in wants):
                     result.judged.add((*key, "invariant-loads"))
                     if sum(f.invariant_loads for f in facts) > 0:
@@ -401,6 +416,8 @@ def main() -> int:
     if args.case:
         cases = [c for c in cases if any(c.name.startswith(p) for p in args.case)]
     langs = args.lang or list(EMITTERS)
+    if args.write_known and lacks_references(args, langs):
+        parser.error("--write-known needs the reference compilers: no --no-refs, no --inline, and C among --lang")
     configs = configs_from(args)
     work = args.dump
     work.mkdir(parents=True, exist_ok=True)
@@ -538,7 +555,7 @@ def main() -> int:
                     break
                 at += count
 
-    judge(cases, langs, configs, result)
+    judge(cases, langs, configs, result, not lacks_references(args, langs))
     ratchet = known.compare(result.short, result.judged)
     if args.write_known:
         known.write(result.short, ratchet.kept_issues, result.judged)

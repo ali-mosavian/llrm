@@ -26,6 +26,9 @@ pub enum Intrinsic {
     MemSet,
     LifetimeStart,
     LifetimeEnd,
+    /// `llvm.assume`: its condition holds here, which a pass may use and no
+    /// code checks. Undefined where it does not.
+    Assume,
     /// An I/O port's value, read: a target intrinsic, as `llvm.x86.*` are.
     PortIn,
     /// A value written to an I/O port.
@@ -208,7 +211,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 30] = [
+const TABLE: [Spec; 31] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -256,6 +259,15 @@ const TABLE: [Spec; 30] = [
         parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Int(8), &[]), (Slot::Any(1), &[]), (Slot::Int(1), &["immarg"])],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "write")],
+    },
+    Spec {
+        name: "llvm.assume",
+        intrinsic: Intrinsic::Assume,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[(Slot::Int(1), &["noundef"])],
+        attrs: LIFETIME_ATTRS,
+        memory: &[(Some("inaccessiblemem"), "write")],
     },
     Spec {
         name: "llvm.lifetime.start",
@@ -390,7 +402,7 @@ impl Intrinsic {
     /// The function's attributes and each parameter's.
     pub fn attributes(self) -> (Vec<Attribute>, Vec<Vec<Attribute>>) {
         if matches!(self, Intrinsic::Code | Intrinsic::Asm) {
-            return (vec![Attribute::Flag("nounwind".to_owned())], Vec::new());
+            return (vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new());
         }
         let spec = self.spec();
         let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();

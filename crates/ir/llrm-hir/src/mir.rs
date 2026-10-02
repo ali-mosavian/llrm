@@ -113,8 +113,8 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
         }
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
-        function.attrs.extend(cells.is_some().then(|| Attribute::Flag("nocallback".to_owned())));
-        function.attrs.extend(nounwind.then(|| Attribute::Flag("nounwind".to_owned())));
+        function.attrs.extend(cells.is_some().then(|| Fact::NoCallback.carrier()));
+        function.attrs.extend(nounwind.then(|| Fact::NoUnwind.carrier()));
         if let Some(cells) = cells {
             let written = std::iter::once(one).chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied())).collect();
             writes.push(node(&mut out, written));
@@ -138,7 +138,7 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
         function.attrs.push(Attribute::Memory(vec![(Some("argmem".to_owned()), "read".to_owned())]));
         for at in 0..function.parameters().len() {
             if matches!(out.context.types.get(function.value(function.parameters()[at]).ty), Type::Pointer(_)) {
-                function.parameter_attrs[at].push(Attribute::Flag("nocapture".to_owned()));
+                function.parameter_attrs[at].push(Fact::NoCapture.carrier());
             }
         }
     }
@@ -1136,7 +1136,7 @@ fn mark_cold(function: &mut Function, block: BlockId) {
     for inst in function.block(block).instructions().to_vec() {
         let old = function.instruction(inst).clone();
         let Opcode::Call(mut info) = old.opcode else { continue };
-        info.attrs.push(Attribute::Flag("cold".to_owned()));
+        info.attrs.push(Fact::Cold.carrier());
         let new = function.create_instruction(Opcode::Call(info), old.ty, old.operands, old.flags, None);
         function.insert(new, Position::Before(inst)).expect("its call is placed");
         for (kind, node) in old.metadata {
@@ -1547,7 +1547,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
             // A shift count is its own width; LLVM's is the shifted value's.
             let b = if matches!(op, Op::Shl | Op::Shr | Op::Sar) { self.count(b, self.b.type_of(a))? } else { b };
-            let flags = if matches!(op, Op::Add | Op::Sub | Op::Mul) { self.stated_flags(instruction) } else { Flags::default() };
+            let flags = match op {
+                Op::Add | Op::Sub | Op::Mul => self.stated_flags(instruction),
+                // A floating operation's flags are its fast-math ones.
+                Op::Fadd | Op::Fsub | Op::Fmul | Op::Fdiv => self.stated_flags(instruction).intersect(Flags::FAST),
+                _ => Flags::default(),
+            };
             if matches!(op, Op::Div | Op::Rem | Op::Udiv | Op::Urem) && !matches!(&instruction.operands[1], Operand::Constant(one) if !matches!(one.value, Number::Int(0))) {
                 self.trapping(instruction.id, b)?;
             }
