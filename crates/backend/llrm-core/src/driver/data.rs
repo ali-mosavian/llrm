@@ -121,6 +121,14 @@ fn split(items: Vec<masm::Datum>, segment: &str) -> Result<Vec<Vec<masm::Datum>>
             Datum::Fill(masm::Fill { size, byte }) => (size as usize, Box::new(move |from, to| Datum::Fill(masm::Fill { size: (to - from) as i64, byte }))),
             Datum::Align(masm::Align { to }) => {
                 let pad = (-(total as i64)).rem_euclid(to) as usize;
+                // Kept as asked where it fits, for the segment to be aligned
+                // as it says; cut into fill only where it straddles a 64K end.
+                if used + pad <= SEGMENT_BYTES {
+                    used += pad;
+                    total += pad;
+                    parts.last_mut().expect("a part").push(Datum::Align(masm::Align { to }));
+                    continue;
+                }
                 (pad, Box::new(move |from, to| Datum::Fill(masm::Fill { size: (to - from) as i64, byte: Some(0) })))
             }
             other => {
@@ -213,5 +221,13 @@ mod tests {
     fn test_a_huge_object_shares_its_segment_with_none() {
         let two = vec![label(), Datum::Bytes(vec![0; 40000]), label(), Datum::Bytes(vec![0; 40000])];
         assert!(split(two, "S").unwrap_err().contains("shares its segment"));
+    }
+
+    /// A variable's `align 4` became bytes of fill before the object file
+    /// saw it, so the segment never learned its widest request.
+    #[test]
+    fn test_an_align_request_survives_for_the_segment_to_keep() {
+        let parts = split(vec![label(), Datum::Bytes(vec![1]), Datum::Align(masm::Align { to: 4 }), Datum::Bytes(vec![2])], "S").unwrap();
+        assert!(parts[0].iter().any(|one| matches!(one, Datum::Align(masm::Align { to: 4 }))), "{:?}", parts[0]);
     }
 }

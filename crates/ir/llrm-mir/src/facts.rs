@@ -159,6 +159,42 @@ pub enum Effect {
     Inaccessible,
 }
 
+/// What the language says of inlining a routine; `Never` outranks the rest.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Inlining {
+    /// Not at any call (`noinline`).
+    Never,
+    /// Worth a larger body than usual (`inlinehint`, C's `inline`).
+    #[default]
+    Hint,
+    /// At every call it can be (`alwaysinline`).
+    Always,
+}
+
+impl Inlining {
+    fn flag(self) -> &'static str {
+        match self {
+            Inlining::Never => "noinline",
+            Inlining::Hint => "inlinehint",
+            Inlining::Always => "alwaysinline",
+        }
+    }
+
+    fn of_flag(name: &str) -> Option<Inlining> {
+        [Inlining::Never, Inlining::Hint, Inlining::Always].into_iter().find(|one| one.flag() == name)
+    }
+}
+
+impl Wire for Inlining {
+    fn wire(self) -> i64 {
+        self as i64
+    }
+
+    fn unwire(value: i64) -> Option<Inlining> {
+        [Inlining::Never, Inlining::Hint, Inlining::Always].into_iter().find(|one| *one as i64 == value)
+    }
+}
+
 facts! {
     flags {
         NoAlias no_alias "noalias" on [Param];
@@ -179,11 +215,20 @@ facts! {
     }
     custom {
         Memory(Effect) memory "memory" on [Callable];
+        Inline(Inlining) inline "inline" on [Callable];
     }
     bits {
         NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction];
         NoUnsignedWrap no_unsigned_wrap "nuw" Flags::NUW, on [Instruction];
         InBounds in_bounds "inbounds" Flags::INBOUNDS, on [Instruction, Operand];
+        // What the language lets a pass do to a floating operation: sums and
+        // products regroup, no operand is NaN or infinite, a zero's sign is
+        // not observed, a division is a multiply by the reciprocal.
+        Reassoc reassoc "reassoc" Flags::REASSOC, on [Instruction];
+        NoNaNs no_nans "nnan" Flags::NNAN, on [Instruction];
+        NoInfs no_infs "ninf" Flags::NINF, on [Instruction];
+        NoSignedZeros no_signed_zeros "nsz" Flags::NSZ, on [Instruction];
+        AllowReciprocal allow_reciprocal "arcp" Flags::ARCP, on [Instruction];
     }
 }
 
@@ -196,7 +241,8 @@ impl Fact {
             Fact::Dereferenceable(value) | Fact::Align(value) => Some(Attribute::Int(self.key().to_owned(), value)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
-            Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds => None,
+            Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
+            Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
     }
@@ -204,7 +250,7 @@ impl Fact {
     /// The fact a carrier states, if it states one.
     pub fn of_attribute(attribute: &Attribute) -> Option<Fact> {
         match attribute {
-            Attribute::Flag(name) => Fact::flag(name),
+            Attribute::Flag(name) => Fact::flag(name).or_else(|| Inlining::of_flag(name).map(Fact::Inline)),
             Attribute::Int(name, value) => Fact::valued(name, *value),
             Attribute::Initializes(ranges) => match ranges[..] {
                 [(0, bytes)] => Some(Fact::Initializes(bytes as u64)),
@@ -316,5 +362,16 @@ mod tests {
         let attribute = fact.attribute().expect("an attribute");
         assert_eq!(Fact::of_attribute(&attribute), Some(fact));
         assert_eq!(Fact::from_wire(fact.key(), fact.wire_value()), Some(fact));
+    }
+
+    /// Each way to state inlining is its own attribute, reads back, and `Never` outranks.
+    #[test]
+    fn each_inlining_has_its_attribute() {
+        for (how, name) in [(Inlining::Never, "noinline"), (Inlining::Hint, "inlinehint"), (Inlining::Always, "alwaysinline")] {
+            assert_eq!(Fact::Inline(how).attribute(), Some(Attribute::Flag(name.to_owned())));
+            assert_eq!(Facts::of(&[Attribute::Flag(name.to_owned())]).inline(), Some(how));
+            assert_eq!(Fact::from_wire("inline", Fact::Inline(how).wire_value()), Some(Fact::Inline(how)));
+        }
+        assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
     }
 }
