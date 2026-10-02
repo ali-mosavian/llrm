@@ -210,7 +210,8 @@ pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, 
 /// `body` without the phis that name one value: a phi whose arguments are all
 /// one value `x` (or itself) is `x`, and every use of it reads `x`. Removing one
 /// can make another trivial, so this runs to a fixed point.
-pub fn simplified(body: &LirBody) -> LirBody {
+pub fn simplified(body: &LirBody) -> Option<LirBody> {
+    let mut found = false;
     let mut body = body.clone();
     loop {
         let mut rename: IndexMap<u32, u32> = IndexMap::default();
@@ -223,8 +224,9 @@ pub fn simplified(body: &LirBody) -> LirBody {
             }
         }
         if rename.is_empty() {
-            return body;
+            return found.then_some(body);
         }
+        found = true;
         // A chain of trivial phis reads through to its end.
         let ends: IndexMap<u32, u32> = rename
             .keys()

@@ -53,7 +53,8 @@ impl LIRTransform for SsaSpill {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        spilled(&body, &mut self.frame.borrow_mut(), &self.segments)
+        // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
+        Ok(changed(&body, &mut self.frame.borrow_mut(), &self.segments)?.unwrap_or(body))
     }
 }
 
@@ -361,8 +362,13 @@ struct Edits {
 }
 
 pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<LirBody, String> {
-    let simple = ssarepair::simplified(body);
-    let body = &simple;
+    Ok(changed(body, frame, segments)?.unwrap_or_else(|| body.clone()))
+}
+
+/// `body` spilled, or None where there was nothing to spill and nothing to simplify.
+fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<Option<LirBody>, String> {
+    let simple = ssarepair::simplified(original);
+    let body = simple.as_ref().unwrap_or(original);
     let flow = Flow::of(body);
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let machine = Machine::of(&confined);
@@ -408,7 +414,7 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency);
     }
     if result.stored.is_empty() {
-        return Ok(body.clone());
+        return Ok(simple);
     }
     // A value is stored once after its definition, or where it leaves the registers, whichever runs less.
     let mut home: IndexMap<u32, i64> = IndexMap::default();
@@ -438,7 +444,7 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         .collect();
     let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &at_leaves, &remakes, frame)?;
     let held: IndexMap<i64, BTreeSet<u32>> = result.edits.iter().map(|(at, edit)| (*at, edit.w_in.clone())).collect();
-    Ok(ssarepair::repaired(&spilled, &result.stored, &held))
+    Ok(Some(ssarepair::repaired(&spilled, &result.stored, &held)))
 }
 
 /// The values of `values` that are made again rather than stored and loaded:

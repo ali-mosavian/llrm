@@ -59,6 +59,10 @@ pub fn before_phase<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a s
         if phase.class_name() == phase_class {
             return (body, std::iter::once(phase).chain(phases).collect());
         }
+        // Tests of the allocator hand it the pressure the spiller would have taken away.
+        if phase.class_name() == "SsaSpill" {
+            continue;
+        }
         body = phase.transform(body).unwrap();
     }
     panic!("no {phase_class} phase");
