@@ -147,6 +147,17 @@ impl ModuleAnalysis for GlobalSizes {
     }
 }
 
+/// The module's `!tbaa` type tree.
+pub struct TypeAncestry;
+
+impl ModuleAnalysis for TypeAncestry {
+    type Result = crate::tbaa::Tbaa;
+    const NAME: &'static str = "type-ancestry";
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+        crate::tbaa::Tbaa::of(&module.metadata)
+    }
+}
+
 /// Every global as its declaration, by id: what a function may read of
 /// the others.
 pub struct Declarations;
@@ -292,6 +303,11 @@ impl Outer {
     /// Each global variable's size: `GlobalSizes`.
     pub fn sizes(&self) -> &crate::valuetracking::Sizes {
         self.cached_ref::<GlobalSizes>().expect("every outer proxy holds the globals' sizes")
+    }
+
+    /// The type tree of the module's `!tbaa` nodes: `TypeAncestry`.
+    pub fn tbaa(&self) -> &crate::tbaa::Tbaa {
+        self.cached_ref::<TypeAncestry>().expect("every outer proxy holds the type tree")
     }
 
     /// `M`'s result, if computed: LLVM's `getCachedResult`.
@@ -525,7 +541,7 @@ impl ModuleAnalyses {
     /// What a function analysis reads of `module`: the same proxy as last
     /// time where nothing it holds changed.
     pub fn outer(&mut self, module: &Module) -> Rc<Outer> {
-        let every = [Kind::of::<CalleeEffects>(), Kind::of::<CallRegisters>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>()].into_iter().chain(self.required.clone());
+        let every = [Kind::of::<CalleeEffects>(), Kind::of::<CallRegisters>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>(), Kind::of::<TypeAncestry>()].into_iter().chain(self.required.clone());
         let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()]).downcast::<Vec<GlobalValue>>().expect("keyed by its type");
         let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };

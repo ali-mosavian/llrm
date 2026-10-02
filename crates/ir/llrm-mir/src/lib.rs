@@ -25,6 +25,7 @@ pub mod print;
 pub mod program;
 pub mod scalarevolution;
 pub mod target;
+pub mod tbaa;
 pub mod transforms;
 pub mod types;
 pub mod valuetracking;
