@@ -230,6 +230,8 @@ fn test_bcc_callees_keep_what_the_convention_keeps() {
 
 /// Every fact BCC shows at a call boundary, llrm shows alike, but for the
 /// mismatches known.txt names.
+// It records C through wccq, which only the toolchain feature builds.
+#[cfg(feature = "toolchain")]
 #[test]
 fn test_llrm_lowers_each_call_boundary_as_bcc_does() {
     let known: Vec<&str> = KNOWN.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).collect();
@@ -280,6 +282,8 @@ fn llrm_text(text: &str) -> BTreeMap<String, Procedure> {
 
 /// A signed char passed through `...` is promoted to int: llrm zero-extended
 /// it, so p_variadic read -2 as 254.
+// It records C through wccq, which only the toolchain feature builds.
+#[cfg(feature = "toolchain")]
 #[test]
 fn test_a_variadic_byte_is_promoted_by_its_signedness() {
     let built = llrm_text("signed char s; unsigned char u;\nvoid far v(int n, ...);\nvoid far f(void) { v(1, s, u); }\n");
@@ -291,6 +295,8 @@ fn test_a_variadic_byte_is_promoted_by_its_signedness() {
 /// A variadic function taking a struct parameter's address got the address
 /// of the struct's local copy, so STDARG.H's `va_start` stepped from there
 /// into the frame; it is refused rather than miscompiled.
+// It records C through wccq, which only the toolchain feature builds.
+#[cfg(feature = "toolchain")]
 #[test]
 fn test_a_variadic_struct_parameter_address_is_refused() {
     let directory = tempfile::tempdir().unwrap();
