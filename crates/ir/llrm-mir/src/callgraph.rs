@@ -95,6 +95,18 @@ impl CallGraph<Defined> {
 }
 
 impl<N: Copy + Ord> CallGraph<N> {
+    /// Every function `from` reaches, through its calls and theirs.
+    pub fn reachable(&self, from: N) -> BTreeSet<N> {
+        let mut seen = BTreeSet::new();
+        let mut work: Vec<N> = self.callees.get(&from).into_iter().flatten().copied().collect();
+        while let Some(at) = work.pop() {
+            if seen.insert(at) {
+                work.extend(self.callees.get(&at).into_iter().flatten().copied());
+            }
+        }
+        seen
+    }
+
     /// Whether `function` makes a call that may reach any function: through
     /// a pointer no `!callees` bounds.
     pub fn calls_unknown(&self, function: N) -> bool {
