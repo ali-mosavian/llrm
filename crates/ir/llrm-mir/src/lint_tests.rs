@@ -46,3 +46,17 @@ fn an_array_filled_by_element_stores_is_stored_before_it_is_read() {
     let unfilled = "define i16 @f() {\nentry:\n  %a = alloca [4 x i8]\n  %q = getelementptr inbounds i16, ptr %a, i16 1\n  %v = load i16, ptr %q\n  ret i16 %v\n}\n";
     assert_eq!(findings(unfilled), ["@f: load uses %a before it is stored"]);
 }
+
+/// An enum stored by its tag alone and read whole carries undefined payload and
+/// padding bytes wherever the whole value goes (#290): found. Stored byte for
+/// byte, or with a store whose offset is not known, it is not.
+#[test]
+fn a_value_read_whole_after_only_part_of_it_was_stored_is_found() {
+    let head = "target datalayout = \"e-p:16:16\"\n";
+    let tag_only = format!("{head}define i32 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i8 1, ptr %x\n  %v = load i32, ptr %x\n  ret i32 %v\n}}\n");
+    assert_eq!(findings(&tag_only), ["@f: load uses %x before it is stored"]);
+    let all_bytes = format!("{head}define i32 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i16 1, ptr %x\n  %p = getelementptr i8, ptr %x, i16 2\n  store i16 0, ptr %p\n  %v = load i32, ptr %x\n  ret i32 %v\n}}\n");
+    assert_eq!(findings(&all_bytes), Vec::<String>::new());
+    let some_bytes = format!("{head}define i16 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i16 1, ptr %x\n  %v = load i16, ptr %x\n  ret i16 %v\n}}\n");
+    assert_eq!(findings(&some_bytes), Vec::<String>::new(), "a read of the part that was stored");
+}

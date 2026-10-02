@@ -94,7 +94,16 @@ fn function_poison(module: &Module, function: &Function) -> Vec<String> {
                     let before = |stores: &[InstId]| function.block(block).instructions().iter().take_while(|&&one| one != user).any(|one| stores.contains(one));
                     let whole_first = before(&whole) || after_whole.get(&block).copied().unwrap_or(false);
                     let part_first = before(&parts) || after_part.contains(&block);
-                    if !whole_first && !part_first {
+                    // A load of all of it needs all of it stored: bytes a constant-offset store
+                    // leaves out (a tag stored, its payload and padding not) are read unstored,
+                    // whatever the language says of them; a store at an offset not known could
+                    // be any of them and is taken to cover the rest.
+                    let uncovered = layout.as_ref().is_some_and(|layout| {
+                        let size = layout.alloc_size(&context.types, allocated);
+                        let reads_all = matches!(crate::valuetracking::underlying(context, layout, function, function.instruction(user).operands[0]), (Operand::Value(base), Some(0)) if base == slot) && u64::from(layout.store_size(&context.types, function.instruction(user).ty)) >= size;
+                        reads_all && !whole_first && !stores_cover(context, layout, function, slot, &parts, size)
+                    });
+                    if uncovered || (!whole_first && !part_first) {
                         let name = function.value(slot).name.clone().map_or_else(|| "an alloca".to_owned(), |one| format!("%{one}"));
                         out.push(format!("load uses {name} before it is stored"));
                     }
@@ -103,6 +112,26 @@ fn function_poison(module: &Module, function: &Function) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether `stores`, into `slot` of `size` bytes, cover all of it: their constant ranges
+/// together do, or one of them is at an offset not known.
+fn stores_cover(context: &Context, layout: &DataLayout, function: &Function, slot: crate::module::ValueId, stores: &[InstId], size: u64) -> bool {
+    let mut covered = vec![false; size as usize];
+    for &store in stores {
+        let instruction = function.instruction(store);
+        let (base, offset) = crate::valuetracking::underlying(context, layout, function, instruction.operands[1]);
+        if base != Operand::Value(slot) {
+            continue;
+        }
+        let Some(offset) = offset else { return true };
+        let Some(ty) = function.operand_type(context, instruction.operands[0]) else { continue };
+        let bytes = u64::from(layout.store_size(&context.types, ty));
+        for at in offset.max(0) as u64..(offset.max(0) as u64 + bytes).min(size) {
+            covered[at as usize] = true;
+        }
+    }
+    covered.iter().all(|&one| one)
 }
 
 /// The blocks every path to which, from the entry, has run one of `stores` by the
