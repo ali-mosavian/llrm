@@ -71,6 +71,31 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
     Ok(out)
 }
 
+/// What the spill model (`llrm_transforms::spill`) forecasts for each function the pipeline
+/// hands to instruction selection: the `spillmodel` channel, to set beside the spills the
+/// allocator makes (`cost` channel, `executed`).
+fn spill_model(program: &Program) {
+    use llrm_transforms::{profit, spill};
+    for module in &program.modules {
+        let Some(text) = module.datalayout.as_deref() else { continue };
+        let Ok(layout) = llrm_mir::datalayout::DataLayout::parse(text) else { continue };
+        let outer = llrm_mir::passes::Outer::of(module, Some(program.target.clone()));
+        let room = spill::Room::of(&outer);
+        let costs = program.target.costs();
+        for global in &module.globals {
+            let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
+            let unit = llrm_analysis::memory::Unit::of(module, &layout, function);
+            let trips = profit::proven_trips(&unit, &unit.registers());
+            let Some(frequency) = profit::_frequencies(&module.context, &module.globals, function, Some(&trips)) else { continue };
+            let found = llrm_analysis::liveness::live(function);
+            let across = |inst| spill::kept_across(&outer, &module.context, function, inst);
+            if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency, &found) {
+                llrm_support::debug!("spillmodel", "{} peak {} spilled {} price {}", global.name.as_deref().unwrap_or("?"), forecast.peak, forecast.spilled.len(), forecast.cost);
+            }
+        }
+    }
+}
+
 /// `program` as MIR, a module per HIR module, linked against the runtime
 /// its promises describe; and each module's data objects' globals, by the
 /// objects' ids.
@@ -103,6 +128,9 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
     llrm_transforms::pipeline::applied(program, &applied)?;
     program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
     program.modules.iter_mut().try_for_each(crate::backend::selects::lowered)?;
+    if llrm_support::debug::enabled("spillmodel") {
+        spill_model(program);
+    }
     verified(program, "the pipeline")
 }
 

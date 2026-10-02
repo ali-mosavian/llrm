@@ -187,6 +187,29 @@ pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, cal
     Some(total)
 }
 
+/// What fitting MIR within `room` spills, a call keeping what `across`
+/// says, as the one spill model (`spill`) forecasts it.
+#[allow(clippy::too_many_arguments)]
+pub fn spill_forecast(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    costs: &OperationCosts,
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
+    frequency: &BTreeMap<i64, i64>,
+    found: &Liveness,
+) -> Option<spill::Forecast<ValueId>> {
+    if !room.priced() {
+        return Some(spill::Forecast { cost: 0, spilled: BTreeSet::new(), peak: 0 });
+    }
+    let cells = spill::cells(function);
+    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
+    let counted = |value: ValueId| spill::integer(context, function, value);
+    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, function, value))).flat_map(spill::Site::points);
+    Some(spill::forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
+}
+
 /// Whole-live-range traffic needed to fit MIR within `room`, a call
 /// keeping what `across` says, as the one spill model (`spill`) prices it.
 #[allow(clippy::too_many_arguments)]
@@ -200,14 +223,7 @@ pub fn spill_risk(
     frequency: &BTreeMap<i64, i64>,
     found: &Liveness,
 ) -> Option<i64> {
-    if !room.priced() {
-        return Some(0);
-    }
-    let cells = spill::cells(function);
-    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
-    let counted = |value: ValueId| spill::integer(context, function, value);
-    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst| spill::transient(context, layout, function, inst, room), &cells, &counted, &|value| spill::segment_view(context, layout, function, value))).flat_map(spill::Site::points);
-    Some(spill::spilled(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
+    spill_forecast(context, layout, function, costs, room, across, frequency, found).map(|one| one.cost)
 }
 
 /// Semantic work plus finite-capacity whole-range spill traffic.
