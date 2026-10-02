@@ -165,3 +165,30 @@ fn a_header_that_stores_stays_rolled() {
     let text = summing("4", "").replace("  %go = icmp", "  store i16 %i, ptr @count\n  %go = icmp");
     assert!(!through(&text, Unroll::default()).0);
 }
+
+/// `summing` with `hint` as the `!llvm.loop` of its back edge.
+fn hinted(bound: &str, hint: &str) -> String {
+    let text = summing(bound, "").replace("  %next = add i16 %i, 1\n  br label %b1\n", "  %next = add i16 %i, 1\n  br label %b1, !llvm.loop !0\n");
+    format!("{text}\n!0 = distinct !{{!0, !1}}\n!1 = !{{{hint}}}\n")
+}
+
+/// The language says never: a loop the budget would copy stays rolled.
+#[test]
+fn a_loop_the_language_says_not_to_unroll_stays_rolled() {
+    assert!(through(&hinted("4", "!\"llvm.loop.unroll.disable\""), Unroll::default()).0 == false);
+    assert!(through(&hinted("4", "!\"llvm.loop.unroll.count\", i32 4"), Unroll::default()).0);
+}
+
+/// The language says as many as the trip count: a copy over the budget, and a trip count
+/// past the iteration cap, are copied. Fewer than the trip count is no partial unrolling:
+/// refused.
+#[test]
+fn a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap() {
+    let tight = || Unroll { limits: Limits { max_unrolled_operations: 1, ..Limits::default() }, ..Unroll::default() };
+    assert!(!through(&hinted("8", "!\"llvm.loop.unroll.count\", i32 4"), tight()).0);
+    assert!(through(&hinted("8", "!\"llvm.loop.unroll.count\", i32 8"), tight()).0);
+    assert!(through(&hinted("8", "!\"llvm.loop.unroll.full\""), tight()).0);
+    // 40 trips: past max-completely-peel-times (16), which an explicit count overrides.
+    assert!(!through(&summing("40", ""), Unroll::default()).0);
+    assert!(through(&hinted("40", "!\"llvm.loop.unroll.count\", i32 40"), Unroll::default()).0);
+}
