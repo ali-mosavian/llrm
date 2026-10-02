@@ -42,8 +42,8 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("nnan", By(&["test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
     ("ninf", By(&["test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
     ("nsz", By(&["floating_freedoms_are_fast_math_flags", "test_nsz_lets_a_cancellation_be_positive_zero"])),
+    ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result", "a_range_in_metadata_bounds_a_load_and_a_call_result", "a_range_a_frontend_states_of_an_instruction_bounds_its_result", "a_matched_enums_tag_is_bounded_by_its_variants_where_ranges_reads_it"])),
     ("arcp", By(&["test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
-    ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result"])),
     ("invariant", Unread("inline-readers: no pass reads !invariant.load yet")),
     ("unroll", Unread("inline-readers: peelsize `admitted` does not read the hint yet")),
 ];
