@@ -290,7 +290,6 @@ impl Model<'_> {
 /// `colour` with affinity chunks moved to one register where that gains, still a proper colouring.
 pub fn recoloured(body: &LirBody, colour: &IndexMap<u32, Register>, fixed: &IndexMap<u32, Register>, segments: &Segments) -> IndexMap<u32, Register> {
     let frequency = Frequency::of(body);
-    let general_roots: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
     let mut registers: Vec<Register> = Vec::new();
     for register in target::AVAILABLE.iter().map(|one| _whole(*one)) {
         if !registers.contains(&register) {
@@ -299,17 +298,13 @@ pub fn recoloured(body: &LirBody, colour: &IndexMap<u32, Register>, fixed: &Inde
     }
     let (_, live_out) = allocate::live(body);
     let mut through: IndexMap<u32, Vec<(f64, BTreeSet<Register>)>> = IndexMap::default();
+    for (value, spots) in ssacolour::through_taken(body) {
+        through.insert(value, spots.into_iter().map(|(at, taken)| (frequency.block(at), taken)).collect());
+    }
     let mut forbidden: IndexMap<u32, BTreeSet<Register>> = IndexMap::default();
     for block in &body.blocks {
-        let here = frequency.block(block.at);
         let mut live = live_out[&block.at].clone();
         for one in block.insns.iter().rev() {
-            let taken = ssaassign::takes(one, &general_roots);
-            if !taken.is_empty() {
-                for value in live.iter().filter(|value| !one.defines.contains(value)) {
-                    through.entry(*value).or_default().push((here, taken.clone()));
-                }
-            }
             let clobbered: BTreeSet<Register> = one.clobbers.iter().map(|register| _whole(*register)).collect();
             if !clobbered.is_empty() {
                 for value in one.defines.iter().filter(|value| !live.contains(value)) {

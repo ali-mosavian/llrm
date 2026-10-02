@@ -98,3 +98,29 @@ fn test_a_swapped_tie_gives_the_result_the_dying_operands_register() {
     let colour = ssacolour::coloured(&body, &floats, &body.pins, &target::BUILT_IN);
     assert_eq!(tie_copies(&body, &colour), 0.0);
 }
+
+/// deedlines GETPAL kept three palette offsets in registers across `in al, dx`; the
+/// colourer gave one AX before the instruction that takes AX was seen, and the
+/// assignment moved it aside and back each iteration: 6667 executed instructions for
+/// Greedy's 4112.
+#[test]
+fn test_a_value_living_through_an_instruction_avoids_the_registers_it_takes() {
+    use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
+    use crate::model::lir::{Insn, LirBlock};
+    let held = |value: u32| Loc::Held(Held { value, width: 2 });
+    let number = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+    let make = |name: &str, dest: u32, sources: Vec<Loc>, uses: Vec<u32>| {
+        let what = Semantics { name: Some(name.to_owned()), dests: vec![held(dest)], sources, ..Semantics::new(if name == "mov" { Operation::Move } else { Operation::Binary }) };
+        Insn::new(0, Some((0, 2)), Some(what), vec![dest], uses)
+    };
+    let mut takes_ax = make("mov", 3, vec![number(7)], vec![]);
+    takes_ax.clobbers = BTreeSet::from([Register::AX]);
+    let insns = vec![
+        std::sync::Arc::new(make("mov", 1, vec![number(5)], vec![])),
+        std::sync::Arc::new(takes_ax),
+        std::sync::Arc::new(make("add", 4, vec![held(1), held(3)], vec![1, 3])),
+    ];
+    let body = LirBody::new("through", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+    let colour = ssacolour::coloured(&body, &BTreeSet::new(), &IndexMap::default(), &target::BUILT_IN);
+    assert_ne!(colour.get(&1), Some(&Register::EAX), "value#1 lives through the instruction that clobbers AX");
+}

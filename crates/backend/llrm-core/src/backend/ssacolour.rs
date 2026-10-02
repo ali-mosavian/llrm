@@ -66,6 +66,30 @@ fn wishes(body: &LirBody) -> IndexMap<u32, Register> {
     out
 }
 
+/// For each value, the instructions it lives through that take registers (what they require,
+/// deliver or clobber), as (block, registers).
+pub(crate) fn through_taken(body: &LirBody) -> IndexMap<u32, Vec<(i64, BTreeSet<Register>)>> {
+    let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
+    let (_, live_out) = allocate::live(body);
+    let mut out: IndexMap<u32, Vec<(i64, BTreeSet<Register>)>> = IndexMap::default();
+    for block in &body.blocks {
+        let mut live = live_out[&block.at].clone();
+        for one in block.insns.iter().rev() {
+            let taken = crate::backend::ssaassign::takes(one, &general);
+            if !taken.is_empty() {
+                for value in live.iter().filter(|value| !one.defines.contains(value)) {
+                    out.entry(*value).or_default().push((block.at, taken.clone()));
+                }
+            }
+            for value in &one.defines {
+                live.remove(value);
+            }
+            live.extend(one.uses.iter().copied());
+        }
+    }
+    out
+}
+
 /// Each use of a value as an address half, with the registers that can form the address and the block it is in.
 pub(crate) fn address_demands(body: &LirBody) -> Vec<(u32, BTreeSet<Register>, i64)> {
     let bx: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
@@ -225,6 +249,8 @@ pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, fixed: &IndexMap<u32, Regi
     };
     let wanted = |value: u32| !skip.contains(&value) && confined.get(&value).is_none_or(|class| class.iter().any(|one| general.contains(&_whole(*one))));
     let wish = wishes(body);
+    // Registers a value would have to leave, and come back to, where an instruction it lives through takes them.
+    let avoid: IndexMap<u32, BTreeSet<Register>> = through_taken(body).into_iter().map(|(value, spots)| (value, spots.into_iter().flat_map(|(_, taken)| taken).collect())).collect();
     let (live_in, live_out) = allocate::live(body);
     let graph = ranges::_graph(&body.blocks);
     let idom = loops::immediate_dominators(&graph, Some(body.entry));
@@ -276,7 +302,11 @@ pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, fixed: &IndexMap<u32, Regi
             order.extend(prefer.iter().copied());
             order.extend(partners.get(&value).into_iter().flatten().filter_map(|other| colour.get(other).copied()));
             order.extend(class.iter().copied());
-            order.into_iter().find(|register| class.contains(register) && !taken.contains_key(register))
+            let free = |register: &Register| class.contains(register) && !taken.contains_key(register);
+            let kept = avoid.get(&value);
+            order.iter().copied().find(|register| free(register) && kept.is_none_or(|set| !set.contains(register)) || wish.get(&value) == Some(register) && free(register))
+                .or_else(|| class.iter().copied().find(|register| free(register) && kept.is_none_or(|set| !set.contains(register))))
+                .or_else(|| order.into_iter().find(free))
         };
         for phi in &block.phis {
             if !wanted(phi.result) {
