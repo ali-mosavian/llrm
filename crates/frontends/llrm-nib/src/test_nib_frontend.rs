@@ -41,6 +41,38 @@ fn refused(source: &Path) -> String {
     driver::parsed(source, &Default::default(), None).expect_err("the frontend refuses").0
 }
 
+/// Every Nib program's emitted MIR lints clean: `lint::poison` called each stated
+/// wrap `poison` and each array filled an element at a time "stored after use",
+/// so `hir-mir` and the corpus tool dropped 56 of 124 programs, `sum_three` among them.
+#[test]
+fn the_mir_of_sum_three_lints_clean() {
+    let program = parsed(&fixture("sum_three.nib"));
+    for emitted in hir::mir::emit(&program) {
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
+    }
+}
+
+/// An enum value is built whole: every byte of it is written, the payload of a
+/// variant without one zero, so that a value flowing as one integer has no
+/// undefined bytes (#290). Until then `lint::poison` finds the load that reads
+/// them in these programs.
+fn lint_of(name: &str) -> Vec<String> {
+    let program = parsed(&PathBuf::from(env!("LLRM_ROOT")).join(name));
+    hir::mir::emit(&program).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
+}
+
+#[test]
+fn the_enum_values_of_digits_still_read_unstored_bytes() {
+    assert!(lint_of("examples/digits.nib").iter().any(|one| one.starts_with("@first_even: load uses")), "the finding went away: enable the test below and delete this one");
+}
+
+#[test]
+#[ignore = "#290: nib-borrowck-fix makes an enum value write all its bytes"]
+fn the_enum_values_of_digits_write_all_their_bytes() {
+    assert_eq!(lint_of("examples/digits.nib"), Vec::<String>::new());
+}
+
 /// `tmp_path / name` holding `text`.
 fn written(directory: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
     let path = directory.path().join(name);
