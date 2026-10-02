@@ -95,7 +95,8 @@ done:
 }
 ";
     let got = listing(text, "sum");
-    // The comparison stays flags beside its branch; the phis' zeros are made in the entry.
+    // The comparison stays flags beside its branch; the phis' zeros are made in the entry,
+    // which runs a copy of the test rather than jump to it.
     assert_eq!(
         got,
         [
@@ -105,7 +106,9 @@ done:
             "mov bx, word ptr [bp+6]",
             "xor ax, ax",
             "xor cx, cx",
-            "jmp L0_1",
+            "cmp cx, bx",
+            "jl L0_5",
+            "jmp L0_8",
             "L0_5:",
             "add ax, cx",
             "inc cx",

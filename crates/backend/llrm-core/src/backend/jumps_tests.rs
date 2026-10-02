@@ -748,3 +748,89 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
     assert!(_arm_bytes(large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
     assert_eq!(order(large), vec![1, 10, 20, 30]);
 }
+
+/// A loop entered at its test, its body ending `jmp test`.
+fn entered_at_its_test(body_ends: Vec<Arc<Insn>>, body_succ: Vec<i64>) -> LirBody {
+    let mut made = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 30)], vec![30]),
+            block(10, body_ends, body_succ),
+            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]),
+            block(40, vec![_return(40)], vec![]),
+            block(50, vec![_return(50)], vec![]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    made.odds.taken.insert((30, 10), fixed(31.0 / 32.0));
+    made.odds.taken.insert((30, 40), fixed(1.0 / 32.0));
+    made
+}
+
+/// A loop body's `jmp` back to the test ran every trip: deedlines' blobs
+/// loops executed one per pass. Copied, the test runs where the jump did,
+/// and the copy's `jmp` to the exit only when the loop leaves (mark 8:
+/// 9,474 ms to 9,069). The copy owns no bytes; the test keeps its own.
+#[test]
+fn test_a_jump_to_a_short_loop_test_runs_a_copy_of_the_test() {
+    let before = entered_at_its_test(vec![_move(10, imm(1)), _jump(11, 30)], vec![30]);
+    let after = duplicated_tails(&before);
+    let jumps = |one: &LirBody| crate::backend::executed::executed(one).expect("reducible").jumps;
+    assert!(jumps(&before) > 30.0, "premise: the jump back runs every trip: {}", jumps(&before));
+    assert!(jumps(&after) < 3.0, "{}", jumps(&after));
+    let copied = after.blocks.iter().find(|one| one.at == 10).unwrap();
+    let names: Vec<String> = _real(copied).iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+    assert_eq!(names, ["mov", "cmp", "jne", "jmp"]);
+    assert_eq!(after.owned_bytes(), before.owned_bytes());
+}
+
+/// A block ending `je out; jmp test` took the test's successors for its own
+/// and lost `out`: pipeline.nib's `je` led nowhere ("a jump to L2_162,
+/// which is nowhere").
+#[test]
+fn test_a_copied_tail_keeps_its_parents_own_branch_targets() {
+    let before = entered_at_its_test(vec![_compare(10), _branch(11, "je", 50), _jump(12, 30)], vec![50, 30]);
+    let after = duplicated_tails(&before);
+    let copied = after.blocks.iter().find(|one| one.at == 10).unwrap();
+    assert!(copied.succ.contains(&50), "{:?}", copied.succ);
+    assert!(after.blocks.iter().any(|one| one.at == 50));
+}
+
+/// A `jmp`'s edge carries no odds, being certain. Its copied test took none
+/// either, and `Frequency` split the copy's branch evenly: the loop it
+/// closes ran twice where it ran 32 times, and qbdemo's PLASMA read 16
+/// times cheaper with its code unchanged.
+#[test]
+fn test_a_copied_test_keeps_its_loops_odds() {
+    let before = entered_at_its_test(vec![_move(10, imm(1)), _jump(11, 30)], vec![30]);
+    assert!(!before.odds.taken.contains_key(&(10, 30)), "premise: the jump's edge has no odds");
+    let after = duplicated_tails(&before);
+    let runs = |one: &LirBody| crate::analysis::frequency::Frequency::of(one).block(10);
+    assert!((runs(&after) - runs(&before)).abs() < 1e-6, "{} {}", runs(&after), runs(&before));
+}
+
+/// A loop test reached from outside the loop by a `jmp` and by a `je`: a
+/// copy at the `jmp` enters the loop at its body while the `je` still
+/// enters at the test. deedlines' `__main` became irreducible that way and its estimate
+/// read "executes an unbounded amount", dropping 777,870 instructions from
+/// the sum.
+#[test]
+fn test_a_copy_never_makes_a_second_entry_into_a_loop() {
+    let mut before = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 30)], vec![30, 5]),
+            block(5, vec![_move(5, imm(2)), _jump(6, 30)], vec![30]),
+            block(10, vec![_move(10, imm(1))], vec![30]),
+            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]),
+            block(40, vec![_return(40)], vec![]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    before.odds.taken.insert((30, 10), fixed(31.0 / 32.0));
+    before.odds.taken.insert((30, 40), fixed(1.0 / 32.0));
+    assert!(crate::backend::executed::executed(&before).is_some(), "premise: reducible");
+    assert!(crate::backend::executed::executed(&duplicated_tails(&before)).is_some(), "the copy made the loop irreducible");
+}
