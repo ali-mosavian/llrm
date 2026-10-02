@@ -1337,14 +1337,15 @@ fn test_an_error_statement_is_placed_after_the_hot_path() {
 /// LBOUND(a, 1) compared the rank against 1 before reading the descriptor.
 ///
 /// Every allocated array has a first dimension, so only the allocation
-/// test may branch to the runtime call.
+/// test may branch to the runtime call. Distinct branches: tail
+/// duplication may copy that test, which is no second condition.
 #[test]
 fn test_the_first_dimension_is_not_rank_checked() {
     let procedure = sum_three(false);
 
     let calls = bound_call_labels(&procedure);
-    let branches = jumps(&procedure, false);
-    assert_eq!(branches.iter().filter(|(_, _, label)| calls.contains(label)).count(), 2);
+    let branches: BTreeSet<&str> = jumps(&procedure, false).iter().filter(|(_, _, label)| calls.contains(label)).map(|(start, end, _)| procedure[*start..*end].trim()).collect();
+    assert_eq!(branches.len(), 2, "{branches:?}");
 }
 
 /// --unchecked-bounds trusts the descriptor: no B$LBND/B$UBND fallback.

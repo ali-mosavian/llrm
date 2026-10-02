@@ -81,7 +81,114 @@ pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintabl
             break;
         }
     }
-    Ok(preferred(&baseline, &threaded(&candidate)).clone())
+    let placed = preferred(&baseline, &threaded(&candidate)).clone();
+    Ok(if size { placed } else { duplicated_tails(&placed) })
+}
+
+/// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its jumps.
+const TAIL_DUPLICATION: usize = 2;
+
+/// Each `jmp` to a short tail replaced by a copy of the tail, as LLVM's tail
+/// duplication: the copy runs where the jump did, and the jump is gone. A
+/// tail that falls through gets a `jmp` there in its copy, which runs only
+/// as often as the copy falls through, so a copy is made only where that is
+/// less often than the jump it removes. A copy claims none of the
+/// original's bytes, which the tail keeps.
+pub fn duplicated_tails(body: &LirBody) -> LirBody {
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let after: IndexMap<i64, i64> = body.blocks.windows(2).map(|pair| (pair[0].at, pair[1].at)).collect();
+    let frequency = Frequency::of(body);
+    let mut odds = body.odds.clone();
+    let irreducible = |blocks: &[LirBlock]| !loopy::irreducible(&intervals::_graph(blocks), Some(body.entry)).is_empty();
+    let reducible = !irreducible(&body.blocks);
+    let mut blocks: Vec<LirBlock> = body.blocks.clone();
+    for (index, parent) in body.blocks.iter().enumerate() {
+        let mut tried = odds.clone();
+        let made = (|| {
+            let real = _real(parent);
+            let Some(last) = real.last().and_then(|one| one.what.as_ref()).filter(|what| what.op == Operation::Jump && !what.indirect) else {
+                return None;
+            };
+            let Some(tail) = last.target.filter(|at| *at != parent.at && *at != body.entry).and_then(|at| by_at.get(&at)) else {
+                return None;
+            };
+            let Some((copied, falls)) = _duplicable(tail, after.get(&tail.at).copied()) else {
+                return None;
+            };
+            // Per run of the jump: the fall-through's jump runs as often as the tail falls through.
+            if let Some(next) = falls {
+                let share = |from: i64, to: i64| frequency.edge(from, to) / frequency.block(from).max(f64::MIN_POSITIVE);
+                if share(tail.at, next) >= 1.0 {
+                    return None;
+                }
+            }
+            let jump = &parent.insns[parent.insns.iter().rposition(|one| Arc::ptr_eq(one, real.last().expect("checked"))).expect("a real instruction")];
+            // The jump's work goes; its source bytes stay, as `_reachable` keeps them.
+            let mut insns: Vec<Arc<Insn>> = parent.insns.iter().map(|one| if Arc::ptr_eq(one, jump) { lir::bytes_only(one) } else { Arc::clone(one) }).collect();
+            insns.extend(copied.iter().map(|one| _unowned(one, jump)));
+            if let Some(next) = falls {
+                let mut made = (**jump).clone();
+                made.what = Some(Semantics { target: Some(next), ..last.clone() });
+                insns.push(_unowned(&made, jump));
+            }
+            // The edge to the tail becomes the tail's edges, at its share.
+            // A parent's only edge carries no odds: it is certain.
+            let only = (parent.succ.len() == 1).then_some(lir::BlockOdds::CERTAIN as u32);
+            if let Some(through) = tried.taken.shift_remove(&(parent.at, tail.at)).or(only) {
+                for next in &tail.succ {
+                    if let Some(taken) = body.odds.taken.get(&(tail.at, *next)) {
+                        let share = (f64::from(through) * f64::from(*taken) / lir::BlockOdds::CERTAIN).round() as u32;
+                        *tried.taken.entry((parent.at, *next)).or_default() += share;
+                    }
+                }
+            }
+            // The parent's own branches keep their targets.
+            let mut succ: Vec<i64> = parent.succ.iter().copied().filter(|at| *at != tail.at).collect();
+            succ.extend(tail.succ.iter().filter(|at| !succ.contains(at)).copied().collect::<Vec<_>>());
+            Some(LirBlock { succ, ..parent.with_insns(insns) })
+        })();
+        // A copy that makes a second entry into a loop is refused: an
+        // irreducible body has no estimate of its loops.
+        if let Some(made) = made {
+            let before = std::mem::replace(&mut blocks[index], made);
+            if reducible && irreducible(&blocks) {
+                blocks[index] = before;
+            } else {
+                odds = tried;
+            }
+        }
+    }
+    _reachable(&LirBody { odds, ..body.clone() }, blocks)
+}
+
+/// A tail's printed instructions where it may be copied, and the block it
+/// falls through to: at most `TAIL_DUPLICATION` besides the branches it ends
+/// in, every one a plain operation.
+fn _duplicable(tail: &LirBlock, next: Option<i64>) -> Option<(Vec<Arc<Insn>>, Option<i64>)> {
+    if !tail.phis.is_empty() {
+        return None;
+    }
+    let real = _real(tail);
+    let ops: Vec<Semantics> = real.iter().map(|one| one.what.clone()).collect::<Option<_>>()?;
+    let jumps = ops.iter().rev().take_while(|one| matches!(one.op, Operation::Jump | Operation::Branch) && !one.indirect).count();
+    let plain = ops[..ops.len() - jumps]
+        .iter()
+        .all(|one| !matches!(one.op, Operation::Call | Operation::Return | Operation::Data | Operation::Barrier | Operation::Jump | Operation::Branch));
+    if jumps == 0 || jumps > 2 || ops.len() - jumps > TAIL_DUPLICATION || !plain || real.iter().any(|one| one.group.is_some()) {
+        return None;
+    }
+    let ends = ops.last().is_some_and(|one| one.op == Operation::Jump);
+    let falls = if ends { None } else { Some(next.filter(|at| tail.succ.contains(at))?) };
+    Some((real, falls))
+}
+
+/// `one` copied where `beside` was, claiming no bytes.
+fn _unowned(one: &Insn, beside: &Insn) -> Arc<Insn> {
+    let at = beside.covers.map_or(beside.at, |covers| covers.0);
+    let mut made = one.clone();
+    made.at = beside.at;
+    made.covers = Some((at, at));
+    Arc::new(made)
 }
 
 /// Each block placed after the jump that reaches it, where no block is already.
