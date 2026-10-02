@@ -1143,6 +1143,30 @@ mod tests {
 
     /// Rotation consumed the syntax that proved crc's counts, so the instrument
     /// guessed nine in ten and read 1505 executed instructions instead of 1356.
+    /// The listing of `function` compiled from tests/fixtures/c/`name`.cgs.
+    fn listing_of(name: &str, function: &str) -> String {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).unwrap();
+        let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+        let built = super::selected(&text, name, None, &options).unwrap_or_else(|error| panic!("{error:?}"));
+        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        let start = listing.find(&format!("{function} proc")).expect("the function");
+        listing[start..start + listing[start..].find("endp").unwrap()].to_owned()
+    }
+
+    /// A const object is read once across a call or a store: writing it is
+    /// undefined, wherever its address went. An extern const was a plain
+    /// global, and no analysis read `constant` as unwritable, so each was
+    /// read again after `ext()`, `keep(tbl)` or `*p = 1`.
+    #[test]
+    fn test_a_const_object_is_read_once_across_a_call_or_a_store() {
+        let reads = |function: &str, name: &str| listing_of("constobj", function).lines().filter(|one| one.contains(&format!("ptr {name}"))).count();
+        assert_eq!(reads("_ext_plain", "_ev"), 2, "premise: a plain extern is read again after a call");
+        assert_eq!(reads("_ext_const", "_ek"), 1);
+        assert_eq!(reads("_table", "_tbl"), 1);
+        assert_eq!(reads("_escaped", "_tbl"), 1);
+        assert_eq!(reads("_stored", "_tbl"), 1);
+    }
+
     #[test]
     fn test_rotation_keeps_provable_trip_counts() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/crc.cgs");

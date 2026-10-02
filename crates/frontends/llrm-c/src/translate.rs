@@ -49,7 +49,13 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     for symbol in imports {
         let id = keys[&Key::Symbol(symbol.id)];
-        data.push(h::DataObject { linkage: DataLinkage::External, address: address(space(unit, Key::Symbol(symbol.id))), ..h::DataObject::new(id, &symbol.object_name(), Vec::new()) });
+        data.push(h::DataObject {
+            linkage: DataLinkage::External,
+            address: address(space(unit, Key::Symbol(symbol.id))),
+            // An extern const object: writing it, anywhere, is undefined.
+            readonly: symbol.constant(),
+            ..h::DataObject::new(id, &symbol.object_name(), Vec::new())
+        });
     }
     let valueless: HashSet<i64> = unit
         .procs

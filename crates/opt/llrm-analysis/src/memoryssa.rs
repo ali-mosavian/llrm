@@ -170,6 +170,13 @@ fn located(reference: &MemRef) -> Option<Location> {
     reference.pointer.map(|pointer| Location { pointer, bytes: u64::from(reference.width) })
 }
 
+/// Whether `writes`, what an instruction writes (`None`: anything), may
+/// change a byte of `cell`, each write asked `clobbers`: the one answer to
+/// it, so that the rules hold everywhere. A constant object nothing changes.
+pub fn changes(cell: &MemRef, writes: Option<&[MemRef]>, clobbers: impl Fn(&MemRef) -> bool) -> bool {
+    !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
+}
+
 /// Whether writing `store` may change a byte of `cell`: `regions` leaves
 /// it open and `pointerfacts` cannot place them apart.
 pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cell: &MemRef, store: &MemRef) -> bool {
@@ -299,7 +306,7 @@ impl MemorySSA<'_> {
                         _ => memory,
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
-                    if written.as_ref().is_none_or(|stores| stores.iter().any(|store| may_clobber(&self.unit, None, queried, store))) {
+                    if changes(queried, written.as_deref(), |store| may_clobber(&self.unit, None, queried, store)) {
                         found.insert(current);
                     } else {
                         pending.push(access.defining);
