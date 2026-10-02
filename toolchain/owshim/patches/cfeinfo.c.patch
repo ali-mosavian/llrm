@@ -1,0 +1,15 @@
+--- a/bld/cc/c/cfeinfo.c	2026-10-02 12:28:52.663981855 +0200
++++ b/bld/cc/c/cfeinfo.c	2026-10-02 12:28:52.672922251 +0200
+@@ -511,7 +511,11 @@
+             if( sym.mods & FLAG_EXPORT ) {
+                 cclass |= FECALL_GEN_DLL_EXPORT;
+             }
+-            if( IsInLineFunc( sym_handle ) ) {
++            /*
++             * qbopt: the language marked it inline: a hint, not a request
++             * for the code generator to ask FEGenProc for the body.
++             */
++            if( sym.mods & FLAG_INLINE ) {
+                 cclass |= FECALL_GEN_MAKE_CALL_INLINE;
+             }
+             if( VarFunc( &sym ) ) {

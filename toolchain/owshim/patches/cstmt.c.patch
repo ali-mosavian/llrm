@@ -1,0 +1,22 @@
+--- a/bld/cc/c/cstmt.c	2026-10-02 12:28:52.663931456 +0200
++++ b/bld/cc/c/cstmt.c	2026-10-02 12:28:52.672857571 +0200
+@@ -183,14 +183,11 @@
+     sym = SymGetPtr( sym_handle );
+     tree->op.u2.func.sym_handle = sym_handle;
+     tree->op.u2.func.flags = FUNC_NONE;
+-    if( TOGGLE( inline )
+-      || (sym->mods & FLAG_INLINE) ) {
+-        if( !sym->attribs.naked ) {
+-            if( strcmp( sym->name, "main" ) != 0 ) {
+-                tree->op.u2.func.flags |= FUNC_OK_TO_INLINE;
+-            }
+-        }
+-    }
++    /*
++     * qbopt: the code generator here does not inline -- nothing answers
++     * FEGenProc -- so a function marked inline is emitted as any is, and the
++     * mark travels in its call class (cfeinfo.c) as a hint.
++     */
+     tree->op.flags = OpFlags( sym->mods );
+     tree->u.expr_type = sym->sym_type->object;    // function return type
+     AddStmt( tree );

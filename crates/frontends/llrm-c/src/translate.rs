@@ -69,6 +69,13 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
         functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, proc, at as i64 + 1)?);
     }
     let debug = described.map(|one| one.finish(|symbol| keys.get(&Key::Symbol(symbol)).copied()));
+    // A routine defined here that the language marked inline carries the mark on its definition.
+    for proc in &unit.procs {
+        let symbol = &unit.symbols[&proc.symbol];
+        if crate::ow_facts::of_call_class(symbol.call_class)?.contains(&llrm_mir::facts::Fact::Inline(llrm_mir::facts::Inlining::Hint)) {
+            callable(&mut callables, &symbol.object_name(), true);
+        }
+    }
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
@@ -2014,6 +2021,18 @@ mod tests {
         let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
+    }
+
+    /// A function declared `inline` is stated a hint: the front end's mark of it reaches the
+    /// routine as `Inlining::Hint`, which the inliner reads.
+    #[test]
+    fn a_function_declared_inline_is_stated_a_hint() {
+        let module = raised("inlinehint.cgs");
+        let twice = module.globals.iter().find(|one| one.name.as_deref() == Some("_twice")).and_then(|one| one.function()).expect("_twice defined");
+        assert_eq!(llrm_mir::facts::Facts::of(&twice.attrs).inline(), Some(llrm_mir::facts::Inlining::Hint), "{}", llrm_mir::print::module(&module));
+        assert!(!twice.is_declaration(), "its body is emitted");
+        let three = module.globals.iter().find(|one| one.name.as_deref() == Some("_three")).and_then(|one| one.function()).expect("_three defined");
+        assert_eq!(llrm_mir::facts::Facts::of(&three.attrs).inline(), None);
     }
 
     /// The C library's strcmp is stated a three-way compare: branchprob

@@ -6,7 +6,7 @@
 //! of its own for any fact. A stream from a build of another version is
 //! refused, not misread.
 
-use llrm_mir::facts::{Effect, Fact};
+use llrm_mir::facts::{Effect, Fact, Inlining};
 
 use crate::hir::{Node, Unit, Unsupported, handle};
 
@@ -46,6 +46,7 @@ enum Bit {
 
 const ABORTS: i64 = 0x2;
 const NORETURN: i64 = 0x4;
+const MAKE_CALL_INLINE: i64 = 0x10;
 const NO_MEMORY_READ: i64 = 0x100;
 const NO_MEMORY_CHANGED: i64 = 0x200;
 
@@ -56,7 +57,7 @@ const CLASS: [(i64, &str, Bit); 11] = [
     (ABORTS, "ABORTS", Bit::Fact),
     (NORETURN, "NORETURN", Bit::Fact),
     (0x8, "PARMS_BY_ADDRESS", Bit::Refused("arguments passed by address have no carrier")),
-    (0x10, "MAKE_CALL_INLINE", Bit::Abi("Symbol::code, inline code")),
+    (MAKE_CALL_INLINE, "MAKE_CALL_INLINE", Bit::Fact),
     (0x20, "HAS_VARARGS", Bit::Abi("Symbol::variadic")),
     (0x40, "SETJMP_KLUGE", Bit::Meaning("Callable::returns_twice")),
     (0x80, "CALLER_POPS", Bit::Abi("the call's stack cleanup")),
@@ -65,8 +66,10 @@ const CLASS: [(i64, &str, Bit); 11] = [
     (0x400, "DLL_EXPORT", Bit::Ignored("a Windows export")),
 ];
 
-/// The facts a routine's call class states: it does not return, and what it
-/// does not do to memory (`#pragma aux ... nomemory`). A bit that changes
+/// The facts a routine's call class states: it does not return, what it
+/// does not do to memory (`#pragma aux ... nomemory`), and that the language
+/// marked it inline (our patched front end sets `MAKE_CALL_INLINE` of what is
+/// declared `inline`; it is a hint, nothing asks the code generator for a body). A bit that changes
 /// meaning and has no carrier, or that this table does not know, refuses.
 pub fn of_call_class(class: i64) -> Result<Vec<Fact>, Unsupported> {
     let known = CLASS.iter().fold(0, |all, (bit, ..)| all | bit);
@@ -79,6 +82,9 @@ pub fn of_call_class(class: i64) -> Result<Vec<Fact>, Unsupported> {
     let mut facts = Vec::new();
     if class & (ABORTS | NORETURN) != 0 {
         facts.push(Fact::NoReturn);
+    }
+    if class & MAKE_CALL_INLINE != 0 {
+        facts.push(Fact::Inline(Inlining::Hint));
     }
     match (class & NO_MEMORY_READ != 0, class & NO_MEMORY_CHANGED != 0) {
         (true, true) => facts.push(Fact::Memory(Effect::None)),
@@ -177,8 +183,9 @@ mod tests {
         assert!(returns_twice(0x40) && !returns_twice(0x80));
         assert!(of_call_class(0x88).unwrap_err().0.contains("PARMS_BY_ADDRESS"));
         assert!(of_call_class(0x800).unwrap_err().0.contains("no table"));
-        // The ABI bits and the ignored one pass.
-        assert_eq!(of_call_class(0x1 | 0x10 | 0x20 | 0x80 | 0x400).unwrap(), Vec::<Fact>::new());
+        // The ABI bits and the ignored one pass; the inline mark is a hint.
+        assert_eq!(of_call_class(0x1 | 0x20 | 0x80 | 0x400).unwrap(), Vec::<Fact>::new());
+        assert_eq!(of_call_class(0x10).unwrap(), vec![Fact::Inline(Inlining::Hint)]);
         // Each bit is in the table once.
         let mut bits: Vec<i64> = CLASS.iter().map(|one| one.0).collect();
         bits.sort_unstable();

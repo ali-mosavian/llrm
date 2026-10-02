@@ -1224,6 +1224,35 @@ mod tests {
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
     }
 
+    /// `source` through wccq, the rich route and `-O2`: the listing of the module.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    fn listing_of_source(source: &str) -> String {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("probe.c");
+        std::fs::write(&path, source).unwrap();
+        let recorded = super::recorded(&path, &[], false, &[]).expect("wccq records the source");
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let built = super::selected(&recorded, "probe", None, &llrm_core::driver::Options::of(machine)).unwrap_or_else(|error| panic!("{error:?}"));
+        llrm_core::backend::masm::text(&built).unwrap()
+    }
+
+    /// A function declared `inline` was dropped: Open Watcom's front end does not emit one
+    /// the code generator is to inline, and nothing here answers for it, so the call was
+    /// `extern _twice` with no body. Now it is emitted as any is, marked a hint, and the
+    /// inliner (which reads the mark) takes it into its caller.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn a_c_function_declared_inline_is_emitted_hinted_and_inlined() {
+        let source = "static __inline int twice(int x) { return x + x; }\nint three(int r) { return twice(r) + twice(r + 1); }\n";
+        let listing = listing_of_source(source);
+        assert!(!listing.contains("extern _twice") && !listing.contains("call far ptr _twice") && !listing.contains("call _twice"), "{listing}");
+        // Not inline-marked, the same function stays a call at this size.
+        let plain = listing_of_source(&source.replace("static __inline int", "int"));
+        assert!(plain.contains("_twice"), "premise: {plain}");
+    }
+
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));

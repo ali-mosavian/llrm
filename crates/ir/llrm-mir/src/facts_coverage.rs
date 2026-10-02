@@ -37,7 +37,7 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("nsw", By(&["a_no_signed_wrap_fact_is_nsw", "test_a_step_promised_not_to_wrap_ends_an_inclusive_symbolic_loop"])),
     ("nuw", By(&["test_a_step_promised_not_to_wrap_ends_an_inclusive_symbolic_loop"])),
     ("inbounds", By(&["inbounds_is_a_fact_of_an_operand", "test_an_inequality_loop_is_bounded_by_its_in_bounds_accesses"])),
-    ("inline", By(&["test_a_callee_the_language_says_never_inline_stays_even_if_always_is_stated_too", "test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size", "each_inlining_has_its_attribute"])),
+    ("inline", By(&["test_a_callee_the_language_says_never_inline_stays_even_if_always_is_stated_too", "test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size", "each_inlining_has_its_attribute", "a_c_function_declared_inline_is_emitted_hinted_and_inlined", "a_function_declared_inline_is_stated_a_hint"])),
     ("reassoc", By(&["test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
     ("nnan", By(&["test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
     ("ninf", By(&["test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
