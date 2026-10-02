@@ -19,7 +19,7 @@ if restoredValue <> 1.5 then
 end if
 encodedDouble = mkd$(sourceDouble)
 restoredDouble = cvd(encodedDouble)
-if encodedDouble <> chr$(248) + chr$(255) + chr$(255) + chr$(255) + chr$(255) + chr$(255) + chr$(63) + chr$(129) then
+if encodedDouble <> chr$(0) + chr$(0) + chr$(0) + chr$(0) + chr$(0) + chr$(0) + chr$(64) + chr$(129) then
     print "FAIL pds-mbf double-bytes"
     end
 end if
