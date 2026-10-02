@@ -108,13 +108,15 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     for (module, global, name, routine) in routines {
         let cells = promises.writes(routine);
         let nounwind = promises.nounwind.iter().any(|one| one == routine);
-        if cells.is_none() && !nounwind || out.named(name).is_some() {
+        let no_return = promises.no_return.iter().any(|one| one == routine);
+        if cells.is_none() && !nounwind && !no_return || out.named(name).is_some() {
             continue;
         }
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
         function.attrs.extend(cells.is_some().then(|| Attribute::Flag("nocallback".to_owned())));
         function.attrs.extend(nounwind.then(|| Attribute::Flag("nounwind".to_owned())));
+        function.attrs.extend(no_return.then(|| llrm_mir::facts::Fact::NoReturn.attribute()).flatten());
         if let Some(cells) = cells {
             let written = std::iter::once(one).chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied())).collect();
             writes.push(node(&mut out, written));
