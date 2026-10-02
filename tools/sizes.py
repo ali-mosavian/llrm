@@ -24,6 +24,24 @@ DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
 
+HEADER = re.compile(r"^\s*(?:'|//)\s*(flags|dialect):\s*(.*?)\s*$")
+
+
+def settings(source: str) -> list[str]:
+    """What a program's header asks of its compiler, but the opt level and cpu this tool sets: tests/run's `dialect:` and `flags:`."""
+    found = {}
+    for line in Path(source).read_text(encoding="latin1").splitlines():
+        match = HEADER.match(line)
+        if match:
+            found[match[1]] = match[2]
+        elif line.strip() and not line.lstrip().startswith(("'", "//")):
+            break
+    flags = found.get("flags", "").split()
+    kept = [one for at, one in enumerate(flags) if not one.startswith("-O") and one != "--cpu" and flags[at - 1 : at] != ["--cpu"]]
+    dialect = ["--dialect", found["dialect"], "--runtime", found["dialect"]] if "dialect" in found else []
+    return [*dialect, *kept]
+
+
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-c", "llrm-nib"))
     out = []
@@ -32,7 +50,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
             sys.exit(f"{DEMOS} is missing: set QBDEMOS, or the demos cannot be counted")
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for pattern, tool in (("tests/run/qb/*.bas", qb), ("bench/*.bas", qb), ("bench/general/*.BAS", qb), ("bench/parity/*.bas", qb), ("bench/c/*.c", cc), ("bench/general/*.c", cc), ("bench/parity/*.c", cc), ("examples/*.nib", nib)):
-        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, file]) for file in sorted(glob.glob(str(ROOT / pattern)))]
+        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, file, *settings(file)]) for file in sorted(glob.glob(str(ROOT / pattern)))]
     return out
 
 
