@@ -701,3 +701,161 @@ b2:
         assert_eq!(at.get(&parsed.value("m")), None, "a call with no range says nothing");
     }
 }
+
+/// What a block assumes bounds a value in the blocks it dominates, as the
+/// branch of a check does, in loops and out; not in its own block.
+#[test]
+fn an_assume_bounds_a_value_below_its_block() {
+    let parsed = Parsed::new(
+        "declare void @llvm.assume(i1)
+
+define i16 @f(i16 %x, i1 %c) {
+b0:
+  %low = icmp sge i16 %x, 0
+  %high = icmp slt i16 %x, 10
+  call void @llvm.assume(i1 %low)
+  call void @llvm.assume(i1 %high)
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %x
+
+b2:
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        for name in ["b1", "b2"] {
+            assert_eq!(scoped[&cfg::id(parsed.block(name))].get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{name}");
+        }
+        assert_eq!(scoped.get(&cfg::id(parsed.block("b0"))).and_then(|at| at.get(&parsed.value("x"))), None, "not in its own block");
+    }
+}
+
+#[test]
+fn an_assume_above_a_counted_loop_bounds_a_value_in_its_body() {
+    let parsed = Parsed::new(
+        "declare void @llvm.assume(i1)
+declare void @use(i16, i16)
+
+define void @f(i16 %x) {
+b0:
+  %low = icmp sge i16 %x, 0
+  %high = icmp slt i16 %x, 10
+  call void @llvm.assume(i1 %low)
+  call void @llvm.assume(i1 %high)
+  br label %body
+
+body:
+  %i = phi i16 [ 0, %b0 ], [ %next, %body ]
+  call void @use(i16 %i, i16 %x)
+  %next = add nsw i16 %i, 1
+  %more = icmp slt i16 %next, 8
+  br i1 %more, label %body, label %out
+
+out:
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let at = &bounded(&unit).unwrap()[&cfg::id(parsed.block("body"))];
+    assert!(at.contains_key(&parsed.value("i")), "the loop is counted: {at:?}");
+    assert_eq!(at.get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{at:?}");
+}
+
+/// A condition a frontend states with `Op::Assume` bounds the value in the code
+/// that follows it: HIR through its lowering to the reader, no hand-written MIR.
+#[test]
+fn an_assume_a_frontend_states_bounds_a_value_below_it() {
+    use llrm_hir::model::{Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile, Terminator, TerminatorKind, Type, TypeKind, Value};
+    let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
+    integer.signed = Some(true);
+    let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
+    // v1 is the parameter; v2 = v1 < 10; assume v2; then a block that returns v1.
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
+    let less = Instruction::new(1, Op::Lt, vec![2], vec![HirOperand::value_ref(1), HirOperand::constant(1, 10)]);
+    let assume = Instruction::new(2, Op::Assume, vec![], vec![HirOperand::value_ref(2)]);
+    let first = Block::new(1, vec![less, assume], Terminator::new(TerminatorKind::Jump, Vec::new(), vec![2]));
+    let second = Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(1)], Vec::new()));
+    let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
+    function.parameters = vec![1];
+    let program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
+    let emitted = llrm_hir::mir::emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    // The assumption is made on the comparison's own `i1`, before any pass.
+    let module = emitted.module;
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
+    let unit = Unit::of(&module, &layout, function);
+    let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
+    let parameter = function.parameters()[0];
+    assert_eq!(below.get(&parameter), Some(&Interval { low: (-32768).into(), high: 9.into(), width: 16 }), "{below:?}");
+}
+
+/// What `!range` says of a load or a call bounded nothing: an enum's tag, `LEN`,
+/// every value a frontend states of an instruction was written to the IR and
+/// never read, though a parameter's `range` was.
+#[test]
+fn a_range_in_metadata_bounds_a_load_and_a_call_result() {
+    let parsed = Parsed::new(
+        "declare i16 @count(ptr)
+
+define i16 @f(ptr %p, i1 %c) {
+b0:
+  %tag = load i16, ptr %p, !range !0
+  %n = call i16 @count(ptr %p), !range !1
+  %free = load i16, ptr %p
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %tag
+
+b2:
+  ret i16 %n
+}
+
+!0 = !{i16 0, i16 3}
+!1 = !{i16 1, i16 100}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        let at = &scoped[&cfg::id(parsed.block("b1"))];
+        assert_eq!(at.get(&parsed.value("tag")), Some(&interval(0, 2, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("n")), Some(&interval(1, 99, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("free")), None, "a load with no range says nothing");
+    }
+}
+
+/// A frontend's `Fact::Range` of an instruction reaches the reader: HIR to its
+/// lowering to `!range` to the interval.
+#[test]
+fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
+    use llrm_hir::facts::{Builder, Subject};
+    use llrm_hir::model::{Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile, Terminator, TerminatorKind, Type, TypeKind, Value};
+    let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
+    integer.signed = Some(true);
+    let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
+    let sum = Instruction::new(1, Op::Add, vec![2], vec![HirOperand::value_ref(1), HirOperand::value_ref(1)]);
+    let first = Block::new(1, vec![sum], Terminator::new(TerminatorKind::Jump, Vec::new(), vec![2]));
+    let second = Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(2)], Vec::new()));
+    let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
+    function.parameters = vec![1];
+    let mut program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, llrm_hir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 7 }));
+    program.modules[0].facts = facts.finish();
+    let emitted = llrm_hir::mir::emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let module = emitted.module;
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
+    let unit = Unit::of(&module, &layout, function);
+    let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
+    let result = function.instruction(function.block(function.layout()[0]).instructions()[0]).result.expect("a sum");
+    assert_eq!(below.get(&result), Some(&interval(0, 7, 16)), "{below:?}");
+}

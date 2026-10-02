@@ -826,6 +826,8 @@ struct Args {
     cpu: String,
     options: Options,
     include: Vec<String>,
+    /// Watcom switches the program opts into, passed to wccq: -oa, -on.
+    watcom: Vec<&'static str>,
     /// The old MIR's route, for a program the rich MIR refuses; `--opt`
     /// optimizes on it.
     legacy: bool,
@@ -836,12 +838,14 @@ struct Args {
 
 /// The code-generator stream wccq records for one C file; with `debug`,
 /// its debug types and symbols too (-d2).
-pub fn recorded(source: &Path, includes: &[String], debug: bool) -> Result<String, hir::Unsupported> {
+pub fn recorded(source: &Path, includes: &[String], debug: bool, watcom: &[&str]) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
     let wccq = Path::new(option_env!("LLRM_WCCQ").ok_or_else(|| hir::Unsupported("llrm was built without the toolchain feature".into()))?);
     // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
     // double, byte-packed structs, 16-bit enums, x87 inline, no stack probes, no
     // default library. -fp3 is for inline assembly: qcport's own uses 387 instructions.
+    // Borland's ABI is the only one: wccq also lays bit fields out as BCC 3.1 does,
+    // with no switch, since no other struct or call ABI exists here to match.
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
     let flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
@@ -853,6 +857,7 @@ pub fn recorded(source: &Path, includes: &[String], debug: bool) -> Result<Strin
     let done = std::process::Command::new(&wccq)
         .args(flags)
         .args(debug.then_some("-d2"))
+        .args(watcom)
         .args(searched)
         .arg(format!("-fo={}/unit.obj", scratch.path().display()))
         .arg(absolute(source))
@@ -873,7 +878,7 @@ fn usage() -> String {
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut flags, mut dump, mut opt, mut legacy) = (None, Flags::default(), None, false, false);
-    let mut include = Vec::new();
+    let (mut include, mut watcom) = (Vec::new(), Vec::new());
     let mut at = 0;
     while at < argv.len() {
         if flags.take(argv, &mut at)? {
@@ -890,6 +895,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--opt" => opt = true,
             "--legacy" => legacy = true,
+            // Watcom's: relaxed alias checking; relaxed floating point.
+            "-oa" => watcom.push("-oa"),
+            "-on" => watcom.push("-on"),
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unrecognized arguments: {flag}"));
             }
@@ -907,6 +915,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         cpu: machine.cpu.clone(),
         options: flags.legacy(),
         include,
+        watcom,
         legacy: legacy || opt,
         codegen: flags.driver(machine),
         flags,
@@ -926,7 +935,7 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            recorded(&args.source, &args.include, args.flags.debug)?
+            recorded(&args.source, &args.include, args.flags.debug, &args.watcom)?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args
@@ -1141,6 +1150,29 @@ mod tests {
 
     /// Rotation consumed the syntax that proved crc's counts, so the instrument
     /// guessed nine in ten and read 1505 executed instructions instead of 1356.
+    /// `name`'s listing of `function`, compiled from tests/fixtures/c/`name`.cgs.
+    fn listing_of(name: &str, function: &str) -> String {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).unwrap();
+        let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+        let built = super::selected(&text, name, None, &options).unwrap_or_else(|error| panic!("{error:?}"));
+        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        let start = listing.find(&format!("{function} proc")).expect("the function");
+        listing[start..start + listing[start..].find("endp").unwrap()].to_owned()
+    }
+
+    /// Watcom's -oa lets a store through a pointer leave alone every object
+    /// the unit never takes the address of: INIT `sw` said so, and llrm-c
+    /// read only its debug bits, so `after_store` read `counter` and `seen`
+    /// again after `*p = 5`. Without -oa they are read again, as C requires.
+    #[test]
+    fn test_relaxed_alias_checking_keeps_unaddressed_objects_across_a_store() {
+        let reads = |listing: &str, name: &str| listing.lines().filter(|one| one.contains(&format!("ptr {name}"))).count();
+        let strict = listing_of("strictalias", "_after_store");
+        assert_eq!((reads(&strict, "_counter"), reads(&strict, "_seen")), (2, 2), "premise: read again without -oa\n{strict}");
+        let relaxed = listing_of("relaxalias", "_after_store");
+        assert_eq!((reads(&relaxed, "_counter"), reads(&relaxed, "_seen")), (1, 1), "{relaxed}");
+    }
+
     #[test]
     fn test_rotation_keeps_provable_trip_counts() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/crc.cgs");
@@ -1166,24 +1198,28 @@ mod tests {
 
     /// toolchain/owshim/build.sh hardcoded macOS ARM64's defines and clang, so no wccq
     /// could be built on any other host and llrm-c refused every C file.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
     #[test]
     fn test_wccq_built_here_records_the_committed_stream() {
         let root = Path::new(env!("LLRM_ROOT"));
         let source = root.join("tests/fixtures/c/halve.c");
         let without_path = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
-        let recorded = super::recorded(&source, &[], false).expect("wccq records halve.c");
+        let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records halve.c");
         let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 
     /// A long double global got its initializer as a double, 8 bytes, while
     /// code loads it as 10 bytes: `gld` read 1.07e-49 and took two bytes of `after`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
     #[test]
     fn test_a_long_double_initializer_is_ten_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("probe.c");
         std::fs::write(&source, "long double gld = 3.5;\nshort after = 7;\nlong double get(void) { return gld; }\n").unwrap();
-        let recorded = super::recorded(&source, &[], false).expect("wccq records probe.c");
+        let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records probe.c");
         let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGBytes")).collect();
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
     }
@@ -1401,6 +1437,22 @@ mod tests {
         use llrm_core::driver::flags::Level;
         assert_eq!(cleanups(Level::Os), ["pop cx", "pop cx", "pop cx"]);
         assert_eq!(cleanups(Level::O2), ["add sp, 2", "add sp, 4"]);
+    }
+
+    /// A C function that calls nothing came out of the compile with no word
+    /// that nothing re-enters it: `norecurse` was inferred where no compiler ran.
+    #[test]
+    fn test_a_leaf_function_comes_out_of_the_compile_norecurse() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/halve.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+        let directory = std::env::temp_dir().join(format!("llrm-c-norecurse-{}", std::process::id()));
+        super::selected(&text, "halve", Some(&directory), &llrm_core::driver::Options::of(machine)).expect("selects");
+        let mut stages = std::fs::read_dir(&directory).unwrap().flatten().map(|one| one.path()).filter(|one| one.extension().is_some_and(|ext| ext == "ll")).collect::<Vec<_>>();
+        stages.sort_by_key(|one| one.file_name().map(std::ffi::OsStr::to_owned));
+        let last = std::fs::read_to_string(stages.last().expect("a stage")).unwrap();
+        std::fs::remove_dir_all(&directory).ok();
+        let defined = last.lines().filter(|line| line.starts_with("define")).collect::<Vec<_>>();
+        assert!(!defined.is_empty() && defined.iter().all(|line| line.contains("norecurse")), "{defined:?}");
     }
 
     /// bcc -O makes fabs the x87 instruction; llrm-c called the library's:

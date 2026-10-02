@@ -31,11 +31,11 @@ fn each_level_selects_its_pipeline() {
     assert_eq!(pipeline(&["-Og"]), o1);
     let o3 = pipeline(&["-O3"]);
     assert_eq!(o3.limits, Limits { max_unrolled_operations: 400, ..Limits::default() });
-    assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold(250), true, true));
+    assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold::new(250), true, true));
     let os = pipeline(&["-Os"]);
-    assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default(), true));
+    assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
-    assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default(), false, false));
+    assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default().for_size(), false, false));
     assert!(parsed(&["-O4"]).is_err());
 }
 
@@ -49,7 +49,7 @@ fn the_default_level_is_the_old_o2() {
 fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
-    assert_eq!(options.inline, Threshold(0));
+    assert_eq!(options.inline, Threshold::new(0));
     assert_eq!(pipeline(&["-O2", "-fno-peel-loops", "-fpeel-loops"]).peel, true);
     assert_eq!(pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline, Threshold::default());
     let error = parsed(&["-fno-vectorize"]).unwrap_err();
@@ -97,4 +97,19 @@ fn sanitizers_take_gccs_names() {
     assert_eq!(sanitize(&["-fsanitize=undefined", "-fno-sanitize=bounds"]), Sanitize { bounds: false, ..all });
     assert_eq!(sanitize(&["-ftrapv"]), Sanitize { signed_integer_overflow: true, ..Sanitize::default() });
     assert!(parsed(&["-fsanitize=address"]).is_err());
+}
+
+/// `-fstack-usage` and `-Wstack-usage=N` were no options: the stack a program
+/// could use was never reported, and `-f` named every flag a pass.
+#[test]
+fn test_stack_usage_options_reach_the_driver() {
+    let mut flags = Flags::default();
+    for argument in ["-fstack-usage", "-Wstack-usage=512"] {
+        let argv = vec![argument.to_owned()];
+        assert!(flags.take(&argv, &mut 0).unwrap(), "{argument}");
+    }
+    let options = flags.driver(crate::abi::machine::BUILT_IN.clone());
+    assert!(options.stack_usage);
+    assert_eq!(options.stack_limit, Some(512));
+    assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());
 }

@@ -140,7 +140,20 @@ plain_record!(Place, None, id => "id", name => "name", r#type => "type", storage
 plain_record!(Value, None, id => "id", r#type => "type");
 plain_record!(DebugType, None, id => "id", kind => "kind", name => "name", target => "target", size => "size",
     reach => "reach", members => "members");
-plain_record!(DebugMember, None, name => "name", r#type => "type", offset => "offset");
+// A bit field's keys only where it is one: every other member writes as before.
+impl _Plain for model::DebugMember {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("type".to_owned(), self.r#type._plain());
+        out.insert("offset".to_owned(), self.offset._plain());
+        if let (Some(start), Some(width)) = (self.bit_start, self.bit_width) {
+            out.insert("bit_start".to_owned(), start._plain());
+            out.insert("bit_width".to_owned(), width._plain());
+        }
+        Json::Dict(out)
+    }
+}
 plain_record!(DebugParameter, None, argument => "argument", name => "name", r#type => "type");
 plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
@@ -213,6 +226,9 @@ impl _Plain for model::Callable {
         out.insert("segmented".to_owned(), self.segmented._plain());
         out.insert("arrays".to_owned(), self.arrays._plain());
         out.insert("defined".to_owned(), self.defined._plain());
+        if self.returns_twice {
+            out.insert("returns_twice".to_owned(), self.returns_twice._plain());
+        }
         if self.symbol.is_some() {
             out.insert("symbol".to_owned(), self.symbol._plain());
         }
@@ -305,8 +321,11 @@ impl _Plain for crate::facts::Stated {
             out.insert("part".to_owned(), part._plain());
         }
         out.insert("fact".to_owned(), Json::Str(self.fact.key().to_owned()));
-        if let Some(value) = self.fact.wire_value() {
+        if let Some((value, second)) = self.fact.wire_value() {
             out.insert("value".to_owned(), value._plain());
+            if let Some(second) = second {
+                out.insert("second".to_owned(), second._plain());
+            }
         }
         if self.source.is_some() {
             out.insert("source".to_owned(), self.source._plain());
@@ -340,7 +359,7 @@ impl _Plain for model::Module {
     }
 }
 plain_record!(CellWriters, None, cell => "cell", routines => "routines");
-// `reads_arguments` only when made, so that promises read as they always have.
+// `reads_arguments` and `no_return` only when made, so that promises read as they always have.
 impl _Plain for model::RuntimePromises {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -349,6 +368,9 @@ impl _Plain for model::RuntimePromises {
         out.insert("nounwind".to_owned(), self.nounwind._plain());
         if !self.reads_arguments.is_empty() {
             out.insert("reads_arguments".to_owned(), self.reads_arguments._plain());
+        }
+        if !self.no_return.is_empty() {
+            out.insert("no_return".to_owned(), self.no_return._plain());
         }
         Json::Dict(out)
     }
@@ -1085,6 +1107,7 @@ static CALLABLE: _Record = _Record {
         ("segmented", BOOLS, true),
         ("arrays", BOOLS, true),
         ("defined", _Hint::Bool, true),
+        ("returns_twice", _Hint::Bool, false),
         ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1097,6 +1120,7 @@ static CALLABLE: _Record = _Record {
             segmented: _required(args, "segmented")?,
             arrays: _required(args, "arrays")?,
             defined: _required(args, "defined")?,
+            returns_twice: _default(args, "returns_twice", false)?,
             symbol: _default(args, "symbol", None)?,
         })
     },
@@ -1266,8 +1290,16 @@ static DEBUG_TYPE: _Record = _Record {
 
 static DEBUG_MEMBER: _Record = _Record {
     name: "DebugMember",
-    fields: &[("name", _Hint::Str, true), ("type", _Hint::Int, true), ("offset", _Hint::Int, true)],
-    build: |args| _object(model::DebugMember { name: _required(args, "name")?, r#type: _required(args, "type")?, offset: _required(args, "offset")? }),
+    fields: &[("name", _Hint::Str, true), ("type", _Hint::Int, true), ("offset", _Hint::Int, true), ("bit_start", OPTIONAL_INT, false), ("bit_width", OPTIONAL_INT, false)],
+    build: |args| {
+        _object(model::DebugMember {
+            name: _required(args, "name")?,
+            r#type: _required(args, "type")?,
+            offset: _required(args, "offset")?,
+            bit_start: _default(args, "bit_start", None)?,
+            bit_width: _default(args, "bit_width", None)?,
+        })
+    },
 };
 
 static DEBUG_PARAMETER: _Record = _Record {
@@ -1337,6 +1369,7 @@ static STATED_FACT: _Record = _Record {
         ("part", OPTIONAL_INT, false),
         ("fact", _Hint::Str, true),
         ("value", OPTIONAL_INT, false),
+        ("second", OPTIONAL_INT, false),
         ("source", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1346,7 +1379,8 @@ static STATED_FACT: _Record = _Record {
         let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?, _default(args, "part", None)?)
             .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
         let value: Option<i64> = _default(args, "value", None)?;
-        let fact = llrm_mir::facts::Fact::from_wire(&name, value).ok_or_else(|| InvalidHIR(format!("{name:?} with value {value:?} is not a fact")))?;
+        let second: Option<i64> = _default(args, "second", None)?;
+        let fact = llrm_mir::facts::Fact::from_wire(&name, value, second).ok_or_else(|| InvalidHIR(format!("{name:?} with values {value:?} {second:?} is not a fact")))?;
         _object(crate::facts::Stated { subject, fact, source: _default(args, "source", None)? })
     },
 };
@@ -1372,6 +1406,7 @@ static RUNTIME_PROMISES: _Record = _Record {
         ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
         ("nounwind", _Hint::Tuple(&_Hint::Str), false),
         ("reads_arguments", _Hint::Tuple(&_Hint::Str), false),
+        ("no_return", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::RuntimePromises {
@@ -1379,6 +1414,7 @@ static RUNTIME_PROMISES: _Record = _Record {
             writers: _default(args, "writers", Vec::new())?,
             nounwind: _default(args, "nounwind", Vec::new())?,
             reads_arguments: _default(args, "reads_arguments", Vec::new())?,
+            no_return: _default(args, "no_return", Vec::new())?,
         })
     },
 };

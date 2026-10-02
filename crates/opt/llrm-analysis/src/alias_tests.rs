@@ -664,3 +664,36 @@ b0:
     let effects = parsed.effects(&IndexMap::default());
     assert!(!writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4)));
 }
+
+/// A value nothing is known of is a multiple of 1, so `x << 1` and
+/// `0 - (x << 1)` are multiples of 2 and `x * 8` of 8: the fact a trip
+/// count's divisibility proof reads. Only operands with a fact gave one.
+#[test]
+fn test_a_shift_or_multiple_of_an_unknown_is_a_multiple() {
+    let parsed = Parsed::new(
+        "define void @f(i16 %x, i16 %y) {
+b0:
+  %s = shl i16 %x, 1
+  %t = sub i16 0, %s
+  %m = mul i16 %y, 8
+  %u = add i16 %x, %y
+  ret void
+}
+",
+    );
+    let found = congruences(&parsed.unit());
+    assert_eq!(found.get(&parsed.value("s")), Some(&(2.into(), 0.into())));
+    assert_eq!(found.get(&parsed.value("t")), Some(&(2.into(), 0.into())));
+    assert_eq!(found.get(&parsed.value("m")), Some(&(8.into(), 0.into())));
+    assert_eq!(found.get(&parsed.value("u")), None);
+}
+
+/// A parameter the language states `nonnull` is non-null at its definition;
+/// the same pointer unstated may be null.
+#[test]
+fn a_nonnull_parameter_is_nonnull_by_definition() {
+    let parsed = Parsed::new("define void @f(ptr nonnull %p, ptr %q) {\nb0:\n  ret void\n}\n");
+    let unit = parsed.unit();
+    assert_eq!(nonnull_by_definition(&unit, parsed.value("p")), Some(true));
+    assert_eq!(nonnull_by_definition(&unit, parsed.value("q")), Some(false));
+}

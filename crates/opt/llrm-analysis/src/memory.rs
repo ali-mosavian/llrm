@@ -44,6 +44,7 @@ use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
 use crate::alias::PointsTo;
+use crate::assumptions::Assumptions;
 use crate::cfg::Shape;
 use crate::consts::Known;
 use crate::globalsaa::Globals;
@@ -397,6 +398,8 @@ pub struct Unit<'a> {
     pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub metadata: &'a [MetadataNode],
+    /// The type tree of `metadata`'s `!tbaa` nodes, the module's, built once.
+    pub tbaa: Option<&'a llrm_mir::tbaa::Tbaa>,
     pub globals: &'a [GlobalValue],
     pub function: &'a Function,
     /// Each access with the provenance alias found (`alias::annotated`).
@@ -413,6 +416,8 @@ pub struct Unit<'a> {
     /// Each access's reference as alias finds it, the manager's
     /// `Annotated`; unlike `references`, the unit does not read through it.
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
+    /// What each block assumes; without it each ask finds it.
+    pub assumptions: Option<&'a Assumptions>,
 }
 
 impl<'a> Unit<'a> {
@@ -429,7 +434,7 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None }
+        Self { program: None, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -485,6 +490,13 @@ impl<'a> Unit<'a> {
 
     /// The function's dominance and loops: the manager's where the unit
     /// carries them.
+    pub fn assumptions(&self) -> Cow<'a, Assumptions> {
+        match self.assumptions {
+            Some(found) => Cow::Borrowed(found),
+            None => Cow::Owned(Assumptions::of(self)),
+        }
+    }
+
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => Cow::Borrowed(shape),
@@ -549,7 +561,7 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
             };
             // Only a reference naming an alloca reaches it until its address
             // is exposed.
-            let exposed = crate::frameescape::exposes(unit.function, value);
+            let exposed = crate::frameescape::exposes(unit.function, value, |inst| matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd)));
             Some(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
@@ -609,6 +621,10 @@ pub struct MemRef {
     pub width: u32,
     /// The `!tbaa` access type's name.
     pub typed: Option<String>,
+    /// The names of that type's ancestors, nearest first: an access whose type
+    /// is one of them may alias this one's (a parent type covers its children,
+    /// as C's `omnipotent char` covers every scalar).
+    pub lineage: Vec<String>,
     /// Every GEP on the way from `root` was `inbounds`.
     pub inbounds: bool,
     pub volatile: bool,
@@ -634,6 +650,7 @@ impl MemRef {
             index_bits,
             width,
             typed: None,
+            lineage: Vec::new(),
             inbounds: true,
             volatile: false,
             provenance: None,
@@ -677,7 +694,7 @@ impl MemRef {
             _ => return None,
         };
         let width = unit.layout.store_size(&unit.context.types, ty) as u32;
-        Some(Self { typed: typed(unit, inst), volatile, ..Self::at(unit, pointer, width) })
+        Some(Self { typed: typed(unit, inst), lineage: lineage(unit, inst), volatile, ..Self::at(unit, pointer, width) })
     }
 
     /// Whether the access names its bytes outright rather than reaching
@@ -721,6 +738,7 @@ impl MemRef {
             index_bits: 16,
             width,
             typed: None,
+            lineage: Vec::new(),
             inbounds: false,
             volatile: false,
             provenance: Some(provenance),
@@ -884,6 +902,17 @@ pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
     match unit.metadata.get(ty.0 as usize)?.operands.first()? {
         MetadataOperand::String(name) => Some(name.clone()),
         _ => None,
+    }
+}
+
+/// The names of the ancestors of the `!tbaa` access type `inst` carries,
+/// nearest first, the root last: the module's type tree where the unit holds
+/// it, else built here from the metadata.
+pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
+    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return Vec::new() };
+    match unit.tbaa {
+        Some(tree) => tree.of_tag(unit.metadata, *tag).to_vec(),
+        None => llrm_mir::tbaa::Tbaa::of(unit.metadata).of_tag(unit.metadata, *tag).to_vec(),
     }
 }
 

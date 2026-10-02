@@ -155,6 +155,27 @@ fn test_hir_verifier_refuses_unsigned_division_over_signed_values() {
     assert!(verify(&broken).unwrap_err().0.contains("requires unsigned integer operands"));
 }
 
+/// `p < q` over two pointers of one type is an ordered compare of pointers,
+/// as LLVM's `icmp ult ptr`; the verifier took unsigned integers alone, so
+/// llrm-c converted a huge pointer to a u32 to compare it (#238) and isel
+/// refused that: its packed bits are not its address.
+#[test]
+fn test_hir_verifier_accepts_an_ordered_compare_of_two_pointers() {
+    let void = Type::new(0, "void", TypeKind::Void, 0);
+    let pointer = Type { element: Some(0), ..Type::new(1, "p", TypeKind::Pointer, 4) };
+    let truth = Type::new(2, "bool", TypeKind::Boolean, 1);
+    let compared = |op: Op| {
+        let compare = instruction(1, op, &[3], vec![model::Operand::value_ref(1), model::Operand::value_ref(2)]);
+        let entry = Block::new(10, vec![compare], Terminator::new(TerminatorKind::Return, vec![model::Operand::value_ref(3)], vec![]));
+        let function = with_parameters(Function::new(1, "f", 2, values(&[(1, 1), (2, 1), (3, 2)]), vec![], vec![entry], 10), &[1, 2]);
+        vbdos(vec![Module::new(1, "m", vec![void.clone(), pointer.clone(), truth.clone()], vec![function])])
+    };
+    for op in [Op::Below, Op::BelowEq, Op::Above, Op::AboveEq] {
+        let checked = verify(&compared(op));
+        assert!(checked.is_ok(), "{op:?}: {:?}", checked.err());
+    }
+}
+
 #[test]
 fn test_hir_verifier_rejects_a_store_with_the_wrong_value_type() {
     let source = program();
@@ -434,6 +455,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
             segmented: vec![false],
             arrays: vec![false],
             defined: true,
+            returns_twice: false,
             symbol: None,
         }],
         ..Module::new(1, "modref", vec![void, integer, pointer], vec![caller, callee])

@@ -22,6 +22,7 @@
 //! and prologue half, which is the backend's; its noreturn half is
 //! `test_a_handler_ending_in_a_runtime_exit_is_noreturn_and_cut`.
 
+use llrm_mir::facts::Fact;
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::Defined;
@@ -100,7 +101,7 @@ pub fn terminal_sites(context: &Context, declarations: &Declarations, function: 
         .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_)))
         .filter(|&inst| {
             effects::callee(context, function, inst).is_some_and(|target| noreturn.contains(&target))
-                || effects::states(context, declarations, function, inst, "noreturn")
+                || effects::states(context, declarations, function, inst, Fact::NoReturn)
         })
         .collect()
 }
@@ -114,7 +115,7 @@ pub fn cold(context: &Context, declarations: &Declarations, function: &Function,
     let blocks = cfg::graph(function);
     let marked = |at: i64| {
         function.block(cfg::block(at)).instructions().iter().any(|&inst| {
-            matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) && effects::states(context, declarations, function, inst, "cold")
+            matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) && effects::states(context, declarations, function, inst, Fact::Cold)
         })
     };
     let mut found = BTreeSet::new();

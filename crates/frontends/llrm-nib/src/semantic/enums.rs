@@ -17,6 +17,22 @@ pub(super) struct EnumLayout {
     pub(super) variants: Vec<VariantLayout>,
 }
 
+impl FunctionCompiler<'_> {
+    /// The tag of the enum at `view`, loaded: a native enum holds only the
+    /// tags its variants have, and says so.
+    pub(super) fn load_tag(&mut self, view: &StructView, layout: &EnumLayout) -> u32 {
+        let tag = self.value(layout.tag);
+        let place = self.projected_place(view, 0, layout.tag);
+        let load = self.emit("load", vec![tag], vec![place], None);
+        let (lo, hi) = layout.variants.iter().fold((i64::MAX, i64::MIN), |(lo, hi), variant| (lo.min(variant.tag), hi.max(variant.tag)));
+        if lo <= hi {
+            let subject = llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(load) };
+            self.stated.state(subject, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo, hi }));
+        }
+        tag
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct VariantLayout {
     pub(super) name: String,
@@ -334,10 +350,49 @@ impl FunctionCompiler<'_> {
             ));
         }
         let variant = layout.variant(name, span)?.clone();
-        stores.push(Store::One(
-            self.projected_place(destination, 0, layout.tag),
-            hir::Operand::Constant(type_id(layout.tag), variant.tag),
-        ));
+        // An enum that fits a register or a pair flows on as one integer,
+        // returned, compared or copied whole, and every byte of it is
+        // written: what the variant leaves (padding, another variant's
+        // payload) is zeroed, the tag's store widened over the bytes after
+        // it where they are among them. A larger one is copied word by word,
+        // and a match reads the tag and the active variant's fields alone: the
+        // word holding the tag is written whole, the rest of the payload not.
+        let width = self.types.width(destination.struct_id);
+        let whole = width <= 4;
+        let mut covered = vec![!whole; width as usize];
+        if !whole {
+            let tag_end = self.types.width(type_id(layout.tag));
+            covered[tag_end.min(2) as usize..2.min(width) as usize].fill(false);
+        }
+        let mut mark = |from: u32, bytes: u32| covered[from as usize..(from + bytes).min(width) as usize].fill(true);
+        mark(0, self.types.width(type_id(layout.tag)));
+        for (_, field) in &variant.fields {
+            mark(field.offset, self.types.field_width(*field));
+        }
+        let tag_width = self.types.width(type_id(layout.tag));
+        let wide = [4u32, 2].into_iter().find(|&wide| wide > tag_width && wide <= width && covered[tag_width as usize..wide as usize].iter().all(|one| !one));
+        let (tag_type, tag_value) = match wide {
+            Some(4) => (TypeName::U32, variant.tag),
+            Some(_) => (TypeName::U16, variant.tag),
+            None => (layout.tag, variant.tag),
+        };
+        covered[..wide.unwrap_or(tag_width) as usize].fill(true);
+        let mut at = 0u32;
+        while at < width {
+            if covered[at as usize] {
+                at += 1;
+                continue;
+            }
+            let free = covered[at as usize..].iter().take_while(|one| !**one).count() as u32;
+            let (piece, step) = match (free, at % 2) {
+                (4.., 0) => (TypeName::U32, 4),
+                (2.., 0) => (TypeName::U16, 2),
+                _ => (TypeName::U8, 1),
+            };
+            stores.push(Store::One(self.projected_place(destination, at, piece), hir::Operand::Constant(type_id(piece), 0)));
+            at += step;
+        }
+        stores.push(Store::One(self.projected_place(destination, 0, tag_type), hir::Operand::Constant(type_id(tag_type), tag_value)));
         let formals: Vec<_> = variant
             .fields
             .iter()

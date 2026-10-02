@@ -326,3 +326,16 @@ b3:
     let body = block_of(&printed(&after), "f", "b2");
     assert!(body.iter().all(|line| !line.contains("load i16, ptr %d") && !line.contains("load ptr, ptr %data")), "{body:?}");
 }
+
+/// The language says a load reads what is written once and never again: a store the loop
+/// cannot rule out as that cell (any pointer) does not keep it in the loop.
+#[test]
+fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
+    let with = |load: &str| format!("{}\n!0 = !{{}}\n", looped(GLOBALS, ", ptr %p", "", "", "%n", &format!("  %v = {load}\n  store i16 %i, ptr %p\n")));
+    let (_, plain) = hoisted(&with("load i16, ptr @g"));
+    assert!(block_of(&printed(&plain), "f", "b2").iter().any(|line| line.contains("load i16, ptr @g")), "a plain load stays");
+    let (_, stated) = hoisted(&with("load i16, ptr @g, !invariant.load !0"));
+    let printed = printed(&stated);
+    assert!(block_of(&printed, "f", "b2").iter().all(|line| !line.contains("load i16, ptr @g")), "{printed}");
+    assert!(block_of(&printed, "f", "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{printed}");
+}

@@ -179,13 +179,27 @@ b2:
 /// Not a positive power of two below the sign bit, possibly zero, or unsigned.
 #[test]
 fn test_other_divisions_stay() {
-    for divisor in ["6", "1", "-4", "-32768", "0"] {
+    for divisor in ["6", "-4", "-32768", "0"] {
         for op in ["sdiv", "srem"] {
             unchanged(&unary(16, &format!("  %r = {op} i16 %x, {divisor}\n  ret i16 %r\n")));
         }
     }
     unchanged("define i16 @f(i16 %x, i16 %y) {\nb0:\n  %r = sdiv i16 %x, %y\n  ret i16 %r\n}\n");
     unchanged(&unary(16, "  %r = udiv i16 %x, 4\n  ret i16 %r\n"));
+}
+
+/// A division by one is the dividend, a remainder by one is zero: no power-of-two
+/// rewrite is needed (`llrm-mir`'s instcombine had both, #237).
+#[test]
+fn test_division_and_remainder_by_one_are_decided() {
+    for op in ["sdiv", "udiv"] {
+        let out = checked(&unary(16, &format!("  %r = {op} i16 %x, 1\n  ret i16 %r\n")), &singles(&edges(16)));
+        assert!(out.contains("ret i16 %x") && !out.contains(op), "{out}");
+    }
+    for op in ["srem", "urem"] {
+        let out = checked(&unary(16, &format!("  %r = {op} i16 %x, 1\n  ret i16 %r\n")), &singles(&edges(16)));
+        assert!(out.contains("ret i16 0") && !out.contains(op), "{out}");
+    }
 }
 
 /// No legal integer is 64 bits wide, so its shifts and adds lower to more

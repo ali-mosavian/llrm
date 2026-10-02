@@ -30,6 +30,7 @@ use llrm_analysis::manager::{GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
+use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
@@ -373,7 +374,10 @@ fn published(program: &mut Program, at: usize, id: GlobalId) -> Vec<usize> {
 /// - on each pointer parameter it keeps no copy of, `nocapture`, then
 ///   `readnone`, `readonly` or `writeonly`, and `initializes`.
 /// - `willreturn` where every path returns without looping and every call
-///   states it; `nounwind` where every call states it and no access can
+///   states it, or where the language promises each loop ends
+///   (`mustprogress` on the function, `llvm.loop.mustprogress` on each
+///   loop) of a function that does nothing observable;
+/// - `norecurse` where nothing can enter it again while it runs; `nounwind` where every call states it and no access can
 ///   fault (`interprocedural::cannot_fault`).
 ///
 /// Any other attribute already stated stays. The bodies stamped; the
@@ -387,7 +391,9 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
     let globals = Result::as_ref(&*globals).map_err(String::clone)?;
     let mut declarations = (*analyses.get::<Declarations>(module)).clone();
     let mut changed = Vec::new();
-    for id in analyses.get::<CallGraphAnalysis>(module).bottom_up() {
+    let graph = analyses.get::<CallGraphAnalysis>(module);
+    let callees = llrm_mir::memory::callees(module);
+    for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private);
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
@@ -396,10 +402,19 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape));
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
-        let states = |flag: &str| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, flag));
-        let returns = facts::returns_without_looping(function) && states("willreturn");
-        let nounwind = states("nounwind") && facts::cannot_fault(module, layout, function);
+        let states = |fact: Fact| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, fact));
         let volatile = function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }));
+        let norecurse = graph.cannot_reenter(module, id);
+        // The language's word that its loops end holds where nothing a loop that never ended could be seen by.
+        let unobserved = !volatile && calls.iter().all(|&inst| !llrm_mir::memory::of(&module.context, &callees, function, inst).writes);
+        let promised = norecurse && unobserved && states(Fact::WillReturn) && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
+        let counted = || {
+            let shape = Shape::of(function);
+            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function), one, None, false);
+            shape.loops.iter().all(|one| proofs(one).iter().any(|proof| !proof.stops && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))))
+        };
+        let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
+        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, function);
         let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
         for &inst in &calls {
             let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
@@ -410,10 +425,9 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let function = function_mut(module, id).1;
         let before = (function.attrs.clone(), function.parameter_attrs.clone());
         _narrowed(&mut function.attrs, summary, hidden);
-        let has = llrm_mir::memory::has;
-        for (flag, proved) in [("willreturn", returns), ("nounwind", nounwind)] {
-            if proved && !has(&function.attrs, flag) {
-                function.attrs.push(Attribute::Flag(flag.to_owned()));
+        for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind), (Fact::NoRecurse, norecurse)] {
+            if proved && !Facts::of(&function.attrs).contains(fact) {
+                function.attrs.extend(fact.attribute());
             }
         }
         for (index, attrs) in function.parameter_attrs.iter_mut().enumerate().filter(|(index, _)| pointers[*index]) {
@@ -421,21 +435,22 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
             if summary.captures.contains(&identity) {
                 continue;
             }
-            if !has(attrs, "nocapture") {
-                attrs.push(Attribute::Flag("nocapture".to_owned()));
+            if !Facts::of(attrs).no_capture() {
+                attrs.extend(Fact::NoCapture.attribute());
             }
             let through = |slices: &BTreeSet<Slice>| slices.iter().any(|one| one.object.kind == MemoryKind::Parameter && one.object.identity == identity);
             let (reads, writes) = (through(&summary.reads) || summary.unknown_read, through(&summary.writes) || summary.unknown_write);
             let access = match (reads, writes) {
-                (false, false) => Some("readnone"),
-                (true, false) => Some("readonly"),
-                (false, true) => Some("writeonly"),
+                (false, false) => Some(Fact::ReadNone),
+                (true, false) => Some(Fact::ReadOnly),
+                (false, true) => Some(Fact::WriteOnly),
                 (true, true) => None,
             };
+            let stated = Facts::of(attrs);
             if let Some(access) = access
-                && !["readnone", "readonly", "writeonly"].iter().any(|one| has(attrs, one))
+                && !(stated.read_none() || stated.read_only() || stated.write_only())
             {
-                attrs.push(Attribute::Flag(access.to_owned()));
+                attrs.extend(access.attribute());
             }
             if !initialized[index].is_empty() && !attrs.iter().any(|one| matches!(one, Attribute::Initializes(_))) {
                 attrs.push(Attribute::Initializes(initialized[index].clone()));
@@ -447,6 +462,10 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         }
     }
     Ok(changed)
+}
+
+fn unit_of<'a>(module: &'a Module, layout: &'a llrm_mir::datalayout::DataLayout, function: &'a llrm_mir::module::Function) -> Unit<'a> {
+    Unit::of(module, layout, function)
 }
 
 fn _both(one: Effects, other: Effects) -> Effects {
@@ -488,8 +507,8 @@ fn _narrowed(attrs: &mut Vec<Attribute>, summary: &Summary, hidden: Effects) {
     // What `readnone`, `readonly` or `writeonly` said, it now says.
     attrs.retain(|one| match one {
         Attribute::Memory(_) => false,
-        Attribute::Flag(flag) => !["readnone", "readonly", "writeonly"].contains(&flag.as_str()),
-        _ => true,
+        // Said again by the `memory` attribute that replaces them.
+        other => !matches!(Fact::of_attribute(other), Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)),
     });
     attrs.push(Attribute::Memory(locations));
 }

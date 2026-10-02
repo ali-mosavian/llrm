@@ -25,7 +25,7 @@ mod handling;
 /// indexing by 16 bits, 16-bit segments, huge ones as far but indexing by
 /// 32 bits (a displacement past 64K carries into the selector), and 16-bit
 /// alignment.
-pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32";
+pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32";
 
 /// A far pointer's address space.
 pub const FAR: u32 = 1;
@@ -34,6 +34,8 @@ pub const FAR: u32 = 1;
 pub const SEGMENT: u32 = 2;
 /// A huge pointer's: a far pointer whose index does not wrap at 64K.
 pub const HUGE: u32 = 3;
+/// A fixed address's: a far pointer into memory no program object occupies.
+pub const FIXED: u32 = llrm_mir::datalayout::FIXED_SPACE;
 
 /// The prefix of a runtime routine's name: a callee the module does not
 /// declare.
@@ -56,10 +58,12 @@ pub fn emit(program: &model::Program) -> Vec<Emitted> {
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the
-/// named cells are the external data each HIR module marks unaddressed.
+/// named cells are the data each HIR module shares with other modules and
+/// marks unaddressed, which other code names but never takes the address of.
 pub fn runtime(emitted: &[(&Emitted, &model::Module)], promises: &model::RuntimePromises) -> Emit<Module> {
     let named = emitted.iter().map(|(emitted, hir)| {
-        let cells = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed);
+        let shared = |one: &&model::DataObject| matches!(one.linkage, model::DataLinkage::External | model::DataLinkage::Exported);
+        let cells = hir.data.iter().filter(shared).filter(|one| !one.addressed);
         (&emitted.module, cells.map(|one| (one.name.as_str(), emitted.data[&one.id])).collect())
     });
     promised(&named.collect::<Vec<_>>(), promises)
@@ -108,13 +112,15 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     for (module, global, name, routine) in routines {
         let cells = promises.writes(routine);
         let nounwind = promises.nounwind.iter().any(|one| one == routine);
-        if cells.is_none() && !nounwind || out.named(name).is_some() {
+        let no_return = promises.no_return.iter().any(|one| one == routine);
+        if cells.is_none() && !nounwind && !no_return || out.named(name).is_some() {
             continue;
         }
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
-        function.attrs.extend(cells.is_some().then(|| Attribute::Flag("nocallback".to_owned())));
-        function.attrs.extend(nounwind.then(|| Attribute::Flag("nounwind".to_owned())));
+        function.attrs.extend(cells.is_some().then(|| Fact::NoCallback.carrier()));
+        function.attrs.extend(nounwind.then(|| Fact::NoUnwind.carrier()));
+        function.attrs.extend(no_return.then(|| Fact::NoReturn.carrier()));
         if let Some(cells) = cells {
             let written = std::iter::once(one).chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied())).collect();
             writes.push(node(&mut out, written));
@@ -138,7 +144,7 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
         function.attrs.push(Attribute::Memory(vec![(Some("argmem".to_owned()), "read".to_owned())]));
         for at in 0..function.parameters().len() {
             if matches!(out.context.types.get(function.value(function.parameters()[at]).ty), Type::Pointer(_)) {
-                function.parameter_attrs[at].push(Attribute::Flag("nocapture".to_owned()));
+                function.parameter_attrs[at].push(Fact::NoCapture.carrier());
             }
         }
     }
@@ -161,6 +167,7 @@ fn value_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
         },
         TypeKind::Pointer if hir.address == AddressKind::Segment => types.ptr(SEGMENT),
         TypeKind::Pointer if hir.address == AddressKind::Huge => types.ptr(HUGE),
+        TypeKind::Pointer if hir.address == AddressKind::Fixed => types.ptr(FIXED),
         TypeKind::Pointer => types.ptr(if hir.width == 4 { FAR } else { 0 }),
         TypeKind::Array | TypeKind::Opaque => return Err(format!("a value of type {}", hir.name)),
     })
@@ -182,6 +189,11 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
 pub struct Tags {
     pub place: MetadataId,
     pub allocation: MetadataId,
+    /// The `!tbaa` access tag of each array allocation a function reaches through
+    /// its descriptor, by function and descriptor place: a type of its own
+    /// under `allocation`, so two arrays are apart and the generic tag, which
+    /// a parameter's array carries, covers them all.
+    pub arrays: HashMap<(i64, i64), MetadataId>,
 }
 
 impl Tags {
@@ -197,8 +209,53 @@ impl Tags {
             let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(root), zero.clone()]);
             node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()])
         };
-        Tags { place: tag("place"), allocation: tag("allocation") }
+        Tags { place: tag("place"), allocation: tag("allocation"), arrays: HashMap::new() }
     }
+
+    /// A tag for each array a function of `hir` reaches through a descriptor
+    /// it owns: a local, a static or a module's, not a parameter's, which may
+    /// be any caller's array and keeps the generic tag. One array is one tag,
+    /// however many functions name it.
+    pub fn arrays(&mut self, module: &mut Module, hir: &model::Module) {
+        let zero = module.context.types.int(64);
+        let zero = MetadataOperand::Constant(module.context.int(zero, 0));
+        // The type node `allocation` made: the first operand of its tag.
+        let parent = match &module.metadata[self.allocation.0 as usize].operands[0] {
+            MetadataOperand::Node(node) => *node,
+            _ => return,
+        };
+        let mut identities: HashMap<(i64, i64), MetadataId> = HashMap::new();
+        for function in &hir.functions {
+            let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
+            let described = function.blocks.iter().flat_map(|block| &block.instructions).flat_map(|one| &one.operands).filter_map(|operand| match operand {
+                Operand::IndirectPlace(one) => one.allocation,
+                _ => None,
+            });
+            for descriptor in described {
+                let Some(place) = places.get(&descriptor) else { continue };
+                // What names the array in every function: a data symbol, or this local.
+                let identity = match place.storage {
+                    Storage::Static | Storage::Module => (-1 - i64::from(place.storage == Storage::Module), place.symbol),
+                    Storage::Local => (function.id, place.id),
+                    // Another module may name the same object under another tag: generic.
+                    Storage::Parameter | Storage::External | Storage::Common => continue,
+                };
+                let tag = *identities.entry(identity).or_insert_with(|| {
+                    let name = format!("allocation.{}", identities_len(&self.arrays));
+                    module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::String(name), MetadataOperand::Node(parent), zero.clone()] });
+                    let ty = MetadataId(module.metadata.len() as u32 - 1);
+                    module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()] });
+                    MetadataId(module.metadata.len() as u32 - 1)
+                });
+                self.arrays.insert((function.id, descriptor), tag);
+            }
+        }
+    }
+}
+
+/// How many distinct array tags `arrays` holds, for naming the next.
+fn identities_len(arrays: &HashMap<(i64, i64), MetadataId>) -> usize {
+    arrays.values().collect::<std::collections::HashSet<_>>().len()
 }
 
 /// The `!tbaa` access tag of each type the language's aliasing classes
@@ -255,6 +312,12 @@ struct Tables<'h> {
     nounwind: &'h [String],
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
+    /// The metadata the language's facts give an instruction's result, by function and instruction id.
+    fact_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
+    /// The alignment the language states of an instruction's access.
+    accesses: HashMap<(i64, i64), u64>,
+    /// The metadata the language's facts give a block's terminator, by function and block id.
+    terminator_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
 }
@@ -274,6 +337,60 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
         });
     }
     nodes
+}
+
+/// The metadata `!range` and the like the language's facts give instructions,
+/// and the alignments they state of accesses.
+fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<FactNodes> {
+    let (mut nodes, mut accesses, mut terminators) = (HashMap::new(), HashMap::new(), HashMap::new());
+    let index = crate::facts::Index::of(hir);
+    for stated in &hir.facts {
+        if let (Subject::Terminator { function, block }, Fact::Unroll(copies)) = (stated.subject, stated.fact) {
+            terminators.entry((function, block)).or_insert_with(Vec::new).push(("llvm.loop", loop_node(module, copies)));
+            continue;
+        }
+        let Subject::Instruction { function, id } = stated.subject else { continue };
+        match stated.fact {
+            Fact::Invariant => {
+                module.metadata.push(MetadataNode { distinct: false, operands: Vec::new() });
+                nodes.entry((function, id)).or_insert_with(Vec::new).push(("invariant.load", MetadataId(module.metadata.len() as u32 - 1)));
+            }
+            Fact::Align(bytes) => {
+                accesses.insert((function, id), bytes);
+            }
+            Fact::Range(bounds) => {
+                let instruction = index.instruction(function, id).ok_or("a range of no instruction")?;
+                let result = instruction.results.first().ok_or("a range of an instruction with no result")?;
+                let hir_type = index.value_type(function, *result).map(|one| types[&one]).ok_or("a range of an unknown value")?;
+                let ty = value_type(&mut module.context.types, hir_type)?;
+                let bits = module.context.types.int_bits(ty).ok_or("a range of what is no integer")?;
+                let Some(llrm_mir::Attribute::Range { lower, upper, .. }) = Fact::Range(bounds).typed_attribute(ty, bits) else { continue };
+                let (lower, upper) = (module.context.int(ty, lower as i128), module.context.int(ty, upper as i128));
+                module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::Constant(lower), MetadataOperand::Constant(upper)] });
+                nodes.entry((function, id)).or_insert_with(Vec::new).push(("range", MetadataId(module.metadata.len() as u32 - 1)));
+            }
+            _ => {}
+        }
+    }
+    Ok((nodes, accesses, terminators))
+}
+
+/// What `fact_nodes` finds: metadata of instructions, alignments of accesses, metadata of terminators.
+type FactNodes = (HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>, HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>);
+
+/// A loop's `!llvm.loop` node: distinct, naming itself and what it says of unrolling.
+fn loop_node(module: &mut Module, copies: u32) -> MetadataId {
+    let i32 = module.context.types.int(32);
+    let hint = match copies {
+        0 => vec![MetadataOperand::String("llvm.loop.unroll.disable".to_owned())],
+        u32::MAX => vec![MetadataOperand::String("llvm.loop.unroll.full".to_owned())],
+        count => vec![MetadataOperand::String("llvm.loop.unroll.count".to_owned()), MetadataOperand::Constant(module.context.int(i32, i128::from(count)))],
+    };
+    module.metadata.push(MetadataNode { distinct: false, operands: hint });
+    let hint = MetadataId(module.metadata.len() as u32 - 1);
+    let this = MetadataId(module.metadata.len() as u32);
+    module.metadata.push(MetadataNode { distinct: true, operands: vec![MetadataOperand::Node(this), MetadataOperand::Node(hint)] });
+    this
 }
 
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
@@ -313,9 +430,17 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         classes: HashMap::new(),
         nounwind,
         lines: HashMap::new(),
+        fact_nodes: HashMap::new(),
+        accesses: HashMap::new(),
+        terminator_nodes: HashMap::new(),
         variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
+    tables.tags.arrays(&mut module, hir);
+    match fact_nodes(&mut module, hir, &tables.types) {
+        Ok((nodes, accesses, terminators)) => (tables.fact_nodes, tables.accesses, tables.terminator_nodes) = (nodes, accesses, terminators),
+        Err(why) => refused.push((hir.name.clone(), why)),
+    }
     match class_tags(&mut module, &hir.alias_classes) {
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -365,6 +490,14 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     for one in &hir.facts {
         if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, &data, one) {
             refused.push((hir.name.clone(), why));
+        }
+    }
+    // What changes what the code after a call means is not a fact a pass may drop.
+    for callable in hir.callables.iter().filter(|one| one.returns_twice) {
+        let Some(&reference) = tables.callees.get(&callable.name) else { continue };
+        let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { continue };
+        if let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind {
+            function.attrs.push(Attribute::Flag(RETURNS_TWICE.to_owned()));
         }
     }
     // Initialized once every function its data addresses is declared: one only addressed, far and C's.
@@ -713,7 +846,7 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
     let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
     let (global, parameter) = match stated.subject {
         // A call's arguments' facts are attributes of the call, made with it.
-        Subject::Instruction { .. } | Subject::Operand { .. } => return Ok(()),
+        Subject::Instruction { .. } | Subject::Operand { .. } | Subject::Terminator { .. } => return Ok(()),
         Subject::Object(id) => {
             let Some(&global) = data.get(&id) else { return Ok(()) };
             let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of a data object that is no variable".to_owned()) };
@@ -738,11 +871,24 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
         }
     };
     let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of what is no function".to_owned()) };
-    let attrs = match parameter {
-        Some(index) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
-        None => &mut function.attrs,
+    let Type::Function { returns, parameters, .. } = module.context.types.get(function.ty).clone() else { return Err("a fact of a function with no function type".to_owned()) };
+    // What the fact bounds, when it is a range or states of a result.
+    let subject_type = match parameter {
+        Some(index) => *parameters.get(index as usize).ok_or("a fact of no parameter")?,
+        None => returns,
     };
-    let attribute = attribute()?;
+    let attrs = match (parameter, stated.fact.of_result()) {
+        (Some(index), _) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
+        (None, true) => &mut function.return_attrs,
+        (None, false) => &mut function.attrs,
+    };
+    let attribute = match module.context.types.int_bits(subject_type) {
+        Some(bits) => match stated.fact.typed_attribute(subject_type, bits) {
+            Some(typed) => typed,
+            None => attribute()?,
+        },
+        None => attribute()?,
+    };
     if !attrs.contains(&attribute) {
         attrs.push(attribute);
     }
@@ -793,6 +939,14 @@ fn frame_groups<'h>(types: &mut Types, tables: &Tables<'h>, function: &'h model:
 /// The memset a zeroed aggregate local calls.
 const MEMSET: &str = "llvm.memset.p0.i16";
 
+/// What a scope's markers call: the lifetime of a local's bytes begins or ends.
+const LIFETIMES: [(Op, &str); 2] = [(Op::LifetimeStart, "llvm.lifetime.start.p0"), (Op::LifetimeEnd, "llvm.lifetime.end.p0")];
+
+fn lifetime_type(types: &mut Types) -> TypeId {
+    let (void, pointer, size) = (types.void(), types.ptr(0), types.int(64));
+    function_type(types, void, vec![size, pointer])
+}
+
 fn memset_type(types: &mut Types) -> TypeId {
     let (void, pointer, byte, size, flag) = (types.void(), types.ptr(0), types.int(8), types.int(16), types.int(1));
     function_type(types, void, vec![pointer, byte, size, flag])
@@ -814,6 +968,14 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             let global = add_unique(module, &place.name, |module, name| module.add_variable(name, variable.clone(), Linkage::External));
             let reference = module.reference(global);
             tables.data.insert(place.symbol, reference);
+        }
+    }
+    for (op, name) in LIFETIMES {
+        if !tables.callees.contains_key(name) && function.blocks.iter().any(|block| block.instructions.iter().any(|one| one.op == op)) {
+            let ty = lifetime_type(&mut module.context.types);
+            let global = module.add_function(name, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(name.to_owned(), reference);
         }
     }
     if tables.zeroed && !tables.callees.contains_key(MEMSET) {
@@ -846,6 +1008,15 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
                 && let Entry::Vacant(slot) = tables.callees.entry(name)
             {
                 let ty = function_type(types, to, parameters);
+                let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                slot.insert(module.reference(global));
+            }
+        }
+        if instruction.op == Op::Assume {
+            let types = &mut module.context.types;
+            let (void, i1) = (types.void(), types.int(1));
+            if let Entry::Vacant(slot) = tables.callees.entry(ASSUME.to_owned()) {
+                let ty = function_type(types, void, vec![i1]);
                 let global = module.add_function(slot.key(), ty, Linkage::External)?;
                 slot.insert(module.reference(global));
             }
@@ -1033,6 +1204,12 @@ fn interrupted(function: &model::Function) -> bool {
     function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
 }
 
+/// A routine that may return twice, LLVM's attribute: not a fact, since dropping it changes what the code means.
+pub const RETURNS_TWICE: &str = "returns_twice";
+
+/// What the language promises holds, LLVM's intrinsic.
+const ASSUME: &str = "llvm.assume";
+
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
 
@@ -1136,7 +1313,7 @@ fn mark_cold(function: &mut Function, block: BlockId) {
     for inst in function.block(block).instructions().to_vec() {
         let old = function.instruction(inst).clone();
         let Opcode::Call(mut info) = old.opcode else { continue };
-        info.attrs.push(Attribute::Flag("cold".to_owned()));
+        info.attrs.push(Fact::Cold.carrier());
         let new = function.create_instruction(Opcode::Call(info), old.ty, old.operands, old.flags, None);
         function.insert(new, Position::Before(inst)).expect("its call is placed");
         for (kind, node) in old.metadata {
@@ -1164,6 +1341,8 @@ struct Body<'b, 'm, 'h> {
     places: HashMap<i64, &'h model::Place>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
+    /// The `i1` each comparison's result was widened from: what an assumption is made of.
+    truths: HashMap<i64, Value>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
     /// Where a variadic function's variadic arguments start, if a parameter lives with them.
@@ -1198,6 +1377,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             places: function.places.iter().map(|one| (one.id, one)).collect(),
             blocks: HashMap::new(),
             values,
+            truths: HashMap::new(),
             frame: HashMap::new(),
             passed: None,
             objects: Vec::new(),
@@ -1246,6 +1426,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for instruction in &block.instructions {
             let first = self.b.function.instruction_count();
             self.instruction(instruction)?;
+            self.stated(first, instruction);
             line = instruction.line.or(line);
             self.lined(first, line);
         }
@@ -1255,11 +1436,37 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let first = self.b.function.instruction_count();
             self.terminator(&block.terminator)?;
             self.lined(first, line);
+            if let Some(nodes) = self.tables.terminator_nodes.get(&(self.function.id, block.id))
+                && let Some(inst) = self.b.function.terminator(self.b.current().expect("a placed block"))
+            {
+                for &(kind, node) in nodes {
+                    self.b.function.annotate(inst, kind, node);
+                }
+            }
         }
         if block.cold {
             mark_cold(self.b.function, self.blocks[&block.id]);
         }
         Ok(())
+    }
+
+    /// What the language's facts say of the instruction lowered as the ones
+    /// made since the `first`th: metadata on its result's, an alignment on its accesses.
+    fn stated(&mut self, first: usize, instruction: &model::Instruction) {
+        let key = (self.function.id, instruction.id);
+        if let Some(nodes) = self.tables.fact_nodes.get(&key)
+            && let Some(Value::Value(value)) = instruction.results.first().and_then(|result| self.values.get(result)).copied()
+            && let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(value).def
+        {
+            for &(kind, node) in nodes {
+                self.b.function.annotate(inst, kind, node);
+            }
+        }
+        if let Some(&bytes) = self.tables.accesses.get(&key) {
+            for at in first..self.b.function.instruction_count() {
+                self.b.function.set_access_align(llrm_mir::InstId(at as u32), bytes);
+            }
+        }
     }
 
     /// Each instruction made since the `first`th, `line`'s: `!dbg`.
@@ -1406,7 +1613,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&one.r#type])?;
                 let inside = self.addresses.get(&one.base).is_some_and(|&size| one.offset >= 0 && one.offset + self.tables.types[&one.r#type].width <= size);
                 let tag = match one.allocation {
-                    Some(_) => Some(self.tables.tags.allocation),
+                    Some(descriptor) => Some(self.tables.tags.arrays.get(&(self.function.id, descriptor)).copied().unwrap_or(self.tables.tags.allocation)),
                     None => inside.then_some(self.tables.tags.place),
                 };
                 Ok((self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)), ty, one.volatile, tag))
@@ -1547,7 +1754,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let [a, b] = self.operands(instruction)?[..] else { return Err(format!("{op} without two operands")) };
             // A shift count is its own width; LLVM's is the shifted value's.
             let b = if matches!(op, Op::Shl | Op::Shr | Op::Sar) { self.count(b, self.b.type_of(a))? } else { b };
-            let flags = if matches!(op, Op::Add | Op::Sub | Op::Mul) { self.stated_flags(instruction) } else { Flags::default() };
+            let flags = match op {
+                Op::Add | Op::Sub | Op::Mul => self.stated_flags(instruction),
+                // A floating operation's flags are its fast-math ones.
+                Op::Fadd | Op::Fsub | Op::Fmul | Op::Fdiv => self.stated_flags(instruction).intersect(Flags::FAST),
+                _ => Flags::default(),
+            };
             if matches!(op, Op::Div | Op::Rem | Op::Udiv | Op::Urem) && !matches!(&instruction.operands[1], Operand::Constant(one) if !matches!(one.value, Number::Int(0))) {
                 self.trapping(instruction.id, b)?;
             }
@@ -1573,6 +1785,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // BASIC's truth is all ones; an unsigned boolean's, as C's, is one.
             let one = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
             let result = self.b.cast(if one { CastOp::ZExt } else { CastOp::SExt }, truth, ty, "");
+            self.truths.insert(instruction.results[0], truth);
             self.define(instruction, result);
             return Ok(());
         }
@@ -1597,6 +1810,28 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             return Ok(());
         }
+        if op == Op::Assume {
+            // A comparison's own `i1`, so that a reader before instcombine sees the test.
+            let made = match &instruction.operands[0] {
+                Operand::ValueRef(one) => self.truths.get(&one.value).copied(),
+                _ => None,
+            };
+            let holds = match made {
+                Some(truth) => truth,
+                None => {
+                    let condition = self.value(&instruction.operands[0])?;
+                    let ty = self.b.type_of(condition);
+                    let zero = self.b.int(self.b.context.types.int_bits(ty).ok_or("an assumption that is no integer")?, 0);
+                    self.b.icmp(IntPredicate::Ne, condition, zero, "")
+                }
+            };
+            let i1 = self.b.context.types.int(1);
+            let void = self.b.context.types.void();
+            let ty = function_type(&mut self.b.context.types, void, vec![i1]);
+            let callee = Value::Constant(*self.tables.callees.get(ASSUME).ok_or("@llvm.assume undeclared")?);
+            self.b.call(ty, callee, &[holds], "");
+            return Ok(());
+        }
         if let Some(called) = called(op) {
             let mut arguments = self.operands(instruction)?;
             let i16 = self.b.context.types.int(16);
@@ -1615,6 +1850,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             return Ok(());
         }
         match op {
+            Op::LifetimeStart | Op::LifetimeEnd => {
+                let Operand::PlaceRef(one) = &instruction.operands[0] else { return Err("a lifetime of what is no place".to_owned()) };
+                let place = self.places[&one.place];
+                let bytes = place.extent.unwrap_or(self.tables.types[&place.r#type].width);
+                let (pointer, _, _, _) = self.place(&instruction.operands[0])?;
+                let name = LIFETIMES.iter().find(|(one, _)| *one == op).expect("a lifetime op").1;
+                let callee = Value::Constant(self.tables.callees[name]);
+                let ty = lifetime_type(&mut self.b.context.types);
+                let size = self.b.int(64, i128::from(bytes));
+                self.b.call(ty, callee, &[size, pointer], "");
+            }
             Op::Copy | Op::Load => {
                 let value = self.value(&instruction.operands[0])?;
                 self.define(instruction, value);
@@ -1682,7 +1928,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Op::Not => {
                 let value = self.value(&instruction.operands[0])?;
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a complemented non-integer")?;
-                let ones = self.b.int(bits, -1);
+                // An unsigned boolean is 0 or 1, as C's: its negation flips that one bit.
+                let one = self.hir_type(self.value_types[&instruction.results[0]]).kind == model::TypeKind::Boolean && self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
+                let ones = self.b.int(bits, if one { 1 } else { -1 });
                 let result = self.b.binary(BinaryOp::Xor, value, ones, Flags::default(), "");
                 self.define(instruction, result);
             }

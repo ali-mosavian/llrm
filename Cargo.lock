@@ -182,6 +182,7 @@ dependencies = [
 name = "llrm-analysis"
 version = "0.1.0"
 dependencies = [
+ "llrm-hir",
  "llrm-mir",
  "llrm-support",
  "llrm-x86-code16",
@@ -292,7 +293,9 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-analysis",
  "llrm-core",
+ "llrm-hir",
  "llrm-mir",
  "llrm-transforms",
  "num-bigint",

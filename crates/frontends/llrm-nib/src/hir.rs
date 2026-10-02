@@ -253,6 +253,13 @@ impl Program {
             stated.extend(function.facts.iter().cloned());
             // A reference's place stays inside what it refers to, where the language checked it.
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+                // A bool is 0 or 1, whoever stored it.
+                let loaded = instruction.op == "load" && instruction.results.first().is_some_and(|result| {
+                    function.values.iter().find(|one| one.id == *result).and_then(|one| self.types.iter().find(|ty| ty.id == one.type_id)).is_some_and(|ty| ty.kind == "boolean")
+                });
+                if loaded {
+                    stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 1 }));
+                }
                 if instruction.inbounds {
                     stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::InBounds);
                 }
@@ -301,7 +308,7 @@ impl Program {
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
         out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":5,\"target\":\"i386-real-mode\"}\n",
+            "]}],\"runtime\":\"freestanding\",\"schema\":5,\"target\":\"i386-real-mode\",\"zeroed_locals\":false}\n",
         );
         out
     }

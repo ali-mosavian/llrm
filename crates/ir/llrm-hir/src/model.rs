@@ -128,6 +128,8 @@ str_enum!(AddressKind {
     Code("CODE") = "code",
     // A 16-bit protected/real-mode segment selector, without an offset.
     Segment("SEGMENT") = "segment",
+    // Memory at a fixed address no program object occupies: a device's.
+    Fixed("FIXED") = "fixed",
 });
 
 str_enum!(FloatEvaluation {
@@ -436,8 +438,15 @@ str_enum!(Op {
     // operands[1], a byte, to operands[0]. Both are observable and ordered.
     PortIn("PORT_IN") = "port_in",
     PortOut("PORT_OUT") = "port_out",
+    // The language promises operands[0], a condition, holds here: passes may
+    // rely on it, as on LLVM's `llvm.assume`. No result.
+    Assume("ASSUME") = "assume",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
+    // From here the local operands[0] names holds a value (start), or no longer (end): the
+    // scope of a block local. Not code; what a frame layout reads. No result.
+    LifetimeStart("LIFETIME_START") = "lifetime_start",
+    LifetimeEnd("LIFETIME_END") = "lifetime_end",
     // Inline machine code: operands go into its input registers, results
     // come out of its output registers. `Instruction.asm` says which.
     Asm("ASM") = "asm",
@@ -536,6 +545,9 @@ pub struct Callable {
     pub segmented: Vec<bool>,
     pub arrays: Vec<bool>,
     pub defined: bool,
+    /// It may return a second time, as C's `setjmp` does: no pass may treat
+    /// the code after a call as reached once.
+    pub returns_twice: bool,
     /// The name it links by, where not the language's own for `name`.
     pub symbol: Option<String>,
 }
@@ -622,6 +634,9 @@ pub struct DebugMember {
     pub name: String,
     pub r#type: i64,
     pub offset: i64,
+    /// A bit field's first bit in the unit at `offset`, and its width.
+    pub bit_start: Option<i64>,
+    pub bit_width: Option<i64>,
 }
 
 /// A parameter: the function's `argument`th, hidden ones counted.
@@ -838,6 +853,9 @@ pub struct RuntimePromises {
     /// The routines that only read what their pointer arguments reach and
     /// keep none of them, by their own names: C's strlen.
     pub reads_arguments: Vec<String>,
+    /// The routines that never come back to their caller: END, SYSTEM, the
+    /// error funnel. Their calls end their block.
+    pub no_return: Vec<String>,
 }
 
 impl RuntimePromises {
@@ -854,6 +872,7 @@ impl RuntimePromises {
             writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
             reads_arguments: Vec::new(),
+            no_return: Vec::new(),
         }
     }
 

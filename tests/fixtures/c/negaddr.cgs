@@ -1,0 +1,49 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "fixtures/c/negaddr.c" main=1
+- DBSrcCue f1 5 1
+SYM y1 name="tick" base="tick" pattern="_*" attr=0x43 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+- CGReturn n0 TY_INTEGER
+- DBSrcCue f1 7 1
+SYM y2 name="negated" base="negated" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INTEGER
+SYM y3 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INTEGER
+l4 CGLastParm
+t5 CGTemp TY_INTEGER
+n6 CGFEName y3 TY_INTEGER
+n7 CGUnary O_POINTS n6 TY_INTEGER
+n8 CGUnary O_UMINUS n7 TY_INTEGER
+n9 CGUnary O_CONVERT n8 TY_INTEGER
+n10 CGTempName t5 TY_INTEGER
+n11 CGAssign n10 n9 TY_INTEGER
+- CGDone n11
+n12 CGTempName t5 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+- CGReturn n13 TY_INTEGER
+- DBSrcCue f1 8 1
+SYM y4 name="attach" base="attach" pattern="_*" attr=0x7 seg=1
+CALLCONV y4 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y4 TY_INTEGER
+l14 CGLastParm
+t15 CGTemp TY_INTEGER
+SYM y5 name="install" base="install" pattern="_*" attr=0xf seg=1
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+n16 CGFEName y5 TY_CODE_PTR
+c17 CGInitCall n16 TY_INTEGER y5
+n18 CGFEName y1 TY_CODE_PTR
+- CGAddParm c17 n18 TY_CODE_PTR
+n19 CGCall c17
+- CGDone n19
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

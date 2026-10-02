@@ -6,13 +6,16 @@ use crate::syntax::{Module, Static};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct StaticLayout {
-    symbol: u32,
+    pub(super) symbol: u32,
     binding: BindingType,
     type_id: u32,
     extent: u32,
     /// Shared with an interrupt handler, which may run between any two
     /// instructions: every access reads or writes memory.
     volatile: bool,
+    /// What the object's address is a multiple of: its element's width, up
+    /// to a dword, or a struct's two bytes.
+    pub(super) align: u32,
 }
 
 /// The module variables an `interrupt16` function names. A variable that
@@ -44,6 +47,21 @@ pub(super) fn shared(module: &Module) -> BTreeSet<String> {
 }
 
 impl TypeRegistry {
+    /// What an address of an `element` is a multiple of: a scalar's width up
+    /// to a dword; a struct's, the widest field's up to its pack, which is
+    /// two bytes unless `@repr` says less -- and a represented struct is
+    /// laid out as its foreign ABI says, so no more is claimed of it.
+    fn alignment_of(&self, element: ElementType) -> u32 {
+        match element {
+            ElementType::Scalar(_) => self.width(element.id()).clamp(1, 4),
+            ElementType::Struct(id) if self.represented.contains(&id) => 1,
+            ElementType::Struct(id) => match self.structure(id) {
+                Some(layout) => layout.fields.values().map(|field| self.alignment_of(field.type_)).max().unwrap_or(1).min(2),
+                None => 1,
+            },
+        }
+    }
+
     /// Lays out each module variable as writable data, its value encoded;
     /// those in `shared` are volatile.
     pub(super) fn register_statics(&mut self, statics: &[Static], shared: &BTreeSet<String>, literals: &mut LiteralPool) -> Result<(), Diagnostic> {
@@ -66,7 +84,8 @@ impl TypeRegistry {
             let extent = bytes.len() as u32;
             let symbol = literals.object(&format!("$var_{}", declared.name), bytes, false);
             let volatile = shared.contains(&declared.name);
-            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile });
+            let align = self.alignment_of(element);
+            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align });
         }
         Ok(())
     }

@@ -11,8 +11,8 @@ use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, sig
 use crate::datalayout::{DataLayout, float_bits};
 use crate::facts::Facts;
 use crate::intrinsics::Intrinsic;
-use crate::module::{BlockId, Function, GlobalKind, Module, Operand, ValueDef, ValueId};
-use crate::opcode::{BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate, Opcode};
+use crate::module::{BlockId, Function, GlobalKind, MetadataOperand, Module, Operand, ValueDef, ValueId};
+use crate::opcode::{Attribute, BinaryOp, CastOp, FloatPredicate, Flags, IntPredicate, Opcode};
 use crate::types::{FloatKind, Type, TypeId};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,7 +53,10 @@ pub fn run(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<V
 
 /// [`run`], with the function's own stated facts checked as it goes: a trap
 /// where a `noalias` parameter's memory is also reached some other way and
-/// one of the accesses writes. The oracle a stated fact is tested against.
+/// one of the accesses writes, where a `readonly` parameter's memory is
+/// written through it, where a `nonnull` parameter is null, and where a value
+/// is outside a `range` stated of a parameter, the result or an instruction. The oracle a
+/// stated fact is tested against.
 /// Only accesses the function makes itself, through a pointer it can trace
 /// to a parameter, a slot or a global (also through a stack slot written
 /// once), are compared.
@@ -377,7 +380,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare => void,
+            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare | Intrinsic::Assume => void,
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
                 (Val::Ptr(a), Val::Ptr(b), Some(width)) => Val::Int { bits: u128::from(a.wrapping_sub(b)) & mask(width), width },
@@ -424,6 +427,11 @@ impl<'m> Machine<'m> {
     /// traps where it breaks a `noalias` parameter's promise with one before.
     fn touch(&self, function: &Function, touched: &mut Vec<Touch>, pointer: Operand, address: u64, size: u64, write: bool) -> Run<()> {
         let Some(root) = self.root_of(function, pointer, 4) else { return Ok(()) };
+        if let (Root::Param(at), true) = (root, write)
+            && Facts::param(function, at as usize).read_only()
+        {
+            return undefined(format!("a readonly parameter's bytes {}..{} are written through it", address, address + size));
+        }
         let restrict = |root: Root| matches!(root, Root::Param(at) if Facts::param(function, at as usize).no_alias());
         let new = Touch { root, start: address, end: address + size, write };
         for old in touched.iter() {
@@ -436,8 +444,65 @@ impl<'m> Machine<'m> {
         Ok(())
     }
 
+    /// Traps where the checked run finds `value` outside a `range(lower, upper)` of `attrs`:
+    /// half-open and modulo the width, as LLVM reads it; equal bounds say nothing.
+    fn within(value: &Val, attrs: &[Attribute], what: &str) -> Run<()> {
+        let Val::Int { bits, width } = value else { return Ok(()) };
+        for attribute in attrs {
+            if let Attribute::Range { lower, upper, .. } = attribute
+                && Self::outside(*bits, *width, *lower, *upper)
+            {
+                return undefined(format!("{what} is {bits}, outside its stated range [{lower}, {upper})"));
+            }
+        }
+        Ok(())
+    }
+
+    fn outside(bits: u128, width: u32, lower: u128, upper: u128) -> bool {
+        let all = mask(width);
+        let (lower, upper) = (lower & all, upper & all);
+        lower != upper && (bits.wrapping_sub(lower) & all) >= (upper.wrapping_sub(lower) & all)
+    }
+
+    /// The `!range` an instruction carries, checked of the value it made.
+    fn in_metadata_range(&self, instruction: &crate::module::Instruction, value: &Val) -> Run<()> {
+        if !self.checked {
+            return Ok(());
+        }
+        let Val::Int { bits, width } = value else { return Ok(()) };
+        for (kind, node) in &instruction.metadata {
+            if kind != "range" {
+                continue;
+            }
+            let operands = &self.module.metadata[node.0 as usize].operands;
+            let bound = |at: usize| match operands.get(at) {
+                Some(MetadataOperand::Constant(id)) => match self.module.context.get(*id).kind {
+                    ConstantKind::Int(bits) => Some(bits),
+                    _ => None,
+                },
+                _ => None,
+            };
+            // A list of pairs: the value is outside the promise only if outside every one.
+            let pairs: Vec<(u128, u128)> = (0..operands.len() / 2).filter_map(|one| Some((bound(2 * one)?, bound(2 * one + 1)?))).collect();
+            if !pairs.is_empty() && pairs.iter().all(|&(lower, upper)| Self::outside(*bits, *width, lower, upper)) {
+                return undefined(format!("a value {bits} outside its stated !range {pairs:?}"));
+            }
+        }
+        Ok(())
+    }
+
     fn execute(&mut self, function: &'m Function, arguments: Vec<Val>) -> Run<Val> {
         let mut touched: Vec<Touch> = Vec::new();
+        if self.checked {
+            for (at, argument) in arguments.iter().enumerate() {
+                if matches!(argument, Val::Ptr(0)) && Facts::param(function, at).non_null() {
+                    return undefined(format!("nonnull parameter {at} is null"));
+                }
+                if let Some(attrs) = function.parameter_attrs.get(at) {
+                    Self::within(argument, attrs, &format!("parameter {at}"))?;
+                }
+            }
+        }
         let mut values: HashMap<ValueId, Val> = function.parameters().iter().copied().zip(arguments).collect();
         let mut block = function.entry().expect("a body");
         let mut came_from: Option<BlockId> = None;
@@ -463,7 +528,16 @@ impl<'m> Machine<'m> {
                     _ => unreachable!("a block operand"),
                 };
                 let result: Option<Val> = match &instruction.opcode {
-                    Opcode::Ret => return if ops.is_empty() { Ok(Val::Aggregate(Vec::new())) } else { value(self, 0) },
+                    Opcode::Ret => {
+                        if ops.is_empty() {
+                            return Ok(Val::Aggregate(Vec::new()));
+                        }
+                        let returned = value(self, 0)?;
+                        if self.checked {
+                            Self::within(&returned, &function.return_attrs, "the result")?;
+                        }
+                        return Ok(returned);
+                    }
                     Opcode::Br if ops.len() == 1 => {
                         next = Some(target(0));
                         break;
@@ -507,6 +581,7 @@ impl<'m> Machine<'m> {
                         };
                         let returned = self.call(callee, arguments)?;
                         if let Some(result) = instruction.result {
+                            self.in_metadata_range(instruction, &returned)?;
                             values.insert(result, returned);
                         }
                         if invoke {
@@ -594,6 +669,7 @@ impl<'m> Machine<'m> {
                     Opcode::Phi => unreachable!("phis come first"),
                 };
                 if let (Some(result), Some(value)) = (instruction.result, result) {
+                    self.in_metadata_range(instruction, &value)?;
                     values.insert(result, value);
                 }
             }
@@ -634,7 +710,7 @@ impl<'m> Machine<'m> {
 
 /// An integer or float operation on two values, as LLVM defines it: the
 /// interpreter's and constant folding's one answer.
-pub(crate) fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
+pub fn binary(op: BinaryOp, flags: Flags, a: Val, b: Val) -> Run<Val> {
     if let (Val::Float(kind, x), Val::Float(_, y)) = (&a, &b) {
         return Ok(float_binary(op, *kind, *x, *y));
     }

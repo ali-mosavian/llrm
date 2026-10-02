@@ -1,71 +1,13 @@
-//! Inlining, as LLVM's inliner does it bottom-up over the call graph: a
-//! direct call to a defined function no bigger than the threshold becomes
-//! a copy of its body, its returns branching to what followed the call.
-//! A call within a cycle of calls, or into one, stays.
+//! The copy an inlining makes: a call replaced by the body it calls, its returns
+//! branching to what followed. Where to inline is `llrm_transforms::inline`'s
+//! policy; this is only how.
 
 use std::collections::HashMap;
 
-use crate::callgraph::{CallGraph, CallGraphAnalysis};
-use crate::context::{Context, GlobalId};
-use crate::memory::callee;
+use crate::context::Context;
 use crate::edit::Position;
-use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueId};
-use crate::opcode::{Attribute, Flags, Opcode};
-use crate::passes::{ModuleAnalyses, ModulePass};
-use crate::types::Type;
-
-/// LLVM's default threshold of 225, at its 5 per instruction.
-const THRESHOLD: usize = 45;
-
-pub struct Inline;
-
-impl ModulePass for Inline {
-    fn name(&self) -> &'static str {
-        "inline"
-    }
-
-    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
-        let graph = analyses.get::<CallGraphAnalysis>(module);
-        let mut changed = Vec::new();
-        for caller in graph.bottom_up() {
-            let mut inlined = false;
-            while let Some((call, callee)) = site(module, &graph, caller) {
-                let GlobalKind::Function(body) = &module.globals[callee.0 as usize].kind else { unreachable!("a function") };
-                let body = (**body).clone();
-                let Module { context, globals, .. } = &mut *module;
-                let GlobalKind::Function(function) = &mut globals[caller.0 as usize].kind else { unreachable!("a function") };
-                splice(context, function, call, &body);
-                inlined = true;
-            }
-            if inlined {
-                changed.push(caller);
-            }
-        }
-        changed
-    }
-}
-
-/// A call in `caller` worth inlining, and its callee.
-fn site(module: &Module, graph: &CallGraph, caller: GlobalId) -> Option<(InstId, GlobalId)> {
-    let function = module.global(caller).function()?;
-    function.walk().find_map(|(_, inst)| {
-        let callee = callee(&module.context, function, inst)?;
-        let body = module.global(callee).function().filter(|one| !one.is_declaration())?;
-        let Opcode::Call(info) = &function.instruction(inst).opcode else { return None };
-        let fits = info.function_type == body.ty
-            && !matches!(module.context.types.get(body.ty), Type::Function { variadic: true, .. })
-            && !body.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noinline" || flag == "optnone"))
-            && !graph.reaches(callee, callee)
-            && !graph.reaches(callee, caller)
-            && inlinable(body);
-        fits.then_some((inst, callee))
-    })
-}
-
-/// Small enough, and nothing a copy cannot carry.
-fn inlinable(body: &Function) -> bool {
-    carries(body) && body.walk().count() <= THRESHOLD
-}
+use crate::module::{BlockId, Function, InstId, Operand, ValueId};
+use crate::opcode::{Flags, Opcode};
 
 /// Whether a copy of `body` can stand in another function: no unwind edge,
 /// and stack allocated only on entry and of a constant size, so the copy
