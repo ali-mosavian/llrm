@@ -374,6 +374,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let body = selector.body(name, &convention)?;
     let mut body = lined(module, function, &selector.ats, body);
     body.variables = parameters(module, name, &convention);
+    body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
@@ -558,6 +559,8 @@ impl Selector<'_, '_, '_> {
         let mut at = 0;
         let mut block_at = IndexMap::default();
         let mut reach = BTreeSet::new();
+        let (group_of, capacity) = self.alloca_groups(layout);
+        let mut homes = IndexMap::<usize, i64>::default();
         for &block in layout {
             block_at.insert(block, at);
             for &inst in function.block(block).instructions() {
@@ -565,11 +568,15 @@ impl Selector<'_, '_, '_> {
                 at += 1;
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
-                    self.depth += size + size % 2;
+                    let group = group_of[&inst];
+                    let disp = *homes.entry(group).or_insert_with(|| {
+                        self.depth += capacity[group];
+                        -self.depth
+                    });
                     let address = function.instruction(inst).result.expect("an address");
-                    self.pointers.insert(address, Pointer::Frame { disp: -self.depth, index: None, scale: 1 });
-                    if llrm_analysis::frameescape::exposes(function, address) {
-                        reach.insert((-self.depth, -self.depth + size));
+                    self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
+                    if llrm_analysis::frameescape::exposes(function, address, |inst| self.marker(inst)) {
+                        reach.insert((disp, disp + size));
                     }
                 }
             }
@@ -948,6 +955,64 @@ impl Selector<'_, '_, '_> {
         let instructions = function.block(block).instructions();
         let (Some(start), Some(end)) = (instructions.iter().position(|&one| one == from), instructions.iter().position(|&one| one == to)) else { return false };
         start < end && instructions[start + 1..end].iter().all(|&one| !llrm_mir::memory::of(&self.module.context, &self.callees, function, one).writes)
+    }
+
+    /// Whether `inst` is a call of `llvm.lifetime.start` or `.end`.
+    fn marker(&self, inst: InstId) -> bool {
+        self.lifetime(inst).is_some()
+    }
+
+    /// The local a call of `llvm.lifetime.start` or `.end` is about.
+    fn lifetime(&self, inst: InstId) -> Option<crate::backend::lifetimes::Marker> {
+        let global = llrm_mir::memory::callee(&self.module.context, self.function, inst)?;
+        let starts = match Intrinsic::named(self.module.global(global).name.as_deref()?)? {
+            Intrinsic::LifetimeStart => true,
+            Intrinsic::LifetimeEnd => false,
+            _ => return None,
+        };
+        let Operand::Value(object) = *self.function.instruction(inst).operands.get(1)? else { return None };
+        Some(crate::backend::lifetimes::Marker { object, starts })
+    }
+
+    /// Each alloca's frame slot, and each slot's bytes: locals never live
+    /// together, by their lifetime markers, share one. A local with no markers
+    /// has a slot of its own.
+    fn alloca_groups(&self, layout: &[BlockId]) -> (IndexMap<InstId, usize>, Vec<i64>) {
+        let function = self.function;
+        let positions: IndexMap<InstId, i64> = layout.iter().flat_map(|&block| function.block(block).instructions().iter().copied()).enumerate().map(|(at, inst)| (inst, at as i64)).collect();
+        // After a second return from `setjmp` a slot another local used holds that local's value.
+        let live = if llrm_mir::memory::calls_returns_twice(self.module, function) { IndexMap::default() } else { crate::backend::lifetimes::intervals(function, layout, &positions, |inst| self.lifetime(inst)) };
+        let allocas: Vec<(InstId, i64)> = positions
+            .keys()
+            .filter_map(|&inst| match function.instruction(inst).opcode {
+                Opcode::Alloca { allocated, .. } => {
+                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
+                    Some((inst, size + size % 2))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..allocas.len()).collect();
+        order.sort_by_key(|&at| (-allocas[at].1, at));
+        let mut colors: Vec<crate::backend::slots::Color> = Vec::new();
+        let mut group_of = IndexMap::default();
+        for at in order {
+            let (inst, size) = allocas[at];
+            let interval = function.instruction(inst).result.and_then(|object| live.get(&object));
+            let color = interval.and_then(|interval| crate::backend::slots::choose(&colors, interval, size as u32, &[]));
+            let color = color.unwrap_or_else(|| {
+                colors.push((colors.len() as i64, size as u32, Vec::new()));
+                colors.len() - 1
+            });
+            if let Some(interval) = interval {
+                colors[color].2.push(interval.clone());
+            } else {
+                // Live throughout: it fits no other.
+                colors[color].2.push(crate::analysis::intervals::Interval::new(0, vec![crate::analysis::intervals::Segment { start: i64::MIN, end: i64::MAX }]));
+            }
+            group_of.insert(inst, color);
+        }
+        (group_of, colors.iter().map(|one| i64::from(one.1)).collect())
     }
 
     /// Whether `inst` is a call of `llvm.lrint`.
@@ -1658,10 +1723,12 @@ impl Selector<'_, '_, '_> {
         // An address only accesses read is their base plus the sum as an
         // index, as the old route's addressforms folds `b + (c << k)` read
         // only by cells: the add goes. Word addressing has no scale.
-        if self.only_addressed(address) {
+        let chained = self.chained(address);
+        if self.only_addressed(address) || chained {
             let indexed = match pointer.moved(offset as i64) {
-                Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
                 Pointer::Based { base, index: None, offset, .. } => Some(Pointer::Based { base, index: Some(sum), scale: 1, offset }),
+                _ if chained && !self.only_addressed(address) => None,
+                Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset }),
                 Pointer::Far { selector, base: None, index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(sum), index: None, scale: 1, offset }),
                 // A global and a register already added: the second register beside it.
@@ -1672,6 +1739,16 @@ impl Selector<'_, '_, '_> {
                 self.pointers.insert(address, indexed);
                 return Ok(());
             }
+        }
+        // A base and an index already, and a third register: the two are added,
+        // and the displacement stays the access's, `[sum+index+disp]`.
+        if self.only_addressed(address)
+            && let Pointer::Based { base, index: Some(index), scale: 1, offset: start } = pointer
+        {
+            let both = Held { value: self.fresh(), width };
+            out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(both)], vec![Loc::Held(base), Loc::Held(index)])));
+            self.pointers.insert(address, Pointer::Based { base: both, index: Some(sum), scale: 1, offset: start + offset as i64 });
+            return Ok(());
         }
         let start = match pointer {
             Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } if offset == 0 => Some(base),
@@ -1795,6 +1872,26 @@ impl Selector<'_, '_, '_> {
                     let constant = self.layout.collect_offset(self.types(), *source, &self.indices(one.user)).1.is_empty();
                     one.index == 0 && constant && function.instruction(one.user).result.is_some_and(|result| self.only_addressed(result))
                 }
+                _ => false,
+            })
+    }
+
+    /// Whether every reader of `value` is an access, or a `getelementptr`, in
+    /// its own block, of an address only accesses read: one more index over a
+    /// lazy address. Across blocks the sum is made again in each, where it may
+    /// be a loop's, not once outside it.
+    fn chained(&self, value: ValueId) -> bool {
+        let function = self.function;
+        let block = match function.value(value).def {
+            ValueDef::Instruction(def) => function.parent(def),
+            _ => None,
+        };
+        let users = function.users(value);
+        !users.is_empty()
+            && users.iter().all(|one| match &function.instruction(one.user).opcode {
+                Opcode::Load { .. } => one.index == 0,
+                Opcode::Store { .. } => one.index == 1,
+                Opcode::GetElementPtr { .. } => one.index == 0 && function.parent(one.user) == block && function.instruction(one.user).result.is_some_and(|result| self.only_addressed(result)),
                 _ => false,
             })
     }
@@ -2448,6 +2545,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
+                // Where a local's bytes are live: read by the frame layout, no code.
+                Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.
                 Some(Intrinsic::Assume) => Ok(()),
                 _ => refuse(format!("@{name}")),

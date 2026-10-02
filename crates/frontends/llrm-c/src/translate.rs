@@ -49,7 +49,12 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     for symbol in imports {
         let id = keys[&Key::Symbol(symbol.id)];
-        data.push(h::DataObject { linkage: DataLinkage::External, address: address(space(unit, Key::Symbol(symbol.id))), ..h::DataObject::new(id, &symbol.object_name(), Vec::new()) });
+        data.push(h::DataObject {
+            linkage: DataLinkage::External,
+            address: address(space(unit, Key::Symbol(symbol.id))),
+            addressed: !symbol.unaddressed(unit.switches),
+            ..h::DataObject::new(id, &symbol.object_name(), Vec::new())
+        });
     }
     let valueless: HashSet<i64> = unit
         .procs
@@ -67,8 +72,10 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
+    let mut callables = callables;
     for symbol in unit.symbols.values().filter(|one| one.proc()) {
-        if let Some(callable) = callables.iter().find(|one| one.name == symbol.object_name()) {
+        if let Some(callable) = callables.iter_mut().find(|one| one.name == symbol.object_name()) {
+            callable.returns_twice = crate::ow_facts::returns_twice(symbol.call_class) || crate::libfunc::returns_twice(&callable.name);
             for fact in crate::ow_facts::of_call_class(symbol.call_class)? {
                 facts.state(Subject::Callable(callable.id), fact);
             }
@@ -227,15 +234,16 @@ fn data_object(unit: &hir::Unit, object: &Object, id: i64, keys: &HashMap<Key, i
         };
         relocations.push(h::DataRelocation { at: relocation.at as i64, target, addend: relocation.offset, address, code: false });
     }
-    let (linkage, readonly) = match object.key {
+    let (linkage, readonly, addressed) = match object.key {
         Key::Symbol(symbol) => {
             let symbol = &unit.symbols[&symbol];
-            (if symbol.exported() { DataLinkage::Exported } else { DataLinkage::Internal }, symbol.constant())
+            (if symbol.exported() { DataLinkage::Exported } else { DataLinkage::Internal }, symbol.constant(), !symbol.unaddressed(unit.switches))
         }
-        Key::Literal(_) => (DataLinkage::Private, true),
+        Key::Literal(_) => (DataLinkage::Private, true, true),
     };
     Ok(h::DataObject {
         readonly,
+        addressed,
         relocations,
         linkage,
         address: address(space(unit, object.key)),
@@ -1131,16 +1139,13 @@ impl<'a, 't> Body<'a, 't> {
             };
             return Ok(self.op(op, truth, vec![value_ref(a), value_ref(b)]));
         }
-        // A far or huge pointer compares as its dword, as the old raise does;
-        // a near pointer as its word: compares order integers.
+        // A far pointer compares as its dword, as the old raise does. Near and
+        // huge pointers compare as pointers: how a huge pointer orders is
+        // isel's (its packed bits are no address, so no conversion to read).
         let (a, b) = match self.space(a) {
-            Some(FAR | HUGE) => {
+            Some(FAR) => {
                 let dword = self.types.int(4, false);
                 (self.op(Op::Convert, dword, vec![value_ref(a)]), self.op(Op::Convert, dword, vec![value_ref(b)]))
-            }
-            Some(_) => {
-                let word = self.types.int(2, false);
-                (self.op(Op::Convert, word, vec![value_ref(a)]), self.op(Op::Convert, word, vec![value_ref(b)]))
             }
             _ => (a, b),
         };
@@ -1984,6 +1989,7 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
             segmented: Vec::new(),
             arrays: Vec::new(),
             defined,
+            returns_twice: false,
             symbol: None,
         })
         .id

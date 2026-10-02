@@ -29,7 +29,7 @@ impl Types<'_> {
         let members = one
             .members
             .iter()
-            .map(|member| Ok(di::Member { name: member.name.clone(), r#type: self.node(module, member.r#type)?, offset: member.offset }))
+            .map(|member| Ok(di::Member { name: member.name.clone(), r#type: self.node(module, member.r#type)?, offset: member.offset, bits: member.bit_start.zip(member.bit_width) }))
             .collect::<Emit<Vec<_>>>()?;
         let made = di::add_type(
             module,

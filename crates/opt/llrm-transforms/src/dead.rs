@@ -50,6 +50,10 @@ impl FunctionPass for Dead {
 /// Instructions whose results nothing that stays reads, removed. Whether
 /// any went.
 pub fn dead(context: &mut Context, callees: &Callees, function: &mut Function) -> bool {
+    let markers = _unneeded_markers(context, callees, function);
+    for &marker in &markers {
+        function.erase(marker).expect("a call with no result");
+    }
     let alive = live(context, callees, function);
     let gone = function
         .walk()
@@ -67,7 +71,19 @@ pub fn dead(context: &mut Context, callees: &Callees, function: &mut Function) -
     for &inst in &gone {
         function.erase(inst).expect("nothing reads it");
     }
-    ssa::pruned_phis(function, &alive) | !gone.is_empty()
+    ssa::pruned_phis(function, &alive) | !gone.is_empty() | !markers.is_empty()
+}
+
+/// The lifetime markers of an object nothing else that stays reads: only
+/// the markers kept it, and they say nothing of a thing nobody uses.
+fn _unneeded_markers(context: &Context, callees: &Callees, function: &Function) -> Vec<InstId> {
+    let marker = |inst: InstId| memory::lifetime(context, callees, function, inst).is_some();
+    let alive = crate::transform::live_except(context, callees, function, marker);
+    function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(memory::lifetime(context, callees, function, inst), Some(Operand::Value(object)) if !alive.contains(&object)))
+        .collect()
 }
 
 /// Whether `inst` stays whatever reads it.

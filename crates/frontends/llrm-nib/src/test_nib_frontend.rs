@@ -41,6 +41,38 @@ fn refused(source: &Path) -> String {
     driver::parsed(source, &Default::default(), None).expect_err("the frontend refuses").0
 }
 
+/// Every Nib program's emitted MIR lints clean: `lint::poison` called each stated
+/// wrap `poison` and each array filled an element at a time "stored after use",
+/// so `hir-mir` and the corpus tool dropped 56 of 124 programs, `sum_three` among them.
+#[test]
+fn the_mir_of_sum_three_lints_clean() {
+    let program = parsed(&fixture("sum_three.nib"));
+    for emitted in hir::mir::emit(&program) {
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
+    }
+}
+
+/// An enum value is built whole: every byte of it is written, the payload of a
+/// variant without one zero, so that a value flowing as one integer has no
+/// undefined bytes (#290). Until then `lint::poison` finds the load that reads
+/// them in these programs.
+fn lint_of(name: &str) -> Vec<String> {
+    let program = parsed(&PathBuf::from(env!("LLRM_ROOT")).join(name));
+    hir::mir::emit(&program).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
+}
+
+#[test]
+fn the_enum_values_of_digits_still_read_unstored_bytes() {
+    assert!(lint_of("examples/digits.nib").iter().any(|one| one.starts_with("@first_even: load uses")), "the finding went away: enable the test below and delete this one");
+}
+
+#[test]
+#[ignore = "#290: nib-borrowck-fix makes an enum value write all its bytes"]
+fn the_enum_values_of_digits_write_all_their_bytes() {
+    assert_eq!(lint_of("examples/digits.nib"), Vec::<String>::new());
+}
+
 /// `tmp_path / name` holding `text`.
 fn written(directory: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
     let path = directory.path().join(name);
@@ -2004,7 +2036,7 @@ fn test_a_loop_through_a_copied_pointer_converges() {
 
 /// A borrowed view's descriptor is the caller's, never written in the
 /// call: stated as LLVM's `noalias readonly dereferenceable`, for LICM to
-/// hoist its loads.
+/// hoist its loads, and `nocapture`, as `multiply` keeps none of them.
 #[test]
 fn test_a_borrowed_view_states_facts_of_its_descriptor() {
     use llrm_mir::facts::Fact;
@@ -2019,13 +2051,13 @@ fn test_a_borrowed_view_states_facts_of_its_descriptor() {
             .collect()
     };
     for index in 0..multiply.parameters.len() {
-        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10)], "parameter {index}");
+        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10), Fact::NoCapture], "parameter {index}");
     }
 }
 
 /// A reference is not null and points at all it borrows; a shared one is
-/// read only. Not that nothing else reaches it: `bump` may write the module
-/// variable `g` it was lent, so no `noalias`.
+/// read only; `bump` keeps neither beyond its call. Nothing else reaches
+/// them (the checker refuses a lend `bump` could write), so `noalias`.
 #[test]
 fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
     use llrm_mir::facts::Fact;
@@ -2041,8 +2073,8 @@ fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
             .map(|one| one.fact)
             .collect()
     };
-    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias]);
-    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias]);
+    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias, Fact::NoCapture]);
+    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias, Fact::NoCapture]);
 }
 
 /// `for i in 0..n` adds one to a counter that is below `n`: it cannot wrap,
@@ -2162,6 +2194,63 @@ fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     assert!(result.is_ok(), "{:?}", result.err());
 }
 
+/// MIR infers each defined function's memory effects, per location, from
+/// its body and what its callees are stated to do (#113: Nib states effects
+/// only where no body shows them, the runtime's routines): a function with
+/// no `&mut` and no module-variable write reads memory and writes none, one
+/// that writes through a `&mut` writes only through it, and one of scalars
+/// touches none.
+#[test]
+fn test_mir_infers_what_a_nib_function_touches() {
+    use llrm_mir::{GlobalKind, Attribute};
+    let source = "@extern(\"cdecl16\")\nfn keep(x: i16) -> i16\n\nvar g: i16 = 3\n\nfn scalars(a: i16, b: i16) -> i16:\n    return a * b\n\nfn reads(p: &i16) -> i16:\n    return p + g\n\nfn writes(p: &mut i16) -> void:\n    p = 1\n\nfn main() -> i16:\n    unsafe:\n        let mut x: i16 = keep(2)\n        writes(x)\n        print(scalars(keep(x), reads(x)))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "effects.nib", source));
+    // As the compile does: each function by its name, `main` the entry that keeps the rest alive.
+    for function in &mut program.modules[0].functions {
+        function.symbol = Some(function.name.clone());
+        if function.name == "main" {
+            function.linkage = llrm_core::hir::model::FunctionLinkage::External;
+        }
+    }
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let module = &mir.modules[0];
+    let memory = |name: &str| -> Vec<(Option<String>, String)> {
+        let GlobalKind::Function(function) = &module.global(module.named(name).unwrap_or_else(|| panic!("{name} among {:?}", module.globals.iter().filter_map(|one| one.name.clone()).collect::<Vec<_>>()))).kind else { panic!("{name} is no function") };
+        function.attrs.iter().find_map(|one| if let Attribute::Memory(locations) = one { Some(locations.clone()) } else { None }).unwrap_or_default()
+    };
+    assert_eq!(memory("scalars"), [(None, "none".to_owned())]);
+    assert!(memory("reads").iter().all(|(_, access)| access != "write" && access != "readwrite"), "{:?}", memory("reads"));
+    assert_eq!(memory("writes"), [(Some("argmem".to_owned()), "write".to_owned())]);
+}
+
+/// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
+/// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
+/// in the loop.
+#[test]
+fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "trip.nib", source));
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let assembly = masm::text(&module).expect("prints");
+    let body = between(&assembly, "_total proc far\n", "_total endp");
+    // The loop: from the label its backward jump names to that jump.
+    let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+    let (head, end) = jump
+        .captures_iter(body)
+        .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+        .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+        .expect("a loop");
+    let looped = between(&body[..end], &format!("{head}:\n"), "\0");
+    assert!(!looped.contains("cmp"), "{looped}");
+}
+
 /// Nib frames are not zeroed, but the program claimed they were: the MIR
 /// stored zero into every local at entry (`mov dword ptr [bp-4], 0` before
 /// the struct's own stores) and left each to dead-store elimination, which
@@ -2178,4 +2267,92 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_f proc far\n", "_f endp");
     assert!(!body.contains(", 0\n"), "{body}");
+}
+
+/// Nib's `true` is one, as C's. It was -1, so a bool C handed over (1)
+/// was not equal to a Nib `true`: `b == t` compared the bytes. Run on the
+/// HIR executor and on the optimized MIR at -O0 and -O2, each a bit of
+/// the score.
+#[test]
+fn test_a_bool_is_equal_to_any_other_true_whoever_stored_it() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+struct S:
+    mut flag: bool
+
+fn main() -> i16:
+    let mut b: bool = false
+    let t: bool = true
+    let mut s = S(flag=false)
+    unsafe:
+        let p: *far mut bool = &mut b
+        let r = p.cast[u8]()
+        r[0] = 1
+        let q: *far mut bool = &mut s.flag
+        let u = q.cast[u8]()
+        u[0] = 1
+    let c: bool = 3 > 2
+    let n: bool = !b
+    let mut score: i16 = 0
+    if b == t:
+        score += 1
+    if b == true:
+        score += 2
+    if b != false:
+        score += 4
+    if s.flag == t:
+        score += 8
+    if b == c:
+        score += 16
+    if n == false:
+        score += 32
+    if !n == b:
+        score += 64
+    return score
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "booleans.nib", source));
+    let held = llrm_core::hir::execute::run(&program, "main", &[]).expect("runs").value;
+    assert_eq!(held, Some(llrm_core::hir::model::Number::Int(127)), "the HIR executor");
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    for optimize in [false, true] {
+        let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
+        let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+        let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+        llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+        let score = interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        assert!(matches!(score, Val::Int { bits: 127, .. }), "optimize {optimize}: {score:?}");
+    }
+}
+
+/// A view's descriptor holds the data's pointer. The optimizer took a call
+/// of `first_even(values)` to read only the descriptor, and dropped the
+/// array's stores before it: the digits example printed "first even 0" on
+/// DOS at -O1 and -O2 (the callee reads the array through the pointer the
+/// descriptor holds, which `nocapture` says nothing of).
+#[test]
+fn test_a_call_reads_the_array_behind_the_view_it_is_given() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+fn first_even(values: &[i16]) -> i16:
+    for value in values:
+        if value % 2 == 0:
+            return value
+    return 0
+
+fn main() -> i16:
+    let values: i16[4] = [3, 7, 8, 9]
+    return first_even(values)
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "views.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 8, .. })), "{result:?}");
 }

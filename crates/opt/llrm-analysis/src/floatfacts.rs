@@ -34,7 +34,7 @@ use crate::graph::loops;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::{InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::types::{FloatKind, Type, TypeId, Types};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;

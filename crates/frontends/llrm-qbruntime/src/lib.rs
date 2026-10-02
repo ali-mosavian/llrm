@@ -1954,6 +1954,14 @@ pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
 
+/// The runtime entries that never come back to their caller: the table's
+/// NEVER rows and the error funnel's.
+pub fn never_returning() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = CONTRACTS.iter().filter(|(_, known)| known.established && known.control == Control::Never).map(|(name, _)| name.as_str()).collect();
+    names.push("B$RUNERR");
+    names
+}
+
 /// Whether a runtime entry never comes back to its caller.
 ///
 /// The table's NEVER rows, plus the error funnel: rt/erproc.asm's RTEDEF

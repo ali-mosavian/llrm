@@ -334,6 +334,45 @@ fn test_a_sum_of_two_registers_is_the_base_and_index_of_a_far_address() {
     assert!(!got.lines().any(|line| line.starts_with("add ") && !line.contains("sp")), "{got}");
 }
 
+/// A constant `getelementptr` under two variable indexes is the access's
+/// displacement, `[bx+si+6072]`. It was added into a register first, `add si,
+/// 6072` a trip with its result live beside the others: x_walkcols_usescalem1
+/// spilled the array's base for it (#243).
+#[test]
+fn test_a_constant_under_two_variable_indexes_is_the_displacement_of_the_access() {
+    let text = "define i16 @f(ptr %p, i16 %i, i16 %j) addrspace(1) {
+  %c = getelementptr i8, ptr %p, i16 6072
+  %a = getelementptr i8, ptr %c, i16 %i
+  %b = getelementptr i8, ptr %a, i16 %j
+  %v = load i8, ptr %b
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("6072]"), "{got}");
+    assert!(!got.lines().any(|line| line.starts_with("add ") && line.contains("6072")), "{got}");
+}
+
+/// Pointers are ordered where `icmp ult ptr` is lowered, not through an
+/// integer: a huge pointer's selector then offset (`sub`, `sbb`, as the old
+/// raise), a near pointer's offset, both unsigned (qcport-rich's request).
+#[test]
+fn test_ordered_compares_of_pointers_are_unsigned_and_lowered_here() {
+    let below = |space: &str| {
+        listing(
+            &format!("define i16 @f(ptr{space} %a, ptr{space} %b) addrspace(1) {{\n  %c = icmp ult ptr{space} %a, %b\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}\n"),
+            "f",
+        )
+        .join("\n")
+    };
+    let huge = below(" addrspace(3)");
+    assert!(huge.contains("sbb") && !huge.contains("jl") && !huge.contains("setl") && !huge.contains("ptrtoint"), "{huge}");
+    let near = below("");
+    assert!(near.contains("cmp") && (near.contains("jb") || near.contains("setb") || near.contains("sbb")), "{near}");
+    assert!(!near.contains("jl") && !near.contains("setl"), "{near}");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {
@@ -3348,4 +3387,156 @@ fn test_an_extended_float_is_never_fcoms_memory_operand() {
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line.starts_with("fld tbyte")) && got.iter().any(|line| line.starts_with("fcom")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fcom") && line.contains("tbyte")), "{got:?}");
+}
+
+/// A fixed-address pointer is a far one to the machine: the same code as
+/// space 1 for the same access, whatever the analysis makes of it.
+#[test]
+fn test_a_fixed_address_pointer_selects_as_a_far_one() {
+    let body = |space: u32| {
+        format!("define i16 @f(ptr addrspace({space}) %p, i16 %i) addrspace(1) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  %v = load volatile i16, ptr addrspace({space}) %q\n  ret i16 %v\n}}\n")
+    };
+    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
+    let listing = |space| {
+        let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
+        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, false, 0).expect("selected");
+        format!("{chosen:?}")
+    };
+    assert_eq!(listing(4), listing(1));
+}
+
+/// A scope's lifetime markers are not code: a body with them selects as the
+/// same body without. They were refused: `@llvm.lifetime.start.p0`.
+#[test]
+fn test_lifetime_markers_are_no_code() {
+    let text = |markers: bool| {
+        let (start, end) = if markers { ("call void @llvm.lifetime.start.p0(i64 16, ptr %x)", "call void @llvm.lifetime.end.p0(i64 16, ptr %x)") } else { ("", "") };
+        format!(
+            "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  {start}
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  %v = load volatile i16, ptr %p
+  {end}
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(listing(&text(true), "f"), listing(&text(false), "f"));
+}
+
+/// Two 16-byte locals, `x` and `y`: in the two arms of an `if`, or, `overlapping`, both
+/// live across the same stores; with lifetime markers when `markers`.
+fn scopes(markers: bool, overlapping: bool) -> String {
+    let mark = |what: &str, name: &str| if markers { format!("call void @llvm.lifetime.{what}.p0(i64 16, ptr %{name})") } else { String::new() };
+    let (start, end, ystart, yend) = (mark("start", "x"), mark("end", "x"), mark("start", "y"), mark("end", "y"));
+    if overlapping {
+        format!(
+            "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  %y = alloca [8 x i16]
+  {start}
+  {ystart}
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  %q = getelementptr inbounds [8 x i16], ptr %y, i16 0, i16 %c
+  store volatile i16 %c, ptr %q
+  %v = load volatile i16, ptr %p
+  %w = load volatile i16, ptr %q
+  {end}
+  {yend}
+  %r = add i16 %v, %w
+  ret i16 %r
+}}
+"
+        )
+    } else {
+        format!(
+            "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  %y = alloca [8 x i16]
+  %t = icmp sgt i16 %a, 0
+  br i1 %t, label %b1, label %b2
+
+b1:
+  {start}
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  %v = load volatile i16, ptr %p
+  {end}
+  ret i16 %v
+
+b2:
+  {ystart}
+  %q = getelementptr inbounds [8 x i16], ptr %y, i16 0, i16 %c
+  store volatile i16 %c, ptr %q
+  %w = load volatile i16, ptr %q
+  {yend}
+  ret i16 %w
+}}
+"
+        )
+    }
+}
+
+/// The frame a listing reserves: `sub sp, N`.
+fn frame_bytes(text: &str) -> i64 {
+    let listing = listing(text, "f");
+    listing.iter().find_map(|line| line.strip_prefix("sub sp, ")?.parse().ok()).unwrap_or(0)
+}
+
+/// Block locals nothing keeps live together share a slot; each had its own, so a function
+/// of sibling scopes reserved the sum of them.
+#[test]
+fn test_block_locals_with_disjoint_lifetimes_share_a_frame_slot() {
+    assert_eq!(frame_bytes(&scopes(false, false)), 32);
+    assert_eq!(frame_bytes(&scopes(true, false)), 16);
+}
+
+/// Locals live together do not: the markers say they overlap.
+#[test]
+fn test_block_locals_live_together_keep_their_own_slots() {
+    assert_eq!(frame_bytes(&scopes(true, true)), 32);
+}
+
+/// A local read after its lifetime ended is not one the markers can speak for: it keeps
+/// its own slot, whatever shares around it.
+#[test]
+fn test_a_local_used_outside_its_lifetime_shares_no_slot() {
+    let text = scopes(true, false).replace("  ret i16 %v\n", "  %again = load volatile i16, ptr %p\n  ret i16 %again\n");
+    assert_eq!(frame_bytes(&text), 32);
+}
+
+/// After a second return from `setjmp` a slot another local used holds that local's value:
+/// in a function that calls a routine returning twice, no slot is shared, whatever the
+/// markers say.
+#[test]
+fn test_no_slot_is_shared_in_a_function_that_calls_setjmp() {
+    let text = scopes(true, false).replace("define i16 @f(i16 %a, i16 %c) addrspace(1) {", "declare i16 @setjmp(i16) returns_twice\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {").replace("  %t = icmp sgt i16 %a, 0\n", "  %j = call i16 @setjmp(i16 %a)\n  %t = icmp sgt i16 %a, 0\n");
+    assert_eq!(frame_bytes(&text), 32);
+}
+
+/// The flag reaches the allocator: the assembled procedure's body still says it calls `setjmp`.
+#[test]
+fn test_a_body_that_calls_setjmp_says_so_to_the_allocator() {
+    let text = "declare i16 @setjmp(i16) returns_twice
+define i16 @f(i16 %a) addrspace(1) {
+  %j = call i16 @setjmp(i16 %a)
+  ret i16 %j
+}
+define i16 @g(i16 %a) addrspace(1) {
+  ret i16 %a
+}
+";
+    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
+    let says = |name: &str| module.procedures.iter().find(|one| one.name.contains(name)).map(|one| one.body.returns_twice);
+    assert_eq!((says("f"), says("g")), (Some(true), Some(false)));
 }

@@ -188,6 +188,100 @@ b0:
     assert_eq!(calls(&bare), 1);
 }
 
+/// priced_unroll's `main` called `value(3)` for nothing: `value` touches only its own
+/// stack and counts to its bound, so the stamp says `memory(none) willreturn` and the
+/// call goes. One that calls what may not return stays. (llrm-mir's function-attrs
+/// stated the loop's end; the stamp read only loop-free bodies.)
+#[test]
+fn an_unused_call_to_a_counted_body_goes_and_one_to_what_may_not_return_stays() {
+    let mut module = parsed(
+        "declare void @fail()
+
+define internal i16 @quiet(i16 %n) {
+b1:
+  %0 = alloca i16
+  br label %b2
+
+b2:
+  %1 = phi i16 [ 0, %b1 ], [ %2, %b3 ]
+  %c = icmp slt i16 %1, 8
+  br i1 %c, label %b3, label %b4
+
+b3:
+  store i16 %1, ptr %0
+  %2 = add i16 %1, 1
+  br label %b2
+
+b4:
+  %3 = load i16, ptr %0
+  ret i16 %3
+}
+
+define internal i16 @loud(i16 %n) {
+b1:
+  call void @fail()
+  ret i16 %n
+}
+
+define i16 @f() {
+b1:
+  %0 = call i16 @quiet(i16 3)
+  %1 = call i16 @loud(i16 3)
+  ret i16 0
+}
+",
+    );
+    crate::testing::stamped(&mut module).unwrap();
+    let before = printed(&module);
+    assert!(before.contains("define internal i16 @quiet(i16 %n) memory(none) willreturn"), "{before}");
+    assert!(deadened(&mut module));
+    let out = printed(&module);
+    assert!(!out.contains("call i16 @quiet"), "{out}");
+    assert!(out.contains("call i16 @loud"), "{out}");
+}
+
+/// A local only its lifetime markers name is not a local: with its markers it goes. They
+/// kept it, and its markers, in the body.
+#[test]
+fn test_a_local_only_its_lifetime_markers_name_goes_with_them() {
+    let mut module = parsed(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca i16
+  call void @llvm.lifetime.start.p0(i64 2, ptr %s)
+  call void @llvm.lifetime.end.p0(i64 2, ptr %s)
+  ret i16 %x
+}
+",
+    );
+    assert!(deadened(&mut module));
+    deadened(&mut module);
+    let text = printed(&module);
+    assert!(!text.contains("alloca") && !text.contains("call void @llvm.lifetime"), "{text}");
+}
+
+/// A local something reads keeps its markers, which a frame layout reads.
+#[test]
+fn test_a_local_something_reads_keeps_its_lifetime_markers() {
+    let mut module = parsed(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca i16
+  call void @llvm.lifetime.start.p0(i64 2, ptr %s)
+  store volatile i16 %x, ptr %s
+  %v = load volatile i16, ptr %s
+  call void @llvm.lifetime.end.p0(i64 2, ptr %s)
+  ret i16 %v
+}
+",
+    );
+    assert!(!deadened(&mut module));
+}
+
 /// An assume gone before selection takes its compare with it: kept alive by
 /// the call, the `icmp` would be selected, a cmp and a setcc for a fact no
 /// code needs.
