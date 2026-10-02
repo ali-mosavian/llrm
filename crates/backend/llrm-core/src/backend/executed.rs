@@ -82,10 +82,11 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     };
     let mut out = Executed::default();
     for block in &body.blocks {
-        let runs = frequency.block(block.at);
-        // What reaches each branch: the block's runs less those an earlier one took.
-        let mut reaching = runs;
+        // What reaches each instruction: the block's runs less those an
+        // earlier branch took.
+        let mut reaching = frequency.block(block.at);
         for one in block.insns.iter().filter(|one| crate::backend::masm::prints(one)) {
+            let runs = reaching;
             out.instructions += runs;
             match one.what.as_ref().map(|what| (what.op, what.target)) {
                 Some((Operation::Branch, target)) => {
@@ -331,5 +332,32 @@ mod tests {
         let (rare_second, likely_second) = (placed(3), placed(2));
         assert!(close(rare_second, [1.0, 0.25, 0.75, 3.75]), "{rare_second:?}");
         assert!(close(likely_second, [1.0, 0.75, 0.25, 3.25]), "{likely_second:?}");
+    }
+
+    /// Work after a branch runs only as often as the branch falls through:
+    /// a `jne loop; jmp exit` block counted its `jmp` on every pass, so the
+    /// instruction column could not see a jump that tail duplication moved
+    /// off the loop (PLASMABLOBS read 35,468,659 either way).
+    #[test]
+    fn test_work_after_a_branch_runs_as_often_as_it_falls_through() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let targeted = |at, op, name, target| {
+            let mut one = (*insn(at, op, name, vec![], vec![])).clone();
+            one.what.as_mut().unwrap().target = Some(target);
+            Arc::new(one)
+        };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Compare, "cmp", vec![], vec![ax.clone(), bx.clone()]), targeted(2, Operation::Branch, "jne", 3), insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]), targeted(4, Operation::Jump, "jmp", 4)], vec![3, 4]),
+            block(3, vec![insn(5, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()])], vec![4]),
+            block(4, vec![insn(6, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body = LirBody::new("tail", 1, blocks, IndexMap::default(), IndexMap::default());
+        body.odds.taken.insert((1, 3), (0.75 * BlockOdds::CERTAIN) as u32);
+        body.odds.taken.insert((1, 4), (0.25 * BlockOdds::CERTAIN) as u32);
+        let done = executed(&body).expect("straight branches");
+        // cmp and jne every time, mov and jmp a quarter, block 3's mov three quarters, ret.
+        assert!((done.instructions - 4.25).abs() < 1e-3, "{}", done.instructions);
     }
 }
