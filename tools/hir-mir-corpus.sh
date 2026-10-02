@@ -14,7 +14,7 @@ emit() {
   "$root/target/release/hir-mir" "$out/$1.json" >"$out/$1.ll" 2>"$out/$1.err" || { echo "FAIL $1: $(grep -m1 -e "^invalid" -e "^poison" "$out/$1.err")"; failed=1; }
   "$bin/opt" -passes=verify -disable-output "$out/$1.ll" 2>"$out/$1.opt" || { echo "FAIL $1: opt rejects it: $(head -1 "$out/$1.opt")"; failed=1; }
 }
-for source in "$root"/tests/suite/*.bas; do
+for source in "$root"/tests/run/qb/*.bas; do
   name=qb-$(basename "$source" .bas)
   if "$root/target/release/llrm-qb" "$source" --dump-hir "$out/$name.json" >/dev/null 2>"$out/$name.frontend"; then
     emit "$name"

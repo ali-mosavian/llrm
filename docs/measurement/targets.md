@@ -1502,7 +1502,7 @@ measure in this file missed it until the helper was priced.
 statement** -- one to store it and one to read it back. 3,944 weighted
 cycles against about 320.
 
-It is not in `tests/suite/` because only QuickBASIC 4.5 accepts the form; PDS
+It is not in `tests/run/qb/` because only QuickBASIC 4.5 accepts the form; PDS
 refuses the REDIM with a math overflow, and the matrix compiles every suite
 program on every configuration.
 

@@ -16,7 +16,7 @@ from qbprint import seq
 from qbprint import qbfloat
 
 ROOT = Path(__file__).resolve().parents[2]
-SUITE = ROOT / "tests/suite"
+SUITE = ROOT / "tests/run/qb"
 
 
 def arith() -> list[str]:
@@ -282,7 +282,7 @@ def chain() -> list[str]:
     """A divide whose divisor is computed by another divide.
 
     BASIC truncates toward zero where Python's // floors, and the negative
-    pair here is exactly the difference -- the same helper tests/suite/nbody.bas
+    pair here is exactly the difference -- the same helper tests/run/qb/nbody.bas
     needs, for the same reason.
     """
 
@@ -306,7 +306,7 @@ def chain() -> list[str]:
 
 
 def nbody() -> list[str]:
-    """The fixed-point integrator of tests/suite/nbody.bas, in the arithmetic it means.
+    """The fixed-point integrator of tests/run/qb/nbody.bas, in the arithmetic it means.
 
     BASIC's \\ truncates toward zero where Python's // floors, which differs on
     every negative operand here -- and half the deltas are negative.
@@ -350,7 +350,7 @@ def nbody() -> list[str]:
 
 
 def arrays() -> list[str]:
-    """tests/suite/arrays.bas: array elements and a chained, unstored subexpression.
+    """tests/run/qb/arrays.bas: array elements and a chained, unstored subexpression.
 
     The two shapes the corpus has zero of and calls.py cannot absorb through
     today -- an operand that is `x(i)`, not a named static, and a term like
@@ -378,7 +378,7 @@ def arrays() -> list[str]:
 
 
 def udt() -> list[str]:
-    """tests/suite/udt.bas: a TYPE with two LONG fields, plain and arrayed."""
+    """tests/run/qb/udt.bas: a TYPE with two LONG fields, plain and arrayed."""
     c = (305419896, 252645135)
     pts = [(1, 2), (3, 4), (5, 6)]
     return [
@@ -389,12 +389,12 @@ def udt() -> list[str]:
 
 
 def arrudt() -> list[str]:
-    """tests/suite/arrudt.bas: an array of TYPE Coord, module-level and BPREL."""
+    """tests/run/qb/arrudt.bas: an array of TYPE Coord, module-level and BPREL."""
     return [seq(11, 33), seq(22, 44), seq(55, 77), seq(66, 88), "DONE"]
 
 
 def nestud() -> list[str]:
-    """tests/suite/nestud.bas: a TYPE nested inside another, plain and arrayed,
+    """tests/run/qb/nestud.bas: a TYPE nested inside another, plain and arrayed,
     at module and procedure scope, plus a single-field TYPE used bare."""
     return [
         num(111),
@@ -413,17 +413,17 @@ def nestud() -> list[str]:
 
 
 def arrprm() -> list[str]:
-    """tests/suite/arrprm.bas: a SUB taking an array parameter, plain and of a TYPE."""
+    """tests/run/qb/arrprm.bas: a SUB taking an array parameter, plain and of a TYPE."""
     return [seq(7, 8), seq(1, 2, 3, 4), "DONE"]
 
 
 def byref2() -> list[str]:
-    """tests/suite/byref2.bas: BYREF SINGLE and DOUBLE parameters."""
+    """tests/run/qb/byref2.bas: BYREF SINGLE and DOUBLE parameters."""
     return [qbfloat(2.0), qbfloat(16.0), "DONE"]
 
 
 def cmpof() -> list[str]:
-    """tests/suite/cmpof.bas: the comparisons B$CPI4 answers backwards.
+    """tests/run/qb/cmpof.bas: the comparisons B$CPI4 answers backwards.
 
     Authored from what the program means, like every other golden here --
     which is the whole point in this one case, since BC's own build prints
@@ -491,7 +491,7 @@ def rcflip() -> list[str]:
 
 
 def onerr() -> list[str]:
-    """tests/suite/onerr.bas: what each handled error leaves behind.
+    """tests/run/qb/onerr.bas: what each handled error leaves behind.
 
     SPACE$(-1), CHR$(300) and LEFT$(s, -1) are illegal function calls,
     error 5. ERR reads 0 once RESUME has run. In the loop, i = 4 and 5 fail
@@ -509,7 +509,7 @@ def onerr() -> list[str]:
 
 
 def erlnum() -> list[str]:
-    """tests/suite/erlnum.bas: ERR and ERL for each error, then DONE.
+    """tests/run/qb/erlnum.bas: ERR and ERL for each error, then DONE.
 
     ERROR 11 precedes any numbered line, so its ERL is 0. SPACE$(-1) runs on
     the line after 100 and CHR$(300) on line 200: error 5 on both.
@@ -569,9 +569,8 @@ PROGRAMS = {
 
 
 def main() -> int:
-    (SUITE / "golden").mkdir(parents=True, exist_ok=True)
     for name, model in PROGRAMS.items():
-        out = SUITE / "golden" / f"{name}.txt"
+        out = SUITE / f"{name}.out"
         out.write_text("\n".join(model()) + "\n")
         print(f"{out.relative_to(ROOT)}: {len(model())} lines")
     return 0

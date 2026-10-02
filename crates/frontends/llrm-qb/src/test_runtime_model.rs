@@ -148,7 +148,7 @@ fn mid_statement_runs_in_the_model() {
     assert_eq!(printed_on(source, "vbdos", "vbdos"), "hXYZo\nhXYZ!\n");
 }
 
-/// ON n GOTO|GOSUB was parsed to nothing: tests/suite/jumps.bas did not
+/// ON n GOTO|GOSUB was parsed to nothing: tests/run/qb/jumps.bas did not
 /// compile. n picks the label; 0 or past the list falls through.
 #[test]
 fn on_goto_and_on_gosub_pick_the_nth_label() {
@@ -157,13 +157,13 @@ fn on_goto_and_on_gosub_pick_the_nth_label() {
 }
 
 /// A PRINT item before the ELSE of a one-line IF was refused:
-/// tests/suite/flags.bas did not compile.
+/// tests/run/qb/flags.bas did not compile.
 #[test]
 fn a_print_item_before_else_prints_the_right_branch() {
     assert_eq!(printed("DEFINT A-Z\nr = 0\nIF r = 0 THEN PRINT r ELSE PRINT 7\nr = 1\nIF r = 0 THEN PRINT r ELSE PRINT 7\n"), " 0 \n 7 \n");
 }
 
-/// ON n outside 0..255 is ERROR 5 raised by the ON itself (tests/suite/onrange.bas
+/// ON n outside 0..255 is ERROR 5 raised by the ON itself (tests/run/qb/onrange.bas
 /// pins that RESUME then retries the ON, as BC does): the selector is the range
 /// check, so no statement of its own follows it.
 #[test]

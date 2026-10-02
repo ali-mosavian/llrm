@@ -35,7 +35,7 @@ fn pushes(insns: &[Arc<Insn>]) -> Vec<Loc> {
 
 /// A rule matching a one-instruction window panicked in the window walk
 /// (a slice starting past its end) on every procedure pushing a loaded
-/// argument; tests/suite/procs.bas stopped compiling.
+/// argument; tests/run/qb/procs.bas stopped compiling.
 #[test]
 fn a_load_read_once_is_pushed_from_its_cell_across_unrelated_work() {
     let other = Held { value: 2, width: 2 };

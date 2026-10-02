@@ -352,7 +352,7 @@ covers directly, caught by a second-round design review, not by testing.
 
 Two real bugs were found this way before this restriction existed at all --
 built, then caught by `tools/fuzzcheck.py`/`tools/matrix.py`, not by
-inspection. `tests/suite/nots.bas` is why the restriction exists in the first
+inspection. `tests/run/qb/nots.bas` is why the restriction exists in the first
 place: BC pre-stages one call's own argument at a frame address (`mov
 [bp-14h],dx` right before `call far B$PSSD`) that this pass cannot tell
 apart from an ordinary local spill, and bridging freely after a store the

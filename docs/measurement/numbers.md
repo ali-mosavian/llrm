@@ -509,7 +509,7 @@ Both numbers are on code that computes the right answer. An earlier
 measurement of 1.78 was not: `forward.py` was deleting the second of two
 `fld dword ptr [si]`, and the build it timed printed -2147483648 for every
 coordinate. It ran faster because it was doing less, and less was wrong.
-`tests/suite/fpdeep.bas` exists so that shape is in the corpus now.
+`tests/run/qb/fpdeep.bas` exists so that shape is in the corpus now.
 
 ## Absorption
 
@@ -517,7 +517,7 @@ All 21 of `bench/nbody.bas`'s arithmetic call sites -- 11 `B$MUI4`, 6
 `B$DVI4`, 4 `B$CPI4` -- are absorbed; the rewritten object contains none of
 them. Base is unchanged, as it must be
 -- BC's own build does not move. `bench/nbody.bas` uses Q23.9 (see
-`tests/suite/nbody.bas`'s own comment), and BC alone builds the base half of this
+`tests/run/qb/nbody.bas`'s own comment), and BC alone builds the base half of this
 comparison.
 
 Re-measured, not reasoned: opt dropped from 4649876 to 4519562 ticks (2.8%
@@ -570,7 +570,7 @@ hardware, and this document quotes both rather than picking the flattering
 one.
 
 One honest gap: `bench/nbody.bas` itself has no golden and prints only
-`TICKS=`, so nothing here checks its own arithmetic. `tests/suite/nbody.bas` --
+`TICKS=`, so nothing here checks its own arithmetic. `tests/run/qb/nbody.bas` --
 the same integrator, Q16.16 instead of Q23.9 -- is golden-checked across all
 twelve configurations by `tools/matrix.py`/`tests/test_e2e.py`, and passes;
 that is the evidence this number rests on for correctness, not an
