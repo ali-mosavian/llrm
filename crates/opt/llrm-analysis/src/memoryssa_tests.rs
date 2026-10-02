@@ -168,15 +168,23 @@ fn test_a_loop_header_phi_carries_the_backedge_definition() {
     assert_eq!(graph.at(site(&unit, "b1", 0)).defining, Some(phi.id));
 }
 
-/// A volatile access is the old barrier.
+/// A volatile access touches only its own bytes, as LLVM's: a volatile
+/// store defines memory and may change the cell through `%p`, but not the
+/// cell beside its own; a volatile load reads, it defines nothing. Both were
+/// a barrier, and TEXTFILL read its variables again after every POKE (#257).
 #[test]
-fn test_a_volatile_access_defines_memory_even_without_named_cells() {
-    for write in ["store volatile i16 1, ptr %p", "%v = load volatile i16, ptr %p"] {
+fn test_a_volatile_access_touches_only_its_own_bytes() {
+    for (write, kind, clobbers) in [
+        ("store volatile i16 1, ptr %p", Kind::Def, true),
+        (&format!("store volatile i16 1, ptr {OTHER}"), Kind::Def, false),
+        ("%v = load volatile i16, ptr %p", Kind::Use, false),
+    ] {
         let parsed = written(write);
         let unit = parsed.unit();
         let graph = graph(&unit);
-        assert_eq!(graph.at(site(&unit, "b0", 0)).kind, Kind::Def, "{write}");
-        assert_eq!(graph.clobbers(site(&unit, "b0", 1), &cell(&unit, site(&unit, "b0", 1))), BTreeSet::from([graph.at(site(&unit, "b0", 0)).id]));
+        assert_eq!(graph.at(site(&unit, "b0", 0)).kind, kind, "{write}");
+        let load = site(&unit, "b0", 1);
+        assert_eq!(graph.clobbers(load, &cell(&unit, load)).contains(&graph.at(site(&unit, "b0", 0)).id), clobbers, "{write}");
     }
 }
 
@@ -550,4 +558,37 @@ b0:
     }
     let plain = Accesses::plain(&unit, &Calls::from_iter([(call, vec![])]));
     assert_eq!(built(&unit, &plain).clobbers(load, &plain.references[&load]), BTreeSet::from([graph(&unit).at(second).id]), "unresolved, @h may be @g");
+}
+
+/// `Accesses`, `memory::unmodeled_write` and `effects::unmodeled` each say
+/// what a load or store touches, and all three ask `memory::own_bytes`:
+/// only its own bytes, volatile or not. b9a49221 changed one, #257 then
+/// reached the other two, and TEXTFILL reloaded every variable after a POKE.
+#[test]
+fn every_answer_to_what_an_access_touches_is_its_own_bytes() {
+    let parsed = Parsed::new(&format!(
+        "define i16 @f() {{
+b0:
+  %a = load i16, ptr {CELL}
+  %b = load volatile i16, ptr {CELL}
+  store i16 %a, ptr {CELL}
+  store volatile i16 %b, ptr {CELL}
+  ret i16 %a
+}}
+"
+    ));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &Calls::default());
+    let declarations = parsed.module.declarations();
+    for index in 0..4 {
+        let inst = site(&unit, "b0", index);
+        let own = crate::memory::own_bytes(&unit.function.instruction(inst).opcode).expect("an access");
+        let mine = [cell(&unit, inst)];
+        let named = |does: bool| Some(if does { &mine[..] } else { &[][..] });
+        assert_eq!((accesses.reads(inst), accesses.writes(inst)), (named(own.reads), named(own.writes)), "Accesses, access {index}");
+        assert!(!crate::memory::unmodeled_write(&unit, inst), "memory::unmodeled_write, access {index}");
+        let context = &parsed.module.context;
+        let unmodeled = (crate::effects::unmodeled_read(context, &declarations, unit.function, inst), crate::effects::unmodeled_write(context, &declarations, unit.function, inst));
+        assert_eq!(unmodeled, (false, false), "effects::unmodeled, access {index}");
+    }
 }

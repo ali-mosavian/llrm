@@ -1,8 +1,8 @@
 //! LLVM's `MemorySSA`: llrm-core's `analysis/memoryssa.rs`, adapted to the
 //! rich MIR. Conservative, rebuilt after a function changes.
 //!
-//! Stores, writing calls and volatile accesses define a single memory
-//! state; loads and reading calls use it. The clobber walker skips writes
+//! Stores and writing calls define a single memory state; loads and
+//! reading calls use it. The clobber walker skips writes
 //! `may_clobber` rules out. What each instruction touches is `Accesses`'.
 //!
 //! A site is an instruction. Dropped, with no rich MIR counterpart: the x87
@@ -26,7 +26,7 @@ use crate::cfg;
 use crate::alias::{self, Effect, Procedure, Summary};
 use crate::consts::Calls;
 use crate::manager::{Annotated, CallEffects};
-use crate::memory::{MemRef, Unit, unmodeled_write};
+use crate::memory::{MemRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
 use crate::regions::{displaced_span, overlapping};
@@ -121,12 +121,13 @@ impl Accesses {
         let mut touched = IndexMap::default();
         for (_, inst) in function.walk() {
             let reference = || references.get(&inst).cloned().into_iter().collect::<Vec<_>>();
-            let found = match &function.instruction(inst).opcode {
-                Opcode::Load { volatile: false, .. } => (Some(reference()), Some(Vec::new())),
-                Opcode::Store { volatile: false, .. } => (Some(Vec::new()), Some(reference())),
-                // A volatile access reads only its own bytes, and orders every write.
-                Opcode::Load { .. } => (Some(reference()), None),
-                Opcode::Store { .. } => (Some(Vec::new()), None),
+            let opcode = &function.instruction(inst).opcode;
+            let found = match opcode {
+                // Its order against other volatile accesses is the passes', which never move one.
+                _ if let Some(own) = own_bytes(opcode) => {
+                    let touched = |does: bool| Some(if does { reference() } else { Vec::new() });
+                    (touched(own.reads), touched(own.writes))
+                }
                 Opcode::Call(info) | Opcode::Invoke(info) => {
                     let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
                     let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
@@ -143,16 +144,6 @@ impl Accesses {
     /// What `inst` writes; `None` where it may write anything.
     pub fn writes(&self, inst: InstId) -> Option<&[MemRef]> {
         self.touched.get(&inst).map_or(Some(&[]), |(_, writes)| writes.as_deref())
-    }
-
-    /// What `inst` writes to memory: `writes`, but a volatile access only
-    /// its own bytes, without its order against every other access.
-    pub fn stored(&self, function: &Function, inst: InstId) -> Option<&[MemRef]> {
-        match function.instruction(inst).opcode {
-            Opcode::Load { volatile: true, .. } => Some(&[]),
-            Opcode::Store { volatile: true, .. } => self.references.get(&inst).map(std::slice::from_ref),
-            _ => self.writes(inst),
-        }
     }
 
     /// What the call `inst` writes before reading any: `initializes`.

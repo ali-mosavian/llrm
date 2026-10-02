@@ -564,3 +564,73 @@ b0:
         assert_eq!(after.matches("load i16, ptr %q").count() == 2, reloaded, "{attribute:?}\n{after}");
     }
 }
+
+/// `text` through `Gvn` with the module's summaries, printed.
+fn numbered(text: &str) -> String {
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    printed(&module)
+}
+
+/// A volatile store writes only the bytes it addresses, as LLVM's: @g is
+/// read once across one to a fixed address or to another global, and again
+/// across one through a far pointer that may be @g. It was a barrier, and
+/// TEXTFILL read its variables again after every POKE (#257).
+#[test]
+fn test_a_volatile_store_elsewhere_keeps_a_global_loaded_before() {
+    for (store, reloaded) in [("ptr addrspace(4) %dev", false), ("ptr @h", false), ("ptr addrspace(1) %far", true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global i16 0
+@h = global i8 0
+
+define i16 @f(ptr addrspace(4) %dev, ptr addrspace(1) %far) {{
+b0:
+  %a = load i16, ptr @g
+  store volatile i8 1, {store}
+  %b = load i16, ptr @g
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let after = numbered(&text);
+        assert_eq!(after.matches("load i16, ptr @g").count() == 2, reloaded, "{store}\n{after}");
+        assert!(after.contains(&format!("store volatile i8 1, {store}")), "{after}");
+    }
+}
+
+/// Volatile accesses keep their number and order: two stores of one address
+/// both stay, and a second volatile read is not the first's value.
+#[test]
+fn test_volatile_accesses_keep_their_order_and_count() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+define i16 @f(ptr addrspace(4) %dev) {
+b0:
+  store volatile i8 1, ptr addrspace(4) %dev
+  store volatile i8 2, ptr addrspace(4) %dev
+  %a = load volatile i8, ptr addrspace(4) %dev
+  %b = load volatile i8, ptr addrspace(4) %dev
+  %c = sub i8 %a, %b
+  %r = zext i8 %c to i16
+  ret i16 %r
+}
+";
+    let after = numbered(text);
+    let volatile = after.lines().filter(|one| one.contains("volatile")).map(str::trim).collect::<Vec<_>>();
+    assert_eq!(
+        volatile,
+        [
+            "store volatile i8 1, ptr addrspace(4) %dev",
+            "store volatile i8 2, ptr addrspace(4) %dev",
+            "%a = load volatile i8, ptr addrspace(4) %dev",
+            "%b = load volatile i8, ptr addrspace(4) %dev"
+        ],
+        "{after}"
+    );
+}

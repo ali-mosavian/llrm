@@ -263,7 +263,7 @@ impl _Exit<'_> {
         let block = cfg::block(at);
         for &inst in operations(function, block).iter().rev() {
             let op = function.instruction(inst);
-            let writes = self.accesses.stored(function, inst);
+            let writes = self.accesses.writes(inst);
             let overlaps = |written: &MemRef| regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true);
             if !llrm_analysis::memoryssa::changes(reference, false, writes, overlaps) {
                 continue;
