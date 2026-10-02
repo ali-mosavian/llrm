@@ -153,9 +153,8 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };
     let crossing = numbered(unit.function, false)?;
-    // gvn's prices were tuned on a loop's trips multiplied, ten where unproven: see #202.
     let price = |one: &Function| {
-        let frequency = profit::_loop_products(one, Some(trips))?;
+        let frequency = profit::_frequencies(unit.context, &outer.globals, one, Some(trips))?;
         profit::pressure_adjusted(unit.context, unit.layout, one, outer.callees(), costs, room, &|inst| crate::spill::kept_across(outer, unit.context, one, inst), &frequency, &liveness::live(one))
     };
     let chosen = if !room.priced() {

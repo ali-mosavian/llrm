@@ -7,7 +7,7 @@ use llrm_analysis::{cfg, liveness};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module, ValueId};
 
-use super::{Room, Traffic, cells, integer, segment_view, sites, spilled, traffic, words};
+use super::{Room, Site, Traffic, cells, forecast, integer, segment_view, sites, spilled, transient, traffic, words};
 use crate::profit::OperationCosts;
 
 fn module(text: &str) -> Module {
@@ -141,16 +141,16 @@ entry:
     let cells = cells(function);
     let room = Room { registers: 3, across_call: 1, ..Room::default() };
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_| 0, &cells, &integer, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_, _| 0, &cells, &integer, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
     let prices = traffic(function, &looped(function), &cells, &costs(), &|_| true, &|_| 1);
     // Each of `a` and `b` is stored once and loaded once.
     assert_eq!(spilled(points, |one| prices.get(&one).map_or(0, |one| one.price(&costs()))), 2);
 }
 
 /// A load through a far pointer takes the register its selector passes
-/// through: one fewer holds values there, which no point counted, so a loop
-/// with four products and a counter live across ten such loads was planned
-/// to fit and could not be allocated.
+/// through besides the pointer's own: one fewer holds values there, which no
+/// point counted, so a loop with four products and a counter live across ten
+/// such loads was planned to fit and could not be allocated.
 #[test]
 fn test_a_far_access_takes_a_register_of_its_own() {
     let module = module("define i16 @f(ptr addrspace(1) %far, ptr %near) {
@@ -165,8 +165,8 @@ entry:
     let layout = llrm_analysis::testing::layout(&module);
     let room = Room { registers: 6, across_call: 2, far_access: 1, ..Room::default() };
     let loads = function.layout().iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect::<Vec<_>>();
-    let taken = loads.iter().map(|&inst| super::transient(&module.context, &layout, function, inst, room)).collect::<Vec<_>>();
-    assert_eq!(taken, [2, 1]);
+    let taken = loads.iter().map(|&inst| super::transient(&module.context, &layout, function, inst, room, &Default::default())).collect::<Vec<_>>();
+    assert_eq!(taken, [1, 0]);
 }
 
 /// A far view of a segment is held in a segment register: counted against the
@@ -196,11 +196,48 @@ entry:
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
-        sites(function, &found, block, room, &|_| 2, &|_| 0, &cells, &integer, &views).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
+        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
     };
     let held = at(3);
     assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
     assert!(held.before.residents.iter().all(|&one| !views(one)));
     let none = at(0);
     assert!(none.segments.residents.is_empty() && none.before.residents.iter().filter(|&&one| views(one)).count() == 2, "no segment registers: general ones");
+}
+
+fn _walk(registers: i64) -> i64 {
+    let module = module("define i16 @f(ptr %p) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %n, %loop ]
+  %g = getelementptr i16, ptr %p, i16 %i
+  %v = load i16, ptr %g
+  %n = add i16 %i, 1
+  %more = icmp ne i16 %n, 100
+  br i1 %more, label %loop, label %exit
+exit:
+  ret i16 %n
+}
+");
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let found = liveness::live(function);
+    let cells = cells(function);
+    let integer = |value: ValueId| integer(&module.context, function, value);
+    let views = |value: ValueId| segment_view(&module.context, &layout, function, value);
+    let room = Room { registers, across_call: 2, ..Room::default() };
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| 2, &|inst, live| transient(&module.context, &layout, function, inst, room, live), &cells, &integer, &views)).flat_map(Site::points);
+    forecast(points, |_| 1).peak
+}
+
+/// An address only its own access takes is folded into the access: it is not
+/// held in a register besides its pointer and index, which the access reads.
+/// Counted as a third, a loop holding a pointer and an index forecast a spill
+/// on two registers and the allocator made none: 54% of the corpus's loops
+/// had a forecast spill that was never made.
+#[test]
+fn test_an_address_folded_into_its_access_takes_no_register_of_its_own() {
+    assert_eq!(_walk(2), 0, "the pointer and the index fit two registers");
+    assert_eq!(_walk(1), 1, "one more than one register holds");
 }
