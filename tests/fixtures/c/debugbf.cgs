@@ -1,0 +1,58 @@
+INIT sw=0x6988000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+d1 DBScalar "char" TY_INT_1
+d2 DBScalar "signed char" TY_INT_1
+d3 DBScalar "unsigned char" TY_UINT_1
+d4 DBScalar "short" TY_INT_2
+d5 DBScalar "unsigned short" TY_UINT_2
+d6 DBScalar "int" TY_INT_2
+d7 DBScalar "unsigned int" TY_UINT_2
+d8 DBScalar "long" TY_INT_4
+d9 DBScalar "unsigned long" TY_UINT_4
+d10 DBScalar "__int64" TY_INT_8
+d11 DBScalar "unsigned __int64" TY_UINT_8
+d12 DBScalar "_Bool" TY_UINT_1
+TYPE T25 size=3 align=1
+SETSEG 11
+SYM y1 name="gf" base="gf" pattern="_*" attr=0x6 seg=11
+b13 BENewBack y1
+- DGLabel b13
+- DGUBytes 3
+d14 DBName "flags"
+d15 DBStruct "flags" struct 3
+- DBBitField d15 0 0 3 "a" d3
+- DBBitField d15 0 3 5 "b" d2
+- DBBitField d15 1 0 9 "c" d7
+- DBEndStruct d15
+- DBEndName d14 d15
+- DBModSym y1 d14
+f16 DBSrcFile "fixtures/c/debugbf.c" main=1
+- DBSrcCue f16 10 1
+SYM y2 name="get_b" base="get_b" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INTEGER
+d17 DBProc TY_CODE_PTR d6
+d18 DBScalar "void" TY_DEFAULT
+- DBParm d17 d18
+- DBModSym y2 d17
+l19 CGLastParm
+t20 CGTemp TY_INTEGER
+n21 CGFEName y1 T25
+n22 CGInteger 0 TY_UNSIGNED
+n23 CGBinary O_PLUS n21 n22 TY_POINTER
+n24 CGBitMask n23 3 5 TY_INT_1
+n25 CGUnary O_POINTS n24 TY_INT_1
+n26 CGUnary O_CONVERT n25 TY_INTEGER
+n27 CGTempName t20 TY_INTEGER
+n28 CGAssign n27 n26 TY_INTEGER
+- CGDone n28
+n29 CGTempName t20 TY_INTEGER
+n30 CGUnary O_POINTS n29 TY_INTEGER
+- CGReturn n30 TY_INTEGER
+STOP
+FINI

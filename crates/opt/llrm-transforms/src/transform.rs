@@ -66,8 +66,13 @@ use crate::lcssa::{arms, from_arms};
 
 /// Values something that stays reads, to a fixed point.
 pub fn live(context: &Context, callees: &Callees, function: &Function) -> BTreeSet<ValueId> {
+    live_except(context, callees, function, |_| false)
+}
+
+/// `live`, as if the instructions `skipped` picks did not stay.
+pub fn live_except(context: &Context, callees: &Callees, function: &Function, skipped: impl Fn(InstId) -> bool) -> BTreeSet<ValueId> {
     let mut alive = BTreeSet::new();
-    let mut pending = function.walk().map(|(_, inst)| inst).filter(|&inst| crate::dead::_kept(context, callees, function, inst)).collect::<Vec<_>>();
+    let mut pending = function.walk().map(|(_, inst)| inst).filter(|&inst| !skipped(inst) && crate::dead::_kept(context, callees, function, inst)).collect::<Vec<_>>();
     while let Some(inst) = pending.pop() {
         for &operand in &function.instruction(inst).operands {
             if let Operand::Value(value) = operand

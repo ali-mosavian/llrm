@@ -14,6 +14,12 @@ pub struct PointerSpec {
     pub index_bits: u32,
 }
 
+/// The address space of memory at a fixed address, where no program object
+/// lives: a device's registers or its frame buffer. Represented as a far
+/// pointer is; a frontend states it of an access, and an analysis reads it
+/// as "apart from every program object".
+pub const FIXED_SPACE: u32 = 4;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataLayout {
     pub big_endian: bool,

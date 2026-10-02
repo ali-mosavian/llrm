@@ -123,7 +123,7 @@ fn a_byval_parameter_is_its_scalar() {
 fn a_structure_and_an_array_of_it_read_as_bc_writes_them() {
     let module = |names: [&str; 5], extra: Option<&str>| {
         let [coord, x, y, c, pts] = names;
-        let field = |name: &str, offset| Field { name: name.into(), r#type: 0, offset };
+        let field = |name: &str, offset| Field { name: name.into(), r#type: 0, offset, bits: None };
         let mut data = vec![data(c, 1), data(pts, 2)];
         data.extend(extra.map(|name| self::data(name, 3)));
         Module {

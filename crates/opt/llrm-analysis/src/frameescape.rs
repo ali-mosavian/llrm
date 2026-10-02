@@ -118,8 +118,9 @@ pub fn analysed(function: &Function) -> Escapes {
 
 /// Whether `alloca`'s address is exposed, as `analysed` finds it: it
 /// reaches, through moves and phis, an operand that is not an access's
-/// own pointer.
-pub fn exposes(function: &Function, alloca: ValueId) -> bool {
+/// own pointer. A lifetime marker (`marker` says which instructions are
+/// one) names an object without handing out its address.
+pub fn exposes(function: &Function, alloca: ValueId, marker: impl Fn(InstId) -> bool) -> bool {
     let mut seen = BTreeSet::from([alloca]);
     let mut pending = vec![alloca];
     while let Some(value) = pending.pop() {
@@ -127,7 +128,7 @@ pub fn exposes(function: &Function, alloca: ValueId) -> bool {
             let instruction = function.instruction(one.user);
             let moves = instruction.opcode == Opcode::Phi || source(function, one.user) == Some(Operand::Value(value)) && one.index == 0;
             if !moves {
-                if accessed(function, one.user) == Some(one.index as usize) {
+                if accessed(function, one.user) == Some(one.index as usize) || marker(one.user) {
                     continue;
                 }
                 return true;
@@ -487,5 +488,28 @@ b:
         let f = function(&module, "f");
         assert_eq!(analysed(f), Escapes { origins: IndexMap::default(), exposed: BTreeSet::new() });
         assert!(framed(f).is_empty());
+    }
+
+    /// A scope's lifetime markers name a local; they hand its address to no one. As a call
+    /// they exposed every local with a scope, and its bytes were never private.
+    #[test]
+    fn test_a_lifetime_marker_does_not_expose_the_local() {
+        let module = parsed(
+            "declare void @llvm.lifetime.start.p0(i64, ptr)
+define i16 @f(i16 %a) {
+b0:
+  %x = alloca i16
+  call void @llvm.lifetime.start.p0(i64 2, ptr %x)
+  store i16 %a, ptr %x
+  %v = load i16, ptr %x
+  ret i16 %v
+}
+",
+        );
+        let f = function(&module, "f");
+        let x = value(f, "x");
+        let marker = |inst: InstId| matches!(&f.instruction(inst).opcode, Opcode::Call(_));
+        assert!(exposes(f, x, |_| false));
+        assert!(!exposes(f, x, marker));
     }
 }

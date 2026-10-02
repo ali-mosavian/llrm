@@ -96,12 +96,12 @@ impl<'u> Described<'u> {
             }
             DebugType::Struct { name, size, fields, .. } => {
                 let mut members = Vec::new();
-                for (offset, field, handle) in &fields {
+                for (offset, field, handle, bits) in &fields {
                     if let Some(r#type) = self.r#type(*handle) {
-                        members.push((field.clone(), r#type, *offset));
+                        members.push((field.clone(), r#type, *offset, *bits));
                     }
                 }
-                let members: Vec<(&str, i64, i64)> = members.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset)).collect();
+                let members: Vec<(&str, i64, i64, Option<(i64, i64)>)> = members.iter().map(|(name, r#type, offset, bits)| (name.as_str(), *r#type, *offset, *bits)).collect();
                 Some(self.builder.structure(&name, size, &members))
             }
             DebugType::Proc { result, parameters } => {

@@ -1,12 +1,13 @@
 """Code size and expected work of every program, two builds side by side.
 
-    python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]...
+    python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]... [--frames]
 
 Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
 defaults to target/release). A program is tests/suite, bench and examples, plus the
 QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's;
 instructions and memory operands are the backend's `cost` estimate per call,
-summed (not a timing). Prints the programs that changed and the totals.
+summed (not a timing). With --frames, also the bytes each program reserves below BP
+(every `sub sp, N` of its -S listing). Prints the programs that changed and the totals.
 """
 
 import re
@@ -45,6 +46,23 @@ def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
         return Path(obj).stat().st_size, sum(i for i, _ in found), sum(m for _, m in found)
 
 
+SUB_SP = re.compile(r"^\s*sub sp, (\d+)\s*$", re.M)
+
+
+def frame(command: list[str], level: str) -> int | None:
+    """Bytes the program's procedures reserve below BP: every `sub sp, N` of its listing."""
+    with tempfile.TemporaryDirectory() as directory:
+        listing = f"{directory}/x.s"
+        subprocess.run([*command, "--cpu", "486", level, "-S", "-o", listing], capture_output=True, text=True, timeout=300)
+        return sum(int(one) for one in SUB_SP.findall(Path(listing).read_text())) if Path(listing).exists() else None
+
+
+def frames(bins: Path, level: str, demos: bool = True) -> dict:
+    with ThreadPoolExecutor(8) as pool:
+        listed = programs(bins, demos)
+        return dict(zip((name for name, _ in listed), pool.map(lambda one: frame(one[1], level), listed)))
+
+
 def table(bins: Path, level: str, demos: bool = True) -> dict:
     with ThreadPoolExecutor(8) as pool:
         listed = programs(bins, demos)
@@ -52,7 +70,7 @@ def table(bins: Path, level: str, demos: bool = True) -> dict:
 
 
 def main() -> None:
-    args = [one for one in sys.argv[1:] if not one.startswith("-O")]
+    args = [one for one in sys.argv[1:] if not one.startswith("-")]
     levels = [one for one in sys.argv[1:] if one.startswith("-O")] or ["-O2"]
     base = Path(args[0])
     new = Path(args[1]) if len(args) > 1 else ROOT / "target" / "release"
@@ -70,6 +88,13 @@ def main() -> None:
                 print(f"{name:34} bytes {b0:>7} -> {b1:>7} ({b1 - b0:+})  ins {i1 - i0:+}  mem {m1 - m0:+}")
         totals = [sum(one[at] for one in (before[n] for n in both)) for at in range(3)], [sum(one[at] for one in (after[n] for n in both)) for at in range(3)]
         print("TOTAL bytes %d -> %d  ins %d -> %d  mem %d -> %d" % tuple(x for pair in zip(*totals) for x in pair))
+        if "--frames" in sys.argv:
+            before, after = frames(base, level), frames(new, level)
+            both = [name for name in before if before[name] is not None and after.get(name) is not None]
+            for name in both:
+                if before[name] != after[name]:
+                    print(f"{name:34} frame {before[name]:>6} -> {after[name]:>6} ({after[name] - before[name]:+})")
+            print("TOTAL frame %d -> %d" % (sum(before[n] for n in both), sum(after[n] for n in both)))
         status |= bool(failed)
     sys.exit(status)
 

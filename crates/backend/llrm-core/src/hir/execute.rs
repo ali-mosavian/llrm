@@ -715,6 +715,8 @@ impl<'p> Machine<'p> {
         let op = instruction.op;
         let operands = &instruction.operands;
         match op {
+            // The scope of a block local: not an effect.
+            Op::LifetimeStart | Op::LifetimeEnd => return Ok(()),
             Op::Load => {
                 let value = self.scalar(activation, &operands[0])?;
                 return self.define(activation, instruction, vec![value]);

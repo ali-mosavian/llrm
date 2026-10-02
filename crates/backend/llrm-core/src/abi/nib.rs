@@ -56,3 +56,14 @@ pub const ERROR_DIVIDE: &str = "N$EDIV";
 
 /// The routines that end the program, touching only memory its caller cannot name.
 pub const TERMINATING: [&str; 5] = [ERROR_BOUNDS, ERROR_CONVERT, ERROR_DIVIDE, ERROR_KEY, ERROR_SHIFT];
+
+/// The routines that take values and touch only the runtime's own state,
+/// memory the program cannot name: each print of a number, a bool or a
+/// char, a field's format, a newline, and the start of a print to a string.
+pub const RUNTIME_STATE_ONLY: [&str; 15] = [
+    PRINT_I1, PRINT_U1, PRINT_I2, PRINT_U2, PRINT_I4, PRINT_U4, PRINT_R4, PRINT_R8, PRINT_Q2, PRINT_Q4, PRINT_BOOL, PRINT_CHAR, PRINT_NEWLINE,
+    PRINT_FIELD, PRINT_BEGIN,
+];
+
+/// The routines that only read the memory their arguments point to.
+pub const READ_ONLY: [&str; 1] = [VIEW_COMPARE];
