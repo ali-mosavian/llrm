@@ -265,7 +265,7 @@ impl _Exit<'_> {
             let op = function.instruction(inst);
             let writes = self.accesses.stored(function, inst);
             let overlaps = |written: &MemRef| regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true);
-            if !llrm_analysis::memoryssa::changes(reference, writes, overlaps) {
+            if !llrm_analysis::memoryssa::changes(reference, false, writes, overlaps) {
                 continue;
             }
             if writes.is_none() {

@@ -344,7 +344,7 @@ fn _clear<'a>(one: InstId, between: &[InstId], accesses: &'a Accesses, program: 
         return false;
     };
     let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, program).unwrap_or(true);
-    between.iter().all(|&other| !llrm_analysis::memoryssa::changes(read, writes(other), overlaps))
+    between.iter().all(|&other| !llrm_analysis::memoryssa::changes(read, false, writes(other), overlaps))
 }
 
 /// Store-to-load forwarding: each load a known value serves becomes that

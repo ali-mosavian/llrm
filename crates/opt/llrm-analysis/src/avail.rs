@@ -82,7 +82,7 @@ fn serves(unit: &Unit, holder: Operand, value: ValueId) -> bool {
 /// The map across one instruction.
 fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
     let writes = accesses.writes(inst);
-    holders.retain(|one, _| !changes(one, writes, |store| may_clobber(unit, known, one, store)));
+    holders.retain(|one, _| !changes(one, false, writes, |store| may_clobber(unit, known, one, store)));
     if writes.is_none() {
         return holders;
     }

@@ -172,9 +172,10 @@ fn located(reference: &MemRef) -> Option<Location> {
 
 /// Whether `writes`, what an instruction writes (`None`: anything), may
 /// change a byte of `cell`, each write asked `clobbers`: the one answer to
-/// it, so that the rules hold everywhere. A constant object nothing changes.
-pub fn changes(cell: &MemRef, writes: Option<&[MemRef]>, clobbers: impl Fn(&MemRef) -> bool) -> bool {
-    !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
+/// it, so that the rules hold everywhere. Nothing changes a constant
+/// object, nor what an `invariant` read reads (`memory::invariant_load`).
+pub fn changes(cell: &MemRef, invariant: bool, writes: Option<&[MemRef]>, clobbers: impl Fn(&MemRef) -> bool) -> bool {
+    !invariant && !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
 }
 
 /// Whether writing `store` may change a byte of `cell`: `regions` leaves
@@ -268,16 +269,14 @@ impl MemorySSA<'_> {
     /// the earlier memory version, rejecting any possibly aliasing write
     /// on the way, including writes carried by loop backedges.
     pub fn unchanged(&self, earlier: InstId, later: InstId, memory: &MemRef) -> bool {
-        // A load of what is written once, then never, reads what any earlier access of it did.
-        if llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, later) {
-            return true;
-        }
         let boundary = self.at(earlier).defining;
         boundary.is_some_and(|boundary| self.frontier(later, memory, Some(boundary), None, None) == BTreeSet::from([boundary]))
     }
 
     fn frontier(&self, site: InstId, memory: &MemRef, boundary: Option<usize>, edge: Option<i64>, edge_memory: Option<&MemRef>) -> BTreeSet<usize> {
         let block = self.at(site).block;
+        // A load of what is written once, then never: no write changes what it reads.
+        let invariant = llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
         let mut seen = BTreeSet::new();
         let mut found = BTreeSet::new();
@@ -310,7 +309,7 @@ impl MemorySSA<'_> {
                         _ => memory,
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
-                    if changes(queried, written.as_deref(), |store| may_clobber(&self.unit, None, queried, store)) {
+                    if changes(queried, invariant, written.as_deref(), |store| may_clobber(&self.unit, None, queried, store)) {
                         found.insert(current);
                     } else {
                         pending.push(access.defining);
@@ -330,9 +329,6 @@ impl MemorySSA<'_> {
     /// A translated address applies outside the destination; its prefix must
     /// still be checked against the original phi-based address.
     pub fn available_on_edge(&self, earlier: InstId, later: InstId, predecessor: i64, memory: &MemRef, edge_memory: Option<&MemRef>) -> bool {
-        if llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, later) {
-            return true;
-        }
         let source = self.at(earlier);
         let boundary = if source.kind == Kind::Def { Some(source.id) } else { source.defining };
         boundary.is_some_and(|boundary| self.frontier(later, memory, Some(boundary), Some(predecessor), edge_memory) == BTreeSet::from([boundary]))
