@@ -114,8 +114,6 @@ impl FunctionCompiler<'_> {
             },
             _ => return None,
         };
-        self.integer(value, None, expression.span())
-            .ok()
-            .map(|one| one.type_name)
+        self.rules.literal(value)
     }
 }
