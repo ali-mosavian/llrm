@@ -219,6 +219,11 @@ static _MODULE: LazyLock<(
     ] {
         latency.insert(_form, cost[_form]);
     }
+
+    // A branch not taken: the 486 refills its prefetch queue only when one is.
+    //                                    486  P5  P6  K5  K6  K7 Core
+    cost.insert("jcc_not_taken", [1, 1, 1, 1, 1, 1, 1]);
+    latency.insert("jcc_not_taken", cost["jcc_not_taken"]);
     (cost, latency)
 });
 
@@ -228,7 +233,8 @@ mod tests {
 
     /// Key order and rows printed by
     /// `uv run python -c "from qbopt.cycles import timings as t; print(list(t.COST)); ..."`
-    /// on 2026-09-22. Order matters: callers iterate these tables.
+    /// on 2026-09-22, then `jcc_not_taken`, which Python never had. Order
+    /// matters: callers iterate these tables.
     #[test]
     fn test_tables_match_python() {
         let cost_keys: Vec<&str> = COST.keys().copied().collect();
@@ -285,6 +291,7 @@ mod tests {
                 "x87_div_m",
                 "x87_control_load",
                 "x87_control_store",
+                "jcc_not_taken",
             ]
         );
         let latency_keys: Vec<&str> = LATENCY.keys().copied().collect();
@@ -341,6 +348,7 @@ mod tests {
                 "x87_div_m",
                 "x87_control_load",
                 "x87_control_store",
+                "jcc_not_taken",
             ]
         );
         for (k, row) in [

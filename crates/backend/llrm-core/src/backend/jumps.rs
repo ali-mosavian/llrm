@@ -20,7 +20,7 @@ use crate::analysis::frequency::Frequency;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::omfwrite::{SHORT_JUMP, short_reaches};
-use crate::backend::{machinedce, masm, select};
+use crate::backend::{cpu, executed, machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -31,11 +31,11 @@ const NO_OP: &str = "'NoneType' object has no attribute 'op'";
 /// Settle allocated tails and edges after every machine-shaping phase.
 /// `size`: blocks placed for short code, every block counted once, rather
 /// than by their estimated frequencies (-Os).
-pub struct ControlFlow {
-    pub size: bool,
+pub struct ControlFlow<'a> {
+    pub cpu: &'a cpu::Profile,
 }
 
-impl LIRTransform for ControlFlow {
+impl LIRTransform for ControlFlow<'_> {
     fn class_name(&self) -> &'static str {
         "ControlFlow"
     }
@@ -45,11 +45,22 @@ impl LIRTransform for ControlFlow {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        optimized(&body, self.size).map_err(|error| error.0)
+        self.placed(&body).map_err(|error| error.0)
     }
 
     fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        Ok(optimized(&body, self.size)?)
+        Ok(self.placed(&body)?)
+    }
+}
+
+impl ControlFlow<'_> {
+    /// `optimized`, its executed work on the `cost` channel.
+    fn placed(&self, body: &LirBody) -> Result<LirBody, masm::Unprintable> {
+        let placed = optimized(body, self.cpu.size)?;
+        if crate::support::debug::enabled("cost") {
+            llrm_support::debug!("cost", "{}", executed::summary(&placed, self.cpu));
+        }
+        Ok(placed)
     }
 }
 
