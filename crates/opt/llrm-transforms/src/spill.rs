@@ -142,11 +142,11 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
 /// copy lives with the second operand, which the operation reads. `sub cx, di`
 /// after `mov cx, dx` holds both `dx` and `cx`: a 7th value where six registers
 /// held six. A commutative operation takes either operand's; one of them dying
-/// is enough.
+/// is enough. A shift is two-address too: `sar r, imm` makes its result in the first operand's register.
 pub fn copied(function: &Function, inst: InstId, past: &BTreeSet<ValueId>, room: Room, counted: &dyn Fn(ValueId) -> bool) -> i64 {
     let op = function.instruction(inst);
     let (Opcode::Binary(kind), Some(result), [first, second]) = (&op.opcode, op.result, &op.operands[..]) else { return 0 };
-    if !room.two_address || !counted(result) || matches!(kind, BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) {
+    if !room.two_address || !counted(result) {
         return 0;
     }
     let stays = |operand: &Operand| matches!(operand, Operand::Value(value) if past.contains(value));
