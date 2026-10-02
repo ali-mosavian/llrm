@@ -2969,3 +2969,21 @@ fn an_outlined_handler_takes_a_row_per_line() {
     let found = handler_lines(&program);
     assert!(found.contains(&100) && found.contains(&110), "{found:?}");
 }
+
+/// PEEK reads and POKE writes memory every time, whatever DEF SEG says: the
+/// BIOS tick wait `DO: LOOP UNTIL PEEK(&H6C) <> t` compiled to an infinite
+/// loop (`cmp ax, ax`), the second PEEK taken for the first's value, and a
+/// second POKE of one address was dropped as dead.
+#[test]
+fn peek_and_poke_touch_memory_every_time() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = b"DEFINT A-Z\r\nDEF SEG = &H40\r\nt = PEEK(&H6C)\r\nDO\r\nLOOP UNTIL PEEK(&H6C) <> t\r\nPOKE &H6C, 0\r\nPOKE &H6C, 1\r\nPRINT 1\r\n";
+    let path = written(&directory, "tick.bas", source);
+    let text = rich_listing(&parsed_as(&path, "qb45", "qb45"));
+    assert!(source.windows(5).any(|one| one == b"PEEK("), "the shape that was folded");
+    // The loop re-reads: a label, a byte read of the tick, and a jump back to it.
+    let read = regex::Regex::new(r"(L\d+_\d+):\n\s+movzx \w+, byte ptr es:\[108\]\n").unwrap();
+    let back = |label: &str| regex::Regex::new(&format!(r"\s+j\w+ {label}\n")).unwrap().is_match(&text);
+    assert!(read.captures_iter(&text).any(|found| back(&found[1])), "{text}");
+    assert_eq!(text.matches("mov byte ptr es:[108],").count(), 2, "{text}");
+}
