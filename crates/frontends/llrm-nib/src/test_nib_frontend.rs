@@ -2161,3 +2161,27 @@ fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
     assert!(result.is_ok(), "{:?}", result.err());
 }
+
+/// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
+/// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
+/// in the loop.
+#[test]
+fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "trip.nib", source));
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let assembly = masm::text(&module).expect("prints");
+    let body = between(&assembly, "_total proc far\n", "_total endp");
+    // The loop: from the label its backward jump names to that jump.
+    let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+    let (head, end) = jump
+        .captures_iter(body)
+        .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+        .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+        .expect("a loop");
+    let looped = between(&body[..end], &format!("{head}:\n"), "\0");
+    assert!(!looped.contains("cmp"), "{looped}");
+}
