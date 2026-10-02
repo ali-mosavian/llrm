@@ -1756,3 +1756,144 @@ fn loop_count_table() {
     }
     eprintln!("loops in {programs} programs: constant {constant}, symbolic {symbolic}, counter but uncounted {uncounted}, no counter {no_counter}");
 }
+
+/// An 8-bit counter from `%a` by `step` while `%i test %b`, its step promised not
+/// to wrap, tested `shape` (pre or post-stepped behind a guard on the entry); it returns its trips.
+fn tested_for_order(shape: &str, test: IntPredicate, step: i64) -> Parsed {
+    let flag = if matches!(test, IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge) { "nuw" } else { "nsw" };
+    let word = spelled(test);
+    let advance = if step > 0 { format!("add {flag} i8 %i, {step}") } else { format!("sub {flag} i8 %i, {}", -step) };
+    let text = if shape == "pre" {
+        format!(
+            "define i8 @f(i8 %a, i8 %b) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ %a, %b0 ], [ %next, %b2 ]
+  %n = phi i8 [ 0, %b0 ], [ %n1, %b2 ]
+  %c = icmp {word} i8 %i, %b
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = {advance}
+  %n1 = add i8 %n, 1
+  br label %b1
+
+b3:
+  ret i8 %n
+}}
+"
+        )
+    } else {
+        format!(
+            "define i8 @f(i8 %a, i8 %b) {{
+b0:
+  %g = icmp {word} i8 %a, %b
+  br i1 %g, label %b8, label %b9
+
+b8:
+  br label %b1
+
+b1:
+  %i = phi i8 [ %a, %b8 ], [ %next, %b1 ]
+  %n = phi i8 [ 0, %b8 ], [ %n1, %b1 ]
+  %next = {advance}
+  %n1 = add i8 %n, 1
+  %c = icmp {word} i8 %next, %b
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i8 %n1
+
+b9:
+  ret i8 0
+}}
+"
+        )
+    };
+    Parsed::new(&text)
+}
+
+/// A loop ordered against an invariant by a step of more than one, promised not to wrap,
+/// was uncounted unless the bound was a number: its count is the distance to the bound
+/// divided by the step and rounded up, on every input the loop is entered with.
+#[test]
+fn test_an_ordered_loop_by_a_longer_step_is_counted_by_dividing_the_distance() {
+    let mut checked = 0;
+    for shape in ["pre", "post-stepped"] {
+        for (test, steps) in [
+            (IntPredicate::Ult, [2, 3, 5]),
+            (IntPredicate::Ule, [2, 3, 5]),
+            (IntPredicate::Slt, [2, 3, 5]),
+            (IntPredicate::Sle, [2, 3, 5]),
+            (IntPredicate::Ugt, [-2, -3, -5]),
+            (IntPredicate::Uge, [-2, -3, -5]),
+            (IntPredicate::Sgt, [-2, -3, -5]),
+            (IntPredicate::Sge, [-2, -3, -5]),
+        ] {
+            for step in steps {
+                let parsed = tested_for_order(shape, test, step);
+                let proofs = parsed.counted(false);
+                let proof = proofs.iter().find(|one| one.test == test).unwrap_or_else(|| panic!("{shape} {test:?} step {step}: no proof"));
+                for a in (0..256).step_by(3) {
+                    for b in (0..256).step_by(5) {
+                        // An input the loop is not entered with has no count to check; one that wraps is poison.
+                        let Some(actual) = parsed.run(&[(a, 8), (b, 8)], 3_000).filter(|&actual| actual != 0) else { continue };
+                        let mut computed = |kind: BinaryOp, args: Vec<AffineOperand>| {
+                            let number = |one: &AffineOperand| match one {
+                                AffineOperand::Const(known) => known.n.clone(),
+                                AffineOperand::Value(value, _) => BigInt::from(match parsed.function().value(*value).name.as_deref() {
+                                    Some("a") => a,
+                                    Some("b") => b,
+                                    other => panic!("{other:?}"),
+                                } as u128),
+                            };
+                            let (x, y) = (number(&args[0]), number(&args[1]));
+                            AffineOperand::constant(
+                                match kind {
+                                    BinaryOp::Add => x + y,
+                                    BinaryOp::Sub => x - y,
+                                    BinaryOp::UDiv => x / y,
+                                    other => panic!("{other:?}"),
+                                },
+                                8,
+                            )
+                        };
+                        let AffineOperand::Const(counted) = trips(proof, &mut computed).expect("placed") else { panic!("a number") };
+                        assert_eq!(counted.n, BigInt::from(actual), "{shape} {test:?} step {step} a {a} b {b}");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(checked > 2_000, "{checked} runs");
+}
+
+/// Without the promise a longer step may jump the bound and wrap: no count.
+#[test]
+fn test_a_longer_step_that_may_wrap_has_no_ordered_count() {
+    let text = tested_for_order("pre", IntPredicate::Ult, 3).function().clone();
+    let _ = text;
+    let parsed = Parsed::new(
+        "define i8 @f(i8 %a, i8 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ %a, %b0 ], [ %next, %b2 ]
+  %c = icmp ult i8 %i, %b
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add i8 %i, 3
+  br label %b1
+
+b3:
+  ret i8 0
+}
+",
+    );
+    assert!(parsed.counted(false).is_empty());
+}

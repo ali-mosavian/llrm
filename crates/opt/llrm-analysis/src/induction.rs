@@ -90,6 +90,10 @@ pub enum Reach {
     /// `shift` low bits of the distance are zero. The step is `2**shift` times
     /// an odd number, which `inverse` undoes.
     Solved { shift: u32, inverse: BigInt, bits: u32 },
+    /// An ordered test with a step of more than one that is promised not to
+    /// wrap, as LLVM's `howManyLessThans`: the distance to the bound, divided
+    /// by the step, rounded up. `strict` is `<` or `>`, not `<=` or `>=`.
+    Ceil { strict: bool },
 }
 
 /// The one proof of how many trips a loop makes, shared by every pass.
@@ -199,11 +203,20 @@ pub fn trips(proof: &CountedLoop, computed: &mut Computed<'_>) -> Option<AffineO
         let solved = if *bits < width { computed(BinaryOp::And, vec![solved, AffineOperand::constant((BigInt::from(1) << *bits) - 1, width)]) } else { solved };
         return Some(if proof.posttested { computed(BinaryOp::Add, vec![solved, AffineOperand::constant(1, width)]) } else { solved });
     }
-    if proof.posttested {
+    if proof.posttested && !(proof.entry_guarded && matches!(proof.reach, Reach::Ceil { .. })) {
         return None;
     }
     if let Some(count) = &proof.count {
         return (count < &(BigInt::from(1) << width)).then(|| AffineOperand::constant(count.clone(), width));
+    }
+    if let Reach::Ceil { strict } = &proof.reach {
+        // On the entered path the distance is at least one: its predecessor, divided, plus one,
+        // cannot overflow where the distance rounded up could.
+        let (ahead, behind) = if proof.step > BigInt::from(0) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
+        let distance = computed(BinaryOp::Sub, vec![ahead.clone(), behind.clone()]);
+        let distance = if *strict { computed(BinaryOp::Sub, vec![distance, AffineOperand::constant(1, width)]) } else { distance };
+        let whole = computed(BinaryOp::UDiv, vec![distance, AffineOperand::constant(abs(&proof.step), width)]);
+        return Some(computed(BinaryOp::Add, vec![whole, AffineOperand::constant(1, width)]));
     }
     let (ahead, behind) = if proof.step > BigInt::from(0) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
     let count = computed(BinaryOp::Sub, vec![ahead.clone(), behind.clone()]);
@@ -495,6 +508,15 @@ fn _proven(
             let period = BigInt::from(1) << *bits;
             reach = solved;
             Some(period)
+        } else if test != IntPredicate::Ne && abs(&step) != BigInt::from(1) {
+            // An ordered test by more than one: promised not to wrap past the
+            // bound, the counter reaches it in the distance divided by the step.
+            if !_promised(function, update, &step, _unsigned(test)) || (shape.posttested && !entered) {
+                continue;
+            }
+            entry_guarded = shape.posttested;
+            reach = Reach::Ceil { strict: !_inclusive(test) };
+            Some((BigInt::from(1) << width) / abs(&step) + 1)
         } else if (shape.posttested && !entered) || abs(&step) != BigInt::from(1) {
             continue;
         } else {
@@ -1984,6 +2006,9 @@ impl CountedLoop {
                 _ => return None,
             };
             return Some(if self.posttested { solved.plus(&Scev::constant(1, width)) } else { solved });
+        }
+        if matches!(self.reach, Reach::Ceil { .. }) && self.count.is_none() {
+            return None;
         }
         if self.posttested && !self.entry_guarded {
             return self.count.as_ref().map(|count| Scev::constant(count.clone(), width));
