@@ -308,9 +308,9 @@ b3:
 }
 
 /// A wait on the BIOS tick (`DEF SEG = &H40: DO: LOOP UNTIL PEEK(&H6C) <> t`)
-/// compiled to `cmp ax, ax` and spun: the second read was the first. A read
-/// at a fixed address is ordered, so it stays in the loop, whatever else the
-/// passes know of the memory.
+/// compiled to `cmp ax, ax` and spun: the second read was the first. The
+/// frontend states `volatile` of such a read, and it stays in the loop
+/// whatever else the passes know of memory at a fixed address.
 #[test]
 fn a_wait_on_a_device_read_keeps_the_read_in_the_loop() {
     let text = format!(

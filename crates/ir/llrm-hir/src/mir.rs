@@ -1412,10 +1412,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     Some(_) => Some(self.tables.tags.allocation),
                     None => inside.then_some(self.tables.tags.place),
                 };
-                // What lives at a fixed address is a device's: it changes by itself, so
-                // every access to it is ordered, whatever the frontend said of the access.
-                let device = self.tables.types.get(&self.value_types[&one.base]).is_some_and(|pointer| pointer.address == AddressKind::Fixed);
-                Ok((self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)), ty, one.volatile || device, tag))
+                Ok((self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)), ty, one.volatile, tag))
             }
             Operand::DescriptorPlace(one) => {
                 let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;
