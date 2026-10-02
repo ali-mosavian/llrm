@@ -84,6 +84,29 @@ def binaries_stamp() -> float:
     return max((BIN / one).stat().st_mtime for one in ("llrm-c", "llrm-qb", "llrm-nib", "llrm-mir"))
 
 
+FRONTENDS = ("llrm-c", "llrm-qb", "llrm-nib", "llrm-mir")
+
+
+def stale_binaries(root: Path = ROOT, bin: Path = BIN) -> list[str]:
+    """Why the frontends are not what the sources say, empty if they are: one
+    missing, or older than the newest file under crates/. A run with them
+    judges the tools and the file against another compiler's answers."""
+    newest, where = 0.0, ""
+    for base, _, names in os.walk(root / "crates"):
+        for name in names:
+            at = os.path.join(base, name)
+            seen = os.stat(at).st_mtime
+            if seen > newest:
+                newest, where = seen, at
+    problems = []
+    for name in FRONTENDS:
+        if not (bin / name).exists():
+            problems.append(f"{name} is not built: run `cargo build --release --bins`")
+        elif (bin / name).stat().st_mtime < newest:
+            problems.append(f"{name} is older than {os.path.relpath(where, root)}: run `cargo build --release --bins`")
+    return problems
+
+
 # --- the references ------------------------------------------------------------
 
 OW_CPU = {"386": "-3", "486": "-4", "P5": "-5", "Core": "-6"}
