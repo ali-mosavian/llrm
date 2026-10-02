@@ -75,3 +75,25 @@ fn test_spilling_leaves_no_phi_that_names_one_value() {
     let spilled = phases[0].transform(body).expect("spills");
     assert_eq!(trivial(&spilled), 0);
 }
+
+/// Under pressure Belady evicted the value used furthest ahead, which was a loop
+/// counter or accumulator redefined every iteration: a store each trip, where an
+/// invariant already in memory costs only its reload (deedlines PLASMABLOBS spilled
+/// its loop counter in a 1M-trip body, +7% executed instructions).
+#[test]
+fn test_a_value_defined_in_the_loop_is_not_stored_on_every_trip() {
+    let (body, mut phases) = before_phase(Calls::C, "hotstore.ll", "_f", "486", "SsaSpill");
+    let spilled = phases[0].transform(body).expect("spills");
+    let frequency = crate::analysis::frequency::Frequency::of(&spilled);
+    let stores = |hot: bool| -> usize {
+        spilled
+            .blocks
+            .iter()
+            .filter(|block| (frequency.block(block.at) >= 8.0) == hot)
+            .flat_map(|block| &block.insns)
+            .filter(|one| one.spill_store)
+            .count()
+    };
+    assert!(stores(false) + stores(true) > 0, "premise: the body spills");
+    assert_eq!(stores(true), 0, "a store per iteration");
+}
