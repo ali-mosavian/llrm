@@ -1,0 +1,17 @@
+struct Pair:
+    mut x: i16
+    mut y: i16
+
+fn bench_parity() -> i32:
+    let mut points: Pair[8] = [Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0)]
+    let mut total: i32 = 17
+    for index in 0..8:
+        points[index].x = index * 3 + 1
+        points[index].y = 29 - index * 2
+    for index in 0..8:
+        total += i32(points[index].x) * i32(points[index].y)
+    return total
+
+fn main() -> i16:
+    print(bench_parity())
+    return 0

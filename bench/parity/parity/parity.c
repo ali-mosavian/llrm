@@ -1,9 +1,11 @@
+extern void report(long value);
+
 typedef struct {
     short x;
     short y;
 } Pair;
 
-long parity_kernel(void)
+long bench_parity(void)
 {
     Pair points[8];
     long total;
@@ -17,4 +19,10 @@ long parity_kernel(void)
     for (index = 0; index < 8; ++index)
         total += (long)points[index].x * points[index].y;
     return total;
+}
+
+int main(void)
+{
+    report(bench_parity());
+    return 0;
 }
