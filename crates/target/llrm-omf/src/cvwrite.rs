@@ -64,6 +64,8 @@ pub struct Field {
     pub name: String,
     pub r#type: TypeId,
     pub offset: u16,
+    /// A bit field's first bit in the unit at `offset`, and its width.
+    pub bits: Option<(u8, u8)>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -191,6 +193,14 @@ impl Table<'_> {
         Ok(index)
     }
 
+    /// A field's type: its own, or a bit field's record of it.
+    fn field_type(&mut self, field: &Field) -> Made<u16> {
+        let Some((start, width)) = field.bits else { return self.index(field.r#type) };
+        let unsigned = matches!(self.module.types[field.r#type], Type::Scalar(Scalar::UInt8 | Scalar::UInt16 | Scalar::UInt32));
+        let base = if unsigned { cvinfo::BITFIELD_UNSIGNED } else { cvinfo::BITFIELD_SIGNED };
+        self.record(vec![Tag::Bitfield as u8, width, base, start])
+    }
+
     fn list(&mut self, indices: &[u16]) -> Made<u16> {
         if indices.is_empty() {
             return Ok(BASE_TYPE_INDEX as u16);
@@ -241,7 +251,7 @@ impl Table<'_> {
                 self.sized(element, Self::bits(bytes)?)?
             }
             Type::Struct { name, bytes, fields } => {
-                let types = fields.iter().map(|field| self.index(field.r#type)).collect::<Made<Vec<u16>>>()?;
+                let types = fields.iter().map(|field| self.field_type(field)).collect::<Made<Vec<u16>>>()?;
                 let types = self.list(&types)?;
                 let mut names = vec![Tag::List as u8];
                 for field in fields {

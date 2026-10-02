@@ -27,6 +27,15 @@ skipped, loudly, when `target/release` has no binaries.
 
     uv run --no-project --with pytest --with iced-x86 python -m pytest tests/test_programs_compile.py -rs
 
+## QCport compiles
+
+QCport, the largest C program llrm-c compiles, is not in this repository,
+so CI cannot build it. Before merging a change to llrm-c, HIR, its verifier
+or MIR lowering, compile its 65 modules at -O2 and -Os; every one must
+compile (#238 made the driver's verifier refuse five, unseen):
+
+    QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-compile.sh
+
 ## The loop corpus
 
 `tools/loops` judges loop code: every case is one loop program in a neutral

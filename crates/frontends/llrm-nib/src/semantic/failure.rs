@@ -140,9 +140,7 @@ impl FunctionCompiler<'_> {
                 }
             },
         };
-        let tag = self.value(layout.tag);
-        let place = self.projected_place(&view, 0, layout.tag);
-        self.emit("load", vec![tag], vec![place], None);
+        let tag = self.load_tag(&view, &layout);
         let failed = self.value(TypeName::Bool);
         self.emit(
             "eq",

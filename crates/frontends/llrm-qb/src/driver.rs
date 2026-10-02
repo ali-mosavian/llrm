@@ -166,5 +166,6 @@ pub fn decoded(text: &str) -> Result<model::Program, FrontendError> {
         program.promises = model::RuntimePromises::of(llrm_core::abi::runtime::ENTERS_USER_CODE.iter().copied(), llrm_core::abi::runtime::writers(family), []);
     }
     program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS.iter().filter(|(_, contract)| !contract.raises_error).map(|(name, _)| name.clone()).collect();
+    program.promises.no_return = llrm_core::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();
     Ok(program)
 }
