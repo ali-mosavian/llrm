@@ -43,7 +43,7 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("arcp", Unread("scev-forms: the folds live in llrm_mir::transforms::instcombine, which the compile route does not run (#237)")),
     ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result"])),
     ("invariant", Unread("inline-readers: no pass reads !invariant.load yet")),
-    ("unroll", Unread("inline-readers: peelsize `admitted` does not read the hint yet")),
+    ("unroll", By(&["a_loop_the_language_says_not_to_unroll_stays_rolled", "a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap", "a_loops_unroll_hint_is_read_from_its_metadata"])),
     ("mustprogress", Unread("compile-time-104: no pass reads it yet")),
 ];
 

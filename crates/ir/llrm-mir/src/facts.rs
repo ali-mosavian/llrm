@@ -11,7 +11,8 @@
 //! and that is measured to pay. A frontend states facts through `llrm_hir::facts`; a pass reads them
 //! through [`Facts`] and never parses an attribute by name.
 
-use crate::module::Function;
+use crate::context::{ConstantKind, Context};
+use crate::module::{Function, InstId, MetadataNode, MetadataOperand};
 use crate::opcode::{Attribute, Flags};
 use crate::types::TypeId;
 
@@ -420,6 +421,35 @@ impl Facts {
         Facts(Fact::of_flags(flags))
     }
 
+    /// What the metadata of the terminator `branch` states: `Unroll`, from the
+    /// `!llvm.loop` of the loop it closes (`llvm.loop.unroll.{disable,full,count}`).
+    pub fn of_terminator(context: &Context, metadata: &[MetadataNode], function: &Function, branch: InstId) -> Facts {
+        let mut facts = Vec::new();
+        let Some((_, node)) = function.instruction(branch).metadata.iter().find(|(kind, _)| kind == "llvm.loop") else { return Facts(facts) };
+        for operand in metadata.get(node.0 as usize).map_or(&[][..], |node| &node.operands[..]) {
+            let MetadataOperand::Node(property) = operand else { continue };
+            let Some(property) = metadata.get(property.0 as usize) else { continue };
+            let copies = match property.operands.as_slice() {
+                [MetadataOperand::String(name)] if name == "llvm.loop.unroll.disable" => Some(0),
+                [MetadataOperand::String(name)] if name == "llvm.loop.unroll.full" => Some(u32::MAX),
+                [MetadataOperand::String(name), MetadataOperand::Constant(count)] if name == "llvm.loop.unroll.count" => match context.get(*count).kind {
+                    ConstantKind::Int(count) => u32::try_from(count).ok(),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(copies) = copies {
+                facts.push(Fact::Unroll(copies));
+            }
+        }
+        Facts::from_facts(facts)
+    }
+
+    /// What the metadata of `inst` states: `Invariant`, from `!invariant.load`.
+    pub fn of_instruction(function: &Function, inst: InstId) -> Facts {
+        Facts::from_facts(function.instruction(inst).metadata.iter().filter(|(kind, _)| kind == "invariant.load").map(|_| Fact::Invariant).collect())
+    }
+
     /// Those of `function`'s `index`th parameter.
     pub fn param(function: &Function, index: usize) -> Facts {
         Facts::of(function.parameter_attrs.get(index).map(Vec::as_slice).unwrap_or_default())
@@ -532,5 +562,25 @@ mod tests {
             assert_eq!(Fact::from_wire("inline", Fact::Inline(how).wire_value().map(|one| one.0), None), Some(Fact::Inline(how)));
         }
         assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
+    }
+
+    /// Each spelling of the unroll hint, and of an invariant load, reads back as its fact.
+    #[test]
+    fn a_loops_unroll_hint_is_read_from_its_metadata() {
+        let text = |hint: &str| {
+            format!(
+                "define void @f(i16 %n) {{\nb0:\n  br label %b1\n\nb1:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]\n  %j = add i16 %i, 1\n  %c = icmp ult i16 %j, %n\n  br i1 %c, label %b1, label %b2, !llvm.loop !0\n\nb2:\n  ret void\n}}\n\n!0 = distinct !{{!0, !1}}\n!1 = !{{{hint}}}\n"
+            )
+        };
+        for (hint, copies) in [("!\"llvm.loop.unroll.disable\"", 0), ("!\"llvm.loop.unroll.full\"", u32::MAX), ("!\"llvm.loop.unroll.count\", i32 6", 6)] {
+            let module = crate::parse::module(&text(hint)).expect("parses");
+            let function = module.global(module.named("f").expect("@f")).function().expect("a function");
+            let branch = function.terminator(function.layout()[1]).expect("a branch");
+            assert_eq!(Facts::of_terminator(&module.context, &module.metadata, function, branch).unroll(), Some(copies), "{hint}");
+        }
+        let module = crate::parse::module(&text("!\"llvm.loop.mustprogress\"")).expect("parses");
+        let function = module.global(module.named("f").expect("@f")).function().expect("a function");
+        let branch = function.terminator(function.layout()[1]).expect("a branch");
+        assert_eq!(Facts::of_terminator(&module.context, &module.metadata, function, branch).unroll(), None);
     }
 }
