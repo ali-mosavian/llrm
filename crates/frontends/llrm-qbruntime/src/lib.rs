@@ -1930,11 +1930,11 @@ mod tests {
             .map(|(name, one)| format!("{name} {}", one.repr()))
             .collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../../../tests/fixtures/abi/runtime-contracts.txt")
+        let want: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-contracts.txt")
             .lines()
             .collect();
         assert_eq!(got, want);
-        let order: Vec<&str> = include_str!("../../../../tests/fixtures/abi/runtime-contract-order.txt")
+        let order: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-contract-order.txt")
             .lines()
             .collect();
         assert_eq!(CONTRACTS.keys().collect::<Vec<_>>(), order);
@@ -1947,7 +1947,7 @@ mod tests {
             .map(|((name, family), one)| format!("{name} {family} {}", one.repr()))
             .collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../../../tests/fixtures/abi/runtime-variants.txt")
+        let want: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-variants.txt")
             .lines()
             .collect();
         assert_eq!(got, want);

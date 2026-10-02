@@ -24,7 +24,7 @@ fn extents(name: &str) -> (Module, Partition) {
 #[test]
 fn test_timer_handler_has_its_own_entry() {
     for (tag, entry) in [("p-evt", 0xFA), ("v-evt", 0xF0)] {
-        let found = loaded(fixture(&format!("{}/tests/fixtures/regressions/evtrap-{tag}.obj", env!("LLRM_ROOT")))).unwrap();
+        let found = loaded(fixture(&format!("{}/tests/inputs/omf/regressions/evtrap-{tag}.obj", env!("LLRM_ROOT")))).unwrap();
         let result = partition(&found).unwrap();
         let handler = result.bodies.iter().find(|body| body.seed == entry).unwrap();
         assert_eq!(handler.kind.value(), "event-handler", "{tag}");
@@ -37,7 +37,7 @@ fn test_timer_handler_has_its_own_entry() {
 
 #[test]
 fn test_empty_statement_table_is_data_not_a_handler_instruction() {
-    let found = loaded(fixture(concat!(env!("LLRM_ROOT"), "/tests/fixtures/regressions/evtrap-v-evt.obj"))).unwrap();
+    let found = loaded(fixture(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/regressions/evtrap-v-evt.obj"))).unwrap();
     let mapped = code_map(&found).unwrap();
     assert!(mapped.tables.contains(&(0x116, 0x118)));
     assert!(!mapped.starts.contains(&0x116));

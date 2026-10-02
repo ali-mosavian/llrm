@@ -134,7 +134,7 @@ fstp qword [secondValue]
 ```
 
 The final LONG fixture passes three runtime cases on each compiler. Its
-committed objects in `tests/fixtures/regressions/fpicse-{p-g2,q-o,v-g3}.obj`
+committed objects in `tests/inputs/omf/regressions/fpicse-{p-g2,q-o,v-g3}.obj`
 come from `tools/e2e.py` using the matching `tools/configs.py` configurations,
 with zero severe compile errors, in temporary run
 `qbopt-fpicse-implicit-stxjen_l`. Source is DOS CRLF, as required by BC.
@@ -221,7 +221,7 @@ The 151-object audit changes only the three new FPI2CS fixtures; all prior
 outputs remain identical. The new fixture's -32768, 123 and 32767 cases
 pass on all three compilers. Disabling B$FIL2 recognition fails the emitted
 code regression on each compiler; the focused bounds/helper tests total 20.
-Objects in `tests/fixtures/regressions/fpi2cs-*.obj` came from `tests/run/qb/fpi2cs.bas`
+Objects in `tests/inputs/omf/regressions/fpi2cs-*.obj` came from `tests/run/qb/fpi2cs.bas`
 through e2e/configs in run `qbopt-fil2-final-agr4msen`. The first attempted
 name exceeded the harness's six-character limit once its output prefixes
 were added; that run proved nothing. Stage dumps: `/tmp/qbopt-fil2-final-stages`.

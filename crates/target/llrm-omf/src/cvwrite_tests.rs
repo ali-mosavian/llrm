@@ -36,7 +36,7 @@ fn shape(records: &[Rc<Record>]) -> (Vec<String>, Vec<String>) {
 fn bc(name: &str) -> (Vec<String>, Vec<String>) {
     // BC's /Zi objects: the corpus's, and those only this reads.
     let path = crate::testing::fixtures().join(name);
-    let path = if path.exists() { path } else { crate::testing::fixtures().join("../cv").join(name) };
+    let path = if path.exists() { path } else { crate::testing::fixtures().join("../codeview").join(name) };
     let found = shape(&omf::read(path).expect("reads"));
     assert!(!found.0.is_empty(), "{name} carries no /Zi symbols");
     found

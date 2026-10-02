@@ -9,7 +9,7 @@ use llrm_mir::interpret::{self, Val};
 use llrm_mir::{CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, InstId, Linkage, Module, Opcode, Operand, Position, Type};
 
 fn raised(fixture: &str) -> Module {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/omf").join(fixture);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
     let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let errors = llrm_mir::verify::verify(&module);
@@ -190,7 +190,7 @@ fn the_heap_element_is_apart_from_every_variable() {
 /// none of it, B$DSG0 does.
 #[test]
 fn def_seg_is_a_store_the_runtime_leaves_alone() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions/qbdemo-fil2.obj");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/qbdemo-fil2.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
     let raised = llrm_bc::raise_each(&found, &llrm_x86_code16::machine::BUILT_IN).expect("raises");
     assert!(raised.outcomes.iter().any(|(name, outcome)| name == "RENDER" && outcome.is_ok()));

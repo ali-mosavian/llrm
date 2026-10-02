@@ -13,7 +13,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 | `e2e/matrix.py` | `e2e` over all twelve BC configurations |
 | `e2e/fuzzgen.py`, `e2e/fuzzcheck.py` | random BASIC programs, judged by an evaluator, BC and `llrm-omf` |
 | `e2e/mkgolden.py` | the suite's expected outputs, computed from what each program means |
-| `e2e/mkfixtures.py` | rebuilds `tests/fixtures/omf` with the BC toolchains |
+| `e2e/mkfixtures.py` | rebuilds `tests/inputs/omf` with the BC toolchains |
 | `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
 | `qcport-compile.sh [llrm-c]` | QCport's 65 C modules compiled at -O2 and -Os; each refusal listed (QCPORT, QCPORT_INC name its sources) |
 | `sizes.py BASE [NEW] [-O2 -Os ...]` | object bytes and the backend's expected instructions and memory operands of every test, bench, example and demo program, two builds side by side |

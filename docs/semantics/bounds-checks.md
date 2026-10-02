@@ -36,7 +36,7 @@ after:  offset = ((column - load(lowerColumn)) * load(rowCount)
 Its `/D` builds print the same answer before/after on all three compilers.
 Artifacts and complete PDS stage dumps:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-native-jbt83893`.
-`tests/fixtures/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
+`tests/inputs/omf/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
 output from `tests/run/qb/harr.bas` with the named configuration plus `/D`.
 An additional focused expression check uses unequal dimensions and negative
 lower bounds, because HARR's square zero-based allocation cannot detect a
@@ -46,7 +46,7 @@ Runtime-sized DIM no longer loses its known rank/type merely because its
 extents are unknown. Allocation header facts are derived separately from the
 optional constant-bound allocation request. Dynamic address recognition uses
 those header facts; it still loads the actual bounds and base at each access.
-`tests/fixtures/regressions/dynsz.bas` reads unequal upper bounds at runtime and
+`tests/inputs/omf/regressions/dynsz.bas` reads unequal upper bounds at runtime and
 uses negative/nonzero lower bounds. Its three `dynsz-*.obj` files are real
 compiler output with the named primary flags plus `/D`. All three original
 and optimized executables print `123 456` and `DONE`; the emitted objects
@@ -67,7 +67,7 @@ for relocated operands, not hard-coded addresses. `/D` tracing calls remain
 barriers, so this is exposure of address arithmetic, not yet a claim that every
 address has become a loop-carried induction value.
 
-Regression fixtures `tests/fixtures/regressions/arridx-bounds-{p-g2,q-o,v-g3}.obj`
+Regression fixtures `tests/inputs/omf/regressions/arridx-bounds-{p-g2,q-o,v-g3}.obj`
 are unchanged BC output from `tests/run/qb/arridx.bas`, using each named configuration
 plus `/D`. All three execute with output 1260, with checks both enabled and
 disabled (six runs). This also exposed an independent INTO normal-path SSA bug:

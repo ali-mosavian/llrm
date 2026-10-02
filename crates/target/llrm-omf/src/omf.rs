@@ -1131,7 +1131,7 @@ mod tests {
     use super::*;
 
     fn fixtures() -> PathBuf {
-        Path::new(env!("LLRM_ROOT")).join("tests/fixtures/omf")
+        Path::new(env!("LLRM_ROOT")).join("tests/inputs/omf")
     }
 
     /// The `obj` fixture: every committed OMF object, sorted by name.
@@ -1630,7 +1630,7 @@ mod tests {
     fn test_adding_pointer_dependency_keeps_existing_fixups() {
         for tag in ["p-g2", "q-O", "v-g3"] {
             let path = Path::new(env!("LLRM_ROOT"))
-                .join(format!("tests/fixtures/regressions/huge2-{tag}.obj").to_lowercase());
+                .join(format!("tests/inputs/omf/regressions/huge2-{tag}.obj").to_lowercase());
             let records = read(path).unwrap();
             let before = externals(&records);
             let (added, index) = with_external(&records, "b$HugeShift").unwrap();

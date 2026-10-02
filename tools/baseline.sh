@@ -22,7 +22,7 @@ record() {
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
-for object in "$root"/tests/fixtures/omf/*.obj; do
+for object in "$root"/tests/inputs/omf/*.obj; do
     name=$(basename "$object" .obj)
     LLRM_MIR_STAGES="$out/omf/$name" record "$out/omf/$name" "$bin/llrm-omf" "$object" -o "$scratch/$name.obj"
 done

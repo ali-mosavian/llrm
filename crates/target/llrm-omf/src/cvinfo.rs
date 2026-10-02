@@ -1181,7 +1181,7 @@ mod tests {
 
     fn fixture(name: &str) -> DebugInfo {
         let path = Path::new(env!("LLRM_ROOT"))
-            .join("tests/fixtures/omf")
+            .join("tests/inputs/omf")
             .join(name);
         parse(&omf::read(path).unwrap())
     }
@@ -1406,7 +1406,7 @@ mod tests {
     fn dump() {
         std::env::set_current_dir(env!("LLRM_ROOT")).unwrap();
         let mut paths = Vec::new();
-        objects(Path::new(concat!(env!("LLRM_ROOT"), "/tests/fixtures")), &mut paths);
+        objects(Path::new(concat!(env!("LLRM_ROOT"), "/tests/inputs")), &mut paths);
         paths.sort();
         let text: String = paths
             .iter()

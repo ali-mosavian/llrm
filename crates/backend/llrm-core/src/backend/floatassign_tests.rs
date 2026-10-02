@@ -11,7 +11,7 @@ use crate::model::ir::Operation;
 /// x87crowd.c's `_deep` through isel and the machine phases before
 /// FloatAssign, under Borland C's medium model; and its frame.
 fn before_float_assign() -> (LirBody, Frame) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir/x87crowd.ll");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/check/mir/x87crowd.ll");
     let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
     let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
     let abi = crate::abi::qb::HirAbi {

@@ -8,9 +8,9 @@ use crate::module::{Group, Module, of};
 use crate::omf;
 use llrm_support::hash::IndexMap;
 
-/// conftest's `tests/fixtures`.
+/// conftest's `tests/inputs`.
 pub fn fixtures() -> PathBuf {
-    Path::new(env!("LLRM_ROOT")).join("tests/fixtures/omf")
+    Path::new(env!("LLRM_ROOT")).join("tests/inputs/omf")
 }
 
 /// conftest's `obj`: every committed OMF object, sorted by name. Python's

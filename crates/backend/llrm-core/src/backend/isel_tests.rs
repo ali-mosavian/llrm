@@ -2783,7 +2783,7 @@ done:
 /// the pixel loop, `push 0A000h / pop ds` every trip.
 #[test]
 fn test_a_constant_selector_is_loaded_outside_the_loop_that_uses_it() {
-    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/mir/plasma.ll")).unwrap();
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/plasma.ll")).unwrap();
     let got = listing(&text, "PLASMA");
     let video = |line: &String| line.contains("-24576") || line.contains("40960") || line.contains("0A000h");
     let loops: Vec<(usize, usize)> = got
@@ -3583,7 +3583,7 @@ fn sized_with(candidates: assemble::Candidates, text: &str) -> usize {
 /// with it, +7%). The function costs what the cheaper route costs.
 #[test]
 fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
-    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/mir/matmul.ll")).unwrap();
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/matmul.ll")).unwrap();
     let (spiller, allocator) = (sized_with(assemble::Candidates::SpillerOnly, &text), sized_with(assemble::Candidates::AllocatorOnly, &text));
     assert!(spiller > allocator, "premise: the spiller's route is larger ({spiller} against {allocator})");
     assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);

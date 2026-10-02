@@ -2,7 +2,7 @@
 
 History: the old MIR this describes was deleted in step 7 of `docs/architecture/rich-mir.md`; MIR is now LLVM IR.
 
-Counted over `tests/fixtures/omf/*-p-g2.obj`, 2,343 operations:
+Counted over `tests/inputs/omf/*-p-g2.obj`, 2,343 operations:
 
 ```
   PUSH 740, POP 15      the machine stack as an operation. A call takes
