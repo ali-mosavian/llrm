@@ -441,6 +441,10 @@ str_enum!(Op {
     Assume("ASSUME") = "assume",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
+    // From here the local operands[0] names holds a value (start), or no longer (end): the
+    // scope of a block local. Not code; what a frame layout reads. No result.
+    LifetimeStart("LIFETIME_START") = "lifetime_start",
+    LifetimeEnd("LIFETIME_END") = "lifetime_end",
     // Inline machine code: operands go into its input registers, results
     // come out of its output registers. `Instruction.asm` says which.
     Asm("ASM") = "asm",

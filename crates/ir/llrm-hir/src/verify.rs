@@ -37,7 +37,7 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
-        model::Op::PortOut | model::Op::Assume => Some(Some(0)),
+        model::Op::PortOut | model::Op::Assume | model::Op::LifetimeStart | model::Op::LifetimeEnd => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -45,7 +45,7 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     }
 }
 
-const _PLACES: [model::Op; 3] = [model::Op::Load, model::Op::Store, model::Op::Address];
+const _PLACES: [model::Op; 5] = [model::Op::Load, model::Op::Store, model::Op::Address, model::Op::LifetimeStart, model::Op::LifetimeEnd];
 const _FLOAT: [model::Op; 13] = [
     model::Op::Fadd,
     model::Op::Fsub,
@@ -539,6 +539,12 @@ fn _function(
                         | model::Operand::DescriptorPlace(_)
                 ) {
                     invalid!("{prefix}: store destination is not a place");
+                }
+            }
+            if matches!(instruction.op, model::Op::LifetimeStart | model::Op::LifetimeEnd) {
+                let local = matches!(&instruction.operands[..], [model::Operand::PlaceRef(one)] if function.places.iter().any(|place| place.id == one.place && place.storage == model::Storage::Local));
+                if !local {
+                    invalid!("{prefix}: {} names one local place", instruction.op);
                 }
             }
             if _FLOAT.contains(&instruction.op) {

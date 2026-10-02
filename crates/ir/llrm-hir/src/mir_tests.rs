@@ -462,6 +462,46 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     assert!(text.contains(entry), "{text}");
 }
 
+/// A block local's scope is its lifetime markers, over the bytes of its place; the markers
+/// are declared once, and verify.
+#[test]
+fn a_locals_scope_is_its_lifetime_markers() {
+    use crate::model::{Place, Storage};
+    let instructions = vec![
+        Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Store, vec![], vec![Operand::place_ref(1), Operand::constant(1, 5)]),
+        Instruction::new(3, Op::LifetimeEnd, vec![], vec![Operand::place_ref(1)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+    let function = Function::new(1, "F%", 1, Vec::new(), vec![Place::new(1, "X", 1, Storage::Local, -2)], vec![block], 1);
+    let program = program(function);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  call void @llvm.lifetime.start.p0(i64 2, ptr %0)\n"), "{text}");
+    assert!(text.contains("  call void @llvm.lifetime.end.p0(i64 2, ptr %0)\n"), "{text}");
+    assert_eq!(text.matches("declare void @llvm.lifetime.start.p0").count(), 1, "{text}");
+}
+
+/// A lifetime is a block local's: a marker on anything else is a frontend's mistake, which
+/// a layout reading it would turn into a wrong frame.
+#[test]
+fn a_lifetime_marker_names_one_local() {
+    use crate::model::{Place, Storage};
+    let marked = |mut place: Place| {
+        place.extent = Some(2);
+        let instructions = vec![Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)])];
+        let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+        program(Function::new(1, "F%", 1, Vec::new(), vec![place], vec![block], 1))
+    };
+    let good = crate::verify::verify(&marked(Place::new(1, "X", 1, Storage::Local, -2)));
+    assert!(good.is_ok(), "{good:?}");
+    let error = crate::verify::verify(&marked(Place::new(1, "P", 1, Storage::Parameter, 4))).unwrap_err();
+    assert!(error.to_string().contains("names one local place"), "{error}");
+}
+
 /// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
 /// ask; with none, a view descriptor's loads never left a loop.
 #[test]

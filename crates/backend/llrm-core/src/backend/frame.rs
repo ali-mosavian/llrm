@@ -110,12 +110,12 @@ impl Frame {
 
     /// This value's displacement, creating one where it has none.
     ///
-    /// A slot belongs to its value for the whole function and is never shared
-    /// with another: `returns_twice` relies on it. After `longjmp` a value
-    /// spilled before `setjmp` is read from its slot, so a slot recycled for
-    /// another value (LLVM's stack colouring) would hand back the wrong one.
-    /// Whoever adds slot sharing must stand down in a function that calls a
-    /// `returns_twice` routine.
+    /// A slot belongs to its value: `Frame::slot` shares none. The sharing is the
+    /// colourers', `spiller::_color_slots` and isel's `alloca_groups` (the rule is
+    /// `slots`), and both stand down in a function that calls a `returns_twice` routine
+    /// (`LirBody::returns_twice`, `memory::calls_returns_twice`): after `longjmp` a value
+    /// spilled before `setjmp` is read from its slot, so a slot recycled for another
+    /// value (LLVM's stack colouring) would hand back the wrong one.
     pub fn slot(&mut self, value: impl Into<SlotKey>, width: impl Into<i64>) -> Result<i64, Refused> {
         let value = value.into();
         let width: i64 = width.into();
