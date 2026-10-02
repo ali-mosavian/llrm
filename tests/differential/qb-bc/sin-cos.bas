@@ -1,3 +1,5 @@
+' bc: /O /E /X
+' diverges: BC's B$SIN8 and B$COS8 differ in the last bits
 ' SIN and COS of 40 arguments, DOUBLE bytes. llrm computes them with the x87 (fsin, fcos); BC calls
 ' B$SIN8 and B$COS8, whose results differ in the last bits: docs/frontends/qb/divergences.md.
 DEFDBL A-Z

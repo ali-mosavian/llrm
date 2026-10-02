@@ -88,7 +88,7 @@ fn test_qb_cli_keeps_the_stack_in_the_data_group_unless_told_not_to() {
 #[test]
 #[ignore = "the Python original fails too: q45n01 now has no spill, so no B$ENRA/B$EXSA"]
 fn test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() {
-    let source = root().join("crates/frontends/qbfront/compat/qb45/q45n01.bas");
+    let source = root().join("tests/differential/conformance/qb45/q45n01.bas");
     let program = qb45(&source);
     let main = &program.modules[0].functions[0];
     let calls = hir_calls(main);

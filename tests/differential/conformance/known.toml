@@ -1,0 +1,18 @@
+# A case that fails today -> the issue that tracks it. Here, not in a header: the sources
+# are CRLF and ERL-sensitive, and the parser goldens read them byte for byte.
+"qb45/files" = "#334"
+"qb45/file-positions" = "#335"
+"qb45/typed-file-io" = "#336"
+"qb45/print-using" = "#337"
+"qb45/binary-file-io" = "#338"
+"qb45/directory-operations" = "#339"
+"qb45/string-justification" = "#340"
+"qb45/file-attributes" = "#341"
+"qb45/reset-files" = "#342"
+"qb45/clear-state" = "#343"
+"qb45/shell-child" = "#344"
+"qb45/definitions" = "#345"
+"pds71/pds-currency" = "#346"
+"pds71/pds-timer-event" = "#347"
+"vbdos/string_far_address" = "#349"
+"vbdos/date_serial_surface" = "#351"

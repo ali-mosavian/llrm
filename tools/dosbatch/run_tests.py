@@ -29,7 +29,8 @@ from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 RUN = ROOT / "tests" / "run"
 DEFAULT_FLAGS = ["-O2", "--cpu", "486"]
-HEADER = re.compile(r"^\s*(?:'|//|#)\s*(flags|known):\s*(.*?)\s*$")
+KEYS = ("flags", "known", "bc", "diverges")
+HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
 COMPILERS = {
     ".bas": ["llrm-qb", "--dialect", "qb45", "--runtime", "qb45"],
 }
@@ -46,27 +47,24 @@ class Program:
         return f"{self.source.parent.name}/{self.source.stem}"
 
 
-def header(source: Path) -> tuple[list[str], str | None]:
-    flags, known = DEFAULT_FLAGS, None
+def header(source: Path) -> dict[str, str]:
+    """The settings in the comment lines leading a source."""
+    found: dict[str, str] = {}
     for line in source.read_text(encoding="latin1").splitlines():
-        found = HEADER.match(line)
-        if not found:
-            if line.strip() and not re.match(r"^\s*(?:'|//|#)", line):
-                break
-            continue
-        if found[1] == "flags":
-            flags = found[2].split()
-        else:
-            known = found[2]
-    return flags, known
+        match = HEADER.match(line)
+        if match:
+            found[match[1]] = match[2]
+        elif line.strip() and not re.match(r"^\s*(?:'|//|#)", line):
+            break
+    return found
 
 
 def discover(selected: list[str]) -> list[Program]:
     programs = []
     for source in sorted(RUN.glob("*/*")):
         if source.suffix in COMPILERS and source.with_suffix(".out").exists():
-            flags, known = header(source)
-            programs.append(Program(source, flags, known))
+            settings = header(source)
+            programs.append(Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known")))
     if selected:
         programs = [p for p in programs if p.source.parent.name in selected or p.source.stem in selected or p.name in selected]
     return programs

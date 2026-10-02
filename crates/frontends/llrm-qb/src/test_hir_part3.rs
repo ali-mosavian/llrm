@@ -25,7 +25,7 @@ use llrm_core::objectfile::omf;
 // ---- small helpers -------------------------------------------------------
 
 fn compat(path: &str) -> std::path::PathBuf {
-    root().join("crates/frontends/qbfront/compat").join(path)
+    root().join("tests/differential/conformance").join(path)
 }
 
 /// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=..., huge_arrays=..., unchecked_bounds=...)`.
