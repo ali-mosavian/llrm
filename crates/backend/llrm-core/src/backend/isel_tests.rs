@@ -3579,6 +3579,7 @@ fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
     let (spiller, allocator) = (sized_with(assemble::Candidates::SpillerOnly, &text), sized_with(assemble::Candidates::AllocatorOnly, &text));
     assert!(spiller > allocator, "premise: the spiller's route is larger ({spiller} against {allocator})");
     assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);
+}
 
 /// A memcpy past the unrolled moves is `rep movsd` through es:di, the source
 /// read through ss as an override and the tail by `movsw`: a refusal failed
