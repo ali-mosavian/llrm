@@ -143,11 +143,15 @@ fn nonnull(provenance: &Provenance) -> bool {
 /// as LLVM's `isKnownNonZero` reads a pointer's underlying object instead
 /// of solving every pointer; `None` where only the whole solve can say.
 pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
-    // A parameter the language states non-null, as a reference is.
-    if let ValueDef::Argument(at) = unit.function.value(value).def
-        && llrm_mir::facts::Facts::param(unit.function, at as usize).non_null()
-    {
-        return Some(true);
+    // A parameter the language states non-null, as a reference is; or
+    // dereferenceable in a near space, where null holds no object (DGROUP's
+    // first bytes are the runtime's); a far one may be 0000:0000.
+    if let ValueDef::Argument(at) = unit.function.value(value).def {
+        let facts = Facts::param(unit.function, at as usize);
+        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(0)));
+        if facts.non_null() || near && facts.dereferenceable().is_some_and(|bytes| bytes > 0) {
+            return Some(true);
+        }
     }
     if let Some(seed) = seeds(unit).get(&value) {
         return Some(nonnull(seed));
@@ -158,18 +162,6 @@ pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
         return None;
     }
     _direct(unit, inst, &IndexMap::default()).ok().flatten().map(|provenance| nonnull(&provenance))
-}
-
-/// Whether `value` is a near pointer parameter the language states non-null,
-/// or dereferenceable for any bytes: in address space 0 a null address holds
-/// no object (DGROUP's first bytes are the runtime's, a frame never sits at
-/// 0), as LLVM's `isKnownNonZero` reads `dereferenceable` where null is not valid.
-pub fn nonnull_argument(unit: &Unit, value: ValueId) -> bool {
-    let function = unit.function;
-    let Some(at) = function.parameters().iter().position(|&one| one == value) else { return false };
-    let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(0)));
-    let facts = llrm_mir::facts::Facts::param(function, at);
-    near && (facts.non_null() || facts.dereferenceable().is_some_and(|bytes| bytes > 0))
 }
 
 /// Every value `points_to` could give a fact: every pointer.

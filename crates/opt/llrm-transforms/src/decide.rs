@@ -100,9 +100,8 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let pointing = alias::may_point(unit);
     let nonnull = |value: ValueId| {
         pointing.contains(&value)
-            && (alias::nonnull_argument(unit, value)
-                || alias::nonnull_by_definition(unit, value)
-                    .unwrap_or_else(|| pointers.get_or_init(|| unit.pointers()).as_ref().is_ok_and(|facts| facts.nonnull(value))))
+            && alias::nonnull_by_definition(unit, value)
+                .unwrap_or_else(|| pointers.get_or_init(|| unit.pointers()).as_ref().is_ok_and(|facts| facts.nonnull(value)))
     };
     let successors =
         |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| _executable_successors(unit, at, values, states, Some(&nonnull));
