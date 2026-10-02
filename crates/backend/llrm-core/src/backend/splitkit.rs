@@ -233,15 +233,31 @@ pub enum Crossing {
 
 /// Every point the value crosses the piece's border while live, and whether
 /// it enters (a copy into the piece) or leaves (a copy back). A piece that
-/// never writes the value still equals it, so leaving needs no copy.
+/// never writes the value still equals it, so leaving needs no copy. One that
+/// writes it only at its one definition copies it back once, there, as
+/// LLVM's `hoistCopies`: the rest then holds it everywhere after.
 /// `carved` places these copies and `_benefit` prices them: one fact.
 pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate::Live, live_out: &allocate::Live) -> Vec<(Crossing, bool)> {
-    let written = body.blocks.iter().any(|block| {
-        region.spans.get(&block.at).is_some_and(|ranges| {
-            ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
-        })
-    });
+    let defining: Vec<(i64, usize)> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter().enumerate().filter(|(_, one)| one.defines.contains(&value)).map(move |(at, _)| (block.at, at)))
+        .collect();
+    let inside: Vec<&(i64, usize)> = defining.iter().filter(|(block, at)| region.covers(*block, *at)).collect();
+    let hoisted = match (defining.as_slice(), inside.as_slice()) {
+        ([only], [_]) => Some(*only),
+        _ => None,
+    };
+    let written = hoisted.is_none() && !inside.is_empty();
     let mut out = Vec::new();
+    if let Some((block, at)) = hoisted.and_then(|(at, position)| body.blocks.iter().find(|one| one.at == at).map(|one| (one, position))) {
+        // After the parallel group the definition belongs to, not inside it.
+        let group = &block.insns[at].group;
+        let end = (at + 1..block.insns.len()).find(|next| group.is_none() || block.insns[*next].group != *group).unwrap_or(block.insns.len());
+        if _live_before(block, value, live_out[&block.at].contains(&value))[end] {
+            out.push((Crossing::Inside { block: block.at, position: end }, false));
+        }
+    }
     for block in &body.blocks {
         if let Some(ranges) = region.spans.get(&block.at) {
             let before = _live_before(block, value, live_out[&block.at].contains(&value));

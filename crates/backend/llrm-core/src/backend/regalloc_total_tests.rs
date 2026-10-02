@@ -117,3 +117,44 @@ fn test_the_addresses_a_parallel_copy_reads_do_not_all_live_across_it() {
     let done = through(body, phases);
     assert!(done.is_ok(), "{:?}", done.err());
 }
+
+/// Every far selector a body's memory operands name.
+fn selectors(body: &LirBody) -> std::collections::BTreeSet<u32> {
+    body.insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .filter_map(|at| match at {
+            Loc::Mem(cell) => cell.selector.as_ref().map(|held| held.value),
+            _ => None,
+        })
+        .collect()
+}
+
+/// deedlines' TRANSLATE3D: a loop reading five far arrays, three segment
+/// registers, and an arm taken half the time. Z's selector was split around
+/// the reloads of X's and Y's in the arm, and the piece holding its own
+/// definition copied it back at every exit: `mov ax, gs` before each reload
+/// and `mov gs, ax` after, six moves an arm where reloading costs four. One
+/// copy after the definition holds the rest everywhere, as LLVM's
+/// `hoistCopies`. Mark 5 ran 81 ms (1.3%) slower.
+#[test]
+fn test_a_selector_split_in_a_full_segment_class_saves_no_segment_register() {
+    let (mut body, phases) = before_regalloc_in(Calls::Everything, "translate3d.ll", "TRANSLATE3D", "486");
+    assert!(selectors(&body).len() > 3, "premise: more far selectors than segment registers: {:?}", selectors(&body));
+    let compare = body.blocks.iter().find(|block| block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("sahf")))).expect("the arm's compare");
+    let (at, arms) = (compare.at, compare.succ.clone());
+    assert_eq!(arms.len(), 2, "premise: the compare chooses the arm");
+    for arm in arms {
+        body.odds.taken.insert((at, arm), (crate::model::lir::BlockOdds::CERTAIN / 2.0) as u32);
+    }
+    let done = through(body, phases).expect("allocates");
+    let saved: Vec<String> = done
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .filter(|what| matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Reg(into)], [Loc::Reg(from)]) if target::SEGMENTS.contains(&from.register) && !target::SEGMENTS.contains(&into.register)))
+        .map(|what| format!("{what:?}"))
+        .collect();
+    assert!(saved.is_empty(), "a segment register saved to a general one: {saved:?}");
+}
