@@ -432,7 +432,7 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let frequency = Frequency::of(body);
     let graph = ranges::_graph(&body.blocks);
     let found = crate::analysis::loops::loops(&graph, Some(body.entry));
-    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room);
+    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency);
     // A loop header keeps a value its back edge must reload only while those
     // reloads run at most half as often as reloads at its first uses inside one trip.
     for _ in 0..4 {
@@ -459,7 +459,7 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         if !more {
             break;
         }
-        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room);
+        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency);
     }
     if result.stored.is_empty() {
         return Ok(body.clone());
@@ -556,6 +556,7 @@ fn simulated(
     order: &[i64],
     dropped: &IndexMap<i64, BTreeSet<u32>>,
     room: &IndexMap<i64, usize>,
+    frequency: &Frequency,
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
@@ -568,8 +569,16 @@ fn simulated(
         }
     }
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let mut made_in: IndexMap<u32, i64> = IndexMap::default();
+    for (at, made) in &flow.defines {
+        for value in made.keys() {
+            made_in.insert(*value, *at);
+        }
+    }
     for at in order {
         let block = by_at[at];
+        // What is stored where it is defined, as often as this block runs, costs a store each time it leaves: evicted last.
+        let hot = |value: &u32| made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
         let mut done = Edits::default();
         let ends: Vec<&BTreeSet<u32>> = preds.get(at).into_iter().flatten().filter_map(|from| edits.get(from)).map(|one| &one.w_out).collect();
         let mut candidates: Vec<(usize, i64, u32)> = flow.live_in[at]
@@ -620,7 +629,7 @@ fn simulated(
                     let victim = held
                         .iter()
                         .filter(|value| !keep.contains(*value))
-                        .max_by_key(|value| (flow.next_use(*at, position, **value), **value))
+                        .max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value))
                         .copied();
                     let Some(victim) = victim else { break };
                     held.remove(&victim);
@@ -661,7 +670,7 @@ fn simulated(
                 let mut across = held.clone();
                 let keep: BTreeSet<u32> = used.union(&made).copied().collect();
                 while across.len() > k - outside.min(k) {
-                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (flow.next_use(*at, position, **value), **value)).copied();
+                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value)).copied();
                     let Some(victim) = victim else { break };
                     across.remove(&victim);
                     held.remove(&victim);
@@ -712,7 +721,7 @@ fn simulated(
         {
             let end = block.insns.len();
             while !machine.fits(&held, &handed, k) {
-                let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (flow.next_use(*at, end, **value), **value)).copied();
+                let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, end, **value), **value)).copied();
                 let Some(victim) = victim else { break };
                 held.remove(&victim);
                 if flow.live_out[at].contains(&victim) {
