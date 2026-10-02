@@ -2985,6 +2985,7 @@ fn a_for_counters_add_states_the_wrap_its_type_cannot_do() {
     assert!(unsigned.iter().any(|one| one.contains("add nuw i16")) && !unsigned.iter().any(|one| one.contains("nsw")), "{unsigned:?}");
     let signed = adds("INTEGER");
     assert!(signed.iter().any(|one| one.contains("add nsw i16")) && !signed.iter().any(|one| one.contains("nuw")), "{signed:?}");
+}
 
 /// PEEK reads and POKE writes memory every time, whatever DEF SEG says: the
 /// BIOS tick wait `DO: LOOP UNTIL PEEK(&H6C) <> t` compiled to an infinite
