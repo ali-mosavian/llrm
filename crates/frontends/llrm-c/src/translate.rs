@@ -2191,6 +2191,21 @@ mod tests {
         assert_eq!(failed, llrm_mir::interpret::Val::Int { bits: 0, width: 16 }, "failed checks: {failed:?}");
     }
 
+    /// Borland orders far pointers by their offsets (bcc -S: `cmp ax,
+    /// [bp+10]` then `jae`) and compares them equal by all 32 bits. llrm-c
+    /// ordered all 32 bits, so 2000:0010 was not below 1000:0020.
+    #[test]
+    fn test_a_far_pointer_orders_by_its_offset() {
+        use llrm_mir::interpret::{Val, run};
+        let module = raised("farorder.cgs");
+        let call = |function: &str, a: u64, b: u64| run(&module, function, vec![Val::Ptr(a), Val::Ptr(b)], 1_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        let (yes, no) = (Val::Int { bits: 1, width: 16 }, Val::Int { bits: 0, width: 16 });
+        assert_eq!(call("_below", 0x2000_0010, 0x1000_0020), yes);
+        assert_eq!(call("_below", 0x1000_0020, 0x2000_0010), no);
+        assert_eq!(call("_same", 0x2000_0010, 0x1000_0010), no);
+        assert_eq!(call("_same", 0x2000_0010, 0x2000_0010), yes);
+    }
+
     /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
     #[test]
     fn test_restrict_parameters_are_noalias() {
