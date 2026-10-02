@@ -1139,13 +1139,16 @@ impl<'a, 't> Body<'a, 't> {
             };
             return Ok(self.op(op, truth, vec![value_ref(a), value_ref(b)]));
         }
-        // A far pointer compares as its dword, as the old raise does. Near and
-        // huge pointers compare as pointers: how a huge pointer orders is
-        // isel's (its packed bits are no address, so no conversion to read).
+        // Borland orders far pointers by their offsets alone and compares
+        // them equal by all 32 bits. Near and huge pointers compare as
+        // pointers: how a huge pointer orders is isel's (its packed bits
+        // are no address, so no conversion to read).
+        let equality = matches!(cg_op.as_str(), "O_EQ" | "O_NE");
         let (a, b) = match self.space(a) {
             Some(FAR) => {
-                let dword = self.types.int(4, false);
-                (self.op(Op::Convert, dword, vec![value_ref(a)]), self.op(Op::Convert, dword, vec![value_ref(b)]))
+                let (op, width) = if equality { (Op::Convert, 4) } else { (Op::PointerOffset, 2) };
+                let part = self.types.int(width, false);
+                (self.op(op, part, vec![value_ref(a)]), self.op(op, part, vec![value_ref(b)]))
             }
             _ => (a, b),
         };

@@ -1173,6 +1173,22 @@ mod tests {
         assert_eq!((reads(&relaxed, "_counter"), reads(&relaxed, "_seen")), (1, 1), "{relaxed}");
     }
 
+    /// Borland orders far pointers by their offset words (bcc -S: `cmp ax,
+    /// [bp+10]` then `jae`); llrm-c packed each pointer's 32 bits into a
+    /// register and compared those, so a pointer in a lower segment ordered
+    /// below one at a lower offset.
+    #[test]
+    fn test_a_far_pointer_orders_by_its_offset() {
+        let packed = |function: &str| listing_of("farorder", function).lines().any(|one| one.trim_start().starts_with("cmp e") || one.contains("shl"));
+        let below = listing_of("farorder", "_below");
+        assert!(below.contains("setb") && !packed("_below"), "{below}");
+        // == still compares all 32 bits: both arguments' segment words are read.
+        let same = listing_of("farorder", "_same");
+        assert_eq!(same.matches("[bp+8]").count() + same.matches("[bp+12]").count(), 2, "{same}");
+    }
+
+
+
     #[test]
     fn test_rotation_keeps_provable_trip_counts() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/crc.cgs");
