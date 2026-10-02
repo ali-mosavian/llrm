@@ -118,7 +118,7 @@ fn _placed(module: &model::Module) -> impl Iterator<Item = &model::DataObject> {
 
 /// Each data object's symbol, by its HIR id: its own name where external.
 fn _data_names(module: &model::Module) -> Names {
-    let mut names: Names = llrm_core::hir::lower::symbol_names();
+    let mut names: Names = llrm_core::hir::symbols::symbol_names();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     for object_ in &module.data {
         if [_READ_DATA_OBJECT, _STATEMENT_TABLE_OBJECT].contains(&object_.name.as_str()) {

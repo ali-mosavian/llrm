@@ -45,7 +45,7 @@ pub struct Registers {
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     let mut names = globals::names(module, &|name| abi.linked(name))?;
-    names.extend(crate::hir::lower::symbol_names());
+    names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
@@ -76,7 +76,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                 }
                 // An interrupt handler loads DGROUP into DS itself.
                 let interrupt = (function.calling_convention == llrm_mir::opcode::X86_INTR).then(|| {
-                    let (space, index) = crate::hir::lower::DGROUP;
+                    let (space, index) = crate::hir::symbols::DGROUP;
                     names.insert((space, index), globals::DGROUP.to_owned());
                     Addr { index, ..Addr::new(space, 0) }
                 });

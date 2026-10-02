@@ -20,13 +20,41 @@ use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
-use crate::backend::lower::{_read, _written, call_clobbered_high, call_clobbers};
-use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{BlockOdds, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
 mod combined;
+/// The abstract values an operand list names, `ir.values` deciding.
+fn _named_values(where_: &[Loc]) -> Vec<u32> {
+    where_.iter().flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)).collect()
+}
+
+/// The values an instruction writes: a destination that *is* a value.
+pub(crate) fn _written(dests: &[Loc]) -> Vec<u32> {
+    dests
+        .iter()
+        .filter_map(|one| match one {
+            Loc::Held(one) => Some(one.value),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The values an instruction reads: its sources, and the addresses its
+/// destinations are reached by.
+pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
+    let mut out = _named_values(&what.sources);
+    for where_ in &what.dests {
+        if !matches!(where_, Loc::Held(_)) {
+            out.extend(ir::values(where_).into_iter().map(|one| one.value));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod generator;
 mod matcher;
@@ -1386,7 +1414,7 @@ impl Selector<'_, '_, '_> {
             return Ok(None);
         }
         let Some(offset) = self.symbol(instruction.operands[0])? else { return Ok(None) };
-        let (space, index) = crate::hir::lower::DGROUP;
+        let (space, index) = crate::hir::symbols::DGROUP;
         Ok(Some([offset, Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })]))
     }
 
@@ -2264,7 +2292,7 @@ impl Selector<'_, '_, '_> {
                     let segment = if framed {
                         Loc::Reg(Reg { register: Register::SS, width: 2 })
                     } else {
-                        let (space, index) = crate::hir::lower::DGROUP;
+                        let (space, index) = crate::hir::symbols::DGROUP;
                         Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
                     };
                     out.push(mov(selector, segment));

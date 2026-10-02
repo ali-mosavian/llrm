@@ -12,7 +12,7 @@ use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 use iced_x86::Register;
 
 use super::{condition_code, insn, refuse, semantics, swapped, Selector, Test, Unselected};
-use crate::backend::lower::{call_clobbered_high, call_clobbers};
+use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::{Insn, LirBlock};
 

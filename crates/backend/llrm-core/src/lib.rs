@@ -7,7 +7,6 @@ pub mod driver;
 pub mod flow;
 pub mod frontends;
 pub mod hir;
-pub use llrm_bcmachine::legacy;
 pub mod model;
 pub use llrm_omf as objectfile;
 pub mod optimize;

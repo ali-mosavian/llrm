@@ -6,5 +6,4 @@ pub use llrm_x86_code16::machine;
 
 pub mod inputscan;
 pub mod nib;
-pub mod profile;
 pub mod qb;

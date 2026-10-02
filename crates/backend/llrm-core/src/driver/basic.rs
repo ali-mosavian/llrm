@@ -614,7 +614,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             names.insert((globals::space(module, id), i64::from(id.0)), symbol.clone());
         }
     }
-    names.extend(crate::hir::lower::symbol_names());
+    names.extend(crate::hir::symbols::symbol_names());
     let main = module.named(&object.main).ok_or("no main body")?;
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
     names.insert((Space::Segment, MAIN_FRAME_ID), MAIN_FRAME.to_owned());

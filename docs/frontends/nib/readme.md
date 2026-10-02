@@ -267,9 +267,9 @@ code-generation: it emits no OMF or executable and supplies no real-mode ABI.
 Its captured output is the known answer that the freestanding real-mode backend
 must reproduce exactly.
 
-The frontend document is accepted by `crates/ir/llrm-hir/src/codec.rs`, `crates/ir/llrm-hir/src/verify.rs`
-and `crates/backend/llrm-core/src/hir/lower.rs`, then follows llrm's shared optimization, lowering,
-allocation, and OMF object-writing path. The minimal real-mode bootstrap and
+The frontend document is accepted by `crates/ir/llrm-hir/src/codec.rs` and `crates/ir/llrm-hir/src/verify.rs`,
+emitted as MIR by `crates/ir/llrm-hir/src/mir.rs`, then follows llrm's shared optimization, instruction
+selection, allocation, and OMF object-writing path. The minimal real-mode bootstrap and
 freestanding runtime can link that object into a DOS executable.
 
 Not implemented in this slice are panics, `checked_to[T]()`, imports,

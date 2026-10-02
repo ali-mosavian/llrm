@@ -176,17 +176,6 @@ impl<T: PyHash + PartialEq> PySet<T> {
         self.iter().any(|one| one == key)
     }
 
-    /// `set.discard`: the slot becomes a dummy, so later order is unchanged.
-    pub fn discard(&mut self, key: &T) {
-        for slot in &mut self.table {
-            if matches!(slot, Slot::Active(_, one) if one == key) {
-                *slot = Slot::Dummy;
-                self.used -= 1;
-                return;
-            }
-        }
-    }
-
     /// Iteration in slot order.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.table.iter().filter_map(|slot| match slot {

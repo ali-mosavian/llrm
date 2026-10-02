@@ -16,7 +16,7 @@ use num_bigint::BigInt;
 use crate::analysis::ranges::{Interval, covering};
 use crate::analysis::cellmap::Bucket;
 use crate::model::memory::{
-    AliasClass, Identity, MemoryKind, MemoryObject, Provenance, Slice, SliceError, alias_class, classes_may_alias,
+    AliasClass, Identity, MemoryKind, MemoryObject, Provenance, Slice, SliceError, alias_class,
 };
 use num_traits::ToPrimitive;
 
@@ -695,51 +695,6 @@ pub fn object_bucket(one: Option<MemoryObject>, frame: Option<Frame>) -> Overlap
     OverlapBucket::interned(OverlapShape { object: one, frame, class })
 }
 
-/// Python `mir.overlap_buckets`: the buckets held (`parts`, of a map keyed
-/// by `object_bucket`) a write through `reference` may reach; None for all
-/// of them.
-///
-/// Only these can hold a cell `overlapping` does not rule out: one whose
-/// object is unknown, one in the write's `_displaced` frame, one in the
-/// write's own object, and one whose alias class may alias the write's.
-///
-/// Sorted and without repeats: a set per write, rehashed as it grew, was dearer than the kill.
-pub fn overlap_buckets(reference: &MemRef, parts: &OverlapParts) -> Option<Vec<OverlapBucket>> {
-    let provenance = reference.provenance.as_ref()?;
-    #[cfg(any(test, feature = "testing"))]
-    PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
-    let mut reached = parts.objectless.iter().copied().collect::<Vec<_>>();
-    if let Some(frame) = _frame(reference) {
-        if let Some(buckets) = parts.frames.get(&Some(frame)) {
-            reached.extend(buckets.iter().copied());
-        }
-    }
-    // A write names one or two objects: a list is cheaper than a set.
-    let mut kinds = Vec::with_capacity(provenance.slices.len());
-    let mut written = Vec::<&MemoryObject>::with_capacity(provenance.slices.len());
-    for one in &provenance.slices {
-        if written.contains(&&one.object) {
-            continue;
-        }
-        written.push(&one.object);
-        if let Some(buckets) = parts.objects.get(&one.object) {
-            reached.extend(buckets.iter().copied());
-        }
-        let kind = alias_class(&one.object);
-        if !kinds.contains(&kind) {
-            kinds.push(kind);
-        }
-    }
-    for (kind, buckets) in &parts.classes {
-        if kind.is_some_and(|kind| kinds.iter().any(|one| classes_may_alias(*one, kind))) {
-            reached.extend(buckets.iter().copied());
-        }
-    }
-    reached.sort_unstable();
-    reached.dedup();
-    Some(reached)
-}
-
 #[cfg(any(test, feature = "testing"))]
 thread_local! {
     /// Writes whose buckets were picked, and the alias classes scanned doing
@@ -825,14 +780,6 @@ pub fn addresses(
     layout: Option<&RegionLayout>,
 ) -> Result<bool, RegionError> {
     Ok(addressed(one, one_width, layout)?.intersects(&addressed(other, other_width, layout)?))
-}
-
-/// The allocation the descriptor at `symbol` owns, as one object.
-pub(crate) fn allocation(symbol: &Symbol) -> MemoryObject {
-    MemoryObject {
-        identity: Some(Identity::Tuple(vec![Identity::Str(crate::support::pyrepr::Repr::repr(symbol))])),
-        ..MemoryObject::new(MemoryKind::Allocation)
-    }
 }
 
 fn meets(one: &Span, other: &Span) -> bool {

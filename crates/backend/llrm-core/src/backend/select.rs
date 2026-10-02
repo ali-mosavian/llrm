@@ -16,10 +16,7 @@ use crate::support::hash::IndexMap;
 
 use crate::backend::target;
 use crate::frontends::bc::declen::BITNESS;
-use crate::legacy::calls as machine;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
-use crate::model::mir;
-use crate::support::pyrepr::Repr;
 
 // The register file's own tables, not a copy of them.
 pub use crate::backend::target::{AT_WIDTH, WIDTHS};
@@ -807,73 +804,6 @@ pub fn restore_of(wide: Register, low: Register, high: Register, at: u64) -> Opt
         out.extend(made.code);
     }
     Some(Emitted::new(out))
-}
-
-/// A divide emitted from the operation's own operands.
-///
-/// `Err(reason)` is Python's `str` answer. calls.assemble's ValueError,
-/// which Python does not catch, panics.
-pub fn divides(op: &mir::Op, seats: (Register, Register), restore: bool) -> Result<Emitted, String> {
-    if op.kind != mir::Kind::Divmod || op.args.len() != 2 {
-        return Err(format!("{}: not a divide over two operands", op.name));
-    }
-
-    let mut steps: Vec<Instruction> = Vec::new();
-    let mut reads: Vec<usize> = Vec::new(); // which steps carry a relocatable field
-
-    for (r#where, one) in [(machine::RESULT, &op.args[0]), (machine::DIVISOR, &op.args[1])] {
-        // `where` given whatever this operand is, or why it cannot be.
-        match one {
-            mir::Arg::Const(constant) => {
-                let n = i64::try_from(&constant.n).unwrap_or_else(|_| panic!("out of range integral type conversion attempted"));
-                steps.push(raised(create_reg_i32(Code::Mov_r32_imm32, r#where, n)));
-                continue;
-            }
-            mir::Arg::Cell(cell) if cell.r#ref.addr.is_some() => {
-                // The accumulator's moffs form has no ModRM byte and is a
-                // byte shorter.
-                let base = cell.r#ref.addr.expect("checked").base;
-                let code = if base == Register::None && r#where == machine::RESULT {
-                    Code::Mov_EAX_moffs32
-                } else {
-                    Code::Mov_r32_rm32
-                };
-                reads.push(steps.len());
-                steps.push(raised(create_reg_mem(code, r#where, machine::relocated_memory(base, Register::None))));
-                continue;
-            }
-            _ => {}
-        }
-        // A value in a register needs the allocation to say which register.
-        return Err(format!("{} is not an operand a divide can read yet", one.repr()));
-    }
-
-    steps.push(Instruction::with(Code::Cdq));
-    steps.push(raised(create_reg(Code::Idiv_rm32, machine::DIVISOR)));
-    // Two moves that happen at once: ordered where one is free, exchanged
-    // where neither is.
-    let (quotient, remainder) = seats;
-    let mut moves: Vec<(Register, Register)> = [(quotient, machine::RESULT), (remainder, Register::EDX)]
-        .into_iter()
-        .filter(|(into, outof)| into != outof)
-        .collect();
-    if moves.len() == 2 && moves[0].0 == moves[1].1 && moves[1].0 == moves[0].1 {
-        steps.push(raised(create_reg_reg(Code::Xchg_rm32_r32, moves[0].0, moves[0].1)));
-    } else {
-        // Whichever move nothing else reads out of, first.
-        if moves.len() == 2 && moves[0].0 == moves[1].1 {
-            moves.reverse();
-        }
-        for (into, outof) in moves {
-            steps.push(raised(create_reg_reg(Code::Mov_r32_rm32, into, outof)));
-        }
-    }
-    if restore {
-        steps.extend(machine::restoring());
-    }
-    let relocated: Vec<(usize, usize)> = reads.iter().map(|&index| (index, index)).collect();
-    let made = raised(machine::assemble(&mut steps, &relocated));
-    Ok(Emitted { fields: made.relocations.iter().map(|&(r#where, _which)| r#where).collect(), ..Emitted::new(made.code) })
 }
 
 /// `idiv` or `div` by a register.

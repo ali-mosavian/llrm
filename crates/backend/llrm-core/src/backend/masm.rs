@@ -831,8 +831,6 @@ mod tests {
     //! select encodes it.
 
     use super::*;
-    use crate::backend::lower::{self, Placed};
-    use crate::model::mir;
 
     fn no_names() -> IndexMap<(Space, i64), String> {
         IndexMap::default()
@@ -866,9 +864,12 @@ mod tests {
     /// ten bytes below where qglsurf then read it.
     #[test]
     fn test_frame_address_displacement_once() {
-        let Placed::Loc(placed) = lower::operand(&mir::Arg::FrameAddress(mir::FrameAddress::new(-10, 2))) else {
-            panic!("a frame address places as a location");
-        };
+        let placed = Loc::Address(ir::Address {
+            through: Register::BP,
+            offset: -10,
+            disp_width: 1,
+            ..ir::Address::new(Some(Addr::new(Space::Frame, -10)))
+        });
         assert_eq!(_operand(&placed, &no_names()).unwrap(), "[bp-10]");
     }
 

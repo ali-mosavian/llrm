@@ -12,13 +12,9 @@ use regex::Regex;
 
 use super::compile as nib_compile;
 use super::driver;
-use llrm_core::backend::cpu::{self as targets};
-use llrm_core::backend::{lower_int64, masm};
-use llrm_core::abi::qb::physicalize;
+use llrm_core::backend::masm;
 use llrm_core::hir::{self, model};
-use llrm_core::model::mir::{self, Arg, Kind};
 use llrm_core::driver::Options;
-use llrm_core::optimize::profit;
 use llrm_core::support::pyjson::{self, Json};
 
 pub(crate) fn root() -> PathBuf {
@@ -191,28 +187,19 @@ fn function<'p>(program: &'p model::Program, name: &str) -> &'p model::Function 
     program.modules[0].functions.iter().find(|one| one.name == name).expect("the function exists")
 }
 
-fn lowered_named(program: &model::Program, name: &str) -> hir::Lowered {
-    hir::lower(program).expect("lowers").into_iter().find(|one| one.name == name).expect("the body exists")
+/// `program`'s MIR as its HIR emits it, before any pass.
+fn emitted_text(program: &model::Program) -> String {
+    hir::mir::emit(program).iter().map(|one| llrm_mir::print::module(&one.module)).collect()
 }
 
-fn kinds(body: &mir::MirBody) -> BTreeSet<Kind> {
-    body.blocks.iter().flat_map(|block| &block.ops).map(|op| op.kind).collect()
+/// `@name`'s definition in `text`.
+fn defined<'t>(text: &'t str, name: &str) -> &'t str {
+    let start = text.find(&format!("@{name}(")).and_then(|at| text[..at].rfind("define ")).unwrap_or_else(|| panic!("no @{name}\n{text}"));
+    &text[start..start + text[start..].find("\n}\n").expect("its end")]
 }
 
 fn instructions(function: &model::Function) -> impl Iterator<Item = &model::Instruction> {
     function.blocks.iter().flat_map(|block| &block.instructions)
-}
-
-fn arg_width(arg: &Arg) -> u32 {
-    match arg {
-        Arg::Held(one) => one.width,
-        Arg::Const(one) => one.width,
-        Arg::Symbol(one) => one.width,
-        Arg::FrameAddress(one) => one.width,
-        Arg::FrameSelector(one) => one.width,
-        Arg::Cell(one) => one.r#ref.width,
-        Arg::Opaque(_) => unreachable!("no width"),
-    }
 }
 
 fn program() -> model::Program {
@@ -231,13 +218,12 @@ fn test_frontend_document_crosses_the_strict_common_hir_boundary() {
 
 #[test]
 fn test_frontend_lowers_control_flow_and_calls_to_existing_mir() {
-    let program = program();
-    let count = kinds(&lowered_named(&program, "control.count").body);
-    let step = kinds(&lowered_named(&program, "control.step").body);
-    for kind in [Kind::Call, Kind::Branch, Kind::Load, Kind::Store] {
-        assert!(count.contains(&kind), "{kind:?}");
+    let text = emitted_text(&program());
+    let count = defined(&text, "count");
+    for one in ["call addrspace(1) i16 @step(", "br i1 ", " = load ", "store "] {
+        assert!(count.contains(one), "{one}\n{count}");
     }
-    assert!(step.contains(&Kind::Add));
+    assert!(defined(&text, "step").contains(" = add "), "{text}");
 }
 
 #[test]
@@ -292,19 +278,13 @@ fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
 
 #[test]
 fn test_unsigned_and_floating_operations_keep_their_semantics_in_mir() {
-    let program = parsed(&fixture("primitives.nib"));
-    let lowered = hir::lower(&program).expect("lowers");
-    assert!(lowered.iter().all(|one| mir::verify(&one.body).is_empty()));
-    let kinds_of = |name: &str| kinds(&lowered.iter().find(|one| one.name == format!("primitives.{name}")).unwrap().body);
+    let text = emitted_text(&parsed(&fixture("primitives.nib")));
 
-    assert!(kinds_of("unsigned_divide").contains(&Kind::Udivmod));
-    assert!(!kinds_of("unsigned_divide").contains(&Kind::Divmod));
-    assert!(kinds_of("unsigned_remainder").contains(&Kind::Udivmod));
-    assert!(kinds_of("float_product").contains(&Kind::Fmul));
-
-    let less = &lowered.iter().find(|one| one.name == "primitives.unsigned_less").unwrap().body;
-    let branch = less.blocks.iter().flat_map(|block| &block.ops).find(|op| op.kind == Kind::Branch).unwrap();
-    assert_eq!(branch.test, Some(Kind::Below));
+    assert!(defined(&text, "unsigned_divide").contains(" = udiv "), "{text}");
+    assert!(!defined(&text, "unsigned_divide").contains(" = sdiv "), "{text}");
+    assert!(defined(&text, "unsigned_remainder").contains(" = urem "), "{text}");
+    assert!(defined(&text, "float_product").contains(" = fmul "), "{text}");
+    assert!(defined(&text, "unsigned_less").contains(" = icmp ult "), "{text}");
 }
 
 #[test]
@@ -334,56 +314,36 @@ fn test_fixed_point_types_scale_literals_and_keep_storage_width_in_mir() {
         assert_eq!(fraction, &model::Operand::constant(types["u8"].id, 16));
     }
 
-    let lowered = hir::lower(&program).expect("lowers");
-    assert!(lowered.iter().all(|one| mir::verify(&one.body).is_empty()));
-    let product = kinds(&lowered.iter().find(|one| one.name == "fixed.product").unwrap().body);
-    let quotient = kinds(&lowered.iter().find(|one| one.name == "fixed.quotient").unwrap().body);
+    let text = emitted_text(&program);
+    let (product, quotient) = (defined(&text, "product"), defined(&text, "quotient"));
     // fixed8 uses a 32-bit intermediate; fixed16 is already based on i32 and
-    // stays one semantic operation until target lowering selects EDX:EAX.
-    assert!([Kind::SignExtend, Kind::Mul, Kind::Sar].iter().all(|one| product.contains(one)));
-    assert!(quotient.contains(&Kind::FixedDiv));
-    assert!(![Kind::SignExtend, Kind::Shl, Kind::Divmod].iter().any(|one| quotient.contains(one)));
+    // stays one fixed-point operation, never widened to i64.
+    assert!(["sext i16", "mul i32", "ashr i32"].iter().all(|one| product.contains(one)), "{product}");
+    assert!(quotient.contains("@llvm.sdiv.fix.i32("), "{quotient}");
+    assert!(!["sext", "shl", " sdiv ", "i64"].iter().any(|one| quotient.contains(one)), "{quotient}");
 }
 
-/// `physicalize(program, nbody, lowered nbody.nbody)`.
-fn nbody_physical() -> llrm_core::abi::qb::Physicalized {
-    let program = parsed(&fixture("nbody.nib"));
-    let function = function(&program, "nbody");
-    let lowered = lowered_named(&program, "nbody.nbody");
-    physicalize(&program, function, &lowered).expect("physicalizes")
+/// nbody's `nbody` as its HIR emits it.
+fn nbody_emitted() -> String {
+    let text = emitted_text(&parsed(&fixture("nbody.nib")));
+    defined(&text, "nbody").to_owned()
 }
 
 #[test]
-fn test_fixed_i32_product_stays_a_storage_width_operation_through_physicalization() {
+fn test_fixed_i32_product_stays_a_storage_width_operation() {
     // Native nbody used to route every Q23.9 product through generic i64 MIR.
-    let physical = nbody_physical();
-    let fixed: Vec<&mir::Op> = physical
-        .lowered
-        .body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.ops)
-        .filter(|op| matches!(op.kind, Kind::FixedMul | Kind::FixedDiv))
-        .collect();
-
-    assert!(!fixed.is_empty());
-    assert!(fixed.iter().all(|op| arg_width(&op.results[0]) == 4));
-    assert!(fixed.iter().all(|op| op.args.iter().all(|arg| arg_width(arg) <= 4)));
+    let nbody = nbody_emitted();
+    assert!(nbody.contains("@llvm.smul.fix.i32(") && nbody.contains("@llvm.sdiv.fix.i32("), "{nbody}");
+    assert!(!nbody.contains("i64"), "{nbody}");
 }
 
 #[test]
 fn test_fixed_i32_arithmetic_never_enters_generic_int64_legalization() {
     // nbody's Q23.9 inner loop expanded one division to 311 inline bytes.
-    let physical = nbody_physical();
-    let legalized = lower_int64::expanded(
-        &physical.lowered.body,
-        Some(&physical.calls),
-        Some(&physical.contracts),
-        Some(&physical.hints),
-    )
-    .expect("legalizes");
-
-    assert!(legalized.inline.is_empty());
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
+    let calls: BTreeSet<&str> = assembly.lines().filter_map(|line| line.trim().strip_prefix("call far ptr ")).collect();
+    assert!(calls.iter().any(|callee| callee.starts_with("N$")), "premise: nbody prints through the runtime\n{assembly}");
+    assert!(calls.iter().all(|callee| callee.starts_with("N$") || *callee == "_nbody"), "{calls:?}");
 }
 
 #[test]
@@ -422,12 +382,9 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     let fixed_id = callables[rt::PRINT_Q4].id;
     assert!(module.functions[0].calls.iter().filter(|call| call.callee == Some(fixed_id)).all(|call| call.order == [1, 0]));
 
-    let lowered = lowered_named(&program, "nbody.nbody");
-    assert!(mir::verify(&lowered.body).is_empty());
-    let kinds = kinds(&lowered.body);
-    for kind in [Kind::Address, Kind::Branch, Kind::Call, Kind::FixedDiv, Kind::FixedMul, Kind::Load, Kind::Mul, Kind::Store]
-    {
-        assert!(kinds.contains(&kind), "{kind:?}");
+    let nbody = nbody_emitted();
+    for one in ["getelementptr", "br i1 ", "call addrspace(1) void @N$", "@llvm.sdiv.fix.i32(", "@llvm.smul.fix.i32(", " = load ", "store "] {
+        assert!(nbody.contains(one), "{one}\n{nbody}");
     }
 
     let operands: Vec<&model::Operand> = instructions(&module.functions[0]).flat_map(|one| &one.operands).collect();
@@ -845,23 +802,6 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
 }
 
 #[test]
-fn test_fixed_point_arithmetic_has_a_price() {
-    // Unpriced FIXED_MUL left nbody unpriceable, so every loop copy was built only to be refused.
-    let directory = tempfile::tempdir().expect("a directory");
-    let source = written(
-        &directory,
-        "fixed.nib",
-        "type fixed16 = fixed i32, fraction=16\n\nfn scaled(left: fixed16, right: fixed16) -> fixed16:\n    return left * right / right\n\nfn main() -> i16:\n    scaled(1.5, 2.25)\n    return 0\n",
-    );
-    let costs = &targets::profile("386").unwrap().operations;
-    let bodies: Vec<mir::MirBody> = hir::lower(&parsed(&source)).unwrap().into_iter().map(|one| one.body).collect();
-    let kinds: BTreeSet<Kind> = bodies.iter().flat_map(kinds).collect();
-
-    assert!(kinds.contains(&Kind::FixedMul) && kinds.contains(&Kind::FixedDiv));
-    assert!(bodies.iter().all(|body| profit::r#static(body, costs).is_some()));
-}
-
-#[test]
 fn test_a_repeat_literal_in_the_frame_is_one_string_fill() {
     // The fill loop stepped its byte address to zero under `!=`, which `fill` missed: 64 stores in a loop.
     let directory = tempfile::tempdir().expect("a directory");
@@ -1169,7 +1109,7 @@ fn test_a_branch_on_a_constant_lowers_as_a_jump() {
         "forever.nib",
         "fn main() -> i16:\n    let mut n = 3\n    while true:\n        if n == 0:\n            return 7\n        n -= 1\n    return 0\n",
     );
-    lowered_named(&parsed(&source), "forever.main");
+    listing(&parsed(&source), "main", &O2());
 }
 
 /// A vec borrowed as `&[T]` takes DGROUP's selector for its far data

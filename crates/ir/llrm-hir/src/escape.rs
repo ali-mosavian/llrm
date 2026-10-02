@@ -13,25 +13,6 @@ use crate::model;
 
 const _NAMING: [model::Op; 6] = [model::Op::Load, model::Op::Store, model::Op::Copy, model::Op::CopyBytes, model::Op::LifetimeStart, model::Op::LifetimeEnd];
 
-/// Data symbols whose address may be held by something other than a direct
-/// reference. Another module's symbol is, unless it is declared unaddressed.
-pub fn escaped(module: &model::Module) -> BTreeSet<i64> {
-    let mut out: BTreeSet<i64> =
-        module.data.iter().filter(|one| one.linkage != model::DataLinkage::Internal && one.addressed).map(|one| one.id).collect();
-    out.extend(
-        module
-            .data
-            .iter()
-            .flat_map(|one| one.relocations.iter())
-            .filter(|relocation| !relocation.code)
-            .map(|relocation| relocation.target),
-    );
-    for function in &module.functions {
-        out.extend(handed(function).filter(|place| !_framed(place)).map(|place| place.symbol));
-    }
-    out
-}
-
 /// The frame places whose address `function` hands out. Every other local
 /// and parameter is reached only by name: no pointer, far or near, can.
 pub fn exposed_frame(function: &model::Function) -> BTreeSet<i64> {
