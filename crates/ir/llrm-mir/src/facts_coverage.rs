@@ -35,6 +35,12 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("nsw", By(&["a_no_signed_wrap_fact_is_nsw"])),
     ("nuw", Unread("ow-frontend-contract: Nib range loops state it; a loop pass that needs it (scev) is owed")),
     ("inbounds", By(&["inbounds_is_a_fact_of_an_operand"])),
+    ("inline", By(&["test_a_callee_the_language_says_never_inline_stays_even_if_always_is_stated_too", "test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size", "each_inlining_has_its_attribute"])),
+    ("reassoc", By(&["floating_freedoms_are_fast_math_flags", "test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
+    ("nnan", By(&["floating_freedoms_are_fast_math_flags", "test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
+    ("ninf", By(&["floating_freedoms_are_fast_math_flags", "test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
+    ("nsz", By(&["floating_freedoms_are_fast_math_flags", "test_nsz_lets_a_cancellation_be_positive_zero"])),
+    ("arcp", By(&["floating_freedoms_are_fast_math_flags", "test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
 ];
 
 /// The facts a row is owed for: every one the table declares.
