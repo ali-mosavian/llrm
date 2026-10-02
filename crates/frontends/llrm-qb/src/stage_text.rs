@@ -82,7 +82,7 @@ pub fn instruction_text(what: &ir::Semantics) -> Vec<String> {
         }
         Operation::Call if what.indirect && !sources.is_empty() => one(format!("call {}", sources[0])),
         Operation::Call => one(format!("call {name}")),
-        Operation::Fill => one(format!("rep {name}")),
+        Operation::Fill | Operation::Copy => one(format!("rep {name}")),
         Operation::Barrier => {
             let operands = if dests.is_empty() { &sources } else { &dests };
             one(if let Some(first) = operands.first() { format!("{name} {first}") } else { name })

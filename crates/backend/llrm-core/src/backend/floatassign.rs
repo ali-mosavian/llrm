@@ -212,7 +212,7 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
     let Some(what) = &one.what else {
         return true;
     };
-    if what.op == Operation::Fill {
+    if matches!(what.op, Operation::Fill | Operation::Copy) {
         return true;
     }
     // A call or barrier writes what its MIR operation lists, or anything.
