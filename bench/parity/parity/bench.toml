@@ -1,0 +1,7 @@
+description = "Sum of products over an 8-element array of 2-field structs"
+repetitions = 1
+
+[region]
+bas = "BenchParity"
+c = "bench_parity"
+nib = "bench_parity"
