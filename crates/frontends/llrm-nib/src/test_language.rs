@@ -3337,3 +3337,57 @@ fn a_module_variable_states_its_alignment() {
     // `flag` is a byte and has none to state.
     assert_eq!(aligned, [2, 4], "{hir}");
 }
+
+/// Every element address safe code makes is stated in bounds: a `ptr_offset`
+/// is only emitted after a check, for a view, a vec, a string, an array
+/// field and a ranked array alike. (Raw pointer arithmetic, `unsafe`, is not.)
+#[test]
+fn every_checked_index_form_states_inbounds() {
+    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/nib/indexing.nib")).expect("the fixture");
+    let hir = super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message)).replace([' ', '\n'], "");
+    let offsets = hir.matches("\"op\":\"ptr_offset\"").count();
+    assert!(offsets >= 5, "the premise: the fixture indexes several forms ({offsets})");
+    assert!(hir.matches("\"fact\":\"inbounds\",\"function\"").count() >= offsets, "{hir}");
+}
+
+/// A module variable an interrupt handler names is ordered access: the
+/// program's own functions read and write it in memory, between any two
+/// instructions the handler may run. A variable no handler names is not.
+#[test]
+fn only_what_a_handler_names_is_volatile() {
+    let source = "\
+var ticks: u16 = 0
+var other: u16 = 0
+
+@export(\"interrupt16\")
+fn tick() -> void:
+    ticks += 1
+
+fn main() -> i16:
+    other += 1
+    print(ticks + other)
+    return 0
+";
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let mut volatile: Vec<(String, bool)> = hir["modules"][0]["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|function| function["places"].as_array().unwrap().iter())
+        .filter(|place| place["storage"] == "module" && place["name"].as_str().is_some_and(|name| !name.starts_with('$')))
+        .map(|place| (place["name"].as_str().unwrap().to_owned(), place["volatile"].as_bool().unwrap()))
+        .collect();
+    volatile.sort();
+    volatile.dedup();
+    assert_eq!(volatile, [("other".to_owned(), false), ("ticks".to_owned(), true)]);
+}
+
+/// What a pointer reaches is a borrowed place or what foreign code hands
+/// over: no integer makes one, so no Nib program names a port or a fixed
+/// address as memory (a port is reached only inside `asm`, which declares
+/// what it touches). That is why Nib states no memory kind (#113).
+#[test]
+fn an_integer_is_not_a_pointer() {
+    let refused = refused("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 753664\n        p[0] = 1\n    return 0\n");
+    assert!(refused.contains("expected *far pointer, found i16"), "{refused}");
+}
