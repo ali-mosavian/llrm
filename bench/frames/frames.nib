@@ -1,0 +1,25 @@
+# fib(24) + sum of digit sums of 1..30000; recursion uses plain stack frames, no runtime frame helpers.
+fn fib(n: i16) -> i32:
+    if n < 2:
+        return i32(n)
+    let a: i32 = fib(n - 1)
+    let b: i32 = fib(n - 2)
+    return a + b
+
+fn digits(v: i32) -> i16:
+    let mut total: i16 = 0
+    let mut rest: i32 = v
+    while rest > 0:
+        total += i16(rest % 10)
+        rest = rest // 10
+    return total
+
+fn bench_frames() -> i32:
+    let mut sum: i32 = 0
+    for i in 1..30001:
+        sum += i32(digits(i32(i)))
+    return fib(24) + sum
+
+fn main() -> i16:
+    print(bench_frames())
+    return 0
