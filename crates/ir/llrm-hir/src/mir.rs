@@ -284,6 +284,7 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
 /// and the alignments they state of accesses.
 fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<(HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>)> {
     let (mut nodes, mut accesses) = (HashMap::new(), HashMap::new());
+    let index = crate::facts::Index::of(hir);
     for stated in &hir.facts {
         let Subject::Instruction { function, id } = stated.subject else { continue };
         match stated.fact {
@@ -291,15 +292,9 @@ fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &mo
                 accesses.insert((function, id), bytes);
             }
             Fact::Range(bounds) => {
-                let instruction = hir
-                    .functions
-                    .iter()
-                    .find(|one| one.id == function)
-                    .and_then(|one| one.blocks.iter().flat_map(|block| &block.instructions).find(|one| one.id == id))
-                    .ok_or("a range of no instruction")?;
+                let instruction = index.instruction(function, id).ok_or("a range of no instruction")?;
                 let result = instruction.results.first().ok_or("a range of an instruction with no result")?;
-                let owner = hir.functions.iter().find(|one| one.id == function).ok_or("a range of no function")?;
-                let hir_type = owner.values.iter().find(|one| one.id == *result).map(|one| types[&one.r#type]).ok_or("a range of an unknown value")?;
+                let hir_type = index.value_type(function, *result).map(|one| types[&one]).ok_or("a range of an unknown value")?;
                 let ty = value_type(&mut module.context.types, hir_type)?;
                 let bits = module.context.types.int_bits(ty).ok_or("a range of what is no integer")?;
                 let Some(llrm_mir::Attribute::Range { lower, upper, .. }) = Fact::Range(bounds).typed_attribute(ty, bits) else { continue };
