@@ -1,26 +1,26 @@
-reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+reason = "the kernel work now depends on an opaque input (keep(0), VAL(\"0\")): the compiler folded the old one to a constant, and the baseline counted the whole program"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 12568
-memory_operands = 2710
+instructions = 99
+memory_operands = 13
 
 [bas.Os]
-instructions = 12568
-memory_operands = 2710
+instructions = 121
+memory_operands = 13
 
 [c.O2]
-instructions = 71
-memory_operands = 7
+instructions = 67
+memory_operands = 1
 
 [c.Os]
-instructions = 72
-memory_operands = 7
+instructions = 91
+memory_operands = 1
 
 [nib.O2]
-instructions = 432
-memory_operands = 83
+instructions = 67
+memory_operands = 1
 
 [nib.Os]
-instructions = 430
-memory_operands = 81
+instructions = 91
+memory_operands = 1

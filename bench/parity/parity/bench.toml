@@ -1,8 +1,7 @@
 description = "Sum of products over an 8-element array of 2-field structs"
 repetitions = 1
 
-# "*": the compiler folds the kernel away at -O2, so the whole program is counted
 [region]
 bas = "BenchParity"
-c = "*"
-nib = "*"
+c = "bench_parity"
+nib = "bench_parity"
