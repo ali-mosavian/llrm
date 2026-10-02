@@ -124,8 +124,8 @@ impl FunctionCompiler<'_> {
         let data = (descriptor::size(rank), self.types.pointer(element.id(), 0));
         for (offset, type_id) in words.chain([data]) {
             let value = self.value_type(type_id);
-            self.emit("load", vec![value], vec![hir::Operand::IndirectPlace { base: source, offset, type_id, inbounds: false }], None);
-            let destination = hir::Operand::IndirectPlace { base: target, offset, type_id, inbounds: false };
+            self.emit("load", vec![value], vec![hir::Operand::IndirectPlace { base: source, offset, type_id, inbounds: false, member: None }], None);
+            let destination = hir::Operand::IndirectPlace { base: target, offset, type_id, inbounds: false, member: None };
             self.emit("store", Vec::new(), vec![destination, hir::Operand::Value(value)], None);
         }
     }

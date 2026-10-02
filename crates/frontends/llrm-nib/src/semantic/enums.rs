@@ -22,14 +22,25 @@ impl FunctionCompiler<'_> {
     /// tags its variants have, and says so.
     pub(super) fn load_tag(&mut self, view: &StructView, layout: &EnumLayout) -> u32 {
         let tag = self.value(layout.tag);
-        let place = self.projected_place(view, 0, layout.tag);
-        let load = self.emit("load", vec![tag], vec![place], None);
-        let (lo, hi) = layout.variants.iter().fold((i64::MAX, i64::MIN), |(lo, hi), variant| (lo.min(variant.tag), hi.max(variant.tag)));
-        if lo <= hi {
-            let subject = llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(load) };
-            self.stated.state(subject, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo, hi }));
-        }
+        // The range of the tag is stated once, of the member (see `tag_ranges`).
+        let place = self.field_place(view, 0, layout.tag);
+        self.emit("load", vec![tag], vec![place], None);
         tag
+    }
+}
+
+impl TypeRegistry {
+    /// The tag of each enum that carries payloads is within the tags its variants have:
+    /// stated once of the tag member of the enum's struct, for every load of it.
+    pub(super) fn tag_ranges(&self) -> Vec<(llrm_core::hir::facts::Subject, llrm_mir::facts::Fact)> {
+        self.enums
+            .values()
+            .filter_map(|layout| {
+                let ElementType::Struct(owner) = layout.element else { return None };
+                let (lo, hi) = layout.variants.iter().fold((i64::MAX, i64::MIN), |(lo, hi), variant| (lo.min(variant.tag), hi.max(variant.tag)));
+                (lo <= hi).then(|| (llrm_core::hir::facts::Subject::Field { owner: i64::from(owner), offset: 0 }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo, hi })))
+            })
+            .collect()
     }
 }
 

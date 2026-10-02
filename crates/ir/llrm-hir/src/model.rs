@@ -285,12 +285,23 @@ pub struct ArrayElement {
     pub indices: Vec<Operand>,
 }
 
+/// Which member of an aggregate type an access is: the aggregate's type and the
+/// byte offset of the member in it. A fact stated of the member (`Subject::Field`)
+/// reaches every access that names it, however the aggregate is reached.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Member {
+    pub owner: i64,
+    pub offset: i64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectedPlace {
     pub place: i64,
     pub indices: Vec<Operand>,
     pub offset: i64,
     pub r#type: i64,
+    /// The member this is, where the frontend knows it.
+    pub member: Option<Member>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -307,6 +318,8 @@ pub struct IndirectPlace {
     /// The descriptor place owning the far allocation the access stays
     /// inside, where the frontend knows it: disjoint from every place.
     pub allocation: Option<i64>,
+    /// The member this is, where the frontend knows it.
+    pub member: Option<Member>,
 }
 
 str_enum!(DescriptorField {

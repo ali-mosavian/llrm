@@ -16,7 +16,7 @@ impl FunctionCompiler<'_> {
         }
         for (axis, index) in indices.iter().enumerate() {
             let dim = self.value(TypeName::U16);
-            let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8), type_id: U16, inbounds: false };
+            let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8), type_id: U16, inbounds: false, member: None };
             self.emit("load", vec![dim], vec![place], None);
             self.check_bounds(index, hir::Operand::Value(dim), span)?;
         }

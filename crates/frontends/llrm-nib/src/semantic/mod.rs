@@ -1073,7 +1073,7 @@ impl ElementAt {
                 base,
                 offset: 0,
                 type_id,
-                inbounds: true,
+                inbounds: true, member: None,
             },
         }
     }
@@ -1478,6 +1478,9 @@ fn program(
     let functions = checked(compiled, &builtin_ids, &literals)?;
     // A module variable sits where its type's accesses are aligned.
     let mut stated = llrm_core::hir::facts::Builder::new("nib");
+    for (subject, fact) in types.tag_ranges() {
+        stated.state(subject, fact);
+    }
     for layout in types.statics.values().filter(|one| one.align > 1) {
         stated.state(llrm_core::hir::facts::Subject::Object(i64::from(layout.symbol)), llrm_mir::facts::Fact::Align(u64::from(layout.align)));
     }

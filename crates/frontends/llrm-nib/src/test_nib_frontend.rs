@@ -41,6 +41,68 @@ fn refused(source: &Path) -> String {
     driver::parsed(source, &Default::default(), None).expect_err("the frontend refuses").0
 }
 
+/// A tag is within the tags its enum has, stated once of the tag's member, not of each load:
+/// every load of it, as many as the program makes, carries `!range` in the emitted MIR
+/// with no instruction fact from the frontend. A load a later change forgets to tag no
+/// longer loses the fact.
+#[test]
+fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
+    use llrm_core::hir::facts::Subject;
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "shape.nib", "enum Shape:\n    circle(radius: i16)\n    square(side: i16)\n    tri(base: i16, height: i16)\n\nfn area(shape: &Shape) -> i16:\n    match shape:\n        .circle(r):\n            return r * r * 3\n        .square(s):\n            return s * s\n        .tri(b, h):\n            return b * h // 2\n\nfn sides(shape: &Shape) -> i16:\n    match shape:\n        .circle(_):\n            return 0\n        .square(_):\n            return 4\n        .tri(_, _):\n            return 3\n\nfn main() -> i16:\n    let a = Shape.square(side=4)\n    return area(a) + sides(a)\n");
+    let program = parsed(&source);
+    let module = &program.modules[0];
+    let fields: Vec<_> = module.facts.iter().filter(|one| matches!(one.subject, Subject::Field { .. })).collect();
+    assert_eq!(fields.len(), 1, "one statement for the one enum");
+    assert!(module.facts.iter().all(|one| !(matches!(one.subject, Subject::Instruction { .. }) && matches!(one.fact, llrm_mir::facts::Fact::Range(bounds) if bounds.hi == 2))), "no load is stated of its own");
+    let emitted = hir::mir::emit(&program);
+    let text: String = emitted.iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    let tag_loads: Vec<&str> = text.lines().filter(|one| one.contains("load i8")).collect();
+    assert!(tag_loads.len() >= 2, "{text}");
+    assert!(tag_loads.iter().all(|one| one.contains("!range")), "{text}");
+}
+
+/// A fact stated once of any member, not only a tag, reaches every load and store of it,
+/// through a reference and through a local: each field access names its member.
+#[test]
+fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
+    use llrm_core::hir::facts::Subject;
+    use llrm_mir::facts::{Bounds, Fact};
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "pair.nib", "struct P:\n    mut a: i16\n    mut b: i16\n\nfn bump(p: &mut P) -> void:\n    p.b = p.b + 1\n\nfn main() -> i16:\n    let mut q = P(a=1, b=2)\n    q.b = q.b + 5\n    bump(q)\n    return q.b + q.a\n");
+    let mut program = parsed(&source);
+    let owner = program.modules[0].types.iter().find(|one| one.name == "P").expect("the struct P").id;
+    // The accesses of member b, as the frontend wrote them: loads and stores, by reference and by place.
+    let member_of = |operand: &model::Operand| match operand {
+        model::Operand::ProjectedPlace(one) => one.member,
+        model::Operand::IndirectPlace(one) => one.member,
+        _ => None,
+    };
+    let (mut loads, mut stores, mut reference, mut local) = (0, 0, 0, 0);
+    for function in &program.modules[0].functions {
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            let Some(member) = instruction.operands.first().and_then(member_of).filter(|one| one.owner == owner && one.offset == 2) else { continue };
+            let _ = member;
+            match instruction.op {
+                model::Op::Store => stores += 1,
+                _ => loads += 1,
+            }
+            match instruction.operands[0] {
+                model::Operand::IndirectPlace(_) => reference += 1,
+                _ => local += 1,
+            }
+        }
+    }
+    assert!(loads >= 3 && stores >= 2 && reference >= 2 && local >= 3, "loads {loads} stores {stores} reference {reference} local {local}");
+    program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Range(Bounds { lo: 0, hi: 100 }), source: None });
+    program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Align(2), source: None });
+    let text: String = hir::mir::emit(&program).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    let ranged = text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count();
+    let aligned_loads = text.lines().filter(|one| one.contains("load i16") && one.contains("align 2")).count();
+    let aligned_stores = text.lines().filter(|one| one.contains("store i16") && one.contains("align 2")).count();
+    assert_eq!((ranged, aligned_loads, aligned_stores), (loads, loads, stores), "{text}");
+}
+
 /// Every Nib program's emitted MIR lints clean: `lint::poison` called each stated
 /// wrap `poison` and each array filled an element at a time "stored after use",
 /// so `hir-mir` and the corpus tool dropped 56 of 124 programs, `sum_three` among them.

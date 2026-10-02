@@ -97,7 +97,7 @@ impl<'a> FunctionCompiler<'a> {
                     base: descriptor,
                     offset: descriptor::dim(axis),
                     type_id: U16,
-                    inbounds: false,
+                    inbounds: false, member: None,
                 }],
                 None,
             );
@@ -249,7 +249,7 @@ impl<'a> FunctionCompiler<'a> {
                         base: pointer,
                         offset: 0,
                         type_id: type_id(type_name),
-                        inbounds: false,
+                        inbounds: false, member: None,
                     }],
                     None,
                 );
@@ -274,7 +274,7 @@ impl<'a> FunctionCompiler<'a> {
                 base: descriptor,
                 offset: descriptor::size(rank),
                 type_id: pointer_type,
-                inbounds: false,
+                inbounds: false, member: None,
             }],
             None,
         );

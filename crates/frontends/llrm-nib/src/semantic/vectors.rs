@@ -388,7 +388,7 @@ impl FunctionCompiler<'_> {
             base: vector,
             offset: 0,
             type_id: element.id(),
-            inbounds: false,
+            inbounds: false, member: None,
         };
         self.emit("address", vec![data], vec![first], None);
         self.ranged_view(name, data, length, element, range, pointer_type, span)
@@ -697,7 +697,7 @@ fn indirect(base: u32, type_name: TypeName) -> hir::Operand {
         base,
         offset: 0,
         type_id: type_id(type_name),
-        inbounds: false,
+        inbounds: false, member: None,
     }
 }
 
