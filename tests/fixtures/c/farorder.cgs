@@ -1,0 +1,53 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "fixtures/c/farorder.c" main=1
+- DBSrcCue f1 3 1
+SYM y1 name="below" base="below" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_LONG_POINTER
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_LONG_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+n4 CGFEName y2 TY_LONG_POINTER
+n5 CGUnary O_POINTS n4 TY_LONG_POINTER
+n6 CGFEName y3 TY_LONG_POINTER
+n7 CGUnary O_POINTS n6 TY_LONG_POINTER
+n8 CGCompare O_LT n5 n7 TY_LONG_POINTER
+n9 CGUnary O_CONVERT n8 TY_INTEGER
+n10 CGTempName t3 TY_INTEGER
+n11 CGAssign n10 n9 TY_INTEGER
+- CGDone n11
+n12 CGTempName t3 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+- CGReturn n13 TY_INTEGER
+- DBSrcCue f1 4 1
+SYM y4 name="same" base="same" pattern="_*" attr=0x7 seg=1
+CALLCONV y4 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y4 TY_INTEGER
+SYM y5 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_LONG_POINTER
+SYM y6 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y6 TY_LONG_POINTER
+l14 CGLastParm
+t15 CGTemp TY_INTEGER
+n16 CGFEName y5 TY_LONG_POINTER
+n17 CGUnary O_POINTS n16 TY_LONG_POINTER
+n18 CGFEName y6 TY_LONG_POINTER
+n19 CGUnary O_POINTS n18 TY_LONG_POINTER
+n20 CGCompare O_EQ n17 n19 TY_LONG_POINTER
+n21 CGUnary O_CONVERT n20 TY_INTEGER
+n22 CGTempName t15 TY_INTEGER
+n23 CGAssign n22 n21 TY_INTEGER
+- CGDone n23
+n24 CGTempName t15 TY_INTEGER
+n25 CGUnary O_POINTS n24 TY_INTEGER
+- CGReturn n25 TY_INTEGER
+STOP
+FINI
