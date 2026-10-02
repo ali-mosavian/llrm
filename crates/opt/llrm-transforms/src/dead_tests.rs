@@ -240,6 +240,48 @@ b1:
     assert!(out.contains("call i16 @loud"), "{out}");
 }
 
+/// A local only its lifetime markers name is not a local: with its markers it goes. They
+/// kept it, and its markers, in the body.
+#[test]
+fn test_a_local_only_its_lifetime_markers_name_goes_with_them() {
+    let mut module = parsed(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca i16
+  call void @llvm.lifetime.start.p0(i64 2, ptr %s)
+  call void @llvm.lifetime.end.p0(i64 2, ptr %s)
+  ret i16 %x
+}
+",
+    );
+    assert!(deadened(&mut module));
+    deadened(&mut module);
+    let text = printed(&module);
+    assert!(!text.contains("alloca") && !text.contains("call void @llvm.lifetime"), "{text}");
+}
+
+/// A local something reads keeps its markers, which a frame layout reads.
+#[test]
+fn test_a_local_something_reads_keeps_its_lifetime_markers() {
+    let mut module = parsed(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca i16
+  call void @llvm.lifetime.start.p0(i64 2, ptr %s)
+  store volatile i16 %x, ptr %s
+  %v = load volatile i16, ptr %s
+  call void @llvm.lifetime.end.p0(i64 2, ptr %s)
+  ret i16 %v
+}
+",
+    );
+    assert!(!deadened(&mut module));
+}
+
 /// An assume gone before selection takes its compare with it: kept alive by
 /// the call, the `icmp` would be selected, a cmp and a setcc for a fact no
 /// code needs.

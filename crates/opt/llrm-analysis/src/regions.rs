@@ -71,6 +71,13 @@ fn linear() -> MemoryObject {
     MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }
 }
 
+/// What an access through a fixed-address pointer names: linear memory, wholly.
+/// The language says no program object lives there, and no selector range
+/// has to prove it.
+pub fn fixed_provenance() -> Provenance {
+    Provenance::one(linear())
+}
+
 /// The range of `value`'s interval, `disp` plus `scale` times it.
 fn scaled(interval: &Interval, disp: i64, scale: i64) -> (BigInt, BigInt) {
     let (one, other) = (BigInt::from(disp) + &interval.low * scale, BigInt::from(disp) + &interval.high * scale);
@@ -945,6 +952,66 @@ b0:
         assert!(!may_alias(text, near, Some(&foreign), None, Some(&dos)).unwrap());
         assert!(overlapping(near, text, None, Some(&ordinary), Some(&dos)).unwrap());
         assert!(overlapping(near, text, None, Some(&foreign), None).unwrap());
+    }
+
+    /// A store through a pointer the language puts at a fixed address
+    /// (address space 4) cannot reach a program global, however its pointer
+    /// was made; through a far pointer it can, a far pointer reaching any
+    /// object. Every POKE to a stated device kept the reloads of the
+    /// program's own data behind it.
+    #[test]
+    fn test_an_access_at_a_fixed_address_misses_program_objects() {
+        for (space, apart) in [(4, true), (1, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr @g
+  store i8 0, ptr addrspace({space}) %p
+  ret void
+}}
+"
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let unit = Unit::of(&module, &dl, f);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!(!may_alias(load, store, None, None, None).unwrap(), apart, "space {space}");
+        }
+    }
+
+    /// The language's word that an address is a device's is checked against
+    /// the target where the address is a constant: DOS loads a program
+    /// anywhere in conventional memory, so a constant segment there (0x1234)
+    /// may be the program's own data and is no fixed address; B800 is video.
+    #[test]
+    fn test_a_constant_segment_in_conventional_memory_is_no_fixed_address() {
+        for (segment, apart) in [(0xB800, true), (0x1234, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f() {{
+b0:
+  %a = load i16, ptr @g
+  %s = inttoptr i16 {segment} to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %dev = addrspacecast ptr addrspace(1) %far to ptr addrspace(4)
+  store i8 0, ptr addrspace(4) %dev
+  ret void
+}}
+"
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let dos = dos(&module);
+            let mut unit = Unit::of(&module, &dl, f);
+            unit.program = Some(&dos);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!(!may_alias(load, store, None, None, Some(&dos)).unwrap(), apart, "segment {segment:#x}");
+        }
     }
 
     /// Only an address space the segment layout places program data in is

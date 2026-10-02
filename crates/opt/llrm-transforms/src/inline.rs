@@ -38,7 +38,7 @@ use llrm_mir::callgraph::CallGraph;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::{Facts, Inlining};
-use llrm_mir::memory::{Callees, callee, has};
+use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::transforms::inline::{carries, splice};
@@ -177,7 +177,7 @@ fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body
         && stated(body) != Some(Inlining::Never)
         && !recursive.contains(&id)
         && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)
-        && !body.walk().any(|(_, inst)| callee(&module.context, body, inst).and_then(|one| module.global(one).function()).is_some_and(|one| has(&one.attrs, "returns_twice")))
+        && !llrm_mir::memory::calls_returns_twice(module, body)
 }
 
 /// The priced work `body` does once, unless something in it is unpriced.

@@ -228,8 +228,39 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !4\n"), "{text}");
-    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!3 = !{!\"allocation\", !0, i64 0}\n"), "{text}");
+    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"), "{text}");
+    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!5 = !{!\"allocation.0\", !3, i64 0}\n"), "{text}");
+}
+
+/// Another module may name a COMMON array under its own tag path, and the
+/// interprocedural passes meet both in one body: per-array tags would call the
+/// same bytes apart. A COMMON array keeps the generic `allocation` tag.
+#[test]
+fn a_common_array_keeps_the_generic_allocation_tag() {
+    use crate::model::{AddressKind, IndirectPlace, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
+    let instructions = vec![
+        Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
+        Instruction::new(3, Op::Store, vec![], vec![indirect(1, 0, Some(1)), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let places = vec![Place::new(1, "D", 4, Storage::Common, 0)];
+    let mut function = Function::new(1, "FILL", 0, values, places, vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    let mut descriptor = Type::new(4, "descriptor", TypeKind::Array, 4);
+    (descriptor.element, descriptor.rank, descriptor.bounds) = (Some(1), 1, vec![(0, 1)]);
+    program.modules[0].types.extend([far, Type::new(3, "near", TypeKind::Pointer, 2), descriptor]);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(!text.contains("allocation."), "{text}");
 }
 
 /// A far pointer advanced by a displacement moves its offset alone: a GEP
@@ -429,6 +460,46 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     let text = llrm_mir::print::module(&emitted.module);
     let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 4, i1 false)\n  store i16 0, ptr %1\n";
     assert!(text.contains(entry), "{text}");
+}
+
+/// A block local's scope is its lifetime markers, over the bytes of its place; the markers
+/// are declared once, and verify.
+#[test]
+fn a_locals_scope_is_its_lifetime_markers() {
+    use crate::model::{Place, Storage};
+    let instructions = vec![
+        Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Store, vec![], vec![Operand::place_ref(1), Operand::constant(1, 5)]),
+        Instruction::new(3, Op::LifetimeEnd, vec![], vec![Operand::place_ref(1)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+    let function = Function::new(1, "F%", 1, Vec::new(), vec![Place::new(1, "X", 1, Storage::Local, -2)], vec![block], 1);
+    let program = program(function);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  call void @llvm.lifetime.start.p0(i64 2, ptr %0)\n"), "{text}");
+    assert!(text.contains("  call void @llvm.lifetime.end.p0(i64 2, ptr %0)\n"), "{text}");
+    assert_eq!(text.matches("declare void @llvm.lifetime.start.p0").count(), 1, "{text}");
+}
+
+/// A lifetime is a block local's: a marker on anything else is a frontend's mistake, which
+/// a layout reading it would turn into a wrong frame.
+#[test]
+fn a_lifetime_marker_names_one_local() {
+    use crate::model::{Place, Storage};
+    let marked = |mut place: Place| {
+        place.extent = Some(2);
+        let instructions = vec![Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)])];
+        let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+        program(Function::new(1, "F%", 1, Vec::new(), vec![place], vec![block], 1))
+    };
+    let good = crate::verify::verify(&marked(Place::new(1, "X", 1, Storage::Local, -2)));
+    assert!(good.is_ok(), "{good:?}");
+    let error = crate::verify::verify(&marked(Place::new(1, "P", 1, Storage::Parameter, 4))).unwrap_err();
+    assert!(error.to_string().contains("names one local place"), "{error}");
 }
 
 /// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
@@ -845,7 +916,7 @@ fn a_float_freedom_or_a_wrap_fact_of_the_wrong_operation_is_refused() {
         assert_eq!(stated(floats(), fact), Ok(()), "{}", fact.key());
     }
     for fact in [Fact::NoSignedWrap, Fact::NoUnsignedWrap] {
-        assert!(stated(floats(), fact).unwrap_err().contains("is stated of an instruction that is no integer add, sub or mul"), "{}", fact.key());
+        assert!(stated(floats(), fact).unwrap_err().contains("no integer add, sub, mul or neg"), "{}", fact.key());
         assert_eq!(stated(program(difference()), fact), Ok(()), "{}", fact.key());
     }
 }
@@ -1246,4 +1317,29 @@ fn a_callable_that_returns_twice_is_declared_so() {
     program.modules[0].callables[0] = callable(false);
     assert!(!crate::codec::encode(&program, None).expect("encodes").contains("returns_twice"));
     assert!(!llrm_mir::print::module(&emit(&program).remove(0).module).contains("returns_twice"));
+}
+
+/// A pointer the frontend says is at a fixed address is a pointer in the
+/// fixed-address space; whether its accesses are ordered is the access's
+/// own promise, `volatile`, which the frontend states and lowering keeps.
+#[test]
+fn a_fixed_address_pointer_is_in_the_fixed_space() {
+    use crate::model::{AddressKind, IndirectPlace};
+    for (volatile, word) in [(false, "load"), (true, "load volatile")] {
+        let mut pointer = Type::new(2, "device", TypeKind::Pointer, 4);
+        pointer.address = AddressKind::Fixed;
+        let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }];
+        let at = Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile, origin: None, allocation: None });
+        let load = Instruction::new(1, Op::Load, vec![2], vec![at]);
+        let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+        let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
+        function.parameters = vec![1];
+        let mut program = program(function);
+        program.modules[0].types.push(pointer);
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains("p4:32:16:16:16") && text.contains("(ptr addrspace(4) %0)") && text.contains(&format!("{word} i16, ptr addrspace(4) %0")), "{text}");
+    }
 }

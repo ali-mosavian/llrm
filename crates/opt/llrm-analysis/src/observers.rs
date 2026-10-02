@@ -28,7 +28,8 @@ use std::borrow::Cow;
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, Operand};
+use llrm_mir::module::{Function, Operand, ValueId};
+use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 
 use crate::alias::PointsTo;
@@ -101,7 +102,34 @@ fn _published(unit: &Unit, pointers: &PointsTo) -> BTreeSet<MemoryObject> {
             published.extend(provenance.slices.into_iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown));
         }
     }
-    published
+    // What a published object holds is read too: a callee given a struct
+    // loads the pointer in it and reads what it points to. A pointer stored
+    // into a published object publishes its pointee, and so on in.
+    let stores: Vec<(ValueId, ValueId)> = unit
+        .function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let instruction = unit.function.instruction(inst);
+            match (&instruction.opcode, &instruction.operands[..]) {
+                (Opcode::Store { .. }, [Operand::Value(value), Operand::Value(address), ..]) => Some((*value, *address)),
+                _ => None,
+            }
+        })
+        .collect();
+    let objects = |value: &ValueId| -> Vec<MemoryObject> {
+        pointers.values.get(value).into_iter().flat_map(|provenance| provenance.slices.iter()).map(|one| one.object.clone()).filter(|one| one.kind != MemoryKind::Unknown).collect()
+    };
+    loop {
+        let before = published.len();
+        for (value, address) in &stores {
+            if objects(address).iter().any(|one| published.contains(one)) {
+                published.extend(objects(value));
+            }
+        }
+        if published.len() == before {
+            return published;
+        }
+    }
 }
 
 #[cfg(test)]

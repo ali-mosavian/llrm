@@ -1087,6 +1087,10 @@ impl<'a> _Scope<'a> {
     }
 
     fn operation(&mut self, instruction: &model::Instruction) -> Result<Vec<mir::Op>, InvalidHIR> {
+        // Where a block local's bytes are live: not code here.
+        if matches!(instruction.op, model::Op::LifetimeStart | model::Op::LifetimeEnd) {
+            return Ok(Vec::new());
+        }
         self.current = instruction.id;
         self.operands_at = instruction.operands.iter().map(|one| one as *const model::Operand as usize).collect();
         let mut before: Vec<mir::Op> = Vec::new();
