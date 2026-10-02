@@ -97,7 +97,7 @@ pub fn embedded(context: &Context, constant: ConstantId, out: &mut BTreeSet<Glob
 /// `nocallback`, at the site or on the callee, says it may not.
 pub fn calls_back(unit: &Unit, at: InstId) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
-    let flagged = |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "nocallback"));
+    let flagged = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_callback();
     // A callee a pass declared after the outer facts were taken is not among them.
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)?.function());
     !(flagged(&info.attrs) || callee.is_some_and(|one| flagged(&one.attrs)))

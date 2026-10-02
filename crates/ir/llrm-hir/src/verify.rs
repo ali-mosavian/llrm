@@ -37,7 +37,7 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
-        model::Op::PortOut => Some(Some(0)),
+        model::Op::PortOut | model::Op::Assume => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -198,6 +198,23 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
         if !found {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));
         }
+        // A freedom of floating arithmetic is of a floating operation, and a
+        // wrap fact of integer add, sub or mul: lowering gives a flag to nothing else.
+        if let Subject::Instruction { function: id, id: at } = subject {
+            use llrm_mir::facts::Fact;
+            let op = function(id).and_then(|one| one.blocks.iter().flat_map(|block| &block.instructions).find(|i| i.id == at)).map(|i| i.op);
+            let floating = matches!(op, Some(model::Op::Fadd | model::Op::Fsub | model::Op::Fmul | model::Op::Fdiv));
+            let integer = matches!(op, Some(model::Op::Add | model::Op::Sub | model::Op::Mul));
+            match fact {
+                Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal if !floating => {
+                    invalid!("{}: {} is stated of an instruction that is no floating operation", module.name, fact.key());
+                }
+                Fact::NoSignedWrap | Fact::NoUnsignedWrap if !integer => {
+                    invalid!("{}: {} is stated of an instruction that is no integer add, sub or mul", module.name, fact.key());
+                }
+                _ => {}
+            }
+        }
     }
     Ok(())
 }
@@ -354,7 +371,9 @@ fn _function(
         };
         let mut order = site.order.clone();
         order.sort();
-        if order != (0..instruction.operands.len() as i64).collect::<Vec<_>>() {
+        // An indirect call's first operand is what it calls, and is not passed.
+        let passed = instruction.operands.len() - usize::from(instruction.op == model::Op::Call && instruction.callee.is_none());
+        if order != (0..passed as i64).collect::<Vec<_>>() {
             invalid!("{prefix}: call {} has invalid argument order", site.instruction);
         }
         let Some(callable) = site.callee.map(|callee| module.callables.iter().find(|one| one.id == callee)) else {
@@ -417,7 +436,12 @@ fn _function(
                     instruction.results.len()
                 );
             }
-            if instruction.op == model::Op::Call && instruction.callee.as_deref().is_none_or(str::is_empty) {
+            // A call names its callee, or calls through the pointer its first operand is.
+            let through_pointer = instruction.callee.is_none()
+                && instruction.operands.first().is_some_and(|first| {
+                    matches!(first, model::Operand::ValueRef(one) if values.get(&one.value).is_some_and(|value| types.get(&value.r#type).is_some_and(|ty| ty.kind == model::TypeKind::Pointer)))
+                });
+            if instruction.op == model::Op::Call && instruction.callee.as_deref().is_none_or(str::is_empty) && !through_pointer {
                 invalid!("{prefix}: call {} has no callee", instruction.id);
             }
             if (instruction.op == model::Op::Call || _STRING_COMPARE.contains(&instruction.op))
@@ -529,6 +553,11 @@ fn _function(
                 if !operand_types.iter().all(|one| word(one) || near(one)) || !result_types.iter().all(word) {
                     invalid!("{prefix}: asm {} moves only 16-bit integers and near pointers", instruction.id);
                 }
+            }
+            if instruction.op == model::Op::Assume
+                && (instruction.operands.len() != 1 || operand_types.iter().any(|one| !matches!(types[one].kind, model::TypeKind::Boolean | model::TypeKind::Integer)))
+            {
+                invalid!("{prefix}: assume {} takes one condition", instruction.id);
             }
             if matches!(instruction.op, model::Op::PortIn | model::Op::PortOut) {
                 let widths: Vec<i64> = operand_types.iter().map(|one| types[one].width).collect();
@@ -698,14 +727,14 @@ fn _function(
                         invalid!("{prefix}: invalid indirect place");
                     }
                     let pointer = types[&values[&operand.base].r#type];
-                    let Some(element) = pointer
-                        .element
-                        .filter(|element| pointer.kind == model::TypeKind::Pointer && types.contains_key(element))
-                    else {
+                    if pointer.kind != model::TypeKind::Pointer || pointer.element.is_some_and(|element| !types.contains_key(&element)) {
                         invalid!("{prefix}: indirect place disagrees with pointer type");
-                    };
-                    if operand.offset + types[&operand.r#type].width > types[&element].width {
-                        invalid!("{prefix}: indirect place exceeds its pointee");
+                    }
+                    // An opaque pointer, as C's, states no pointee to stay inside.
+                    if let Some(element) = pointer.element {
+                        if operand.offset + types[&operand.r#type].width > types[&element].width {
+                            invalid!("{prefix}: indirect place exceeds its pointee");
+                        }
                     }
                 }
                 if let model::Operand::DescriptorPlace(operand) = operand {
@@ -780,5 +809,5 @@ fn _function(
         missing.sort();
         invalid!("{prefix}: undefined values {}", pyrepr::list(&missing));
     }
-    Ok(())
+    crate::dominance::check(function).map_err(|why| InvalidHIR(format!("{prefix}: {why}")))
 }
