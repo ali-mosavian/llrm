@@ -1,0 +1,32 @@
+# Arrays are 0-based, index i stands for BASIC's i-50; locals, as Nib has no globals.
+fn advance(px: &mut i16[101], py: &mut i16[101], pz: &mut i16[101], vx: &i16[101], vy: &i16[101], vz: &i16[101], n: i16) -> void:
+    for i in 50 - n..51 + n:
+        px[i] = px[i] + vx[i]
+        py[i] = py[i] + vy[i]
+        pz[i] = pz[i] + vz[i]
+
+fn bench_particle() -> i32:
+    let mut px: i16[101] = [0] * 101
+    let mut py: i16[101] = [0] * 101
+    let mut pz: i16[101] = [0] * 101
+    let mut vx: i16[101] = [0] * 101
+    let mut vy: i16[101] = [0] * 101
+    let mut vz: i16[101] = [0] * 101
+    for i in 0..101:
+        let p: i16 = i - 50
+        px[i] = p
+        py[i] = 2 * p
+        pz[i] = -p
+        vx[i] = p & 7
+        vy[i] = 3 - (p & 3)
+        vz[i] = 1
+    for t in 0..100:
+        advance(px, py, pz, vx, vy, vz, 50)
+    let mut s: i32 = 0
+    for i in 0..101:
+        s = s + i32(px[i]) + 3 * i32(py[i]) + 7 * i32(pz[i])
+    return s
+
+fn main() -> i16:
+    print(bench_particle())
+    return 0
