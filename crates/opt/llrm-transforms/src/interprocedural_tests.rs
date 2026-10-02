@@ -143,7 +143,7 @@ b:
 fn test_agreed_actuals_specialize_and_a_constant_return_is_carried() {
     let mut module = parsed(STORES);
     // With no inlining: a callee that stores to memory is inlined otherwise.
-    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold(0));
+    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold::new(0));
     let text = printed(&module);
     assert!(text.contains("  store i16 5, ptr @g\n"), "{text}");
     assert!(text.contains("  %s = add i16 7, %a\n"), "{text}");
