@@ -543,6 +543,9 @@ pub struct Callable {
     pub segmented: Vec<bool>,
     pub arrays: Vec<bool>,
     pub defined: bool,
+    /// It may return a second time, as C's `setjmp` does: no pass may treat
+    /// the code after a call as reached once.
+    pub returns_twice: bool,
     /// The name it links by, where not the language's own for `name`.
     pub symbol: Option<String>,
 }

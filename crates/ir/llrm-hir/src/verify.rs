@@ -199,6 +199,7 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
                     && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
             }),
             Subject::Object(id) => objects.contains(&id),
+            Subject::Terminator { function: id, block } => function(id).is_some_and(|one| one.blocks.iter().any(|b| b.id == block)),
         };
         if !found {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));
