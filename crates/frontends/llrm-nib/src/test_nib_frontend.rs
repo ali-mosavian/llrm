@@ -2304,3 +2304,40 @@ fn main() -> i16:
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
+
+/// An enum too large for a register moves by memory copy and a match reads
+/// the tag first, so its `.none` leaves the payload bytes unwritten: it
+/// copies and matches right, and costs no zero-fill.
+#[test]
+fn test_a_large_enum_value_copied_and_matched_stays_correct() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+enum Box:
+    empty
+    full(a: i16, b: i16, c: i16)
+
+fn make(n: i16) -> Box:
+    if n > 0:
+        return .full(n, n, n)
+    return .empty
+
+fn main() -> i16:
+    let x = make(0)
+    let y = x
+    match y:
+        .full(a, b, c):
+            return a + b + c
+        .empty:
+            return 7
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "large.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
+}
