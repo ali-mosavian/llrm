@@ -1,5 +1,7 @@
 # MIR is x86 with SSA names on it
 
+History: the old MIR this describes was deleted in step 7 of `docs/architecture/rich-mir.md`; MIR is now LLVM IR.
+
 Counted over `tests/fixtures/omf/*-p-g2.obj`, 2,343 operations:
 
 ```

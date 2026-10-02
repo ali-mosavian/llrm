@@ -1,10 +1,7 @@
-//! Port of `qbopt/frontend/qb/abi.py`: late QB-family call ABI
-//! materialization.
-//!
-//! HIR and optimizing MIR keep typed arguments on the call.  Only after those
-//! passes have finished do stack order and cleanup become physical ARG nodes.
-//! This is deliberately frontend-owned: no QB convention is added to MIR or
-//! the backend.
+//! The QB-family runtime's call ABI, as selection asks it: each callee's
+//! contract (stack cleanup, clobbers, register arguments), its linked name,
+//! and the CPU target the backend lowers to. MIR calls carry typed
+//! arguments only; no QB convention reaches MIR.
 
 use std::collections::BTreeSet;
 use std::fmt;
