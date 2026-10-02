@@ -3004,3 +3004,29 @@ fn peek_and_poke_touch_memory_every_time() {
     assert!(read.captures_iter(&text).any(|found| back(&found[1])), "{text}");
     assert_eq!(text.matches("mov byte ptr es:[108],").count(), 2, "{text}");
 }
+
+/// Every dynamic array shared one `allocation` tag, so a store to `a(i)` was
+/// a write of `b(i)`: `b(i)` was loaded again for `c(i) = a(i) + b(i)` (#113).
+/// Each array a function owns is a type of its own under `allocation`; a
+/// parameter's array and a BYREF element keep no tag, and so alias them all.
+#[test]
+fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = |fill: &str| format!("DECLARE SUB fill (z() AS INTEGER, n AS INTEGER)\r\nDEFINT A-Z\r\nREM $DYNAMIC\r\nDIM SHARED a(100) AS INTEGER, b(100) AS INTEGER\r\nDIM c(100) AS INTEGER\r\nINPUT n\r\nFOR i = 1 TO n\r\na(i) = b(i) + 1\r\nc(i) = a(i) + b(i)\r\nNEXT\r\n{fill}PRINT c(3)\r\nSUB fill (z() AS INTEGER, n AS INTEGER)\r\nz(1) = n\r\nEND SUB\r\n");
+    let loads_of_b = |text: &str| {
+        let mir = optimized_mir(&parsed_as(&written(&directory, "arrays.bas", text.as_bytes()), "qb45", "qb45"));
+        let at = mir.find("define internal cc1000 void @__main").expect("the body");
+        let body = &mir[at..at + mir[at..].find("\n}\n").expect("its end")];
+        // b's tag is the first array's: the one loaded first.
+        let first = body.lines().find(|one| one.contains("load i16") && one.contains("addrspace(1)")).and_then(|one| one.split("!tbaa ").nth(1)).map(str::to_owned).expect("a far load");
+        body.lines().filter(|one| one.contains("load i16") && one.ends_with(&format!("!tbaa {first}"))).count()
+    };
+    let apart = loads_of_b(&source(""));
+    assert_eq!(apart, 1, "b(i) is loaded once");
+    // The SUB's array is any caller's: its accesses carry no array's tag.
+    let mir = emitted_mir(&parsed_as(&written(&directory, "param.bas", source("fill c(), n\r\n").as_bytes()), "qb45", "qb45"));
+    let at = mir.find("define cc1000 void @FILL(").expect("the SUB");
+    let sub = &mir[at..at + mir[at..].find("\n}\n").expect("its end")];
+    let far = sub.lines().filter(|one| one.contains("addrspace(1)") && (one.contains("store i16") || one.contains("load i16"))).collect::<Vec<_>>();
+    assert!(!far.is_empty() && far.iter().all(|one| !one.contains("!tbaa")), "{sub}");
+}

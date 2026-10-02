@@ -228,8 +228,39 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !4\n"), "{text}");
-    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!3 = !{!\"allocation\", !0, i64 0}\n"), "{text}");
+    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"), "{text}");
+    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!5 = !{!\"allocation.0\", !3, i64 0}\n"), "{text}");
+}
+
+/// Another module may name a COMMON array under its own tag path, and the
+/// interprocedural passes meet both in one body: per-array tags would call the
+/// same bytes apart. A COMMON array keeps the generic `allocation` tag.
+#[test]
+fn a_common_array_keeps_the_generic_allocation_tag() {
+    use crate::model::{AddressKind, IndirectPlace, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
+    let instructions = vec![
+        Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
+        Instruction::new(3, Op::Store, vec![], vec![indirect(1, 0, Some(1)), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let places = vec![Place::new(1, "D", 4, Storage::Common, 0)];
+    let mut function = Function::new(1, "FILL", 0, values, places, vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    let mut descriptor = Type::new(4, "descriptor", TypeKind::Array, 4);
+    (descriptor.element, descriptor.rank, descriptor.bounds) = (Some(1), 1, vec![(0, 1)]);
+    program.modules[0].types.extend([far, Type::new(3, "near", TypeKind::Pointer, 2), descriptor]);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(!text.contains("allocation."), "{text}");
 }
 
 /// A far pointer advanced by a displacement moves its offset alone: a GEP
