@@ -6,7 +6,6 @@ pub mod alias;
 pub mod avail;
 pub mod cellmap;
 pub mod consts;
-pub mod effects;
 pub mod floatfacts;
 pub mod frequency;
 pub mod induction;
