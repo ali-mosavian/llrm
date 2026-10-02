@@ -25,6 +25,8 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("noreturn", By(&["test_direct_noreturn_summary_prunes_only_the_callers_impossible_tail"])),
     ("nounwind", By(&["a_routine_that_raises_no_error_is_nounwind", "purity_refuses_nontermination_nonlocal_accesses_and_what_callees_do_not_state"])),
     ("willreturn", Unread("ow-frontend-contract: no frontend states it; functionattrs infers it (test for the inference only)")),
+    ("norecurse", By(&["the_stamp_infers_norecurse_where_nothing_can_reenter", "test_a_leaf_function_comes_out_of_the_compile_norecurse"])),
+    ("mustprogress", By(&["the_stamp_takes_the_languages_word_that_a_loop_ends", "a_loop_with_no_exit_is_never_taken_to_end"])),
     ("nocallback", Unread("ow-frontend-contract: stated by the QB runtime table; a test of globalsaa reading it is owed")),
     ("cold", By(&["test_a_frontend_cold_block_stays_cold_in_the_rich_mir"])),
     ("threeway", Unread("qcport-rich: a pass that folds a compare of a three-way result")),
@@ -44,7 +46,6 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result"])),
     ("invariant", Unread("inline-readers: no pass reads !invariant.load yet")),
     ("unroll", Unread("inline-readers: peelsize `admitted` does not read the hint yet")),
-    ("mustprogress", Unread("compile-time-104: no pass reads it yet")),
 ];
 
 /// The facts a row is owed for: every one the table declares.
