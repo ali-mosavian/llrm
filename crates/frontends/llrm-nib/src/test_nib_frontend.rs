@@ -2161,3 +2161,78 @@ fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
     assert!(result.is_ok(), "{:?}", result.err());
 }
+
+/// MIR infers each defined function's memory effects, per location, from
+/// its body and what its callees are stated to do (#113: Nib states effects
+/// only where no body shows them, the runtime's routines): a function with
+/// no `&mut` and no module-variable write reads memory and writes none, one
+/// that writes through a `&mut` writes only through it, and one of scalars
+/// touches none.
+#[test]
+fn test_mir_infers_what_a_nib_function_touches() {
+    use llrm_mir::{GlobalKind, Attribute};
+    let source = "@extern(\"cdecl16\")\nfn keep(x: i16) -> i16\n\nvar g: i16 = 3\n\nfn scalars(a: i16, b: i16) -> i16:\n    return a * b\n\nfn reads(p: &i16) -> i16:\n    return p + g\n\nfn writes(p: &mut i16) -> void:\n    p = 1\n\nfn main() -> i16:\n    unsafe:\n        let mut x: i16 = keep(2)\n        writes(x)\n        print(scalars(keep(x), reads(x)))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "effects.nib", source));
+    // As the compile does: each function by its name, `main` the entry that keeps the rest alive.
+    for function in &mut program.modules[0].functions {
+        function.symbol = Some(function.name.clone());
+        if function.name == "main" {
+            function.linkage = llrm_core::hir::model::FunctionLinkage::External;
+        }
+    }
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let module = &mir.modules[0];
+    let memory = |name: &str| -> Vec<(Option<String>, String)> {
+        let GlobalKind::Function(function) = &module.global(module.named(name).unwrap_or_else(|| panic!("{name} among {:?}", module.globals.iter().filter_map(|one| one.name.clone()).collect::<Vec<_>>()))).kind else { panic!("{name} is no function") };
+        function.attrs.iter().find_map(|one| if let Attribute::Memory(locations) = one { Some(locations.clone()) } else { None }).unwrap_or_default()
+    };
+    assert_eq!(memory("scalars"), [(None, "none".to_owned())]);
+    assert!(memory("reads").iter().all(|(_, access)| access != "write" && access != "readwrite"), "{:?}", memory("reads"));
+    assert_eq!(memory("writes"), [(Some("argmem".to_owned()), "write".to_owned())]);
+}
+
+/// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
+/// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
+/// in the loop.
+#[test]
+fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "trip.nib", source));
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let assembly = masm::text(&module).expect("prints");
+    let body = between(&assembly, "_total proc far\n", "_total endp");
+    // The loop: from the label its backward jump names to that jump.
+    let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+    let (head, end) = jump
+        .captures_iter(body)
+        .map(|one| (one[1].to_owned(), one.get(0).unwrap().start()))
+        .find(|(label, at)| body[..*at].contains(&format!("{label}:\n")))
+        .expect("a loop");
+    let looped = between(&body[..end], &format!("{head}:\n"), "\0");
+    assert!(!looped.contains("cmp"), "{looped}");
+}
+
+/// Nib frames are not zeroed, but the program claimed they were: the MIR
+/// stored zero into every local at entry (`mov dword ptr [bp-4], 0` before
+/// the struct's own stores) and left each to dead-store elimination, which
+/// -O0 does not run.
+#[test]
+fn test_a_nib_program_does_not_claim_zeroed_frames() {
+    let source = "struct P:\n    mut x: i16\n    mut y: i16\n\nfn f(n: i16) -> i16:\n    let mut p = P(x=n, y=2)\n    p.x += 1\n    return p.x + p.y\n\nfn main() -> i16:\n    print(f(1))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "zeroed.nib", source));
+    assert!(!program.zeroed_locals, "the premise: the program says its frames are not zeroed");
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let assembly = masm::text(&module).expect("prints");
+    let body = between(&assembly, "_f proc far\n", "_f endp");
+    assert!(!body.contains(", 0\n"), "{body}");
+}

@@ -334,6 +334,26 @@ fn test_a_sum_of_two_registers_is_the_base_and_index_of_a_far_address() {
     assert!(!got.lines().any(|line| line.starts_with("add ") && !line.contains("sp")), "{got}");
 }
 
+/// A constant `getelementptr` under two variable indexes is the access's
+/// displacement, `[bx+si+6072]`. It was added into a register first, `add si,
+/// 6072` a trip with its result live beside the others: x_walkcols_usescalem1
+/// spilled the array's base for it (#243).
+#[test]
+fn test_a_constant_under_two_variable_indexes_is_the_displacement_of_the_access() {
+    let text = "define i16 @f(ptr %p, i16 %i, i16 %j) addrspace(1) {
+  %c = getelementptr i8, ptr %p, i16 6072
+  %a = getelementptr i8, ptr %c, i16 %i
+  %b = getelementptr i8, ptr %a, i16 %j
+  %v = load i8, ptr %b
+  %w = zext i8 %v to i16
+  ret i16 %w
+}
+";
+    let got = listing(text, "f").join("\n");
+    assert!(got.contains("6072]"), "{got}");
+    assert!(!got.lines().any(|line| line.starts_with("add ") && line.contains("6072")), "{got}");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {

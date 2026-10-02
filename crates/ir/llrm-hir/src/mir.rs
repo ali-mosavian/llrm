@@ -113,8 +113,8 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
         }
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
-        function.attrs.extend(cells.is_some().then(|| Attribute::Flag("nocallback".to_owned())));
-        function.attrs.extend(nounwind.then(|| Attribute::Flag("nounwind".to_owned())));
+        function.attrs.extend(cells.is_some().then(|| Fact::NoCallback.carrier()));
+        function.attrs.extend(nounwind.then(|| Fact::NoUnwind.carrier()));
         if let Some(cells) = cells {
             let written = std::iter::once(one).chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied())).collect();
             writes.push(node(&mut out, written));
@@ -138,7 +138,7 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
         function.attrs.push(Attribute::Memory(vec![(Some("argmem".to_owned()), "read".to_owned())]));
         for at in 0..function.parameters().len() {
             if matches!(out.context.types.get(function.value(function.parameters()[at]).ty), Type::Pointer(_)) {
-                function.parameter_attrs[at].push(Attribute::Flag("nocapture".to_owned()));
+                function.parameter_attrs[at].push(Fact::NoCapture.carrier());
             }
         }
     }
@@ -255,6 +255,10 @@ struct Tables<'h> {
     nounwind: &'h [String],
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
+    /// The metadata the language's facts give an instruction's result, by function and instruction id.
+    fact_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
+    /// The alignment the language states of an instruction's access.
+    accesses: HashMap<(i64, i64), u64>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
 }
@@ -274,6 +278,34 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
         });
     }
     nodes
+}
+
+/// The metadata `!range` and the like the language's facts give instructions,
+/// and the alignments they state of accesses.
+fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<(HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>)> {
+    let (mut nodes, mut accesses) = (HashMap::new(), HashMap::new());
+    let index = crate::facts::Index::of(hir);
+    for stated in &hir.facts {
+        let Subject::Instruction { function, id } = stated.subject else { continue };
+        match stated.fact {
+            Fact::Align(bytes) => {
+                accesses.insert((function, id), bytes);
+            }
+            Fact::Range(bounds) => {
+                let instruction = index.instruction(function, id).ok_or("a range of no instruction")?;
+                let result = instruction.results.first().ok_or("a range of an instruction with no result")?;
+                let hir_type = index.value_type(function, *result).map(|one| types[&one]).ok_or("a range of an unknown value")?;
+                let ty = value_type(&mut module.context.types, hir_type)?;
+                let bits = module.context.types.int_bits(ty).ok_or("a range of what is no integer")?;
+                let Some(llrm_mir::Attribute::Range { lower, upper, .. }) = Fact::Range(bounds).typed_attribute(ty, bits) else { continue };
+                let (lower, upper) = (module.context.int(ty, lower as i128), module.context.int(ty, upper as i128));
+                module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::Constant(lower), MetadataOperand::Constant(upper)] });
+                nodes.entry((function, id)).or_insert_with(Vec::new).push(("range", MetadataId(module.metadata.len() as u32 - 1)));
+            }
+            _ => {}
+        }
+    }
+    Ok((nodes, accesses))
 }
 
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
@@ -313,9 +345,15 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         classes: HashMap::new(),
         nounwind,
         lines: HashMap::new(),
+        fact_nodes: HashMap::new(),
+        accesses: HashMap::new(),
         variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
+    match fact_nodes(&mut module, hir, &tables.types) {
+        Ok((nodes, accesses)) => (tables.fact_nodes, tables.accesses) = (nodes, accesses),
+        Err(why) => refused.push((hir.name.clone(), why)),
+    }
     match class_tags(&mut module, &hir.alias_classes) {
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -738,11 +776,24 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
         }
     };
     let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of what is no function".to_owned()) };
-    let attrs = match parameter {
-        Some(index) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
-        None => &mut function.attrs,
+    let Type::Function { returns, parameters, .. } = module.context.types.get(function.ty).clone() else { return Err("a fact of a function with no function type".to_owned()) };
+    // What the fact bounds, when it is a range or states of a result.
+    let subject_type = match parameter {
+        Some(index) => *parameters.get(index as usize).ok_or("a fact of no parameter")?,
+        None => returns,
     };
-    let attribute = attribute()?;
+    let attrs = match (parameter, stated.fact.of_result()) {
+        (Some(index), _) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
+        (None, true) => &mut function.return_attrs,
+        (None, false) => &mut function.attrs,
+    };
+    let attribute = match module.context.types.int_bits(subject_type) {
+        Some(bits) => match stated.fact.typed_attribute(subject_type, bits) {
+            Some(typed) => typed,
+            None => attribute()?,
+        },
+        None => attribute()?,
+    };
     if !attrs.contains(&attribute) {
         attrs.push(attribute);
     }
@@ -862,6 +913,15 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
                 && let Entry::Vacant(slot) = tables.callees.entry(name)
             {
                 let ty = function_type(types, to, parameters);
+                let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                slot.insert(module.reference(global));
+            }
+        }
+        if instruction.op == Op::Assume {
+            let types = &mut module.context.types;
+            let (void, i1) = (types.void(), types.int(1));
+            if let Entry::Vacant(slot) = tables.callees.entry(ASSUME.to_owned()) {
+                let ty = function_type(types, void, vec![i1]);
                 let global = module.add_function(slot.key(), ty, Linkage::External)?;
                 slot.insert(module.reference(global));
             }
@@ -1049,6 +1109,9 @@ fn interrupted(function: &model::Function) -> bool {
     function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
 }
 
+/// What the language promises holds, LLVM's intrinsic.
+const ASSUME: &str = "llvm.assume";
+
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
 
@@ -1152,7 +1215,7 @@ fn mark_cold(function: &mut Function, block: BlockId) {
     for inst in function.block(block).instructions().to_vec() {
         let old = function.instruction(inst).clone();
         let Opcode::Call(mut info) = old.opcode else { continue };
-        info.attrs.push(Attribute::Flag("cold".to_owned()));
+        info.attrs.push(Fact::Cold.carrier());
         let new = function.create_instruction(Opcode::Call(info), old.ty, old.operands, old.flags, None);
         function.insert(new, Position::Before(inst)).expect("its call is placed");
         for (kind, node) in old.metadata {
@@ -1180,6 +1243,8 @@ struct Body<'b, 'm, 'h> {
     places: HashMap<i64, &'h model::Place>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
+    /// The `i1` each comparison's result was widened from: what an assumption is made of.
+    truths: HashMap<i64, Value>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
     /// Where a variadic function's variadic arguments start, if a parameter lives with them.
@@ -1214,6 +1279,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             places: function.places.iter().map(|one| (one.id, one)).collect(),
             blocks: HashMap::new(),
             values,
+            truths: HashMap::new(),
             frame: HashMap::new(),
             passed: None,
             objects: Vec::new(),
@@ -1262,6 +1328,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for instruction in &block.instructions {
             let first = self.b.function.instruction_count();
             self.instruction(instruction)?;
+            self.stated(first, instruction);
             line = instruction.line.or(line);
             self.lined(first, line);
         }
@@ -1276,6 +1343,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             mark_cold(self.b.function, self.blocks[&block.id]);
         }
         Ok(())
+    }
+
+    /// What the language's facts say of the instruction lowered as the ones
+    /// made since the `first`th: metadata on its result's, an alignment on its accesses.
+    fn stated(&mut self, first: usize, instruction: &model::Instruction) {
+        let key = (self.function.id, instruction.id);
+        if let Some(nodes) = self.tables.fact_nodes.get(&key)
+            && let Some(Value::Value(value)) = instruction.results.first().and_then(|result| self.values.get(result)).copied()
+            && let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(value).def
+        {
+            for &(kind, node) in nodes {
+                self.b.function.annotate(inst, kind, node);
+            }
+        }
+        if let Some(&bytes) = self.tables.accesses.get(&key) {
+            for at in first..self.b.function.instruction_count() {
+                self.b.function.set_access_align(llrm_mir::InstId(at as u32), bytes);
+            }
+        }
     }
 
     /// Each instruction made since the `first`th, `line`'s: `!dbg`.
@@ -1594,6 +1680,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // BASIC's truth is all ones; an unsigned boolean's, as C's, is one.
             let one = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
             let result = self.b.cast(if one { CastOp::ZExt } else { CastOp::SExt }, truth, ty, "");
+            self.truths.insert(instruction.results[0], truth);
             self.define(instruction, result);
             return Ok(());
         }
@@ -1616,6 +1703,28 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     }
                 }
             }
+            return Ok(());
+        }
+        if op == Op::Assume {
+            // A comparison's own `i1`, so that a reader before instcombine sees the test.
+            let made = match &instruction.operands[0] {
+                Operand::ValueRef(one) => self.truths.get(&one.value).copied(),
+                _ => None,
+            };
+            let holds = match made {
+                Some(truth) => truth,
+                None => {
+                    let condition = self.value(&instruction.operands[0])?;
+                    let ty = self.b.type_of(condition);
+                    let zero = self.b.int(self.b.context.types.int_bits(ty).ok_or("an assumption that is no integer")?, 0);
+                    self.b.icmp(IntPredicate::Ne, condition, zero, "")
+                }
+            };
+            let i1 = self.b.context.types.int(1);
+            let void = self.b.context.types.void();
+            let ty = function_type(&mut self.b.context.types, void, vec![i1]);
+            let callee = Value::Constant(*self.tables.callees.get(ASSUME).ok_or("@llvm.assume undeclared")?);
+            self.b.call(ty, callee, &[holds], "");
             return Ok(());
         }
         if let Some(called) = called(op) {

@@ -98,3 +98,18 @@ fn sanitizers_take_gccs_names() {
     assert_eq!(sanitize(&["-ftrapv"]), Sanitize { signed_integer_overflow: true, ..Sanitize::default() });
     assert!(parsed(&["-fsanitize=address"]).is_err());
 }
+
+/// `-fstack-usage` and `-Wstack-usage=N` were no options: the stack a program
+/// could use was never reported, and `-f` named every flag a pass.
+#[test]
+fn test_stack_usage_options_reach_the_driver() {
+    let mut flags = Flags::default();
+    for argument in ["-fstack-usage", "-Wstack-usage=512"] {
+        let argv = vec![argument.to_owned()];
+        assert!(flags.take(&argv, &mut 0).unwrap(), "{argument}");
+    }
+    let options = flags.driver(crate::abi::machine::BUILT_IN.clone());
+    assert!(options.stack_usage);
+    assert_eq!(options.stack_limit, Some(512));
+    assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());
+}

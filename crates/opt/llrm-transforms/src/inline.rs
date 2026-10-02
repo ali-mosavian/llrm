@@ -138,7 +138,7 @@ fn frame(context: &Context, layout: &DataLayout, function: &Function) -> u64 {
 /// The functions that call themselves, directly or not.
 pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     let graph = CallGraph::new(module);
-    module.functions().map(|(id, _, _)| id).filter(|&id| graph.reaches(id, id)).collect()
+    module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
 }
 
 /// Functions whose address is taken: named anywhere but as a callee.

@@ -1723,10 +1723,12 @@ impl Selector<'_, '_, '_> {
         // An address only accesses read is their base plus the sum as an
         // index, as the old route's addressforms folds `b + (c << k)` read
         // only by cells: the add goes. Word addressing has no scale.
-        if self.only_addressed(address) {
+        let chained = self.chained(address);
+        if self.only_addressed(address) || chained {
             let indexed = match pointer.moved(offset as i64) {
-                Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
                 Pointer::Based { base, index: None, offset, .. } => Some(Pointer::Based { base, index: Some(sum), scale: 1, offset }),
+                _ if chained && !self.only_addressed(address) => None,
+                Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset }),
                 Pointer::Far { selector, base: None, index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(sum), index: None, scale: 1, offset }),
                 // A global and a register already added: the second register beside it.
@@ -1737,6 +1739,16 @@ impl Selector<'_, '_, '_> {
                 self.pointers.insert(address, indexed);
                 return Ok(());
             }
+        }
+        // A base and an index already, and a third register: the two are added,
+        // and the displacement stays the access's, `[sum+index+disp]`.
+        if self.only_addressed(address)
+            && let Pointer::Based { base, index: Some(index), scale: 1, offset: start } = pointer
+        {
+            let both = Held { value: self.fresh(), width };
+            out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(both)], vec![Loc::Held(base), Loc::Held(index)])));
+            self.pointers.insert(address, Pointer::Based { base: both, index: Some(sum), scale: 1, offset: start + offset as i64 });
+            return Ok(());
         }
         let start = match pointer {
             Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } if offset == 0 => Some(base),
@@ -1860,6 +1872,26 @@ impl Selector<'_, '_, '_> {
                     let constant = self.layout.collect_offset(self.types(), *source, &self.indices(one.user)).1.is_empty();
                     one.index == 0 && constant && function.instruction(one.user).result.is_some_and(|result| self.only_addressed(result))
                 }
+                _ => false,
+            })
+    }
+
+    /// Whether every reader of `value` is an access, or a `getelementptr`, in
+    /// its own block, of an address only accesses read: one more index over a
+    /// lazy address. Across blocks the sum is made again in each, where it may
+    /// be a loop's, not once outside it.
+    fn chained(&self, value: ValueId) -> bool {
+        let function = self.function;
+        let block = match function.value(value).def {
+            ValueDef::Instruction(def) => function.parent(def),
+            _ => None,
+        };
+        let users = function.users(value);
+        !users.is_empty()
+            && users.iter().all(|one| match &function.instruction(one.user).opcode {
+                Opcode::Load { .. } => one.index == 0,
+                Opcode::Store { .. } => one.index == 1,
+                Opcode::GetElementPtr { .. } => one.index == 0 && function.parent(one.user) == block && function.instruction(one.user).result.is_some_and(|result| self.only_addressed(result)),
                 _ => false,
             })
     }

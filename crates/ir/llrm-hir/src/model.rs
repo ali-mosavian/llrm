@@ -436,6 +436,9 @@ str_enum!(Op {
     // operands[1], a byte, to operands[0]. Both are observable and ordered.
     PortIn("PORT_IN") = "port_in",
     PortOut("PORT_OUT") = "port_out",
+    // The language promises operands[0], a condition, holds here: passes may
+    // rely on it, as on LLVM's `llvm.assume`. No result.
+    Assume("ASSUME") = "assume",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
     // From here the local operands[0] names holds a value (start), or no longer (end): the
