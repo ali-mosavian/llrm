@@ -12,7 +12,7 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::target;
-use crate::model::ir::{self, Loc, Mem, Operation, Reg, Semantics};
+use crate::model::ir::{self, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;

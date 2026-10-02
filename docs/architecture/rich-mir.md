@@ -92,7 +92,7 @@ call graph. Each fact has one owner (the seventh rule).
 
 ## Stage dumps and the verifier
 
-`tools/stages.py` writes one `.ll` per pass; diffing adjacent files is the
+`LLRM_MIR_STAGES=DIR` writes one `.ll` per pass; diffing adjacent files is the
 debugging evidence (the fourth rule).
 
 `llrm-mir` implements LLVM's `Verifier` rules for its subset, so the

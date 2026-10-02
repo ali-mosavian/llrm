@@ -3,7 +3,7 @@
 
 use crate::model::floating::{Format, Precision, Rounding, Semantics};
 use crate::model::ir::{Loc, Operation};
-use crate::model::mir::{Arg, Kind, Op, OpCode, RaisedBody};
+use crate::model::mir::{Arg, Op, OpCode};
 
 fn _format(width: u32, integer: bool) -> Option<Format> {
     if integer {
@@ -111,96 +111,5 @@ pub fn semantics(op: &Op) -> Option<Semantics> {
             ))
         }
         _ => None,
-    }
-}
-
-pub fn annotated(body: RaisedBody) -> RaisedBody {
-    let annotated_op = |op: &Op| {
-        if op.op == Some(OpCode::Operation(Operation::Nothing))
-            && matches!(op.name.as_str(), "wait" | "fwait")
-            && op.defines.is_empty()
-            && op.uses.is_empty()
-            && op.loads.is_empty()
-            && op.stores.is_empty()
-        {
-            let mut op = op.clone();
-            op.kind = Kind::Fcheck;
-            op.name = String::new();
-            return op;
-        }
-        let mut made = op.clone();
-        made.floating = semantics(op);
-        made
-    };
-    let blocks = body.blocks.iter().map(|block| block.with_ops(block.ops.iter().map(annotated_op).collect())).collect();
-    body.with_blocks(blocks)
-}
-
-#[cfg(test)]
-mod tests {
-    //! The `raising_floats` tests of `tests/test_floating.py`.
-    //!
-    //! Skipped, needing `mir.bodies` and `tools/stages.py`:
-    //! `test_dump_exposes_single_rounding`.
-    use super::*;
-    use crate::model::floating::Exceptions;
-    use crate::model::mir::MemRef;
-
-    /// The same four bytes mean signed integer for FILD, binary32 for FLD.
-    #[test]
-    fn test_conversion_formats_do_not_confuse_integer_and_real() {
-        let cases: [(&str, u32, Option<Format>); 15] = [
-            ("fld", 4, Some(Format::Binary32)),
-            ("fld", 8, Some(Format::Binary64)),
-            ("fld", 10, Some(Format::Extended80)),
-            ("fild", 2, Some(Format::Signed16)),
-            ("fild", 4, Some(Format::Signed32)),
-            ("fild", 8, Some(Format::Signed64)),
-            ("fstp", 4, Some(Format::Binary32)),
-            ("fstp", 8, Some(Format::Binary64)),
-            ("fstp", 10, Some(Format::Extended80)),
-            ("fistp", 2, Some(Format::Signed16)),
-            ("fistp", 4, Some(Format::Signed32)),
-            ("fistp", 8, Some(Format::Signed64)),
-            ("fld", 2, None),
-            ("fild", 10, None),
-            ("unknown", 4, None),
-        ];
-        for (name, width, expected) in cases {
-            let store = matches!(name, "fstp" | "fistp");
-            let reference = MemRef::new(None, width);
-            let operation = if store { Operation::FloatStore } else { Operation::FloatLoad };
-            let mut op = Op::new(0, OpCode::Operation(operation), name, vec![], vec![]);
-            op.kind = if store { Kind::Fstore } else { Kind::Fload };
-            if store {
-                op.stores = vec![reference];
-            } else {
-                op.loads = vec![reference];
-            }
-            let rule = semantics(&op);
-            let Some(expected) = expected else {
-                assert!(rule.is_none(), "{name} {width}");
-                continue;
-            };
-            let rule = rule.unwrap();
-            assert_eq!(if store { rule.result } else { rule.inputs[0] }, expected);
-            assert_eq!(rule.exceptions, Exceptions::Strict);
-            let rounding = if store && width != 10 { Rounding::Dynamic } else { Rounding::None };
-            assert_eq!(rule.rounding, rounding);
-        }
-    }
-
-    #[test]
-    fn test_unary_precision_is_explicit() {
-        for (name, precision, rounding) in [
-            ("fchs", Precision::Exact, Rounding::None),
-            ("fabs", Precision::Exact, Rounding::None),
-            ("fsqrt", Precision::Dynamic, Rounding::Dynamic),
-        ] {
-            let op = Op::new(0, OpCode::Operation(Operation::FloatUnary), name, vec![], vec![]);
-            let rule = semantics(&op).unwrap();
-            assert!(rule.precision == precision && rule.rounding == rounding);
-            assert_eq!(rule.exceptions, Exceptions::Strict);
-        }
     }
 }

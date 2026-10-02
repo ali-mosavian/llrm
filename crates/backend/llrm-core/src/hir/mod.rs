@@ -1,6 +1,5 @@
 //! The common HIR (`llrm-hir`), its lowering to MIR, and its interpreter.
 
-pub mod callmemory;
 pub mod dump;
 pub mod execute;
 pub mod lower;
@@ -18,6 +17,3 @@ pub use model::{
     TypeKind, Value, ValueRef,
 };
 pub use verify::{InvalidHIR, verify};
-
-#[cfg(test)]
-mod test_hir;

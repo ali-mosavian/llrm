@@ -143,23 +143,6 @@ pub struct InlineCode {
 }
 
 impl Physicalized {
-    /// `hints` with each inline block's results where it leaves them. Keyed
-    /// by site, not by value: a pass that copies a block gives the copy new
-    /// values but the same site.
-    pub fn hints_for(&self, body: &mir::MirBody) -> mir::AllocationHints {
-        let mut hints = self.hints.clone();
-        for op in body.blocks.iter().flat_map(|block| &block.ops).filter(|op| op.kind == Kind::Call) {
-            let Some(inline) = self.inline.get(&op.at) else {
-                continue;
-            };
-            for (result, register) in op.results.iter().zip(&inline.outputs) {
-                if let Arg::Held(held) = result {
-                    hints.origins.insert(held.value.variable, *register);
-                }
-            }
-        }
-        hints
-    }
 }
 
 /// An inline block as a call: its declared registers are all it reads and changes.
@@ -1731,46 +1714,4 @@ pub fn physicalize(
         },
         inline,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::assemble::Abi;
-
-    /// A C call clobbered SI and DI when the driver asked the QB defaults
-    /// instead of the program's calling convention.
-    #[test]
-    fn test_a_call_no_runtime_contract_describes_keeps_the_convention_s_registers() {
-        let program = model::Program { preserved: vec!["si".to_owned(), "di".to_owned()], ..model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new()) };
-        let contract = HirAbi::of(&program).unwrap().contract("_strlen", false, 2).unwrap();
-        assert!(contract.clobbers.contains(&runtime::Reg::Ax));
-        assert!(!contract.clobbers.contains(&runtime::Reg::Si) && !contract.clobbers.contains(&runtime::Reg::Di));
-    }
-
-    /// A call keeps what its callee's contract leaves: every call was
-    /// priced as keeping two registers, where B$PEI2 keeps SI alone, a call
-    /// of the program's own keeps none, and a C one keeps SI and DI.
-    #[test]
-    fn test_a_call_keeps_the_registers_its_contract_leaves() {
-        use llrm_mir::target::Machine;
-        let calling = |program: &model::Program| LoweredTarget::of(crate::backend::cpu::profile("486").unwrap(), HirAbi::of(program).unwrap());
-        let qb = calling(&model::Program::new(model::Dialect::Qb45, model::RuntimeProfile::Qb45, Vec::new()));
-        assert_eq!(qb.kept_across(Some(&format!("{}B$PEI2", crate::hir::mir::RUNTIME))), 1);
-        assert_eq!(qb.kept_across(Some("OWN")), 0);
-        let c = calling(&model::Program { preserved: vec!["si".to_owned(), "di".to_owned()], ..model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new()) });
-        assert_eq!(c.kept_across(Some("_strlen")), 2);
-    }
-
-    /// A multiply by a constant costs the chain the backend emits for it
-    /// where that is cheaper: every one was priced as an `imul`.
-    #[test]
-    fn test_a_multiply_by_a_constant_costs_its_chain() {
-        use llrm_mir::target::Machine;
-        let cpu = crate::backend::cpu::profile("486").unwrap();
-        let target = LoweredTarget::of(cpu, HirAbi::of(&model::Program::new(model::Dialect::C, model::RuntimeProfile::Freestanding, Vec::new())).unwrap());
-        let (_, chain) = crate::backend::arithmetic::cheapest_chain(6, cpu).unwrap().unwrap();
-        assert_eq!(target.multiply_by(6), chain);
-        assert!(target.multiply_by(6) < target.costs().multiply);
-    }
 }

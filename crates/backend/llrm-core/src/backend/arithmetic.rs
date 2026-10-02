@@ -13,11 +13,6 @@ pub fn shift<'a>(cpu: impl Into<ProfileOrName<'a>>, count: i64) -> Result<i64, S
     profile.cost(if count == 1 { profile.doubling()? } else { "shift_ri" })
 }
 
-pub fn validate<'a>(cpu: impl Into<ProfileOrName<'a>>) -> Result<(), String> {
-    targets::profile(cpu)?;
-    Ok(())
-}
-
 /// `int.bit_length()`.
 fn bit_length(value: i64) -> i64 {
     i64::from(64 - value.unsigned_abs().leading_zeros())

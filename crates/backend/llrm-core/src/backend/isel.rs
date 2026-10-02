@@ -167,7 +167,6 @@ pub struct Selected {
     pub landing: Option<i64>,
 }
 
-
 /// The bytes a value of `ty` takes in a register.
 fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
     let types = &module.context.types;
@@ -1257,7 +1256,7 @@ impl Selector<'_, '_, '_> {
         let [_, Operand::Block(taken), Operand::Block(otherwise)] = self.function.instruction(inst).operands[..] else { unreachable!("a branch") };
         let (taken, otherwise, second) = (block_at[&taken], block_at[&otherwise], self.chains[&inst][0]);
         let (target, other) = if conjunction { (second, otherwise) } else { (taken, second) };
-        let mut branched = |this: &mut Self, compare: InstId, target: i64, insns: &mut Vec<Arc<Insn>>| -> Result<(), Unselected> {
+        let branched = |this: &mut Self, compare: InstId, target: i64, insns: &mut Vec<Arc<Insn>>| -> Result<(), Unselected> {
             let Test::One(code) = this.compare(compare, at, insns)? else { unreachable!("an integer compare is one condition") };
             insns.push(insn(at, Semantics { target: Some(target), ..semantics(Operation::Branch, code, vec![], vec![]) }));
             Ok(())
@@ -2241,7 +2240,7 @@ impl Selector<'_, '_, '_> {
         let (operand, to) = (instruction.operands[0], instruction.ty);
         let from = self.function.operand_type(&self.module.context, operand).expect("a typed operand");
         let result = instruction.result.expect("a cast's value");
-        let word = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let _word = |value| Loc::Imm(Imm { value, width: 2, address: None });
         let mov = |into: Held, from: Loc| insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(into)], vec![from]));
         if self.is_far(to) {
             if self.only_stored(result) && self.far_words(Operand::Value(result))?.is_some() {
@@ -2594,12 +2593,12 @@ impl Selector<'_, '_, '_> {
             return refuse("a huge pointer difference that is not a dword");
         }
         let ((a_offset, a_selector), (b_offset, b_selector)) = (self.far(arguments[0], at, out)?, self.far(arguments[1], at, out)?);
-        let mut widened = |selector: &mut Self, held: Held, out: &mut Vec<Arc<Insn>>| {
+        let widened = |selector: &mut Self, held: Held, out: &mut Vec<Arc<Insn>>| {
             let wide = selector.fresh_held(4);
             out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(held)])));
             wide
         };
-        let mut binary = |selector: &mut Self, name: &str, into: Option<Held>, sources: Vec<Loc>, out: &mut Vec<Arc<Insn>>| {
+        let binary = |selector: &mut Self, name: &str, into: Option<Held>, sources: Vec<Loc>, out: &mut Vec<Arc<Insn>>| {
             let into = into.unwrap_or_else(|| selector.fresh_held(4));
             out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], sources)));
             into
@@ -2893,9 +2892,9 @@ impl Selector<'_, '_, '_> {
             }
             return Ok(());
         }
-        let mut put = |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+        let put = |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
         // Each side's cell address in a register, as `memset` takes its destination's.
-        let mut through = |this: &mut Self, pointer: Pointer, out: &mut Vec<Arc<Insn>>| match pointer {
+        let through = |this: &mut Self, pointer: Pointer, out: &mut Vec<Arc<Insn>>| match pointer {
             Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } => base,
             _ => {
                 let held = this.fresh_held(2);
@@ -2992,7 +2991,7 @@ impl Selector<'_, '_, '_> {
         let byte = self.constant(value, 1);
         let pattern = |byte: i64, width: u32| (0..width).fold(0i64, |word, _| (word << 8) | (byte & 0xFF));
         let pointer = self.pointer(destination)?;
-        let mut put = |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
+        let put = |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
         let imm = |value: i64, width: u32| Loc::Imm(Imm { value, width, address: None });
         let constant = byte.zip(self.constant(length, 2));
         if let Some((byte, length)) = constant

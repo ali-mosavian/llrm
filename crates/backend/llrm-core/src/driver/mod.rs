@@ -20,7 +20,6 @@ use crate::backend::cpu::{self, Profile, ProfileOrName};
 use crate::backend::masm;
 use crate::backend::target::Segments;
 use crate::hir::model;
-use crate::backend::ehprepare;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir;
 use data::Placed;

@@ -306,50 +306,6 @@ pub fn narrowed(body: &LirBody, pinned: &IndexMap<u32, Register>) -> (LirBody, I
     )
 }
 
-/// Which values are ever live at the same moment.
-pub fn interference(body: &LirBody) -> IndexMap<u32, BTreeSet<u32>> {
-    let (_into, out_of) = live(body);
-    let mut graph: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
-
-    let meet = |graph: &mut IndexMap<u32, BTreeSet<u32>>, alive: &BTreeSet<u32>| {
-        for one in alive {
-            graph
-                .entry(*one)
-                .or_default()
-                .extend(alive.iter().copied().filter(|other| other != one));
-        }
-    };
-
-    for block in &body.blocks {
-        for one in &block.insns {
-            for value in one.defines.iter().chain(&one.uses) {
-                graph.entry(*value).or_default();
-            }
-        }
-        for value in block.arrives() {
-            graph.entry(value).or_default();
-        }
-        let mut alive = out_of[&block.at].clone();
-        meet(&mut graph, &alive);
-        let mut index = block.insns.len() as i64 - 1;
-        while index >= 0 {
-            let first = _group_start(block, index as usize);
-            let group = &block.insns[first..=index as usize];
-            for item in group {
-                for value in &item.defines {
-                    alive.remove(value);
-                }
-            }
-            for item in group {
-                alive.extend(item.uses.iter().copied());
-            }
-            meet(&mut graph, &alive);
-            index = first as i64 - 1;
-        }
-    }
-    graph
-}
-
 /// How far a range has got, and therefore what may still be tried on it.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Stage {
@@ -1931,23 +1887,6 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
         .collect()
 }
 
-/// The memory references spilling these values costs, weighted by loop depth.
-pub fn _traffic(body: &LirBody, spilled: &BTreeSet<u32>) -> f64 {
-    let busy = Frequency::of(body);
-    let mut total = 0.0;
-    for block in &body.blocks {
-        let each = busy.block(block.at);
-        for one in &block.insns {
-            for value in one.defines.iter().chain(&one.uses) {
-                if spilled.contains(value) {
-                    total += each;
-                }
-            }
-        }
-    }
-    total
-}
-
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
 /// reloads, stores and rematerializations, and the frame operands of x87 and
 /// other instructions. The allocator can reach only the first three.
@@ -1976,52 +1915,6 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
         }
     }
     out
-}
-
-/// The instructions a plan inserted, weighted by loop depth.
-///
-/// Unpriced, sum_three's unfolded `add di,bx` looked free and the loop grew
-/// an instruction.
-fn _added(before: &LirBody, after: &LirBody) -> f64 {
-    let busy = Frequency::of(after);
-    let was: IndexMap<i64, usize> = before.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
-    after
-        .blocks
-        .iter()
-        .map(|block| {
-            busy.block(block.at)
-                * block.insns.len().saturating_sub(was.get(&block.at).copied().unwrap_or(0)) as f64
-        })
-        .sum()
-}
-
-/// The memory references to these values' frame slots, weighted by loop depth.
-fn _slot_traffic(body: &LirBody, frame: &Frame, values: &BTreeSet<u32>) -> f64 {
-    let homes: BTreeSet<i64> =
-        values.iter().filter_map(|value| frame.slots.get(&frames::SlotKey::from(*value)).copied()).collect();
-    if homes.is_empty() {
-        return 0.0;
-    }
-    let busy = Frequency::of(body);
-    let mut total = 0.0;
-    for block in &body.blocks {
-        let each = busy.block(block.at);
-        for one in &block.insns {
-            let Some(what) = &one.what else {
-                continue;
-            };
-            for place in what.dests.iter().chain(&what.sources) {
-                if let Loc::Mem(cell) = place {
-                    if cell.addr.is_some_and(|addr| addr.space == Space::Frame && homes.contains(&addr.disp))
-                        && cell.base.is_none()
-                    {
-                        total += each;
-                    }
-                }
-            }
-        }
-    }
-    total
 }
 
 /// Spilled invariant frame loads that repeatedly form addresses.
@@ -2402,7 +2295,7 @@ mod tests {
     use super::*;
     use crate::analysis::intervals::Segment;
     use crate::backend::regalloc_input::{before_regalloc, through};
-    use crate::backend::{cpu, parcopy, select, verify};
+    use crate::backend::{parcopy, select, verify};
     use crate::model::ir::Imm;
 
     fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
@@ -3198,7 +3091,6 @@ mod tests {
         assert_eq!(found[&2], *target::WORD_BASES);
     }
 
-
     #[test]
     fn test_repeated_acyclic_stable_address_base_is_a_retention_candidate() {
         let mut insns = vec![_frame_load(1, 1, 6)];
@@ -3393,6 +3285,4 @@ mod tests {
         let made = splitkit::_next_value(&after) - before;
         assert!(made < 1000, "{made} values made for ten walks");
     }
-
 }
-

@@ -2,46 +2,12 @@
 //! and the records without their fixups.
 
 use std::collections::BTreeSet;
-use std::rc::Rc;
 
 use iced_x86::Code;
 
 use crate::frontends::bc::declen::decode;
 use crate::objectfile::module::Module;
-use crate::objectfile::omf::{self, Record};
-use crate::support::hash::IndexMap;
-
-pub fn native_records(module: &Module, starts: &BTreeSet<usize>) -> Vec<Rc<Record>> {
-    let patches = sites(module, starts);
-    // keyed by id(record)
-    let mut removed: IndexMap<*const Record, Vec<(usize, usize)>> = IndexMap::default();
-    for fixup in omf::fixups(&module.records) {
-        if fixup.seg == Some(module.seg) && fixup.offset >= 0 && patches.contains(&(fixup.offset as usize)) {
-            removed.entry(Rc::as_ptr(&fixup.record)).or_default().push((fixup.lo, fixup.hi));
-        }
-    }
-    let mut records: Vec<Rc<Record>> = Vec::new();
-    for record in &module.records {
-        let mut ranges = removed.get(&Rc::as_ptr(record)).cloned().unwrap_or_default();
-        ranges.sort();
-        if ranges.is_empty() {
-            records.push(record.clone());
-            continue;
-        }
-        let mut fragments: Vec<&[u8]> = Vec::new();
-        let mut cursor = 0;
-        for (lo, hi) in ranges {
-            fragments.push(slice(&record.body, cursor, lo));
-            cursor = hi;
-        }
-        fragments.push(slice(&record.body, cursor, record.body.len()));
-        let body = fragments.concat();
-        if !body.is_empty() {
-            records.push(Rc::new(Record { r#type: record.r#type, body, raw: None }));
-        }
-    }
-    records
-}
+use crate::objectfile::omf::{self};
 
 pub fn sites(module: &Module, starts: &BTreeSet<usize>) -> BTreeSet<usize> {
     let names = omf::externals(&module.records);

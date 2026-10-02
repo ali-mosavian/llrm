@@ -1,10 +1,7 @@
 //! Python's `pathlib.Path.resolve()` and `str(OSError)`, where a port reads
 //! files and reports their errors as Python did.
 
-use std::io;
 use std::path::{Component, Path, PathBuf};
-
-use crate::pyrepr;
 
 /// `Path(path).resolve()`, which is `posixpath.realpath` without `strict`:
 /// absolute, each existing symlink followed, `..` applied to what came
@@ -38,38 +35,6 @@ fn _join(out: &mut PathBuf, rest: &Path, depth: usize) {
                     _ => *out = candidate,
                 }
             }
-        }
-    }
-}
-
-/// `str(error)` for the `OSError` Python raised reading `filename`:
-/// `[Errno N] strerror: 'filename'`.
-pub fn os_error(error: &io::Error, filename: &Path) -> String {
-    let text = error.to_string();
-    match error.raw_os_error() {
-        Some(code) => {
-            let strerror = text.strip_suffix(&format!(" (os error {code})")).unwrap_or(&text);
-            format!("[Errno {code}] {strerror}: {}", pyrepr::string(&filename.to_string_lossy()))
-        }
-        None => text,
-    }
-}
-
-/// `bytes.decode("utf-8")`'s `UnicodeDecodeError` text, or the string.
-pub fn decode_utf8(data: &[u8]) -> Result<String, String> {
-    match std::str::from_utf8(data) {
-        Ok(text) => Ok(text.to_owned()),
-        Err(error) => {
-            let at = error.valid_up_to();
-            let byte = data[at];
-            let reason = if matches!(byte, 0x80..=0xC1 | 0xF5..=0xFF) {
-                "invalid start byte"
-            } else if error.error_len().is_none() {
-                "unexpected end of data"
-            } else {
-                "invalid continuation byte"
-            };
-            Err(format!("'utf-8' codec can't decode byte {byte:#04x} in position {at}: {reason}"))
         }
     }
 }

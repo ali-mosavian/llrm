@@ -507,7 +507,7 @@ fn a_lifetime_marker_names_one_local() {
 #[test]
 fn a_byte_copy_is_a_memcpy_of_its_bytes() {
     use crate::model::{Place, Storage};
-    let mut place = |id, offset| {
+    let place = |id, offset| {
         let mut one = Place::new(id, "X", 1, Storage::Local, offset);
         one.extent = Some(6);
         one
@@ -710,7 +710,7 @@ fn a_languages_promises_reach_mir() {
     let mut boolean = Type::new(2, "bool", TypeKind::Boolean, 2);
     boolean.signed = Some(false);
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
-    let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
+    let advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
     let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None });
     let instructions = vec![
         advance,

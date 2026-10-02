@@ -1,7 +1,7 @@
 //! Source occurrences recognised as halves of a BC long operation.
 //!
-//! Direct port of `qbopt.legacy.lift.py:{Kind,Decoded,FIXUP}`.  These are
-//! deliberately decoded OMF-source facts, not generic machine instructions.
+//! The decoder's classification, ported from `qbopt.legacy.lift.py`. These
+//! are deliberately decoded OMF-source facts, not generic machine instructions.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

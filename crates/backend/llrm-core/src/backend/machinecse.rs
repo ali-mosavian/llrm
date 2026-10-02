@@ -26,23 +26,6 @@ const _REPRODUCIBLE: [(Operation, &str); 4] = [
     (Operation::Address, "lea"),
 ];
 
-/// Remove an exact physical recomputation whose inputs still agree.
-pub struct MachineCSE;
-
-impl LIRTransform for MachineCSE {
-    fn class_name(&self) -> &'static str {
-        "MachineCSE"
-    }
-
-    fn name(&self) -> &str {
-        "machine-cse"
-    }
-
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        eliminated(&body)
-    }
-}
-
 fn _relocated(where_: &Loc) -> bool {
     match where_ {
         Loc::Imm(one) => one.address.is_some(),

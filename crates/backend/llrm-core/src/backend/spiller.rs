@@ -6,7 +6,6 @@
 //! lives only across that one instruction.
 
 use std::collections::BTreeSet;
-use std::fmt;
 use std::sync::Arc;
 
 use iced_x86::Register;
@@ -22,41 +21,8 @@ use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg,
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::memory::MemoryKind;
 use crate::model::mir::{self, MemRef};
-use crate::model::passes::{Exception, LIRTransform};
+use crate::model::passes::LIRTransform;
 use crate::support::pyset::PySet;
-
-pub struct Spiller {
-    pub spilled: BTreeSet<u32>,
-    pub frame: Option<Frame>,
-}
-
-impl Spiller {
-    pub const NAME: &'static str = "spill";
-
-    pub fn new(spilled: BTreeSet<u32>, frame: Option<Frame>) -> Self {
-        Self { spilled, frame }
-    }
-}
-
-impl LIRTransform for Spiller {
-    fn class_name(&self) -> &'static str {
-        "Spiller"
-    }
-
-    fn name(&self) -> &str {
-        Self::NAME
-    }
-
-    /// Python returns `spilled(...)`'s pair; the trait carries the body.
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        spilled(&body, &self.spilled, self.frame.as_mut()).map(|(body, _made)| body).map_err(|error| error.to_string())
-    }
-
-    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        spilled(&body, &self.spilled, self.frame.as_mut()).map(|(body, _made)| body).map_err(|error| error.raised())
-    }
-}
-
 
 /// `frame.WORD` at the width type this module uses.
 const WORD: u32 = frames::WORD as u32;
@@ -108,10 +74,6 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// The values this plan puts in slots.
-    pub fn stored(&self) -> &BTreeSet<u32> {
-        &self.stored
-    }
 }
 
 /// `values` of `body` decided: how each is spilled, and the slots of those stored.
@@ -878,17 +840,6 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
     (colors, live)
 }
 
-/// Spill candidates whose value can be reconstructed without a slot.
-pub fn rematerializable(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
-    let mut out: BTreeSet<u32> = _constants(body, values).keys().copied().collect();
-    out.extend(_addresses(body, values).keys().copied());
-    out.extend(_extensions(body, values).keys().copied());
-    out.extend(frame_rematerializable(body, values));
-    out.extend(_stable_loads(body, values).keys().copied());
-    out.extend(_frame_homes(body, values).keys().copied());
-    out
-}
-
 /// The instruction that remakes `value` anywhere: its only definition, when
 /// that reads nothing (a constant or an address).
 pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
@@ -906,11 +857,6 @@ pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
         && one.clobbers.is_empty()
         && one.group.is_none();
     alone.then(|| Arc::clone(one))
-}
-
-/// Frame-loaded selectors whose proof permits eager rematerialization.
-pub fn frame_rematerializable(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
-    _frame_loads(body, values).keys().copied().collect()
 }
 
 /// Values loaded from a cell nothing changes before they are used again.
@@ -2130,19 +2076,6 @@ pub fn _renamed(one: &Insn, rename: &IndexMap<u32, u32>) -> Arc<Insn> {
 fn _settled(place: &Loc, rename: &IndexMap<u32, u32>) -> Loc {
     ir::mapped(place, |one| Held { value: rename.get(&one.value).copied().unwrap_or(one.value), width: one.width })
 }
-
-/// A move in a parallel copy with both ends spilled. Retained for callers
-/// reporting this legacy refusal.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Simultaneous(pub String);
-
-impl fmt::Display for Simultaneous {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Simultaneous {}
 
 /// One move of a parallel copy, with its spilled end read or written where it lives.
 fn _in_place(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Option<Arc<Insn>>, Error> {

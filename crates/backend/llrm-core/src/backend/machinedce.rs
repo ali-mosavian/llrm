@@ -16,8 +16,7 @@ use iced_x86::Register;
 use crate::backend::liveness;
 use crate::backend::peephole::id;
 use crate::model::ir::{Loc, Operation, Space};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
+use crate::model::lir::{self, Insn, LirBody};
 
 const _PURE: [Operation; 9] = [
     Operation::Move,
@@ -32,23 +31,6 @@ const _PURE: [Operation; 9] = [
 ];
 const _STATEFUL_REGISTERS: [Register; 6] =
     [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
-
-/// Remove an allocated computation with no live physical result.
-pub struct MachineDCE;
-
-impl LIRTransform for MachineDCE {
-    fn class_name(&self) -> &'static str {
-        "MachineDCE"
-    }
-
-    fn name(&self) -> &str {
-        "machine-dce"
-    }
-
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        Ok(eliminated(body))
-    }
-}
 
 fn _relocated(where_: &Loc) -> bool {
     match where_ {

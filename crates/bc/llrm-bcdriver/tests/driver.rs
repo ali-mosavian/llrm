@@ -223,3 +223,31 @@ fn data_emission_adds_is_laid_out() {
         llrm_bcdriver::compiled(&data, "386", name).unwrap_or_else(|why| panic!("{name}: {why}"));
     }
 }
+
+/// The recompiled `name`'s code after its header, decoded in order.
+fn instructions(name: &str) -> Vec<iced_x86::Instruction> {
+    let records = recompiled(name);
+    let (_, code_name, _) = omf::code_segment(&records).expect("code");
+    let (_, image) = segment(&records, &code_name);
+    let decoded: Vec<iced_x86::Instruction> = iced_x86::Decoder::with_ip(16, &image[0x30..], 0x30, iced_x86::DecoderOptions::NONE).into_iter().collect();
+    assert!(!decoded.iter().any(iced_x86::Instruction::is_invalid), "{name}: the code decodes");
+    decoded
+}
+
+/// PRESSX retained an unconditional jump to its exit immediately after loop elimination.
+#[test]
+fn pressx_has_no_jump_to_the_following_instruction() {
+    for insn in instructions("pressx-p-g2.obj") {
+        if insn.mnemonic() == iced_x86::Mnemonic::Jmp && matches!(insn.op0_kind(), iced_x86::OpKind::NearBranch16 | iced_x86::OpKind::NearBranch32) {
+            assert_ne!(insn.near_branch_target(), insn.next_ip(), "{insn}");
+        }
+    }
+}
+
+/// FPCSE's removed loop still took three unconditional jumps through its old block layout.
+#[test]
+fn a_removed_floating_loop_is_emitted_in_execution_order() {
+    for tag in ["p-g2", "q-o", "v-g3"] {
+        assert!(!instructions(&format!("fpcse-{tag}.obj")).iter().any(|insn| insn.mnemonic() == iced_x86::Mnemonic::Jmp), "{tag}");
+    }
+}

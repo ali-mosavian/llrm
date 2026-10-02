@@ -12,7 +12,7 @@ use crate::support::hash::HashMap;
 
 use crate::support::hash::IndexMap;
 
-use crate::model::mir::{self, Arg, Kind, MirBlock, MirBody, Op, Value};
+use crate::model::mir::{self, Arg, Kind, MirBody, Op, Value};
 
 const _WORD: u32 = 2;
 

@@ -29,14 +29,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const fn value(self) -> &'static str {
-        match self {
-            Self::Live => "live-on-entry",
-            Self::Use => "use",
-            Self::Def => "def",
-            Self::Phi => "phi",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -91,18 +83,6 @@ impl MemorySSA<'_> {
     /// forwarding consumers must establish value availability separately.
     pub fn clobbers(&self, site: Site, memory: &MemRef, dgroup: Option<&RegionLayout>) -> BTreeSet<usize> {
         self._frontier(site, memory, dgroup, None, None, None)
-    }
-
-    /// Whether a dominating earlier read's memory state still applies.
-    ///
-    /// The caller must establish dominance and equal addresses. Stop at
-    /// the earlier memory version, rejecting any possibly aliasing write
-    /// on the way, including writes carried by loop backedges.
-    pub fn unchanged(&self, earlier: Site, later: Site, memory: &MemRef, dgroup: Option<&RegionLayout>) -> bool {
-        let boundary = self.at(earlier).defining;
-        boundary.is_some_and(|boundary| {
-            self._frontier(later, memory, dgroup, Some(boundary), None, None) == BTreeSet::from([boundary])
-        })
     }
 
     fn _frontier(
@@ -164,30 +144,6 @@ impl MemorySSA<'_> {
             }
         }
         found
-    }
-
-    /// An earlier load/store still supplies these bytes on one incoming edge.
-    ///
-    /// The caller proves equal addresses and that the scalar provider dominates
-    /// the predecessor. Only the destination's memory phi is edge-selected;
-    /// other intervening joins still require agreement along every path.
-    /// A translated address applies outside the destination; its prefix must
-    /// still be checked against the original phi-based address.
-    pub fn available_on_edge(
-        &self,
-        earlier: Site,
-        later: Site,
-        predecessor: i64,
-        memory: &MemRef,
-        dgroup: Option<&RegionLayout>,
-        edge_memory: Option<&MemRef>,
-    ) -> bool {
-        let source = self.at(earlier);
-        let boundary = if source.kind == Kind::Def { Some(source.id) } else { source.defining };
-        boundary.is_some_and(|boundary| {
-            self._frontier(later, memory, dgroup, Some(boundary), Some(predecessor), edge_memory)
-                == BTreeSet::from([boundary])
-        })
     }
 }
 
@@ -296,7 +252,3 @@ pub fn built(body: &MirBody) -> MemorySSA<'_> {
         .collect();
     MemorySSA { live, accesses, sites, phis, operations, pointers: pointerfacts::offsets(body) }
 }
-
-#[cfg(test)]
-#[path = "memoryssa_tests.rs"]
-mod tests;

@@ -1,10 +1,7 @@
 //! Port of `qbopt/flow.py`: so far the MIR fixed point, the machine phases and their gate.
 
-use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use crate::support::hash::IndexMap;
 use iced_x86::Register;
@@ -19,9 +16,7 @@ use crate::backend::{
 
 use crate::backend::verify::{self, Malformed};
 use crate::model::lir::LirBody;
-use crate::model::mir::MirBody;
-use crate::model::passes::{LIRTransform, Options, LEVELS};
-use crate::optimize::transform;
+use crate::model::passes::LIRTransform;
 
 /// Every phase between lowering and emission, in order, for the legacy routes that lower
 /// by themselves (`--legacy`, the BC machine-code route): the spiller is left out, which
@@ -84,50 +79,6 @@ pub fn machine_with<'a>(
         phases.retain(|phase| phase.class_name() != "SsaSpill");
     }
     Ok(phases)
-}
-
-/// The MIR fixed point every driver runs, configured by target and options alone.
-///
-/// A switch one frontend sets and another does not makes the same program
-/// compile differently by spelling: sum_three took three paths here.
-/// Promotion needs dominators, which an irreducible CFG -- QB's RESUME
-/// entering a loop -- does not have; that is a fact about the body.
-#[allow(clippy::too_many_arguments)]
-pub fn optimized<'a>(
-    body: &Rc<MirBody>,
-    dgroup: &BTreeSet<i64>,
-    calls: &IndexMap<i64, String>,
-    cpu: impl Into<ProfileOrName<'a>>,
-    options: Options,
-    blocks: Option<Rc<Vec<crate::frontends::bc::blocks::Block>>>,
-    found: Option<Rc<crate::objectfile::module::Module>>,
-    only: Option<String>,
-    watch: Option<&mut dyn FnMut(&str, &MirBody)>,
-) -> Result<Rc<MirBody>, String> {
-    use crate::analysis::loops;
-
-    let target = targets::profile(cpu)?;
-    let mut options = options;
-    if !loops::irreducible(&body.blocks, Some(body.entry)).is_empty() {
-        options = Options { promote: false, ..options };
-    }
-    transform::applied(
-        body,
-        dgroup,
-        calls,
-        transform::Applied {
-            blocks,
-            found,
-            only,
-            options,
-            registers: Some(target.register_capacity),
-            call_registers: target.call_register_capacity,
-            index_scales: Some(target.address_scales.clone()),
-            address_forms: Some(target.address_forms.clone()),
-            costs: Some(target.operations.clone()),
-            watch,
-        },
-    )
 }
 
 /// Return a well-formed body or name the phase boundary that is not.

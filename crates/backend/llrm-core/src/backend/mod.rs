@@ -3,6 +3,7 @@
 pub mod addressforms;
 pub mod affine;
 pub mod addressvalues;
+pub mod lirtext;
 pub mod assemble;
 pub mod allocate;
 pub mod arithmetic;
@@ -25,7 +26,6 @@ pub mod floatalloc;
 pub mod floatassign;
 pub mod floatregions;
 pub mod inline_asm;
-pub mod fpu;
 pub mod frame;
 pub mod slots;
 pub mod stackusage;

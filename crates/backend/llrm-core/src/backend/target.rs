@@ -168,20 +168,6 @@ fn _root(register: Register) -> Register {
     ir::root(register)
 }
 
-/// A shift whose count is a register takes it in cl and says so.
-///
-/// A funnel shift counts from cl and from nowhere else.
-pub fn _shifted(what: &Semantics) -> bool {
-    if what.op == Operation::Funnel {
-        return what.sources.len() == 3 && matches!(what.sources[2], Loc::Reg(_));
-    }
-    ["shl", "shr", "sar", "rol", "ror", "rcl", "rcr"].contains(&what.name.as_deref().unwrap_or(""))
-        && what
-            .sources
-            .iter()
-            .any(|one| matches!(one, Loc::Reg(reg) if _root(reg.register) == Register::ECX))
-}
-
 /// Whether this is an x87 operation, which shares no register with the rest.
 ///
 /// `ir` models `fdivp` as a DIVIDE, and the widening rule claimed it reads

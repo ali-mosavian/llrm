@@ -15,8 +15,6 @@ use crate::backend::allocate;
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::mir::MirBlock;
 
-// Points per instruction: where it reads, and where it writes.
-pub const USE: i64 = 0;
 pub const DEF: i64 = 1;
 pub const PER_INSN: i64 = 2;
 
@@ -271,19 +269,6 @@ pub fn level(depth: u32) -> f64 {
 
 /// Added to the size before dividing. LLVM's `25 * InstrDist`.
 pub const GRACE: i64 = 25 * PER_INSN;
-
-/// What spilling each value would cost. See `_weights` for the formula.
-pub fn weights(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, f64> {
-    let owned;
-    let index = match index {
-        Some(index) => index,
-        None => {
-            owned = indexed(body);
-            &owned
-        }
-    };
-    _weights(body, index, &_ranges(body, index))
-}
 
 /// `references weighted by block frequency / (live slots + grace)`.
 fn _weights(body: &LirBody, _index: &Indexes, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {

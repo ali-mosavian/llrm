@@ -3,53 +3,9 @@
 //! `transform(body) -> body` is the whole contract. Anything a pass needs to
 //! know about the module it is compiling is given when the pass is made.
 
-use std::any::Any;
-use std::rc::Rc;
-use std::collections::BTreeSet;
-use std::sync::Arc;
-
 use crate::support::hash::IndexMap;
 
-use crate::model::ir::Space;
 use crate::model::lir::LirBody;
-use crate::model::mir::MirBody;
-
-/// One transformation over a body.
-///
-/// Implementors override `transform` and nothing else. `name` is what the
-/// pipeline lists it by and what `--only` matches.
-pub trait MIRTransform {
-    /// `type(self).__name__`.
-    fn class_name(&self) -> &'static str;
-
-    fn name(&self) -> &str {
-        ""
-    }
-
-    fn transform(&mut self, body: Rc<MirBody>) -> Result<Rc<MirBody>, String> {
-        let _ = body;
-        Err(format!("{} has no transform", self.class_name()))
-    }
-
-    /// How many times the passes before it must settle before it runs. A
-    /// pass whose rewrite cannot be undone must choose on canonical MIR, not
-    /// on another pass's leftovers; one that chooses last waits for those.
-    fn settles_after(&self) -> u8 {
-        0
-    }
-
-    /// `__repr__`.
-    fn repr(&self) -> String {
-        format!(
-            "<{}>",
-            if self.name().is_empty() {
-                self.class_name()
-            } else {
-                self.name()
-            }
-        )
-    }
-}
 
 /// A Python exception crossing a boundary: `type(error).__module__`,
 /// `__name__` and `str(error)`. A caller that catches by class, as
@@ -70,14 +26,6 @@ impl Exception {
     /// A class a qbopt module defines, e.g. `qbopt.backend.masm`'s `Unprintable`.
     pub fn defined_in(module: &'static str, kind: &'static str, message: impl Into<String>) -> Self {
         Exception { module, kind, message: message.into() }
-    }
-
-    /// The last line of the traceback Python prints when this escapes.
-    pub fn traceback(&self) -> String {
-        match self.module {
-            "builtins" => format!("{}: {}", self.kind, self.message),
-            module => format!("{module}.{}: {}", self.kind, self.message),
-        }
     }
 }
 
@@ -110,22 +58,9 @@ pub trait LIRTransform {
     fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
         self.transform(body).map_err(|message| Exception::new("Exception", message))
     }
-
-    /// `__repr__`.
-    fn repr(&self) -> String {
-        format!(
-            "<{}>",
-            if self.name().is_empty() {
-                self.class_name()
-            } else {
-                self.name()
-            }
-        )
-    }
 }
 
 pub use llrm_mir::target::{AddressForm, OperationCosts};
-
 
 pub const DEFAULT_MAX_UNROLL_ITERATIONS: i64 = 16;
 pub const DEFAULT_MAX_UNROLLED_OPERATIONS: i64 = 200;
@@ -201,54 +136,3 @@ pub fn LEVELS() -> IndexMap<&'static str, Options> {
 pub fn O2() -> Options {
     LEVELS()["O2"].clone()
 }
-
-/// What a pass may be told about the module it is compiling.
-///
-/// Handed to a pass when it is made, never reachable from `transform`.
-#[derive(Clone)]
-pub struct Where {
-    pub dgroup: BTreeSet<i64>,
-    pub calls: Option<IndexMap<i64, String>>,
-    pub bounds: Option<IndexMap<(Space, i64), Vec<i64>>>,
-    pub blocks: Option<Rc<Vec<crate::frontends::bc::blocks::Block>>>,
-    pub found: Option<Rc<crate::objectfile::module::Module>>,
-    pub registers: i64,
-    // Values the target can keep live across an ordinary call.
-    pub call_registers: i64,
-    // The multipliers an address may apply to an index register.
-    pub index_scales: BTreeSet<i64>,
-    // Complete legal indexed-address families.
-    pub address_forms: Vec<AddressForm>,
-    // Semantic work only.
-    pub costs: OperationCosts,
-    pub options: Options,
-}
-
-impl Default for Where {
-    fn default() -> Self {
-        Self {
-            dgroup: BTreeSet::new(),
-            calls: None,
-            bounds: None,
-            blocks: None,
-            found: None,
-            registers: 0,
-            call_registers: 0,
-            index_scales: BTreeSet::new(),
-            address_forms: Vec::new(),
-            costs: OperationCosts::default(),
-            options: Options::default(),
-        }
-    }
-}
-
-impl Where {
-    /// `self.calls or {}`.
-    pub fn named(&self) -> IndexMap<i64, String> {
-        match &self.calls {
-            Some(calls) if !calls.is_empty() => calls.clone(),
-            _ => IndexMap::default(),
-        }
-    }
-}
-

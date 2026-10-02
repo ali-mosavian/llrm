@@ -18,7 +18,7 @@ use super::occurrence::{OpOccurrence, PhiOccurrence, operations, phis};
 use super::noreturn;
 use super::ranges;
 use super::regions::{RegionError, RegionLayout, overlapping};
-use crate::analysis::loops::{self, Loop, predecessors};
+use crate::analysis::loops::{self, Loop};
 use crate::model::mir::{self, Arg, Const, Held, Kind, MemRef, MirBody, Op, OrderedMap, Value};
 use crate::support::pyset::PySet;
 
@@ -85,16 +85,6 @@ pub struct Derived {
     pub pointer: Option<Arg>,
 }
 
-/// A width-limited `scale * source + offset` relation.
-///
-/// Direct port of `qbopt.analysis.induction:AffineMap`.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct AffineMap {
-    pub scale: BigInt,
-    pub offset: BigInt,
-    pub width: u32,
-}
-
 /// The one proof of how many trips a loop makes, shared by every pass.
 ///
 ///     i = start; loop { [i test bound?] body; i += step; [i test bound?] }
@@ -139,11 +129,6 @@ pub struct CountedLoop {
 }
 
 impl CountedLoop {
-    /// Python's `CountedLoop.inclusive` property.
-    pub const fn inclusive(&self) -> bool {
-        _INCLUSIVE(self.test)
-    }
-
     /// Python's `CountedLoop.width` property.
     pub const fn width(&self) -> u32 {
         self.bound.width()
@@ -152,16 +137,6 @@ impl CountedLoop {
     /// The proven phi in `body`, the snapshot this proof indexes.
     pub fn phi_in<'b>(&self, body: &'b MirBody) -> &'b mir::Phi {
         &body.blocks[self.phi.block_index()].phis[self.phi.phi_index()]
-    }
-
-    /// The proven compare in `body`, the snapshot this proof indexes.
-    pub fn compare_in<'b>(&self, body: &'b MirBody) -> &'b Op {
-        &body.blocks[self.compare.block_index()].ops[self.compare.operation_index()]
-    }
-
-    /// The proven branch in `body`, the snapshot this proof indexes.
-    pub fn branch_in<'b>(&self, body: &'b MirBody) -> &'b Op {
-        &body.blocks[self.branch.block_index()].ops[self.branch.operation_index()]
     }
 
     /// The signed values the header's counter takes on a trip, lowest first.
@@ -189,168 +164,6 @@ const fn _INCLUSIVE(test: Kind) -> bool {
 #[allow(non_snake_case)]
 const fn _UNSIGNED(test: Kind) -> bool {
     matches!(test, Kind::Below | Kind::BelowEq | Kind::Above | Kind::AboveEq)
-}
-
-/// The preheader test `bound SKIPPED start` under which no trip runs: `_SKIPPED[test]`.
-#[allow(non_snake_case)]
-fn _SKIPPED(test: Kind) -> Kind {
-    assert!(_ASCENDING(test) || _DESCENDING(test) || test == Kind::Ne, "KeyError: {test:?}");
-    mir::MIRRORED(mir::NEGATED(test).expect("a comparison negates")).expect("a comparison mirrors")
-}
-
-/// Python's `Computed`: places one preheader operation and returns its result.
-pub type Computed<'a> = dyn FnMut(Kind, Vec<Arg>) -> AffineOperand + 'a;
-
-/// The preheader comparison, and the test on it, under which the loop runs no trips.
-pub fn skipped(proof: &CountedLoop) -> Option<((AffineOperand, AffineOperand), Kind)> {
-    if proof.posttested {
-        return None;
-    }
-    Some(((proof.bound.clone(), proof.start.clone()), _SKIPPED(proof.test)))
-}
-
-/// Trips on the entered path, exact modulo the compare's width, or None where not expressible.
-///
-/// `computed(kind, args)` places one preheader operation and returns its
-/// result. `counted` proved the count finite.
-pub fn trips(proof: &CountedLoop, computed: &mut Computed<'_>) -> Option<AffineOperand> {
-    let width = proof.width();
-    if proof.posttested {
-        return None;
-    }
-    if let Some(count) = &proof.count {
-        return (count < &(BigInt::from(1_u8) << (8 * width)))
-            .then(|| AffineOperand::Const(Const::new(count.clone(), width)));
-    }
-    let (ahead, behind) =
-        if proof.step > BigInt::from(0_u8) { (&proof.bound, &proof.start) } else { (&proof.start, &proof.bound) };
-    let count = computed(Kind::Sub, vec![ahead.as_arg(), behind.as_arg()]);
-    Some(computed(Kind::Add, vec![count.as_arg(), Arg::Const(Const::new(u8::from(proof.inclusive()), width))]))
-}
-
-/// The header's counter as a pre-tested loop that ran a trip leaves: the first value failing its test.
-pub fn exit_value(proof: &CountedLoop, computed: &mut Computed<'_>) -> Option<AffineOperand> {
-    let width = proof.width();
-    if proof.posttested {
-        return None;
-    }
-    if proof.test == Kind::Ne {
-        return Some(proof.bound.clone());
-    }
-    if let (AffineOperand::Const(start), Some(count)) = (&proof.start, &proof.count) {
-        return Some(AffineOperand::Const(Const::new(masked(&(&start.n + count * &proof.step), width), width)));
-    }
-    let past = Const::new(masked(&(&proof.step * u8::from(proof.inclusive())), width), width);
-    if let AffineOperand::Const(bound) = &proof.bound {
-        return Some(AffineOperand::Const(Const::new(masked(&(&bound.n + &past.n), width), width)));
-    }
-    Some(computed(Kind::Add, vec![proof.bound.as_arg(), Arg::Const(past)]))
-}
-
-/// Proof that a counted loop's source recurrence may be removed.
-///
-/// Direct port of `qbopt.analysis.induction:ControlReplacement`.  The
-/// counted-loop proof is borrowed, retaining Python's `is` relationship for
-/// the consumer.  Operations and phis use snapshot-local occurrences rather
-/// than `Op.source` or structural equality.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ControlReplacement<'a> {
-    pub counted: &'a CountedLoop,
-    pub stepping: OpOccurrence,
-    pub update: Value,
-    pub aliases: BTreeSet<Value>,
-    pub copies: BTreeSet<OpOccurrence>,
-    /// Exit-block phis reading the counter as the loop leaves: `exit_value`
-    /// after a trip, `start` after none.
-    pub exits: Vec<PhiOccurrence>,
-}
-
-/// Proof that an affine recurrence's update flags end counted control.
-///
-/// Direct port of `qbopt.analysis.induction:ZeroTerminatingControl`.  The
-/// replacement borrows the exact counted-loop proof supplied by the caller,
-/// as its Python counterpart retains that object.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ZeroTerminatingControl<'a> {
-    pub replacement: ControlReplacement<'a>,
-    pub candidate: Affine,
-    pub step: BigInt,
-    pub maximum: BigInt,
-    pub period: BigInt,
-}
-
-impl AffineMap {
-    /// Python's `AffineMap.period` property.
-    pub fn period(&self) -> BigInt {
-        let modulus = BigInt::from(1_u8) << (self.width * 8);
-        let scale = if self.scale < BigInt::from(0_u8) {
-            -&self.scale
-        } else {
-            self.scale.clone()
-        };
-        modulus.clone() / gcd(scale, modulus)
-    }
-
-    /// Python's `AffineMap.injective(low, high)`.
-    pub fn injective(&self, low: &BigInt, high: &BigInt) -> bool {
-        self.scale != BigInt::from(0_u8) && high - low < self.period()
-    }
-}
-
-/// Python's `relation(source, target, facts)`.
-pub fn relation(
-    source: &Affine,
-    target: &Affine,
-    facts: &IndexMap<Value, Known>,
-) -> Option<AffineMap> {
-    let width = source.start.width();
-    if target.start.width() != width {
-        return None;
-    }
-    let source_start = _signed(&source.start.as_arg(), facts, width)?;
-    let source_step = _signed(&source.step.as_arg(), facts, width)?;
-    let target_start = _signed(&target.start.as_arg(), facts, width)?;
-    let target_step = _signed(&target.step.as_arg(), facts, width)?;
-    if source_step == BigInt::from(0_u8) || (&target_step % &source_step) != BigInt::from(0_u8) {
-        return None;
-    }
-    // Divisibility was established immediately above, so Rust's truncating
-    // division has the same result as Python's floor division here.
-    let scale = &target_step / &source_step;
-    if scale == BigInt::from(0_u8) {
-        return None;
-    }
-    let offset = masked(&(target_start - &scale * source_start), width);
-    Some(AffineMap {
-        scale,
-        offset,
-        width,
-    })
-}
-
-/// Python's `derived_map(formula, facts)`.
-///
-/// This deliberately proves only the constant modular map carried by one
-/// already-recognized `Derived` formula.  Recognition, pointer formation, and
-/// recurrence discovery belong to their Python-equivalent callers; this is
-/// not a second scalar-evolution solver.
-pub fn derived_map(formula: &Derived, facts: &IndexMap<Value, Known>) -> Option<AffineMap> {
-    let width = formula.of.start.width();
-    let scale = _signed(&formula.by, facts, width)?;
-    if scale == BigInt::from(0_u8) || formula.pointer.is_some() {
-        return None;
-    }
-    let modulus = BigInt::from(1_u8) << (width * 8);
-    let mut offset = BigInt::from(0_u8);
-    for (value, coefficient) in &formula.offsets {
-        let constant = _constant(value, facts, width)?;
-        offset = mod_floor(&(offset + constant * coefficient), &modulus);
-    }
-    Some(AffineMap {
-        scale,
-        offset,
-        width,
-    })
 }
 
 /// Python's `_quotients(body, loop, found)`.
@@ -1046,24 +859,6 @@ pub fn derived(
     Ok(direct.values().cloned().collect())
 }
 
-/// Every loop in this body, with its counters and what they derive.
-#[allow(clippy::type_complexity)]
-pub fn of(
-    body: &Rc<MirBody>,
-    bounds: Option<&RegionLayout>,
-) -> Result<Vec<(Loop, OrderedMap<u32, Affine>, Vec<Derived>)>, RegionError> {
-    let mut result = Vec::new();
-    for loop_ in loops::loops(&body.blocks, Some(body.entry)) {
-        let found = basics(body, &loop_);
-        if found.is_empty() {
-            continue;
-        }
-        let formulas = derived(body, &loop_, Some(&found), bounds)?;
-        result.push((loop_, found, formulas));
-    }
-    Ok(result)
-}
-
 /// Where a single-latch loop with one exit tests whether to go round again.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct _Control {
@@ -1352,105 +1147,6 @@ fn _difference(
     let (root, ahead) = anchored(&bound.as_arg(), made, width, Some(facts));
     let (other, behind) = anchored(&start.as_arg(), made, width, Some(facts));
     (root == other).then(|| masked(&(ahead - behind), width))
-}
-
-/// `arg` as terms times coefficients, through copies, adds, subtracts,
-/// increments and decrements. A constant is a term; `headers` stay terms.
-/// A value no rule expands is a term too when `opaque`, else None.
-pub(crate) fn linear(
-    arg: &Arg,
-    made: &BTreeMap<Value, &Op>,
-    headers: &BTreeSet<Value>,
-    width: u32,
-    opaque: bool,
-    visiting: &BTreeSet<Value>,
-    cached: &mut IndexMap<Arg, IndexMap<Arg, BigInt>>,
-) -> Option<IndexMap<Arg, BigInt>> {
-    let held = match arg {
-        Arg::Const(constant) if constant.width == width => None,
-        Arg::Held(held) if held.width == width => Some(held),
-        _ => return None,
-    };
-    let Some(held) =
-        held.filter(|held| !headers.contains(&held.value) && made.contains_key(&held.value))
-    else {
-        return Some(IndexMap::from_iter([(arg.clone(), BigInt::from(1))]));
-    };
-    if visiting.contains(&held.value) {
-        return None;
-    }
-    if let Some(found) = cached.get(arg) {
-        return Some(found.clone());
-    }
-    let op = made[&held.value];
-    // Not `op.merges`. That is the two-address tie -- which use shares a
-    // register with which definition -- and it says nothing about whether
-    // the operation is a linear function of its own arguments. BC writes
-    // every accumulator as a two-address `add`, so refusing on it refused
-    // every accumulator there is: hotlpx's `s = s + (n*k) + i` linearised
-    // to None, so the sum had no exit value and the loop could not go.
-    let term = || opaque.then(|| IndexMap::from_iter([(arg.clone(), BigInt::from(1))]));
-    if op.results != [arg.clone()] || !op.loads.is_empty() || !op.stores.is_empty() {
-        return term();
-    }
-    let parts = if op.kind == Kind::Copy && op.args.len() == 1 {
-        vec![(op.args[0].clone(), BigInt::from(1))]
-    } else if matches!(op.kind, Kind::Add | Kind::Sub) && op.args.len() == 2 {
-        vec![
-            (op.args[0].clone(), BigInt::from(1)),
-            (
-                op.args[1].clone(),
-                BigInt::from(if op.kind == Kind::Sub { -1 } else { 1 }),
-            ),
-        ]
-    } else if matches!(op.kind, Kind::Increment | Kind::Decrement) && op.args.len() == 1 {
-        vec![
-            (op.args[0].clone(), BigInt::from(1)),
-            (
-                Arg::Const(Const::new(1, width)),
-                BigInt::from(if op.kind == Kind::Decrement { -1 } else { 1 }),
-            ),
-        ]
-    } else {
-        return term();
-    };
-    let mut result = IndexMap::<Arg, BigInt>::default();
-    let mut deeper = visiting.clone();
-    deeper.insert(held.value);
-    for (source, coefficient) in parts {
-        let terms = linear(&source, made, headers, width, opaque, &deeper, cached)?;
-        for (term, factor) in terms {
-            let entry = result.entry(term).or_insert_with(|| BigInt::from(0));
-            *entry += &coefficient * factor;
-        }
-    }
-    let kept = result
-        .into_iter()
-        .filter(|(_, factor)| *factor != BigInt::from(0))
-        .collect::<IndexMap<_, _>>();
-    cached.insert(arg.clone(), kept.clone());
-    Some(kept)
-}
-
-/// How far `one` lies above `other`, where their terms other than constants agree.
-///
-/// Strength reduction starts `a[i].x` at `n + (m + 600)` and `a[i].y` at
-/// `n + (m + 606)`: no single root, but 6 apart.
-pub(crate) fn distance(one: &Arg, other: &Arg, made: &BTreeMap<Value, &Op>, width: u32) -> Option<BigInt> {
-    let terms_of = |arg: &Arg| linear(arg, made, &BTreeSet::new(), width, true, &BTreeSet::new(), &mut IndexMap::default());
-    let mut terms = terms_of(one)?;
-    for (term, factor) in terms_of(other)? {
-        *terms.entry(term).or_insert_with(|| BigInt::from(0)) -= factor;
-    }
-    let mut apart = BigInt::from(0);
-    for (term, factor) in terms {
-        match term {
-            Arg::Const(constant) => apart += &constant.n * factor,
-            _ if factor == BigInt::from(0) => {}
-            _ => return None,
-        }
-    }
-    Some(masked(&apart, width))
 }
 
 /// `arg` as a root value plus a constant, through copies and constant adds; a number has no root.
@@ -1798,11 +1494,6 @@ fn _trips(body: &Rc<MirBody>, loop_: &Loop, proofs: &[CountedLoop]) -> Option<Bi
     agreed_count(proofs)
 }
 
-/// A counted loop whose first iteration and finite exit are proven.
-pub fn nonempty(body: &Rc<MirBody>, loop_: &Loop) -> bool {
-    trip_count(body, loop_, &consts::known(body, None, None, None, None)).is_some()
-}
-
 /// The proof in which `counter` decides when `loop` leaves.
 pub fn controlling(
     body: &Rc<MirBody>,
@@ -1870,37 +1561,6 @@ pub fn gcd(mut one: BigInt, mut other: BigInt) -> BigInt {
         other = remainder;
     }
     one
-}
-
-/// Python's `test_only(op)`.
-pub fn test_only(op: &Op) -> bool {
-    if op.kind == Kind::Nothing
-        && op.name.is_empty()
-        && op.defines.is_empty()
-        && op.uses.is_empty()
-        && op.args.is_empty()
-        && op.results.is_empty()
-        && op.loads.is_empty()
-        && op.stores.is_empty()
-        && op.merges.is_empty()
-        && !op.barrier()
-        && op.floating.is_none()
-        && op.stack.is_none()
-        && op.floating_origin.is_none()
-    {
-        return true;
-    }
-    matches!(op.kind, Kind::Sub | Kind::And | Kind::Or)
-        && op.results.is_empty()
-        && op.loads.is_empty()
-        && op.stores.is_empty()
-        && op.merges.is_empty()
-        && !op.barrier()
-        && op.floating.is_none()
-        && op.stack.is_none()
-        && op.floating_origin.is_none()
-        && !op.defines.is_empty()
-        && op.defines.iter().all(|value| value.flags)
 }
 
 /// Python's `invariant(body, inside)`.
@@ -2108,231 +1768,3 @@ fn _stepped(
         _ => None,
     }
 }
-
-/// Python's `transparent_aliases(body, loop, source)`.
-///
-/// The returned occurrence keys are valid only for this exact immutable body
-/// snapshot.  A transform constructs a new body after consuming them and
-/// must rerun this analysis before asking about that successor body.
-pub fn transparent_aliases(
-    body: &MirBody,
-    loop_: &Loop,
-    source: Value,
-) -> (BTreeSet<Value>, BTreeSet<OpOccurrence>) {
-    let mut aliases = BTreeSet::from([source]);
-    let mut copies = BTreeSet::new();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for (occurrence, block, operation) in operations(body) {
-            if !loop_.body.contains(&block.at)
-                || operation.kind != Kind::Copy
-                || operation.args.len() != 1
-                || operation.results.len() != 1
-            {
-                continue;
-            }
-            let (Arg::Held(argument), Arg::Held(result)) =
-                (&operation.args[0], &operation.results[0])
-            else {
-                continue;
-            };
-            if !aliases.contains(&argument.value) || result.width != argument.width {
-                continue;
-            }
-            copies.insert(occurrence);
-            changed |= aliases.insert(result.value);
-        }
-    }
-    (aliases, copies)
-}
-
-/// Python's `control_replacement(body, loop, proof, covered=frozenset())`.
-///
-/// This is a proof, not a transform: the caller supplies precisely the
-/// operation occurrences it will replace, and this analysis establishes that
-/// those, canonical control, transparent copies and exit phis are every observation of
-/// the control recurrence.  Occurrences belong to `body`'s immutable
-/// snapshot, just as Python's `id(op)` values belong to its object graph.
-pub fn control_replacement<'a>(
-    body: &MirBody,
-    loop_: &Loop,
-    proof: &'a CountedLoop,
-    covered: &BTreeSet<OpOccurrence>,
-) -> Option<ControlReplacement<'a>> {
-    // Python's address map retains its last duplicate.  Occurrence keys made
-    // by `counted` identify that same snapshot occurrence.
-    let blocks = body
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(index, block)| (block.at, (index, block)))
-        .collect::<BTreeMap<_, _>>();
-    let predecessors = predecessors(&body.blocks);
-    if proof.posttested || proof.preheader.is_none() || proof.width() != proof.counter.start.width() {
-        return None;
-    }
-    let (header_index, header) = blocks.get(&loop_.header).copied()?;
-    let (_, latch) = blocks.get(&proof.latch).copied()?;
-    if loop_.body.len() != 2
-        || proof.entered != proof.latch
-        || !latch.phis.is_empty()
-        || predecessors.get(&latch.at) != Some(&BTreeSet::from([header.at]))
-        || operations(body).any(|(occurrence, _, operation)| {
-            occurrence.block_index() == header_index
-                && occurrence != proof.compare
-                && occurrence != proof.branch
-                && !test_only(operation)
-        })
-    {
-        return None;
-    }
-
-    let mut made = BTreeMap::<u32, OpOccurrence>::new();
-    for (occurrence, _, operation) in operations(body) {
-        for value in &operation.defines {
-            made.insert(value.id, occurrence);
-        }
-    }
-    let phi =
-        phis(body).find_map(|(occurrence, _, phi)| (occurrence == proof.phi).then_some(phi))?;
-    let update = *phi.incoming.get(&proof.latch)?;
-    let stepping = *made.get(&update.id)?;
-    let width = proof.width();
-    let stepping_op = &body.blocks[stepping.block_index()].ops[stepping.operation_index()];
-    let counter = Arg::Held(Held { value: phi.result, width });
-    if !mir::stepping(stepping_op).is_some_and(|(one, other)| one == counter || other == counter)
-        || stepping_op.results != vec![Arg::Held(Held { value: update, width })]
-        || !stepping_op.loads.is_empty()
-        || !stepping_op.stores.is_empty()
-        || stepping_op.barrier()
-        || !stepping_op.merges.is_empty()
-    {
-        return None;
-    }
-    let (aliases, copies) = transparent_aliases(body, loop_, phi.result);
-    let mut allowed = covered.clone();
-    allowed.extend(copies.iter().copied());
-    allowed.insert(proof.compare);
-    allowed.insert(stepping);
-    if operations(body).any(|(occurrence, _, operation)| {
-        (operation.uses.iter().any(|value| aliases.contains(value))
-            && !allowed.contains(&occurrence))
-            || operation.uses.contains(&update)
-    }) {
-        return None;
-    }
-    let (exit_index, exit) = blocks.get(&proof.exit).copied()?;
-    let expected = OrderedMap::from_iter([(header.at, phi.result)]);
-    let exits = phis(body)
-        .filter(|(occurrence, _, other)| occurrence.block_index() == exit_index && other.incoming == expected)
-        .map(|(occurrence, _, _)| occurrence)
-        .collect::<Vec<_>>();
-    let exit_phis = exits.iter().map(|at| &exit.phis[at.phi_index()]).collect::<Vec<_>>();
-    if phis(body).any(|(occurrence, _, other)| {
-        occurrence != proof.phi
-            // Python's `other not in exits` compares phis by value.
-            && !exit_phis.contains(&other)
-            && other
-                .incoming
-                .values()
-                .any(|value| aliases.contains(value) || *value == update)
-    }) {
-        return None;
-    }
-
-    let compare_flags = operations(body)
-        .find_map(|(occurrence, _, operation)| (occurrence == proof.compare).then_some(operation))?
-        .defines
-        .iter()
-        .copied()
-        .filter(|value| value.flags)
-        .collect::<BTreeSet<_>>();
-    let step_flags = operations(body)
-        .find_map(|(occurrence, _, operation)| (occurrence == stepping).then_some(operation))?
-        .defines
-        .iter()
-        .copied()
-        .filter(|value| value.flags)
-        .collect::<BTreeSet<_>>();
-    if operations(body).any(|(occurrence, _, operation)| {
-        (operation
-            .uses
-            .iter()
-            .any(|value| compare_flags.contains(value))
-            && occurrence != proof.branch)
-            || operation
-                .uses
-                .iter()
-                .any(|value| step_flags.contains(value))
-    }) {
-        return None;
-    }
-    Some(ControlReplacement {
-        counted: proof,
-        stepping,
-        update,
-        aliases,
-        copies,
-        exits,
-    })
-}
-
-/// Prove that `candidate` can supply a counted loop's terminating flags.
-///
-/// `covered` are the counter's reads the caller rebases; the counter itself
-/// is a candidate when they are all its data reads.
-pub fn zero_terminating_control<'a>(
-    body: &Rc<MirBody>,
-    loop_: &Loop,
-    proof: &'a CountedLoop,
-    candidate: &Affine,
-    covered: &BTreeSet<OpOccurrence>,
-    facts: Option<&IndexMap<Value, Known>>,
-) -> Option<ZeroTerminatingControl<'a>> {
-    let replacement = control_replacement(body, loop_, proof, covered)?;
-    let maximum = proof.maximum.as_ref()?;
-    let width = proof.counter.start.width();
-    if candidate.start.width() != width
-        || candidate.step.width() != width
-        || maximum < &BigInt::from(0_u8)
-    {
-        return None;
-    }
-    let computed;
-    let facts = match facts {
-        Some(facts) => facts,
-        None => {
-            computed = consts::known(body, None, None, None, None);
-            &computed
-        }
-    };
-    let step = _signed(&candidate.step.as_arg(), facts, width)?;
-    if step == BigInt::from(0_u8) {
-        return None;
-    }
-    let period = AffineMap {
-        scale: step.clone(),
-        offset: BigInt::from(0_u8),
-        width,
-    }
-    .period();
-    if maximum > &period {
-        return None;
-    }
-    Some(ZeroTerminatingControl {
-        replacement,
-        candidate: candidate.clone(),
-        step,
-        maximum: maximum.clone(),
-        period,
-    })
-}
-
-#[cfg(test)]
-#[path = "induction_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "counted_loops_tests.rs"]
-pub mod counted_loops_tests;

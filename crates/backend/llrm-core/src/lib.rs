@@ -11,9 +11,6 @@ pub use llrm_bcmachine::legacy;
 pub mod model;
 pub use llrm_omf as objectfile;
 pub mod optimize;
-pub mod rewrite;
 pub use llrm_support as support;
-pub mod tools;
-pub mod wholeseg;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

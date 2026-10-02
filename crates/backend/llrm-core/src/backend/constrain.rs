@@ -12,7 +12,7 @@ use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::{spiller, target};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, LirBody};
 
 /// Whether two requirement names mean the same register at `width`.
 fn _same_register(one: Register, other: Register, width: u32) -> bool {
@@ -471,7 +471,7 @@ struct Wanted {
 /// met by a copy of its own.
 fn _wanted(one: &Insn) -> Vec<Wanted> {
     let mut out: Vec<Wanted> = Vec::new();
-    let mut group = |out: &mut Vec<Wanted>, value: u32, register: Register, width: u32| -> usize {
+    let group = |out: &mut Vec<Wanted>, value: u32, register: Register, width: u32| -> usize {
         match out.iter().position(|found| found.value == value && _same_register(found.register, register, width)) {
             Some(at) => at,
             None => {

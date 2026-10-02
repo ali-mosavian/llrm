@@ -43,54 +43,6 @@ pub fn _reg(register: Register) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
 }
 
-/// Zero a native frame as BASIC's runtime entry routines do.
-///
-/// QB variables begin at zero, and runtime-managed string/array descriptors
-/// require that invariant before their first assignment.  The shared backend
-/// deliberately owns only reservation; this source ABI initialization stays
-/// in the frontend and runs before any source instruction.
-pub fn _initialize_frame(
-    body: &lir::LirBody,
-    size: i64,
-) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), String> {
-    let size = size + (size & 1);
-    if size == 0 {
-        return Ok((body.clone(), IndexMap::default()));
-    }
-    if size > 0x7FFE {
-        return Err(format!("{}: {size} byte native frame exceeds a 16-bit BP displacement", body.name).into());
-    }
-    let at = body.blocks.iter().flat_map(|block| &block.insns).map(|one| one.at).max().unwrap_or(0) + 1;
-    let initialize = _insn(at, _semantics(Operation::Call, "frame-zero", vec![], vec![]));
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| {
-            if block.at == body.entry {
-                let insns = std::iter::once(Arc::clone(&initialize)).chain(block.insns.iter().cloned()).collect();
-                block.with_insns(insns)
-            } else {
-                block.clone()
-            }
-        })
-        .collect();
-    let code: Vec<u8> = [
-        vec![0x06, 0x57, 0x16, 0x07, 0x31, 0xc0, 0x8d, 0xbe],
-        ((-size) as i16).to_le_bytes().to_vec(),
-        vec![0xB9],
-        ((size / 2) as u16).to_le_bytes().to_vec(),
-        vec![0xfc, 0xf3, 0xab, 0x5f, 0x07],
-    ]
-    .concat();
-    Ok((
-        body.with_blocks(blocks),
-        IndexMap::from_iter([(
-            at,
-            masm::Callee { name: "$frame_zero".into(), far: false, code: vec![masm::InlinePart::Bytes(code)] },
-        )]),
-    ))
-}
-
 #[allow(non_snake_case)]
 pub fn _RUNTIME_FRAME_HEADER(runtime: model::RuntimeProfile) -> Result<i64, String> {
     match runtime {
@@ -531,11 +483,6 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
         blocks.push(block.with_insns(instructions));
     }
     Ok(Finalized { body: body.with_blocks(blocks), callees: sites })
-}
-
-/// Return one audited expansion for diagnostics and stage dumps.
-pub fn expansion(name: &str) -> Option<Vec<u8>> {
-    _CODE(name)
 }
 
 /// The main body's symbol.

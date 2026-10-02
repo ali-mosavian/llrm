@@ -47,63 +47,6 @@ pub fn entry_values(body: &MirBody) -> BTreeSet<Value> {
     used.difference(&defined).copied().collect()
 }
 
-/// The most values live at once, flags aside -- anywhere, or in `inside`.
-pub fn pressure(body: &MirBody, found: Option<&Liveness>, inside: Option<&BTreeSet<i64>>) -> usize {
-    let owned;
-    let found = match found {
-        Some(found) => found,
-        None => {
-            owned = live(body);
-            &owned
-        }
-    };
-    let count = |alive: &BTreeSet<Value>| alive.iter().filter(|one| !one.flags).count();
-    let mut peak = 0;
-    for block in &body.blocks {
-        if inside.is_some_and(|inside| !inside.contains(&block.at)) {
-            continue;
-        }
-        let mut alive = found.live_out[&block.at].clone();
-        peak = peak.max(count(&alive));
-        for op in block.ops.iter().rev() {
-            for one in &op.defines {
-                alive.remove(one);
-            }
-            alive.extend(op.uses.iter().copied());
-            peak = peak.max(count(&alive));
-        }
-    }
-    peak
-}
-
-/// The edge operands of phis whose results are actually live.
-pub fn phi_inputs(body: &MirBody, found: Option<&Liveness>) -> BTreeSet<Value> {
-    let owned;
-    let found = match found {
-        Some(found) => found,
-        None => {
-            owned = live(body);
-            &owned
-        }
-    };
-    let mut inputs = BTreeSet::new();
-    for block in &body.blocks {
-        let mut alive = found.live_out[&block.at].clone();
-        for op in block.ops.iter().rev() {
-            for one in &op.defines {
-                alive.remove(one);
-            }
-            alive.extend(op.uses.iter().copied());
-        }
-        for phi in &block.phis {
-            if alive.contains(&phi.result) {
-                inputs.extend(phi.incoming.values().copied());
-            }
-        }
-    }
-    inputs
-}
-
 /// What is live at each block's entry and exit, to a fixed point.
 ///
 /// Run on bit sets over dense value indices; the sets, and the order they
@@ -209,25 +152,5 @@ pub fn live(body: &MirBody) -> Liveness {
     Liveness {
         live_in: sets(&live_in),
         live_out: sets(&live_out),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::mir::Phi;
-
-    /// PARITYCONTROL's dead join-flag phis kept ADD/ADC live as word operations.
-    #[test]
-    fn test_a_dead_phi_does_not_keep_its_edge_operand_live() {
-        let incoming = Value { flags: true, ..Value::new(1, 0x10) };
-        let merged = Value { flags: true, ..Value::new(2, 0x20) };
-        let phi = Phi { result: merged, incoming: [(0x10, incoming)].into_iter().collect() };
-        let body = MirBody::new(
-            0x10,
-            vec![MirBlock::new(0x10, vec![], vec![], vec![0x20]), MirBlock::new(0x20, vec![phi], vec![], vec![])],
-        );
-        let found = live(&body);
-        assert!(!found.live_out[&0x10].contains(&incoming));
     }
 }

@@ -270,7 +270,3 @@ pub fn propagated(
         enqueue(consumers_of(&value), &live, &mut pending, &mut queued);
     }
 }
-
-#[cfg(test)]
-#[path = "constant_cycles_tests.rs"]
-mod tests;

@@ -6,7 +6,6 @@
 
 use iced_x86::Register;
 use llrm_qbruntime as runtime;
-use llrm_bcmachine::legacy::calls::LEFT_FIRST;
 use llrm_bcmachine::model::ir::nodes::Node;
 use llrm_mir::{BinaryOp, CastOp};
 
@@ -62,7 +61,9 @@ impl Recognizer for Absorbed {
 fn absorb(emitter: &mut Emitter, name: &str, at: usize, meaning: Meaning) -> Emit<()> {
     let depth = emitter.depth();
     let (first, second) = (emitter.stack_word(depth - 4, 4)?, emitter.stack_word(depth, 4)?);
-    let (left, right) = if LEFT_FIRST[name] { (first, second) } else { (second, first) };
+    // Comparison pushes its left operand first; multiply, divide and
+    // remainder push it second. Backwards is a different answer.
+    let (left, right) = if matches!(meaning, Meaning::Compare) { (first, second) } else { (second, first) };
     emitter.popped(CONSUMES)?;
     let contract = emitter.unit.facts.contract(at).ok_or_else(|| format!("{name} has no contract"))?.clone();
     let disturbed: Vec<Register> = runtime::disturbs(&contract).into_iter().filter_map(from_contract).filter(|&one| one != FLAGS).collect();

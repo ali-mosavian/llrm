@@ -11,13 +11,6 @@ use std::fmt;
 pub struct PhysicalRegister(u32);
 
 impl PhysicalRegister {
-    pub const fn new(raw: u32) -> Self {
-        Self(raw)
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0
-    }
 }
 
 impl fmt::Display for PhysicalRegister {
