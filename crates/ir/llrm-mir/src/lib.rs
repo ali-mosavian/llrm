@@ -11,6 +11,7 @@ pub mod debuginfo;
 pub mod dominators;
 pub mod edit;
 pub mod facts;
+mod facts_rewrite;
 pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;

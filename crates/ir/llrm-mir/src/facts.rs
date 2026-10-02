@@ -250,6 +250,17 @@ impl Effect {
 pub struct Facts(Vec<Fact>);
 
 impl Facts {
+    /// The facts listed, each once.
+    pub fn from_facts(list: Vec<Fact>) -> Facts {
+        let mut facts = Vec::new();
+        for fact in list {
+            if !facts.contains(&fact) {
+                facts.push(fact);
+            }
+        }
+        Facts(facts)
+    }
+
     /// The facts `attributes` state; any other attribute is not a fact.
     pub fn of(attributes: &[Attribute]) -> Facts {
         let mut facts = Vec::new();
