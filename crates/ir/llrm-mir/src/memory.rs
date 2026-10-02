@@ -62,7 +62,7 @@ pub fn summary(function: &Function) -> Summary {
         accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),
         returns: returns(attrs),
-        nocapture: function.parameter_attrs.iter().map(|one| has(one, "nocapture")).collect(),
+        nocapture: function.parameter_attrs.iter().map(|one| Facts::of(one).no_capture()).collect(),
         memset: false,
     }
 }
@@ -74,20 +74,21 @@ pub fn memset(context: &Context, callees: &Callees, function: &Function, inst: I
     (summary.memset && operands.len() == 5).then(|| (operands[0], operands[1], operands[2]))
 }
 
-/// Whether `attrs` carry the flag `flag`.
+/// Whether `attrs` carry the flag `flag`: for what is no fact (`returns_twice`,
+/// `optnone`); a fact is asked of `Facts`.
 pub fn has(attrs: &[Attribute], flag: &str) -> bool {
     attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag))
 }
 
 /// Whether `attrs` promise `willreturn`.
 pub fn returns(attrs: &[Attribute]) -> bool {
-    has(attrs, "willreturn")
+    Facts::of(attrs).will_return()
 }
 
 /// Whether the call `inst` keeps no copy of its argument `index`.
 pub fn nocapture(context: &Context, callees: &Callees, function: &Function, inst: InstId, index: usize) -> bool {
     let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
-    info.argument_attrs.get(index).is_some_and(|attrs| has(attrs, "nocapture"))
+    info.argument_attrs.get(index).is_some_and(|attrs| Facts::of(attrs).no_capture())
         || callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.nocapture.get(index) == Some(&true))
 }
 
@@ -183,15 +184,10 @@ fn at(attrs: &[Attribute], location: Option<&str>) -> Effects {
 /// What `readnone`, `readonly` or `writeonly` among `attrs` allow, on a
 /// function or on one pointer parameter.
 pub fn through(attrs: &[Attribute]) -> Effects {
-    let mut effects = Effects::ANY;
-    for attr in attrs {
-        match attr {
-            Attribute::Flag(flag) if flag == "readnone" => effects = Effects::NONE,
-            Attribute::Flag(flag) if flag == "readonly" => effects.writes = false,
-            Attribute::Flag(flag) if flag == "writeonly" => effects.reads = false,
-            _ => {}
-        }
-    }
+    let facts = Facts::of(attrs);
+    let mut effects = if facts.read_none() { Effects::NONE } else { Effects::ANY };
+    effects.writes &= !facts.read_only();
+    effects.reads &= !facts.write_only();
     effects
 }
 
@@ -241,8 +237,8 @@ pub fn invariant(context: &Context, layout: &DataLayout, function: &Function, po
     let (Operand::Value(base), _) = crate::valuetracking::underlying(context, layout, function, pointer) else { return false };
     let ValueDef::Argument(at) = function.value(base).def else { return false };
     let attrs = &function.parameter_attrs[at as usize];
-    let has = |flag: &str| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag));
-    Facts::of(attrs).no_alias() && has("readonly")
+    let facts = Facts::of(attrs);
+    facts.no_alias() && facts.read_only()
 }
 
 /// Whether the call `inst` always comes back, as it or its callee says.

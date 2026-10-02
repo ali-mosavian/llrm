@@ -3885,11 +3885,12 @@ impl Compiler {
                             "store",
                             Vec::new(),
                             vec![
+                                // POKE writes the memory every time, whatever reads it.
                                 Operand::Indirect {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
-                                    volatile: false,
+                                    volatile: true,
                                     inbounds: false,
                                 },
                                 value,
@@ -7431,11 +7432,12 @@ impl Compiler {
             self.emit(
                 "load",
                 vec![byte],
+                // PEEK reads the memory every time: interrupts and hardware change it.
                 vec![Operand::Indirect {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
-                    volatile: false,
+                    volatile: true,
                     inbounds: false,
                 }],
             );
