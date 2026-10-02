@@ -41,6 +41,18 @@ fn refused(source: &Path) -> String {
     driver::parsed(source, &Default::default(), None).expect_err("the frontend refuses").0
 }
 
+/// Every Nib program's emitted MIR lints clean: `lint::poison` called each stated
+/// wrap `poison` and each array filled an element at a time "stored after use",
+/// so `hir-mir` and the corpus tool dropped 56 of 124 programs, `sum_three` among them.
+#[test]
+fn the_mir_of_sum_three_lints_clean() {
+    let program = parsed(&fixture("sum_three.nib"));
+    for emitted in hir::mir::emit(&program) {
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
+    }
+}
+
 /// `tmp_path / name` holding `text`.
 fn written(directory: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
     let path = directory.path().join(name);

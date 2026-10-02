@@ -1,14 +1,15 @@
 //! What a frontend's MIR must not hold before any pass can exploit it:
-//! poison the source language defines a value for. A raise may mark its
-//! language's promise that an access stays in its object -- `inbounds` on
-//! a GEP -- and no other flag; it holds no `poison` constant, and uses no
-//! alloca before a store of its whole type.
+//! poison the source language defines a value for. A flag on an instruction
+//! is the language's stated promise (`nsw`, `inbounds`, ...), not poison; a
+//! raise holds no `poison` constant and reads no alloca that nothing stores
+//! to before the read.
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
 use crate::intrinsics::Intrinsic;
-use crate::module::{Function, GlobalKind, Module, Operand, Use};
+use std::collections::{HashMap, HashSet};
+
+use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, Use};
 use crate::opcode::Opcode;
 
 pub fn poison(module: &Module) -> Vec<String> {
@@ -44,37 +45,107 @@ fn function_poison(module: &Module, function: &Function) -> Vec<String> {
     let context = &module.context;
     let layout = module.datalayout.as_deref().and_then(|one| DataLayout::parse(one).ok());
     let mut out = Vec::new();
-    let tree = DominatorTree::new(function);
     for (_, inst) in function.walk() {
         let instruction = function.instruction(inst);
         let mnemonic = instruction.opcode.mnemonic();
         if instruction.operands.iter().any(|&one| matches!(one, Operand::Constant(id) if holds_poison(context, id))) {
             out.push(format!("{mnemonic} uses poison"));
         }
-        let gep = matches!(instruction.opcode, Opcode::GetElementPtr { .. });
-        for word in instruction.flags.words().into_iter().filter(|&word| !(gep && word == "inbounds")) {
-            out.push(format!("{mnemonic} carries {word}"));
-        }
         if let Opcode::Alloca { allocated, .. } = instruction.opcode {
             let slot = instruction.result.expect("an alloca's pointer");
-            let initializers: Vec<_> = function
-                .users(slot)
-                .iter()
-                .filter(|one| is_store_of(function, context, **one, allocated) || is_fill_of(module, layout.as_ref(), function, **one, allocated))
-                .map(|one| one.user)
-                .collect();
-            for &Use { user, .. } in function.users(slot) {
-                if initializers.contains(&user) {
-                    continue;
+            // The slot and every pointer derived from it by an address computation.
+            let mut pointers = vec![slot];
+            let mut at = 0;
+            while at < pointers.len() {
+                for &Use { user, .. } in function.users(pointers[at]) {
+                    let derived = function.instruction(user);
+                    if matches!(derived.opcode, Opcode::GetElementPtr { .. } | Opcode::Cast(_)) {
+                        pointers.extend(derived.result.filter(|one| !pointers.contains(one)));
+                    }
                 }
-                if !initializers.iter().any(|&store| store != user && tree.instruction_dominates(function, store, user)) {
-                    let name = function.value(slot).name.clone().map_or_else(|| "an alloca".to_owned(), |one| format!("%{one}"));
-                    out.push(format!("{} uses {name} before it is stored", function.instruction(user).opcode.mnemonic()));
+                at += 1;
+            }
+            // What fills all of it: a store of the whole type through the slot, a memset of
+            // all of it, a call it is handed to. And what fills part: any other store through
+            // the slot or a pointer computed from it (an array is filled an element at a
+            // time, a loop at a time).
+            let (mut whole, mut parts) = (Vec::new(), Vec::new());
+            for &pointer in &pointers {
+                for &one in function.users(pointer) {
+                    let stores = one.index == 1 && matches!(function.instruction(one.user).opcode, Opcode::Store { .. });
+                    if (pointer == slot && is_store_of(function, context, one, allocated)) || is_fill_of(module, layout.as_ref(), function, one, allocated) || (matches!(function.instruction(one.user).opcode, Opcode::Call(_)) && !is_memset(module, function, one.user)) {
+                        whole.push(one.user);
+                    } else if stores {
+                        parts.push(one.user);
+                    }
+                }
+            }
+            // A load is read after a whole fill on every path, or after a part that can reach it
+            // (a loop's stores are not on the path that skips the loop); one reached by neither
+            // reads what nothing stored.
+            let after_whole = stored_on_every_path(function, &whole);
+            let after_part = may_follow(function, &parts);
+            for &pointer in &pointers {
+                for &Use { user, .. } in function.users(pointer) {
+                    if !matches!(function.instruction(user).opcode, Opcode::Load { .. }) {
+                        continue;
+                    }
+                    let block = function.parent(user).expect("a placed load");
+                    let before = |stores: &[InstId]| function.block(block).instructions().iter().take_while(|&&one| one != user).any(|one| stores.contains(one));
+                    let whole_first = before(&whole) || after_whole.get(&block).copied().unwrap_or(false);
+                    let part_first = before(&parts) || after_part.contains(&block);
+                    if !whole_first && !part_first {
+                        let name = function.value(slot).name.clone().map_or_else(|| "an alloca".to_owned(), |one| format!("%{one}"));
+                        out.push(format!("load uses {name} before it is stored"));
+                    }
                 }
             }
         }
     }
     out
+}
+
+/// The blocks every path to which, from the entry, has run one of `stores` by the
+/// time it enters them: the greatest fixed point from "none at the entry, all elsewhere".
+fn stored_on_every_path(function: &Function, stores: &[InstId]) -> HashMap<BlockId, bool> {
+    let entry = function.entry();
+    let mut at_entry: HashMap<BlockId, bool> = function.layout().iter().map(|&block| (block, Some(block) != entry)).collect();
+    let stores_in = |block| function.block(block).instructions().iter().any(|one| stores.contains(one));
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in function.layout() {
+            if Some(block) == entry || !at_entry[&block] {
+                continue;
+            }
+            let predecessors = function.predecessors(block);
+            if predecessors.is_empty() || !predecessors.iter().all(|&one| at_entry.get(&one).copied().unwrap_or(false) || stores_in(one)) {
+                at_entry.insert(block, false);
+                changed = true;
+            }
+        }
+    }
+    at_entry
+}
+
+/// The blocks a block holding one of `stores` can reach, itself only round a loop:
+/// where something may have been stored before.
+fn may_follow(function: &Function, stores: &[InstId]) -> HashSet<BlockId> {
+    let mut reached = HashSet::new();
+    let mut work: Vec<_> = function.layout().iter().copied().filter(|&block| function.block(block).instructions().iter().any(|one| stores.contains(one))).flat_map(|block| function.successors(block)).collect();
+    while let Some(block) = work.pop() {
+        if reached.insert(block) {
+            work.extend(function.successors(block));
+        }
+    }
+    reached
+}
+
+/// Whether the call `inst` is `llvm.memset`.
+fn is_memset(module: &Module, function: &Function, inst: InstId) -> bool {
+    let Some(&Operand::Constant(callee)) = function.instruction(inst).operands.last() else { return false };
+    let ConstantKind::Global(callee) = module.context.get(callee).kind else { return false };
+    module.global(callee).name.as_deref().and_then(Intrinsic::named) == Some(Intrinsic::MemSet)
 }
 
 /// Whether `at` is a store's pointer operand, storing a whole `ty`.
