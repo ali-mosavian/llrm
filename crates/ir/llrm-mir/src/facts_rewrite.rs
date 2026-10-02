@@ -24,6 +24,19 @@
 //! by the argument above; `algebraic` reassociation changes operands and
 //! already clears the flags (`set_flags(.., Flags::default())`); `simplifycfg`
 //! only joins a block to its single predecessor.
+//!
+//! The argument needs one more thing: no reader takes a flag or `!range` off
+//! an instruction to conclude something about its operands, or about another
+//! point, without the instruction executing wherever it concludes. LLVM drops
+//! flags when it hoists for exactly that. Checked: `induction::_promised`
+//! reads a counter's step, which flows into the header phi along the back
+//! edge and so ran on every trip it matters to (and depends on the phi, so is
+//! never hoisted); `induction::inbounds_backedges` requires the access to
+//! dominate the latch; `memory` and `pointerfacts` conclude only that a GEP's
+//! result is in its base's object; `gepoffset` rewrites `sext (add nsw ..)` at
+//! the add; `isel` prices a wrapping add. `ranges`, `guards`, `consts` and
+//! value tracking read no flag. The test below lists the files that name a
+//! no-wrap or inbounds flag, so a new reader is checked before it is added.
 
 use crate::facts::{Effect, Fact, Facts};
 
@@ -123,5 +136,36 @@ mod tests {
     fn speculation_keeps_every_fact_today() {
         let all = Facts::from_facts(Fact::examples());
         assert_eq!(all.speculated().iter().count(), all.iter().count());
+    }
+
+    /// Every file that reads a no-wrap or inbounds promise off an
+    /// instruction is one whose conclusion was checked (see the module
+    /// documentation); a new one fails here until it is, and is listed.
+    #[test]
+    fn only_audited_readers_take_a_promise_off_an_instruction() {
+        const CHECKED: [&str; 7] = ["induction.rs", "memory.rs", "gepoffset.rs", "isel.rs", "interpret.rs", "mir.rs", "pointerfacts.rs"];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let reads = ["no_signed_wrap()", "no_unsigned_wrap()", "in_bounds()", "Flags::NSW", "Flags::NUW", "Flags::INBOUNDS"];
+        let mut found = Vec::new();
+        let mut directories = vec![root];
+        while let Some(directory) = directories.pop() {
+            for entry in std::fs::read_dir(&directory).expect("a directory").flatten() {
+                let path = entry.path();
+                let name = path.file_name().and_then(|one| one.to_str()).unwrap_or_default().to_owned();
+                if path.is_dir() {
+                    if !matches!(name.as_str(), "target" | "tests" | "fixtures") {
+                        directories.push(path);
+                    }
+                } else if name.ends_with(".rs") && !name.contains("test") && !CHECKED.contains(&name.as_str()) && !matches!(name.as_str(), "facts.rs" | "facts_rewrite.rs" | "parse.rs" | "print.rs" | "opcode.rs" | "edit.rs") {
+                    let text = std::fs::read_to_string(&path).expect("source");
+                    let source = text.split("#[cfg(test)]").next().unwrap_or_default();
+                    if reads.iter().any(|read| source.contains(read)) {
+                        found.push(name);
+                    }
+                }
+            }
+        }
+        found.sort();
+        assert_eq!(found, Vec::<String>::new(), "a reader of nsw/nuw/inbounds that was not audited");
     }
 }
