@@ -374,7 +374,10 @@ fn published(program: &mut Program, at: usize, id: GlobalId) -> Vec<usize> {
 /// - on each pointer parameter it keeps no copy of, `nocapture`, then
 ///   `readnone`, `readonly` or `writeonly`, and `initializes`.
 /// - `willreturn` where every path returns without looping and every call
-///   states it; `nounwind` where every call states it and no access can
+///   states it, or where the language promises each loop ends
+///   (`mustprogress` on the function, `llvm.loop.mustprogress` on each
+///   loop) of a function that does nothing observable;
+/// - `norecurse` where nothing can enter it again while it runs; `nounwind` where every call states it and no access can
 ///   fault (`interprocedural::cannot_fault`).
 ///
 /// Any other attribute already stated stays. The bodies stamped; the
@@ -388,7 +391,9 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
     let globals = Result::as_ref(&*globals).map_err(String::clone)?;
     let mut declarations = (*analyses.get::<Declarations>(module)).clone();
     let mut changed = Vec::new();
-    for id in analyses.get::<CallGraphAnalysis>(module).bottom_up() {
+    let graph = analyses.get::<CallGraphAnalysis>(module);
+    let callees = llrm_mir::memory::callees(module);
+    for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private);
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
@@ -398,9 +403,18 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
         let states = |fact: Fact| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, fact));
-        let returns = facts::returns_without_looping(function) && states(Fact::WillReturn);
-        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, function);
         let volatile = function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }));
+        let norecurse = graph.cannot_reenter(module, id);
+        // The language's word that its loops end holds where nothing a loop that never ended could be seen by.
+        let unobserved = !volatile && calls.iter().all(|&inst| !llrm_mir::memory::of(&module.context, &callees, function, inst).writes);
+        let promised = norecurse && unobserved && states(Fact::WillReturn) && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
+        let counted = || {
+            let shape = Shape::of(function);
+            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function), one, None, false);
+            shape.loops.iter().all(|one| proofs(one).iter().any(|proof| !proof.stops && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))))
+        };
+        let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
+        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, function);
         let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
         for &inst in &calls {
             let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
@@ -411,7 +425,7 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let function = function_mut(module, id).1;
         let before = (function.attrs.clone(), function.parameter_attrs.clone());
         _narrowed(&mut function.attrs, summary, hidden);
-        for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind)] {
+        for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind), (Fact::NoRecurse, norecurse)] {
             if proved && !Facts::of(&function.attrs).contains(fact) {
                 function.attrs.extend(fact.attribute());
             }
@@ -448,6 +462,10 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         }
     }
     Ok(changed)
+}
+
+fn unit_of<'a>(module: &'a Module, layout: &'a llrm_mir::datalayout::DataLayout, function: &'a llrm_mir::module::Function) -> Unit<'a> {
+    Unit::of(module, layout, function)
 }
 
 fn _both(one: Effects, other: Effects) -> Effects {

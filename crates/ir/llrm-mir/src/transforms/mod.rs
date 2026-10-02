@@ -3,7 +3,6 @@
 
 pub mod adce;
 pub mod earlycse;
-pub mod functionattrs;
 pub mod indvars;
 pub mod inline;
 pub mod ipsccp;
@@ -18,13 +17,12 @@ use crate::module::Module;
 use crate::passes::{Pass, PassManager};
 
 /// The default pipeline, in order.
-const PIPELINE: &[&str] = &["mem2reg", "instcombine", "simplifycfg", "ipsccp", "instcombine", "simplifycfg", "indvars", "instcombine", "simplifycfg", "function-attrs", "instcombine", "inline", "mem2reg", "instcombine", "simplifycfg", "earlycse", "licm", "earlycse", "loop-reduce", "instcombine", "simplifycfg", "earlycse", "instcombine", "loop-deletion", "adce", "simplifycfg"];
+const PIPELINE: &[&str] = &["mem2reg", "instcombine", "simplifycfg", "ipsccp", "instcombine", "simplifycfg", "indvars", "instcombine", "simplifycfg", "instcombine", "inline", "mem2reg", "instcombine", "simplifycfg", "earlycse", "licm", "earlycse", "loop-reduce", "instcombine", "simplifycfg", "earlycse", "instcombine", "loop-deletion", "adce", "simplifycfg"];
 
 fn pass(name: &str) -> Result<Pass, String> {
     match name {
         "inline" => return Ok(Pass::Module(Box::new(inline::Inline))),
         "ipsccp" => return Ok(Pass::Module(Box::new(ipsccp::Ipsccp))),
-        "function-attrs" => return Ok(Pass::Module(Box::new(functionattrs::FunctionAttrs))),
         _ => {}
     }
     Ok(Pass::Function(match name {
