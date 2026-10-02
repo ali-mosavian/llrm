@@ -3353,3 +3353,13 @@ fn main() -> i16:
     volatile.dedup();
     assert_eq!(volatile, [("other".to_owned(), false), ("ticks".to_owned(), true)]);
 }
+
+/// What a pointer reaches is a borrowed place or what foreign code hands
+/// over: no integer makes one, so no Nib program names a port or a fixed
+/// address as memory (a port is reached only inside `asm`, which declares
+/// what it touches). That is why Nib states no memory kind (#113).
+#[test]
+fn an_integer_is_not_a_pointer() {
+    let refused = refused("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 753664\n        p[0] = 1\n    return 0\n");
+    assert!(refused.contains("expected *far pointer, found i16"), "{refused}");
+}
