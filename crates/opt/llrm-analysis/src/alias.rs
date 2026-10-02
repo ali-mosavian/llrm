@@ -38,7 +38,7 @@ use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::facts::Facts;
 use llrm_mir::memory::Effects;
-use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
+use llrm_mir::module::{InstId, Linkage, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
@@ -143,6 +143,12 @@ fn nonnull(provenance: &Provenance) -> bool {
 /// as LLVM's `isKnownNonZero` reads a pointer's underlying object instead
 /// of solving every pointer; `None` where only the whole solve can say.
 pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
+    // A parameter the language states non-null, as a reference is.
+    if let ValueDef::Argument(at) = unit.function.value(value).def
+        && llrm_mir::facts::Facts::param(unit.function, at as usize).non_null()
+    {
+        return Some(true);
+    }
     if let Some(seed) = seeds(unit).get(&value) {
         return Some(nonnull(seed));
     }
