@@ -213,6 +213,9 @@ impl _Plain for model::Callable {
         out.insert("segmented".to_owned(), self.segmented._plain());
         out.insert("arrays".to_owned(), self.arrays._plain());
         out.insert("defined".to_owned(), self.defined._plain());
+        if self.returns_twice {
+            out.insert("returns_twice".to_owned(), self.returns_twice._plain());
+        }
         if self.symbol.is_some() {
             out.insert("symbol".to_owned(), self.symbol._plain());
         }
@@ -1085,6 +1088,7 @@ static CALLABLE: _Record = _Record {
         ("segmented", BOOLS, true),
         ("arrays", BOOLS, true),
         ("defined", _Hint::Bool, true),
+        ("returns_twice", _Hint::Bool, false),
         ("symbol", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1097,6 +1101,7 @@ static CALLABLE: _Record = _Record {
             segmented: _required(args, "segmented")?,
             arrays: _required(args, "arrays")?,
             defined: _required(args, "defined")?,
+            returns_twice: _default(args, "returns_twice", false)?,
             symbol: _default(args, "symbol", None)?,
         })
     },

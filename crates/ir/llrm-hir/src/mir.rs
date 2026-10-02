@@ -367,6 +367,14 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             refused.push((hir.name.clone(), why));
         }
     }
+    // What changes what the code after a call means is not a fact a pass may drop.
+    for callable in hir.callables.iter().filter(|one| one.returns_twice) {
+        let Some(&reference) = tables.callees.get(&callable.name) else { continue };
+        let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { continue };
+        if let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind {
+            function.attrs.push(Attribute::Flag(RETURNS_TWICE.to_owned()));
+        }
+    }
     // Initialized once every function its data addresses is declared: one only addressed, far and C's.
     let mut code = HashMap::new();
     for callable in hir.data.iter().flat_map(|one| &one.relocations).filter(|one| one.code).filter_map(|one| hir.callables.iter().find(|callable| callable.id == one.target)) {
@@ -1032,6 +1040,9 @@ fn answer<'t>(site: &model::CallAbi, results: &[i64], hir_type: impl Fn(i64) -> 
 fn interrupted(function: &model::Function) -> bool {
     function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
 }
+
+/// A routine that may return twice, LLVM's attribute: not a fact, since dropping it changes what the code means.
+pub const RETURNS_TWICE: &str = "returns_twice";
 
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
