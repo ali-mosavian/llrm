@@ -4,6 +4,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 
 | Tool | Does |
 |---|---|
+| `bench/bench.py` | the benchmark gate: executed instructions and memory operands per kernel against `bench/NAME/expected.toml`; `--bless --reason` to move a baseline; see `bench/readme.md` |
 | `nib-build.sh` | builds a Nib program into a DOS `.EXE` |
 | `mir-corpus.sh` | regenerates `crates/opt/llrm-analysis/corpus`, the rich MIR the corpus tests read |
 | `baseline.sh OUT` | every stage dump of the OMF corpus and Nib examples; `diff -r` two of them |
