@@ -11,7 +11,7 @@ import dosbatch  # noqa: E402
 
 class SourceTests(unittest.TestCase):
     def test_a_source_for_bc_ends_its_lines_with_cr_lf(self):
-        """BC read a LF-only file as one line, so a leading comment ate the program:
+        """BC reads a LF-only file as one line, so a leading comment eats the program:
         every BC run printed nothing, and the two programs expected to differ from BC passed."""
         self.assertEqual(dosbatch.crlf(b"' c\nPRINT 1\r\nEND\n"), b"' c\r\nPRINT 1\r\nEND\r\n")
 
