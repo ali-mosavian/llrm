@@ -436,6 +436,9 @@ str_enum!(Op {
     // operands[1], a byte, to operands[0]. Both are observable and ordered.
     PortIn("PORT_IN") = "port_in",
     PortOut("PORT_OUT") = "port_out",
+    // The language promises operands[0], a condition, holds here: passes may
+    // rely on it, as on LLVM's `llvm.assume`. No result.
+    Assume("ASSUME") = "assume",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
     // Inline machine code: operands go into its input registers, results
@@ -536,6 +539,9 @@ pub struct Callable {
     pub segmented: Vec<bool>,
     pub arrays: Vec<bool>,
     pub defined: bool,
+    /// It may return a second time, as C's `setjmp` does: no pass may treat
+    /// the code after a call as reached once.
+    pub returns_twice: bool,
     /// The name it links by, where not the language's own for `name`.
     pub symbol: Option<String>,
 }

@@ -73,6 +73,9 @@ impl FunctionCompiler<'_> {
         let kinds = function.parameters.iter().map(|one| parameter_kind(self.types, one)).collect::<Result<Vec<_>, _>>()?;
         let lent = self.lent(&inferred.passed, &kinds);
         borrows::check_disjoint(&lent, &inferred.passed.iter().map(Expr::span).collect::<Vec<_>>())?;
+        // A frame outlives the call that starts it.
+        let lent_all = lent.iter().flat_map(|one| one.roots.iter().cloned()).collect();
+        self.keep_lent(&lent_all);
         self.store_call_borrows(&inferred.passed, &kinds, &lent, span)?;
         let mut fields = vec![(RESUME.to_string(), Expr::Integer(0, span), span)];
         fields.extend(function.parameters.iter().zip(inferred.passed).map(|(parameter, argument)| (parameter.name.clone(), argument, span)));

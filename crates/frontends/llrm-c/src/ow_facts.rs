@@ -36,6 +36,8 @@ enum Bit {
     Fact,
     /// Part of how the routine is called; read where the call is made.
     Abi(&'static str),
+    /// Changes what the code after a call means, so no fact: a field of the routine.
+    Meaning(&'static str),
     /// Changes what the program means and has no carrier yet: the compile stops.
     Refused(&'static str),
     /// Has no meaning for this target.
@@ -56,7 +58,7 @@ const CLASS: [(i64, &str, Bit); 11] = [
     (0x8, "PARMS_BY_ADDRESS", Bit::Refused("arguments passed by address have no carrier")),
     (0x10, "MAKE_CALL_INLINE", Bit::Abi("Symbol::code, inline code")),
     (0x20, "HAS_VARARGS", Bit::Abi("Symbol::variadic")),
-    (0x40, "SETJMP_KLUGE", Bit::Refused("a routine that returns twice has no carrier")),
+    (0x40, "SETJMP_KLUGE", Bit::Meaning("Callable::returns_twice")),
     (0x80, "CALLER_POPS", Bit::Abi("the call's stack cleanup")),
     (NO_MEMORY_READ, "NO_MEMORY_READ", Bit::Fact),
     (NO_MEMORY_CHANGED, "NO_MEMORY_CHANGED", Bit::Fact),
@@ -85,6 +87,11 @@ pub fn of_call_class(class: i64) -> Result<Vec<Fact>, Unsupported> {
         (false, false) => {}
     }
     Ok(facts)
+}
+
+/// Whether the routine may return a second time (`setjmp`'s class bit).
+pub fn returns_twice(class: i64) -> bool {
+    class & 0x40 != 0
 }
 
 /// A `CGFact` node's version and term, checked: `CGFact v1 n7 restrict`.
@@ -165,7 +172,9 @@ mod tests {
     /// compiled as though it returned once.
     #[test]
     fn a_call_class_bit_with_no_carrier_stops_the_compile() {
-        assert!(of_call_class(0x40).unwrap_err().0.contains("SETJMP_KLUGE"));
+        // A routine that returns twice is a field of the callable, not a refusal.
+        assert_eq!(of_call_class(0x40).unwrap(), Vec::<Fact>::new());
+        assert!(returns_twice(0x40) && !returns_twice(0x80));
         assert!(of_call_class(0x88).unwrap_err().0.contains("PARMS_BY_ADDRESS"));
         assert!(of_call_class(0x800).unwrap_err().0.contains("no table"));
         // The ABI bits and the ignored one pass.

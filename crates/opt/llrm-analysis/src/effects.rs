@@ -12,7 +12,8 @@
 //! unwind edge, and `exposes_memory` asks for that edge.
 
 pub use llrm_mir::memory::callee;
-use llrm_mir::memory::{Effects, has, stated_at};
+use llrm_mir::facts::{Fact, Facts};
+use llrm_mir::memory::{Effects, stated_at};
 use llrm_mir::module::{Function, GlobalValue, InstId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::Context;
@@ -27,10 +28,10 @@ fn declared<'a>(context: &Context, declarations: &'a Declarations, function: &Fu
     declarations.get(callee(context, function, inst)?.0 as usize).and_then(GlobalValue::function)
 }
 
-/// Whether the call `inst` or its callee carries the attribute `flag`.
-pub fn states(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, flag: &str) -> bool {
+/// Whether the call `inst` or its callee states `fact`.
+pub fn states(context: &Context, declarations: &Declarations, function: &Function, inst: InstId, fact: Fact) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    has(&info.attrs, flag) || declared(context, declarations, function, inst).is_some_and(|one| has(&one.attrs, flag))
+    Facts::of(&info.attrs).contains(fact) || declared(context, declarations, function, inst).is_some_and(|one| Facts::of(&one.attrs).contains(fact))
 }
 
 /// What the call `inst` may do to locations `counted` admits: what both the
@@ -80,7 +81,7 @@ pub fn writes_memory(context: &Context, declarations: &Declarations, function: &
 
 /// Whether a raise here can reach a handler in this body, which reads memory.
 pub fn exposes_memory(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
-    matches!(function.instruction(inst).opcode, Opcode::Invoke(_)) && !states(context, declarations, function, inst, "nounwind")
+    matches!(function.instruction(inst).opcode, Opcode::Invoke(_)) && !states(context, declarations, function, inst, Fact::NoUnwind)
 }
 
 #[cfg(test)]
