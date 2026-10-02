@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import threading
 import shutil
 import subprocess
 from pathlib import Path
@@ -73,6 +74,7 @@ class BuildError(Exception):
     pass
 
 
+_RUNTIME_LOCK = threading.Lock()
 C_RUNTIME = ROOT / "tools" / "loops" / "runtime"
 
 
@@ -86,13 +88,15 @@ def assemble(source: Path, obj: Path, *defines: str) -> None:
     _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
 
 
-def link_c(obj: Path, exe: Path, work: Path) -> None:
+def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None) -> None:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline."""
     crt, ext = work / "CRT.OBJ", work / "EXT.OBJ"
-    if not crt.exists():
-        assemble(C_RUNTIME / "crt.asm", crt)
-        assemble(C_RUNTIME / "ext.asm", ext)
-    _host([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext)])
+    with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
+        if not crt.exists() or not ext.exists():
+            assemble(C_RUNTIME / "crt.asm", crt)
+            assemble(C_RUNTIME / "ext.asm", ext)
+    mapping = ["option", f"map={listing}"] if listing else []
+    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext)])
 
 
 @dataclass
@@ -110,6 +114,7 @@ class Job:
     args: str = ""  # the program's command line
     objects: tuple[Path, ...] = ()  # more objects to link with an obj job's
     files: tuple[Path, ...] = ()  # files the program reads, copied beside it under their upper-case names
+    map: bool = False  # LINK /MAP: NAME.MAP lists the public symbols too
 
 
 @dataclass
@@ -159,7 +164,7 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
         u = job.stem.upper()
         libraries = "+".join([job.library or tools.library, *job.libs])
         more = "".join(f"+{u}X{at}.OBJ" for at in range(len(job.objects)))
-        link = f"{tools.link} /NOE {u}.OBJ{more},{u}.EXE,,{libraries}; > {u}.LNK"
+        link = f"{tools.link} /NOE{' /MAP' if job.map else ''} {u}.OBJ{more},{u}.EXE,,{libraries}; > {u}.LNK"
         for data in job.files:
             shutil.copy(data, work / data.name.upper())
         if job.kind == "exe":

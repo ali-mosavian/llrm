@@ -1,0 +1,26 @@
+reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+blessed = "2026-10-03"
+
+[bas.O2]
+instructions = 11137809
+memory_operands = 3586023
+
+[bas.Os]
+instructions = 11167809
+memory_operands = 3586023
+
+[c.O2]
+instructions = 4817164
+memory_operands = 420099
+
+[c.Os]
+instructions = 4877164
+memory_operands = 420099
+
+[nib.O2]
+instructions = 6202233
+memory_operands = 570147
+
+[nib.Os]
+instructions = 6112184
+memory_operands = 570147
