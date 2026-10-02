@@ -112,7 +112,7 @@ struct Flow {
 }
 
 impl Flow {
-    fn of(body: &LirBody) -> Self {
+    fn of(body: &LirBody, loops: &[crate::analysis::loops::Loop]) -> Self {
         let (live_in, live_out) = allocate::live(body);
         let mut uses: IndexMap<i64, IndexMap<u32, Vec<usize>>> = IndexMap::default();
         let mut defines: IndexMap<i64, IndexMap<u32, usize>> = IndexMap::default();
@@ -153,7 +153,7 @@ impl Flow {
             defines,
             live_in,
             live_out,
-            depth: ranges::depths(body),
+            depth: ranges::depths_in(body, loops),
             from_top: body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect(),
             length,
             succ: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
@@ -223,6 +223,8 @@ struct Machine<'a> {
     confined: &'a Classes,
     general: BTreeSet<Register>,
     classes: BTreeSet<BTreeSet<Register>>,
+    /// The registers with byte halves.
+    bytes: BTreeSet<Register>,
 }
 
 impl<'a> Machine<'a> {
@@ -233,7 +235,7 @@ impl<'a> Machine<'a> {
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>())
             .filter(|class| !class.is_empty() && class.len() < general.len())
             .collect();
-        Self { confined, general, classes }
+        Self { confined, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
     }
 
     /// A value that lives in a general register at all.
@@ -254,10 +256,9 @@ impl<'a> Machine<'a> {
         if held.len() > room {
             return false;
         }
-        let bytes: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
         self.classes.iter().all(|class| {
             let counted = |value: &u32| {
-                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&bytes))))
+                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes))))
             };
             held.iter().filter(|value| counted(value)).count() <= class.len()
         })
@@ -385,7 +386,9 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
 fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
-    let flow = Flow::of(body);
+    // The loops, found once: depths, headers and each loop's pressure all come from them.
+    let loops = crate::analysis::loops::loops(&ranges::_graph(&body.blocks), Some(body.entry));
+    let flow = Flow::of(body, &loops);
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let machine = Machine::of(&confined);
     let skip = untouchable(body);
@@ -394,13 +397,12 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     // A value a loop's back edge must reload each trip is not worth holding at its header.
     let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
-    let room = loop_room(body, &flow, &machine, &skip);
+    let room = loop_room(body, &flow, &machine, &skip, &loops);
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
     let remakes = remakable(body, &all);
     let frequency = Frequency::of(body);
-    let graph = ranges::_graph(&body.blocks);
-    let found = crate::analysis::loops::loops(&graph, Some(body.entry));
-    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency);
+    let headers: BTreeSet<i64> = loops.iter().map(|found| found.header).collect();
+    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
     // A loop header keeps a value its back edge must reload only while those
     // reloads run at most half as often as reloads at its first uses inside one trip.
     for _ in 0..4 {
@@ -409,7 +411,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
             if place[from] < place[to] {
                 continue;
             }
-            let Some(within) = found.iter().find(|one| one.header == *to) else { continue };
+            let Some(within) = loops.iter().find(|one| one.header == *to) else { continue };
             for value in values {
                 let keep: f64 = body
                     .blocks
@@ -427,7 +429,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         if !more {
             break;
         }
-        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency);
+        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
     }
     if result.stored.is_empty() {
         return Ok(simple);
@@ -525,6 +527,7 @@ fn simulated(
     dropped: &IndexMap<i64, BTreeSet<u32>>,
     room: &IndexMap<i64, usize>,
     frequency: &Frequency,
+    headers: &BTreeSet<i64>,
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
@@ -564,7 +567,7 @@ fn simulated(
         candidates.sort_unstable();
         let mut held: BTreeSet<u32> = BTreeSet::new();
         // Entering a loop, what is read only after it does not wait in a register.
-        let header = ends.len() < preds.get(at).map_or(0, Vec::len);
+        let header = headers.contains(at);
         // A loop that fits its registers with them keeps what it does not read; one that does not, makes room.
         let through = candidates.iter().filter(|(_, near, _)| *near >= EXIT).count();
         let mut spare = match (header, room.get(at)) {
@@ -610,7 +613,7 @@ fn simulated(
             for value in used.clone() {
                 if !held.contains(&value) {
                     stored.insert(value);
-                    if !remakes.contains_key(&value) && folds(one, value) {
+                    if !remakes.contains_key(&value) && done.folded.get(&position).is_none_or(Vec::is_empty) && folds(one, value) {
                         used.remove(&value);
                         done.folded.entry(position).or_default().push(value);
                     } else {
@@ -750,7 +753,7 @@ fn first_uses(flow: &Flow, frequency: &Frequency, within: &BTreeSet<i64>, header
 }
 
 /// For each loop header, the most values live at once inside the loop.
-fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet<u32>) -> IndexMap<i64, usize> {
+fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet<u32>, loops: &[crate::analysis::loops::Loop]) -> IndexMap<i64, usize> {
     let wanted = |value: &u32| machine.registered(*value) && !skip.contains(value);
     let mut most: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
@@ -766,9 +769,8 @@ fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet
         }
         most.insert(block.at, peak);
     }
-    let graph = ranges::_graph(&body.blocks);
-    crate::analysis::loops::loops(&graph, Some(body.entry))
-        .into_iter()
+    loops
+        .iter()
         .map(|found| {
             let busiest = found.body.iter().filter_map(|at| most.get(at)).copied().max().unwrap_or(0);
             llrm_support::debug!("ssaspill", "{}: loop at {:#x} peaks at {busiest}", body.name, found.header);
@@ -826,7 +828,8 @@ fn written(
     let mut cells: IndexMap<u32, crate::model::ir::Mem> = IndexMap::default();
     for value in stored.iter().filter(|value| !remakes.contains_key(*value)) {
         let width = widths.get(value).copied().unwrap_or(2);
-        cells.insert(*value, frame.cell(*value, width).map_err(|error| error.to_string())?);
+        // Its own keys: a later phase that spills a value with the same number (after phi elimination and coalescing renamed things) must not be handed this slot.
+        cells.insert(*value, frame.cell(("ssaspill", i64::from(*value)), width).map_err(|error| error.to_string())?);
     }
     let in_memory = |value: &u32| stored.contains(value) && !remakes.contains_key(value);
     let reload = |beside: &Insn, value: u32| match remakes.get(&value) {

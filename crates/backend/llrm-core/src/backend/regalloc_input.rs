@@ -25,14 +25,34 @@ pub fn before_regalloc<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (Lir
 }
 
 /// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
-/// phase before `RegAlloc`; the body, and the phases from `RegAlloc` on.
+/// phase before `RegAlloc` as production runs them (the spiller included);
+/// the body, and the phases from `RegAlloc` on.
 pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
-    before_phase(calls, fixture, name, cpu_name, "RegAlloc")
+    before_phase_skipping(calls, fixture, name, cpu_name, "RegAlloc", &[])
+}
+
+/// `before_regalloc`, without the spiller: the allocator is handed the pressure the spiller
+/// takes away in production. For tests of the allocator on its own, which must hold for any input
+/// it is given; a test whose premise only holds here guards code the production pipeline may not reach.
+pub fn before_regalloc_unspilled<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    before_phase_skipping(Calls::C, fixture, name, cpu_name, "RegAlloc", &["SsaSpill"])
 }
 
 /// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
 /// phase before the one of class `phase`; the body, and the phases from it on.
 pub fn before_phase<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str, phase_class: &str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    before_phase_skipping(calls, fixture, name, cpu_name, phase_class, &[])
+}
+
+/// `before_phase`, leaving out the phases of the classes in `skipped`.
+pub fn before_phase_skipping<'a>(
+    calls: Calls,
+    fixture: &str,
+    name: &str,
+    cpu_name: &'a str,
+    phase_class: &str,
+    skipped: &[&str],
+) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir").join(fixture);
     let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
     let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
@@ -59,8 +79,7 @@ pub fn before_phase<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a s
         if phase.class_name() == phase_class {
             return (body, std::iter::once(phase).chain(phases).collect());
         }
-        // Tests of the allocator hand it the pressure the spiller would have taken away.
-        if phase.class_name() == "SsaSpill" {
+        if skipped.contains(&phase.class_name()) {
             continue;
         }
         body = phase.transform(body).unwrap();

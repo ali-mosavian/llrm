@@ -11,7 +11,7 @@
 //! holds the value in no register on entry (`held`) reloads it before every
 //! use, so it needs no phi for it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::analysis::{intervals as ranges, loops};
@@ -193,8 +193,6 @@ pub fn repaired(body: &LirBody, redefined: &BTreeSet<u32>, held: &IndexMap<i64, 
             todo.push((*child, false));
         }
     }
-    let blocks: BTreeMap<i64, ()> = BTreeMap::new();
-    let _ = blocks;
     let rebuilt = body
         .blocks
         .iter()
