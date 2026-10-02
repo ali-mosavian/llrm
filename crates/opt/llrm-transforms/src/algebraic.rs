@@ -586,7 +586,7 @@ fn _identity(context: &mut Context, function: &mut Function, inst: InstId) -> bo
 }
 
 /// The operand `inst` equals by an identity: `x + 0`, `x - 0`, `x | 0`,
-/// `x ^ 0`, a shift by 0, `x * 1` and `x & -1` are `x`; `x * 0` and `x & 0`
+/// `x ^ 0`, a shift by 0, `x * 1`, `x / 1` and `x & -1` are `x`; `x * 0` and `x & 0`
 /// are 0, and `x | -1` is -1.
 pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<Operand> {
     let (op, left, right, width) = _binary(context, function, inst)?;
