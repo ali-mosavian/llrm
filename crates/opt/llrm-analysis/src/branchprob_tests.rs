@@ -542,3 +542,36 @@ lp:
     assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Invoke));
     assert!(odds.probability(at("entry"), at("lp")).is_some_and(|one| one < 1e-5), "{:?}", odds.taken);
 }
+
+/// A switch whose cases share a body (QB `CASE 1, 2`, a C fallthrough) names
+/// that block twice: its weights add. The check that every target be
+/// distinct dropped the weights of exactly these switches.
+#[test]
+fn test_switch_cases_to_one_block_weigh_together() {
+    let (odds, at) = estimate(
+        "define i16 @f(i16 %x) {
+entry:
+  switch i16 %x, label %other [
+    i16 1, label %shared
+    i16 2, label %shared
+    i16 3, label %rare
+  ], !prof !0
+
+shared:
+  ret i16 1
+
+rare:
+  ret i16 2
+
+other:
+  ret i16 3
+}
+
+!0 = !{!\"branch_weights\", i32 4, i32 30, i32 50, i32 16}
+",
+    );
+    assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Declared));
+    assert!(close(odds.probability(at("entry"), at("shared")), 0.8), "{:?}", odds.taken);
+    assert!(close(odds.probability(at("entry"), at("rare")), 0.16), "{:?}", odds.taken);
+    assert!(close(odds.probability(at("entry"), at("other")), 0.04), "{:?}", odds.taken);
+}
