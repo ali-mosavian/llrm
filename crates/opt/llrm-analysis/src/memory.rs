@@ -44,6 +44,7 @@ use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
 use crate::alias::PointsTo;
+use crate::assumptions::Assumptions;
 use crate::cfg::Shape;
 use crate::consts::Known;
 use crate::globalsaa::Globals;
@@ -413,6 +414,8 @@ pub struct Unit<'a> {
     /// Each access's reference as alias finds it, the manager's
     /// `Annotated`; unlike `references`, the unit does not read through it.
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
+    /// What each block assumes; without it each ask finds it.
+    pub assumptions: Option<&'a Assumptions>,
 }
 
 impl<'a> Unit<'a> {
@@ -429,7 +432,7 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None }
+        Self { program: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -485,6 +488,13 @@ impl<'a> Unit<'a> {
 
     /// The function's dominance and loops: the manager's where the unit
     /// carries them.
+    pub fn assumptions(&self) -> Cow<'a, Assumptions> {
+        match self.assumptions {
+            Some(found) => Cow::Borrowed(found),
+            None => Cow::Owned(Assumptions::of(self)),
+        }
+    }
+
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => Cow::Borrowed(shape),
@@ -523,13 +533,6 @@ impl<'a> Unit<'a> {
             Type::Pointer(space) => Some(*space),
             _ => None,
         }
-    }
-
-    /// The condition `inst` assumes, if it is a call of `llvm.assume`.
-    pub fn assumption(&self, inst: InstId) -> Option<Operand> {
-        let global = llrm_mir::memory::callee(self.context, self.function, inst)?;
-        let named = self.globals.get(global.0 as usize)?.name.as_deref()?;
-        (llrm_mir::intrinsics::Intrinsic::named(named) == Some(llrm_mir::intrinsics::Intrinsic::Assume)).then(|| self.function.instruction(inst).operands.first().copied()).flatten()
     }
 
     /// The instruction defining `operand`, if a local value defines it.

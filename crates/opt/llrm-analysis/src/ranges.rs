@@ -327,6 +327,7 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
     let immediate = unit.shape().dominance.immediate_dominators(function);
     let mut known: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
     let mut own: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
+    let assumed = unit.assumptions();
     for at in loops::reverse_postorder(&graph, cfg::id(entry)) {
         let block = cfg::block(at);
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
@@ -355,10 +356,8 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
         // What the block assumes holds below it, not in it: the code before the
         // assume is not covered.
         let mut below = scoped.clone();
-        for &inst in function.block(block).instructions() {
-            if let Some(condition) = unit.assumption(inst)
-                && let Some(narrower) = narrowed(unit, condition, true, &below, facts)
-            {
+        for &condition in assumed.here(at) {
+            if let Some(narrower) = narrowed(unit, condition, true, &below, facts) {
                 below = narrower;
             }
         }
@@ -395,6 +394,7 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let shape = unit.shape();
+    let assumed = unit.assumptions();
     let mut result = Facts::default();
     for loop_ in &shape.loops {
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
@@ -464,16 +464,10 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                 }
             }
             // What the blocks above it assume.
-            let mut above = at;
-            while let Some(up) = shape.dominance.immediate(above) {
-                for &inst in function.block(cfg::block(up)).instructions() {
-                    if let Some(condition) = unit.assumption(inst)
-                        && let Some(narrower) = narrowed(unit, condition, true, &scoped, facts)
-                    {
-                        scoped = narrower;
-                    }
+            for condition in assumed.above(&shape, at) {
+                if let Some(narrower) = narrowed(unit, condition, true, &scoped, facts) {
+                    scoped = narrower;
                 }
-                above = up;
             }
             loop {
                 // What each value set in this sweep held before it.
