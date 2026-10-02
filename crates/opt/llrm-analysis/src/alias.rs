@@ -934,6 +934,14 @@ fn _cell_key(reference: &MemRef) -> Option<CellKey> {
     reference.addr().map(|addr| CellKey::Address(addr, i64::from(reference.width)))
 }
 
+/// Whether the call `inst` returns what its callee states `noalias`: a
+/// pointer to an object no other pointer reaches, as a constructor's.
+fn returns_unique(unit: &Unit, inst: InstId) -> bool {
+    llrm_mir::memory::callee(unit.context, unit.function, inst)
+        .and_then(|callee| unit.globals.get(callee.0 as usize)?.function())
+        .is_some_and(|callee| Facts::of(&callee.return_attrs).no_alias())
+}
+
 /// What `inst` computes as a pointer from what it is given: an object's
 /// own address, or a known pointer moved, cast or joined.
 fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> Result<Option<Provenance>, String> {
@@ -944,6 +952,12 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
     match &op.opcode {
         Opcode::Alloca { .. } => {
             let object = object_of(unit, Operand::Value(result)).expect("an alloca is an object");
+            Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
+        }
+        // A callee whose result is `noalias` returns a pointer to an object nothing else
+        // points to: its own, apart from every other.
+        Opcode::Call(_) | Opcode::Invoke(_) if returns_unique(unit, inst) => {
+            let object = MemoryObject { identity: Some(Identity::Value(result.0)), addressed: true, captured: true, ..MemoryObject::new(MemoryKind::Allocation) };
             Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
         }
         // A segment is no pointer to a program object: `segment:0` is a
