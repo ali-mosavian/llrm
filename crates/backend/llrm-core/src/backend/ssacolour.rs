@@ -37,9 +37,7 @@ pub fn uncoloured() -> usize {
 
 /// Whether `one` writes its first source's register.
 fn tied(one: &Insn) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        twoaddr::_TIED.contains(&what.op) || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2)
-    })
+    one.what.as_ref().is_some_and(twoaddr::ties)
 }
 
 fn first_source(one: &Insn) -> Option<u32> {
@@ -69,18 +67,32 @@ fn wishes(body: &LirBody) -> IndexMap<u32, Register> {
 }
 
 /// A register for each value of `body` that wants one: `skip` names those that do not.
-pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, segments: &Segments) -> IndexMap<u32, Register> {
+pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, fixed: &IndexMap<u32, Register>, segments: &Segments) -> IndexMap<u32, Register> {
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let general: Vec<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
+    // A value any register holds leaves the address registers to the values only they hold, the scarcest last.
+    let mut roomy: Vec<Register> = general.clone();
+    roomy.sort_by_key(|register| (target::WORD_INDEXES.iter().any(|one| _whole(*one) == *register), target::ADDRESSING.iter().any(|one| _whole(*one) == *register)));
+    // A byte value lives in a register with byte halves; an address role is met
+    // where the value acts, by a copy if need be, so it only orders the choice.
+    let bytes: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
     let class_of = |value: u32| -> Vec<Register> {
         match confined.get(&value) {
-            None => general.clone(),
+            None => roomy.clone(),
             Some(class) => {
                 let mut out: Vec<Register> = Vec::new();
                 for register in target::order(Some(class), segments) {
                     let root = _whole(register);
                     if general.contains(&root) && !out.contains(&root) {
                         out.push(root);
+                    }
+                }
+                let hard = out.iter().all(|register| bytes.contains(register));
+                if !hard {
+                    for register in &roomy {
+                        if !out.contains(register) {
+                            out.push(*register);
+                        }
                     }
                 }
                 out
@@ -131,6 +143,10 @@ pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, segments: &Segments) -> In
         }
         let choose = |value: u32, taken: &IndexMap<Register, u32>, colour: &IndexMap<u32, Register>, prefer: &[Register]| -> Option<Register> {
             let class = class_of(value);
+            // A pinned value has its register, taken or not: a clash is the assignment's to refuse.
+            if let Some(register) = fixed.get(&value) {
+                return Some(_whole(*register));
+            }
             let mut order: Vec<Register> = Vec::new();
             order.extend(wish.get(&value).copied());
             order.extend(prefer.iter().copied());
@@ -181,7 +197,10 @@ pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, segments: &Segments) -> In
                         blocked.insert(register, value);
                         colour.insert(value, register);
                     }
-                    None => UNCOLOURED.with(|count| count.set(count.get() + 1)),
+                    None => {
+                        UNCOLOURED.with(|count| count.set(count.get() + 1));
+                        llrm_support::debug!("ssaassign", "{}: no colour for value#{value} at {:#06x}: taken {:?}, class {:?}", body.name, one.at, pool.keys().collect::<Vec<_>>(), class_of(value));
+                    }
                 }
             }
             for value in dying {

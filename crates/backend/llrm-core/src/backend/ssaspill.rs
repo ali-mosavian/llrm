@@ -25,7 +25,7 @@ use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{self, Classes, _whole};
 use crate::backend::frame::Frame;
 use crate::backend::target::{self, Segments};
-use crate::backend::{spiller, splitkit, ssacolour, ssarepair, twoaddr};
+use crate::backend::{spiller, splitkit, ssaassign, ssacolour, ssarepair, twoaddr};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -40,6 +40,10 @@ pub struct SsaSpill {
     pub segments: Segments,
     /// Where the colours of the spilled SSA body go, for the allocator.
     pub colours: ssacolour::Colours,
+    /// The registers this phase assigned, which the allocator must keep.
+    pub assigned: ssacolour::Colours,
+    /// Whether the last body was assigned, and so left SSA.
+    pub left_ssa: bool,
 }
 
 impl SsaSpill {
@@ -60,16 +64,77 @@ impl LIRTransform for SsaSpill {
         Self::NAME
     }
 
+    fn keeps_ssa(&self) -> bool {
+        !self.left_ssa
+    }
+
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+        self.left_ssa = false;
         if !Self::enabled() {
             return Ok(body);
         }
         let out = spilled(&body, &mut self.frame.borrow_mut(), &self.segments)?;
         if std::env::var_os("LLRM_SSA_COLOUR").is_some() {
-            *self.colours.borrow_mut() = ssacolour::coloured(&out, &untouchable(&out), &self.segments);
+            *self.colours.borrow_mut() = ssacolour::coloured(&out, &untouchable(&out), &IndexMap::default(), &self.segments);
+        }
+        if std::env::var_os("LLRM_SSA_ASSIGN").is_some() {
+            let floats = floating(&out);
+            let confined = allocate::classes(&out, &BTreeSet::new(), &self.segments);
+            let machine = Machine::of(&confined);
+            let general = |value: u32| machine.registered(value) && !floats.contains(&value);
+            let colours = ssacolour::coloured(&out, &floats, &out.pins, &self.segments);
+            match ssaassign::assigned(&out, &colours, &general, &self.segments) {
+                Ok((assigned, pins)) => {
+                    *self.assigned.borrow_mut() = pins;
+                    self.left_ssa = true;
+                    return Ok(assigned);
+                }
+                Err(why) => {
+                    ssaassign::fell_back();
+                    llrm_support::debug!("ssaassign", "{}: left to Greedy: {why}", out.name);
+                }
+            }
         }
         Ok(out)
     }
+}
+
+/// The widest each value of `values` is read or written, a phi's result and
+/// arguments counting as one value: a value only phis name has no width of its own.
+fn widths_through_phis(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+    let mut web: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
+    for block in &body.blocks {
+        for phi in &block.phis {
+            let members: BTreeSet<u32> = std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value)).collect();
+            for one in &members {
+                web.entry(*one).or_default().extend(members.iter().copied());
+            }
+        }
+    }
+    // Close each web.
+    loop {
+        let mut grew = false;
+        let keys: Vec<u32> = web.keys().copied().collect();
+        for key in keys {
+            let reach: BTreeSet<u32> = web[&key].iter().flat_map(|one| web.get(one).cloned().unwrap_or_default()).collect();
+            if !reach.is_subset(&web[&key]) {
+                web.get_mut(&key).expect("a member").extend(reach);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let every: BTreeSet<u32> = values.iter().flat_map(|one| web.get(one).cloned().unwrap_or_else(|| BTreeSet::from([*one]))).collect();
+    let known = spiller::_widest(body, &every);
+    values
+        .iter()
+        .map(|one| {
+            let members = web.get(one).cloned().unwrap_or_else(|| BTreeSet::from([*one]));
+            (*one, members.iter().filter_map(|member| known.get(member)).copied().max().unwrap_or(2))
+        })
+        .collect()
 }
 
 /// What each block does with each value: where it reads it, in order.
@@ -236,13 +301,23 @@ fn stated(one: &Insn, general: &BTreeSet<Register>) -> BTreeSet<Register> {
     }
     out.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)));
     out.extend(one.clobbers.iter().map(|register| _whole(*register)));
+    if one.what.as_ref().is_some_and(target::status_through_ax) {
+        out.insert(Register::EAX);
+    }
     out.retain(|register| general.contains(register));
     out
 }
 
 /// Values the spiller leaves alone: x87 values, pinned ones, and the body's inputs.
-fn untouchable(body: &LirBody) -> BTreeSet<u32> {
-    let mut out: BTreeSet<u32> = body.pins.keys().copied().chain(body.inputs.iter().copied()).collect();
+pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
+    let mut out = floating(body);
+    out.extend(body.pins.keys().copied().chain(body.inputs.iter().copied()));
+    out
+}
+
+/// Values no general register holds: x87 values and wider ones, and every phi web they join.
+pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
+    let mut out: BTreeSet<u32> = BTreeSet::new();
     for one in body.insns() {
         if one.what.as_ref().is_some_and(|what| target::_on_the_stack(what) || what.op.is_x87()) {
             out.extend(one.uses.iter().chain(&one.defines).copied());
@@ -574,7 +649,7 @@ fn simulated(
                 }
             }
             // The first source of a tied instruction gives its register to the result.
-            let tied = one.what.as_ref().is_some_and(|what| twoaddr::_TIED.contains(&what.op));
+            let tied = one.what.as_ref().is_some_and(twoaddr::ties);
             let first = if tied { one.what.as_ref().and_then(|what| what.sources.first()).and_then(|source| if let Loc::Held(first) = source { Some(first.value) } else { None }) } else { None };
             let dying = |value: &u32| flow.next_use(*at, position, *value) >= FAR;
             let gone: Vec<u32> = used.iter().copied().filter(|value| dying(value) && (!tied || Some(*value) == first)).collect();
@@ -751,7 +826,7 @@ fn written(
     remakes: &IndexMap<u32, Arc<Insn>>,
     frame: &mut Frame,
 ) -> Result<LirBody, String> {
-    let widths = spiller::_widest(body, stored);
+    let widths = widths_through_phis(body, stored);
     let mut cells: IndexMap<u32, crate::model::ir::Mem> = IndexMap::default();
     for value in stored.iter().filter(|value| !remakes.contains_key(*value)) {
         let width = widths.get(value).copied().unwrap_or(2);

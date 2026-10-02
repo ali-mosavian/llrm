@@ -43,16 +43,17 @@ pub fn machine<'a>(
     }
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let colours: ssacolour::Colours = Rc::default();
+    let assigned: ssacolour::Colours = Rc::default();
     Ok(vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), colours: Rc::clone(&colours) }),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), colours: Rc::clone(&colours), assigned: Rc::clone(&assigned), left_ssa: false }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None, segments)),
-        Box::new(allocate::RegAlloc { colours: Some(Rc::clone(&colours)), ..allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)? }),
+        Box::new(allocate::RegAlloc { colours: Some(Rc::clone(&colours)), assigned: Some(Rc::clone(&assigned)), ..allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)? }),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
@@ -135,7 +136,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
     let owned = body.owned_bytes();
     let transformed =
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
-    let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
+    let body = verified(transformed, &stage, in_ssa && phase.keeps_ssa()).map_err(Checked::Malformed)?;
     let now = body.owned_bytes();
     if now != owned {
         let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));

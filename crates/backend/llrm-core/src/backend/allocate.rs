@@ -1094,7 +1094,11 @@ fn _allocated(
                             .collect();
                         llrm_support::debug!("regalloc", "{}: value#{value} {:?} {}: clobbered {}, held by {holders:?}", body.name, mine.segments, register.repr(), _clobbered(&mine, *register, &facts.masks, width));
                     }
-                    // `unallocatable` refused every body that could land here.
+                    // `unallocatable` refused every body that could land here, unless an
+                    // assignment made before allocation pinned it: that assignment is then given up.
+                    if ASSIGNED.with(std::cell::Cell::get) {
+                        return Err(Unplaced(format!("value#{value} has no register beside the assigned ones")).into());
+                    }
                     unreachable!("{}: value#{value} cannot be spilled and no register it may take is free of values that cannot be", body.name);
                 };
                 LAST_RESORTS.with(|count| count.set(count.get() + 1));
@@ -1497,6 +1501,8 @@ fn _forced(
 }
 
 thread_local! {
+    /// Whether the allocation in progress keeps registers an assignment on SSA gave.
+    static ASSIGNED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LAST_RESORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -1670,6 +1676,8 @@ pub struct RegAlloc {
     pub segments: Segments,
     /// Registers an earlier phase advises for values, as `ssacolour` gives them on SSA.
     pub colours: Option<crate::backend::ssacolour::Colours>,
+    /// Registers an earlier phase assigned, which stay where they are.
+    pub assigned: Option<crate::backend::ssacolour::Colours>,
 }
 
 impl RegAlloc {
@@ -1681,11 +1689,33 @@ impl RegAlloc {
         cpu: ProfileOrName<'_>,
         segments: &Segments,
     ) -> Result<Self, String> {
-        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone(), colours: None })
+        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone(), colours: None, assigned: None })
     }
 
     /// Assign; where that spills, make the spill real and assign again.
     pub fn transform(&mut self, body: LirBody) -> Result<LirBody, Error> {
+        // Registers an assignment on SSA gave are kept; where what came after leaves the
+        // allocator no way to keep them, it allocates as if there were none.
+        let given: IndexMap<u32, Register> = self.assigned.as_ref().map(|assigned| std::mem::take(&mut *assigned.borrow_mut())).unwrap_or_default();
+        if !given.is_empty() {
+            let named: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect();
+            let (pinned, frame) = (self.pinned.clone(), self.frame.as_ref().map(|frame| frame.borrow().clone()));
+            self.pinned.extend(given.iter().filter(|(value, _)| named.contains(*value)).map(|(value, register)| (*value, *register)));
+            ASSIGNED.with(|flag| flag.set(true));
+            let kept = self.transform(body.clone());
+            ASSIGNED.with(|flag| flag.set(false));
+            match kept {
+                Err(Error::Unplaced(why)) => {
+                    crate::backend::ssaassign::overridden();
+                    llrm_support::debug!("ssaassign", "{}: the allocator gave up the assignment: {why}", body.name);
+                    self.pinned = pinned;
+                    if let (Some(shared), Some(saved)) = (&self.frame, frame) {
+                        *shared.borrow_mut() = saved;
+                    }
+                }
+                other => return other,
+            }
+        }
         if self.frame.is_none() {
             self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
         }

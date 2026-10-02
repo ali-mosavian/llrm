@@ -111,6 +111,12 @@ pub trait LIRTransform {
         self.transform(body).map_err(|message| Exception::new("Exception", message))
     }
 
+    /// Whether the body this phase returned is still in SSA form; a phase that
+    /// destroys SSA, as phi elimination or an assignment on SSA does, says no.
+    fn keeps_ssa(&self) -> bool {
+        true
+    }
+
     /// `__repr__`.
     fn repr(&self) -> String {
         format!(
