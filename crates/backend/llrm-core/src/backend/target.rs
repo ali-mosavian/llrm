@@ -588,6 +588,13 @@ mod tests {
         assert!(crate::backend::select::_WORD_BASES.iter().all(|one| encodable.contains(one)));
     }
 
+    /// x86 arithmetic is two-address: the spill model charges the copy of a first operand that stays live.
+    #[test]
+    fn test_the_machine_says_its_arithmetic_is_two_address() {
+        use llrm_mir::target::Machine;
+        assert!(llrm_x86_code16::Dos::default().two_address());
+    }
+
     /// The spill model counts the registers an address may use as the allocator restricts to.
     #[test]
     fn test_the_spill_models_address_registers_are_the_allocators() {
