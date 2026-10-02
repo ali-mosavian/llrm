@@ -469,3 +469,27 @@ b4:
     assert!(!after.contains("phi"), "{after}");
     assert_eq!(results(&module, inputs), before);
 }
+
+/// A pointer parameter stated `nonnull` is never null: compared with it the
+/// branch is decided; unstated, it is not.
+#[test]
+fn a_nonnull_parameter_is_never_null() {
+    for (attribute, decided) in [("nonnull", true), ("", false)] {
+        let mut module = parsed(&format!(
+            "define i16 @f(ptr {attribute} %p) {{
+b0:
+  %c = icmp eq ptr %p, null
+  br i1 %c, label %yes, label %no
+
+yes:
+  ret i16 1
+
+no:
+  ret i16 0
+}}
+"
+        ));
+        decide(&mut module);
+        assert_eq!(!has(&module, "yes"), decided, "{attribute}: {}", printed(&module));
+    }
+}
