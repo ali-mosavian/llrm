@@ -936,6 +936,38 @@ b0:
         }
     }
 
+    /// The language's word that an address is a device's is checked against
+    /// the target where the address is a constant: DOS loads a program
+    /// anywhere in conventional memory, so a constant segment there (0x1234)
+    /// may be the program's own data and is no fixed address; B800 is video.
+    #[test]
+    fn test_a_constant_segment_in_conventional_memory_is_no_fixed_address() {
+        for (segment, apart) in [(0xB800, true), (0x1234, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f() {{
+b0:
+  %a = load i16, ptr @g
+  %s = inttoptr i16 {segment} to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %dev = addrspacecast ptr addrspace(1) %far to ptr addrspace(4)
+  store i8 0, ptr addrspace(4) %dev
+  ret void
+}}
+"
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let dos = dos(&module);
+            let mut unit = Unit::of(&module, &dl, f);
+            unit.program = Some(&dos);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!(!may_alias(load, store, None, None, Some(&dos)).unwrap(), apart, "segment {segment:#x}");
+        }
+    }
+
     /// Only an address space the segment layout places program data in is
     /// apart from foreign memory: address space 0 was taken to be, whatever
     /// the layout.

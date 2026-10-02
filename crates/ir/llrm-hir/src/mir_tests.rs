@@ -944,14 +944,16 @@ fn floating_freedoms_are_fast_math_flags() {
 }
 
 /// A pointer the frontend says is at a fixed address is a pointer in the
-/// fixed-address space; any other near-or-far pointer is as before.
+/// fixed-address space, and a read through it is ordered whether or not the
+/// frontend said so: a device changes by itself (a wait on the BIOS tick
+/// compiled to `cmp ax, ax` and spun).
 #[test]
 fn a_fixed_address_pointer_is_in_the_fixed_space() {
     use crate::model::{AddressKind, IndirectPlace};
     let mut pointer = Type::new(2, "device", TypeKind::Pointer, 4);
     pointer.address = AddressKind::Fixed;
     let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }];
-    let at = Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: true, origin: None, allocation: None });
+    let at = Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None });
     let load = Instruction::new(1, Op::Load, vec![2], vec![at]);
     let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
     let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);

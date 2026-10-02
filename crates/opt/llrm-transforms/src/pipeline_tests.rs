@@ -306,3 +306,37 @@ b3:
     assert_eq!(body.matches("call void @llrm.ia16.asm.fa").count(), 2, "{text}");
     assert_eq!(body.matches(&format!("@{block}(")).count(), 2, "{text}");
 }
+
+/// A wait on the BIOS tick (`DEF SEG = &H40: DO: LOOP UNTIL PEEK(&H6C) <> t`)
+/// compiled to `cmp ax, ax` and spun: the second read was the first. A read
+/// at a fixed address is ordered, so it stays in the loop, whatever else the
+/// passes know of the memory.
+#[test]
+fn a_wait_on_a_device_read_keeps_the_read_in_the_loop() {
+    let text = format!(
+        "{}define i16 @f() {{
+b0:
+  %s = inttoptr i16 64 to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %dev = addrspacecast ptr addrspace(1) %far to ptr addrspace(4)
+  %tick = getelementptr i8, ptr addrspace(4) %dev, i16 108
+  %t = load volatile i16, ptr addrspace(4) %tick
+  br label %b1
+
+b1:
+  %v = load volatile i16, ptr addrspace(4) %tick
+  %same = icmp eq i16 %v, %t
+  br i1 %same, label %b1, label %b2
+
+b2:
+  ret i16 %v
+}}
+",
+        llrm_analysis::testing::DOS
+    );
+    let mut module = crate::testing::parsed(&text);
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    let after = crate::testing::printed(&module);
+    let body = after.split("b1:").nth(1).unwrap_or("").split("\n\n").next().unwrap_or("");
+    assert!(body.contains("load volatile i16, ptr addrspace(4)"), "{after}");
+}
