@@ -380,7 +380,7 @@ pub fn read_arguments(unit: &Unit, at: InstId) -> Vec<Operand> {
 /// at the site or on the callee's parameter.
 fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
-    let nocapture = |attrs: &[Attribute]| llrm_mir::memory::has(attrs, "nocapture");
+    let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
     info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs)) || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
 }
