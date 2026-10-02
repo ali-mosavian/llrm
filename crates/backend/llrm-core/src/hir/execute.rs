@@ -234,7 +234,9 @@ fn normalized(value: Scalar, type_: &model::Type) -> Outcome<Scalar> {
         }
         // A word copy of an aggregate carries its addresses.
         TypeKind::Integer if matches!(value, Scalar::Address(_)) => Ok(value),
-        // Widened as `movsx` widens it: the all-ones `true` is -1.
+        // An unsigned boolean's `true` is one, as C's; any other widens as
+        // `movsx` widens it, the all-ones `true` being -1.
+        TypeKind::Boolean if type_.signed == Some(false) => Ok(Scalar::Int(i128::from(wrap(value.whole()?, type_.width * 8, false) != 0))),
         TypeKind::Boolean => Ok(Scalar::Int(wrap(value.whole()?, type_.width * 8, true))),
         TypeKind::Integer => Ok(Scalar::Int(integer(value.whole()?, type_))),
         _ => fail(format!(

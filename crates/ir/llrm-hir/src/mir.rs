@@ -1843,7 +1843,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Op::Not => {
                 let value = self.value(&instruction.operands[0])?;
                 let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a complemented non-integer")?;
-                let ones = self.b.int(bits, -1);
+                // An unsigned boolean is 0 or 1, as C's: its negation flips that one bit.
+                let one = self.hir_type(self.value_types[&instruction.results[0]]).kind == model::TypeKind::Boolean && self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
+                let ones = self.b.int(bits, if one { 1 } else { -1 });
                 let result = self.b.binary(BinaryOp::Xor, value, ones, Flags::default(), "");
                 self.define(instruction, result);
             }

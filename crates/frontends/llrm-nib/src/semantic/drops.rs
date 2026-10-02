@@ -89,7 +89,7 @@ impl FunctionCompiler<'_> {
 
     pub(super) fn set_live(&mut self, key: Owner, live: bool) {
         if let Some(flag) = self.drop_flags.get(&key).copied() {
-            let value = hir::Operand::Constant(BOOL, if live { -1 } else { 0 });
+            let value = hir::Operand::Constant(BOOL, i64::from(live));
             self.emit("store", Vec::new(), vec![hir::Operand::Place(flag), value], None);
         }
     }
@@ -149,7 +149,7 @@ impl FunctionCompiler<'_> {
                 Some((_, Some(flag))) => {
                     let flag = hir::Operand::Place(*flag);
                     self.when_live(Some(flag.clone()), |this| this.owned_field(view, *field, Owned::Drop));
-                    self.emit("store", Vec::new(), vec![flag, hir::Operand::Constant(BOOL, -1)], None);
+                    self.emit("store", Vec::new(), vec![flag, hir::Operand::Constant(BOOL, 1)], None);
                 }
                 None if below.is_empty() => self.owned_field(view, *field, Owned::Drop),
                 None => {
@@ -184,9 +184,9 @@ impl FunctionCompiler<'_> {
             .collect();
         for ((owner, filled), block, at) in std::mem::take(&mut self.field_refills) {
             let flags = self.field_flags.iter().filter(|((one, path), _)| *one == owner && path.starts_with(&filled));
-            stores.extend(flags.map(|(_, flag)| (block, at, *flag, -1)));
+            stores.extend(flags.map(|(_, flag)| (block, at, *flag, 1)));
         }
-        stores.extend(self.field_flags.values().map(|flag| (1, 0, *flag, -1)));
+        stores.extend(self.field_flags.values().map(|flag| (1, 0, *flag, 1)));
         // From the end of each block back, so that each index still holds.
         stores.sort_by(|one, other| (other.0, other.1).cmp(&(one.0, one.1)).then(one.3.cmp(&other.3)));
         for (block, at, flag, value) in stores {

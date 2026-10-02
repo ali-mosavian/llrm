@@ -2236,3 +2236,60 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let body = between(&assembly, "_f proc far\n", "_f endp");
     assert!(!body.contains(", 0\n"), "{body}");
 }
+
+/// Nib's `true` is one, as C's. It was -1, so a bool C handed over (1)
+/// was not equal to a Nib `true`: `b == t` compared the bytes. Run on the
+/// HIR executor and on the optimized MIR at -O0 and -O2, each a bit of
+/// the score.
+#[test]
+fn test_a_bool_is_equal_to_any_other_true_whoever_stored_it() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+struct S:
+    mut flag: bool
+
+fn main() -> i16:
+    let mut b: bool = false
+    let t: bool = true
+    let mut s = S(flag=false)
+    unsafe:
+        let p: *far mut bool = &mut b
+        let r = p.cast[u8]()
+        r[0] = 1
+        let q: *far mut bool = &mut s.flag
+        let u = q.cast[u8]()
+        u[0] = 1
+    let c: bool = 3 > 2
+    let n: bool = !b
+    let mut score: i16 = 0
+    if b == t:
+        score += 1
+    if b == true:
+        score += 2
+    if b != false:
+        score += 4
+    if s.flag == t:
+        score += 8
+    if b == c:
+        score += 16
+    if n == false:
+        score += 32
+    if !n == b:
+        score += 64
+    return score
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "booleans.nib", source));
+    let held = llrm_core::hir::execute::run(&program, "main", &[]).expect("runs").value;
+    assert_eq!(held, Some(llrm_core::hir::model::Number::Int(127)), "the HIR executor");
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    for optimize in [false, true] {
+        let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
+        let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+        let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+        llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+        let score = interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        assert!(matches!(score, Val::Int { bits: 127, .. }), "optimize {optimize}: {score:?}");
+    }
+}
