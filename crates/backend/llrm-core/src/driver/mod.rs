@@ -101,7 +101,7 @@ fn spill_model(program: &Program) {
 /// objects' ids.
 pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
     // Whichever frontend made it, a program is checked before it is lowered.
-    llrm_hir::verify::verify(program).map_err(|why| why.0)?;
+    crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
     let emitted = crate::hir::mir::emit(program);
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
