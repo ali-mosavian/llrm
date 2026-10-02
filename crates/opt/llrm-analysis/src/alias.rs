@@ -1565,6 +1565,11 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
                 got = Some(foreign);
             }
         }
+        // An access the language says is at a fixed address names linear
+        // memory, whatever its pointer was made from.
+        if reference.space == llrm_mir::datalayout::FIXED_SPACE {
+            got = Some(regions::fixed_provenance());
+        }
         Ok(MemRef { provenance: got, ..reference.clone() })
     };
 

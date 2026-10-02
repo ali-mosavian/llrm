@@ -71,6 +71,13 @@ fn linear() -> MemoryObject {
     MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }
 }
 
+/// What an access through a fixed-address pointer names: linear memory, wholly.
+/// The language says no program object lives there, and no selector range
+/// has to prove it.
+pub fn fixed_provenance() -> Provenance {
+    Provenance::one(linear())
+}
+
 /// The range of `value`'s interval, `disp` plus `scale` times it.
 fn scaled(interval: &Interval, disp: i64, scale: i64) -> (BigInt, BigInt) {
     let (one, other) = (BigInt::from(disp) + &interval.low * scale, BigInt::from(disp) + &interval.high * scale);
@@ -899,6 +906,34 @@ b0:
         assert!(!may_alias(text, near, Some(&foreign), None, Some(&dos)).unwrap());
         assert!(overlapping(near, text, None, Some(&ordinary), Some(&dos)).unwrap());
         assert!(overlapping(near, text, None, Some(&foreign), None).unwrap());
+    }
+
+    /// A store through a pointer the language puts at a fixed address
+    /// (address space 4) cannot reach a program global, however its pointer
+    /// was made; through a far pointer it can, a far pointer reaching any
+    /// object. Every POKE to a stated device kept the reloads of the
+    /// program's own data behind it.
+    #[test]
+    fn test_an_access_at_a_fixed_address_misses_program_objects() {
+        for (space, apart) in [(4, true), (1, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr @g
+  store i8 0, ptr addrspace({space}) %p
+  ret void
+}}
+"
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let unit = Unit::of(&module, &dl, f);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!(!may_alias(load, store, None, None, None).unwrap(), apart, "space {space}");
+        }
     }
 
     /// Only an address space the segment layout places program data in is

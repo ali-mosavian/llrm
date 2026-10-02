@@ -434,3 +434,34 @@ b0:
     let after = printed(&module);
     assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
 }
+
+/// The program's global is read again after a store to a device: through a
+/// pointer in the fixed-address space the store cannot change it, so the
+/// second read is the first; through a far pointer it may, and stays.
+#[test]
+fn test_a_store_at_a_fixed_address_keeps_a_global_loaded_before() {
+    for (space, reloaded) in [(4, false), (1, true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global i16 0
+
+define i16 @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr @g
+  store i8 1, ptr addrspace({space}) %p
+  %b = load i16, ptr @g
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let mut module = parsed(&text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr @g").count() == 2, reloaded, "space {space}\n{after}");
+    }
+}

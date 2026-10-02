@@ -3349,3 +3349,19 @@ fn test_an_extended_float_is_never_fcoms_memory_operand() {
     assert!(got.iter().any(|line| line.starts_with("fld tbyte")) && got.iter().any(|line| line.starts_with("fcom")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fcom") && line.contains("tbyte")), "{got:?}");
 }
+
+/// A fixed-address pointer is a far one to the machine: the same code as
+/// space 1 for the same access, whatever the analysis makes of it.
+#[test]
+fn test_a_fixed_address_pointer_selects_as_a_far_one() {
+    let body = |space: u32| {
+        format!("define i16 @f(ptr addrspace({space}) %p, i16 %i) addrspace(1) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  %v = load volatile i16, ptr addrspace({space}) %q\n  ret i16 %v\n}}\n")
+    };
+    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
+    let listing = |space| {
+        let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
+        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, false, 0).expect("selected");
+        format!("{chosen:?}")
+    };
+    assert_eq!(listing(4), listing(1));
+}

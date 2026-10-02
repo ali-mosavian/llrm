@@ -128,6 +128,8 @@ str_enum!(AddressKind {
     Code("CODE") = "code",
     // A 16-bit protected/real-mode segment selector, without an offset.
     Segment("SEGMENT") = "segment",
+    // Memory at a fixed address no program object occupies: a device's.
+    Fixed("FIXED") = "fixed",
 });
 
 str_enum!(FloatEvaluation {

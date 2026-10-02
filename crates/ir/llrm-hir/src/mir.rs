@@ -25,7 +25,7 @@ mod handling;
 /// indexing by 16 bits, 16-bit segments, huge ones as far but indexing by
 /// 32 bits (a displacement past 64K carries into the selector), and 16-bit
 /// alignment.
-pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32";
+pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32";
 
 /// A far pointer's address space.
 pub const FAR: u32 = 1;
@@ -34,6 +34,8 @@ pub const FAR: u32 = 1;
 pub const SEGMENT: u32 = 2;
 /// A huge pointer's: a far pointer whose index does not wrap at 64K.
 pub const HUGE: u32 = 3;
+/// A fixed address's: a far pointer into memory no program object occupies.
+pub const FIXED: u32 = llrm_mir::datalayout::FIXED_SPACE;
 
 /// The prefix of a runtime routine's name: a callee the module does not
 /// declare.
@@ -161,6 +163,7 @@ fn value_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
         },
         TypeKind::Pointer if hir.address == AddressKind::Segment => types.ptr(SEGMENT),
         TypeKind::Pointer if hir.address == AddressKind::Huge => types.ptr(HUGE),
+        TypeKind::Pointer if hir.address == AddressKind::Fixed => types.ptr(FIXED),
         TypeKind::Pointer => types.ptr(if hir.width == 4 { FAR } else { 0 }),
         TypeKind::Array | TypeKind::Opaque => return Err(format!("a value of type {}", hir.name)),
     })
