@@ -1,0 +1,19 @@
+# 10000 pairs of i32s (80000 bytes) in huge memory: 8-byte elements.
+struct Pair:
+    mut x: i32
+    mut y: i32
+
+huge var p: Pair[10000] = [Pair(x=0, y=0)] * 10000
+
+fn bench_pairs() -> i32:
+    let mut t: i32 = 0
+    for i in 0..10000:
+        p[i].x = i32(i)
+        p[i].y = i32(i) * 3
+    for i in 0..10000:
+        t += p[i].y - p[i].x
+    return t
+
+fn main() -> i16:
+    print(bench_pairs())
+    return 0

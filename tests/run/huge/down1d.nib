@@ -1,0 +1,16 @@
+# 30000 i32s (120000 bytes) in huge memory, summed from the top down.
+huge var a: i32[30000] = [0] * 30000
+
+fn bench_down1d() -> i32:
+    let mut t: i32 = 0
+    for i in 0..30000:
+        a[i] = i32(i)
+    let mut i: i16 = 29999
+    while i >= 0:
+        t = (t * 3 + a[i]) & 0xFFFF
+        i -= 1
+    return t
+
+fn main() -> i16:
+    print(bench_down1d())
+    return 0

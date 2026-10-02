@@ -1435,6 +1435,11 @@ contiguous, so no stride is stored: each follows from the dimensions after
 it. A fixed array's descriptor has the same words as a vector's,
 `[dimensions][capacity]`. At rank one these are `[length][capacity]`.
 
+A `huge var` array's (section 14) bytes run on through consecutive 64K
+segments. An element is reached through a `*huge` pointer at
+its 32-bit byte offset. It is only indexed or iterated: no view or pointer
+to it may be taken, since neither carries past 64K.
+
 A borrowed `&T[N]` needs no descriptor: its dimensions are in its type, so it
 is a far pointer to the array. An unsized view, `&[T]` or `&string`, is a
 descriptor of its dimensions, capacity, and far data pointer. That descriptor
@@ -1668,6 +1673,13 @@ var origin: Point = Point(x=0, y=0)
 fn record(value: i16) -> void:
     table[count] = value
     count += 1
+```
+
+A `huge var` is an array in far data of its own, which may pass 64K
+(section 13). A plain `var` past 64K is an error.
+
+```text
+huge var samples: i32[30000] = [0] * 30000
 ```
 
 The import graph must be acyclic. A cycle is a compile-time error and is

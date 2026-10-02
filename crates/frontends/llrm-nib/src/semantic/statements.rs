@@ -25,6 +25,9 @@ impl<'a> FunctionCompiler<'a> {
             if let Some(error) = self.moves.error.take() {
                 return Err(Diagnostic::new(statement.span(), error.message));
             }
+            if std::mem::take(&mut self.huge_address) {
+                return Err(Diagnostic::new(statement.span(), "a 'huge var' is only indexed: no view or pointer reaches past 64K"));
+            }
             if self.open() {
                 self.drop_temporaries();
             } else {
