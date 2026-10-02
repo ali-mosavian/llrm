@@ -51,6 +51,8 @@ pub enum Subject {
     /// Operand `operand` of call `instruction`.
     Operand { function: i64, instruction: i64, operand: i64 },
     Object(i64),
+    /// The terminator of block `block`.
+    Terminator { function: i64, block: i64 },
 }
 
 impl Subject {
@@ -61,6 +63,7 @@ impl Subject {
             Subject::Instruction { .. } => Kind::Instruction,
             Subject::Operand { .. } => Kind::Operand,
             Subject::Object(_) => Kind::Object,
+            Subject::Terminator { .. } => Kind::Terminator,
         }
     }
 
@@ -72,11 +75,12 @@ impl Subject {
             Kind::Instruction => "instruction",
             Kind::Operand => "operand",
             Kind::Object => "object",
+            Kind::Terminator => "terminator",
         }
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object].into_iter().find(|&kind| Self::kind_key(kind) == key)
+        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object, Kind::Terminator].into_iter().find(|&kind| Self::kind_key(kind) == key)
     }
 
     /// The function a subject belongs to, its own id in it, and, for what
@@ -87,6 +91,7 @@ impl Subject {
             Subject::Param { function, index } => (Some(function), Some(index), None),
             Subject::Instruction { function, id } => (Some(function), Some(id), None),
             Subject::Operand { function, instruction, operand } => (Some(function), Some(instruction), Some(operand)),
+            Subject::Terminator { function, block } => (Some(function), Some(block), None),
         }
     }
 
@@ -103,6 +108,7 @@ impl Subject {
             Kind::Instruction => Subject::Instruction { function: function?, id: id? },
             Kind::Operand => Subject::Operand { function: function?, instruction: id?, operand: part? },
             Kind::Object => Subject::Object(id?),
+            Kind::Terminator => Subject::Terminator { function: function?, block: id? },
         })
     }
 }
