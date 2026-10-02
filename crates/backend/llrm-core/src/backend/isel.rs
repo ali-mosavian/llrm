@@ -2448,6 +2448,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
+                // A fact for the passes: no code.
+                Some(Intrinsic::Assume) => Ok(()),
                 _ => refuse(format!("@{name}")),
             };
         }

@@ -525,6 +525,13 @@ impl<'a> Unit<'a> {
         }
     }
 
+    /// The condition `inst` assumes, if it is a call of `llvm.assume`.
+    pub fn assumption(&self, inst: InstId) -> Option<Operand> {
+        let global = llrm_mir::memory::callee(self.context, self.function, inst)?;
+        let named = self.globals.get(global.0 as usize)?.name.as_deref()?;
+        (llrm_mir::intrinsics::Intrinsic::named(named) == Some(llrm_mir::intrinsics::Intrinsic::Assume)).then(|| self.function.instruction(inst).operands.first().copied()).flatten()
+    }
+
     /// The instruction defining `operand`, if a local value defines it.
     pub fn defining(&self, operand: Operand) -> Option<(InstId, &'a llrm_mir::module::Instruction)> {
         let Operand::Value(value) = operand else { return None };

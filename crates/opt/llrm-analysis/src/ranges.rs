@@ -113,21 +113,28 @@ pub fn on_edge(
     let Some((condition, taken)) = branch(unit, block) else {
         return Ok(Some(result));
     };
+    Ok(narrowed(unit, condition, successor == taken, known, facts))
+}
+
+/// What `known` becomes where `condition`, an `icmp`, is `holds`; `None`
+/// where it cannot be.
+fn narrowed(unit: &Unit, condition: Operand, holds: bool, known: &IndexMap<ValueId, Interval>, facts: &IndexMap<ValueId, Known>) -> Option<IndexMap<ValueId, Interval>> {
+    let result = known.clone();
     let Some((_, compare)) = unit.defining(condition) else {
-        return Ok(Some(result));
+        return Some(result);
     };
     let Opcode::ICmp(predicate) = compare.opcode else {
-        return Ok(Some(result));
+        return Some(result);
     };
     let (mut left, mut right) = (compare.operands[0], compare.operands[1]);
     let (Some(left_width), Some(right_width)) = (unit.int_bits(left), unit.int_bits(right)) else {
-        return Ok(Some(result));
+        return Some(result);
     };
     if right_width != left_width {
-        return Ok(Some(result));
+        return Some(result);
     }
     let mut kind = predicate;
-    if successor != taken {
+    if !holds {
         kind = kind.inverse();
     }
     let sign = BigInt::from(1_u8) << (left_width - 1);
@@ -143,7 +150,7 @@ pub fn on_edge(
             IntPredicate::Ult => first_low < second_high,
             _ => first_low <= second_high,
         };
-        return Ok(possible.then_some(result));
+        return possible.then_some(result);
     }
     if matches!(kind, IntPredicate::Sge | IntPredicate::Sgt) {
         (left, right) = (right, left);
@@ -174,18 +181,18 @@ pub fn on_edge(
             };
             [excluding(&first, &second), excluding(&second, &first)]
         }
-        _ => return Ok(Some(result)),
+        _ => return Some(result),
     };
     let mut result = result;
     for (operand, (low, high)) in [left, right].into_iter().zip(spans) {
         if low > high {
-            return Ok(None);
+            return None;
         }
         if let Operand::Value(value) = operand {
             result.insert(value, Interval { low, high, width: left_width });
         }
     }
-    Ok(Some(result))
+    Some(result)
 }
 
 fn _unsigned_span(interval: &Interval) -> (BigInt, BigInt) {
@@ -319,6 +326,7 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
     let predecessors = loops::predecessors(&graph);
     let immediate = unit.shape().dominance.immediate_dominators(function);
     let mut known: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
+    let mut own: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
     for at in loops::reverse_postorder(&graph, cfg::id(entry)) {
         let block = cfg::block(at);
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
@@ -344,12 +352,23 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
                 scoped.insert(result, interval);
             }
         }
-        known.insert(at, scoped);
+        // What the block assumes holds below it, not in it: the code before the
+        // assume is not covered.
+        let mut below = scoped.clone();
+        for &inst in function.block(block).instructions() {
+            if let Some(condition) = unit.assumption(inst)
+                && let Some(narrower) = narrowed(unit, condition, true, &below, facts)
+            {
+                below = narrower;
+            }
+        }
+        own.insert(at, scoped);
+        known.insert(at, below);
     }
     Ok(function
         .layout()
         .iter()
-        .filter_map(|&block| known.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), scoped.clone())))
+        .filter_map(|&block| own.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), scoped.clone())))
         .collect())
 }
 
@@ -443,6 +462,18 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                         scoped = narrowed;
                     }
                 }
+            }
+            // What the blocks above it assume.
+            let mut above = at;
+            while let Some(up) = shape.dominance.immediate(above) {
+                for &inst in function.block(cfg::block(up)).instructions() {
+                    if let Some(condition) = unit.assumption(inst)
+                        && let Some(narrower) = narrowed(unit, condition, true, &scoped, facts)
+                    {
+                        scoped = narrower;
+                    }
+                }
+                above = up;
             }
             loop {
                 // What each value set in this sweep held before it.
