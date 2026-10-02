@@ -23,7 +23,9 @@ use crate::model::mir::MirBody;
 use crate::model::passes::{LIRTransform, Options, LEVELS};
 use crate::optimize::transform;
 
-/// Every phase between lowering and emission, in order.
+/// Every phase between lowering and emission, in order, for the legacy routes that lower
+/// by themselves (`--legacy`, the BC machine-code route): the spiller is left out, which
+/// is what those routes were pinned and measured with. The rich route asks `machine_with`.
 pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,
     frame: Option<Rc<RefCell<Frame>>>,
@@ -33,7 +35,7 @@ pub fn machine<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, true)
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, false)
 }
 
 /// `machine`, with the spiller in front of the allocator or left out.

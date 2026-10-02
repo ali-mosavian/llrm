@@ -292,3 +292,25 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
     let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN).expect("spills");
     assert!(spilled.insns().iter().all(|one| !one.spill_store && !one.spill_reload), "one value in a six-register machine was spilled");
 }
+
+/// The legacy routes (`--legacy`, BC's machine-code route) lower by themselves and were pinned
+/// and measured without the spiller; #271 put it in front of them too, which changed their
+/// listings (PLASMA's counter loop gained two `[bp]` stores, nbody lost a paired recurrence)
+/// and failed three pinned tests outside llrm-core. Only the rich route asks for it.
+#[test]
+fn test_only_the_rich_routes_phase_list_has_the_spiller() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let names = |spilling: Option<bool>| -> Vec<&'static str> {
+        let frame = Some(Rc::new(RefCell::new(Frame::new(0))));
+        let calls = IndexMap::default();
+        let phases = match spilling {
+            None => crate::flow::machine(&IndexMap::default(), frame, None, Some(&calls), false, "386", &target::BUILT_IN),
+            Some(on) => crate::flow::machine_with(&IndexMap::default(), frame, None, Some(&calls), false, "386", &target::BUILT_IN, on),
+        };
+        phases.expect("phases").iter().map(|phase| phase.class_name()).collect()
+    };
+    assert!(!names(None).contains(&"SsaSpill"), "the legacy routes' list");
+    assert!(names(Some(true)).contains(&"SsaSpill"), "the rich route's list");
+    assert_eq!(names(Some(false)), names(None));
+}
