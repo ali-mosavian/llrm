@@ -974,6 +974,7 @@ fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> Strin
         segmented: vec![false],
         arrays: vec![false],
         defined: false,
+        returns_twice: false,
         symbol: None,
     });
     let mut facts = Builder::new("test");
@@ -1218,4 +1219,31 @@ fn an_assume_of_a_comparison_is_made_on_its_own_truth() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("%2 = icmp slt i16 %0, %1\n  %3 = sext i1 %2 to i16\n  call void @llvm.assume(i1 %2)"), "{text}");
+}
+
+/// A callable that returns twice is a declaration with the attribute, which
+/// the inliner and anything that keeps a value across a call reads; it is
+/// no fact, so the facts builder cannot drop it.
+#[test]
+fn a_callable_that_returns_twice_is_declared_so() {
+    use crate::model::{CallAbi, CallDistance, Callable, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(1)]);
+    call.callee = Some("B$TWICE".to_owned());
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.push(call);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
+    function.calls = vec![CallAbi { instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    let callable = |returns_twice| Callable { id: 1, name: "B$TWICE".to_owned(), result_type: Some(1), parameter_types: vec![1], by_value: vec![true], segmented: vec![false], arrays: vec![false], defined: false, returns_twice, symbol: None };
+    program.modules[0].callables.push(callable(true));
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("declare") && text.contains("returns_twice") && text.contains("@B$TWICE"), "{text}");
+    // It crosses the wire, and a callable that does not says nothing of it.
+    let text = crate::codec::encode(&program, None).expect("encodes");
+    assert!(text.contains("\"returns_twice\":true"), "{text}");
+    assert!(crate::codec::decode(&text).expect("decodes").modules[0].callables[0].returns_twice);
+    program.modules[0].callables[0] = callable(false);
+    assert!(!crate::codec::encode(&program, None).expect("encodes").contains("returns_twice"));
+    assert!(!llrm_mir::print::module(&emit(&program).remove(0).module).contains("returns_twice"));
 }
