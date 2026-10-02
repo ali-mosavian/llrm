@@ -2392,3 +2392,32 @@ fn main() -> i16:
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
+
+/// A far pointer is its segment and offset words: a store through
+/// `screen[2]`, `screen` from the literal 0xB8000000, writes B800:0002. The
+/// MIR interpreter models no video memory, so it stops at the access and
+/// names its address. The literal was refused: "expected *far pointer, found i16".
+#[test]
+fn test_a_far_pointer_literal_stores_at_its_segment_and_offset() {
+    use llrm_mir::interpret::{self, Trap};
+    let source = "fn poke() -> void:\n    unsafe:\n        let screen: *far mut u8 = 0xB8000000\n        screen[2] = 7\n";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "poke.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions[0].linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let options = llrm_core::driver::Options::of(nib_compile::machine());
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "poke", vec![], 1_000);
+    assert_eq!(result, Err(Trap::Undefined("an access of 1 bytes at 0xb8000002, outside every object".to_owned())));
+}
+
+/// TEXTFILL in Nib compiles at -O2: its screen is the literal 0xB8000000.
+#[test]
+fn test_textfill_compiles_at_o2() {
+    let program = parsed(&fixture("textfill.nib"));
+    for entry in ["fill", "checksum"] {
+        let text = listing(&program, entry, &level("O2"));
+        assert!(text.contains("byte ptr es:["), "{text}");
+    }
+}
