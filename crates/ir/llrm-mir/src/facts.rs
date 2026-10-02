@@ -25,6 +25,8 @@ pub enum Kind {
     /// One operand of an instruction: a call argument, or a place.
     Operand,
     Object,
+    /// The terminator of a block: a loop's back edge carries what the language says of the loop.
+    Terminator,
 }
 
 macro_rules! facts {
@@ -201,6 +203,8 @@ facts! {
     flags {
         // Of a routine, its result: a pointer to memory nothing else names.
         NoAlias no_alias "noalias" on [Param, Callable];
+        // The load reads what nothing writes after it is initialised.
+        Invariant invariant "invariant" on [Instruction];
         ReadOnly read_only "readonly" on [Param];
         // Touches no memory through the pointer, or at all, of a routine.
         ReadNone read_none "readnone" on [Param, Callable];
@@ -226,6 +230,8 @@ facts! {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
         Align(u64) align "align" on [Param, Object, Instruction];
         Initializes(u64) initializes "initializes" on [Operand];
+        // Of a loop's back edge: most copies the language lets be made. 0 forbids, `u32::MAX` is all.
+        Unroll(u32) unroll "unroll" on [Terminator];
     }
     custom {
         Memory(Effect) memory "memory" on [Callable];
@@ -259,9 +265,15 @@ impl Fact {
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
             // A range wants the width of what it bounds: `typed_attribute`.
-            Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
+            Fact::Invariant | Fact::Unroll(_) | Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
+    }
+
+    /// Whether it is carried as metadata (`!range`, `!llvm.loop`) or by the width of
+    /// what it bounds, where it is neither an attribute nor an instruction flag.
+    pub fn is_metadata(self) -> bool {
+        matches!(self, Fact::Range(_) | Fact::Invariant | Fact::Unroll(_))
     }
 
     /// Whether, stated of a routine, it is of the routine's result.
@@ -421,7 +433,7 @@ mod tests {
         for fact in Fact::examples() {
             match fact.attribute() {
                 Some(attribute) => assert_eq!(Fact::of_attribute(&attribute), Some(fact), "{}", fact.key()),
-                None if fact.key() == "range" => {}
+                None if fact.is_metadata() => {}
                 None => assert!(Fact::of_flags(fact.flags()).contains(&fact), "{} is a flag", fact.key()),
             }
             assert!(Fact::is_named(fact.key()));
@@ -464,40 +476,6 @@ mod tests {
         let facts = Facts::of_typed(&attributes, |_| Some(8), false);
         assert_eq!((facts.range(), facts.no_alias()), (Some(Bounds { lo: 3, hi: 9 }), true));
         assert_eq!(Fact::from_wire("range", Some(5), Some(2)), None, "lo above hi is no range");
-    }
-
-    /// A pass asks the fact, never the attribute's spelling: no source outside
-    /// the fact table, the parser and printer, and the tests names one as a
-    /// flag. Every `Attribute::Flag("noalias")` or `has(attrs, "nocapture")`
-    /// left behind is a second way to state a fact.
-    #[test]
-    fn no_pass_reads_a_fact_by_the_name_of_its_attribute() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let keys: Vec<&str> = Fact::examples().into_iter().filter(|fact| matches!(fact.attribute(), Some(Attribute::Flag(_)))).map(|fact| fact.key()).collect();
-        let mut found = Vec::new();
-        let mut directories = vec![root];
-        while let Some(directory) = directories.pop() {
-            for entry in std::fs::read_dir(&directory).expect("a directory").flatten() {
-                let path = entry.path();
-                let name = path.file_name().and_then(|one| one.to_str()).unwrap_or_default().to_owned();
-                if path.is_dir() {
-                    if !matches!(name.as_str(), "target" | "tests" | "fixtures") {
-                        directories.push(path);
-                    }
-                } else if name.ends_with(".rs") && !name.contains("test") && !matches!(name.as_str(), "facts.rs" | "parse.rs" | "print.rs" | "opcode.rs") {
-                    let text = std::fs::read_to_string(&path).expect("source");
-                    // Test modules sit at the end of a file.
-                    let source = text.split("#[cfg(test)]").next().unwrap_or_default();
-                    for (at, line) in source.lines().enumerate() {
-                        let reads = line.contains("Attribute::Flag(") || line.contains("has(") || line.contains("states(");
-                        if reads && keys.iter().any(|key| line.contains(&format!("\"{key}\""))) {
-                            found.push(format!("{}:{}: {}", path.display(), at + 1, line.trim()));
-                        }
-                    }
-                }
-            }
-        }
-        assert_eq!(found, Vec::<String>::new());
     }
 
     /// A pass asks the fact, never the attribute's spelling: no source outside
