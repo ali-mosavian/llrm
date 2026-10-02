@@ -1173,9 +1173,6 @@ mod tests {
         assert_eq!((reads(&relaxed, "_counter"), reads(&relaxed, "_seen")), (1, 1), "{relaxed}");
     }
 
-
-
-
     #[test]
     fn test_rotation_keeps_provable_trip_counts() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/crc.cgs");
