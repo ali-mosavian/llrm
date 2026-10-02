@@ -2956,7 +2956,7 @@ Implemented in #119 (branch `alim/feat/hir-facts`), against `origin/main` at `fd
 | 8 | `InBounds` | landed on `Subject::Operand` (a place) and `Subject::Instruction` (`ptr_offset`); `inbounds` fields removed; C, Quick BASIC, Nib | 112 programs and 3 demos compile to identical assembly |
 | 14 | `Align` | landed on `Subject::Object`; `DataObject.align` removed | same |
 | (call) | `NoCapture`, `WriteOnly`, `Initializes` | landed on `Subject::Operand` of a call; `CallAbi.promises` removed; Quick BASIC fills | same |
-| (rewrite) | merge and speculate policy | `Fact::merged`, `Facts::merged`, `Fact::survives_speculation`: one exhaustive `match` each, in `facts_rewrite.rs`; no pass merges across a promise today (flags are in every value-numbering key) and every site that moves an instruction was checked (listed in the module) | no change: nothing calls them yet |
+| 9, 10 | `Range`, `Align` of an instruction, `NoAlias` of a result | landed as carriers: a pair on the wire, `range` attribute or `!range`, access `align`; readers by their owners | none yet: nothing states them |
 | 11, 12, 20 | `AliasClass`, `Immutable`, `Owned` | not facts: `alias_classes` is a module table each access refers to, as LLVM's TBAA nodes are; `zeroed_locals` is Quick BASIC's meaning, not a droppable promise | |
 | 6 | `NoUnwind`, `WillReturn` | `RuntimePromises` stays a named table with one owner: Quick BASIC derives it from the runtime description (`nounwind`, writers, user-code entries); C's `reads_arguments` is the C library's alone | |
 | 9, 10, 15 to 19, 21 | `Range`, `Assume`, hints, `Cold`, `MustProgress`, lifetimes, `Callees`, float flags | no variant: none has a program that shows a win, and a variant lands with its reader and a measured win | |
