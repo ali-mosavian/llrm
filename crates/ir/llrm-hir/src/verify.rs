@@ -184,7 +184,17 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
         let found = match subject {
             Subject::Callable(id) => module.callables.iter().any(|one| one.id == id),
             Subject::Param { function: id, index } => function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index)),
-            Subject::Instruction { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.instructions.iter().any(|i| i.id == at))),
+            Subject::Instruction { function: id, id: at } => function(id).is_some_and(|one| {
+                one.blocks.iter().flat_map(|block| &block.instructions).any(|i| {
+                    i.id == at
+                        && match fact {
+                            // Of what it yields, and of what it accesses.
+                            llrm_mir::facts::Fact::Range(_) => !i.results.is_empty(),
+                            llrm_mir::facts::Fact::Align(_) => matches!(i.op, model::Op::Load | model::Op::Store),
+                            _ => true,
+                        }
+                })
+            }),
             Subject::Operand { function: id, instruction, operand } => function(id).is_some_and(|one| {
                 one.blocks.iter().flat_map(|block| &block.instructions).any(|i| {
                     i.id == instruction
