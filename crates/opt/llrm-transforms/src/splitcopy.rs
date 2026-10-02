@@ -1,7 +1,9 @@
 //! A `memcpy` into a local nothing else can reach is the loads and stores of
-//! the bytes the local is read as: LLVM's SROA slicing a memcpy. Adapted from
+//! the bytes the local is read as. LLVM's counterpart is SROA slicing an
+//! alloca's memcpys (`AllocaSlices`, `visitMemTransferInst`). Adapted from
 //! llrm-core's `_split_copies`, which split one aggregate load and store
-//! into the scalar leaves its destination already had.
+//! into the scalar leaves its destination already had; that pass has no
+//! tests to port, and these are new.
 //!
 //! What changed with the IR:
 //! - The copy is a `llvm.memcpy` of a constant length between two exact

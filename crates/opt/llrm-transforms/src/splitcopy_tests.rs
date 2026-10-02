@@ -117,3 +117,67 @@ fn test_a_memcpy_read_across_leaves_stays_whole() {
     let (after, changed) = split_all(body);
     assert!(!changed, "{}", printed(&after));
 }
+
+fn stays(body: &str) {
+    let (after, changed) = split_all(body);
+    assert!(!changed, "{}", printed(&after));
+}
+
+/// A volatile copy is an access in its own right: it is not the loads and stores of leaves.
+#[test]
+fn test_a_volatile_memcpy_stays_whole() {
+    stays("define i16 @f(i16 %x) {
+  %from = alloca [8 x i8]
+  %to = alloca [8 x i8]
+  store i16 %x, ptr %from
+  call void @llvm.memcpy.p0.p0.i16(ptr %to, ptr %from, i16 8, i1 true)
+  %v = load i16, ptr %to
+  ret i16 %v
+}
+");
+}
+
+/// The leaves are the destination's bytes; a length not known has none.
+#[test]
+fn test_a_memcpy_of_a_length_not_constant_stays_whole() {
+    stays("define i16 @f(i16 %x, i16 %n) {
+  %from = alloca [8 x i8]
+  %to = alloca [8 x i8]
+  store i16 %x, ptr %from
+  call void @llvm.memcpy.p0.p0.i16(ptr %to, ptr %from, i16 %n, i1 false)
+  %v = load i16, ptr %to
+  ret i16 %v
+}
+");
+}
+
+/// A copy within one object overlaps itself: loads of the destination are
+/// loads of the source's bytes too.
+#[test]
+fn test_a_memcpy_within_one_local_stays_whole() {
+    stays("define i16 @f(i16 %x) {
+  %a = alloca [8 x i8]
+  store i16 %x, ptr %a
+  %q = getelementptr i8, ptr %a, i16 2
+  call void @llvm.memcpy.p0.p0.i16(ptr %q, ptr %a, i16 2, i1 false)
+  %v = load i16, ptr %q
+  ret i16 %v
+}
+");
+}
+
+/// A destination whose address is stored is reachable by whoever loads it.
+#[test]
+fn test_a_memcpy_into_a_captured_local_stays_whole() {
+    stays("@slot = global ptr null
+define i16 @f(i16 %x) {
+  %from = alloca [8 x i8]
+  %to = alloca [8 x i8]
+  store i16 %x, ptr %from
+  store ptr %to, ptr @slot
+  call void @llvm.memcpy.p0.p0.i16(ptr %to, ptr %from, i16 8, i1 false)
+  %v = load i16, ptr %to
+  ret i16 %v
+}
+");
+}
