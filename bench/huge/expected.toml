@@ -1,13 +1,13 @@
-reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+reason = "QB addresses a huge element inline, no B$HARY call per element; huge.bas walks memory in C's order"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 8043188
-memory_operands = 2011105
+instructions = 1452795
+memory_operands = 282911
 
 [bas.Os]
-instructions = 8043188
-memory_operands = 2011105
+instructions = 1573388
+memory_operands = 282907
 
 [c.O2]
 instructions = 1615614

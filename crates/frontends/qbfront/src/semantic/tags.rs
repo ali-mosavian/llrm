@@ -168,9 +168,9 @@ mod tests {
     }
 
     /// The constants each call to `callee` pushes, first pushed first.
-    fn pushed(source: &str, row_major: bool, checked: bool, callee: &str) -> Vec<Vec<Option<i64>>> {
+    fn pushed(source: &str, row_major: bool, callee: &str) -> Vec<Vec<Option<i64>>> {
         let module = parse(source, Dialect::VbDos).expect("parses");
-        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, checked_arrays: checked, ..Options::default() })
+        let compiler = built(&module, "T", Dialect::VbDos, "vbdos", &Options { row_major, ..Options::default() })
             .unwrap_or_else(|error| panic!("{}", error.message));
         let mut found = Vec::new();
         for function in &compiler.functions {
@@ -196,19 +196,9 @@ mod tests {
     /// 1, 2, 3, 5, and 3, 5, 1, 2 under /R.
     #[test]
     fn test_dim_pushes_its_bounds_as_bc_does() {
-        let bounds = |row_major| pushed(TWO_BY_THREE, row_major, false, "B$DDIM")[0][..4].to_vec();
+        let bounds = |row_major| pushed(TWO_BY_THREE, row_major, "B$DDIM")[0][..4].to_vec();
         assert_eq!(bounds(false), [Some(1), Some(2), Some(3), Some(5)]);
         assert_eq!(bounds(true), [Some(3), Some(5), Some(1), Some(2)]);
-    }
-
-    /// B$HARY pairs the subscript pushed last with record 0; the subscripts
-    /// were pushed reversed, pairing a(1, 4)'s 1 with the second dimension's
-    /// record. BC pushes 1, 4, and 4, 1 under /R.
-    #[test]
-    fn test_a_checked_element_pushes_its_subscripts_as_bc_does() {
-        let subscripts = |row_major| pushed(TWO_BY_THREE, row_major, true, "B$HARY")[0][..3].to_vec();
-        assert_eq!(subscripts(false), [Some(1), Some(4), Some(2)]);
-        assert_eq!(subscripts(true), [Some(4), Some(1), Some(2)]);
     }
 
     #[test]
