@@ -59,6 +59,13 @@ pub(super) fn rich_listing(program: &Program) -> String {
     masm::text(&module).expect("prints")
 }
 
+/// The module's MIR as the front end emits it, as text.
+pub(super) fn emitted_mir(program: &Program) -> String {
+    let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
+    let (mir, _) = llrm_core::driver::emitted(program, &options).expect("emits");
+    llrm_mir::print::module(&mir.modules[0])
+}
+
 /// `qb_compile.object_bytes(program, name)`.
 pub(super) fn object_bytes(program: &Program, name: &str) -> Result<Vec<u8>, CompileError> {
     qb_compile::object_bytes(program, Path::new(name), None, &O2())

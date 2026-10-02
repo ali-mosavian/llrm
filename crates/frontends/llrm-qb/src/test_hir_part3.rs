@@ -2970,6 +2970,23 @@ fn an_outlined_handler_takes_a_row_per_line() {
     assert!(found.contains(&100) && found.contains(&110), "{found:?}");
 }
 
+/// A FOR counter's add was `nsw` whatever the counter's type: an UNSIGNED
+/// INTEGER passes 32767 legitimately, so `nsw` was poison there. An unsigned
+/// counter's add does not wrap as unsigned (BC hangs if it would), `nuw`.
+#[test]
+fn a_for_counters_add_states_the_wrap_its_type_cannot_do() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = |declared: &str| format!("DIM c AS {declared}, n AS {declared}, s AS LONG\r\nn = 30100\r\nFOR c = 30000 TO n\r\ns = s + 1\r\nNEXT c\r\nPRINT s\r\n");
+    let adds = |declared: &str| {
+        let mir = emitted_mir(&parsed_as(&written(&directory, "count.bas", source(declared).as_bytes()), "quickr", "qb45"));
+        mir.lines().filter(|one| one.contains(" = add ") && one.contains("i16")).map(str::to_owned).collect::<Vec<_>>()
+    };
+    let unsigned = adds("UNSIGNED INTEGER");
+    assert!(unsigned.iter().any(|one| one.contains("add nuw i16")) && !unsigned.iter().any(|one| one.contains("nsw")), "{unsigned:?}");
+    let signed = adds("INTEGER");
+    assert!(signed.iter().any(|one| one.contains("add nsw i16")) && !signed.iter().any(|one| one.contains("nuw")), "{signed:?}");
+}
+
 /// PEEK reads and POKE writes memory every time, whatever DEF SEG says: the
 /// BIOS tick wait `DO: LOOP UNTIL PEEK(&H6C) <> t` compiled to an infinite
 /// loop (`cmp ax, ax`), the second PEEK taken for the first's value, and a

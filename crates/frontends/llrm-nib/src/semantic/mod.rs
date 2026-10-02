@@ -76,6 +76,7 @@ mod references;
 mod instances;
 mod iterators;
 mod views;
+mod captures;
 mod liveness;
 mod modref;
 mod writable;
@@ -1186,6 +1187,10 @@ struct Compiled {
     lends: Vec<modref::Lend>,
     /// Its `&` and `&mut` parameters.
     references: Vec<llrm_core::hir::facts::Subject>,
+    /// Its borrowed parameters, views too, by ordinal.
+    borrowed: Vec<(usize, llrm_core::hir::facts::Subject)>,
+    /// Where those parameters may go.
+    escapes: Vec<captures::Escape>,
 }
 
 struct BlockBuilder {
@@ -1456,10 +1461,14 @@ fn program(
     }
     callables.extend(templates.borrow().callables(&mut types));
     let functions = checked(compiled, &builtin_ids, &literals)?;
+    // A module variable sits where its type's accesses are aligned.
+    let mut stated = llrm_core::hir::facts::Builder::new("nib");
+    for layout in types.statics.values().filter(|one| one.align > 1) {
+        stated.state(llrm_core::hir::facts::Subject::Object(i64::from(layout.symbol)), llrm_mir::facts::Fact::Align(u64::from(layout.align)));
+    }
     // What the runtime's routines do, which no body shows: one that ends the
     // program touches nothing a caller's loop reads back, and one that prints
     // a value touches only the runtime's own state.
-    let mut stated = llrm_core::hir::facts::Builder::new("nib");
     for callable in callables.iter().filter(|one| !one.defined) {
         use llrm_core::abi::nib as routines;
         let subject = llrm_core::hir::facts::Subject::Callable(i64::from(callable.id));
@@ -1495,15 +1504,22 @@ fn checked(compiled: Vec<Compiled>, builtin_ids: &BTreeMap<&'static str, (u32, T
     let lends: Vec<modref::Lend> = compiled.iter().flat_map(|one| one.lends.iter().cloned()).collect();
     let addressed: BTreeSet<u32> = literals.data.iter().filter_map(|one| one.code).collect();
     let entry = |function: &hir::Function| function.exported || addressed.contains(&function.id);
+    let kept = captures::kept(&compiled);
     let mut functions = Vec::new();
-    for Compiled { mut function, references, .. } in compiled {
+    for Compiled { mut function, references, borrowed, .. } in compiled {
+        let mut stated = llrm_core::hir::facts::Builder::new("nib");
         if !entry(&function) {
-            let mut stated = llrm_core::hir::facts::Builder::new("nib");
             for subject in references {
                 stated.state(subject, llrm_mir::facts::Fact::NoAlias);
             }
-            function.facts.extend(stated.finish());
         }
+        // A borrow cannot outlive its call unless the function keeps it.
+        for (ordinal, subject) in borrowed {
+            if !kept.contains(&(function.name.clone(), ordinal)) {
+                stated.state(subject, llrm_mir::facts::Fact::NoCapture);
+            }
+        }
+        function.facts.extend(stated.finish());
         functions.push(function);
     }
     let runtime: BTreeSet<&str> = builtin_ids.keys().copied().collect();
@@ -1662,6 +1678,12 @@ struct FunctionCompiler<'a> {
     across: Vec<liveness::Across>,
     /// Its `&` and `&mut` parameters.
     references: Vec<llrm_core::hir::facts::Subject>,
+    /// Its borrowed parameters, views too, by ordinal, with their subjects.
+    borrowed: Vec<(usize, llrm_core::hir::facts::Subject)>,
+    /// The ordinal of each borrowed parameter, by its binding's identity.
+    borrowed_ordinals: BTreeMap<borrows::BorrowKey, usize>,
+    /// Where its borrowed parameters may go.
+    escapes: Vec<captures::Escape>,
     /// The named sequences `for` loops are walking, outermost first.
     iterated: Vec<borrows::Root>,
 }
@@ -1738,6 +1760,9 @@ impl<'a> FunctionCompiler<'a> {
             conflicts: Vec::new(),
             across: Vec::new(),
             references: Vec::new(),
+            borrowed: Vec::new(),
+            borrowed_ordinals: BTreeMap::new(),
+            escapes: Vec::new(),
             iterated: Vec::new(),
         };
         // Module variables are the outermost scope; parameters and the body
@@ -1764,10 +1789,13 @@ impl<'a> FunctionCompiler<'a> {
             };
             compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), Binding { type_, mutable: true, storage });
         }
-        for (parameter, resolved) in function.parameters.iter().zip(&signature.parameters) {
+        for (ordinal, (parameter, resolved)) in function.parameters.iter().zip(&signature.parameters).enumerate() {
             let value = compiler.value_type(resolved.hir_type());
             compiler.parameters.push(value);
             let subject = llrm_core::hir::facts::Subject::Param { function: i64::from(signature.id), index: compiler.parameters.len() as i64 - 1 };
+            if matches!(resolved, SignatureParameter::Borrowed { .. }) {
+                compiler.borrowed.push((ordinal, subject));
+            }
             match *resolved {
                 // A borrowed view's descriptor is the caller's, and only reseating
                 // a binding writes one: no parameter is reseated.
@@ -1777,6 +1805,10 @@ impl<'a> FunctionCompiler<'a> {
                 // A reference is made from a place, so it is not null and points at
                 // the whole of what it borrows; a shared one cannot write it. Whether
                 // nothing else reaches it depends on its callers (`unaliased`).
+                // An owned aggregate is the caller's private copy, made for this call:
+                // nothing else reaches it, so it is as unaliased as a borrow proven
+                // so, and by construction.
+                SignatureParameter::Owned { .. } => compiler.references.push(subject),
                 SignatureParameter::Borrowed { mutable, target, .. } => {
                     if let Some(bytes) = compiler.types.referent_bytes(target) {
                         compiler.stated.state(subject, llrm_mir::facts::Fact::NonNull).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(bytes)));
@@ -1800,6 +1832,9 @@ impl<'a> FunctionCompiler<'a> {
             };
             if let Some(owner) = borrows::identity(&binding.storage) {
                 compiler.parameter_lives.insert(owner, life);
+                if matches!(resolved, SignatureParameter::Borrowed { .. }) {
+                    compiler.note_borrowed_parameter(owner, ordinal);
+                }
                 // A value passed in holds only what the caller lent.
                 let passed = match binding.type_ {
                     BindingType::Scalar(type_name) => Some(ElementType::Scalar(type_name)),
@@ -1927,6 +1962,8 @@ impl<'a> FunctionCompiler<'a> {
             .collect();
         let lends = std::mem::take(&mut self.lends);
         let references = std::mem::take(&mut self.references);
+        let borrowed = std::mem::take(&mut self.borrowed);
+        let escapes = std::mem::take(&mut self.escapes);
         let function = hir::Function {
             id: self.signature.id,
             name: self.signature.name.clone(),
@@ -1942,7 +1979,7 @@ impl<'a> FunctionCompiler<'a> {
             abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types)),
             named_parameters: self.named_parameters,
         };
-        Ok(Compiled { function, lends, references })
+        Ok(Compiled { function, lends, references, borrowed, escapes })
     }
 
     fn prune_unreachable(&mut self) {
