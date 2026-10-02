@@ -66,37 +66,61 @@ fn wishes(body: &LirBody) -> IndexMap<u32, Register> {
     out
 }
 
-/// The registers each value used as an address half may take there, over all its uses.
-fn addressing(body: &LirBody) -> IndexMap<u32, BTreeSet<Register>> {
+/// Each use of a value as an address half, with the registers that can form the address and the block it is in.
+pub(crate) fn address_demands(body: &LirBody) -> Vec<(u32, BTreeSet<Register>, i64)> {
     let bx: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
     let indexes: BTreeSet<Register> = target::WORD_INDEXES.iter().map(|one| _whole(*one)).collect();
     let bases: BTreeSet<Register> = target::ADDRESSING.iter().map(|one| _whole(*one)).filter(|one| *one != Register::EBP).collect();
-    let mut out: IndexMap<u32, BTreeSet<Register>> = IndexMap::default();
-    let mut note = |value: u32, allowed: &BTreeSet<Register>| {
-        let entry = out.entry(value).or_insert_with(|| allowed.clone());
-        let narrowed: BTreeSet<Register> = entry.intersection(allowed).copied().collect();
-        if !narrowed.is_empty() {
-            *entry = narrowed;
-        }
-    };
     let pair: BTreeSet<Register> = bx.union(&indexes).copied().collect();
-    for one in body.insns() {
-        let Some(what) = &one.what else { continue };
-        for place in what.dests.iter().chain(&what.sources) {
-            let Loc::Mem(cell) = place else { continue };
-            let word = |held: &Option<Held>| held.filter(|held| held.width == 2);
-            match (word(&cell.base), word(&cell.index)) {
-                (Some(base), None) => note(base.value, if cell.addr.is_some_and(|addr| addr.space == Space::Frame) { &indexes } else { &bases }),
-                (Some(base), Some(index)) => {
-                    note(base.value, &pair);
-                    note(index.value, &pair);
+    let mut out: Vec<(u32, BTreeSet<Register>, i64)> = Vec::new();
+    for block in &body.blocks {
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            for place in what.dests.iter().chain(&what.sources) {
+                let Loc::Mem(cell) = place else { continue };
+                let word = |held: &Option<Held>| held.filter(|held| held.width == 2);
+                match (word(&cell.base), word(&cell.index)) {
+                    (Some(base), None) => {
+                        let allowed = if cell.addr.is_some_and(|addr| addr.space == Space::Frame) { &indexes } else { &bases };
+                        out.push((base.value, allowed.clone(), block.at));
+                    }
+                    (Some(base), Some(index)) => {
+                        out.push((base.value, pair.clone(), block.at));
+                        out.push((index.value, pair.clone(), block.at));
+                    }
+                    (None, Some(index)) => out.push((index.value, indexes.clone(), block.at)),
+                    (None, None) => {}
                 }
-                (None, Some(index)) => note(index.value, &indexes),
-                (None, None) => {}
             }
         }
     }
     out
+}
+
+/// The registers each value used as an address half may take there, over all its uses.
+fn addressing(body: &LirBody) -> IndexMap<u32, BTreeSet<Register>> {
+    let mut out: IndexMap<u32, BTreeSet<Register>> = IndexMap::default();
+    for (value, allowed, _) in address_demands(body) {
+        let entry = out.entry(value).or_insert_with(|| allowed.clone());
+        let narrowed: BTreeSet<Register> = entry.intersection(&allowed).copied().collect();
+        if !narrowed.is_empty() {
+            *entry = narrowed;
+        }
+    }
+    out
+}
+
+/// The registers each value confined to byte registers may take: the only values with no other home.
+pub(crate) fn byte_classes(body: &LirBody, segments: &Segments) -> IndexMap<u32, BTreeSet<Register>> {
+    let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
+    let bytes: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
+    allocate::classes(body, &BTreeSet::new(), segments)
+        .into_iter()
+        .filter_map(|(value, class)| {
+            let registers: BTreeSet<Register> = class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect();
+            (!registers.is_empty() && registers.is_subset(&bytes)).then_some((value, registers))
+        })
+        .collect()
 }
 
 /// Each value a phi, a copy or a tie names, with every value they join it to.
@@ -276,7 +300,7 @@ pub fn coloured(body: &LirBody, skip: &BTreeSet<u32>, fixed: &IndexMap<u32, Regi
                 }
             };
             // A tied instruction writes its first source's register while its other sources are still read.
-            let first = if tied(one) { first_source(one) } else { None };
+            let first = twoaddr::tie_source(one, &after[position]);
             for value in &dying {
                 if !tied(one) || Some(*value) == first {
                     free(&mut taken, &colour, *value);

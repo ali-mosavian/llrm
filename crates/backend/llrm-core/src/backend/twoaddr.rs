@@ -205,6 +205,18 @@ pub fn ties(what: &Semantics) -> bool {
         && (_TIED.contains(&what.op) || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
 }
 
+/// The value whose register `one`'s result takes over, `alive` being what lives
+/// after it: the first source, or the second where the pass swaps a commutative pair.
+pub fn tie_source(one: &Insn, alive: &BTreeSet<u32>) -> Option<u32> {
+    let what = one.what.as_ref().filter(|what| ties(what))?;
+    let swapped = _commuted(one, alive, None, None);
+    let sources = swapped.as_ref().and_then(|made| made.what.as_ref()).map_or(&what.sources, |made| &made.sources);
+    match sources.first()? {
+        Loc::Held(held) => Some(held.value),
+        _ => None,
+    }
+}
+
 /// The copy and the fixed instruction, or None where it is already tied.
 fn _untied(one: &Insn, mint: &mut dyn FnMut() -> u32) -> Option<Vec<Arc<Insn>>> {
     let what = one.what.as_ref()?;

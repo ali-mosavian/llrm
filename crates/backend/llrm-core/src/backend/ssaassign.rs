@@ -16,7 +16,7 @@ use iced_x86::Register;
 
 use crate::backend::allocate::{self, _whole};
 use crate::backend::target::{self, Segments};
-use crate::backend::{spiller, splitkit};
+use crate::backend::{spiller, splitkit, twoaddr};
 use crate::model::ir::{Held, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
@@ -49,6 +49,67 @@ pub fn overridden() {
     OVERRIDDEN.with(|count| count.set(count.get() + 1));
 }
 
+/// The general registers `one` itself takes: what it requires, delivers or clobbers.
+pub(crate) fn takes(one: &Insn, general_roots: &BTreeSet<Register>) -> BTreeSet<Register> {
+    let Some(what) = &one.what else { return BTreeSet::new() };
+    let mut taken: BTreeSet<Register> = target::requirements(what).values().map(|register| _whole(*register)).collect();
+    taken.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)));
+    taken.extend(one.clobbers.iter().map(|register| _whole(*register)));
+    if target::status_through_ax(what) {
+        taken.insert(Register::EAX);
+    }
+    taken.retain(|register| general_roots.contains(register));
+    taken
+}
+
+/// Why `colour` is no register assignment for `body`: two values live together
+/// in one register, at an instruction, at a block's entry (a phi result beside
+/// a value live in), or a tied result beside a source it does not take over.
+pub(crate) fn improper(body: &LirBody, colour: &IndexMap<u32, Register>) -> Option<String> {
+    let (live_in, live_out) = allocate::live(body);
+    let clash = |values: &mut dyn Iterator<Item = u32>| -> Option<(u32, u32, Register)> {
+        let mut held: IndexMap<Register, u32> = IndexMap::default();
+        for value in values {
+            if let Some(register) = colour.get(&value) {
+                if let Some(other) = held.insert(*register, value) {
+                    if other != value {
+                        return Some((other, value, *register));
+                    }
+                }
+            }
+        }
+        None
+    };
+    for block in &body.blocks {
+        let entry: BTreeSet<u32> = live_in[&block.at].iter().copied().chain(block.phis.iter().map(|phi| phi.result)).collect();
+        if let Some((a, b, register)) = clash(&mut entry.iter().copied()) {
+            return Some(format!("block {:#06x}: value#{a} and value#{b} are both in {register:?} on entry", block.at));
+        }
+        let mut live = live_out[&block.at].clone();
+        for one in block.insns.iter().rev() {
+            let beside: BTreeSet<u32> = live.iter().chain(&one.defines).copied().collect();
+            if let Some((a, b, register)) = clash(&mut beside.iter().copied()) {
+                return Some(format!("{:#06x}: value#{a} and value#{b} are both in {register:?}", one.at));
+            }
+            if one.what.as_ref().is_some_and(twoaddr::ties) {
+                let first = twoaddr::tie_source(one, &live);
+                for made in &one.defines {
+                    for source in one.uses.iter().filter(|source| Some(**source) != first) {
+                        if colour.get(made).is_some_and(|register| colour.get(source) == Some(register)) {
+                            return Some(format!("{:#06x}: tied result value#{made} shares value#{source}'s register", one.at));
+                        }
+                    }
+                }
+            }
+            for value in &one.defines {
+                live.remove(value);
+            }
+            live.extend(one.uses.iter().copied());
+        }
+    }
+    None
+}
+
 /// The group numbers this pass gives its copies: above any phi elimination makes.
 const GROUPS: i64 = 1 << 40;
 
@@ -74,6 +135,9 @@ pub fn assigned(
                 return Err(format!("phi value#{} joins coloured and uncoloured values", phi.result));
             }
         }
+    }
+    if let Some(why) = improper(body, colour) {
+        return Err(why);
     }
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect();
     let widths = spiller::_widest(body, &all);
@@ -122,14 +186,7 @@ pub fn assigned(
                 insns.push(Arc::clone(one));
                 continue;
             };
-            // The registers the instruction itself takes.
-            let mut taken: BTreeSet<Register> = target::requirements(what).values().map(|register| _whole(*register)).collect();
-            taken.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)));
-            taken.extend(one.clobbers.iter().map(|register| _whole(*register)));
-            if target::status_through_ax(what) {
-                taken.insert(Register::EAX);
-            }
-            taken.retain(|register| general_roots.contains(register));
+            let taken = takes(one, &general_roots);
             let defined: BTreeSet<u32> = one.defines.iter().copied().collect();
             let mut busy: BTreeSet<Register> = taken.clone();
             busy.extend(after[position].iter().chain(&one.uses).chain(&one.defines).filter_map(|value| colour.get(value)).copied());

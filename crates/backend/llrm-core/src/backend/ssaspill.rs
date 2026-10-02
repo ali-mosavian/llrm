@@ -25,7 +25,7 @@ use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{self, Classes, _whole};
 use crate::backend::frame::Frame;
 use crate::backend::target::{self, Segments};
-use crate::backend::{spiller, splitkit, ssaassign, ssacolour, ssarepair, twoaddr};
+use crate::backend::{spiller, splitkit, ssaassign, ssacolour, ssarecolour, ssarepair, twoaddr};
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -317,13 +317,22 @@ pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
 }
 
 /// Values no general register holds: x87 values and wider ones, and every phi web they join.
-/// The spilled SSA `body` coloured and taken out of SSA in those colours, and the register each value keeps.
+/// The spilled SSA `body` coloured, its affinities recoloured, and taken out of SSA in those
+/// colours, and the register each value keeps.
 pub(crate) fn assigned(body: &LirBody, segments: &Segments) -> Result<(LirBody, IndexMap<u32, Register>), String> {
+    assigned_with(body, segments, std::env::var_os("LLRM_SSA_NO_RECOLOUR").is_none())
+}
+
+/// `assigned`, with the recolouring step on or off.
+pub(crate) fn assigned_with(body: &LirBody, segments: &Segments, recolour: bool) -> Result<(LirBody, IndexMap<u32, Register>), String> {
     let floats = floating(body);
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
     let machine = Machine::of(&confined);
     let general = |value: u32| machine.registered(value) && !floats.contains(&value);
-    let colours = ssacolour::coloured(body, &floats, &body.pins, segments);
+    let mut colours = ssacolour::coloured(body, &floats, &body.pins, segments);
+    if recolour {
+        colours = ssarecolour::recoloured(body, &colours, &body.pins, segments);
+    }
     ssaassign::assigned(body, &colours, &general, segments)
 }
 
