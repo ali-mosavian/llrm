@@ -847,6 +847,9 @@ pub struct RuntimePromises {
     /// The routines that only read what their pointer arguments reach and
     /// keep none of them, by their own names: C's strlen.
     pub reads_arguments: Vec<String>,
+    /// The routines that never come back to their caller: END, SYSTEM, the
+    /// error funnel. Their calls end their block.
+    pub no_return: Vec<String>,
 }
 
 impl RuntimePromises {
@@ -863,6 +866,7 @@ impl RuntimePromises {
             writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
             reads_arguments: Vec::new(),
+            no_return: Vec::new(),
         }
     }
 
