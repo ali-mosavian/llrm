@@ -32,7 +32,7 @@ fn costs(call: i64) -> OperationCosts {
 /// Every call in `caller` that `candidates` admits, inlined.
 fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
     let layout = DataLayout::default();
-    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), Threshold::default(), true);
+    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), Threshold::default());
     let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)) };
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
@@ -138,9 +138,9 @@ b1:
 "
     ));
     let (private, layout) = (private(&module), DataLayout::default());
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), Threshold::default(), true), IndexMap::default());
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), Threshold::default()), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), Threshold::default(), true).len(), 1);
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), Threshold::default()).len(), 1);
 }
 
 const HELPERS: &str = "define internal i16 @scale(i16 %x) {
@@ -483,11 +483,12 @@ fn test_a_callee_the_language_says_always_inline_is_inlined_at_any_size() {
 fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     // Eight operations, one private site: the budget at this call price is 6, a hint's 8.
     let text = |attr: &str| chain(8, attr, 1).replace("define i16 @big", "define internal i16 @big");
-    let admits = |attr: &str, hints: bool| {
+    let admits = |attr: &str, threshold: Threshold| {
         let module = parsed(&text(attr));
-        candidates(&module, &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), Threshold::default(), hints).len()
+        candidates(&module, &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), threshold).len()
     };
-    assert_eq!((admits("", true), admits("inlinehint", true), admits("inlinehint", false)), (0, 1, 0));
+    let (speed, size) = (Threshold::default(), Threshold::default().for_size());
+    assert_eq!((admits("", speed), admits("inlinehint", speed), admits("inlinehint", size)), (0, 1, 0));
 }
 
 #[test]

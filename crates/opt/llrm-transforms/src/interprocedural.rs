@@ -77,7 +77,6 @@ impl ProgramPass for Interprocedural {
             &roots,
             &costs,
             self.inline,
-            !self.size,
             &mut |module, analyses, id, stage| {
                 pipeline(module, analyses, id, stage);
                 Ok(())
@@ -149,7 +148,6 @@ pub fn optimized<E: From<String>>(
     roots: &BTreeSet<Defined>,
     costs: &OperationCosts,
     threshold: inline::Threshold,
-    hints: bool,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
@@ -175,7 +173,7 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold, hints);
+            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold);
             let recursive = inline::recursive(module);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
@@ -261,7 +259,7 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold, hints);
+            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold);
             let recursive = inline::recursive(module);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
