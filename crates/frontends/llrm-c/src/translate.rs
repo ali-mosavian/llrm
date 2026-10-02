@@ -69,7 +69,7 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
     for symbol in unit.symbols.values().filter(|one| one.proc()) {
         if let Some(callable) = callables.iter().find(|one| one.name == symbol.object_name()) {
-            for fact in crate::ow_facts::of_call_class(symbol.call_class) {
+            for fact in crate::ow_facts::of_call_class(symbol.call_class)? {
                 facts.state(Subject::Callable(callable.id), fact);
             }
             if !callable.defined && crate::libfunc::three_way_compare(&callable.name) {
