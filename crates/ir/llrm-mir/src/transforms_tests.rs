@@ -48,7 +48,7 @@ b4:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @sum(i16 %n) memory(none) willreturn {
+        "define i16 @sum(i16 %n) memory(none) willreturn norecurse {
 b1:
   br label %b2
 
@@ -116,7 +116,7 @@ b3:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i16 %i, i16 %n) memory(none) willreturn {
+        "define i16 @f(i16 %i, i16 %n) memory(none) willreturn norecurse {
 b1:
   %0 = icmp ult i16 %i, %n
   br i1 %0, label %b2, label %b3
@@ -160,7 +160,7 @@ b5:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i16 %x) memory(none) willreturn {
+        "define i16 @f(i16 %x) memory(none) willreturn norecurse {
 b1:
   %0 = add i16 %x, 1
   ret i16 %0
@@ -193,7 +193,7 @@ b5:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i1 %c, i1 %d, i16 %x) memory(none) willreturn {
+        "define i16 @f(i1 %c, i1 %d, i16 %x) memory(none) willreturn norecurse {
 b1:
   br i1 %c, label %b2, label %b5
 
@@ -865,7 +865,7 @@ b1:
 }
 ";
     let out = through(&["function-attrs", "instcombine"], text);
-    assert!(out.contains("define internal i16 @quiet(i16 %n) memory(none) willreturn {"), "{out}");
+    assert!(out.contains("define internal i16 @quiet(i16 %n) memory(none) willreturn norecurse {"), "{out}");
     assert!(!out.contains("call i16 @quiet"), "{out}");
     assert!(out.contains("call i16 @loud"), "{out}");
 }
@@ -940,6 +940,96 @@ b4:
 ";
     let out = through(&["loop-deletion", "simplifycfg"], text);
     assert!(out.contains("define i16 @f() {\nb1:\n  ret i16 7\n}"), "{out}");
+}
+
+/// Which functions of `text` `function-attrs` marks `norecurse`.
+fn norecurse(text: &str) -> Vec<String> {
+    let out = through(&["function-attrs"], text);
+    let mut found = Vec::new();
+    for line in out.lines().filter(|line| line.starts_with("define")) {
+        if line.contains("norecurse") {
+            let name = line.split('@').nth(1).and_then(|rest| rest.split('(').next()).expect("a name");
+            found.push(name.to_owned());
+        }
+    }
+    found
+}
+
+/// A function that nothing can enter while it runs says so: a leaf, one that
+/// calls a `nocallback` declaration or an intrinsic. Not one that calls
+/// itself, its mutual caller, an unbounded pointer, a declaration that may
+/// call back, or anything reaching those. Inline kept its own `recursive` set
+/// and the rest of the pipeline had none.
+#[test]
+fn test_function_attrs_infers_norecurse_where_nothing_can_reenter() {
+    let text = "declare void @quiet() nocallback
+declare void @loud()
+declare i16 @llvm.smax.i16(i16, i16)
+
+define void @leaf() {
+b0:
+  ret void
+}
+
+define void @calls_quiet() {
+b0:
+  call void @quiet()
+  ret void
+}
+
+define void @calls_loud() {
+b0:
+  call void @loud()
+  ret void
+}
+
+define i16 @calls_intrinsic(i16 %c) {
+b0:
+  %m = call i16 @llvm.smax.i16(i16 %c, i16 0)
+  ret i16 %m
+}
+
+define void @self() {
+b0:
+  call void @self()
+  ret void
+}
+
+define void @ping() {
+b0:
+  call void @pong()
+  ret void
+}
+
+define void @pong() {
+b0:
+  call void @ping()
+  ret void
+}
+
+define void @pointer(ptr %p) {
+b0:
+  call void %p()
+  ret void
+}
+
+define void @listed(ptr %p) {
+b0:
+  call void %p(), !callees !0
+  ret void
+}
+
+define void @through() {
+b0:
+  call void @pointer(ptr null)
+  ret void
+}
+
+!0 = !{ptr @leaf}
+";
+    let mut found = norecurse(text);
+    found.sort();
+    assert_eq!(found, ["calls_intrinsic", "calls_quiet", "leaf", "listed"]);
 }
 
 /// `body` over `double %x`, through instcombine, as one function's text.

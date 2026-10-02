@@ -28,9 +28,10 @@ impl ModulePass for FunctionAttrs {
         let mut changed = Vec::new();
         for id in graph.bottom_up() {
             // A cycle of calls proves nothing about itself.
-            if graph.reaches(id, id) {
+            if graph.recursive(id) {
                 continue;
             }
+            let quiet = recurses_never(module, &graph, id);
             let Module { context, globals, .. } = &mut *module;
             let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { continue };
             let (arguments, other) = accesses(context, &layout, &callees, function);
@@ -51,6 +52,9 @@ impl ModulePass for FunctionAttrs {
             if !memory::returns(&function.attrs) && returns(context, &callees, function) {
                 added.extend(crate::facts::Fact::WillReturn.attribute());
             }
+            if quiet && !function.attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "norecurse")) {
+                added.push(Attribute::Flag("norecurse".to_owned()));
+            }
             if added.is_empty() {
                 continue;
             }
@@ -63,6 +67,25 @@ impl ModulePass for FunctionAttrs {
         }
         changed
     }
+}
+
+/// Whether `id` can never be entered again while it runs: it is in no cycle of
+/// calls, and neither it nor what it reaches calls a function the graph does
+/// not bound, or one outside the module that may call back (a declaration not
+/// `nocallback`), as LLVM's `addNoRecurseAttrs`.
+fn recurses_never(module: &Module, graph: &crate::callgraph::CallGraph, id: GlobalId) -> bool {
+    if graph.recursive(id) {
+        return false;
+    }
+    let mut over = graph.reachable(id);
+    over.insert(id);
+    over.into_iter().all(|at| {
+        let GlobalKind::Function(function) = &module.globals[at.0 as usize].kind else { return true };
+        if function.is_declaration() {
+            return function.attrs.iter().any(|one| matches!(one, Attribute::Flag(name) if name == "nocallback")) || module.globals[at.0 as usize].name.as_deref().and_then(crate::intrinsics::Intrinsic::named).is_some_and(|one| !matches!(one, crate::intrinsics::Intrinsic::Code | crate::intrinsics::Intrinsic::Asm));
+        }
+        !graph.calls_unknown(at)
+    })
 }
 
 /// What `function` does to memory its pointer arguments reach, and to any
