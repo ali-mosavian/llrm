@@ -58,13 +58,14 @@ fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }
 
-/// What a `getelementptr` producing `ty` costs: the address's own price, or
-/// the carry into the selector where its space's displacement has one
-/// (`DataLayout::carries`). The one place the advance's price is stated.
-pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, costs: &OperationCosts) -> i64 {
+/// What advancing a pointer of type `ty` costs: `plain`, the price of the
+/// advance as its caller makes it, or the carry into the selector where its
+/// space's displacement has one (`DataLayout::carries`). The one place the
+/// carry's price is stated.
+pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, plain: i64, costs: &OperationCosts) -> i64 {
     match context.types.get(ty) {
         Type::Pointer(space) if layout.carries(*space) => costs.carry,
-        _ => costs.address,
+        _ => plain,
     }
 }
 
@@ -81,7 +82,7 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
-        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs),
+        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs.address, costs),
         Opcode::Alloca { .. } => costs.address,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
@@ -130,9 +131,13 @@ pub fn proven_trips(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> In
     trips
 }
 
+/// What one execution of the entry weighs in `_frequencies`: a block taken a
+/// third of the time weighs a third of it.
+pub const UNIT: i64 = 256;
+
 /// Block frequencies as `branchprob` estimates them (the heuristics, a loop's
-/// proven `trips` by latch), per entry, rounded and never below 1: this
-/// model counts whole executions, so a cold arm weighs as the entry. `None`
+/// proven `trips` by latch), per entry, in `UNIT`ths of an execution and never
+/// below one, so a cold arm is near free but still ordered. `None`
 /// for conflicting proofs.
 pub fn _frequencies(context: &Context, globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let shape = cfg::Shape::of(function);
@@ -149,7 +154,7 @@ pub fn _frequencies(context: &Context, globals: &Declarations, function: &Functi
         }
     }
     let odds = branchprob::estimated(context, globals, function, &shape, &counted);
-    Some(cfg::graph(function).iter().map(|block| (block.at, odds.frequency.get(&block.at).map_or(1, |one| (one.round() as i64).max(1)))).collect())
+    Some(cfg::graph(function).iter().map(|block| (block.at, odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)))).collect())
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten where none is
@@ -186,6 +191,30 @@ pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, cal
     Some(total)
 }
 
+/// What fitting MIR within `room` spills, a call keeping what `across`
+/// says, as the one spill model (`spill`) forecasts it.
+#[allow(clippy::too_many_arguments)]
+pub fn spill_forecast(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    costs: &OperationCosts,
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
+    frequency: &BTreeMap<i64, i64>,
+    found: &Liveness,
+) -> Option<spill::Forecast<ValueId>> {
+    if !room.priced() {
+        return Some(spill::Forecast { cost: 0, spilled: BTreeSet::new(), peak: 0 });
+    }
+    let cells = spill::cells(function);
+    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
+    let counted = |value: ValueId| spill::integer(context, function, value);
+    let addressed = spill::addressed(function);
+    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, function, value), &|value| addressed.contains(&value))).flat_map(spill::Site::points);
+    Some(spill::forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
+}
+
 /// Whole-live-range traffic needed to fit MIR within `room`, a call
 /// keeping what `across` says, as the one spill model (`spill`) prices it.
 #[allow(clippy::too_many_arguments)]
@@ -199,14 +228,7 @@ pub fn spill_risk(
     frequency: &BTreeMap<i64, i64>,
     found: &Liveness,
 ) -> Option<i64> {
-    if !room.priced() {
-        return Some(0);
-    }
-    let cells = spill::cells(function);
-    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
-    let counted = |value: ValueId| spill::integer(context, function, value);
-    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst| spill::transient(context, layout, function, inst, room), &cells, &counted, &|value| spill::segment_view(context, layout, function, value))).flat_map(spill::Site::points);
-    Some(spill::spilled(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
+    spill_forecast(context, layout, function, costs, room, across, frequency, found).map(|one| one.cost)
 }
 
 /// Semantic work plus finite-capacity whole-range spill traffic.

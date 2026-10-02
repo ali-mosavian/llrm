@@ -32,11 +32,13 @@ pub struct Room {
     pub far_access: i64,
     /// The segment registers a far pointer's selector is held in.
     pub segments: i64,
+    /// The registers an address's pointer and index must be held in.
+    pub addresses: i64,
 }
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
-        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers() }
+        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers(), addresses: outer.target().address_registers() }
     }
 
     pub fn priced(&self) -> bool {
@@ -68,14 +70,28 @@ pub struct Point<K> {
     pub residents: Vec<K>,
 }
 
+/// What fitting `points` costs and spills.
+pub struct Forecast<K> {
+    pub cost: i64,
+    pub spilled: BTreeSet<K>,
+    /// The most residents past a point's registers, before any spill.
+    pub peak: i64,
+}
+
 /// What spilling costs to fit `points`, in order: at each, the cheapest
 /// residents past its registers are spilled, and stay spilled.
 pub fn spilled<K: Ord + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> i64 {
+    forecast(points, price).cost
+}
+
+/// `spilled`, and which cells it spills and how far past its registers the pressure goes.
+pub fn forecast<K: Ord + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> Forecast<K> {
     let mut spilled = BTreeSet::new();
-    let mut cost = 0;
+    let (mut cost, mut peak) = (0, 0);
     for point in points {
         let resident = point.residents.into_iter().filter(|one| !spilled.contains(one)).collect::<BTreeSet<_>>();
         let excess = resident.len() as i64 - point.registers.max(0);
+        peak = peak.max(excess);
         if excess <= 0 {
             continue;
         }
@@ -86,7 +102,7 @@ pub fn spilled<K: Ord + Copy>(points: impl IntoIterator<Item = Point<K>>, price:
             spilled.insert(one);
         }
     }
-    cost
+    Forecast { cost, spilled, peak }
 }
 
 /// Whether `inst` leaves only the registers a call does.
@@ -100,11 +116,14 @@ pub fn kept_across(outer: &Outer, context: &Context, function: &Function, inst: 
     outer.kept_across(llrm_mir::memory::callee(context, function, inst))
 }
 
-/// The registers `inst` needs for its address beyond the values live: a
-/// spilled operand is read back into one. They are the runtime pointer it
-/// is an offset from, each variable index, and for a far pointer the
-/// selector. A symbol or frame object is a displacement.
-pub fn transient(context: &Context, layout: &DataLayout, function: &Function, inst: InstId, room: Room) -> i64 {
+/// The registers `inst` needs for its address beyond the values `live`
+/// before it. An address `getelementptr` only accesses take is folded into
+/// them, so what it is made of is read into registers at the access: the
+/// runtime pointer it is an offset from and each variable index, those not
+/// live already. Any other address is a value, live, in a register. A
+/// symbol or frame object is a displacement. A far pointer takes its
+/// selector besides.
+pub fn transient(context: &Context, layout: &DataLayout, function: &Function, inst: InstId, room: Room, live: &BTreeSet<ValueId>) -> i64 {
     let op = function.instruction(inst);
     let address = match op.opcode {
         Opcode::Load { .. } => op.operands.first(),
@@ -112,6 +131,37 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
         _ => None,
     };
     let Some(Operand::Value(pointer)) = address else { return 0 };
+    let read = address_values(function, *pointer);
+    read.iter().filter(|value| !live.contains(value)).count() as i64 + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
+}
+
+/// The values an access takes its address from: its pointer, or where the
+/// access alone takes the `getelementptr` that makes it, what that is made
+/// of: the pointer it is an offset from and each variable index.
+pub fn addressed(function: &Function) -> BTreeSet<ValueId> {
+    let mut found = BTreeSet::new();
+    for &block in function.layout() {
+        for &inst in function.block(block).instructions() {
+            let op = function.instruction(inst);
+            let address = match op.opcode {
+                Opcode::Load { .. } => op.operands.first(),
+                Opcode::Store { .. } => op.operands.get(1),
+                _ => None,
+            };
+            if let Some(Operand::Value(pointer)) = address {
+                found.extend(address_values(function, *pointer));
+            }
+        }
+    }
+    found
+}
+
+/// What an access through `pointer` reads its address from. Where `pointer`
+/// is made by `getelementptr`s only accesses and each other take, what they
+/// are made of: each variable index and the pointer they are offsets from,
+/// unless that is a symbol or frame object, a displacement. Any other
+/// `pointer` is itself a value.
+pub fn address_values(function: &Function, pointer: ValueId) -> Vec<ValueId> {
     let defined = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Instruction(def) => Some(function.instruction(def)),
@@ -119,14 +169,14 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
         },
         _ => None,
     };
-    // The access's own `getelementptr` names its variable indices; what it
-    // is an offset from is one register, however it was made.
-    let mut components = 0;
-    let mut base = Operand::Value(*pointer);
-    if let Some(op) = defined(base)
+    let mut read = Vec::new();
+    let mut base = Operand::Value(pointer);
+    while let Operand::Value(value) = base
+        && folded(function, value)
+        && let Some(op) = defined(base)
         && let (Opcode::GetElementPtr { .. }, [from, indices @ ..]) = (&op.opcode, &op.operands[..])
     {
-        components += indices.iter().filter(|index| matches!(index, Operand::Value(_))).count() as i64;
+        read.extend(indices.iter().filter_map(|index| if let Operand::Value(value) = index { Some(*value) } else { None }));
         base = *from;
     }
     // A constant displacement from a symbol or frame object needs none.
@@ -141,8 +191,10 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
             _ => break true,
         }
     };
-    components += i64::from(!symbolic);
-    components + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
+    if let (false, Operand::Value(runtime)) = (symbolic, base) {
+        read.push(runtime);
+    }
+    read
 }
 
 /// Whether `value` is a far pointer of offset zero, a selector cast to the
@@ -164,9 +216,32 @@ pub fn segment_view(context: &Context, layout: &DataLayout, function: &Function,
 pub fn integer(context: &Context, function: &Function, value: ValueId) -> bool {
     match context.types.get(function.value(value).ty) {
         Type::Int(1) => !_flags(function, value),
-        Type::Int(_) | Type::Pointer(_) => true,
+        Type::Int(_) | Type::Pointer(_) => !folded(function, value),
         _ => false,
     }
+}
+
+/// Whether `value` is an address only memory accesses of its own block, and
+/// `getelementptr`s that are such addresses, take: folded into their
+/// addressing modes, it takes no register.
+pub fn folded(function: &Function, value: ValueId) -> bool {
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }) {
+        return false;
+    }
+    let block = function.parent(def);
+    let users = function.users(value);
+    !users.is_empty()
+        && users.iter().all(|one| {
+            let op = function.instruction(one.user);
+            function.parent(one.user) == block
+                && match op.opcode {
+                    Opcode::GetElementPtr { .. } => op.operands.first() == Some(&Operand::Value(value)) && folded(function, op.result.expect("a getelementptr's result")),
+                    Opcode::Load { .. } => op.operands.first() == Some(&Operand::Value(value)),
+                    Opcode::Store { .. } => op.operands.get(1) == Some(&Operand::Value(value)) && op.operands.first() != Some(&Operand::Value(value)),
+                    _ => false,
+                }
+        })
 }
 
 fn _flags(function: &Function, value: ValueId) -> bool {
@@ -320,6 +395,8 @@ pub struct Site {
     pub across: Option<Point<ValueId>>,
     /// The values live before it that the segment registers hold, against theirs.
     pub segments: Point<ValueId>,
+    /// The values live before it that an address takes, against the registers one may be held in.
+    pub addresses: Point<ValueId>,
 }
 
 /// Each instruction's site in `block` but its phis, in order.
@@ -329,20 +406,23 @@ pub fn sites(
     block: BlockId,
     room: Room,
     across: &dyn Fn(InstId) -> i64,
-    transient: &dyn Fn(InstId) -> i64,
+    transient: &dyn Fn(InstId, &BTreeSet<ValueId>) -> i64,
     cells: &BTreeMap<ValueId, ValueId>,
     counted: &dyn Fn(ValueId) -> bool,
     segment: &dyn Fn(ValueId) -> bool,
+    addressed: &dyn Fn(ValueId) -> bool,
 ) -> Vec<Site> {
     let viewed = |one: ValueId| room.segments > 0 && segment(one);
     let residents = |live: BTreeSet<ValueId>| live.into_iter().filter(|&one| counted(one) && !viewed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
     let held = |live: &BTreeSet<ValueId>| live.iter().copied().filter(|&one| counted(one) && viewed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
+    let routed = |live: &BTreeSet<ValueId>| live.iter().copied().filter(|&one| counted(one) && !viewed(one) && addressed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
     liveness::live_points(function, found, block)
         .into_iter()
         .map(|(inst, before, past)| Site {
             inst,
+            addresses: Point { registers: room.addresses, residents: if room.addresses > 0 { routed(&before) } else { Vec::new() } },
             segments: Point { registers: room.segments, residents: held(&before) },
-            before: Point { registers: room.registers - transient(inst), residents: residents(before) },
+            before: Point { registers: room.registers - transient(inst, &before), residents: residents(before) },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
         })
         .collect()
@@ -351,7 +431,7 @@ pub fn sites(
 impl Site {
     /// Its points, in order.
     pub fn points(self) -> impl Iterator<Item = Point<ValueId>> {
-        std::iter::once(self.before).chain(self.across).chain((!self.segments.residents.is_empty()).then_some(self.segments))
+        std::iter::once(self.before).chain(self.across).chain((!self.segments.residents.is_empty()).then_some(self.segments)).chain((!self.addresses.residents.is_empty()).then_some(self.addresses))
     }
 }
 

@@ -182,6 +182,8 @@ static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
         ("nop", 3),
         ("jmp_short", 7),
         ("jcc", 7),
+        // Intel's 80386 table: Jcc is 7+m taken, 3 not.
+        ("jcc_not_taken", 3),
         ("call_far", 37),
         ("ret_far", 18),
         ("lahf", 2),

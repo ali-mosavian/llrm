@@ -2,11 +2,13 @@
 //!
 //! Each block's expected executions per call (`analysis::frequency`: the
 //! branch heuristics, a loop's proven trips) weigh its instructions and memory
-//! operands, so spill code the MIR estimate cannot see is counted.
+//! operands, so spill code the MIR estimate cannot see is counted. On the
+//! placed body, each edge's odds say how often a branch is taken.
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops;
-use crate::model::ir::{Addr, Loc, Space};
+use crate::backend::cpu::Profile;
+use crate::model::ir::{Addr, Loc, Operation, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
 
@@ -14,6 +16,8 @@ use crate::support::hash::{IndexMap, IndexSet};
 /// of those instructions, the integer allocator's reloads, spill stores and
 /// remats. A reload is any read of a spill slot: most are folded into their
 /// use or lose the flag. x87 spills are left out: their restores carry none.
+/// Of the instructions, the conditional branches, how many of those are
+/// taken, and the unconditional jumps.
 #[derive(Default)]
 pub struct Executed {
     pub instructions: f64,
@@ -21,14 +25,34 @@ pub struct Executed {
     pub reloads: f64,
     pub stores: f64,
     pub remats: f64,
+    pub branches: f64,
+    pub taken: f64,
+    pub jumps: f64,
 }
 
-/// `executed` as one line, for the `cost` channel and dump.
-pub fn summary(body: &LirBody) -> String {
+impl Executed {
+    /// The branches' and jumps' clocks on `cpu`.
+    pub fn jump_cycles(&self, cpu: &Profile) -> Result<f64, String> {
+        let cost = |form: &str| cpu.cost(form).map(|one| one as f64);
+        Ok(self.taken * cost("jcc")? + (self.branches - self.taken) * cost("jcc_not_taken")? + self.jumps * cost("jmp_short")?)
+    }
+}
+
+/// `executed` as one line, for the `cost` channel and dump, its jumps priced on `cpu`.
+pub fn summary(body: &LirBody, cpu: &Profile) -> String {
     match executed(body) {
         Some(done) => format!(
-            "{} executes {:.0} instructions, {:.0} memory operands; {:.0} reloads, {:.0} spill stores, {:.0} remats",
-            body.name, done.instructions, done.memory, done.reloads, done.stores, done.remats
+            "{} executes {:.0} instructions, {:.0} memory operands; {:.0} reloads, {:.0} spill stores, {:.0} remats; {:.0} branches, {:.0} taken, {:.0} jumps, {:.0} jump cycles",
+            body.name,
+            done.instructions,
+            done.memory,
+            done.reloads,
+            done.stores,
+            done.remats,
+            done.branches,
+            done.taken,
+            done.jumps,
+            done.jump_cycles(cpu).unwrap_or(f64::NAN)
         ),
         None => format!("{} executes an unbounded amount", body.name),
     }
@@ -58,9 +82,20 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     };
     let mut out = Executed::default();
     for block in &body.blocks {
-        let frequency = frequency.block(block.at);
+        // What reaches each instruction: the block's runs less those an
+        // earlier branch took.
+        let mut reaching = frequency.block(block.at);
         for one in block.insns.iter().filter(|one| crate::backend::masm::prints(one)) {
-            out.instructions += frequency;
+            let runs = reaching;
+            out.instructions += runs;
+            match one.what.as_ref().map(|what| (what.op, what.target)) {
+                Some((Operation::Branch, target)) => {
+                    let taken = target.map_or(0.0, |to| frequency.edge(block.at, to)).min(reaching);
+                    (out.branches, out.taken, reaching) = (out.branches + reaching, out.taken + taken, reaching - taken);
+                }
+                Some((Operation::Jump, _)) => out.jumps += reaching,
+                _ => {}
+            }
             // A remat may be built as a reload; it counts as a remat.
             let spill = match () {
                 _ if x87(one) => None,
@@ -70,10 +105,10 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                 _ => None,
             };
             if let Some(count) = spill {
-                *count += frequency;
+                *count += runs;
             }
             if let Some(what) = &one.what {
-                out.memory += frequency * what.dests.iter().chain(&what.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
+                out.memory += runs * what.dests.iter().chain(&what.sources).filter(|at| matches!(at, Loc::Mem(_))).count() as f64;
             }
         }
     }
@@ -87,8 +122,9 @@ mod tests {
     use iced_x86::Register;
 
     use super::executed;
+    use crate::backend::cpu;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn insn(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
@@ -258,5 +294,70 @@ mod tests {
         let insns = vec![Arc::new(store), insn(2, Operation::Return, "ret", vec![], vec![])];
         let body = LirBody::new("x87", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
         assert_eq!(executed(&body).expect("straight-line").stores, 0.0);
+    }
+
+    /// Placement moves no instruction the estimate saw differently from a
+    /// fall-through, so no column said which of a diamond's layouts costs
+    /// fewer jump clocks. On the 486, a taken branch is 3, a fall-through 1,
+    /// a jmp 3: the likelier arm (3 in 4) as the branch's target, falling
+    /// into the join, saves the rarer arm's jmp on the common path.
+    #[test]
+    fn test_a_diamonds_jumps_are_counted_taken_or_not_and_priced() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let targeted = |at, op, name, target| {
+            let mut one = (*insn(at, op, name, vec![], vec![])).clone();
+            one.what.as_mut().unwrap().target = Some(target);
+            Arc::new(one)
+        };
+        let mov = |at| insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]);
+        // Blocks 2 (likely) and 3 (rare) join at 4; `second` falls into it.
+        let placed = |second: i64| {
+            let first = 5 - second;
+            let blocks = vec![
+                block(1, vec![targeted(1, Operation::Branch, "jne", second)], vec![second, first]),
+                block(first, vec![mov(2), targeted(3, Operation::Jump, "jmp", 4)], vec![4]),
+                block(second, vec![mov(4)], vec![4]),
+                block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+            ];
+            let mut body = LirBody::new("diamond", 1, blocks, IndexMap::default(), IndexMap::default());
+            for (to, probability) in [(2, 0.75), (3, 0.25)] {
+                body.odds.taken.insert((1, to), (probability * BlockOdds::CERTAIN).round() as u32);
+            }
+            let done = executed(&body).expect("a diamond");
+            (done.branches, done.taken, done.jumps, done.jump_cycles(cpu::named("486").unwrap()).unwrap())
+        };
+        let close = |(a, b, c, d): (f64, f64, f64, f64), want: [f64; 4]| [a, b, c, d].iter().zip(want).all(|(got, want)| (got - want).abs() < 1e-3);
+        let (rare_second, likely_second) = (placed(3), placed(2));
+        assert!(close(rare_second, [1.0, 0.25, 0.75, 3.75]), "{rare_second:?}");
+        assert!(close(likely_second, [1.0, 0.75, 0.25, 3.25]), "{likely_second:?}");
+    }
+
+    /// Work after a branch runs only as often as the branch falls through:
+    /// a `jne loop; jmp exit` block counted its `jmp` on every pass, so the
+    /// instruction column could not see a jump that tail duplication moved
+    /// off the loop (PLASMABLOBS read 35,468,659 either way).
+    #[test]
+    fn test_work_after_a_branch_runs_as_often_as_it_falls_through() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let bx = Loc::Reg(Reg { register: Register::BX, width: 2 });
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let targeted = |at, op, name, target| {
+            let mut one = (*insn(at, op, name, vec![], vec![])).clone();
+            one.what.as_mut().unwrap().target = Some(target);
+            Arc::new(one)
+        };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Compare, "cmp", vec![], vec![ax.clone(), bx.clone()]), targeted(2, Operation::Branch, "jne", 3), insn(3, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]), targeted(4, Operation::Jump, "jmp", 4)], vec![3, 4]),
+            block(3, vec![insn(5, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()])], vec![4]),
+            block(4, vec![insn(6, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body = LirBody::new("tail", 1, blocks, IndexMap::default(), IndexMap::default());
+        body.odds.taken.insert((1, 3), (0.75 * BlockOdds::CERTAIN) as u32);
+        body.odds.taken.insert((1, 4), (0.25 * BlockOdds::CERTAIN) as u32);
+        let done = executed(&body).expect("straight branches");
+        // cmp and jne every time, mov and jmp a quarter, block 3's mov three quarters, ret.
+        assert!((done.instructions - 4.25).abs() < 1e-3, "{}", done.instructions);
     }
 }

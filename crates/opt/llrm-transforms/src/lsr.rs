@@ -533,9 +533,11 @@ fn _fixed(
     let counted = |value: ValueId| spill::integer(view.context, function, value) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
     let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
-    let transient = |inst: InstId| spill::transient(view.context, view.layout, function, inst, room);
+    let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
     let segment = |value: ValueId| spill::segment_view(view.context, view.layout, function, value);
-    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment))).collect()
+    let addressed = spill::addressed(function);
+    let routed = |value: ValueId| addressed.contains(&value);
+    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.
@@ -552,7 +554,7 @@ fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64
 
 /// What a trip pays to advance `one`: an add, or a pointer's own advance.
 fn _step(view: &memory::Unit, target: &Target, one: &Candidate) -> i64 {
-    one.pointer.map_or(target.costs.add, |ty| profit::advance(view.context, view.layout, ty, &target.costs))
+    one.pointer.map_or(target.costs.add, |ty| profit::advance(view.context, view.layout, ty, target.costs.add, &target.costs))
 }
 
 /// The candidates: each use's own recurrence, less its symbols and its
@@ -856,7 +858,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             let native = target.forms.first()?;
             // An integer cannot index a pair in a carrying space: the use advances
             // the pointer by it, and pays what an advance there costs over an address's.
-            let advance = profit::advance(view.context, view.layout, view.function.value(site.one.value).ty, costs);
+            let advance = profit::advance(view.context, view.layout, view.function.value(site.one.value).ty, costs.address, costs);
             price.cost += advance - costs.address;
             if pointer_base(&fit) {
                 // A global is a displacement beside two registers; a frame object

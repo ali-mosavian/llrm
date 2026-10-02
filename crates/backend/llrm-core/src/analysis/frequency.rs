@@ -31,16 +31,8 @@ impl Frequency {
     pub fn over(body: &LirBody, blocks: &[LirBlock]) -> Self {
         let mut taken = IndexMap::default();
         for block in blocks {
-            let succ: Vec<i64> = block.succ.iter().copied().collect::<BTreeSet<_>>().into_iter().collect();
-            let known: f64 = succ.iter().filter_map(|to| body.odds.probability(block.at, *to)).sum();
-            let unknown = succ.iter().filter(|to| body.odds.probability(block.at, **to).is_none()).count();
-            for to in &succ {
-                // An edge made after isel carries what its block's isel edges do not.
-                let share = match body.odds.probability(block.at, *to) {
-                    Some(probability) => probability,
-                    None => (1.0 - known).max(0.0) / unknown as f64,
-                };
-                taken.insert((block.at, *to), if succ.len() == 1 { 1.0 } else { share });
+            for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
+                taken.insert((block.at, to), body.odds.chance(block.at, &block.succ, to));
             }
         }
         let successors: IndexMap<i64, Vec<i64>> = blocks.iter().map(|block| (block.at, block.succ.clone())).collect();

@@ -628,7 +628,8 @@ pub fn _split_edges(
     }
     let mut out = body.clone();
     for (&(where_, into), &at) in &landing {
-        out.odds.redirected(where_, into, at);
+        let succ = &body.blocks.iter().find(|one| one.at == where_).expect("a split edge's block").succ;
+        out.odds.rerouted(where_, succ, into, &[(at, 1.0)]);
     }
     blocks.extend(made.into_values());
     out.blocks = blocks;

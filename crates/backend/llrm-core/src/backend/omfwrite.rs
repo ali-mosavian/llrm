@@ -943,6 +943,14 @@ pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>) -> Res
     Ok(Piece { code, fixups: fixups.into_values().collect() })
 }
 
+/// A short jump's length: opcode and an 8-bit displacement.
+pub const SHORT_JUMP: i64 = 2;
+
+/// Whether a short jump reaches `displacement`, counted from its end.
+pub fn short_reaches(displacement: i64) -> bool {
+    (-128..=127).contains(&displacement)
+}
+
 /// Every label's offset, with each jump short unless its target is out of reach.
 ///
 /// Short first and lengthened to a fixed point, as jwasm does: lengthening
@@ -966,7 +974,7 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
                     let Some(target) = labels.get(&item.label) else {
                         return Err(Unencodable(format!("a jump to {}, which is nowhere", item.label)));
                     };
-                    if !(-128..=127).contains(&(target - (at + 2))) {
+                    if !short_reaches(target - (at + SHORT_JUMP)) {
                         item.long = true;
                         changed = true;
                     }
@@ -986,7 +994,7 @@ pub fn _length(item: &Encoded) -> usize {
         Encoded::Piece(Piece { code, .. }) => code.len(),
         Encoded::Jump(Jump { name, long, .. }) => {
             if !long {
-                2
+                SHORT_JUMP as usize
             } else if name == "jmp" {
                 3
             } else {

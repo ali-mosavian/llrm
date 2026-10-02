@@ -490,6 +490,8 @@ def main() -> int:
             dos.link_c(batch.obj, exe, batch.work)
         elif batch.lang == "nib":
             dos.link_nib(batch.obj, exe, batch.work, batch.config.opt)
+        if batch.lang != "bas":
+            dos.check_loads(exe)
         job = dos.Job(batch.stem, "obj" if batch.lang == "bas" else "exe", batch.obj if batch.lang == "bas" else exe)
         job.expected = batch.expected
         job.cases = [(c.name, len(batch.streams[c.name])) for c in batch.cases]

@@ -63,7 +63,7 @@ pub fn machine<'a>(
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
-        Box::new(jumps::ControlFlow { size: target.size }),
+        Box::new(jumps::ControlFlow { cpu: target }),
     ])
 }
 
@@ -142,9 +142,6 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
         let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));
         let listed = |bytes: Vec<i64>| bytes.iter().map(|one| format!("{one:#x}")).collect::<Vec<_>>().join(" ");
         return Err(Checked::Malformed(Malformed(format!("{stage}: lost source bytes [{}], gained [{}]", listed(lost), listed(gained)))));
-    }
-    if stage == "jumps" && crate::support::debug::enabled("cost") {
-        llrm_support::debug!("cost", "{}", crate::backend::executed::summary(&body));
     }
     Ok(body)
 }

@@ -231,7 +231,8 @@ fn test_gvn_joins_the_values_each_arm_stored() {
 /// inside it, where serving the reload holds `%a` through a point that
 /// then spills. Priced at the conventional ten trips even when proven
 /// one, the reload was always served: a spill for one saved load. The
-/// registers are the target's; gvn used to ignore them.
+/// registers are the target's; gvn used to ignore them. Where `%a` spills
+/// in the loop, each reload of it costs the load it saves.
 #[test]
 fn a_loop_of_proven_trips_prices_the_reload_it_serves() {
     let text = |bound: &str| {
@@ -269,19 +270,19 @@ b3:
 "
         )
     };
-    let reloads = |bound: &str| {
+    let reloads = |bound: &str, registers: i64| {
         let before = parsed(&text(bound));
         let mut module = before.clone();
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn::default());
-        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() })).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() })).unwrap();
         let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
         assert_eq!(results(&module, inputs), results(&before, inputs));
         printed(&module).contains("%b = load i16, ptr @x")
     };
-    assert!(reloads("1"));
-    assert!(!reloads("%n"));
+    assert!(reloads("1", 4));
+    assert!(!reloads("%n", 6), "room for %a: serving the reload saves a load per trip");
 }
 
 /// Without `Summaries` required the pass runs, as an LLVM function pass

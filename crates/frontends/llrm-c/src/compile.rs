@@ -330,7 +330,7 @@ pub fn assembled(
         let low = jumps::duplicated_returns(body, overhead);
         if dump.is_some() {
             lirs.push(_lir_text(&format!("{} (allocated)", raised.name), &low));
-            costs.push(executed::summary(&low));
+            costs.push(executed::summary(&low, cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?));
             costs.push(format!("{} loop trip counts {:?}", low.name, low.loop_trip_counts));
         }
         procedures.push(masm::Procedure { name, public, far, body: low, reserve, callees, interrupt });
@@ -1231,9 +1231,11 @@ mod tests {
 
     /// `strides` walks frame arrays of 1-, 2-, 4- and 8-byte elements with one
     /// counter. Strength gave each stride its own pointer, and two of them lived
-    /// in the frame: loaded for every access and stepped in memory.
+    /// in the frame: loaded for every access and stepped in memory. Indexes in
+    /// registers are the cure: one per address width, as the byte array through
+    /// 16-bit `si` saves its two address-size prefixes for one more add.
     #[test]
-    fn test_arrays_of_several_strides_share_one_index() {
+    fn test_arrays_of_several_strides_keep_their_indexes_in_registers() {
         for function in ["_bench_strides3", "_bench_strides4"] {
             let body = selected_loop("strides", function, "xor");
             let registers: std::collections::BTreeSet<String> = body
@@ -1245,7 +1247,7 @@ mod tests {
                 .collect();
             // A pointer kept in the frame is stepped there: `add word ptr [bp-76h], 1`.
             let stepped = body.iter().any(|one| ["add ", "sub ", "inc ", "dec "].iter().any(|op| one.strip_prefix(op).is_some_and(|rest| rest.split(',').next().unwrap_or("").contains("ptr ["))));
-            assert!(registers.len() == 1 && !stepped, "{function}: {registers:?}\n{body:#?}");
+            assert!(registers.len() <= 2 && !stepped, "{function}: {registers:?}\n{body:#?}");
         }
     }
 

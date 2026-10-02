@@ -300,7 +300,12 @@ pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, success
             }
             let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
             let stay = (trips as f64 - tested) / (trips as f64 + 1.0 - tested);
-            return Some(if one.body.contains(&to) { stay / inside as f64 } else { (1.0 - stay) / outside as f64 });
+            // The trips fix how often the loop is left, not which way: each
+            // edge takes its side's mass by its own odds.
+            let side: BTreeSet<i64> = next.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
+            let weight: f64 = side.iter().map(|at| given(from, *at)).sum();
+            let part = if weight > 0.0 { given(from, to) / weight } else { 1.0 / side.len() as f64 };
+            return Some(if one.body.contains(&to) { stay * part } else { (1.0 - stay) * part });
         }
         None
     };
