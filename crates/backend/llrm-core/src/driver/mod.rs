@@ -63,7 +63,8 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
             let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
             let written = |name: &str, text: String| std::fs::write(directory.join(format!("{name}{suffix}")), text).map_err(|error| error.to_string());
             written("listing.asm", masm::text(&assembled).map_err(|error| error.to_string())?)?;
-            written("cost", assembled.procedures.iter().map(|one| executed::summary(&one.body) + "\n").collect())?;
+            let cpu = options.cpu()?;
+            written("cost", assembled.procedures.iter().map(|one| executed::summary(&one.body, cpu) + "\n").collect())?;
         }
         out.push(assembled);
     }

@@ -330,7 +330,7 @@ pub fn assembled(
         let low = jumps::duplicated_returns(body, overhead);
         if dump.is_some() {
             lirs.push(_lir_text(&format!("{} (allocated)", raised.name), &low));
-            costs.push(executed::summary(&low));
+            costs.push(executed::summary(&low, cpu::profile(cpu::ProfileOrName::Name(target)).map_err(hir::Unsupported)?));
             costs.push(format!("{} loop trip counts {:?}", low.name, low.loop_trip_counts));
         }
         procedures.push(masm::Procedure { name, public, far, body: low, reserve, callees, interrupt });
