@@ -58,13 +58,14 @@ fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }
 
-/// What a `getelementptr` producing `ty` costs: the address's own price, or
-/// the carry into the selector where its space's displacement has one
-/// (`DataLayout::carries`). The one place the advance's price is stated.
-pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, costs: &OperationCosts) -> i64 {
+/// What advancing a pointer of type `ty` costs: `plain`, the price of the
+/// advance as its caller makes it, or the carry into the selector where its
+/// space's displacement has one (`DataLayout::carries`). The one place the
+/// carry's price is stated.
+pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, plain: i64, costs: &OperationCosts) -> i64 {
     match context.types.get(ty) {
         Type::Pointer(space) if layout.carries(*space) => costs.carry,
-        _ => costs.address,
+        _ => plain,
     }
 }
 
@@ -81,7 +82,7 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
-        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs),
+        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs.address, costs),
         Opcode::Alloca { .. } => costs.address,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
