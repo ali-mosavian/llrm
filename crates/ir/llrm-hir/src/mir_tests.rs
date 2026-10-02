@@ -1041,4 +1041,14 @@ fn a_range_survives_the_codec() {
     let back = crate::codec::decode(&text).expect("decodes");
     assert_eq!(back.modules[0].facts, program.modules[0].facts);
     assert!(crate::codec::decode(&text.replace("\"second\":7", "\"second\":-9")).is_err());
+
+/// The verifier a frontend's HIR meets refuses a value used where its
+/// definition does not dominate it.
+#[test]
+fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
+    let mut function = difference();
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Add, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]));
+    function.values.push(Value { id: 4, r#type: 1 });
+    let error = crate::verify::verify(&program(function)).unwrap_err();
+    assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
 }

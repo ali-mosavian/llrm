@@ -22,8 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::loops;
 use llrm_mir::context::signed;
-use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
@@ -211,8 +211,44 @@ pub fn _operand(unit: &Unit, operand: Operand, known: &IndexMap<ValueId, Interva
     if let Some(interval) = known.get(&value).filter(|interval| interval.width == width) {
         return Some(interval.clone());
     }
+    if let Some(interval) = declared_argument(unit, value).filter(|interval| interval.width == width) {
+        return Some(interval);
+    }
     let fact = facts.get(&value).filter(|fact| fact.width >= width)?;
     Some(singleton(&fact.n, width))
+}
+
+/// The interval a `range` attribute states, if it is one that does not wrap
+/// past the signed bounds: `[lower, upper)` at the type's width.
+fn stated(unit: &Unit, attribute: &Attribute) -> Option<Interval> {
+    let Attribute::Range { ty, lower, upper } = attribute else { return None };
+    let width = unit.context.types.int_bits(*ty)?;
+    let (low, high) = (singleton(&BigInt::from(*lower), width), singleton(&(BigInt::from(*upper) - 1), width));
+    (lower != upper && low.low <= high.low).then_some(Interval { low: low.low, high: high.low, width })
+}
+
+/// Every parameter's stated range.
+fn declared_arguments(unit: &Unit) -> IndexMap<ValueId, Interval> {
+    unit.function.parameters().iter().filter_map(|&value| Some((value, declared_argument(unit, value)?))).collect()
+}
+
+/// What a `range` on parameter `value` says of it.
+fn declared_argument(unit: &Unit, value: ValueId) -> Option<Interval> {
+    let ValueDef::Argument(index) = unit.function.value(value).def else { return None };
+    unit.function.parameter_attrs.get(index as usize)?.iter().find_map(|one| stated(unit, one))
+}
+
+/// What a `range` on call `inst`'s result says of it, at the call or on the
+/// callee: the contract of a routine whose result is bounded, `LEN`'s
+/// 0 to 32767.
+fn declared_result(unit: &Unit, inst: InstId) -> Option<Interval> {
+    let op = unit.function.instruction(inst);
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return None };
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst).and_then(|global| unit.globals.get(global.0 as usize)).and_then(|global| global.function());
+    let attributes = info.return_attrs.iter().chain(callee.iter().flat_map(|function| function.return_attrs.iter()));
+    let mut stated = attributes.filter_map(|one| stated(unit, one));
+    let first = stated.next()?;
+    stated.try_fold(first, |one, other| (one.width == other.width).then(|| Interval { low: one.low.max(other.low), high: one.high.min(other.high), width: one.width }).filter(|met| met.low <= met.high))
 }
 
 /// `n`'s low `width` bits, signed, as an interval of one.
@@ -228,6 +264,9 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
     let op = unit.function.instruction(inst);
     let result = op.result?;
     let width = unit.int_bits(Operand::Value(result))?;
+    if let Some(interval) = declared_result(unit, inst).filter(|interval| interval.width == width) {
+        return Some(interval);
+    }
     // Every other operation answers None below, whatever its operands.
     let kind = match op.opcode {
         Opcode::Cast(CastOp::SExt) => None,
@@ -322,11 +361,12 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
     for at in loops::reverse_postorder(&graph, cfg::id(entry)) {
         let block = cfg::block(at);
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
+        let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { IndexMap::default() };
         let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
             Some((parent, inherited)) if edges(unit, cfg::block(parent), block) == 1 => {
                 on_edge(unit, cfg::block(parent), block, inherited, Some(facts))?.unwrap_or_else(|| inherited.clone())
             }
-            _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).cloned().unwrap_or_default(),
+            _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).cloned().unwrap_or(seeded),
         };
         for &inst in function.block(block).instructions() {
             let (Some(interval), Some(result)) = (_computed(unit, inst, &scoped, facts), function.instruction(inst).result) else {
@@ -385,7 +425,7 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         if proofs.is_empty() || !proofs.iter().all(|proof| proof.posttested) {
             inside.remove(&loop_.header);
         }
-        let mut known = IndexMap::<ValueId, Interval>::default();
+        let mut known = declared_arguments(unit);
         let mut trips = BTreeSet::new();
         for proof in &proofs {
             if let (Some((low, high)), Some(count)) = (proof.span(), &proof.count) {
