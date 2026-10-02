@@ -1,0 +1,27 @@
+# i32 checksum (no unsigned 32-bit needed: it stays far below 2^31).
+fn bench_matmul(seed: i16) -> i32:
+    let mut a: i16[8, 8] = [[0] * 8] * 8
+    let mut b: i16[8, 8] = [[0] * 8] * 8
+    let mut c: i32[8, 8] = [[0] * 8] * 8
+    let mut checksum: i32 = 0
+    for i in 0..8:
+        for j in 0..8:
+            a[i, j] = i * 3 + j + 1 + seed
+            if i == j:
+                b[i, j] = 2
+            else:
+                b[i, j] = (i + j) % 3
+    for i in 0..8:
+        for j in 0..8:
+            let mut total: i32 = 0
+            for k in 0..8:
+                total += i32(a[i, k]) * i32(b[k, j])
+            c[i, j] = total
+    for i in 0..8:
+        for j in 0..8:
+            checksum += c[i, j] * i32(i * 8 + j + 1)
+    return checksum
+
+fn main() -> i16:
+    print(bench_matmul(0))
+    return 0

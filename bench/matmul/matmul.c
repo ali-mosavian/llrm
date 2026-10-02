@@ -1,3 +1,5 @@
+extern void report(long value);
+
 /* Small enough for every DOS memory model, large enough to expose three loops. */
 unsigned long bench_matmul(unsigned short seed)
 {
@@ -20,4 +22,10 @@ unsigned long bench_matmul(unsigned short seed)
     for (i = 0; i < 8; ++i)
         for (j = 0; j < 8; ++j) checksum += (unsigned long)c[i][j] * (i * 8 + j + 1);
     return checksum;
+}
+
+int main(void)
+{
+    report((long)bench_matmul(0));
+    return 0;
 }
