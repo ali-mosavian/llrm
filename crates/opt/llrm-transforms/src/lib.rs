@@ -47,6 +47,9 @@ pub mod spill;
 #[cfg(test)]
 pub mod testing;
 pub mod transform;
+pub mod unclose;
+#[cfg(test)]
+mod unclose_tests;
 pub mod unroll;
 pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

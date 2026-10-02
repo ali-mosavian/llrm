@@ -36,7 +36,7 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     algebraic, dead, decide, dse, fill, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, unroll, unswitch,
+    promote, rotate, unclose, unroll, unswitch,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -191,6 +191,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill),
         Box::new(fill::Merge),
+        // Last: the loop passes above need the closed form.
+        Box::new(unclose::Unclose),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -304,7 +306,7 @@ impl Fixed {
         let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
         let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
-        let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "merge");
+        let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| matches!(one.name(), "merge" | "unclose"));
         // A candidate is judged after the whole pipeline, unswitching off.
         let unswitch = applied.options.unswitch.then(|| {
             let options = Options { unswitch: false, ..applied.options.clone() };
