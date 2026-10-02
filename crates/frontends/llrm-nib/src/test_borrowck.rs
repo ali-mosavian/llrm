@@ -858,3 +858,29 @@ fn main() -> i16:
     // Only the frame's own `next(self)`, which keeps nothing of itself.
     assert_eq!(uncaptured(escapes), ["$state0.next.0"]);
 }
+
+#[test]
+fn an_owned_aggregate_parameter_is_unaliased() {
+    // The caller copies a by-value struct for the call, so the callee's
+    // pointer reaches nothing else; none was stated, and a store through a
+    // borrow could not be told apart from a store to the copy.
+    let source = "\
+struct P:
+    mut x: i16
+    y: i16
+
+fn take(p: P, q: &mut P) -> i16:
+    q.x = 5
+    return p.x
+
+fn main() -> i16:
+    let mut a = P(x=1, y=2)
+    let mut b = P(x=3, y=4)
+    print(take(a, b))
+    return 0
+";
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let take = hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["name"] == "take").unwrap()["id"].as_i64().unwrap();
+    let noalias: Vec<i64> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "noalias" && one["function"].as_i64() == Some(take)).map(|one| one["id"].as_i64().unwrap()).collect();
+    assert_eq!(noalias, [0, 1]);
+}

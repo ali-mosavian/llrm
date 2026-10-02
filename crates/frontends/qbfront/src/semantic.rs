@@ -9854,8 +9854,13 @@ impl Compiler {
         }
         // What the language promises of a FOR counter's add: it does not wrap.
         for function in &self.functions {
+            // A signed counter's add does not wrap as signed; an unsigned counter's
+            // as unsigned (it may well pass 32767): a counter that wrapped hangs in BC.
+            let types: BTreeMap<u32, u32> = function.values.iter().copied().collect();
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
-                facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
+                let counts_up = instruction.results.first().and_then(|result| types.get(result)).is_some_and(|&type_id| unsigned(type_id));
+                let fact = if counts_up { llrm_hir::facts::Fact::NoUnsignedWrap } else { llrm_hir::facts::Fact::NoSignedWrap };
+                facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, fact);
             }
         }
         // A call that fills a fixed-length destination: the callee writes its first

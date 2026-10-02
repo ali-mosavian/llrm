@@ -1461,10 +1461,14 @@ fn program(
     }
     callables.extend(templates.borrow().callables(&mut types));
     let functions = checked(compiled, &builtin_ids, &literals)?;
+    // A module variable sits where its type's accesses are aligned.
+    let mut stated = llrm_core::hir::facts::Builder::new("nib");
+    for layout in types.statics.values().filter(|one| one.align > 1) {
+        stated.state(llrm_core::hir::facts::Subject::Object(i64::from(layout.symbol)), llrm_mir::facts::Fact::Align(u64::from(layout.align)));
+    }
     // What the runtime's routines do, which no body shows: one that ends the
     // program touches nothing a caller's loop reads back, and one that prints
     // a value touches only the runtime's own state.
-    let mut stated = llrm_core::hir::facts::Builder::new("nib");
     for callable in callables.iter().filter(|one| !one.defined) {
         use llrm_core::abi::nib as routines;
         let subject = llrm_core::hir::facts::Subject::Callable(i64::from(callable.id));
@@ -1801,6 +1805,10 @@ impl<'a> FunctionCompiler<'a> {
                 // A reference is made from a place, so it is not null and points at
                 // the whole of what it borrows; a shared one cannot write it. Whether
                 // nothing else reaches it depends on its callers (`unaliased`).
+                // An owned aggregate is the caller's private copy, made for this call:
+                // nothing else reaches it, so it is as unaliased as a borrow proven
+                // so, and by construction.
+                SignatureParameter::Owned { .. } => compiler.references.push(subject),
                 SignatureParameter::Borrowed { mutable, target, .. } => {
                     if let Some(bytes) = compiler.types.referent_bytes(target) {
                         compiler.stated.state(subject, llrm_mir::facts::Fact::NonNull).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(bytes)));
