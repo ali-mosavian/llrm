@@ -16,7 +16,7 @@ fn risk(text: &str, capacity: i64) -> Option<i64> {
     let costs = OperationCosts { load: 10, store: 10, ..OperationCosts::default() };
     let room = crate::spill::Room { registers: capacity, across_call: capacity, ..Default::default() };
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
-    spill_risk(&module.context, &layout, function, &costs, room, &|_| capacity, &_frequencies(&module.context, &module.globals, function, None).expect("frequencies"), &llrm_analysis::liveness::live(function))
+    spill_risk(&module.context, &layout, function, &costs, room, &|_| capacity, &_frequencies(&module.context, &module.globals, function, None).expect("frequencies"), &llrm_analysis::liveness::live(function)).map(|price| price / super::UNIT)
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn work(text: &str, trips: &[(&str, i64)]) -> Option<i64> {
     let latch = |name: &str| cfg::id(*f.layout().iter().find(|&&one| f.block(one).name.as_deref() == Some(name)).expect("a block"));
     let trips = trips.iter().map(|&(name, count)| (latch(name), count)).collect::<IndexMap<_, _>>();
     let callees = llrm_mir::memory::callees(&module);
-    weighted(&module.context, &llrm_mir::datalayout::DataLayout::default(), f, &callees, &OperationCosts::default(), &_frequencies(&module.context, &module.globals, f, Some(&trips))?)
+    weighted(&module.context, &llrm_mir::datalayout::DataLayout::default(), f, &callees, &OperationCosts::default(), &_frequencies(&module.context, &module.globals, f, Some(&trips))?).map(|total| total / super::UNIT)
 }
 
 /// Three priced instructions in a loop body of one block, one before and one after.
@@ -108,7 +108,7 @@ fn a_loop_induction_counts_is_weighted_by_its_count() {
         let unit = llrm_analysis::memory::Unit::of(&module, &layout, function(&module));
         let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit, None, None, None));
         let callees = llrm_mir::memory::callees(&module);
-        (trips.len(), weighted(&module.context, &layout, function(&module), &callees, &OperationCosts::default(), &_frequencies(&module.context, &module.globals, function(&module), Some(&trips)).unwrap()))
+        (trips.len(), weighted(&module.context, &layout, function(&module), &callees, &OperationCosts::default(), &_frequencies(&module.context, &module.globals, function(&module), Some(&trips)).unwrap()).map(|total| total / super::UNIT))
     };
     assert_eq!(trips(&COUNTED.replace("icmp ult i16 %next, %n", "icmp ult i16 %next, 3")), (1, Some(1 + 4 * 3 + 1)));
     assert_eq!(trips(COUNTED), (0, Some(1 + 4 * 32 + 1)));
@@ -282,6 +282,38 @@ out:
     let products = _loop_products(f, None).expect("products");
     assert_eq!((products[&named("head")], products[&named("left")], products[&named("right")]), (10, 10, 10));
     let odds = _frequencies(&module.context, &module.globals, f, None).expect("frequencies");
-    assert_eq!(odds[&named("head")], 32, "{odds:?}");
-    assert!(odds[&named("left")] + odds[&named("right")] <= odds[&named("head")] + 1 && odds[&named("left")] < odds[&named("head")], "{odds:?}");
+    assert_eq!(odds[&named("head")], 32 * super::UNIT, "{odds:?}");
+    assert!(odds[&named("left")] + odds[&named("right")] <= odds[&named("head")] + 2 && odds[&named("left")] < odds[&named("head")], "{odds:?}");
+}
+
+/// A cold arm priced as whole executions, floor 1, weighed what the code
+/// before it did; and a branch's arms each weighed the whole loop's 32 rather
+/// than their share. Now a block's weight is its share of the entry's, in
+/// `UNIT`ths: the arm to a block ending in `unreachable` weighs one.
+#[test]
+fn a_block_that_is_all_but_never_reached_weighs_next_to_nothing() {
+    let text = "@g = global i16 0
+
+declare void @abort()
+
+define void @f(i16 %x) {
+b0:
+  %c = icmp eq i16 %x, 7
+  br i1 %c, label %cold, label %b2
+
+cold:
+  call void @abort()
+  unreachable
+
+b2:
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let (_, _, f) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    let found = _frequencies(&module.context, &module.globals, f, None).expect("frequencies");
+    let at = |name: &str| *found.get(&cfg::id(f.layout().iter().copied().find(|&one| f.block(one).name.as_deref() == Some(name)).expect("a block"))).expect("a frequency");
+    assert_eq!(at("b0"), super::UNIT);
+    assert!(at("cold") < super::UNIT / 100, "the cold arm: {}", at("cold"));
+    assert!(at("cold") >= 1, "never below one unit");
 }
