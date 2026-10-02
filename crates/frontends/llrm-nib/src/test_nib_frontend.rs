@@ -2004,7 +2004,7 @@ fn test_a_loop_through_a_copied_pointer_converges() {
 
 /// A borrowed view's descriptor is the caller's, never written in the
 /// call: stated as LLVM's `noalias readonly dereferenceable`, for LICM to
-/// hoist its loads.
+/// hoist its loads, and `nocapture`, as `multiply` keeps none of them.
 #[test]
 fn test_a_borrowed_view_states_facts_of_its_descriptor() {
     use llrm_mir::facts::Fact;
@@ -2019,13 +2019,13 @@ fn test_a_borrowed_view_states_facts_of_its_descriptor() {
             .collect()
     };
     for index in 0..multiply.parameters.len() {
-        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10)], "parameter {index}");
+        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10), Fact::NoCapture], "parameter {index}");
     }
 }
 
 /// A reference is not null and points at all it borrows; a shared one is
-/// read only. Not that nothing else reaches it: `bump` may write the module
-/// variable `g` it was lent, so no `noalias`.
+/// read only; `bump` keeps neither beyond its call. Nothing else reaches
+/// them (the checker refuses a lend `bump` could write), so `noalias`.
 #[test]
 fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
     use llrm_mir::facts::Fact;
@@ -2041,8 +2041,8 @@ fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
             .map(|one| one.fact)
             .collect()
     };
-    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias]);
-    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias]);
+    assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias, Fact::NoCapture]);
+    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias, Fact::NoCapture]);
 }
 
 /// `for i in 0..n` adds one to a counter that is below `n`: it cannot wrap,
