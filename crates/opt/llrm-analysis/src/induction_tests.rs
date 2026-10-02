@@ -1545,3 +1545,214 @@ fn test_recurrences_built_in_another_order_are_equal() {
     assert!(first.is_some());
     assert_eq!(first, second);
 }
+
+/// An 8-bit counter from `start` by `step`, ended by `!=` against `bound`,
+/// tested `shape` (pre, post or post-stepped); the function returns its trips.
+fn tested_for_equality(shape: &str, step: i64, scale: u32) -> Parsed {
+    let (start, bound) = if scale == 0 { ("%a".to_owned(), "%b".to_owned()) } else { ("%s".to_owned(), "%e".to_owned()) };
+    let lead = if scale == 0 { String::new() } else { format!("  %s = shl i8 %a, {scale}\n  %e = shl i8 %b, {scale}\n") };
+    let body = match shape {
+        "pre" => format!(
+            "b1:
+  %i = phi i8 [ {start}, %b0 ], [ %next, %b2 ]
+  %n = phi i8 [ 0, %b0 ], [ %n1, %b2 ]
+  %c = icmp ne i8 %i, {bound}
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add i8 %i, {step}
+  %n1 = add i8 %n, 1
+  br label %b1
+
+b3:
+  ret i8 %n
+"
+        ),
+        _ => {
+            let tested = if shape == "post-stepped" { "%next" } else { "%i" };
+            format!(
+                "b1:
+  %i = phi i8 [ {start}, %b0 ], [ %next, %b1 ]
+  %n = phi i8 [ 0, %b0 ], [ %n1, %b1 ]
+  %next = add i8 %i, {step}
+  %n1 = add i8 %n, 1
+  %c = icmp ne i8 {tested}, {bound}
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i8 %n1
+"
+            )
+        }
+    };
+    Parsed::new(&format!("define i8 @f(i8 %a, i8 %b) {{\nb0:\n{lead}  br label %b1\n\n{body}}}\n"))
+}
+
+/// `trips` of `proof` at `a` and `b`, evaluated: the instructions it would place, run on numbers.
+fn evaluated_trips(parsed: &Parsed, proof: &CountedLoop, a: u128, b: u128, scale: u32) -> Option<u128> {
+    let env = |name: &str| -> u128 {
+        match name {
+            "a" => a,
+            "b" => b,
+            "s" => (a << scale) & 0xFF,
+            "e" => (b << scale) & 0xFF,
+            other => panic!("%{other}"),
+        }
+    };
+    let number = |one: &AffineOperand| match one {
+        AffineOperand::Const(known) => known.n.clone(),
+        AffineOperand::Value(value, _) => BigInt::from(env(parsed.function().value(*value).name.as_deref().expect("a named value"))),
+    };
+    let mut computed = |kind: BinaryOp, args: Vec<AffineOperand>| {
+        let (x, y) = (number(&args[0]), number(&args[1]));
+        let result = match kind {
+            BinaryOp::Add => x + y,
+            BinaryOp::Sub => x - y,
+            BinaryOp::Mul => x * y,
+            BinaryOp::And => x & y,
+            BinaryOp::LShr => x >> usize::try_from(y).unwrap(),
+            other => panic!("{other:?}"),
+        };
+        AffineOperand::constant(result, 8)
+    };
+    match trips(proof, &mut computed)? {
+        AffineOperand::Const(known) => u128::try_from(known.n).ok(),
+        value @ AffineOperand::Value(..) => u128::try_from(number(&value)).ok(),
+    }
+}
+
+/// A loop ended by `!=` against an invariant, with a symbolic start or bound, any step,
+/// and any shape was uncounted: after lsr every `for x in xs` is `iv.next != 0` from
+/// `-2 * len`. Its count is where `start + k * step` first meets the bound,
+/// solved modulo the width and proved by what the low bits of the distance are, and
+/// it is what the loop makes for every input the loop ends on.
+#[test]
+fn test_a_loop_tested_for_equality_is_counted_by_solving_for_the_bound() {
+    let mut checked = 0;
+    for shape in ["pre", "post", "post-stepped"] {
+        for (step, scale) in [(1, 0), (-1, 0), (3, 0), (-5, 0), (2, 1), (-2, 1), (4, 2), (6, 1), (-12, 2)] {
+            let parsed = tested_for_equality(shape, step, scale);
+            let proofs = parsed.counted(false);
+            let proof = proofs.iter().find(|one| one.test == IntPredicate::Ne).unwrap_or_else(|| panic!("{shape} step {step} scale {scale}: no proof"));
+            assert_eq!((proof.posttested, proof.stepped), (shape != "pre", shape == "post-stepped"), "{shape}");
+            for a in (0..256).step_by(7) {
+                for b in (0..256).step_by(5) {
+                    // Where the loop never ends there is nothing to count.
+                    let Some(actual) = parsed.run(&[(a, 8), (b, 8)], 3_000) else { continue };
+                    let counted = evaluated_trips(&parsed, proof, a as u128, b as u128, scale).expect("trips are placed");
+                    assert_eq!(counted & 0xFF, actual & 0xFF, "{shape} step {step} scale {scale} a {a} b {b}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 1_000, "{checked} runs");
+}
+
+/// Where the step is even and nothing says the distance is a multiple of it,
+/// the loop may never end: no count.
+#[test]
+fn test_a_step_the_distance_may_not_divide_has_no_equality_count() {
+    for shape in ["pre", "post", "post-stepped"] {
+        let parsed = tested_for_equality(shape, 2, 0);
+        assert!(parsed.counted(false).iter().all(|one| one.test != IntPredicate::Ne), "{shape}");
+    }
+}
+
+/// `for x in xs` after lsr, as the pipeline leaves it: `iv` from `-(len << 1)`
+/// by 2, `iv.next != 0` after each trip. The loop makes `len` trips.
+#[test]
+fn test_the_loop_lsr_leaves_for_a_slice_makes_its_length_in_trips() {
+    let parsed = Parsed::new(
+        "define i16 @f(ptr %p, i16 %len) {
+b1:
+  %shifted = shl i16 %len, 1
+  %start = sub i16 0, %shifted
+  %empty = icmp ule i16 %len, 0
+  br i1 %empty, label %b5, label %b3
+
+b3:
+  %sum = phi i16 [ %next_sum, %b3 ], [ 0, %b1 ]
+  %iv = phi i16 [ %next, %b3 ], [ %start, %b1 ]
+  %at = getelementptr i8, ptr %p, i16 %iv
+  %v = load i16, ptr %at
+  %next_sum = add i16 %sum, %v
+  %next = add i16 %iv, 2
+  %more = icmp ne i16 %next, 0
+  br i1 %more, label %b3, label %b5
+
+b5:
+  %r = phi i16 [ 0, %b1 ], [ %next_sum, %b3 ]
+  ret i16 %r
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("one proof: {proofs:?}") };
+    assert!(proof.posttested && proof.stepped && proof.test == IntPredicate::Ne);
+    let len = parsed.value("len");
+    for n in [1_i128, 2, 7, 1000, 32767] {
+        let number = |one: &AffineOperand| match one {
+            AffineOperand::Const(known) => known.n.clone(),
+            AffineOperand::Value(value, _) if *value == len => BigInt::from(n),
+            AffineOperand::Value(value, _) if *value == parsed.value("start") => BigInt::from(masked(&BigInt::from(-2 * n), 16)),
+            other => panic!("{other:?}"),
+        };
+        let mut computed = |kind: BinaryOp, args: Vec<AffineOperand>| {
+            let (x, y) = (number(&args[0]), number(&args[1]));
+            let result = match kind {
+                BinaryOp::Add => x + y,
+                BinaryOp::Sub => x - y,
+                BinaryOp::And => x & y,
+                BinaryOp::LShr => x >> usize::try_from(y).unwrap(),
+                BinaryOp::Mul => x * y,
+                other => panic!("{other:?}"),
+            };
+            AffineOperand::constant(result, 16)
+        };
+        let count = match trips(proof, &mut computed).expect("a count") {
+            AffineOperand::Const(known) => known.n,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(count, BigInt::from(n), "len {n}");
+    }
+}
+
+/// Every loop of the optimized corpus in `LOOPS_CORPUS` (a directory of
+/// `optimized/*.ll`), sorted by how far its trips are known: the table the
+/// counting is measured by. `cargo test -- --ignored loop_count_table --nocapture`.
+#[test]
+#[ignore = "a measurement, not a check: it reads a corpus directory"]
+fn loop_count_table() {
+    let Ok(root) = std::env::var("LOOPS_CORPUS") else { return };
+    let mut paths: Vec<_> = std::fs::read_dir(std::path::Path::new(&root).join("optimized")).unwrap().map(|entry| entry.unwrap().path()).collect();
+    paths.sort();
+    let (mut constant, mut symbolic, mut uncounted, mut no_counter, mut programs) = (0, 0, 0, 0, 0);
+    for path in paths {
+        let Ok(module) = llrm_mir::parse::module(&std::fs::read_to_string(&path).unwrap()) else { continue };
+        programs += 1;
+        let layout = layout(&module);
+        for (_, global, function) in module.functions().filter(|(_, _, one)| one.entry().is_some()) {
+            let gname = global.name.clone();
+            let unit = Unit::of(&module, &layout, function);
+            for loop_ in unit.shape().loops.iter() {
+                let proofs = counted_unless_stopped(&unit, loop_, None, false);
+                let placed = |proof: &CountedLoop| proof.count.is_some() || trips(proof, &mut |_, args| args[0].clone()).is_some();
+                if proofs.iter().any(|proof| proof.count.is_some()) {
+                    constant += 1;
+                } else if proofs.iter().any(placed) {
+                    symbolic += 1;
+                } else if !basics(&unit, loop_).is_empty() || !pointers(&unit, loop_).is_empty() {
+                    uncounted += 1;
+                    if std::env::var("LOOPS_SHOW").is_ok() {
+                        let counters = basics(&unit, loop_).values().map(|one| format!("{:?}+{:?}", one.start, one.step)).collect::<Vec<_>>();
+                        eprintln!("uncounted {} {}: {}", path.file_stem().unwrap().to_string_lossy(), gname.as_deref().unwrap_or("?"), counters.join(" "));
+                    }
+                } else {
+                    no_counter += 1;
+                }
+            }
+        }
+    }
+    eprintln!("loops in {programs} programs: constant {constant}, symbolic {symbolic}, counter but uncounted {uncounted}, no counter {no_counter}");
+}

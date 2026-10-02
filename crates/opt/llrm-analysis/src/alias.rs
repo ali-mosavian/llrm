@@ -1476,8 +1476,9 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
             let op = function.instruction(inst);
             let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
             let (Opcode::Binary(kind), [left, right], Some(width)) = (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value))) else { continue };
+            // A value nothing is known of is a multiple of 1: `x << 1` is a multiple of 2 all the same.
             let fact = |one: Operand| match one {
-                Operand::Value(source) => result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))),
+                Operand::Value(source) => Some(result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))).unwrap_or_else(|| (BigInt::from(1), BigInt::from(0)))),
                 _ => unit.int_constant(one).map(|n| (BigInt::from(0), BigInt::from(n))),
             };
             let (Some(mut a), Some(mut b)) = (fact(*left), fact(*right)) else { continue };
@@ -1501,6 +1502,9 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
                 }
                 _ => continue,
             };
+            if found.0 == BigInt::from(1) {
+                continue;
+            }
             result.insert(value, found);
             changed = true;
         }
