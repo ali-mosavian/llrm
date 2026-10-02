@@ -8,5 +8,3 @@
 pub use llrm_bcmachine::frontends::bc::{
     blocks, declen, extent, fppatches, raising_control, stack,
 };
-
-pub mod raising_floats;

@@ -12,7 +12,6 @@ use iced_x86::{Code, Register};
 
 use crate::objectfile::module::{Addr, Space, far_pointer, frame_relative, literal_only};
 
-
 use crate::frontends::bc::declen::Insn;
 
 /// The seven single-half forms `lift.classify()` recognises.
@@ -360,7 +359,6 @@ mod tests {
     use super::{Decoded, FIXUP, Kind, classify, operand};
     use crate::frontends::bc::declen::{Insn, decode};
     use crate::objectfile::module::{Addr, Space, far_pointer, literal_only};
-    
 
     fn insn(bytes: &[u8]) -> Insn {
         decode(bytes, 0).unwrap()
@@ -666,19 +664,4 @@ mod tests {
             assert_eq!(operand(&decoded, &no_field), Some(wanted));
         }
     }
-}
-
-/// Port of `qbopt/legacy/lift.py:Emitted`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Emitted {
-    pub code: Vec<u8>,
-    /// (offset within `code`, where the operand's field was) for each
-    /// displacement that has to be relocated.
-    pub relocations: Vec<(usize, usize)>,
-}
-
-/// Port of `qbopt/legacy/lift.py:relocated_memory`: a relocated address,
-/// always emitted as zero.
-pub fn relocated_memory(base: Register, segment: Register) -> iced_x86::MemoryOperand {
-    iced_x86::MemoryOperand::new(base, Register::None, 1, 0, 2, false, segment)
 }

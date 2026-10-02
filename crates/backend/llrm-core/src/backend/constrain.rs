@@ -578,8 +578,6 @@ fn _next_value(body: &LirBody) -> u32 {
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_constrain.py`.
-    use std::rc::Rc;
-    use crate::model::mir::MirBody;
 
     use std::collections::BTreeSet;
     use std::sync::Arc;
@@ -590,10 +588,10 @@ mod tests {
     use super::{addressed, constrained, required};
     use crate::backend::cpu::ProfileOrName;
     use crate::backend::frame::Frame;
-    use crate::backend::{allocate, lower, select, spiller, target};
-    use crate::model::ir::nodes::{Node, Opaque};
-    use crate::model::ir::{self, Addr, Effects, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space, St};
-    use crate::model::mir;
+    use crate::backend::{allocate, select, spiller, target};
+
+    use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space, St};
+
     use crate::model::lir::{Insn, LirBlock, LirBody};
 
     fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
@@ -729,138 +727,6 @@ mod tests {
         let emitted = select::emit(what(placed.insns().last().unwrap()), 0, None, false, false, None);
         assert!(emitted.is_some());
         assert_eq!(emitted.unwrap().code, [0xDE, 0x34]); // fidiv word [si]
-    }
-
-    /// D_SURF returned sc_test=-4000: spilling ES left a far load on the old segment.
-    #[test]
-    fn test_spilled_segment_load_still_sets_es() {
-        let segment = mir::Value::new(1, 0xFCC);
-        let cell = mir::Arg::Cell(mir::Cell { r#ref: mir::MemRef::new(Some(Addr::new(Space::Frame, -2)), 2) });
-        let mut op = mir::Op::new(0xFCC, mir::OpCode::Operation(Operation::Move), "mov", vec![segment], vec![]);
-        op.kind = mir::Kind::Load;
-        op.args = vec![cell];
-        op.results = vec![mir::Arg::Held(mir::Held { value: segment, width: 2 })];
-        let context = mir::MirBody::new(0xFCC, vec![mir::MirBlock::new(0xFCC, vec![], vec![op.clone()], vec![])]);
-        let calls = IndexMap::default();
-        let contracts = IndexMap::default();
-        let options = lower::Options { origin: [(segment, Register::ES)].into_iter().collect(), ..Default::default() };
-        let mut lowering = lower::Lowering::new(
-            &Rc::new(MirBody::clone(&context)),
-            BTreeSet::from([segment.id]),
-            &calls,
-            BTreeSet::new(),
-            Some(&contracts),
-            "386",
-            &crate::backend::target::BUILT_IN,
-            options,
-        )
-        .unwrap();
-        let expanded = lowering.expand(&op, true).unwrap();
-        let [load] = expanded.as_slice() else { panic!("{} instructions", expanded.len()) };
-        let far = Mem {
-            selector: Some(Held { value: segment.id, width: 2 }),
-            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, 0x10) }), 2)
-        };
-        let use_ =
-            _insn(semantics(Operation::Move, "mov", vec![Loc::Mem(far)], vec![imm(7, 2)]), &[], &[segment.id], 0xFCF);
-        let (body, pins) = constrained(&_body(vec![(**load).clone(), use_]), Some(&IndexMap::default()));
-        let (spilled, _) = spiller::spilled(&body, &BTreeSet::from([segment.id]), Some(&mut Frame::new(0))).unwrap();
-        let wanted = merged(&pins, &required(&spilled));
-        let placed = allocate::applied(&spilled, &allocated(&spilled, &wanted)).unwrap();
-        let decoded: Vec<iced_x86::Instruction> = placed
-            .insns()
-            .iter()
-            .map(|one| {
-                let code = select::emit(what(one), 0, None, false, false, None).expect("encodes").code;
-                iced_x86::Decoder::new(16, &code, iced_x86::DecoderOptions::NONE).decode()
-            })
-            .collect();
-        let [reload, access] = decoded.as_slice() else { panic!("{} instructions", decoded.len()) };
-        assert!(target::BUILT_IN.selectors.contains(&reload.op0_register()));
-        assert_eq!(
-            access.segment_prefix(),
-            reload.op0_register(),
-            "the far access reads a segment the reload did not set"
-        );
-    }
-
-    /// D_SURF sc_test=-4000: a reused slot selector read through the LRU array's ES.
-    ///
-    /// Only `selected_site=False`: the selected site is `Lowering`'s dict form of
-    /// `absorbed`, which is not ported.
-    #[test]
-    fn test_far_read_restores_its_forwarded_selector() {
-        let (segment, result) = (mir::Value::new(1, 0), mir::Value::new(2, 8));
-        let addr = Addr { segment: Register::ES, ..Addr::new(Space::Far, 0) };
-        let reference = mir::MemRef { segment: Some(segment), ..mir::MemRef::new(Some(addr), 2) };
-        let machine = semantics(
-            Operation::Move,
-            "mov",
-            vec![Loc::Reg(Reg { register: Register::AX, width: 2 })],
-            vec![Loc::Mem(Mem { through: Register::BX, ..Mem::new(Some(addr), 2) })],
-        );
-        let mut op = mir::Op::new(8, mir::OpCode::Operation(Operation::Move), "mov", vec![result], vec![segment]);
-        op.kind = mir::Kind::Load;
-        op.args = vec![mir::Arg::Cell(mir::Cell { r#ref: reference.clone() })];
-        op.results = vec![mir::Arg::Held(mir::Held { value: result, width: 2 })];
-        op.loads = vec![reference];
-        op.source_backed = true;
-        op.source = Some(8);
-        op.raised = Some((vec![], vec![]));
-        let context = mir::MirBody::new(0, vec![mir::MirBlock::new(0, vec![], vec![op.clone()], vec![])]);
-        // Python's `SimpleNamespace(semantics=machine)`: only the semantics is read.
-        let node = Node::Opaque(Opaque { semantics: machine, ..Opaque::new(_any_insn(), Effects::no_effect()) });
-        let calls = IndexMap::default();
-        let contracts = IndexMap::default();
-        let options = lower::Options {
-            nodes: [(8, Arc::new(node))].into_iter().collect(),
-            origin: [(segment, Register::ES)].into_iter().collect(),
-            ..Default::default()
-        };
-        let mut lowering = lower::Lowering::new(
-            &Rc::new(MirBody::clone(&context)),
-            BTreeSet::from([1, 2]),
-            &calls,
-            BTreeSet::new(),
-            Some(&contracts),
-            "386",
-            &crate::backend::target::BUILT_IN,
-            options,
-        )
-        .unwrap();
-        let expanded = lowering.expand(&op, true).unwrap();
-        let [read] = expanded.as_slice() else { panic!("{} instructions", expanded.len()) };
-        assert!(read.uses.contains(&segment.id), "the selector must remain live until the far read");
-        let saved = _insn(
-            semantics(
-                Operation::Move,
-                "mov",
-                vec![held(1, 2)],
-                vec![Loc::Mem(Mem { through: Register::BP, ..Mem::new(Some(Addr::new(Space::Frame, -2)), 2) })],
-            ),
-            &[1],
-            &[],
-            0x100,
-        );
-        let overwrite = _insn(
-            semantics(
-                Operation::Move,
-                "mov",
-                vec![Loc::Reg(Reg { register: Register::ES, width: 2 })],
-                vec![Loc::Reg(Reg { register: Register::DX, width: 2 })],
-            ),
-            &[],
-            &[],
-            4,
-        );
-        let cx = pinned(&[(1, Register::CX)]);
-        let body = allocate::explicit_selectors(&_body(vec![saved, overwrite, (**read).clone()]), Some(&cx), &target::BUILT_IN);
-        let (body, pins) = constrained(&body, Some(&cx));
-        let placed = allocate::applied(&body, &allocated(&body, &merged(&cx, &pins))).unwrap();
-        let insns = placed.insns();
-        let restore = what(&insns[insns.len() - 2]);
-        assert_eq!(restore.dests, [Loc::Reg(Reg { register: Register::ES, width: 2 })]);
-        assert_eq!(restore.sources, [Loc::Reg(Reg { register: Register::CX, width: 2 })]);
     }
 
     fn _any_insn() -> crate::frontends::bc::declen::Insn {

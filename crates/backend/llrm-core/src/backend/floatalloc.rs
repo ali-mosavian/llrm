@@ -17,7 +17,7 @@ use crate::backend::spillplacement;
 use crate::backend::constpool::Pool;
 use crate::backend::floatassign;
 use crate::backend::frame::Frame;
-use crate::backend::lower::Unlowered;
+use crate::backend::floatregions::Unlowered;
 use crate::backend::select;
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics, St};
 use crate::model::lir::{Insn, LirBlock, LirBody};

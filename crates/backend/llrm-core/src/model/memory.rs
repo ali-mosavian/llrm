@@ -221,18 +221,6 @@ impl Slice {
             .expect("the fixed whole-object slice is valid")
     }
 
-    /// Direct port of `Slice.shifted`.
-    pub fn shifted(&self, amount: i64) -> Self {
-        Self::new(
-            self.object.clone(),
-            self.low + amount,
-            self.high + amount,
-            self.stride,
-            self.width,
-        )
-        .expect("shifting a valid slice retains its positive shape")
-    }
-
     /// Direct port of `Slice.intersects`.
     pub fn intersects(&self, other: &Self) -> bool {
         if !objects_may_alias(&self.object, &other.object) {
@@ -298,14 +286,6 @@ pub struct Provenance {
 }
 
 impl Provenance {
-    /// Direct port of `Provenance.one` with Python's default whole-object
-    /// bounds and no restrict roots.
-    pub fn one(object: MemoryObject) -> Self {
-        Self {
-            slices: BTreeSet::from([Slice::whole(object)]),
-            restrict: BTreeSet::new(),
-        }
-    }
 
     /// `Provenance.one` with its explicit slice and restrict arguments.
     pub fn one_with_slice(
@@ -320,30 +300,6 @@ impl Provenance {
             slices: BTreeSet::from([Slice::new(object, low, high, stride, width)?]),
             restrict,
         })
-    }
-
-    /// Direct port of `Provenance.shifted`.
-    pub fn shifted(&self, amount: i64) -> Self {
-        let slices = self
-            .slices
-            .iter()
-            .map(|one| {
-                let whole = one.low == WHOLE_LOW && one.high == WHOLE_HIGH;
-                let bounded_whole = one
-                    .object
-                    .extent
-                    .is_some_and(|extent| one.low == 0 && one.high == extent);
-                if whole || bounded_whole {
-                    one.clone()
-                } else {
-                    one.shifted(amount)
-                }
-            })
-            .collect();
-        Self {
-            slices,
-            restrict: self.restrict.clone(),
-        }
     }
 
     /// Direct port of `Provenance.intersects`.

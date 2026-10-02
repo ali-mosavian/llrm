@@ -1042,7 +1042,6 @@ define double @f(double %x) addrspace(1) {
     );
 }
 
-
 /// fptosi is fisttp; fptoui, which x87 cannot store, is a dword's low word.
 #[test]
 fn test_a_float_to_an_integer_is_stored_toward_zero() {
@@ -3030,7 +3029,6 @@ define void @f(i16 %a, i16 %b, i16 %c, i16 %d, ptr %p) addrspace(1) {
     assert!(!body.iter().any(|one| one.contains("[bp-")), "{body:#?}");
 }
 
-
 /// A spill reload whose only reader is a push is the push's memory
 /// operand: qcport's savegame_load reloaded each spilled argument into ax to
 /// push it, a byte more each than BCC's `push [bp-n]`.
@@ -3639,4 +3637,62 @@ define i16 @f(ptr addrspace(1) %p) addrspace(1) {
     let lines = listing(text, "f");
     assert!(lines.iter().any(|one| one.starts_with("lfs ") || one.starts_with("mov fs, ")), "{lines:?}");
     assert!(lines.contains(&"rep movs dword ptr es:[di], dword ptr fs:[si]".to_owned()), "{lines:?}");
+}
+
+/// `@f` of forty volatile stores, apart, to `@g` that a branch at its entry may
+/// skip: more than a short branch reaches.
+fn far_branch_body() -> String {
+    let stores: String = (0..40).map(|at| format!("  %p{at} = getelementptr i8, ptr @g, i16 {}\n  store volatile i16 {at}, ptr %p{at}\n", 4 * at)).collect();
+    format!("@g = global [160 x i8] zeroinitializer\ndefine i16 @f(i16 %c) addrspace(1) {{\nentry:\n  %z = icmp eq i16 %c, 0\n  br i1 %z, label %skip, label %body\nbody:\n{stores}  br label %skip\nskip:\n  ret i16 %c\n}}\n")
+}
+
+/// The code segment of `text`'s object, decoded, with the offsets its fixups patch.
+fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<usize>) {
+    use llrm_omf::omf;
+    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
+    let bytes = crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    let records = omf::parse(&bytes).expect("parses");
+    let (code, _, size) = omf::code_segment(&records).expect("a code segment");
+    let image = omf::segment_image(&records, code, size);
+    let mut decoder = iced_x86::Decoder::with_ip(16, &image, 0, iced_x86::DecoderOptions::NONE);
+    let (mut insns, mut fields) = (Vec::new(), Vec::new());
+    while decoder.can_decode() {
+        let insn = decoder.decode();
+        let offsets = decoder.get_constant_offsets(&insn);
+        if offsets.has_displacement() {
+            fields.push(insn.ip() as usize + offsets.displacement_offset());
+        }
+        insns.push(insn);
+    }
+    let fixed = omf::fixups(&records).into_iter().filter(|one| one.seg == Some(code)).map(|one| one.offset as usize).collect();
+    (insns, fields, fixed)
+}
+
+/// A branch past a short branch's reach is encoded near and lands on its
+/// target, the code it skips intact. Replaces layout_tests'
+/// `test_fallthrough_relaxation_preserves_targets_and_intervening_data`, which
+/// checked relaxation through BC's raise.
+#[test]
+fn test_a_branch_past_a_short_reach_grows_and_lands_on_its_target() {
+    let (insns, _, _) = decoded_object(&far_branch_body());
+    assert!(!insns.iter().any(iced_x86::Instruction::is_invalid));
+    let starts: Vec<u64> = insns.iter().map(iced_x86::Instruction::ip).collect();
+    let branch = insns.iter().find(|one| one.flow_control() == iced_x86::FlowControl::ConditionalBranch).expect("the entry's branch");
+    assert_eq!(branch.op0_kind(), iced_x86::OpKind::NearBranch16);
+    assert!(branch.len() > 2, "a short branch cannot reach: {branch}");
+    let target = branch.near_branch_target();
+    assert!(target - branch.next_ip() > 127, "{branch} skips {} bytes", target - branch.next_ip());
+    assert!(starts.contains(&target), "{branch} lands inside an instruction");
+    let skipped = insns.iter().filter(|one| one.ip() >= branch.next_ip() && one.ip() < target);
+    assert_eq!(skipped.filter(|one| one.mnemonic() == iced_x86::Mnemonic::Mov && one.op0_kind() == iced_x86::OpKind::Memory).count(), 40);
+}
+
+/// Every relocated field is patched where its instruction landed, after the
+/// branch before it grew. Replaces layout_tests'
+/// `test_a_moved_operation_keeps_its_fixup`, which checked it through BC's raise.
+#[test]
+fn test_every_relocated_field_moves_with_its_instruction() {
+    let (_, fields, fixed) = decoded_object(&far_branch_body());
+    assert_eq!(fixed.len(), 40, "{fixed:?}");
+    assert!(fixed.iter().all(|at| fields.contains(at)), "fixups {fixed:?}, fields {fields:?}");
 }

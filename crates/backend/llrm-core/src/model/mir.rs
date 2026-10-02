@@ -9,22 +9,18 @@
 //! map ports, not to this public schema slice.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
 use num_bigint::BigInt;
 
-use crate::analysis::loops;
 use crate::model::floating::Semantics as FloatingSemantics;
 use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::memory::Provenance;
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::{self, Repr};
 use iced_x86::Register;
-
-mod raise;
-pub use raise::*;
 
 /// The registers that become values, rooted.
 pub const TRACKED: [Register; 6] = llrm_x86_code16::GENERAL;
@@ -97,13 +93,6 @@ pub struct IntegerRange {
 }
 
 impl IntegerRange {
-    pub fn new(low: impl Into<BigInt>, high: impl Into<BigInt>, width: u32) -> Self {
-        Self {
-            low: low.into(),
-            high: high.into(),
-            width,
-        }
-    }
 }
 
 /// Operations no single machine instruction computes.
@@ -293,15 +282,6 @@ pub struct Symbol {
 }
 
 impl Symbol {
-    pub const fn new(space: Space, index: i64, offset: i64, width: u32) -> Self {
-        Self {
-            space,
-            index,
-            offset,
-            width,
-            addend: 0,
-        }
-    }
 }
 
 /// Direct port of `qbopt.model.mir:FrameAddress`.
@@ -313,13 +293,6 @@ pub struct FrameAddress {
 }
 
 impl FrameAddress {
-    pub const fn new(offset: i64, width: u32) -> Self {
-        Self {
-            offset,
-            width,
-            extent: None,
-        }
-    }
 }
 
 /// The run-time selector of the current activation's frame segment.
@@ -367,10 +340,6 @@ pub struct Opaque {
 }
 
 impl Opaque {
-    /// Historical machine payload for the lowering boundary only.
-    pub const fn machine_payload(&self) -> Option<&Loc> {
-        self.what.as_ref()
-    }
 }
 
 /// Direct port of `qbopt.model.mir:Arg`.
@@ -427,77 +396,7 @@ pub fn kind_of(what: &Semantics, args: &[Arg], results: &[Arg]) -> Kind {
     }
 }
 
-/// Direct port of `qbopt.model.mir:WHOLE_FRAME`: every BP-relative frame byte.
-/// A flags value's tracked variable. Direct port of `mir.FLAGS`.
-pub const FLAGS: Register = Register::None;
-
-/// Which root a restore reads and which it writes the high half into, by
-/// `ir.FIXUP`'s pair numbering. Direct port of `mir.RESTORE_PAIR`.
-pub fn restore_pair(pair: i64) -> Option<(Register, Register)> {
-    match pair {
-        0 => Some((Register::EAX, Register::EDX)),
-        1 => Some((Register::ECX, Register::EBX)),
-        _ => None,
-    }
-}
-
-/// Each contract register at its own name. Direct port of `mir.AS_NAMED`.
-pub fn as_named(one: crate::abi::runtime::Reg) -> Option<Register> {
-    use crate::abi::runtime::Reg;
-    match one {
-        Reg::Ax => Some(Register::AX),
-        Reg::Bx => Some(Register::BX),
-        Reg::Cx => Some(Register::CX),
-        Reg::Dx => Some(Register::DX),
-        Reg::Si => Some(Register::SI),
-        Reg::Di => Some(Register::DI),
-        Reg::Flags => Some(FLAGS),
-        _ => None,
-    }
-}
-
 pub const WHOLE_FRAME: (Addr, u32) = (Addr::new(Space::Frame, -(1 << 15)), 1 << 16);
-
-/// Direct port of `qbopt.model.mir:same_bytes`.
-///
-/// This is the forwarding question: both references must certainly name the
-/// same bytes. Its negation is not a disjointness proof.
-pub fn same_bytes(one: &MemRef, other: &MemRef) -> bool {
-    if matches!(
-        (&one.provenance, &other.provenance),
-        (Some(one), Some(other)) if one != other
-    ) {
-        return false;
-    }
-    if one.pointer || other.pointer {
-        return one.pointer
-            && other.pointer
-            && one.base.is_some()
-            && one.base == other.base
-            && one.width == other.width
-            && one.addr.is_none()
-            && other.addr.is_none()
-            && one.segment.is_none()
-            && other.segment.is_none()
-            && one.base_width == other.base_width;
-    }
-
-    let one = symbolic_ref(one);
-    let other = symbolic_ref(other);
-    let (Some(one_addr), Some(other_addr)) = (one.addr, other.addr) else {
-        return false;
-    };
-    if one_addr.space == Space::Far
-        && one.segment.is_none()
-        && !(one.allocation.is_some() && one.allocation == other.allocation)
-    {
-        return false;
-    }
-    if one.width != other.width || one.base != other.base || one.segment != other.segment {
-        return false;
-    }
-    one_addr == other_addr
-}
 
 /// Direct port of `qbopt.model.mir:_symbolic_ref`.
 ///
@@ -597,75 +496,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Self; 67] = [
-        Self::Add,
-        Self::Sub,
-        Self::AddCarry,
-        Self::SubBorrow,
-        Self::Increment,
-        Self::Decrement,
-        Self::Mul,
-        Self::Smulhi,
-        Self::FixedMul,
-        Self::FixedDiv,
-        Self::Div,
-        Self::Rem,
-        Self::Divmod,
-        Self::Udivmod,
-        Self::And,
-        Self::Or,
-        Self::Xor,
-        Self::Shl,
-        Self::Shr,
-        Self::Sar,
-        Self::Neg,
-        Self::Not,
-        Self::Lt,
-        Self::Le,
-        Self::Gt,
-        Self::Ge,
-        Self::Eq,
-        Self::Ne,
-        Self::Below,
-        Self::BelowEq,
-        Self::Above,
-        Self::AboveEq,
-        Self::Copy,
-        Self::Load,
-        Self::Store,
-        Self::Convert,
-        Self::SignExtend,
-        Self::ZeroExtend,
-        Self::Address,
-        Self::PtrOffset,
-        Self::Fill,
-        Self::PortIn,
-        Self::PortOut,
-        Self::Call,
-        Self::Branch,
-        Self::Switch,
-        Self::Jump,
-        Self::Return,
-        Self::Escape,
-        Self::Fadd,
-        Self::Fsub,
-        Self::Fmul,
-        Self::Fdiv,
-        Self::Fneg,
-        Self::Fabs,
-        Self::Fsqrt,
-        Self::Fload,
-        Self::Fstore,
-        Self::Fcompare,
-        Self::Fcheck,
-        Self::Arg,
-        Self::Result,
-        Self::Join,
-        Self::Extract,
-        Self::Concat,
-        Self::Opaque,
-        Self::Nothing,
-    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -821,42 +651,6 @@ impl Repr for Kind {
     }
 }
 
-/// `a test b` is `b MIRRORED[test] a`.  `MIRRORED.get(test)`.
-#[allow(non_snake_case)]
-pub fn MIRRORED(test: Kind) -> Option<Kind> {
-    Some(match test {
-        Kind::Eq => Kind::Eq,
-        Kind::Ne => Kind::Ne,
-        Kind::Lt => Kind::Gt,
-        Kind::Gt => Kind::Lt,
-        Kind::Le => Kind::Ge,
-        Kind::Ge => Kind::Le,
-        Kind::Below => Kind::Above,
-        Kind::Above => Kind::Below,
-        Kind::BelowEq => Kind::AboveEq,
-        Kind::AboveEq => Kind::BelowEq,
-        _ => return None,
-    })
-}
-
-/// `not (a test b)` is `a NEGATED[test] b`.  `NEGATED.get(test)`.
-#[allow(non_snake_case)]
-pub fn NEGATED(test: Kind) -> Option<Kind> {
-    Some(match test {
-        Kind::Eq => Kind::Ne,
-        Kind::Ne => Kind::Eq,
-        Kind::Lt => Kind::Ge,
-        Kind::Ge => Kind::Lt,
-        Kind::Le => Kind::Gt,
-        Kind::Gt => Kind::Le,
-        Kind::Below => Kind::AboveEq,
-        Kind::AboveEq => Kind::Below,
-        Kind::BelowEq => Kind::Above,
-        Kind::Above => Kind::BelowEq,
-        _ => return None,
-    })
-}
-
 impl fmt::Display for Kind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
@@ -938,21 +732,10 @@ impl<K, V> OrderedMap<K, V> {
         self.entries.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&K, &V)> {
         self.entries.iter().map(|(key, value)| (key, value))
     }
 
-    pub fn keys(&self) -> impl ExactSizeIterator<Item = &K> {
-        self.entries.iter().map(|(key, _)| key)
-    }
-
-    pub fn values(&self) -> impl ExactSizeIterator<Item = &V> {
-        self.entries.iter().map(|(_, value)| value)
-    }
 }
 
 impl<K: Eq, V> OrderedMap<K, V> {
@@ -960,10 +743,6 @@ impl<K: Eq, V> OrderedMap<K, V> {
         self.entries
             .iter()
             .find_map(|(candidate, value)| (candidate == key).then_some(value))
-    }
-
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.get(key).is_some()
     }
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -978,12 +757,6 @@ impl<K: Eq, V> OrderedMap<K, V> {
         None
     }
 
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.entries
-            .iter()
-            .position(|(candidate, _)| candidate == key)
-            .map(|index| self.entries.remove(index).1)
-    }
 }
 
 impl<K, V> Default for OrderedMap<K, V> {
@@ -1216,10 +989,6 @@ impl MirBlock {
         }
     }
 
-    /// Python's `replace(block, ops=ops)`: the old ops are never copied.
-    pub fn with_ops(&self, ops: Vec<Op>) -> Self {
-        Self { at: self.at, phis: self.phis.clone(), ops, succ: self.succ.clone(), cold: self.cold }
-    }
 }
 
 /// One source-neutral MIR body.  Direct port of `qbopt.model.mir:MirBody`.
@@ -1256,58 +1025,7 @@ pub struct MirBody {
 }
 
 impl MirBody {
-    /// Constructs Python's two-required-field `MirBody` form.
-    pub fn new(entry: i64, blocks: Vec<MirBlock>) -> Self {
-        Self {
-            entry,
-            blocks,
-            initial: Vec::new(),
-            repetitions: Vec::new(),
-            cloned: false,
-            sealed: false,
-            stack_in_data: false,
-            pointer_values: BTreeSet::new(),
-            pointer_seeds: OrderedMap::new(),
-            integer_ranges: OrderedMap::new(),
-            loop_trip_counts: Vec::new(),
-        }
-    }
 
-    /// Python's `replace(body, blocks=blocks)`: the old blocks are never copied.
-    pub fn with_blocks(&self, blocks: Vec<MirBlock>) -> Self {
-        Self {
-            entry: self.entry,
-            blocks,
-            initial: self.initial.clone(),
-            repetitions: self.repetitions.clone(),
-            cloned: self.cloned,
-            sealed: self.sealed,
-            stack_in_data: self.stack_in_data,
-            pointer_values: self.pointer_values.clone(),
-            pointer_seeds: self.pointer_seeds.clone(),
-            integer_ranges: self.integer_ranges.clone(),
-            loop_trip_counts: self.loop_trip_counts.clone(),
-        }
-    }
-
-    /// Python `MirBody.block`.
-    pub fn block(&self, at: i64) -> Option<&MirBlock> {
-        self.blocks.iter().find(|block| block.at == at)
-    }
-
-    /// Python `MirBody.values`, preserving block/phi/op declaration order.
-    pub fn values(&self) -> Vec<Value> {
-        self.blocks
-            .iter()
-            .flat_map(|block| {
-                block
-                    .phis
-                    .iter()
-                    .map(|phi| phi.result)
-                    .chain(block.ops.iter().flat_map(|op| op.defines.iter().copied()))
-            })
-            .collect()
-    }
 }
 
 // Proof caches key on a body's identity, so a shared body must not change:
@@ -1317,139 +1035,11 @@ const _: () = {
     frozen::<MirBody>();
 };
 
-/// Backend-only placement history, outside public MIR semantics.
-/// Direct port of `qbopt.model.mir:AllocationHints`.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AllocationHints {
-    pub origins: OrderedMap<u32, iced_x86::Register>,
-    pub pins: OrderedMap<(u32, usize), iced_x86::Register>,
-}
-
-impl AllocationHints {
-    pub fn new() -> Self {
-        Self {
-            origins: OrderedMap::new(),
-            pins: OrderedMap::new(),
-        }
-    }
-
-    /// Python `AllocationHints.origin_of`.
-    pub fn origin_of(&self, value: Value) -> Option<iced_x86::Register> {
-        self.origins.get(&value.variable).copied()
-    }
-
-    /// Python `AllocationHints.pin_of`.
-    pub fn pin_of(&self, operation: &Op, result: usize) -> Option<iced_x86::Register> {
-        operation
-            .source
-            .and_then(|id| self.pins.get(&(id, result)).copied())
-    }
-}
-
-impl Default for AllocationHints {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Python `consumed`: all values actually read by one operation.
-pub fn consumed(op: &Op) -> BTreeSet<Value> {
-    let mut result = op
-        .uses
-        .iter()
-        .copied()
-        .filter(|value| !op.merges.contains_key(value))
-        .collect::<BTreeSet<_>>();
-    result.extend(op.args.iter().filter_map(|arg| match arg {
-        Arg::Held(held) => Some(held.value),
-        _ => None,
-    }));
-    for arg in op.args.iter().chain(&op.results) {
-        if let Arg::Cell(cell) = arg {
-            result.extend([cell.r#ref.base, cell.r#ref.segment].into_iter().flatten());
-        }
-    }
-    result
-}
-
 /// Python `rewritten`.
 pub fn rewritten(op: &Op) -> bool {
     op.raised
         .as_ref()
         .is_some_and(|raised| (&op.args, &op.results) != (&raised.0, &raised.1))
-}
-
-/// Python `partial`: a result retains bits from its old place.
-pub fn partial(op: &Op) -> bool {
-    let words = op
-        .results
-        .iter()
-        .filter_map(|result| match result {
-            Arg::Held(held) if held.width == 2 => Some(held.value),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    op.merges.values().any(|value| !words.contains(value))
-}
-
-fn arg_width(arg: &Arg) -> u32 {
-    match arg {
-        Arg::Held(value) => value.width,
-        Arg::Const(value) => value.width,
-        Arg::Symbol(value) => value.width,
-        Arg::FrameAddress(value) => value.width,
-        Arg::FrameSelector(value) => value.width,
-        Arg::Cell(_) | Arg::Opaque(_) => 2,
-    }
-}
-
-/// Python `stepping`: `(what it steps, by how much)`, or no affine step.
-pub fn stepping(op: &Op) -> Option<(Arg, Arg)> {
-    if !op.loads.is_empty() || !op.stores.is_empty() {
-        return None;
-    }
-    match op.kind {
-        Kind::Increment if op.args.len() == 1 => Some((
-            op.args[0].clone(),
-            Arg::Const(Const::new(1, arg_width(&op.args[0]))),
-        )),
-        Kind::Decrement if op.args.len() == 1 => Some((
-            op.args[0].clone(),
-            Arg::Const(Const::new(-1, arg_width(&op.args[0]))),
-        )),
-        Kind::Add if op.args.len() == 2 => Some((op.args[0].clone(), op.args[1].clone())),
-        Kind::Sub if op.args.len() == 2 => match &op.args[1] {
-            Arg::Const(value) => Some((
-                op.args[0].clone(),
-                Arg::Const(Const::new(-&value.n, value.width)),
-            )),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Python `exposed`: values observable after control leaves a body.
-pub fn exposed(body: &MirBody) -> BTreeSet<Value> {
-    body.blocks
-        .iter()
-        .filter(|block| block.succ.is_empty())
-        .filter_map(|block| block.ops.last())
-        .flat_map(|op| exit_values(op).iter().copied())
-        .collect()
-}
-
-/// Python `exit_values`: values observable without being operation operands.
-pub fn exit_values(op: &Op) -> &[Value] {
-    &op.exits
-}
-
-/// Python `_IDS = itertools.count(1)`.
-static IDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
-
-/// `next(_IDS)`.
-pub fn next_id() -> u32 {
-    IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Python `_outside`: the frame's bytes no range in `reach` covers, as exclusions.
@@ -1468,156 +1058,6 @@ pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
         out.push((Addr::new(Space::Frame, at), (high - at) as u32));
     }
     out
-}
-
-/// Direct port of `qbopt.model.mir:verify`.
-///
-/// The returned diagnostics establish only Python MIR's three SSA promises:
-/// one definition per value, definitions that dominate uses, and one phi
-/// incoming value per predecessor.  This is intentionally not a structural
-/// or type verifier.
-pub fn verify(body: &MirBody) -> Vec<String> {
-    let dominators = loops::dominators(&body.blocks, Some(body.entry));
-    let mut problems = Vec::new();
-
-    let mut defined_at = BTreeMap::<Value, i64>::new();
-    for block in &body.blocks {
-        for phi in &block.phis {
-            if defined_at.contains_key(&phi.result) {
-                problems.push(format!("{} defined twice", phi.result));
-            }
-            defined_at.insert(phi.result, block.at);
-        }
-        for op in &block.ops {
-            for value in &op.defines {
-                if defined_at.contains_key(value) {
-                    problems.push(format!(
-                        "{} defined twice, at {}",
-                        value,
-                        python_padded_hex(op.at)
-                    ));
-                }
-                defined_at.insert(*value, block.at);
-            }
-        }
-    }
-
-    let predecessors = loops::predecessors(&body.blocks);
-    for block in &body.blocks {
-        for phi in &block.phis {
-            let want = predecessors
-                .get(&block.at)
-                .expect("every supplied block has a predecessor entry")
-                .iter()
-                .filter(|predecessor| body.block(**predecessor).is_some())
-                .copied()
-                .collect::<BTreeSet<_>>();
-            let have = phi.incoming.keys().copied().collect::<BTreeSet<_>>();
-            if have != want {
-                problems.push(format!(
-                    "{} at {} has {}, its predecessors are {}",
-                    phi.result,
-                    python_padded_hex(block.at),
-                    python_hex_list(&have),
-                    python_hex_list(&want)
-                ));
-            }
-            for (came_from, value) in phi.incoming.iter() {
-                if let Some(where_) = defined_at.get(value) {
-                    if !dominators
-                        .get(came_from)
-                        .is_some_and(|dominators| dominators.contains(where_))
-                    {
-                        problems.push(format!(
-                            "{} takes {} from {}, which it does not reach",
-                            phi.result,
-                            value,
-                            python_padded_hex(*came_from)
-                        ));
-                    }
-                }
-            }
-        }
-
-        let mut pending = block
-            .ops
-            .iter()
-            .flat_map(|op| op.defines.iter().copied())
-            .collect::<BTreeSet<_>>();
-        for op in &block.ops {
-            for value in &op.uses {
-                let Some(where_) = defined_at.get(value) else {
-                    continue;
-                };
-                if pending.contains(value) {
-                    problems.push(format!(
-                        "{} uses {} before its definition in {}",
-                        python_padded_hex(op.at),
-                        value,
-                        python_padded_hex(block.at)
-                    ));
-                } else if !dominators
-                    .get(&block.at)
-                    .is_some_and(|dominators| dominators.contains(where_))
-                {
-                    problems.push(format!(
-                        "{} uses {}, defined in {}, which does not dominate it",
-                        python_padded_hex(op.at),
-                        value,
-                        python_padded_hex(*where_)
-                    ));
-                }
-            }
-            for value in &op.defines {
-                pending.remove(value);
-            }
-            for value in &op.exits {
-                if let Some(where_) = defined_at.get(value) {
-                    if !dominators
-                        .get(&block.at)
-                        .is_some_and(|dominators| dominators.contains(where_))
-                    {
-                        problems.push(format!(
-                            "{} exposes {}, defined in {}, which does not dominate it",
-                            python_padded_hex(op.at),
-                            value,
-                            python_padded_hex(*where_)
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    problems
-}
-
-fn python_hex_list(values: &BTreeSet<i64>) -> String {
-    let mut values = values
-        .iter()
-        .map(|value| python_hex(*value))
-        .collect::<Vec<_>>();
-    values.sort();
-    let values = values
-        .iter()
-        .map(|value| format!("'{value}'"))
-        .collect::<Vec<_>>();
-    format!("[{}]", values.join(", "))
-}
-
-fn python_hex(value: i64) -> String {
-    if value < 0 {
-        format!("-0x{:x}", value.unsigned_abs())
-    } else {
-        format!("0x{value:x}")
-    }
-}
-
-fn python_padded_hex(value: i64) -> String {
-    if value < 0 {
-        format!("-0x{:03x}", value.unsigned_abs())
-    } else {
-        format!("0x{value:04x}")
-    }
 }
 
 impl Repr for Value {

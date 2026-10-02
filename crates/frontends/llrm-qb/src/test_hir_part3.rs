@@ -20,7 +20,6 @@ use llrm_core::backend::masm;
 use llrm_core::hir::model::{self as hir, Operand};
 use llrm_core::model::ir::{self, Loc, Operation};
 use llrm_core::model::lir;
-use llrm_core::model::mir::{self};
 use llrm_core::objectfile::omf;
 
 // ---- small helpers -------------------------------------------------------
@@ -45,10 +44,6 @@ fn stripped_lines(listing: &str) -> Vec<String> {
 
 fn externals(program: &hir::Program, name: &str) -> Vec<String> {
     omf::externals(&records(program, name))
-}
-
-fn ops(body: &mir::MirBody) -> Vec<&mir::Op> {
-    body.blocks.iter().flat_map(|block| &block.ops).collect()
 }
 
 fn function_named<'p>(program: &'p hir::Program, name: &str) -> (usize, &'p hir::Function) {

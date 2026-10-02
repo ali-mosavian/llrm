@@ -33,10 +33,6 @@ impl Format {
         }
     }
 
-    /// A two's complement or unsigned integer, not a float.
-    pub const fn integer(self) -> bool {
-        matches!(self, Self::Signed16 | Self::Signed32 | Self::Signed64 | Self::Unsigned64)
-    }
 }
 
 impl fmt::Display for Format {
@@ -142,32 +138,5 @@ pub struct Semantics {
 }
 
 impl Semantics {
-    /// Constructs Python's four-required-field form, whose exception rule is
-    /// the dataclass default `Exceptions.STRICT`.
-    pub fn new(
-        inputs: impl Into<Box<[Format]>>,
-        result: Format,
-        precision: Precision,
-        rounding: Rounding,
-    ) -> Self {
-        Self::with_exceptions(inputs, result, precision, rounding, Exceptions::Strict)
-    }
 
-    /// Constructs the five-field Python dataclass form with an explicit
-    /// exception rule. All choices remain the closed, typed enums above.
-    pub fn with_exceptions(
-        inputs: impl Into<Box<[Format]>>,
-        result: Format,
-        precision: Precision,
-        rounding: Rounding,
-        exceptions: Exceptions,
-    ) -> Self {
-        Self {
-            inputs: inputs.into(),
-            result,
-            precision,
-            rounding,
-            exceptions,
-        }
-    }
 }
