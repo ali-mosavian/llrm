@@ -1,13 +1,13 @@
-reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+reason = "BASIC variants rewritten in QB 4.5 syntax so BC compiles them: FUNCTION name& (args), no BYVAL on a BASIC procedure, so arguments pass by reference"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 158
-memory_operands = 60
+instructions = 165
+memory_operands = 68
 
 [bas.Os]
-instructions = 158
-memory_operands = 60
+instructions = 165
+memory_operands = 68
 
 [c.O2]
 instructions = 95

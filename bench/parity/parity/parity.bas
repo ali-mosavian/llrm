@@ -7,10 +7,10 @@ end type
 
 declare function BenchParity& ()
 
-print ltrim$(str$(BenchParity&()))
+print ltrim$(str$(BenchParity&))
 end
 
-function BenchParity& ()
+function BenchParity&
     dim points(0 to 7) as Coord
     dim total as long
     dim index as integer

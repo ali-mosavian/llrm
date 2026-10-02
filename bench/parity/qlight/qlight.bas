@@ -1,25 +1,26 @@
+' BC 4.5 takes no BYVAL on a BASIC procedure: arguments pass by reference, the C and Nib ones by value.
 defint a-z
 
 const LSNEUTRAL = 120
 
-declare function lsScaleByte (byval raw as integer, byval sval as integer) as integer
+declare function lsScaleByte% (raw as integer, sval as integer)
 declare function BenchQlight& ()
 
-print ltrim$(str$(BenchQlight&()))
+print ltrim$(str$(BenchQlight&))
 end
 
 ' From qb-qrender d_surf.bas and qcport render/ls.c.
-function lsScaleByte (byval raw as integer, byval sval as integer) as integer
+function lsScaleByte% (raw as integer, sval as integer)
     dim value as long
 
     value = clng(raw) * sval \ LSNEUTRAL
     if value > 255 then value = 255
     if value < 0 then value = 0
-    lsScaleByte = value
+    lsScaleByte% = value
 end function
 
 function BenchQlight&
-    BenchQlight& = clng(lsScaleByte(200, 120)) * 1000000 + _
-                     clng(lsScaleByte(200, 60)) * 1000 + _
-                     lsScaleByte(200, 240) + lsScaleByte(-20, 120)
+    BenchQlight& = clng(lsScaleByte%(200, 120)) * 1000000 + _
+                     clng(lsScaleByte%(200, 60)) * 1000 + _
+                     lsScaleByte%(200, 240) + lsScaleByte%(-20, 120)
 end function
