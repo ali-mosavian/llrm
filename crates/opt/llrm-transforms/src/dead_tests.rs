@@ -229,3 +229,27 @@ b0:
     );
     assert!(!deadened(&mut module));
 }
+
+/// An assume gone before selection takes its compare with it: kept alive by
+/// the call, the `icmp` would be selected, a cmp and a setcc for a fact no
+/// code needs.
+#[test]
+fn an_assume_and_the_compare_only_it_reads_leave_no_code() {
+    let mut module = crate::testing::parsed(
+        "declare void @llvm.assume(i1)
+
+define i16 @f(i16 %x) {
+b0:
+  %c = icmp slt i16 %x, 10
+  call void @llvm.assume(i1 %c)
+  %d = icmp sgt i16 %x, 3
+  %e = zext i1 %d to i16
+  ret i16 %e
+}
+",
+    );
+    super::assumptions_dropped(&mut module);
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("llvm.assume(i1 %") && !text.contains("slt i16 %x, 10"), "{text}");
+    assert!(text.contains("icmp sgt i16 %x, 3"), "what else reads a compare stays:\n{text}");
+}

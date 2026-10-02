@@ -856,6 +856,40 @@ fn a_fact_of_the_wrong_subject_is_refused() {
     assert!(crate::verify::verify(&program).is_ok());
 }
 
+/// A freedom of floating arithmetic stated of an integer subtraction, or a
+/// wrap fact of a floating add, was lowered to a flag on an instruction it
+/// means nothing for; the verifier refuses both, and takes the right pairs.
+#[test]
+fn a_float_freedom_or_a_wrap_fact_of_the_wrong_operation_is_refused() {
+    use crate::facts::{Stated, Subject};
+    use llrm_mir::facts::Fact;
+    // `difference` is two integers' sub; `floats` two doubles' fadd.
+    let floats = || {
+        let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 2 }];
+        let add = Instruction::new(1, Op::Fadd, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+        let block = Block::new(1, vec![add], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+        let mut function = Function::new(1, "f", 2, values, Vec::new(), vec![block], 1);
+        function.parameters = vec![1, 2];
+        let mut program = program(function);
+        let mut double = Type::new(2, "double", TypeKind::Float, 8);
+        double.evaluation = crate::model::FloatEvaluation::Binary64;
+        program.modules[0].types.push(double);
+        program
+    };
+    let stated = |mut program: crate::model::Program, fact| {
+        program.modules[0].facts = vec![Stated { subject: Subject::Instruction { function: 1, id: 1 }, fact, source: None }];
+        crate::verify::verify(&program).map_err(|error| error.0)
+    };
+    for fact in [Fact::Reassoc, Fact::NoNaNs, Fact::NoInfs, Fact::NoSignedZeros, Fact::AllowReciprocal] {
+        assert!(stated(program(difference()), fact).unwrap_err().contains("is stated of an instruction that is no floating operation"), "{}", fact.key());
+        assert_eq!(stated(floats(), fact), Ok(()), "{}", fact.key());
+    }
+    for fact in [Fact::NoSignedWrap, Fact::NoUnsignedWrap] {
+        assert!(stated(floats(), fact).unwrap_err().contains("is stated of an instruction that is no integer add, sub or mul"), "{}", fact.key());
+        assert_eq!(stated(program(difference()), fact), Ok(()), "{}", fact.key());
+    }
+}
+
 /// Stated facts cross the wire and come back the same, source and all.
 #[test]
 fn stated_facts_survive_the_codec() {
@@ -956,4 +990,40 @@ fn inbounds_is_a_fact_of_an_operand() {
     let text = llrm_mir::print::module(&emitted.module);
     assert_eq!(text.matches("getelementptr inbounds i8, ptr %0, i16 2").count(), 1, "{text}");
     assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
+}
+
+/// What a language lets a pass do to a floating operation reaches the
+/// instruction as its fast-math flags: `-on` and alternate math were stated
+/// nowhere, so no float fold could ask.
+#[test]
+fn floating_freedoms_are_fast_math_flags() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 2 }];
+    let add = Instruction::new(1, Op::Fadd, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    let block = Block::new(1, vec![add], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "double", TypeKind::Float, 8));
+    let mut facts = Builder::new("test");
+    for fact in [Fact::Reassoc, Fact::NoNaNs, Fact::NoInfs, Fact::NoSignedZeros, Fact::AllowReciprocal] {
+        facts.state(Subject::Instruction { function: 1, id: 1 }, fact);
+    }
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("= fadd reassoc nnan ninf nsz arcp double %0, %1"), "{text}");
+}
+
+/// The verifier a frontend's HIR meets refuses a value used where its
+/// definition does not dominate it.
+#[test]
+fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
+    let mut function = difference();
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Add, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]));
+    function.values.push(Value { id: 4, r#type: 1 });
+    let error = crate::verify::verify(&program(function)).unwrap_err();
+    assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
 }

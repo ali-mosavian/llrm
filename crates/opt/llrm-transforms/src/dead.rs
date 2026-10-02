@@ -99,3 +99,29 @@ pub fn _removable(context: &Context, callees: &Callees, function: &Function, ins
 #[cfg(test)]
 #[path = "dead_tests.rs"]
 mod tests;
+
+/// The calls of `llvm.assume` gone from `module`, and what only they read:
+/// the last step before selection, once every reader has used them. A
+/// condition kept alive by its assume would cost a compare for nothing.
+pub fn assumptions_dropped(module: &mut llrm_mir::Module) {
+    let assumes = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter(|(_, global)| global.name.as_deref().and_then(llrm_mir::intrinsics::Intrinsic::named) == Some(llrm_mir::intrinsics::Intrinsic::Assume))
+        .map(|(at, _)| llrm_mir::GlobalId(at as u32))
+        .collect::<BTreeSet<_>>();
+    if assumes.is_empty() {
+        return;
+    }
+    let callees = llrm_mir::memory::callees(module);
+    let llrm_mir::Module { context, globals, .. } = module;
+    for global in globals.iter_mut() {
+        let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
+        let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| llrm_mir::memory::callee(context, function, inst).is_some_and(|callee| assumes.contains(&callee))).collect::<Vec<_>>();
+        for inst in calls {
+            function.erase(inst).expect("a call of void is read by nothing");
+        }
+        while dead(context, &callees, function) {}
+    }
+}

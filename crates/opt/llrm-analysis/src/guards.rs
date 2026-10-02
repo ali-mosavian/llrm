@@ -25,9 +25,16 @@ pub struct Guard {
 pub fn guards(unit: &Unit, at: i64) -> Vec<Guard> {
     let function = unit.function;
     let shape = unit.shape();
+    let assumed = unit.assumptions();
     let mut found = Vec::new();
     let mut reached = at;
     while let Some(above) = shape.dominance.immediate(reached) {
+        // What the block assumes holds below it, wherever its terminator goes.
+        for condition in assumed.here(above) {
+            if let Operand::Value(condition) = *condition {
+                _proven(unit, condition, true, &mut found);
+            }
+        }
         // The edge from `above` toward `at` that alone enters the block it leads to.
         if let Some(branch) = function.terminator(cfg::block(above))
             && let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = function.instruction(branch).operands[..]

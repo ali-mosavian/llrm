@@ -2513,6 +2513,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
                 // Where a local's bytes are live: read by the frame layout, no code.
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
+                // A fact for the passes: no code.
+                Some(Intrinsic::Assume) => Ok(()),
                 _ => refuse(format!("@{name}")),
             };
         }
