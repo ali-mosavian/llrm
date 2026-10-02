@@ -35,6 +35,8 @@ use crate::noreturn;
 pub enum Heuristic {
     /// The program says: `!prof` branch weights.
     Declared,
+    /// An invoke's unwind edge is all but never taken.
+    Invoke,
     Unreachable,
     Loop,
     Pointer,
@@ -102,6 +104,9 @@ pub fn estimated(context: &Context, metadata: &[MetadataNode], declarations: &De
     odds
 }
 
+/// What an invoke's normal edge weighs against its unwind edge's one.
+const INVOKE_NORMAL: f64 = 1048575.0;
+
 /// The `!prof` `branch_weights` on `block`'s terminator, one per successor, in
 /// the order the terminator names them (a `br`'s true target then its
 /// false, a `switch`'s default then its cases). LLVM's
@@ -135,6 +140,14 @@ fn declared(context: &Context, metadata: &[MetadataNode], function: &Function, b
 fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
     if let Some(weights) = declared(context, metadata, function, block, successors.len()) {
         return (Heuristic::Declared, weights);
+    }
+    if let Some(last) = function.terminator(block).map(|one| function.instruction(one))
+        && matches!(last.opcode, Opcode::Invoke(_))
+        && let [Operand::Block(_), Operand::Block(_)] = last.operands.iter().filter(|one| matches!(one, Operand::Block(_))).copied().collect::<Vec<_>>()[..]
+        && successors.len() == 2
+    {
+        // LLVM's `calcInvokeHeuristics`: the unwind edge is taken 1 time in 2^20.
+        return (Heuristic::Invoke, vec![INVOKE_NORMAL, 1.0]);
     }
     let split = |favoured: &dyn Fn(i64) -> bool, (yes, no): (f64, f64)| -> Option<Vec<f64>> {
         let count = successors.iter().filter(|&&at| favoured(at)).count();

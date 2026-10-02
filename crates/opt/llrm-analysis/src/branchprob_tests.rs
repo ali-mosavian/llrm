@@ -516,3 +516,29 @@ fn test_branch_weights_that_do_not_fit_the_successors_are_ignored() {
     let (odds, ..) = weighted_branch("i32 0, i32 0", false);
     assert_ne!(odds.by.get(&entry), Some(&Heuristic::Declared), "weights of nothing");
 }
+
+/// An invoke's unwind edge was weighed as any branch to a block that does not
+/// return: two thirds. QB's `ON ERROR` makes every runtime call in its region
+/// an invoke of its handler, so the handler ran twice for every three calls.
+#[test]
+fn test_an_invokes_unwind_edge_is_all_but_never_taken() {
+    let (odds, at) = estimate(
+        "declare i16 @g(i16)
+declare i32 @__gxx_personality_v0(...)
+
+define i16 @f(i16 %x) personality ptr @__gxx_personality_v0 {
+entry:
+  %r = invoke i16 @g(i16 %x) to label %ok unwind label %lp
+
+ok:
+  ret i16 %r
+
+lp:
+  %e = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %e
+}
+",
+    );
+    assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Invoke));
+    assert!(odds.probability(at("entry"), at("lp")).is_some_and(|one| one < 1e-5), "{:?}", odds.taken);
+}
