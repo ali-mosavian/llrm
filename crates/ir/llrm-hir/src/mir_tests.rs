@@ -974,6 +974,7 @@ fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> Strin
         segmented: vec![false],
         arrays: vec![false],
         defined: false,
+        returns_twice: false,
         symbol: None,
     });
     let mut facts = Builder::new("test");
