@@ -744,7 +744,6 @@ fn _color_slots(
             frame.slot(value, width)?;
             continue;
         };
-        let fits = |one: &(i64, u32, Vec<Interval>)| one.1 >= capacity && one.2.iter().all(|other| !interval.overlaps(other));
         // A slot the value is copied to or from makes that copy vanish.
         let partners: Vec<i64> = copies
             .get(&value)
@@ -755,10 +754,7 @@ fn _color_slots(
                 Ok(other) => frame.slots.get(&SlotKey::from(*other)).copied(),
             })
             .collect();
-        let color = partners
-            .iter()
-            .find_map(|home| colors.iter().position(|one| one.0 == *home && fits(one)))
-            .or_else(|| colors.iter().position(fits));
+        let color = crate::backend::slots::choose(&colors, interval, capacity, &partners);
         let Some(color) = color else {
             let home = frame.slot(value, width)?;
             colors.push((home, capacity, vec![interval.clone()]));

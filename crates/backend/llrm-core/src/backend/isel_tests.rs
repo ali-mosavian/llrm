@@ -3373,3 +3373,89 @@ define i16 @f(i16 %a, i16 %c) addrspace(1) {{
     };
     assert_eq!(listing(&text(true), "f"), listing(&text(false), "f"));
 }
+
+/// Two 16-byte locals, `x` and `y`: in the two arms of an `if`, or, `overlapping`, both
+/// live across the same stores; with lifetime markers when `markers`.
+fn scopes(markers: bool, overlapping: bool) -> String {
+    let mark = |what: &str, name: &str| if markers { format!("call void @llvm.lifetime.{what}.p0(i64 16, ptr %{name})") } else { String::new() };
+    let (start, end, ystart, yend) = (mark("start", "x"), mark("end", "x"), mark("start", "y"), mark("end", "y"));
+    if overlapping {
+        format!(
+            "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  %y = alloca [8 x i16]
+  {start}
+  {ystart}
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  %q = getelementptr inbounds [8 x i16], ptr %y, i16 0, i16 %c
+  store volatile i16 %c, ptr %q
+  %v = load volatile i16, ptr %p
+  %w = load volatile i16, ptr %q
+  {end}
+  {yend}
+  %r = add i16 %v, %w
+  ret i16 %r
+}}
+"
+        )
+    } else {
+        format!(
+            "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  %y = alloca [8 x i16]
+  %t = icmp sgt i16 %a, 0
+  br i1 %t, label %b1, label %b2
+
+b1:
+  {start}
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  %v = load volatile i16, ptr %p
+  {end}
+  ret i16 %v
+
+b2:
+  {ystart}
+  %q = getelementptr inbounds [8 x i16], ptr %y, i16 0, i16 %c
+  store volatile i16 %c, ptr %q
+  %w = load volatile i16, ptr %q
+  {yend}
+  ret i16 %w
+}}
+"
+        )
+    }
+}
+
+/// The frame a listing reserves: `sub sp, N`.
+fn frame_bytes(text: &str) -> i64 {
+    let listing = listing(text, "f");
+    listing.iter().find_map(|line| line.strip_prefix("sub sp, ")?.parse().ok()).unwrap_or(0)
+}
+
+/// Block locals nothing keeps live together share a slot; each had its own, so a function
+/// of sibling scopes reserved the sum of them.
+#[test]
+fn test_block_locals_with_disjoint_lifetimes_share_a_frame_slot() {
+    assert_eq!(frame_bytes(&scopes(false, false)), 32);
+    assert_eq!(frame_bytes(&scopes(true, false)), 16);
+}
+
+/// Locals live together do not: the markers say they overlap.
+#[test]
+fn test_block_locals_live_together_keep_their_own_slots() {
+    assert_eq!(frame_bytes(&scopes(true, true)), 32);
+}
+
+/// A local read after its lifetime ended is not one the markers can speak for: it keeps
+/// its own slot, whatever shares around it.
+#[test]
+fn test_a_local_used_outside_its_lifetime_shares_no_slot() {
+    let text = scopes(true, false).replace("  ret i16 %v\n", "  %again = load volatile i16, ptr %p\n  ret i16 %again\n");
+    assert_eq!(frame_bytes(&text), 32);
+}
