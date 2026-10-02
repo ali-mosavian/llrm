@@ -1,0 +1,24 @@
+# The language has no integer conversions, so everything is i32.
+fn bench_mandel() -> i32:
+    let mut work: i32 = 0
+    for py in -12..12:
+        for px in -16..16:
+            let mut x: i32 = 0
+            let mut y: i32 = 0
+            let cx: i32 = px * 24 - 128
+            let cy: i32 = py * 24
+            let mut iteration: i32 = 0
+            while iteration < 32:
+                let xx: i32 = (x * x) >> 8
+                let yy: i32 = (y * y) >> 8
+                if xx + yy > 1024:
+                    break
+                y = ((x * y) >> 7) + cy
+                x = xx - yy + cx
+                iteration += 1
+            work += iteration
+    return work
+
+fn main() -> i16:
+    print(bench_mandel())
+    return 0

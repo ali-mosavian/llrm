@@ -1,13 +1,15 @@
 /* Integer Q8 Mandelbrot work count: deterministic, with no floating ambiguity. */
-unsigned long bench_mandel(short xOffset)
+extern void report(long value);
+
+long bench_mandel(void)
 {
     short px, py, iteration;
-    unsigned long work = 0;
+    long work = 0;
 
     for (py = -12; py < 12; ++py)
         for (px = -16; px < 16; ++px) {
             long x = 0, y = 0;
-            long cx = (long)px * 24 - 128 + xOffset;
+            long cx = (long)px * 24 - 128;
             long cy = (long)py * 24;
             for (iteration = 0; iteration < 32; ++iteration) {
                 long xx = (x * x) >> 8;
@@ -16,7 +18,13 @@ unsigned long bench_mandel(short xOffset)
                 y = ((x * y) >> 7) + cy;
                 x = xx - yy + cx;
             }
-            work += (unsigned short)iteration;
+            work += iteration;
         }
     return work;
+}
+
+int main(void)
+{
+    report(bench_mandel());
+    return 0;
 }

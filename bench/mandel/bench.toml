@@ -1,0 +1,7 @@
+description = "Q8 fixed-point Mandelbrot iteration count over a 32x24 grid"
+repetitions = 1
+
+[region]
+bas = "BenchMandel"
+c = "bench_mandel"
+nib = "bench_mandel"
