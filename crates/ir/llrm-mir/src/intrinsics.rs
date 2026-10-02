@@ -264,7 +264,7 @@ const TABLE: [Spec; 30] = [
         returns: Slot::Void,
         parameters: LIFETIME,
         attrs: LIFETIME_ATTRS,
-        memory: &[(Some("argmem"), "readwrite")],
+        memory: &[(Some("argmem"), "write")],
     },
     Spec {
         name: "llvm.lifetime.end",
@@ -273,7 +273,7 @@ const TABLE: [Spec; 30] = [
         returns: Slot::Void,
         parameters: LIFETIME,
         attrs: LIFETIME_ATTRS,
-        memory: &[(Some("argmem"), "readwrite")],
+        memory: &[(Some("argmem"), "write")],
     },
     Spec {
         name: "llrm.ia16.in",

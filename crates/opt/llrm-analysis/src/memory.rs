@@ -549,7 +549,7 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
             };
             // Only a reference naming an alloca reaches it until its address
             // is exposed.
-            let exposed = crate::frameescape::exposes(unit.function, value);
+            let exposed = crate::frameescape::exposes(unit.function, value, |inst| matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd)));
             Some(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),

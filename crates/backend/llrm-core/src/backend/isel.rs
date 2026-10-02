@@ -568,7 +568,7 @@ impl Selector<'_, '_, '_> {
                     self.depth += size + size % 2;
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp: -self.depth, index: None, scale: 1 });
-                    if llrm_analysis::frameescape::exposes(function, address) {
+                    if llrm_analysis::frameescape::exposes(function, address, |inst| self.marker(inst)) {
                         reach.insert((-self.depth, -self.depth + size));
                     }
                 }
@@ -948,6 +948,12 @@ impl Selector<'_, '_, '_> {
         let instructions = function.block(block).instructions();
         let (Some(start), Some(end)) = (instructions.iter().position(|&one| one == from), instructions.iter().position(|&one| one == to)) else { return false };
         start < end && instructions[start + 1..end].iter().all(|&one| !llrm_mir::memory::of(&self.module.context, &self.callees, function, one).writes)
+    }
+
+    /// Whether `inst` is a call of `llvm.lifetime.start` or `.end`.
+    fn marker(&self, inst: InstId) -> bool {
+        let Some(global) = llrm_mir::memory::callee(&self.module.context, self.function, inst) else { return false };
+        self.module.global(global).name.as_deref().is_some_and(|name| matches!(Intrinsic::named(name), Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd)))
     }
 
     /// Whether `inst` is a call of `llvm.lrint`.
@@ -2448,6 +2454,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
+                // Where a local's bytes are live: read by the frame layout, no code.
+                Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 _ => refuse(format!("@{name}")),
             };
         }

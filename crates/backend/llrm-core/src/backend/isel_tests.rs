@@ -3349,3 +3349,27 @@ fn test_an_extended_float_is_never_fcoms_memory_operand() {
     assert!(got.iter().any(|line| line.starts_with("fld tbyte")) && got.iter().any(|line| line.starts_with("fcom")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fcom") && line.contains("tbyte")), "{got:?}");
 }
+
+/// A scope's lifetime markers are not code: a body with them selects as the
+/// same body without. They were refused: `@llvm.lifetime.start.p0`.
+#[test]
+fn test_lifetime_markers_are_no_code() {
+    let text = |markers: bool| {
+        let (start, end) = if markers { ("call void @llvm.lifetime.start.p0(i64 16, ptr %x)", "call void @llvm.lifetime.end.p0(i64 16, ptr %x)") } else { ("", "") };
+        format!(
+            "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  {start}
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  %v = load volatile i16, ptr %p
+  {end}
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(listing(&text(true), "f"), listing(&text(false), "f"));
+}
