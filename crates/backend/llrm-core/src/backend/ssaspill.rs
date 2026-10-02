@@ -198,6 +198,12 @@ impl Flow {
         }
     }
 
+    /// Whether `value` is read after position `at` of `block`, or lives out of it. Death is
+    /// decided here and never from `next_use`: its `FAR` is also what an unconverged distance reads.
+    fn live_after(&self, block: i64, at: usize, value: u32) -> bool {
+        self.uses[&block].get(&value).is_some_and(|list| list.iter().any(|next| *next > at)) || self.live_out[&block].contains(&value)
+    }
+
     /// How far after position `at` of `block` the value is read next.
     fn next_use(&self, block: i64, at: usize, value: u32) -> i64 {
         if let Some(list) = self.uses[&block].get(&value) {
@@ -316,30 +322,40 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
-/// Whether `one` can read `value` from memory as its second source: `op reg, [slot]`;
-/// a commutative operation turns its operands over first. The value is a source of the instruction.
-fn folds(one: &Insn, value: u32) -> bool {
-    let Some(what) = &one.what else { return false };
-    if !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
-        return false;
+/// `one` reading `value` from `cell` as its second source (`op reg, [slot]`), a commutative
+/// operation turning its operands over first, as Greedy folds a spilled source; None where it cannot.
+/// The operand is as wide as the instruction reads it, which may be less than the slot.
+pub(crate) fn folded_into(one: &Insn, value: u32, cell: &crate::model::ir::Mem) -> Option<Arc<Insn>> {
+    let what = one.what.as_ref()?;
+    let values = BTreeSet::from([value]);
+    let commutes = what.sources.len() == 2
+        && matches!((what.op, what.name.as_deref()), (Operation::Binary, Some("add" | "and" | "or" | "xor")) | (Operation::Multiply, Some("imul")));
+    let turned = commutes && matches!(&what.sources[0], Loc::Held(left) if left.value == value) && matches!(&what.sources[1], Loc::Held(right) if right.value != value);
+    let mut sources = what.sources.clone();
+    if turned {
+        sources.swap(0, 1);
     }
-    let (shape, commutes) = match (what.op, what.name.as_deref()) {
-        (Operation::Binary, Some("add" | "and" | "or" | "xor")) => (what.dests.len() == 1, true),
-        (Operation::Binary, Some("sub")) => (what.dests.len() == 1, false),
-        (Operation::Multiply, Some("imul")) => (what.dests.len() == 1, true),
-        (Operation::Compare, Some("cmp")) => (what.dests.is_empty(), false),
-        _ => (false, false),
+    let candidate = if turned {
+        let mut made = one.clone();
+        made.what = Some(Semantics { sources: sources.clone(), ..what.clone() });
+        Arc::new(made)
+    } else {
+        Arc::new(one.clone())
     };
-    match what.sources.as_slice() {
-        [Loc::Held(left), Loc::Held(right)] => {
-            shape
-                && left.value != right.value
-                && left.width == right.width
-                && matches!(right.width, 2 | 4)
-                && (right.value == value || (commutes && left.value == value))
-        }
-        _ => false,
+    if what.op == Operation::Move {
+        return None;
     }
+    let right = spiller::folded_source_in(&candidate, &values, false)?;
+    sources[1] = Loc::Mem(crate::model::ir::Mem { width: right.width, ..cell.clone() });
+    let mut made = (*candidate).clone();
+    made.what = Some(Semantics { sources, ..what.clone() });
+    made.uses = one.uses.iter().copied().filter(|each| *each != value).collect();
+    Some(Arc::new(made))
+}
+
+/// Whether `one` can read `value` from its slot.
+fn folds(one: &Insn, value: u32) -> bool {
+    folded_into(one, value, &crate::model::ir::Mem::new(None, 2)).is_some()
 }
 
 /// What the simulation of one block decided.
@@ -550,7 +566,7 @@ fn simulated(
         // Entering a loop, what is read only after it does not wait in a register.
         let header = ends.len() < preds.get(at).map_or(0, Vec::len);
         // A loop that fits its registers with them keeps what it does not read; one that does not, makes room.
-        let through = candidates.iter().filter(|(_, near, _)| *near >= EXIT && *near < FAR).count();
+        let through = candidates.iter().filter(|(_, near, _)| *near >= EXIT).count();
         let mut spare = match (header, room.get(at)) {
             (true, Some(peak)) if *peak > k => k.saturating_sub(peak - through.min(*peak)),
             _ => usize::MAX,
@@ -558,7 +574,7 @@ fn simulated(
         for (tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
             let far = header && *near >= EXIT;
-            if *near < FAR && (!far || spare > 0) && (*tier < 2 || block.arrives().contains(value)) {
+            if (!far || spare > 0) && (*tier < 2 || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
                 if machine.fits(&next, &BTreeSet::new(), k) {
@@ -585,7 +601,7 @@ fn simulated(
                         .copied();
                     let Some(victim) = victim else { break };
                     held.remove(&victim);
-                    if flow.next_use(*at, position, victim) < FAR || flow.live_out[at].contains(&victim) {
+                    if flow.live_after(*at, position, victim) {
                         leaving.push(victim);
                     }
                 }
@@ -632,7 +648,7 @@ fn simulated(
             // The first source of a tied instruction gives its register to the result.
             let tied = one.what.as_ref().is_some_and(twoaddr::ties);
             let first = if tied { one.what.as_ref().and_then(|what| what.sources.first()).and_then(|source| if let Loc::Held(first) = source { Some(first.value) } else { None }) } else { None };
-            let dying = |value: &u32| flow.next_use(*at, position, *value) >= FAR;
+            let dying = |value: &u32| !flow.live_after(*at, position, *value);
             let gone: Vec<u32> = used.iter().copied().filter(|value| dying(value) && (!tied || Some(*value) == first)).collect();
             for value in gone {
                 held.remove(&value);
@@ -644,7 +660,7 @@ fn simulated(
                 }
             }
             evict(&mut held, &mut leaving, &made.union(&keep).copied().collect(), k);
-            held.retain(|value| flow.next_use(*at, position, *value) < FAR);
+            held.retain(|value| flow.live_after(*at, position, *value));
             // A value made here leaves after the instruction, not before it.
             let (after, before): (Vec<u32>, Vec<u32>) = leaving.into_iter().partition(|value| made.contains(value));
             if !before.is_empty() {
@@ -833,6 +849,11 @@ fn written(
         }
     }
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    // What code put in a block sits beside: its last instruction, or the block's own address when it has none.
+    let anchor = |block: &LirBlock| -> Arc<Insn> {
+        block.insns.last().cloned().unwrap_or_else(|| Arc::new(Insn::new(block.at, Some((block.at, block.at)), None, Vec::new(), Vec::new())))
+    };
+    let mut odds = body.odds.clone();
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut bridges: Vec<LirBlock> = Vec::new();
     let mut retarget: IndexMap<(i64, i64), i64> = IndexMap::default();
@@ -845,14 +866,15 @@ fn written(
         }
         let source = by_at[from];
         let listed: Vec<(bool, u32)> = code.stores.iter().map(|value| (true, *value)).chain(code.reloads.iter().map(|value| (false, *value))).collect();
-        if source.succ.len() == 1 && !source.insns.is_empty() {
+        if source.succ.len() == 1 {
             at_end.entry(*from).or_default().extend(listed);
-        } else if preds.get(to) == Some(&1) && !by_at[to].insns.is_empty() {
+        } else if preds.get(to) == Some(&1) {
             at_top.entry(*to).or_default().extend(listed);
         } else {
             let at = next_at;
             next_at += 1;
-            let beside = source.insns.last().ok_or("an empty block with two successors")?;
+            let beside = anchor(source);
+            let beside = &*beside;
             let mut insns: Vec<Arc<Insn>> = listed.iter().map(|(stores, value)| if *stores { store(beside, *value) } else { reload(beside, *value) }).collect();
             let mut jump = Insn::new(
                 beside.at,
@@ -864,6 +886,7 @@ fn written(
             jump.op = beside.op.clone();
             insns.push(Arc::new(jump));
             bridges.push(LirBlock { succ: vec![*to], ..LirBlock::new(at, insns) });
+            odds.rerouted(*from, &source.succ, *to, &[(at, 1.0)]);
             retarget.insert((*from, *to), at);
         }
     }
@@ -873,15 +896,16 @@ fn written(
         let tail = splitkit::_tail(block);
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         // A phi's result is written when control enters; its store comes first.
-        if let Some(first) = block.insns.first() {
+        {
+            let first = block.insns.first().cloned().unwrap_or_else(|| anchor(block));
             for phi in &block.phis {
                 let leaves_here = edit.leaves_at_top.contains(&phi.result);
                 if in_memory(&phi.result) && (!at_leaves.contains(&phi.result) || leaves_here) {
-                    insns.push(store(first, phi.result));
+                    insns.push(store(&first, phi.result));
                 }
             }
             for (stores, value) in at_top.get(&block.at).into_iter().flatten() {
-                insns.push(if *stores { store(first, *value) } else { reload(first, *value) });
+                insns.push(if *stores { store(&first, *value) } else { reload(&first, *value) });
             }
         }
         let leave = |position: usize| edit.leaves.get(&position).into_iter().flatten().copied().filter(|value| in_memory(value) && at_leaves.contains(value));
@@ -908,16 +932,7 @@ fn written(
             }
             let mut one = Arc::clone(one);
             for value in edit.folded.get(&position).into_iter().flatten() {
-                let what = one.what.as_ref().expect("a fold has semantics");
-                let mut sources = what.sources.clone();
-                if matches!(&sources[0], Loc::Held(left) if left.value == *value) {
-                    sources.swap(0, 1);
-                }
-                sources[1] = Loc::Mem(cells[value].clone());
-                let mut made = (*one).clone();
-                made.what = Some(Semantics { sources, ..what.clone() });
-                made.uses = one.uses.iter().copied().filter(|each| each != value).collect();
-                one = Arc::new(made);
+                one = folded_into(&one, *value, &cells[value]).expect("a fold the simulation chose");
             }
             if one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch)) {
                 if let Some(what) = &one.what {
@@ -936,12 +951,11 @@ fn written(
             }
         }
         if tail == block.insns.len() {
-            if let Some(last) = block.insns.last() {
-                for value in leave(block.insns.len()) {
-                    insns.push(store(last, value));
-                }
-                ending(last, &mut insns);
+            let last = anchor(block);
+            for value in leave(block.insns.len()) {
+                insns.push(store(&last, value));
             }
+            ending(&last, &mut insns);
         }
         let succ = block.succ.iter().map(|to| retarget.get(&(block.at, *to)).copied().unwrap_or(*to)).collect();
         blocks.push(LirBlock { succ, ..block.with_insns(insns) });
@@ -958,7 +972,9 @@ fn written(
         }
     }
     blocks.extend(bridges);
-    Ok(body.with_blocks(blocks))
+    let mut out = body.with_blocks(blocks);
+    out.odds = odds;
+    Ok(out)
 }
 
 #[cfg(test)]
