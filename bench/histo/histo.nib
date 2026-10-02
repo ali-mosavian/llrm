@@ -1,0 +1,23 @@
+# Mirrors histo.c.
+var data: u8[4096] = [0] * 4096
+var counts: i16[256] = [0] * 256
+
+fn histogram(seed: i16) -> void:
+    for index in 0..4096:
+        let j: i16 = (i16(data[index]) * 7 + seed) & 255
+        counts[j] += 1
+
+fn bench_histo(seed: i16) -> i32:
+    let mut sum: i32 = 0
+    for i in 0..4096:
+        data[i] = u8(((i & 127) * (i >> 5)) & 255)
+    for i in 0..256:
+        counts[i] = 0
+    histogram(seed)
+    for i in 0..256:
+        sum += i32(counts[i]) * (i32(i) + 1)
+    return sum
+
+fn main() -> i16:
+    print(bench_histo(3))
+    return 0
