@@ -128,6 +128,8 @@ str_enum!(AddressKind {
     Code("CODE") = "code",
     // A 16-bit protected/real-mode segment selector, without an offset.
     Segment("SEGMENT") = "segment",
+    // Memory at a fixed address no program object occupies: a device's.
+    Fixed("FIXED") = "fixed",
 });
 
 str_enum!(FloatEvaluation {
@@ -441,6 +443,10 @@ str_enum!(Op {
     Assume("ASSUME") = "assume",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
+    // From here the local operands[0] names holds a value (start), or no longer (end): the
+    // scope of a block local. Not code; what a frame layout reads. No result.
+    LifetimeStart("LIFETIME_START") = "lifetime_start",
+    LifetimeEnd("LIFETIME_END") = "lifetime_end",
     // Inline machine code: operands go into its input registers, results
     // come out of its output registers. `Instruction.asm` says which.
     Asm("ASM") = "asm",
@@ -847,6 +853,9 @@ pub struct RuntimePromises {
     /// The routines that only read what their pointer arguments reach and
     /// keep none of them, by their own names: C's strlen.
     pub reads_arguments: Vec<String>,
+    /// The routines that never come back to their caller: END, SYSTEM, the
+    /// error funnel. Their calls end their block.
+    pub no_return: Vec<String>,
 }
 
 impl RuntimePromises {
@@ -863,6 +872,7 @@ impl RuntimePromises {
             writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
             reads_arguments: Vec::new(),
+            no_return: Vec::new(),
         }
     }
 

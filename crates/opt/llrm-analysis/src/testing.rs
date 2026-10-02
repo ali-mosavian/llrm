@@ -4,7 +4,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, Module, ValueId};
 
 /// The layout HIR's modules state, as a module's first line.
-pub const DOS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+pub const DOS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"\n\n";
 
 pub fn parsed(text: &str) -> Module {
     llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"))

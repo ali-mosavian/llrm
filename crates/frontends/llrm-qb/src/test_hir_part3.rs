@@ -2970,6 +2970,20 @@ fn an_outlined_handler_takes_a_row_per_line() {
     assert!(found.contains(&100) && found.contains(&110), "{found:?}");
 }
 
+/// END and SYSTEM call `B$CEND`, which "does not return" (rt/rtterm.asm): the
+/// runtime description says so, but its declaration did not, and the call's
+/// block ended only by the `unreachable` after it. The program's promises now
+/// name the routines that never come back, and their declarations are `noreturn`.
+#[test]
+fn the_runtime_routines_that_never_return_are_declared_noreturn() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "end.bas", b"DEFINT A-Z\r\nINPUT a\r\nIF a THEN END\r\nPRINT 1\r\n");
+    let mir = emitted_mir(&parsed_as(&path, "qb45", "qb45"));
+    let declaration = |name: &str| mir.lines().find(|one| one.starts_with("declare") && one.contains(&format!("@llrm.qb.{name}("))).map(str::to_owned).unwrap_or_default();
+    assert!(declaration("B$CEND").contains("noreturn"), "{}", declaration("B$CEND"));
+    assert!(!declaration("B$PEI2").contains("noreturn"), "{}", declaration("B$PEI2"));
+}
+
 /// A FOR counter's add was `nsw` whatever the counter's type: an UNSIGNED
 /// INTEGER passes 32767 legitimately, so `nsw` was poison there. An unsigned
 /// counter's add does not wrap as unsigned (BC hangs if it would), `nuw`.

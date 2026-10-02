@@ -37,7 +37,7 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
-        model::Op::PortOut | model::Op::Assume => Some(Some(0)),
+        model::Op::PortOut | model::Op::Assume | model::Op::LifetimeStart | model::Op::LifetimeEnd => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -45,7 +45,7 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     }
 }
 
-const _PLACES: [model::Op; 3] = [model::Op::Load, model::Op::Store, model::Op::Address];
+const _PLACES: [model::Op; 5] = [model::Op::Load, model::Op::Store, model::Op::Address, model::Op::LifetimeStart, model::Op::LifetimeEnd];
 const _FLOAT: [model::Op; 13] = [
     model::Op::Fadd,
     model::Op::Fsub,
@@ -205,18 +205,19 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));
         }
         // A freedom of floating arithmetic is of a floating operation, and a
-        // wrap fact of integer add, sub or mul: lowering gives a flag to nothing else.
+        // wrap fact of integer add, sub, mul or neg (a sub from zero):
+        // lowering gives a flag to nothing else.
         if let Subject::Instruction { function: id, id: at } = subject {
             use llrm_mir::facts::Fact;
             let op = function(id).and_then(|one| one.blocks.iter().flat_map(|block| &block.instructions).find(|i| i.id == at)).map(|i| i.op);
             let floating = matches!(op, Some(model::Op::Fadd | model::Op::Fsub | model::Op::Fmul | model::Op::Fdiv));
-            let integer = matches!(op, Some(model::Op::Add | model::Op::Sub | model::Op::Mul));
+            let integer = matches!(op, Some(model::Op::Add | model::Op::Sub | model::Op::Mul | model::Op::Neg));
             match fact {
                 Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal if !floating => {
                     invalid!("{}: {} is stated of an instruction that is no floating operation", module.name, fact.key());
                 }
                 Fact::NoSignedWrap | Fact::NoUnsignedWrap if !integer => {
-                    invalid!("{}: {} is stated of an instruction that is no integer add, sub or mul", module.name, fact.key());
+                    invalid!("{}: {} is stated of {op:?} {at}, no integer add, sub, mul or neg", module.name, fact.key());
                 }
                 _ => {}
             }
@@ -464,7 +465,9 @@ fn _function(
             if _STRING_COMPARE.contains(&instruction.op) && instruction.callee.as_deref() != Some("B$SCMP") {
                 invalid!("{prefix}: string comparison is not B$SCMP");
             }
-            if _PLACES.contains(&instruction.op) && instruction.operands.is_empty() {
+            // A code address names its function as its callee, and no place.
+            let code_address = instruction.op == model::Op::Address && instruction.callee.as_deref().is_some_and(|one| !one.is_empty());
+            if _PLACES.contains(&instruction.op) && instruction.operands.is_empty() && !code_address {
                 invalid!("{prefix}: {} {} has no place", instruction.op, instruction.id);
             }
             for result in &instruction.results {
@@ -539,6 +542,12 @@ fn _function(
                         | model::Operand::DescriptorPlace(_)
                 ) {
                     invalid!("{prefix}: store destination is not a place");
+                }
+            }
+            if matches!(instruction.op, model::Op::LifetimeStart | model::Op::LifetimeEnd) {
+                let local = matches!(&instruction.operands[..], [model::Operand::PlaceRef(one)] if function.places.iter().any(|place| place.id == one.place && place.storage == model::Storage::Local));
+                if !local {
+                    invalid!("{prefix}: {} names one local place", instruction.op);
                 }
             }
             if _FLOAT.contains(&instruction.op) {
@@ -659,9 +668,13 @@ fn _function(
                 } else {
                     result_types.iter().chain(operand_types.iter()).copied().collect()
                 };
-                let unsigned = involved
-                    .iter()
-                    .all(|one| types[one].kind == model::TypeKind::Integer && types[one].signed == Some(false));
+                // An ordered compare also orders pointers, as LLVM's `icmp ult ptr`: how
+                // a space's pointers order is the lowering's, not a conversion's.
+                let ordered_pointers = _COMPARE.contains(&instruction.op);
+                let unsigned = involved.iter().all(|one| {
+                    (types[one].kind == model::TypeKind::Integer && types[one].signed == Some(false))
+                        || (ordered_pointers && types[one].kind == model::TypeKind::Pointer)
+                });
                 if !unsigned {
                     invalid!("{prefix}: {} requires unsigned integer operands", instruction.op);
                 }

@@ -25,7 +25,7 @@ mod handling;
 /// indexing by 16 bits, 16-bit segments, huge ones as far but indexing by
 /// 32 bits (a displacement past 64K carries into the selector), and 16-bit
 /// alignment.
-pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32";
+pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32";
 
 /// A far pointer's address space.
 pub const FAR: u32 = 1;
@@ -34,6 +34,8 @@ pub const FAR: u32 = 1;
 pub const SEGMENT: u32 = 2;
 /// A huge pointer's: a far pointer whose index does not wrap at 64K.
 pub const HUGE: u32 = 3;
+/// A fixed address's: a far pointer into memory no program object occupies.
+pub const FIXED: u32 = llrm_mir::datalayout::FIXED_SPACE;
 
 /// The prefix of a runtime routine's name: a callee the module does not
 /// declare.
@@ -110,13 +112,15 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     for (module, global, name, routine) in routines {
         let cells = promises.writes(routine);
         let nounwind = promises.nounwind.iter().any(|one| one == routine);
-        if cells.is_none() && !nounwind || out.named(name).is_some() {
+        let no_return = promises.no_return.iter().any(|one| one == routine);
+        if cells.is_none() && !nounwind && !no_return || out.named(name).is_some() {
             continue;
         }
         let Some(one) = out.declared(module, global)? else { continue };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
         function.attrs.extend(cells.is_some().then(|| Fact::NoCallback.carrier()));
         function.attrs.extend(nounwind.then(|| Fact::NoUnwind.carrier()));
+        function.attrs.extend(no_return.then(|| Fact::NoReturn.carrier()));
         if let Some(cells) = cells {
             let written = std::iter::once(one).chain(cells.iter().filter_map(|cell| declared.get(cell.as_str()).copied())).collect();
             writes.push(node(&mut out, written));
@@ -163,6 +167,7 @@ fn value_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
         },
         TypeKind::Pointer if hir.address == AddressKind::Segment => types.ptr(SEGMENT),
         TypeKind::Pointer if hir.address == AddressKind::Huge => types.ptr(HUGE),
+        TypeKind::Pointer if hir.address == AddressKind::Fixed => types.ptr(FIXED),
         TypeKind::Pointer => types.ptr(if hir.width == 4 { FAR } else { 0 }),
         TypeKind::Array | TypeKind::Opaque => return Err(format!("a value of type {}", hir.name)),
     })
@@ -934,6 +939,14 @@ fn frame_groups<'h>(types: &mut Types, tables: &Tables<'h>, function: &'h model:
 /// The memset a zeroed aggregate local calls.
 const MEMSET: &str = "llvm.memset.p0.i16";
 
+/// What a scope's markers call: the lifetime of a local's bytes begins or ends.
+const LIFETIMES: [(Op, &str); 2] = [(Op::LifetimeStart, "llvm.lifetime.start.p0"), (Op::LifetimeEnd, "llvm.lifetime.end.p0")];
+
+fn lifetime_type(types: &mut Types) -> TypeId {
+    let (void, pointer, size) = (types.void(), types.ptr(0), types.int(64));
+    function_type(types, void, vec![size, pointer])
+}
+
 fn memset_type(types: &mut Types) -> TypeId {
     let (void, pointer, byte, size, flag) = (types.void(), types.ptr(0), types.int(8), types.int(16), types.int(1));
     function_type(types, void, vec![pointer, byte, size, flag])
@@ -955,6 +968,14 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             let global = add_unique(module, &place.name, |module, name| module.add_variable(name, variable.clone(), Linkage::External));
             let reference = module.reference(global);
             tables.data.insert(place.symbol, reference);
+        }
+    }
+    for (op, name) in LIFETIMES {
+        if !tables.callees.contains_key(name) && function.blocks.iter().any(|block| block.instructions.iter().any(|one| one.op == op)) {
+            let ty = lifetime_type(&mut module.context.types);
+            let global = module.add_function(name, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(name.to_owned(), reference);
         }
     }
     if tables.zeroed && !tables.callees.contains_key(MEMSET) {
@@ -1829,6 +1850,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             return Ok(());
         }
         match op {
+            Op::LifetimeStart | Op::LifetimeEnd => {
+                let Operand::PlaceRef(one) = &instruction.operands[0] else { return Err("a lifetime of what is no place".to_owned()) };
+                let place = self.places[&one.place];
+                let bytes = place.extent.unwrap_or(self.tables.types[&place.r#type].width);
+                let (pointer, _, _, _) = self.place(&instruction.operands[0])?;
+                let name = LIFETIMES.iter().find(|(one, _)| *one == op).expect("a lifetime op").1;
+                let callee = Value::Constant(self.tables.callees[name]);
+                let ty = lifetime_type(&mut self.b.context.types);
+                let size = self.b.int(64, i128::from(bytes));
+                self.b.call(ty, callee, &[size, pointer], "");
+            }
             Op::Copy | Op::Load => {
                 let value = self.value(&instruction.operands[0])?;
                 self.define(instruction, value);
