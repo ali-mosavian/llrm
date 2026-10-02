@@ -390,7 +390,7 @@ fn test_qb_numeric_procedure_emits_a_fresh_far_pascal_object() {
 fn test_source_procedure_names_match_all_three_microsoft_omf_dialects() {
     let expected = set(&["REPORT", "TWICE"]);
     for fixture in ["procs-q-O-zi.obj", "procs-p-ot.obj", "procs-v-g3-zi.obj"] {
-        let read = omf::read(root().join("tests/fixtures/omf").join(fixture.to_lowercase())).unwrap();
+        let read = omf::read(root().join("tests/inputs/omf").join(fixture.to_lowercase())).unwrap();
         assert_eq!(omf::public_definitions(&read).unwrap().keys().cloned().collect::<BTreeSet<_>>(), expected);
         assert!(expected.is_subset(&omf::externals(&read).into_iter().collect()));
     }

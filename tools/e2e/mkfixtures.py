@@ -1,5 +1,5 @@
 """
-Regenerate tests/fixtures/omf from the suite, and record where each object came from.
+Regenerate tests/inputs/omf from the suite, and record where each object came from.
 
 The objects are committed; this is what made them. Generating at test time would
 make the suite unrunnable for anyone without three DOS toolchains, and would
@@ -31,7 +31,7 @@ from configs import switches_for
 
 ROOT = Path(__file__).resolve().parents[2]
 SUITE = ROOT / "tests/run/qb"
-FIXTURES = ROOT / "tests/fixtures" / "omf"
+FIXTURES = ROOT / "tests/inputs" / "omf"
 MANIFEST = FIXTURES / "manifest.tsv"
 
 # /Zd and /Zi add records rather than changing code, so each is a variant of

@@ -16,7 +16,7 @@ if [ -z "$bin" ] || ! "$bin/opt" --version | grep -q 'version 20\.'; then
   exit 2
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
-cargo build -q --release -p llrm-mir --manifest-path "$root/Cargo.toml" || exit 2
+cargo build -q --release --bin llrm-mir --manifest-path "$root/Cargo.toml" || exit 2
 ours=$(mktemp -d)
 trap 'rm -rf "$ours"' EXIT
 canonical() { "$bin/llvm-as" -o - "$1" | "$bin/llvm-dis" -o - | grep -v -e '^; ModuleID' -e '^source_filename'; }

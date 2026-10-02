@@ -155,7 +155,7 @@ floating CSE or a fully optimized integrator. Full stages are in
 ## Static: what the pass does to the corpus
 
 
-Measured 2026-08-30, over the 110 objects in `tests/fixtures/omf`, with
+Measured 2026-08-30, over the 110 objects in `tests/inputs/omf`, with
 `uv run python tools/census.py`, after `docs/optimizations/residue.md`'s D, I and B all
 landed.
 
@@ -234,7 +234,7 @@ rewritten object is now **26 bytes larger** than BC's own, 1386 against 1360
 object's byte count at all: every one of its 9 measured sites is still
 refused by the same growth check that refuses any region wider than what it
 replaces, for reasons `docs/optimizations/residue.md`'s own F section now measures in
-full rather than estimates. The 110-object `tests/fixtures/omf` static census
+full rather than estimates. The 110-object `tests/inputs/omf` static census
 (below) is unchanged by either -- neither shape occurs in that corpus.
 
 4268 bytes bigger than the previous census (16942), from a correctness fix
@@ -376,7 +376,7 @@ refusals above.
 
 Re-measured 2026-08-31, code bytes only, `v-g3`.
 
-| | tests/fixtures/omf (155) | qb-qrender (15) |
+| | tests/inputs/omf (155) | qb-qrender (15) |
 |---|---|---|
 | BC | 95,189 | 74,855 |
 | absorbed | 89,665 (-5.80%) | 76,198 (+1.79%) |

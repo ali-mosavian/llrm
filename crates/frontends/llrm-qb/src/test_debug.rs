@@ -61,23 +61,23 @@ fn shape(records: &[Rc<omf::Record>]) -> Vec<String> {
 fn debug_symbols_read_as_bc_writes_them() {
     for (program, fixture, dialect) in [
         ("byref2", "omf/byref2-q-o-zi", "qb45"),
-        ("byref2", "cv/byref2-p-g2-zi", "pds71"),
-        ("byref2", "cv/byref2-v-g3-zi", "vbdos"),
-        ("byval", "cv/byval-p-g2-zi", "pds71"),
-        ("byval", "cv/byval-v-g3-zi", "vbdos"),
-        ("udt", "cv/udt-q-o-zi", "qb45"),
-        ("udt", "cv/udt-p-g2-zi", "pds71"),
-        ("udt", "cv/udt-v-g3-zi", "vbdos"),
-        ("arrays", "cv/arrays-q-o-zi", "qb45"),
-        ("arrays", "cv/arrays-p-g2-zi", "pds71"),
-        ("arrays", "cv/arrays-v-g3-zi", "vbdos"),
+        ("byref2", "codeview/byref2-p-g2-zi", "pds71"),
+        ("byref2", "codeview/byref2-v-g3-zi", "vbdos"),
+        ("byval", "codeview/byval-p-g2-zi", "pds71"),
+        ("byval", "codeview/byval-v-g3-zi", "vbdos"),
+        ("udt", "codeview/udt-q-o-zi", "qb45"),
+        ("udt", "codeview/udt-p-g2-zi", "pds71"),
+        ("udt", "codeview/udt-v-g3-zi", "vbdos"),
+        ("arrays", "codeview/arrays-q-o-zi", "qb45"),
+        ("arrays", "codeview/arrays-p-g2-zi", "pds71"),
+        ("arrays", "codeview/arrays-v-g3-zi", "vbdos"),
         ("nestud", "omf/nestud-q-o-zi", "qb45"),
     ] {
         let source = ["tests/run/qb", "tests/inputs/codeview"]
             .iter()
             .find_map(|dir| std::fs::read_to_string(root().join(format!("{dir}/{program}.bas"))).ok())
             .expect("reads");
-        let bc = shape(&omf::read(root().join(format!("tests/fixtures/{fixture}.obj"))).expect("reads"));
+        let bc = shape(&omf::read(root().join(format!("tests/inputs/{fixture}.obj"))).expect("reads"));
         assert!(!bc.is_empty(), "{fixture} carries no symbols");
         assert_eq!(shape(&object(&source, &[], dialect, dialect, true)), bc, "{fixture}");
     }

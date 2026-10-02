@@ -47,6 +47,7 @@ default-run = "llrm-qb"
 
 [dependencies]
 llrm-core = { workspace = true }
+llrm-mir = { workspace = true }
 llrm-bcdriver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
@@ -82,6 +83,10 @@ path = "src/bin/llrm-omf.rs"
 [[bin]]
 name = "llrm-nib"
 path = "src/bin/llrm-nib.rs"
+
+[[bin]]
+name = "llrm-mir"
+path = "src/bin/llrm-mir.rs"
 
 [[bin]]
 name = "llrm-run"

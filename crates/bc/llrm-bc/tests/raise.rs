@@ -5,7 +5,7 @@ use llrm_mir::interpret::{self, Val};
 use llrm_mir::{BinaryOp, CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, Linkage, Module, Opcode, Operand, Position, Type};
 
 fn raised(fixture: &str) -> Module {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/omf").join(fixture);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
     let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let errors = llrm_mir::verify::verify(&module);
@@ -409,7 +409,7 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
 /// "B$FIST outside the FP emulator's protocol" although BC asked for BCOM45.
 #[test]
 fn a_module_without_inline_floats_keeps_the_emulators_protocol() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions/nbody-q-o.obj");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/nbody-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
     let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     assert!(llrm_mir::verify::verify(&module).is_empty());
@@ -428,7 +428,7 @@ fn an_indexed_array_is_one_object() {
 /// order, their count last of those, then the descriptor in BX.
 #[test]
 fn an_element_address_passes_the_descriptor_last() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions/ndarr-q-o.obj");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/ndarr-q-o.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
     let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let text = llrm_mir::print::module(&module);
@@ -451,7 +451,7 @@ fn an_element_address_passes_the_descriptor_last() {
 #[test]
 fn erl_is_the_line_bcs_statement_table_gives() {
     for name in ["erlnum-q-o.obj", "erlnum-p-g2.obj", "erlnum-v-g3.obj"] {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions").join(name);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions").join(name);
         let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
         let module = llrm_bc::raise(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{name}: {refusal}")).module;
         let text = llrm_mir::print::module(&module);

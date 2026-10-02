@@ -19,12 +19,12 @@ pub enum Calls {
     Everything,
 }
 
-/// `name` of a C program's `tests/fixtures/mir/{fixture}`, as `before_regalloc_in`.
+/// `name` of a C program's `tests/check/mir/{fixture}`, as `before_regalloc_in`.
 pub fn before_regalloc<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
     before_regalloc_in(Calls::C, fixture, name, cpu_name)
 }
 
-/// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
+/// `name` of `tests/check/mir/{fixture}` for `cpu`, run through every
 /// phase before `RegAlloc` as production runs them (the spiller included);
 /// the body, and the phases from `RegAlloc` on.
 pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
@@ -38,7 +38,7 @@ pub fn before_regalloc_unspilled<'a>(fixture: &str, name: &str, cpu_name: &'a st
     before_phase_skipping(Calls::C, fixture, name, cpu_name, "RegAlloc", &["SsaSpill"])
 }
 
-/// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
+/// `name` of `tests/check/mir/{fixture}` for `cpu`, run through every
 /// phase before the one of class `phase`; the body, and the phases from it on.
 pub fn before_phase<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str, phase_class: &str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
     before_phase_skipping(calls, fixture, name, cpu_name, phase_class, &[])
@@ -53,7 +53,7 @@ pub fn before_phase_skipping<'a>(
     phase_class: &str,
     skipped: &[&str],
 ) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir").join(fixture);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/check/mir").join(fixture);
     let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
     let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
     let abi = crate::abi::qb::HirAbi {

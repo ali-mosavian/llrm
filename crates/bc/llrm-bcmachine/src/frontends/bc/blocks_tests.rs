@@ -40,7 +40,7 @@ fn test_what_ends_a_block() {
 #[test]
 fn test_runtime_return_does_not_fall_into_the_next_statement() {
     for tag in ["p-evt", "v-evt"] {
-        let path = Path::new(env!("LLRM_ROOT")).join(format!("{}/tests/fixtures/omf/addrm-{tag}.obj", env!("LLRM_ROOT")));
+        let path = Path::new(env!("LLRM_ROOT")).join(format!("{}/tests/inputs/omf/addrm-{tag}.obj", env!("LLRM_ROOT")));
         let mut found = loaded(path).unwrap();
         found.code = hx("9a 00 00 00 00 90 c3");
         found.start = 0;

@@ -6,7 +6,7 @@ use std::rc::Rc;
 use llrm_omf::omf::{self, Record};
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/omf").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(name)
 }
 
 fn records(name: &str) -> Vec<Rc<Record>> {
@@ -105,7 +105,7 @@ fn a_refusal_writes_nothing() {
     let out = std::env::temp_dir().join(format!("bcdriver-refusal-{}", std::process::id()));
     std::fs::create_dir_all(&out).expect("made");
     // Refused: INTO is unmodelled.
-    let refused = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions/arridx-bounds-p-g2.obj");
+    let refused = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/arridx-bounds-p-g2.obj");
     assert!(refused.exists());
     let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), refused]
         .iter()
@@ -218,7 +218,7 @@ fn a_module_without_a_handler_keeps_no_statement_rows() {
 #[test]
 fn data_emission_adds_is_laid_out() {
     for name in ["erlnum-q-o.obj", "erlnum-v-g3.obj"] {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions").join(name);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions").join(name);
         let data = std::fs::read(path).expect("reads");
         llrm_bcdriver::compiled(&data, "386", name).unwrap_or_else(|why| panic!("{name}: {why}"));
     }

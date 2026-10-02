@@ -359,7 +359,7 @@ requires seven `B$PEI4` output sites or reports PROVISIONAL. Fresh builds of the
 current source execute all seven rows correctly on QB, PDS and VBDOS. All 15
 CHAIN fixtures have now been regenerated from that source with zero severe
 compiler errors and updated manifest hashes. Three historical five-row objects
-remain as `tests/fixtures/regressions/chain5-*.obj` solely to test stale-reference
+remain as `tests/inputs/omf/regressions/chain5-*.obj` solely to test stale-reference
 rejection; their original source is unavailable, so they are not runtime goldens.
 Those fresh optimized objects cost **962 on QB/PDS (2.00×)** and **882 on
 VBDOS (1.83×)**. This exposes a real above-target case hidden by the stale
