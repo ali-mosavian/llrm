@@ -1,0 +1,7 @@
+description = "qlight demo kernel from the Quake port"
+repetitions = 1
+
+[region]
+bas = "BenchQlight"
+c = "bench_qlight"
+nib = "bench_qlight"

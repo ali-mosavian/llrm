@@ -1,0 +1,27 @@
+const PL_ACCELERATE: f32 = 10.0
+
+struct Vec3:
+    mut x: f32
+    mut y: f32
+    mut z: f32
+
+fn pl_ground_accel(vel: &mut Vec3, wishdir: &Vec3, wishspeed: f32, dt: f32) -> void:
+    let currentspeed = vel.x * wishdir.x + vel.y * wishdir.y
+    let addspeed = wishspeed - currentspeed
+    if addspeed <= 0.0:
+        return
+    let mut accelspeed = PL_ACCELERATE * wishspeed * dt
+    if accelspeed > addspeed:
+        accelspeed = addspeed
+    vel.x += accelspeed * wishdir.x
+    vel.y += accelspeed * wishdir.y
+
+fn bench_qmove() -> i32:
+    let mut vel = Vec3(3.0, 4.0, 5.0)
+    let wishdir = Vec3(1.0, 0.0, 0.0)
+    pl_ground_accel(&mut vel, &wishdir, 10.0, 0.25)
+    return i32(vel.x) * 10000 + i32(vel.y) * 100 + i32(vel.z)
+
+fn main() -> i16:
+    print(bench_qmove())
+    return 0

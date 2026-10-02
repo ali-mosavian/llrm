@@ -1,0 +1,16 @@
+const LS_NEUTRAL: i32 = 120
+
+fn ls_scale_byte(raw: i16, sval: i16) -> i16:
+    let mut value: i32 = i32(raw) * i32(sval) // LS_NEUTRAL
+    if value > 255:
+        value = 255
+    if value < 0:
+        value = 0
+    return i16(value)
+
+fn bench_qlight() -> i32:
+    return i32(ls_scale_byte(200, 120)) * 1000000 + i32(ls_scale_byte(200, 60)) * 1000 + i32(ls_scale_byte(200, 240)) + i32(ls_scale_byte(-20, 120))
+
+fn main() -> i16:
+    print(bench_qlight())
+    return 0

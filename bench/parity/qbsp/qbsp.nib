@@ -1,0 +1,41 @@
+# Leaf marker tested as i16 sign (`nodenr < 0`): Nib has no 0x8000 i16 literal.
+struct Vec3:
+    x: f32
+    y: f32
+    z: f32
+
+struct Plane:
+    norm: Vec3
+    dist: f32
+
+struct Node:
+    plane_id: i16
+    child0: i16
+    child1: i16
+
+fn r_plane_dist(p: &Vec3, pl: &Plane) -> f32:
+    return p.x * pl.norm.x + p.y * pl.norm.y + p.z * pl.norm.z - pl.dist
+
+fn r_point_leaf(p: &Vec3, nodes: &Node[2], planes: &Plane[2]) -> i16:
+    let mut nodenr: i16 = 0
+    while nodenr >= 0:
+        if r_plane_dist(p, planes[nodes[nodenr].plane_id]) >= 0.0:
+            nodenr = nodes[nodenr].child0
+        else:
+            nodenr = nodes[nodenr].child1
+    return ~nodenr
+
+fn bench_qbsp() -> i32:
+    let planes: Plane[2] = [
+        Plane(norm=Vec3(1.0, 0.0, 0.0), dist=0.0),
+        Plane(norm=Vec3(0.0, 1.0, 0.0), dist=0.0),
+    ]
+    let nodes: Node[2] = [Node(0, 1, -1), Node(1, -2, -3)]
+    let a = r_point_leaf(Vec3(2.0, 3.0, 0.0), nodes, planes)
+    let b = r_point_leaf(Vec3(2.0, -3.0, 0.0), nodes, planes)
+    let c = r_point_leaf(Vec3(-2.0, -3.0, 0.0), nodes, planes)
+    return i32(a) * 100 + i32(b) * 10 + i32(c)
+
+fn main() -> i16:
+    print(bench_qbsp())
+    return 0
