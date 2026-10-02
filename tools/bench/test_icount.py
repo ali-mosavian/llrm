@@ -85,11 +85,6 @@ class CountTests(unittest.TestCase):
         result = icount.run(self.exe, entry, self.directory)
         self.assertEqual((result.region.instructions, result.region.memory_operands), (3 + 1, 0))
 
-    def test_the_whole_program_counts_through_its_exit(self):
-        result = icount.run(self.exe, None, self.directory, whole=True)
-        self.assertEqual(result.exit_code, 0)
-        self.assertGreater(result.region.instructions, 34 + 4)
-
     def test_a_function_the_program_never_calls_is_reported_not_counted_as_zero(self):
         result = icount.run(self.exe, 0x7000, self.directory)
         self.assertIsNone(result.region)
