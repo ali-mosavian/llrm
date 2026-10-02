@@ -20,7 +20,8 @@ fn _plain(one: &Insn) -> bool {
 }
 
 fn _literal(one: &Insn) -> Option<(Mem, i64)> {
-    if !_plain(one) {
+    // A volatile store's width is what the device sees: never paired.
+    if !_plain(one) || one.volatile {
         return None;
     }
     let what = one.what.as_ref()?;

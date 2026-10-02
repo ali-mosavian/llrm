@@ -3639,11 +3639,11 @@ define i16 @f(ptr addrspace(1) %p) addrspace(1) {
     assert!(lines.contains(&"rep movs dword ptr es:[di], dword ptr fs:[si]".to_owned()), "{lines:?}");
 }
 
-/// `@f` of forty volatile stores, apart, to `@g` that a branch at its entry may
+/// `@f` of forty volatile stores to `@g` that a branch at its entry may
 /// skip: more than a short branch reaches.
 fn far_branch_body() -> String {
-    let stores: String = (0..40).map(|at| format!("  %p{at} = getelementptr i8, ptr @g, i16 {}\n  store volatile i16 {at}, ptr %p{at}\n", 4 * at)).collect();
-    format!("@g = global [160 x i8] zeroinitializer\ndefine i16 @f(i16 %c) addrspace(1) {{\nentry:\n  %z = icmp eq i16 %c, 0\n  br i1 %z, label %skip, label %body\nbody:\n{stores}  br label %skip\nskip:\n  ret i16 %c\n}}\n")
+    let stores: String = (0..40).map(|at| format!("  %p{at} = getelementptr i8, ptr @g, i16 {}\n  store volatile i16 {at}, ptr %p{at}\n", 2 * at)).collect();
+    format!("@g = global [80 x i8] zeroinitializer\ndefine i16 @f(i16 %c) addrspace(1) {{\nentry:\n  %z = icmp eq i16 %c, 0\n  br i1 %z, label %skip, label %body\nbody:\n{stores}  br label %skip\nskip:\n  ret i16 %c\n}}\n")
 }
 
 /// The code segment of `text`'s object, decoded, with the offsets its fixups patch.
@@ -3695,4 +3695,21 @@ fn test_every_relocated_field_moves_with_its_instruction() {
     let (_, fields, fixed) = decoded_object(&far_branch_body());
     assert_eq!(fixed.len(), 40, "{fixed:?}");
     assert!(fixed.iter().all(|at| fields.contains(at)), "fixups {fixed:?}, fields {fields:?}");
+}
+
+/// Two adjacent volatile word stores are two word stores: the width of a
+/// device access is its behaviour. storecombine paired them into one dword,
+/// as it rightly pairs plain ones (#319).
+#[test]
+fn test_adjacent_volatile_word_stores_stay_two_word_stores() {
+    let stores = |volatile: &str| {
+        let text = format!("@g = global [4 x i8] zeroinitializer\ndefine void @f() addrspace(1) {{\n  store {volatile}i16 1, ptr @g\n  %p = getelementptr i8, ptr @g, i16 2\n  store {volatile}i16 2, ptr %p\n  ret void\n}}\n");
+        listing(&text, "f").into_iter().filter(|line| line.starts_with("mov ")).collect::<Vec<_>>()
+    };
+    let volatile = stores("volatile ");
+    assert_eq!(volatile.len(), 2, "{volatile:?}");
+    assert!(volatile.iter().all(|line| line.starts_with("mov word ptr")), "{volatile:?}");
+    let plain = stores("");
+    assert_eq!(plain.len(), 1, "{plain:?}");
+    assert!(plain[0].starts_with("mov dword ptr"), "{plain:?}");
 }
