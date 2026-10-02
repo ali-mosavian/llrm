@@ -977,6 +977,17 @@ fn floating_freedoms_are_fast_math_flags() {
     assert!(text.contains("= fadd reassoc nnan ninf nsz arcp double %0, %1"), "{text}");
 }
 
+/// The verifier a frontend's HIR meets refuses a value used where its
+/// definition does not dominate it.
+#[test]
+fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
+    let mut function = difference();
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Add, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]));
+    function.values.push(Value { id: 4, r#type: 1 });
+    let error = crate::verify::verify(&program(function)).unwrap_err();
+    assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
+}
+
 /// A pointer the frontend says is at a fixed address is a pointer in the
 /// fixed-address space; whether its accesses are ordered is the access's
 /// own promise, `volatile`, which the frontend states and lowering keeps.
@@ -1000,15 +1011,4 @@ fn a_fixed_address_pointer_is_in_the_fixed_space() {
         let text = llrm_mir::print::module(&emitted.module);
         assert!(text.contains("p4:32:16:16:16") && text.contains("(ptr addrspace(4) %0)") && text.contains(&format!("{word} i16, ptr addrspace(4) %0")), "{text}");
     }
-}
-
-/// The verifier a frontend's HIR meets refuses a value used where its
-/// definition does not dominate it.
-#[test]
-fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
-    let mut function = difference();
-    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Add, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]));
-    function.values.push(Value { id: 4, r#type: 1 });
-    let error = crate::verify::verify(&program(function)).unwrap_err();
-    assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
 }
