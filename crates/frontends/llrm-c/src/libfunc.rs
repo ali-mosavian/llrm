@@ -68,6 +68,15 @@ pub fn three_way_compare(name: &str) -> bool {
     THREE_WAY.contains(&name.strip_prefix('_').unwrap_or(name))
 }
 
+/// The C library's routines that return twice: once as called, once more
+/// from the `longjmp` that jumps back to them.
+const RETURNS_TWICE: [&str; 3] = ["setjmp", "sigsetjmp", "savectx"];
+
+/// Whether the function of object name `name` is one of them.
+pub fn returns_twice(name: &str) -> bool {
+    RETURNS_TWICE.contains(&name.strip_prefix('_').unwrap_or(name))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -89,5 +98,12 @@ mod tests {
         assert_eq!(strlen.reads, BTreeSet::from([Slice::whole(parameter)]));
         assert!(strlen.writes.is_empty() && strlen.captures.is_empty());
         assert!(!strlen.unknown_read && !strlen.unknown_write);
+    }
+
+    /// `setjmp` returns twice by its name, with or without the C decoration.
+    #[test]
+    fn setjmp_is_known_to_return_twice() {
+        assert!(super::returns_twice("_setjmp") && super::returns_twice("setjmp") && super::returns_twice("_sigsetjmp"));
+        assert!(!super::returns_twice("_longjmp") && !super::returns_twice("_setjmp2"));
     }
 }
