@@ -37,6 +37,7 @@ use std::rc::Rc;
 use llrm_mir::callgraph::CallGraph;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, callee, has};
 use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
@@ -48,29 +49,51 @@ use crate::profit::{OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
 /// for none. A callee's budget, in semantic operations, scales with it.
+/// `hint` is the ratio a routine the language marks worth inlining may grow
+/// by: LLVM's inline-hint threshold, 325 against 225; 1/1 where code size
+/// outranks speed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Threshold(pub i64);
+pub struct Threshold {
+    pub limit: i64,
+    pub hint: (i64, i64),
+}
+
+impl Threshold {
+    pub fn new(limit: i64) -> Self {
+        Self { limit, hint: (325, 225) }
+    }
+
+    /// The same where code size outranks speed: a hint buys nothing.
+    pub fn for_size(self) -> Self {
+        Self { hint: (1, 1), ..self }
+    }
+}
 
 impl Default for Threshold {
     fn default() -> Self {
-        Self(225)
+        Self::new(225)
     }
 }
 
 impl Threshold {
     /// The budget for a call priced `call_cost`; None when nothing inlines.
     fn budget(self, call_cost: i64) -> Option<i64> {
-        (self.0 > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.0 / Self::default().0)
+        (self.limit > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.limit / Self::default().limit)
     }
+}
+
+/// Direct call counts by callee.
+pub type Counter = IndexMap<GlobalId, i64>;
+
+/// What the language says of inlining `body`.
+fn stated(body: &Function) -> Option<Inlining> {
+    Facts::of(&body.attrs).inline()
 }
 
 /// The stack, in bytes, inlining may add to one function: a copy's frame is
 /// a cell of its own wherever it sits, so copies add up, and in a recursive
 /// function they add up per level.  LLVM bounds the same way.
 const FRAME_LIMIT: u64 = 256;
-
-/// Direct call counts by callee.
-pub type Counter = IndexMap<GlobalId, i64>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
@@ -115,7 +138,7 @@ fn frame(context: &Context, layout: &DataLayout, function: &Function) -> u64 {
 /// The functions that call themselves, directly or not.
 pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     let graph = CallGraph::new(module);
-    module.functions().map(|(id, _, _)| id).filter(|&id| graph.reaches(id, id)).collect()
+    module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
 }
 
 /// Functions whose address is taken: named anywhere but as a callee.
@@ -147,11 +170,11 @@ fn addressed(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// Whether `body` may be cloned into another function: it returns, `splice`
-/// carries it, and it is not recursive, `noinline` or `setjmp`-like.
+/// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
 fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
     !body.is_declaration()
         && carries(body)
-        && !has(&body.attrs, "noinline")
+        && stated(body) != Some(Inlining::Never)
         && !recursive.contains(&id)
         && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)
         && !body.walk().any(|(_, inst)| callee(&module.context, body, inst).and_then(|one| module.global(one).function()).is_some_and(|one| has(&one.attrs, "returns_twice")))
@@ -165,23 +188,32 @@ fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCo
 
 /// Functions worth moving into their direct callers.
 ///
-/// A candidate's size is bounded by the `Threshold`.  Inlining it at all
+/// A candidate's size is bounded by the `Threshold`; a routine the language
+/// says is `Always` inlined is a candidate at any size, and `Never` is none.
+/// Inlining it at all
 /// `count` sites leaves the body behind when it is public or its address is
 /// taken; a private one goes with the last site, so one site costs nothing.
 /// Each copy beyond that duplicates the body's priced work, which has to
 /// stay below the calls removed.
 pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
-    let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
+    let budget = threshold.budget(call_cost);
     let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), addressed(module));
     let mut out = IndexMap::default();
     for (&name, &count) in calls {
         let Some(body) = body(module, name) else { continue };
-        if count == 0 || semantic_count(body) > budget || !cloneable(module, &recursive, name, body) {
+        if count == 0 || !cloneable(module, &recursive, name, body) {
             continue;
         }
+        let always = stated(body) == Some(Inlining::Always);
+        // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
+        let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
-        if copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < count * call_cost) {
+        let admitted = || {
+            budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
+                && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * call_cost)))
+        };
+        if always || admitted() {
             out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
     }

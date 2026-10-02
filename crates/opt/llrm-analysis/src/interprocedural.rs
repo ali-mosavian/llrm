@@ -32,6 +32,7 @@
 //! - `noreturn_procedures`, `terminal_sites` and the `terminal_calls` cut
 //!   are noreturn's facts and edit, asked for here.
 
+use llrm_mir::facts::{Fact, Facts};
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::Defined;
@@ -324,7 +325,7 @@ pub fn stated_pure(module: &Module) -> BTreeSet<GlobalId> {
         .into_iter()
         .filter(|(_, function)| {
             let attrs = &function.attrs;
-            memory::stated(attrs) == memory::Effects::NONE && memory::has(attrs, "willreturn") && memory::has(attrs, "nounwind")
+            memory::stated(attrs) == memory::Effects::NONE && Facts::of(attrs).will_return() && Facts::of(attrs).no_unwind()
         })
         .map(|(id, _)| id)
         .collect()
@@ -335,8 +336,8 @@ pub fn stated_pure(module: &Module) -> BTreeSet<GlobalId> {
 /// `wouldInstructionBeTriviallyDead` asks.
 pub fn erasable(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
     !effects::writes_memory(context, declarations, function, inst)
-        && effects::states(context, declarations, function, inst, "willreturn")
-        && effects::states(context, declarations, function, inst, "nounwind")
+        && effects::states(context, declarations, function, inst, Fact::WillReturn)
+        && effects::states(context, declarations, function, inst, Fact::NoUnwind)
 }
 
 /// Direct private procedures that cannot reach a normal return: noreturn's

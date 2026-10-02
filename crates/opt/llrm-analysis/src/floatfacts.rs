@@ -227,10 +227,6 @@ impl Rule {
     }
 }
 
-fn nsz() -> Flags {
-    Flags::NAMES.iter().find(|(_, name)| *name == "nsz").expect("nsz is a flag").0
-}
-
 /// The floating rule of `inst`, if it has one.
 pub fn rule(unit: &Unit, inst: InstId) -> Option<Rule> {
     let op = unit.function.instruction(inst);
@@ -265,7 +261,7 @@ pub fn rule(unit: &Unit, inst: InstId) -> Option<Rule> {
         },
         _ => return None,
     };
-    Some(Rule { operation, inputs, result, nsz: op.flags.contains(nsz()) })
+    Some(Rule { operation, inputs, result, nsz: llrm_mir::facts::Facts::of_flags(op.flags).no_signed_zeros() })
 }
 
 pub fn decoded(bits: &BigInt, format: Format) -> Option<Finite> {

@@ -53,7 +53,9 @@ pub fn run(module: &Module, name: &str, arguments: Vec<Val>, fuel: u64) -> Run<V
 
 /// [`run`], with the function's own stated facts checked as it goes: a trap
 /// where a `noalias` parameter's memory is also reached some other way and
-/// one of the accesses writes. The oracle a stated fact is tested against.
+/// one of the accesses writes, where a `readonly` parameter's memory is
+/// written through it, and where a `nonnull` parameter is null. The oracle a
+/// stated fact is tested against.
 /// Only accesses the function makes itself, through a pointer it can trace
 /// to a parameter, a slot or a global (also through a stack slot written
 /// once), are compared.
@@ -377,7 +379,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare => void,
+            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare | Intrinsic::Assume => void,
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
                 (Val::Ptr(a), Val::Ptr(b), Some(width)) => Val::Int { bits: u128::from(a.wrapping_sub(b)) & mask(width), width },
@@ -424,6 +426,11 @@ impl<'m> Machine<'m> {
     /// traps where it breaks a `noalias` parameter's promise with one before.
     fn touch(&self, function: &Function, touched: &mut Vec<Touch>, pointer: Operand, address: u64, size: u64, write: bool) -> Run<()> {
         let Some(root) = self.root_of(function, pointer, 4) else { return Ok(()) };
+        if let (Root::Param(at), true) = (root, write)
+            && Facts::param(function, at as usize).read_only()
+        {
+            return undefined(format!("a readonly parameter's bytes {}..{} are written through it", address, address + size));
+        }
         let restrict = |root: Root| matches!(root, Root::Param(at) if Facts::param(function, at as usize).no_alias());
         let new = Touch { root, start: address, end: address + size, write };
         for old in touched.iter() {
@@ -438,6 +445,13 @@ impl<'m> Machine<'m> {
 
     fn execute(&mut self, function: &'m Function, arguments: Vec<Val>) -> Run<Val> {
         let mut touched: Vec<Touch> = Vec::new();
+        if self.checked {
+            for (at, argument) in arguments.iter().enumerate() {
+                if matches!(argument, Val::Ptr(0)) && Facts::param(function, at).non_null() {
+                    return undefined(format!("nonnull parameter {at} is null"));
+                }
+            }
+        }
         let mut values: HashMap<ValueId, Val> = function.parameters().iter().copied().zip(arguments).collect();
         let mut block = function.entry().expect("a body");
         let mut came_from: Option<BlockId> = None;
