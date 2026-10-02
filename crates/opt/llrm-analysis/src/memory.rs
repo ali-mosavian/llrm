@@ -928,12 +928,11 @@ pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
 
 /// Whether `inst` may write memory beyond what its own access says:
 /// effects.rs's `unmodeled_write`. A call writes what its callee may, as
-/// its attributes and the callee's state it; a volatile access is a
-/// barrier.
+/// its attributes and the callee's state it; a load or store, volatile
+/// or not, writes only what it addresses.
 pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
     let instruction = unit.function.instruction(inst);
     match &instruction.opcode {
-        Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => *volatile,
         Opcode::Call(info) | Opcode::Invoke(info) => {
             let callee = instruction.operands.last().and_then(|&one| match one {
                 Operand::Constant(id) => match unit.context.get(id).kind {

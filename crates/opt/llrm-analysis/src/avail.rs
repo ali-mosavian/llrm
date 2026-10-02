@@ -265,7 +265,7 @@ impl Solve<'_, '_> {
             // Nothing can read a private cell but by its name: not a call,
             // and not an address this cannot resolve.
             let shielded = self.private.is_some();
-            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.stored(unit.function, inst)) else {
+            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.writes(inst)) else {
                 if shielded && call {
                     overwritten.intersect_with(&stored.private);
                 } else {

@@ -168,15 +168,23 @@ fn test_a_loop_header_phi_carries_the_backedge_definition() {
     assert_eq!(graph.at(site(&unit, "b1", 0)).defining, Some(phi.id));
 }
 
-/// A volatile access is the old barrier.
+/// A volatile access touches only its own bytes, as LLVM's: a volatile
+/// store defines memory and may change the cell through `%p`, but not the
+/// cell beside its own; a volatile load reads, it defines nothing. Both were
+/// a barrier, and TEXTFILL read its variables again after every POKE (#257).
 #[test]
-fn test_a_volatile_access_defines_memory_even_without_named_cells() {
-    for write in ["store volatile i16 1, ptr %p", "%v = load volatile i16, ptr %p"] {
+fn test_a_volatile_access_touches_only_its_own_bytes() {
+    for (write, kind, clobbers) in [
+        ("store volatile i16 1, ptr %p", Kind::Def, true),
+        (&format!("store volatile i16 1, ptr {OTHER}"), Kind::Def, false),
+        ("%v = load volatile i16, ptr %p", Kind::Use, false),
+    ] {
         let parsed = written(write);
         let unit = parsed.unit();
         let graph = graph(&unit);
-        assert_eq!(graph.at(site(&unit, "b0", 0)).kind, Kind::Def, "{write}");
-        assert_eq!(graph.clobbers(site(&unit, "b0", 1), &cell(&unit, site(&unit, "b0", 1))), BTreeSet::from([graph.at(site(&unit, "b0", 0)).id]));
+        assert_eq!(graph.at(site(&unit, "b0", 0)).kind, kind, "{write}");
+        let load = site(&unit, "b0", 1);
+        assert_eq!(graph.clobbers(load, &cell(&unit, load)).contains(&graph.at(site(&unit, "b0", 0)).id), clobbers, "{write}");
     }
 }
 

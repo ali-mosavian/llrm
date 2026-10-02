@@ -2609,6 +2609,27 @@ fn a_for_counters_add_states_the_wrap_its_type_cannot_do() {
     assert!(signed.iter().any(|one| one.contains("add nsw i16")) && !signed.iter().any(|one| one.contains("nuw")), "{signed:?}");
 }
 
+/// A POKE writes only the byte it addresses. Volatile was a barrier, so
+/// after #257 TEXTFILL's Fill loop read `ch`, `at` and `b$seg` (twice)
+/// again every trip, 4 loads, though DEF SEG had put the segment at video
+/// memory. Through `llrm-qb -O2 --cpu 486 -S`, as shipped.
+#[test]
+fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let out = directory.path().join("textfill.asm");
+    let source = root().join("bench/general/TEXTFILL.BAS");
+    let argv = [source.to_str().unwrap(), "-O2", "--cpu", "486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
+    assert_eq!(crate::cli::main(&argv), 0);
+    let text = std::fs::read_to_string(&out).expect("the listing");
+    let fill = between(&text, "FILL proc", "FILL endp").lines().map(str::trim).collect::<Vec<_>>();
+    let at = fill.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("the loop's branch");
+    let top = fill.iter().position(|one| *one == format!("{}:", fill[at].split_whitespace().nth(1).unwrap())).expect("its label");
+    let body = &fill[top..=at];
+    let loads = body.iter().filter(|one| one.contains("ptr [") || one.contains("b$seg")).count();
+    let pokes = body.iter().filter(|one| one.starts_with("mov byte ptr es:[")).count();
+    assert_eq!((loads, pokes), (0, 2), "{body:#?}");
+}
+
 /// PEEK reads and POKE writes memory every time, whatever DEF SEG says: the
 /// BIOS tick wait `DO: LOOP UNTIL PEEK(&H6C) <> t` compiled to an infinite
 /// loop (`cmp ax, ax`), the second PEEK taken for the first's value, and a

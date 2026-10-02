@@ -373,7 +373,7 @@ fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, t
             let instruction = function.instruction(inst);
             let store = matches!(instruction.opcode, Opcode::Store { .. });
             // A volatile access writes its own bytes: it orders, it does not clobber.
-            let Some(writes) = accesses.stored(function, inst) else {
+            let Some(writes) = accesses.writes(inst) else {
                 available = Bits::new(cells.len());
                 continue;
             };
