@@ -101,7 +101,7 @@ fn spill_model(program: &Program) {
 /// objects' ids.
 pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
     // Whichever frontend made it, a program is checked before it is lowered.
-    // Dominance alone, not `llrm_hir::verify::verify`: llrm-c's HIR does not pass the rest yet (#NNN).
+    // Dominance alone, not `llrm_hir::verify::verify`: llrm-c's HIR does not pass the rest yet (#224).
     for function in program.modules.iter().flat_map(|module| &module.functions) {
         llrm_hir::dominance::check(function).map_err(|why| format!("{}: {why}", function.name))?;
     }
