@@ -2,7 +2,7 @@
 //! lowering writes it and a backend reads it, both through here.
 //!
 //! A type is a node `!{!"kind", !"name", i64 size, !"address", target, !{members}}`
-//! and a member `!{!"name", type, i64 offset}`. Named metadata [`TYPES`],
+//! and a member `!{!"name", type, i64 offset}`, a bit field's with its `i64 start, i64 width` after. Named metadata [`TYPES`],
 //! [`FUNCTIONS`] and [`GLOBALS`] list the types, each after those it names,
 //! the procedures and the variables in data; a variable in a frame is an `llvm.dbg.declare` of its storage,
 //! its [`VARIABLE`] attachment naming it.
@@ -110,6 +110,8 @@ pub struct Member {
     pub name: String,
     pub r#type: MetadataId,
     pub offset: i64,
+    /// A bit field's first bit in the unit at `offset`, and its width.
+    pub bits: Option<(i64, i64)>,
 }
 
 /// A procedure: MIR's `function`, and its parameters by argument index;
@@ -220,7 +222,15 @@ fn list(module: &mut Module, items: Vec<Vec<MetadataOperand>>) -> MetadataOperan
 }
 
 pub fn add_type(module: &mut Module, one: &Type) -> MetadataId {
-    let members = one.members.iter().map(|member| vec![text(&member.name), MetadataOperand::Node(member.r#type), int(module, member.offset)]).collect();
+    let members = one
+        .members
+        .iter()
+        .map(|member| {
+            let mut made = vec![text(&member.name), MetadataOperand::Node(member.r#type), int(module, member.offset)];
+            made.extend(member.bits.into_iter().flat_map(|(start, width)| [int(module, start), int(module, width)]));
+            made
+        })
+        .collect();
     let members = list(module, members);
     let size = int(module, one.size);
     let target = one.target.map_or(MetadataOperand::Null, MetadataOperand::Node);
@@ -242,7 +252,7 @@ pub fn read_type(module: &Module, id: MetadataId) -> Option<Type> {
         size: one.int(2)?,
         reach: Reach::from_value(&one.text(3)?)?,
         target: one.node(4),
-        members: one.list(5, |member| Some(Member { name: member.text(0)?, r#type: member.node(1)?, offset: member.int(2)? }))?,
+        members: one.list(5, |member| Some(Member { name: member.text(0)?, r#type: member.node(1)?, offset: member.int(2)?, bits: member.int(3).zip(member.int(4)) }))?,
     })
 }
 
@@ -309,7 +319,7 @@ mod tests {
         let mut module = Module::default();
         let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new() };
         let int16 = add_type(&mut module, &scalar);
-        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, members: vec![Member { name: "x".into(), r#type: int16, offset: 2 }] };
+        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, members: vec![Member { name: "x".into(), r#type: int16, offset: 2, bits: None }, Member { name: "f".into(), r#type: int16, offset: 0, bits: Some((3, 5)) }] };
         let pt = add_type(&mut module, &structure);
         assert_eq!(read_type(&module, int16), Some(scalar));
         assert_eq!(read_type(&module, pt), Some(structure));

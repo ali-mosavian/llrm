@@ -262,7 +262,8 @@ pub enum DebugType {
     Scalar { name: String, cg: String },
     Array { hi: i64, base: i64 },
     Pointer { cg: String, base: i64 },
-    Struct { name: String, union: bool, size: i64, fields: Vec<(i64, String, i64)> },
+    /// Fields: offset, name, type, and a bit field's first bit and width.
+    Struct { name: String, union: bool, size: i64, fields: Vec<(i64, String, i64, Option<(i64, i64)>)> },
     Enum { cg: String },
     Proc { result: i64, parameters: Vec<i64> },
     /// A tag or typedef name for the type it names.
@@ -408,9 +409,10 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let debug = made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
                 let known = debug.types.get_mut(&handle(arg(one, 0)));
                 match (one.call.as_str(), known) {
-                    ("DBField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)))),
-                    // A bit field as its base type: CodeView's own is unmeasured.
-                    ("DBBitField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 4).to_owned(), handle(arg(one, 5)))),
+                    ("DBField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)), None)),
+                    ("DBBitField", Some(DebugType::Struct { fields, .. })) => {
+                        fields.push((int(arg(one, 1)), arg(one, 4).to_owned(), handle(arg(one, 5)), Some((int(arg(one, 2)), int(arg(one, 3))))))
+                    }
                     ("DBParm", Some(DebugType::Proc { parameters, .. })) => parameters.push(handle(arg(one, 1))),
                     ("DBEndName", Some(DebugType::Name { target, .. })) => *target = Some(handle(arg(one, 1))),
                     _ => return Err(Unsupported(format!("stream line {}: {} of an unknown debug type", one.line, one.call))),

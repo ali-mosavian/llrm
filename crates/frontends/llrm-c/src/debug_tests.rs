@@ -9,13 +9,18 @@ use llrm_core::objectfile::{cvinfo, omf};
 /// tests/fixtures/c/debug.cgs, recorded from debug.c (and its debug.h)
 /// with -d2, compiled as the CLI compiles it.
 fn object() -> Vec<Rc<omf::Record>> {
-    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
+    object_of("debug")
+}
+
+/// tests/fixtures/c/`name`.cgs compiled as the CLI compiles it.
+fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
+    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(machine) };
-    let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
-    omf::parse(&omfwrite::written(&built, "debug.c").expect("writes")).expect("parses")
+    let built = super::compile::selected(&text, name, None, &options).expect("compiles");
+    omf::parse(&omfwrite::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
 }
 
 /// Every parameter, local, static and global with its C type; `(void)`
@@ -51,4 +56,16 @@ fn c_symbols_read_with_their_types() {
 fn c_lines_are_the_main_files() {
     let lines: Vec<u16> = object().iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).map(|(line, _)| line).collect();
     assert_eq!(lines, [13, 15, 16, 17]);
+}
+
+/// A bit field read as its whole base type: `DBBitField`'s first bit and
+/// width were dropped, and a debugger showed `b` as the int at offset 0.
+/// Each is now QuickC's bitfield record of its width, sign and first bit.
+#[test]
+fn c_bit_fields_read_with_their_width_and_first_bit() {
+    let shape = cvinfo::parse(&object_of("debugbf")).shape();
+    assert!(
+        shape.contains(&"DATA gf: TYPE flags {a +0 BITFIELD 3 UNSIGNED @0, b +0 BITFIELD 5 SIGNED @3, c +1 BITFIELD 9 UNSIGNED @0}".to_owned()),
+        "{shape:#?}"
+    );
 }

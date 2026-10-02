@@ -622,6 +622,9 @@ pub struct DebugMember {
     pub name: String,
     pub r#type: i64,
     pub offset: i64,
+    /// A bit field's first bit in the unit at `offset`, and its width.
+    pub bit_start: Option<i64>,
+    pub bit_width: Option<i64>,
 }
 
 /// A parameter: the function's `argument`th, hidden ones counted.

@@ -140,7 +140,7 @@ plain_record!(Place, None, id => "id", name => "name", r#type => "type", storage
 plain_record!(Value, None, id => "id", r#type => "type");
 plain_record!(DebugType, None, id => "id", kind => "kind", name => "name", target => "target", size => "size",
     reach => "reach", members => "members");
-plain_record!(DebugMember, None, name => "name", r#type => "type", offset => "offset");
+plain_record!(DebugMember, None, name => "name", r#type => "type", offset => "offset", bit_start => "bit_start", bit_width => "bit_width");
 plain_record!(DebugParameter, None, argument => "argument", name => "name", r#type => "type");
 plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
@@ -1266,8 +1266,16 @@ static DEBUG_TYPE: _Record = _Record {
 
 static DEBUG_MEMBER: _Record = _Record {
     name: "DebugMember",
-    fields: &[("name", _Hint::Str, true), ("type", _Hint::Int, true), ("offset", _Hint::Int, true)],
-    build: |args| _object(model::DebugMember { name: _required(args, "name")?, r#type: _required(args, "type")?, offset: _required(args, "offset")? }),
+    fields: &[("name", _Hint::Str, true), ("type", _Hint::Int, true), ("offset", _Hint::Int, true), ("bit_start", OPTIONAL_INT, false), ("bit_width", OPTIONAL_INT, false)],
+    build: |args| {
+        _object(model::DebugMember {
+            name: _required(args, "name")?,
+            r#type: _required(args, "type")?,
+            offset: _required(args, "offset")?,
+            bit_start: _default(args, "bit_start", None)?,
+            bit_width: _default(args, "bit_width", None)?,
+        })
+    },
 };
 
 static DEBUG_PARAMETER: _Record = _Record {
