@@ -340,3 +340,30 @@ b2:
     let body = after.split("b1:").nth(1).unwrap_or("").split("\n\n").next().unwrap_or("");
     assert!(body.contains("load volatile i16, ptr addrspace(4)"), "{after}");
 }
+
+/// `int a = *p; *q = 1; return a + *p` with `q` a `char *`: C lets the char
+/// store write `*p`, so the second load stays. TypeBasedAA's `omnipotent char`
+/// was not read as the parent of `int2`, and llrm-c's -O2 added `*p` to itself.
+#[test]
+fn a_char_store_between_two_int_loads_leaves_the_second_load() {
+    let text = "define i16 @f(ptr %p, ptr %q) {
+b0:
+  %a = load i16, ptr %p, !tbaa !5
+  store i8 1, ptr %q, !tbaa !4
+  %b = load i16, ptr %p, !tbaa !5
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+
+!0 = !{!\"Simple C/C++ TBAA\"}
+!1 = !{!\"omnipotent char\", !0, i64 0}
+!2 = !{!\"int2\", !1, i64 0}
+!4 = !{!1, !1, i64 0}
+!5 = !{!2, !2, i64 0}
+";
+    assert!(text.contains("store i8 1, ptr %q"), "the shape that was forwarded over");
+    let mut module = llrm_analysis::testing::parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    let printed = llrm_mir::print::module(&module);
+    assert_eq!(printed.matches("load i16").count(), 2, "{printed}");
+}

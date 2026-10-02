@@ -110,6 +110,9 @@ impl FunctionCompiler<'_> {
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
         self.require_unsafe("taking a raw pointer", span)?;
+        // A raw pointer goes where nothing follows it.
+        let kept = self.roots(operand);
+        self.keep_lent(&kept);
         let TypeName::Pointer {
             type_id: pointer_id,
             width,

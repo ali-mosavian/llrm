@@ -71,7 +71,7 @@ impl Described<'_> {
             }
             fields.push((name.clone(), r#type, i64::from(field.offset)));
         }
-        let fields: Vec<(&str, i64, i64)> = fields.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset)).collect();
+        let fields: Vec<(&str, i64, i64, Option<(i64, i64)>)> = fields.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset, None)).collect();
         Some(self.builder.structure(&layout.name, i64::from(width), &fields))
     }
 }

@@ -1148,6 +1148,7 @@ fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
             segmented: vec![false],
             arrays: vec![false],
             defined: true,
+            returns_twice: false,
             symbol: None,
         }],
         ..hir::Module::new(1, "modref", vec![void, integer, pointer], vec![caller, callee])
@@ -2967,4 +2968,39 @@ fn an_outlined_handler_takes_a_row_per_line() {
     assert!(program.modules[0].line_numbers.contains(&(5, 110)));
     let found = handler_lines(&program);
     assert!(found.contains(&100) && found.contains(&110), "{found:?}");
+}
+
+/// A FOR counter's add was `nsw` whatever the counter's type: an UNSIGNED
+/// INTEGER passes 32767 legitimately, so `nsw` was poison there. An unsigned
+/// counter's add does not wrap as unsigned (BC hangs if it would), `nuw`.
+#[test]
+fn a_for_counters_add_states_the_wrap_its_type_cannot_do() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = |declared: &str| format!("DIM c AS {declared}, n AS {declared}, s AS LONG\r\nn = 30100\r\nFOR c = 30000 TO n\r\ns = s + 1\r\nNEXT c\r\nPRINT s\r\n");
+    let adds = |declared: &str| {
+        let mir = emitted_mir(&parsed_as(&written(&directory, "count.bas", source(declared).as_bytes()), "quickr", "qb45"));
+        mir.lines().filter(|one| one.contains(" = add ") && one.contains("i16")).map(str::to_owned).collect::<Vec<_>>()
+    };
+    let unsigned = adds("UNSIGNED INTEGER");
+    assert!(unsigned.iter().any(|one| one.contains("add nuw i16")) && !unsigned.iter().any(|one| one.contains("nsw")), "{unsigned:?}");
+    let signed = adds("INTEGER");
+    assert!(signed.iter().any(|one| one.contains("add nsw i16")) && !signed.iter().any(|one| one.contains("nuw")), "{signed:?}");
+}
+
+/// PEEK reads and POKE writes memory every time, whatever DEF SEG says: the
+/// BIOS tick wait `DO: LOOP UNTIL PEEK(&H6C) <> t` compiled to an infinite
+/// loop (`cmp ax, ax`), the second PEEK taken for the first's value, and a
+/// second POKE of one address was dropped as dead.
+#[test]
+fn peek_and_poke_touch_memory_every_time() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let source = b"DEFINT A-Z\r\nDEF SEG = &H40\r\nt = PEEK(&H6C)\r\nDO\r\nLOOP UNTIL PEEK(&H6C) <> t\r\nPOKE &H6C, 0\r\nPOKE &H6C, 1\r\nPRINT 1\r\n";
+    let path = written(&directory, "tick.bas", source);
+    let text = rich_listing(&parsed_as(&path, "qb45", "qb45"));
+    assert!(source.windows(5).any(|one| one == b"PEEK("), "the shape that was folded");
+    // The loop re-reads: a label, a byte read of the tick, and a jump back to it.
+    let read = regex::Regex::new(r"(L\d+_\d+):\n\s+movzx \w+, byte ptr es:\[108\]\n").unwrap();
+    let back = |label: &str| regex::Regex::new(&format!(r"\s+j\w+ {label}\n")).unwrap().is_match(&text);
+    assert!(read.captures_iter(&text).any(|found| back(&found[1])), "{text}");
+    assert_eq!(text.matches("mov byte ptr es:[108],").count(), 2, "{text}");
 }

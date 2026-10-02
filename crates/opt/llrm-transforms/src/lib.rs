@@ -6,6 +6,8 @@ pub mod algebraic;
 pub mod canonical;
 #[cfg(test)]
 mod corpus_tests;
+#[cfg(test)]
+mod pipeline_ported_tests;
 pub mod cfg;
 pub mod counting;
 pub mod dead;

@@ -765,3 +765,33 @@ out:
     assert!(at.contains_key(&parsed.value("i")), "the loop is counted: {at:?}");
     assert_eq!(at.get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{at:?}");
 }
+
+/// A condition a frontend states with `Op::Assume` bounds the value in the code
+/// that follows it: HIR through its lowering to the reader, no hand-written MIR.
+#[test]
+fn an_assume_a_frontend_states_bounds_a_value_below_it() {
+    use llrm_hir::model::{Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile, Terminator, TerminatorKind, Type, TypeKind, Value};
+    let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
+    integer.signed = Some(true);
+    let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
+    // v1 is the parameter; v2 = v1 < 10; assume v2; then a block that returns v1.
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
+    let less = Instruction::new(1, Op::Lt, vec![2], vec![HirOperand::value_ref(1), HirOperand::constant(1, 10)]);
+    let assume = Instruction::new(2, Op::Assume, vec![], vec![HirOperand::value_ref(2)]);
+    let first = Block::new(1, vec![less, assume], Terminator::new(TerminatorKind::Jump, Vec::new(), vec![2]));
+    let second = Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(1)], Vec::new()));
+    let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
+    function.parameters = vec![1];
+    let program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
+    let emitted = llrm_hir::mir::emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let mut module = emitted.module;
+    // As the pipeline folds the frontend's `icmp ne (sext i1 %c), 0` to `%c`.
+    llrm_mir::transforms::optimized_with(&mut module, &["instcombine"]).expect("optimizes");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
+    let unit = Unit::of(&module, &layout, function);
+    let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
+    let parameter = function.parameters()[0];
+    assert_eq!(below.get(&parameter), Some(&Interval { low: (-32768).into(), high: 9.into(), width: 16 }), "{below:?}");
+}

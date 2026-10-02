@@ -208,7 +208,7 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
     let raising: Vec<GlobalId> = module
         .functions()
         .filter(|(_, global, function)| {
-            !function.attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(flag) if flag == "nounwind"))
+            !llrm_mir::facts::Facts::of(&function.attrs).no_unwind()
                 && !global.name.as_deref().is_some_and(llrm_mir::intrinsics::is_reserved)
         })
         .map(|(id, _, _)| id)

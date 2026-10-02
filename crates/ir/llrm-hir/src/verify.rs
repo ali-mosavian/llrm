@@ -37,7 +37,7 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
-        model::Op::PortOut => Some(Some(0)),
+        model::Op::PortOut | model::Op::Assume => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -174,26 +174,32 @@ fn _operand_type(
 /// Each stated fact is of a subject kind it may be stated of, and of a
 /// subject the module has.
 fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
-    use crate::facts::Subject;
+    use crate::facts::{Index, Subject};
+    let index = Index::of(module);
+    let callables: HashSet<i64> = module.callables.iter().map(|one| one.id).collect();
+    let objects: HashSet<i64> = module.data.iter().map(|one| one.id).collect();
     for stated in &module.facts {
         let (fact, subject) = (stated.fact, stated.subject);
         if !fact.kinds().contains(&subject.kind()) {
             invalid!("{}: {} is not stated of a {}", module.name, fact.key(), Subject::kind_key(subject.kind()));
         }
-        let function = |id: i64| module.functions.iter().find(|one| one.id == id);
+        let function = |id: i64| index.function(id);
         let found = match subject {
-            Subject::Callable(id) => module.callables.iter().any(|one| one.id == id),
+            Subject::Callable(id) => callables.contains(&id),
             Subject::Param { function: id, index } => function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index)),
-            Subject::Instruction { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.instructions.iter().any(|i| i.id == at))),
-            Subject::Operand { function: id, instruction, operand } => function(id).is_some_and(|one| {
-                one.blocks.iter().flat_map(|block| &block.instructions).any(|i| {
-                    i.id == instruction
-                        && (0..i.operands.len() as i64).contains(&operand)
-                        // What a callee does with a pointer is stated of a call's argument.
-                        && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
-                })
+            Subject::Instruction { function: id, id: at } => index.instruction(id, at).is_some_and(|i| match fact {
+                // Of what it yields, and of what it accesses.
+                llrm_mir::facts::Fact::Range(_) => !i.results.is_empty(),
+                llrm_mir::facts::Fact::Align(_) => matches!(i.op, model::Op::Load | model::Op::Store),
+                _ => true,
             }),
-            Subject::Object(id) => module.data.iter().any(|one| one.id == id),
+            Subject::Operand { function: id, instruction, operand } => index.instruction(id, instruction).is_some_and(|i| {
+                (0..i.operands.len() as i64).contains(&operand)
+                    // What a callee does with a pointer is stated of a call's argument.
+                    && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
+            }),
+            Subject::Object(id) => objects.contains(&id),
+            Subject::Terminator { function: id, block } => function(id).is_some_and(|one| one.blocks.iter().any(|b| b.id == block)),
         };
         if !found {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));
@@ -232,6 +238,12 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
             invalid!("duplicate module {}", module.id);
         }
         module_ids.insert(module.id);
+        // A debug member is a bit field with both its first bit and width, or neither.
+        for member in module.debug.iter().flat_map(|one| &one.types).flat_map(|one| &one.members) {
+            if member.bit_start.is_some() != member.bit_width.is_some() {
+                invalid!("{}: debug member {} has a bit field's start or width alone", module.name, member.name);
+            }
+        }
         let data: IndexMap<i64, &model::DataObject> = module.data.iter().map(|one| (one.id, one)).collect();
         if data.len() != module.data.len() {
             invalid!("{}: duplicate data object id", module.name);
@@ -371,7 +383,9 @@ fn _function(
         };
         let mut order = site.order.clone();
         order.sort();
-        if order != (0..instruction.operands.len() as i64).collect::<Vec<_>>() {
+        // An indirect call's first operand is what it calls, and is not passed.
+        let passed = instruction.operands.len() - usize::from(instruction.op == model::Op::Call && instruction.callee.is_none());
+        if order != (0..passed as i64).collect::<Vec<_>>() {
             invalid!("{prefix}: call {} has invalid argument order", site.instruction);
         }
         let Some(callable) = site.callee.map(|callee| module.callables.iter().find(|one| one.id == callee)) else {
@@ -434,7 +448,12 @@ fn _function(
                     instruction.results.len()
                 );
             }
-            if instruction.op == model::Op::Call && instruction.callee.as_deref().is_none_or(str::is_empty) {
+            // A call names its callee, or calls through the pointer its first operand is.
+            let through_pointer = instruction.callee.is_none()
+                && instruction.operands.first().is_some_and(|first| {
+                    matches!(first, model::Operand::ValueRef(one) if values.get(&one.value).is_some_and(|value| types.get(&value.r#type).is_some_and(|ty| ty.kind == model::TypeKind::Pointer)))
+                });
+            if instruction.op == model::Op::Call && instruction.callee.as_deref().is_none_or(str::is_empty) && !through_pointer {
                 invalid!("{prefix}: call {} has no callee", instruction.id);
             }
             if (instruction.op == model::Op::Call || _STRING_COMPARE.contains(&instruction.op))
@@ -546,6 +565,11 @@ fn _function(
                 if !operand_types.iter().all(|one| word(one) || near(one)) || !result_types.iter().all(word) {
                     invalid!("{prefix}: asm {} moves only 16-bit integers and near pointers", instruction.id);
                 }
+            }
+            if instruction.op == model::Op::Assume
+                && (instruction.operands.len() != 1 || operand_types.iter().any(|one| !matches!(types[one].kind, model::TypeKind::Boolean | model::TypeKind::Integer)))
+            {
+                invalid!("{prefix}: assume {} takes one condition", instruction.id);
             }
             if matches!(instruction.op, model::Op::PortIn | model::Op::PortOut) {
                 let widths: Vec<i64> = operand_types.iter().map(|one| types[one].width).collect();
@@ -715,14 +739,14 @@ fn _function(
                         invalid!("{prefix}: invalid indirect place");
                     }
                     let pointer = types[&values[&operand.base].r#type];
-                    let Some(element) = pointer
-                        .element
-                        .filter(|element| pointer.kind == model::TypeKind::Pointer && types.contains_key(element))
-                    else {
+                    if pointer.kind != model::TypeKind::Pointer || pointer.element.is_some_and(|element| !types.contains_key(&element)) {
                         invalid!("{prefix}: indirect place disagrees with pointer type");
-                    };
-                    if operand.offset + types[&operand.r#type].width > types[&element].width {
-                        invalid!("{prefix}: indirect place exceeds its pointee");
+                    }
+                    // An opaque pointer, as C's, states no pointee to stay inside.
+                    if let Some(element) = pointer.element {
+                        if operand.offset + types[&operand.r#type].width > types[&element].width {
+                            invalid!("{prefix}: indirect place exceeds its pointee");
+                        }
                     }
                 }
                 if let model::Operand::DescriptorPlace(operand) = operand {

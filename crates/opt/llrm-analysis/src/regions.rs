@@ -153,12 +153,19 @@ fn same_typed_start(one: &MemRef, other: &MemRef) -> bool {
 }
 
 /// Python `typed_apart`: accesses of different `!tbaa` types cannot alias
-/// except for two views explicitly computed from the same union start.
+/// unless one's type is an ancestor of the other's, or for two views
+/// explicitly computed from the same union start.
 pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
     let (Some(one_type), Some(other_type)) = (&one.typed, &other.typed) else {
         return false;
     };
-    one_type != other_type && !same_typed_start(one, other)
+    // As LLVM's TypeBasedAA: types of one root, neither covering the other.
+    // A type with no root, or of another root, says nothing: may alias.
+    let (Some(one_root), Some(other_root)) = (one.lineage.last(), other.lineage.last()) else {
+        return false;
+    };
+    let related = one.lineage.contains(other_type) || other.lineage.contains(one_type);
+    one_root == other_root && one_type != other_type && !related && !same_typed_start(one, other)
 }
 
 /// Python `may_alias`'s private `narrowed` helper.
@@ -590,6 +597,45 @@ b0:
         // Two roots one object starts: the union view by provenance.
         let object = global(1, Some(8));
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(elsewhere, one(&object, 0, 1))));
+    }
+
+    const C_TAGS: &str = "!0 = !{!\"Simple C/C++ TBAA\"}
+!1 = !{!\"omnipotent char\", !0, i64 0}
+!2 = !{!\"int2\", !1, i64 0}
+!3 = !{!\"int4\", !1, i64 0}
+!4 = !{!1, !1, i64 0}
+!5 = !{!2, !2, i64 0}
+!6 = !{!3, !3, i64 0}
+!7 = !{!\"llrm hir\"}
+!8 = !{!\"place\", !7, i64 0}
+!9 = !{!8, !8, i64 0}
+";
+
+    /// `*q = 1` through a `char *` between two loads of `*p` was no write of
+    /// `*p`: the types differed by name, and `omnipotent char`, the parent of
+    /// every scalar type, was not read as one that covers them. C lets a
+    /// char access any object (llrm-c at -O2 added `*p` to itself).
+    #[test]
+    fn a_type_covers_its_descendants_and_roots_are_not_compared() {
+        let module = module(&format!(
+            "define void @f(ptr %p, ptr %q, ptr %r, ptr %s) {{
+b0:
+  store i8 1, ptr %q, !tbaa !4
+  store i16 2, ptr %p, !tbaa !5
+  store i32 3, ptr %r, !tbaa !6
+  store i16 4, ptr %s, !tbaa !9
+  ret void
+}}
+
+{C_TAGS}"
+        ));
+        let dl = layout(&module);
+        let [character, short, long, place] = &accesses(&module, &dl)[..] else { panic!() };
+        // The parent covers a child; siblings are apart; another root says nothing.
+        assert!(!typed_apart(character, short));
+        assert!(!typed_apart(long, character));
+        assert!(typed_apart(short, long));
+        assert!(!typed_apart(short, place));
     }
 
     #[test]
