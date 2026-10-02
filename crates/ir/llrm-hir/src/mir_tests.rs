@@ -207,7 +207,7 @@ fn an_external_object_is_as_large_as_its_places() {
 fn an_allocation_and_a_place_are_tagged_apart() {
     use crate::model::{AddressKind, IndirectPlace, Place, Storage};
     let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
-    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation, member: None });
     let instructions = vec![
         Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
         Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
@@ -239,7 +239,7 @@ fn an_allocation_and_a_place_are_tagged_apart() {
 fn a_common_array_keeps_the_generic_allocation_tag() {
     use crate::model::{AddressKind, IndirectPlace, Place, Storage};
     let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
-    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation, member: None });
     let instructions = vec![
         Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
         Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
@@ -663,7 +663,7 @@ fn a_languages_promises_reach_mir() {
     boolean.signed = Some(false);
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
     let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
-    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None });
+    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None });
     let instructions = vec![
         advance,
         Instruction::new(2, Op::Load, vec![3], vec![at]),
@@ -1005,7 +1005,7 @@ fn inbounds_is_a_fact_of_an_operand() {
     use crate::facts::{Builder, Subject};
     use crate::model::IndirectPlace;
     use llrm_mir::facts::Fact;
-    let at = || Operand::IndirectPlace(IndirectPlace { base: 1, offset: 2, r#type: 1, volatile: false, origin: None, allocation: None });
+    let at = || Operand::IndirectPlace(IndirectPlace { base: 1, offset: 2, r#type: 1, volatile: false, origin: None, allocation: None, member: None });
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }];
     let loads = vec![Instruction::new(1, Op::Load, vec![2], vec![at()]), Instruction::new(2, Op::Load, vec![3], vec![at()])];
     let block = Block::new(1, loads, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
@@ -1102,7 +1102,7 @@ fn an_alignment_of_an_access_is_stated_of_its_instruction() {
     use llrm_mir::facts::Fact;
     let mut function = difference();
     function.values.push(Value { id: 4, r#type: 1 });
-    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None })]);
+    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None })]);
     function.blocks[0].instructions.insert(0, load);
     function.values.iter_mut().find(|one| one.id == 1).expect("a").r#type = 2;
     let mut program = program(function);
@@ -1191,7 +1191,7 @@ fn an_invariant_load_is_its_metadata() {
     use llrm_mir::facts::Fact;
     let mut function = difference();
     function.values.push(Value { id: 4, r#type: 1 });
-    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None })]);
+    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None })]);
     function.blocks[0].instructions.insert(0, load);
     function.values.iter_mut().find(|one| one.id == 1).expect("a parameter").r#type = 2;
     let mut program = program(function);
@@ -1329,7 +1329,7 @@ fn a_fixed_address_pointer_is_in_the_fixed_space() {
         let mut pointer = Type::new(2, "device", TypeKind::Pointer, 4);
         pointer.address = AddressKind::Fixed;
         let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }];
-        let at = Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile, origin: None, allocation: None });
+        let at = Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile, origin: None, allocation: None, member: None });
         let load = Instruction::new(1, Op::Load, vec![2], vec![at]);
         let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
         let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
@@ -1342,4 +1342,103 @@ fn a_fixed_address_pointer_is_in_the_fixed_space() {
         let text = llrm_mir::print::module(&emitted.module);
         assert!(text.contains("p4:32:16:16:16") && text.contains("(ptr addrspace(4) %0)") && text.contains(&format!("{word} i16, ptr addrspace(4) %0")), "{text}");
     }
+}
+
+/// A function that stores its parameter in place 1 and loads it twice, once
+/// through the place and once through a member of an aggregate: what a fact
+/// stated once of the place or the member must reach.
+fn two_loads(member: Option<crate::model::Member>) -> Program {
+    use crate::model::{Place, Storage};
+    let place = |id, name, ty, extent, offset| Place { extent: Some(extent), ..Place::new(id, name, ty, Storage::Local, offset) };
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }];
+    let place_ref = || Operand::place_ref(1);
+    let projected = Operand::ProjectedPlace(crate::model::ProjectedPlace { place: 2, indices: Vec::new(), offset: 0, r#type: 1, member });
+    let instructions = vec![
+        Instruction::new(1, Op::Store, vec![], vec![place_ref(), Operand::value_ref(1)]),
+        Instruction::new(2, Op::Load, vec![2], vec![place_ref()]),
+        Instruction::new(3, Op::Load, vec![3], vec![projected]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, vec![place(1, "x", 1, 2, 0), place(2, "e", 3, 4, 2)], vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(3, "pair", TypeKind::Opaque, 4));
+    program
+}
+
+fn stated_text(mut program: Program, facts: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> String {
+    let mut stated = crate::facts::Builder::new("test");
+    for (subject, fact) in facts {
+        stated.state(subject, fact);
+    }
+    program.modules[0].facts = stated.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    llrm_mir::print::module(&emitted.module)
+}
+
+/// A range stated once of a place is on every load of it, and an alignment on
+/// every access; the store has no range. Nothing was stated of the loads.
+#[test]
+fn a_fact_of_a_place_reaches_every_access_of_it() {
+    use crate::facts::Subject;
+    use llrm_mir::facts::{Bounds, Fact};
+    let text = stated_text(two_loads(None), vec![(Subject::Place { function: 1, place: 1 }, Fact::Range(Bounds { lo: 0, hi: 1 })), (Subject::Place { function: 1, place: 1 }, Fact::Align(2))]);
+    let loads: Vec<&str> = text.lines().filter(|one| one.contains("load i16")).collect();
+    assert_eq!(loads.len(), 2, "{text}");
+    // The load of the place has both; the load of the projection is another place's access.
+    assert!(loads.iter().any(|one| one.contains("!range") && one.contains("align 2")), "{text}");
+    assert_eq!(loads.iter().filter(|one| one.contains("!range")).count(), 1, "{text}");
+    assert!(text.lines().any(|one| one.contains("store i16") && one.contains("align 2") && !one.contains("!range")), "{text}");
+}
+
+/// A range stated once of a member of an aggregate type is on every load of that
+/// member, reached through a place or a pointer; an access that is not that member has none.
+#[test]
+fn a_fact_of_a_member_reaches_every_access_of_it() {
+    use crate::facts::Subject;
+    use crate::model::Member;
+    use llrm_mir::facts::{Bounds, Fact};
+    let range = (Subject::Field { owner: 3, offset: 0 }, Fact::Range(Bounds { lo: 0, hi: 2 }));
+    let reached = stated_text(two_loads(Some(Member { owner: 3, offset: 0 })), vec![range]);
+    assert_eq!(reached.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count(), 1, "{reached}");
+    let other = stated_text(two_loads(Some(Member { owner: 3, offset: 2 })), vec![range]);
+    assert_eq!(other.lines().filter(|one| one.contains("!range")).count(), 0, "{other}");
+    let unnamed = stated_text(two_loads(None), vec![range]);
+    assert_eq!(unnamed.lines().filter(|one| one.contains("!range")).count(), 0, "{unnamed}");
+}
+
+/// A fact of a place or a member the module lacks is refused.
+#[test]
+fn a_fact_of_a_place_or_member_the_module_lacks_is_refused() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    for subject in [Subject::Place { function: 1, place: 9 }, Subject::Place { function: 9, place: 1 }, Subject::Field { owner: 9, offset: 0 }, Subject::Field { owner: 3, offset: 4 }] {
+        let mut program = two_loads(None);
+        let mut facts = Builder::new("test");
+        facts.state(subject, Fact::Range(Bounds { lo: 0, hi: 1 }));
+        program.modules[0].facts = facts.finish();
+        assert!(crate::verify::verify(&program).unwrap_err().0.contains("the module lacks"), "{subject:?}");
+    }
+}
+
+/// A member and the subjects cross the wire; an access that names none writes as before.
+#[test]
+fn members_and_their_facts_survive_the_codec() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::Member;
+    use llrm_mir::facts::{Bounds, Fact};
+    let mut program = two_loads(Some(Member { owner: 3, offset: 0 }));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Field { owner: 3, offset: 0 }, Fact::Range(Bounds { lo: 0, hi: 2 }));
+    facts.state(Subject::Place { function: 1, place: 1 }, Fact::Align(2));
+    program.modules[0].facts = facts.finish();
+    let text = crate::codec::encode(&program, None).expect("encodes");
+    assert!(text.contains("\"member\":{\"offset\":0,\"owner\":3}") || text.contains("\"member\":{\"owner\":3,\"offset\":0}"), "{text}");
+    let back = crate::codec::decode(&text).expect("decodes");
+    assert_eq!(back.modules[0].facts, program.modules[0].facts);
+    assert_eq!(back, program);
+    let plain = crate::codec::encode(&two_loads(None), None).expect("encodes");
+    assert!(!plain.contains("member"), "{plain}");
 }

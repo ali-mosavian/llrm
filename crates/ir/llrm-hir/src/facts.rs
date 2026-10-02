@@ -53,6 +53,10 @@ pub enum Subject {
     Object(i64),
     /// The terminator of block `block`.
     Terminator { function: i64, block: i64 },
+    /// A place of `function`.
+    Place { function: i64, place: i64 },
+    /// The member at byte `offset` of aggregate type `owner`.
+    Field { owner: i64, offset: i64 },
 }
 
 impl Subject {
@@ -64,6 +68,8 @@ impl Subject {
             Subject::Operand { .. } => Kind::Operand,
             Subject::Object(_) => Kind::Object,
             Subject::Terminator { .. } => Kind::Terminator,
+            Subject::Place { .. } => Kind::Place,
+            Subject::Field { .. } => Kind::Field,
         }
     }
 
@@ -76,11 +82,13 @@ impl Subject {
             Kind::Operand => "operand",
             Kind::Object => "object",
             Kind::Terminator => "terminator",
+            Kind::Place => "place",
+            Kind::Field => "field",
         }
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object, Kind::Terminator].into_iter().find(|&kind| Self::kind_key(kind) == key)
+        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object, Kind::Terminator, Kind::Place, Kind::Field].into_iter().find(|&kind| Self::kind_key(kind) == key)
     }
 
     /// The function a subject belongs to, its own id in it, and, for what
@@ -92,6 +100,8 @@ impl Subject {
             Subject::Instruction { function, id } => (Some(function), Some(id), None),
             Subject::Operand { function, instruction, operand } => (Some(function), Some(instruction), Some(operand)),
             Subject::Terminator { function, block } => (Some(function), Some(block), None),
+            Subject::Place { function, place } => (Some(function), Some(place), None),
+            Subject::Field { owner, offset } => (None, Some(owner), Some(offset)),
         }
     }
 
@@ -109,6 +119,8 @@ impl Subject {
             Kind::Operand => Subject::Operand { function: function?, instruction: id?, operand: part? },
             Kind::Object => Subject::Object(id?),
             Kind::Terminator => Subject::Terminator { function: function?, block: id? },
+            Kind::Place => Subject::Place { function: function?, place: id? },
+            Kind::Field => Subject::Field { owner: id?, offset: part? },
         })
     }
 }

@@ -318,6 +318,10 @@ struct Tables<'h> {
     accesses: HashMap<(i64, i64), u64>,
     /// The metadata the language's facts give a block's terminator, by function and block id.
     terminator_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
+    /// The facts stated of a place, by function and place: every access of it has them.
+    place_facts: HashMap<(i64, i64), Vec<Fact>>,
+    /// The facts stated of a member of an aggregate type, by type and offset: every access of it has them.
+    field_facts: HashMap<(i64, i64), Vec<Fact>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
 }
@@ -413,6 +417,14 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             }
         }
     }
+    let (mut place_facts, mut field_facts): (HashMap<(i64, i64), Vec<Fact>>, HashMap<(i64, i64), Vec<Fact>>) = (HashMap::new(), HashMap::new());
+    for one in &hir.facts {
+        match one.subject {
+            Subject::Place { function, place } => place_facts.entry((function, place)).or_default().push(one.fact),
+            Subject::Field { owner, offset } => field_facts.entry((owner, offset)).or_default().push(one.fact),
+            _ => {}
+        }
+    }
     let mut tables = Tables {
         instruction_flags,
         argument_facts,
@@ -433,6 +445,8 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         fact_nodes: HashMap::new(),
         accesses: HashMap::new(),
         terminator_nodes: HashMap::new(),
+        place_facts,
+        field_facts,
         variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
@@ -846,7 +860,8 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
     let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
     let (global, parameter) = match stated.subject {
         // A call's arguments' facts are attributes of the call, made with it.
-        Subject::Instruction { .. } | Subject::Operand { .. } | Subject::Terminator { .. } => return Ok(()),
+        // Made at the accesses they reach.
+        Subject::Instruction { .. } | Subject::Operand { .. } | Subject::Terminator { .. } | Subject::Place { .. } | Subject::Field { .. } => return Ok(()),
         Subject::Object(id) => {
             let Some(&global) = data.get(&id) else { return Ok(()) };
             let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of a data object that is no variable".to_owned()) };
@@ -1359,6 +1374,8 @@ struct Body<'b, 'm, 'h> {
     /// know which operand a place is.
     at_instruction: i64,
     operands_at: Vec<usize>,
+    /// The `!range` node of each bounds at each integer type, made on the first access that wants it.
+    range_nodes: HashMap<(i64, i64, TypeId), MetadataId>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
@@ -1387,6 +1404,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             destination,
             at_instruction: 0,
             operands_at: Vec::new(),
+            range_nodes: HashMap::new(),
         })
     }
 
@@ -1552,6 +1570,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let (pointer, ty, volatile, tag) = self.place(place)?;
                 let loaded = self.b.load(ty, pointer, volatile, "");
                 self.tagged(tag);
+                self.stated_access(place, true);
                 Ok(loaded)
             }
         }
@@ -1629,6 +1648,46 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     }
 
     /// The access just emitted, tagged `tag`.
+    /// What the language's facts say of the place or member `operand` names, on the access
+    /// just emitted: a range on a load, an alignment on either.
+    fn stated_access(&mut self, operand: &Operand, load: bool) {
+        let facts: Vec<Fact> = match operand {
+            Operand::PlaceRef(one) => self.tables.place_facts.get(&(self.function.id, one.place)).cloned().unwrap_or_default(),
+            Operand::ArrayElement(one) => self.tables.place_facts.get(&(self.function.id, one.place)).cloned().unwrap_or_default(),
+            Operand::ProjectedPlace(model::ProjectedPlace { member: Some(member), .. }) | Operand::IndirectPlace(model::IndirectPlace { member: Some(member), .. }) => {
+                self.tables.field_facts.get(&(member.owner, member.offset)).cloned().unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        let Some(inst) = self.b.function.block(self.b.current().expect("a placed block")).instructions().last().copied() else { return };
+        for fact in facts {
+            match fact {
+                Fact::Align(bytes) => self.b.function.set_access_align(inst, bytes),
+                Fact::Range(bounds) if load => {
+                    let ty = self.b.function.instruction(inst).ty;
+                    if let Some(node) = self.range_node(bounds, ty) {
+                        self.b.function.annotate(inst, "range", node);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The `!range` node saying a value of `ty` is within `bounds`, if `ty` is an integer.
+    fn range_node(&mut self, bounds: llrm_mir::facts::Bounds, ty: TypeId) -> Option<MetadataId> {
+        if let Some(&node) = self.range_nodes.get(&(bounds.lo, bounds.hi, ty)) {
+            return Some(node);
+        }
+        let bits = self.b.context.types.int_bits(ty)?;
+        let Some(llrm_mir::Attribute::Range { lower, upper, .. }) = Fact::Range(bounds).typed_attribute(ty, bits) else { return None };
+        let (lower, upper) = (self.b.context.int(ty, lower as i128), self.b.context.int(ty, upper as i128));
+        self.b.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::Constant(lower), MetadataOperand::Constant(upper)] });
+        let node = MetadataId(self.b.metadata.len() as u32 - 1);
+        self.range_nodes.insert((bounds.lo, bounds.hi, ty), node);
+        Some(node)
+    }
+
     fn tagged(&mut self, tag: Option<MetadataId>) {
         if let Some(tag) = tag {
             self.b.attach("tbaa", tag);
@@ -1870,6 +1929,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let value = self.value(&instruction.operands[1])?;
                 self.b.store(value, pointer, volatile);
                 self.tagged(tag);
+                self.stated_access(&instruction.operands[0], false);
             }
             Op::Address if instruction.operands.is_empty() => {
                 let callee = instruction.callee.as_deref().ok_or("an address of nothing")?;

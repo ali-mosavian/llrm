@@ -199,6 +199,8 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
                     && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
             }),
             Subject::Object(id) => objects.contains(&id),
+            Subject::Place { function: id, place } => function(id).is_some_and(|one| one.places.iter().any(|p| p.id == place)),
+            Subject::Field { owner, offset } => module.types.iter().any(|one| one.id == owner && (0..one.width.max(1)).contains(&offset)),
             Subject::Terminator { function: id, block } => function(id).is_some_and(|one| one.blocks.iter().any(|b| b.id == block)),
         };
         if !found {

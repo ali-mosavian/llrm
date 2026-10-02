@@ -28,6 +28,10 @@ pub enum Kind {
     Object,
     /// The terminator of a block: a loop's back edge carries what the language says of the loop.
     Terminator,
+    /// A place of a function: a variable, every access of which the fact reaches.
+    Place,
+    /// A member of an aggregate type: every access of that member, however reached.
+    Field,
 }
 
 macro_rules! facts {
@@ -232,7 +236,7 @@ facts! {
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
-        Align(u64) align "align" on [Param, Object, Instruction];
+        Align(u64) align "align" on [Param, Object, Instruction, Place, Field];
         Initializes(u64) initializes "initializes" on [Operand];
         // Of a loop's back edge: most copies the language lets be made. 0 forbids, `u32::MAX` is all.
         Unroll(u32) unroll "unroll" on [Terminator];
@@ -240,7 +244,7 @@ facts! {
     custom {
         Memory(Effect) memory "memory" on [Callable];
         // Of a routine, its result.
-        Range(Bounds) range "range" on [Param, Callable, Instruction];
+        Range(Bounds) range "range" on [Param, Callable, Instruction, Place, Field];
         Inline(Inlining) inline "inline" on [Callable];
     }
     bits {
