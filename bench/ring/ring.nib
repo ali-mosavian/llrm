@@ -1,0 +1,13 @@
+# Fill and sum a 1024-entry i32 ring, in the kernel; Nib has no globals.
+fn bench_ring() -> i32:
+    let mut buf: i32[1024] = [0] * 1024
+    for i in 0..1024:
+        buf[i] = (i + 1) * 3 - 7
+    let mut total: i32 = 0
+    for i in 0..6000:
+        total += buf[(i * 5 + 3) & 1023]
+    return total
+
+fn main() -> i16:
+    print(bench_ring())
+    return 0

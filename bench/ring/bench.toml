@@ -1,0 +1,7 @@
+description = "Sum 6000 strided reads of a 1024-entry 32-bit ring buffer"
+repetitions = 1
+
+[region]
+bas = "BenchRing"
+c = "bench_ring"
+nib = "bench_ring"
