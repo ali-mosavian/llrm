@@ -37,3 +37,6 @@ across commits.
 commit's own tools/bench, and appends one JSON line per commit x benchmark x language x level to
 results.jsonl on an orphan branch that holds only that file. A commit already there is skipped.
 `backfill N` records the last N first-parent commits of main.
+
+When a benchmark's program changes its trend has a step, and its `expected.toml` reason says why: read a
+step in the dashboard against the `git log` of that benchmark.

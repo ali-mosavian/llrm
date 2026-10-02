@@ -17,32 +17,32 @@ type Node
     child1 as integer
 end type
 
-declare function rPlaneDist (p as Vec3, pl as Plane) as single
-declare function rPointLeaf (p as Vec3, nodes() as Node, planes() as Plane) as integer
+declare function rPlaneDist! (p as Vec3, pl as Plane)
+declare function rPointLeaf% (p as Vec3, nodes() as Node, planes() as Plane)
 declare function BenchQbsp& ()
 
-print ltrim$(str$(BenchQbsp&()))
+print ltrim$(str$(BenchQbsp&))
 end
 
 ' From qb-qrender r_bsp.bas and qcport render/r_bsp.c.
-function rPlaneDist (p as Vec3, pl as Plane) as single
-    rPlaneDist = p.x * pl.norm.x + p.y * pl.norm.y + p.z * pl.norm.z - pl.dist
+function rPlaneDist! (p as Vec3, pl as Plane)
+    rPlaneDist! = p.x * pl.norm.x + p.y * pl.norm.y + p.z * pl.norm.z - pl.dist
 end function
 
 ' Walk hull zero until the sign-bit leaf marker is reached.
-function rPointLeaf (p as Vec3, nodes() as Node, planes() as Plane) as integer
+function rPointLeaf% (p as Vec3, nodes() as Node, planes() as Plane)
     dim nodenr as integer
 
     nodenr = 0
     do while (nodenr and &h8000) = 0
-        if rPlaneDist(p, planes(nodes(nodenr).planeId)) >= 0.0 then
+        if rPlaneDist!(p, planes(nodes(nodenr).planeId)) >= 0.0 then
             nodenr = nodes(nodenr).child0
         else
             nodenr = nodes(nodenr).child1
         end if
     loop
 
-    rPointLeaf = not nodenr
+    rPointLeaf% = not nodenr
 end function
 
 function BenchQbsp&
@@ -64,11 +64,11 @@ function BenchQbsp&
 
     p.x = 2.0
     p.y = 3.0
-    a = rPointLeaf(p, nodes(), planes())
+    a = rPointLeaf%(p, nodes(), planes())
     p.y = -3.0
-    b = rPointLeaf(p, nodes(), planes())
+    b = rPointLeaf%(p, nodes(), planes())
     p.x = -2.0
-    c = rPointLeaf(p, nodes(), planes())
+    c = rPointLeaf%(p, nodes(), planes())
 
     BenchQbsp& = clng(a) * 100 + clng(b) * 10 + c
 end function

@@ -1,16 +1,16 @@
 defint a-z
 
-declare function parityMemory (value as integer, delta as integer) as long
+declare function parityMemory& (value as integer, delta as integer)
 declare function BenchMemory& ()
 
-print ltrim$(str$(BenchMemory&()))
+print ltrim$(str$(BenchMemory&))
 end
 
-function parityMemory (value as integer, delta as integer) as long
+function parityMemory& (value as integer, delta as integer)
     value = value * 3 + delta
-    parityMemory = clng(value) * clng(value)
+    parityMemory& = clng(value) * clng(value)
 end function
 
-function BenchMemory& ()
-    BenchMemory& = parityMemory(7, -2) * 1000 + parityMemory(-4, 11)
+function BenchMemory&
+    BenchMemory& = parityMemory&(7, -2) * 1000 + parityMemory&(-4, 11)
 end function

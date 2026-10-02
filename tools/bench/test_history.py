@@ -53,6 +53,15 @@ class BranchTests(unittest.TestCase):
         parents = subprocess.run(["git", "rev-list", "--parents", "-n1", history.BRANCH], cwd=self.repo, capture_output=True, text=True).stdout.split()
         self.assertEqual(len(parents), 1, "an orphan commit has no parent")
 
+    def test_a_tree_an_interrupted_run_left_behind_is_replaced(self):
+        """Killing a backfill left tree-21428b83 behind and the next run died on `already exists`."""
+        tree = Path(self.temp.name) / "tree"
+        history.fresh_tree(tree, "main")
+        (tree / "stale").write_text("x")
+        history.fresh_tree(tree, "main")
+        self.assertTrue((tree / "file").exists())
+        self.assertFalse((tree / "stale").exists())
+
     def test_a_recorded_commit_is_recognised_on_the_next_run(self):
         tree = Path(self.temp.name) / "tree"
         history.history_worktree(tree)

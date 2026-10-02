@@ -1,12 +1,12 @@
 defint a-z
 
-declare function parityLoop (count as integer, seed as integer) as long
+declare function parityLoop& (count as integer, seed as integer)
 declare function BenchLoop& ()
 
-print ltrim$(str$(BenchLoop&()))
+print ltrim$(str$(BenchLoop&))
 end
 
-function parityLoop (count as integer, seed as integer) as long
+function parityLoop& (count as integer, seed as integer)
     dim total as long
     dim index as integer
 
@@ -16,9 +16,9 @@ function parityLoop (count as integer, seed as integer) as long
         total = total + clng(index) * seed + 3
         index = index + 1
     loop
-    parityLoop = total
+    parityLoop& = total
 end function
 
-function BenchLoop& ()
-    BenchLoop& = parityLoop(7, 5) * 1000 + parityLoop(4, -3)
+function BenchLoop&
+    BenchLoop& = parityLoop&(7, 5) * 1000 + parityLoop&(4, -3)
 end function

@@ -80,10 +80,18 @@ def append(directory: Path, lines: list[str], message: str) -> None:
     git("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", message, cwd=directory)
 
 
+def fresh_tree(tree: Path, commit: str) -> None:
+    """A detached worktree of `commit` at `tree`, replacing what an interrupted run left there."""
+    git("worktree", "remove", "--force", str(tree), check=False)
+    shutil.rmtree(tree, ignore_errors=True)
+    git("worktree", "prune")
+    git("worktree", "add", "--detach", str(tree), commit)
+
+
 def measure(commit: str, scratch: Path) -> dict | str:
     """bench.py's measurements of `commit`, built and run in a scratch worktree; or why there are none."""
     tree = scratch / f"tree-{commit[:8]}"
-    git("worktree", "add", "--detach", str(tree), commit)
+    fresh_tree(tree, commit)
     try:
         tool = tree / "tools" / "bench" / "bench.py"
         if not tool.exists():
@@ -94,9 +102,13 @@ def measure(commit: str, scratch: Path) -> dict | str:
         if built.returncode != 0:
             return "does not build: " + built.stderr.strip()[-300:]
         out = scratch / f"{commit[:8]}.json"
-        subprocess.run(["uv", "run", "--project", str(tree / "tools"), "python", str(tool), "--time", "--references", "--json", str(out), "--work", str(scratch / "work")],
-                       env={**env, "LLRM_BIN": str(target / "release")}, capture_output=True, text=True)  # a failed gate still has numbers
-        return json.loads(out.read_text()) if out.exists() else "bench.py wrote nothing"
+        base = ["uv", "run", "--project", str(tree / "tools"), "python", str(tool)]
+        # an older commit's bench.py may not know --time or --references: ask for what it has
+        for extra in (["--time", "--references"], []):
+            subprocess.run([*base, *extra, "--json", str(out), "--work", str(scratch / "work")], env={**env, "LLRM_BIN": str(target / "release")}, capture_output=True, text=True)  # a failed gate still has numbers
+            if out.exists():
+                return json.loads(out.read_text())
+        return "bench.py wrote nothing"
     finally:
         git("worktree", "remove", "--force", str(tree), check=False)
 

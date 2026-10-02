@@ -1,12 +1,12 @@
 defint a-z
 
-declare function parityControl (value as integer, limit as integer) as long
+declare function parityControl& (value as integer, limit as integer)
 declare function BenchControl& ()
 
-print ltrim$(str$(BenchControl&()))
+print ltrim$(str$(BenchControl&))
 end
 
-function parityControl (value as integer, limit as integer) as long
+function parityControl& (value as integer, limit as integer)
     dim total as long
     dim index as integer
 
@@ -18,9 +18,9 @@ function parityControl (value as integer, limit as integer) as long
             total = total - clng(value) + index
         end if
     next index
-    parityControl = total
+    parityControl& = total
 end function
 
-function BenchControl& ()
-    BenchControl& = parityControl(7, 6) * 1000 + parityControl(-3, 5)
+function BenchControl&
+    BenchControl& = parityControl&(7, 6) * 1000 + parityControl&(-3, 5)
 end function

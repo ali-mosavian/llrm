@@ -1,3 +1,4 @@
+' BC 4.5 takes no BYVAL on a BASIC procedure: arguments pass by reference, the C and Nib ones by value.
 defint a-z
 
 const PLACCELERATE = 10
@@ -8,15 +9,15 @@ type Vec3
     z as single
 end type
 
-declare sub plGroundAccel (vel as Vec3, wishdir as Vec3, byval wishspeed as single, byval dt as single)
+declare sub plGroundAccel (vel as Vec3, wishdir as Vec3, wishspeed as single, dt as single)
 declare function BenchQmove& ()
 
-print ltrim$(str$(BenchQmove&()))
+print ltrim$(str$(BenchQmove&))
 end
 
 ' From qb-qrender pl_move.bas and qcport game/pl_move.c.  This is Quake's
 ' SV_Accelerate arithmetic, including the cap as top speed is approached.
-sub plGroundAccel (vel as Vec3, wishdir as Vec3, byval wishspeed as single, byval dt as single)
+sub plGroundAccel (vel as Vec3, wishdir as Vec3, wishspeed as single, dt as single)
     dim currentspeed as single
     dim addspeed as single
     dim accelspeed as single
