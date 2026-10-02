@@ -7,5 +7,4 @@ description = "llrm's common HIR: model, codec, verifier, escape facts"
 
 [dependencies]
 llrm-support = { workspace = true }
-llrm-analysis = { workspace = true }
 llrm-mir = { workspace = true }

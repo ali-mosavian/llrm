@@ -3,20 +3,23 @@
 //! that dominates it. A parameter dominates everything. The one dominator
 //! computation is `llrm-analysis`'s.
 
-use llrm_analysis::graph::loops::{Node, dominance};
+use llrm_support::graph::{Node, dominance};
 use llrm_support::hash::HashMap;
 
 use crate::model::{Function, Operand};
 
-struct Edges<'a>(&'a crate::model::Block);
+struct Edges {
+    id: i64,
+    to: Vec<i64>,
+}
 
-impl Node for Edges<'_> {
+impl Node for Edges {
     fn at(&self) -> i64 {
-        self.0.id
+        self.id
     }
 
     fn succ(&self) -> &[i64] {
-        &self.0.terminator.targets
+        &self.to
     }
 }
 
@@ -38,15 +41,15 @@ fn values(operand: &Operand, out: &mut Vec<i64>) {
 
 /// The first use of `function` whose definition does not dominate it.
 ///
-/// A function with another entry than its first (RESUME) is not checked: a
-/// definition on the way to the first entry does not reach the other. A
-/// block no entry reaches is not checked either.
+/// Every entry (the first, and RESUME's) is reached from a root of its own
+/// that nothing else dominates, so a definition on the way to one entry does
+/// not reach another. A block no entry reaches is not checked.
 pub fn check(function: &Function) -> Result<(), String> {
-    if function.external_entries.iter().any(|&one| one != function.entry) {
-        return Ok(());
-    }
-    let edges: Vec<Edges> = function.blocks.iter().map(Edges).collect();
-    let dominance = dominance(&edges, Some(function.entry));
+    let root = function.blocks.iter().map(|one| one.id).min().unwrap_or(0) - 1;
+    let entries = std::iter::once(function.entry).chain(function.external_entries.iter().copied());
+    let mut edges: Vec<Edges> = function.blocks.iter().map(|one| Edges { id: one.id, to: one.terminator.targets.clone() }).collect();
+    edges.push(Edges { id: root, to: entries.collect() });
+    let dominance = dominance(&edges, Some(root));
     // Where each value is defined: block, and position in it.
     let mut defined: HashMap<i64, (i64, usize)> = HashMap::default();
     for block in &function.blocks {
@@ -125,5 +128,22 @@ mod tests {
         let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
         function.parameters = vec![1];
         assert!(check(&function).unwrap_err().contains("instruction 1 uses value 3"));
+    }
+
+    /// A definition on the way to the first entry does not reach another entry
+    /// (RESUME's): a use past the other entry was accepted.
+    #[test]
+    fn a_definition_reaching_only_one_of_two_entries_is_refused() {
+        let values = (1..=4).map(|id| Value { id, r#type: 1 }).collect();
+        let blocks = vec![
+            Block::new(1, vec![add(1, 2, 1)], jump(2)),
+            Block::new(2, vec![add(2, 3, 2)], returns(3)),
+        ];
+        let mut function = Function::new(1, "f", 1, values, Vec::new(), blocks, 1);
+        function.parameters = vec![1];
+        assert_eq!(check(&function), Ok(()));
+        function.external_entries = vec![2];
+        let error = check(&function).unwrap_err();
+        assert!(error.contains("instruction 2 uses value 2, defined in block 1"), "{error}");
     }
 }
