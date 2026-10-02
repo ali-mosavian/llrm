@@ -106,7 +106,7 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 }
                 Ok(TypedOperand {
-                    operand: Some(hir::Operand::Constant(BOOL, if *value { -1 } else { 0 })),
+                    operand: Some(hir::Operand::Constant(BOOL, i64::from(*value))),
                     type_name: TypeName::Bool,
                 })
             }

@@ -219,6 +219,9 @@ facts! {
         // Of a routine: it raises nothing, comes back, calls nothing of the module, is rare.
         NoUnwind no_unwind "nounwind" on [Callable];
         WillReturn will_return "willreturn" on [Callable];
+        // It is never entered again while it runs: in no cycle of calls, and nothing
+        // it reaches calls what may call back.
+        NoRecurse no_recurse "norecurse" on [Callable];
         NoCallback no_callback "nocallback" on [Callable];
         Cold cold "cold" on [Callable];
         // The result is a three-way compare of the data: its sign says which

@@ -13,6 +13,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 | `e2e/mkgolden.py` | the suite's expected outputs, computed from what each program means |
 | `e2e/mkfixtures.py` | rebuilds `tests/fixtures/omf` with the BC toolchains |
 | `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
+| `qcport-compile.sh [llrm-c]` | QCport's 65 C modules compiled at -O2 and -Os; each refusal listed (QCPORT, QCPORT_INC name its sources) |
 | `sizes.py BASE [NEW] [-O2 -Os ...]` | object bytes and the backend's expected instructions and memory operands of every test, bench, example and demo program, two builds side by side |
 | `innerloops.py` | each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or msp430) |
 | `loops/run.py` | the loop corpus: cases in C, BASIC and Nib, checked by an oracle, llrm-mir and DOSBox, measured against hand-derived bounds and reference compilers; see below |
