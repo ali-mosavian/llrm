@@ -2036,6 +2036,25 @@ mod tests {
         assert!(invalid.is_empty(), "{invalid:#?}");
     }
 
+    /// The driver checked only dominance (#224); it now refuses any program
+    /// the HIR verifier refuses, whichever frontend made it.
+    #[test]
+    fn test_the_driver_refuses_what_the_verifier_refuses() {
+        let mut program = program_of("bytes.cgs");
+        let machine = llrm_core::abi::machine::BUILT_IN.clone();
+        let options = llrm_core::driver::Options::of(machine);
+        assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
+        let module = &mut program.modules[0];
+        let byte = module.types.iter().find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1).map(|one| one.id).expect("a byte type");
+        let stored = module.functions.iter_mut().flat_map(|one| &mut one.blocks).flat_map(|one| &mut one.instructions).find(|one| {
+            one.op == llrm_core::hir::model::Op::Store && matches!(&one.operands[0], llrm_core::hir::model::Operand::IndirectPlace(place) if place.r#type != byte)
+        });
+        let Some(llrm_core::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0]) else { panic!("premise: a store through a pointer") };
+        place.r#type = byte;
+        let why = llrm_core::driver::emitted(&program, &options).err().unwrap_or_default();
+        assert!(why.contains("store value type does not match its place"), "{why}");
+    }
+
     /// The verifier lets C's untyped pointers through, but a pointer that
     /// states its pointee still bounds what is read through it.
     #[test]
