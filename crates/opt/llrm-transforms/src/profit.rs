@@ -139,7 +139,7 @@ pub const UNIT: i64 = 256;
 /// proven `trips` by latch), per entry, in `UNIT`ths of an execution and never
 /// below one, so a cold arm is near free but still ordered. `None`
 /// for conflicting proofs.
-pub fn _frequencies(context: &Context, globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+pub fn _frequencies(context: &Context, metadata: &[llrm_mir::module::MetadataNode], globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let shape = cfg::Shape::of(function);
     let empty = IndexMap::default();
     let trips = trips.unwrap_or(&empty);
@@ -153,7 +153,7 @@ pub fn _frequencies(context: &Context, globals: &Declarations, function: &Functi
             counted.insert(loop_.header, count);
         }
     }
-    let odds = branchprob::estimated(context, globals, function, &shape, &counted);
+    let odds = branchprob::estimated(context, metadata, globals, function, &shape, &counted);
     Some(cfg::graph(function).iter().map(|block| (block.at, odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)))).collect())
 }
 

@@ -32,12 +32,16 @@ pub struct Options {
     pub machine: Machine,
     pub pipeline: llrm_transforms::pipeline::Options,
     pub dump: Option<PathBuf>,
+    /// `-fstack-usage`: print each procedure's frame and what it can reach.
+    pub stack_usage: bool,
+    /// `-Wstack-usage=N`: warn of each entry that can reach more than N bytes.
+    pub stack_limit: Option<i64>,
 }
 
 impl Options {
     /// For `machine` at -O2, the stages written where `LLRM_MIR_STAGES` names.
     pub fn of(machine: Machine) -> Self {
-        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into) }
+        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None }
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -68,6 +72,15 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
         }
         out.push(assembled);
     }
+    if options.stack_usage || options.stack_limit.is_some() {
+        let usage = crate::backend::stackusage::Usage::of(&out);
+        if options.stack_usage {
+            eprint!("{}", usage.report());
+        }
+        for warning in options.stack_limit.into_iter().flat_map(|limit| usage.warnings(limit)) {
+            eprintln!("{warning}");
+        }
+    }
     Ok(out)
 }
 
@@ -86,7 +99,7 @@ fn spill_model(program: &Program) {
             let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
             let unit = llrm_analysis::memory::Unit::of(module, &layout, function);
             let trips = profit::proven_trips(&unit, &unit.registers());
-            let Some(frequency) = profit::_frequencies(&module.context, &module.globals, function, Some(&trips)) else { continue };
+            let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
             let found = llrm_analysis::liveness::live(function);
             let across = |inst| spill::kept_across(&outer, &module.context, function, inst);
             if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency, &found) {
@@ -100,6 +113,8 @@ fn spill_model(program: &Program) {
 /// its promises describe; and each module's data objects' globals, by the
 /// objects' ids.
 pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
+    // Whichever frontend made it, a program is checked before it is lowered.
+    crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
     let emitted = crate::hir::mir::emit(program);
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
@@ -126,6 +141,7 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
     llrm_transforms::pipeline::applied(program, &applied)?;
+    program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped);
     program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
     program.modules.iter_mut().try_for_each(crate::backend::selects::lowered)?;
     if llrm_support::debug::enabled("spillmodel") {
