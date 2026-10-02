@@ -11,6 +11,7 @@ pub mod debuginfo;
 pub mod dominators;
 pub mod edit;
 pub mod facts;
+pub mod splice;
 mod facts_rewrite;
 #[cfg(test)]
 mod facts_coverage;

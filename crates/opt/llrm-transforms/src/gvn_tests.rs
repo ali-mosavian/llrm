@@ -435,6 +435,39 @@ b0:
     assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
 }
 
+/// A load of what the language says is written once and never again is the value an earlier
+/// load of it read, whatever a call between may write.
+#[test]
+fn a_load_the_language_says_is_invariant_is_reused_across_a_call_that_may_write() {
+    let gvn = |second: &str| {
+        let mut module = parsed(&format!(
+            "@g = global i16 0
+
+declare void @poke()
+
+define i16 @f() {{
+b0:
+  %a = load i16, ptr @g
+  call void @poke()
+  %b = {second}
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+
+!0 = !{{}}
+"
+        ));
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn::default());
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        printed(&module)
+    };
+    assert!(gvn("load i16, ptr @g").contains("  %r = add i16 %a, %b\n"), "a plain load is read again");
+    let stated = gvn("load i16, ptr @g, !invariant.load !0");
+    assert!(stated.contains("  %r = add i16 %a, %a\n"), "{stated}");
+}
+
 /// The program's global is read again after a store to a device: through a
 /// pointer in the fixed-address space the store cannot change it, so the
 /// second read is the first; through a far pointer it may, and stays.

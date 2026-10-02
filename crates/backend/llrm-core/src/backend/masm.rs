@@ -599,6 +599,22 @@ pub fn _instruction(
         // Its operands are the registers the instruction names in its opcode.
         return Ok(vec![format!("{}{name}", if what.sources.len() == 4 { "rep " } else { "" })]);
     }
+    if what.op == Operation::Copy {
+        // Its operands are the registers the instruction names in its opcode;
+        // a source read through another segment than ds says so.
+        let rep = if what.sources.len() == 5 { "rep " } else { "" };
+        let size = match name {
+            "movsb" => "byte",
+            "movsw" => "word",
+            _ => "dword",
+        };
+        return Ok(vec![match &what.sources[what.sources.len() - 2] {
+            Loc::Reg(one) if one.register != Register::DS => {
+                format!("{rep}movs {size} ptr es:[di], {size} ptr {}:[si]", format!("{:?}", one.register).to_lowercase())
+            }
+            _ => format!("{rep}{name}"),
+        }]);
+    }
     let dests = what.dests.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
     let last = |items: &[String]| items[items.len() - 1].clone();
@@ -828,6 +844,21 @@ mod tests {
 
     fn ax() -> Loc {
         Loc::Reg(ir::Reg { register: Register::AX, width: 2 })
+    }
+
+    /// A string move prints as the instruction it is: `rep` where it has a count.
+    #[test]
+    fn test_a_string_move_prints_with_rep_where_it_repeats() {
+        let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
+        let semantics = |sources: Vec<Loc>| Semantics { name: Some("movsw".to_owned()), sources, ..Semantics::new(Operation::Copy) };
+        let repeated = semantics(vec![held(1), held(2), held(3), held(4), held(5)]);
+        let single = semantics(vec![held(2), held(3), held(4), held(5)]);
+        assert_eq!(_instruction(&repeated, &no_names(), 0).unwrap(), ["rep movsw"]);
+        assert_eq!(_instruction(&single, &no_names(), 0).unwrap(), ["movsw"]);
+        let ss = |name: &str, sources: Vec<Loc>| Semantics { name: Some(name.to_owned()), sources, ..Semantics::new(Operation::Copy) };
+        let segment = |register| Loc::Reg(ir::Reg { register, width: 2 });
+        let through = ss("movsd", vec![held(1), held(2), held(3), segment(Register::SS), segment(Register::ES)]);
+        assert_eq!(_instruction(&through, &no_names(), 0).unwrap(), ["rep movs dword ptr es:[di], dword ptr ss:[si]"]);
     }
 
     /// `lea bx,[bp-20]` for `&n` at bp-10: lower carries the displacement in

@@ -1813,7 +1813,7 @@ fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
         (Operation::Move, Some("mov")) | (Operation::Address, Some("lea")) => flags_dead,
         (Operation::Extend, Some("movsx" | "movzx" | "cwd" | "cdq")) => flags_dead,
         (Operation::Push, Some("push")) | (Operation::Pop, Some("pop")) => flags_dead,
-        (Operation::Nothing, None | Some("")) | (Operation::Jump, _) | (Operation::Fill, _) => flags_dead,
+        (Operation::Nothing, None | Some("")) | (Operation::Jump, _) | (Operation::Fill | Operation::Copy, _) => flags_dead,
         _ => {
             // Anything else by what it encodes: a far load writes no flag, and
             // missing from the list above it kept `mov ax,0` from becoming `xor`.

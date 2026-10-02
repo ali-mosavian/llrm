@@ -24,7 +24,7 @@
 //! predecessors) move or insert an instruction with its flags, and are sound
 //! by the argument above; `algebraic` reassociation changes operands and
 //! already clears the flags (`set_flags(.., Flags::default())`). The passes of
-//! `llrm_mir::transforms` that remain (`instcombine`, `function-attrs`, `inline`) are
+//! `llrm_mir::transforms` that remains (`instcombine`) is
 //! not run by the compile route (#237); a pass that moves into the route comes
 //! under this audit.
 //!
