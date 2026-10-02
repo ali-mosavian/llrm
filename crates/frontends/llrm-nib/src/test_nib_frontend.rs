@@ -2161,3 +2161,21 @@ fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     let result = nib_compile::assembled(&program, "main", ProfileOrName::Name("386"), &level("O2"));
     assert!(result.is_ok(), "{:?}", result.err());
 }
+
+/// Nib frames are not zeroed, but the program claimed they were: the MIR
+/// stored zero into every local at entry (`mov dword ptr [bp-4], 0` before
+/// the struct's own stores) and left each to dead-store elimination, which
+/// -O0 does not run.
+#[test]
+fn test_a_nib_program_does_not_claim_zeroed_frames() {
+    let source = "struct P:\n    mut x: i16\n    mut y: i16\n\nfn f(n: i16) -> i16:\n    let mut p = P(x=n, y=2)\n    p.x += 1\n    return p.x + p.y\n\nfn main() -> i16:\n    print(f(1))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "zeroed.nib", source));
+    assert!(!program.zeroed_locals, "the premise: the program says its frames are not zeroed");
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let module = nib_compile::assembled_from_mir(&program, "main", &options).expect("assembles");
+    let assembly = masm::text(&module).expect("prints");
+    let body = between(&assembly, "_f proc far\n", "_f endp");
+    assert!(!body.contains(", 0\n"), "{body}");
+}
