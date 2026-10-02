@@ -354,6 +354,34 @@ fn test_a_constant_under_two_variable_indexes_is_the_displacement_of_the_access(
     assert!(!got.lines().any(|line| line.starts_with("add ") && line.contains("6072")), "{got}");
 }
 
+/// A huge pointer converted to an integer only to be compared is its packed
+/// dword, selector:offset: canonical within an object, that orders as the
+/// pointers do. llrm-c compares so since #238, and isel refused it ("a huge
+/// pointer as an integer"), failing the 80000-byte `__huge` array's loop end
+/// on DOS (hugearray). A conversion read as a number stays refused.
+#[test]
+fn test_a_huge_pointer_converted_only_to_be_compared_is_its_dword() {
+    let compared = "define i16 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
+  %x = ptrtoint ptr addrspace(3) %a to i32
+  %y = ptrtoint ptr addrspace(3) %b to i32
+  %c = icmp ult i32 %x, %y
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+";
+    let got = listing(compared, "f").join("\n");
+    assert!(got.contains("cmp") && got.contains("jb") || got.contains("setb") || got.contains("sbb"), "{got}");
+    let number = "define i32 @g(ptr addrspace(3) %a) addrspace(1) {
+  %x = ptrtoint ptr addrspace(3) %a to i32
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+";
+    let module = parsed(number);
+    let refused = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC);
+    assert!(refused.is_err(), "a huge pointer used as a number is selected");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {

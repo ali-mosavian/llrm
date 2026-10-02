@@ -1811,6 +1811,12 @@ impl Selector<'_, '_, '_> {
             })
     }
 
+    /// Whether every reader of `value` is a compare.
+    fn only_compared(&self, value: ValueId) -> bool {
+        let users = self.function.users(value);
+        !users.is_empty() && users.iter().all(|one| matches!(self.function.instruction(one.user).opcode, Opcode::ICmp(_)))
+    }
+
     /// Whether every reader of `value` is an access, or a `getelementptr`, in
     /// its own block, of an address only accesses read: one more index over a
     /// lazy address. Across blocks the sum is made again in each, where it may
@@ -2231,7 +2237,8 @@ impl Selector<'_, '_, '_> {
             self.fars.insert(result, pair);
             return Ok(());
         }
-        if op == CastOp::PtrToInt && self.carries(from) {
+        // Packed, selector:offset orders canonical pointers as they order; as a number it is no address.
+        if op == CastOp::PtrToInt && self.carries(from) && !self.only_compared(result) {
             return refuse("a huge pointer as an integer: its packed bits are not its address");
         }
         let (offset, selector) = self.far(operand, at, out)?;
