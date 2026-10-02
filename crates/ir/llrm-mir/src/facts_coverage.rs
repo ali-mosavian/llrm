@@ -42,7 +42,7 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("nsz", By(&["floating_freedoms_are_fast_math_flags", "test_nsz_lets_a_cancellation_be_positive_zero"])),
     ("arcp", Unread("scev-forms: the folds live in llrm_mir::transforms::instcombine, which the compile route does not run (#237)")),
     ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result"])),
-    ("invariant", Unread("inline-readers: no pass reads !invariant.load yet")),
+    ("invariant", By(&["a_load_the_language_says_is_invariant_is_reused_across_a_call_that_may_write", "test_a_load_the_language_says_is_invariant_leaves_past_a_store", "a_loads_invariance_is_read_from_its_metadata"])),
     ("unroll", By(&["a_loop_the_language_says_not_to_unroll_stays_rolled", "a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap", "a_loops_unroll_hint_is_read_from_its_metadata"])),
     ("mustprogress", Unread("compile-time-104: no pass reads it yet")),
 ];

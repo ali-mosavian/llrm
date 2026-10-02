@@ -583,4 +583,13 @@ mod tests {
         let branch = function.terminator(function.layout()[1]).expect("a branch");
         assert_eq!(Facts::of_terminator(&module.context, &module.metadata, function, branch).unroll(), None);
     }
+
+    /// A load says it reads what is written once, as `!invariant.load`; a plain one says nothing.
+    #[test]
+    fn a_loads_invariance_is_read_from_its_metadata() {
+        let module = crate::parse::module("@g = global i16 0\n\ndefine i16 @f() {\nb0:\n  %a = load i16, ptr @g, !invariant.load !0\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n\n!0 = !{}\n").expect("parses");
+        let function = module.global(module.named("f").expect("@f")).function().expect("a function");
+        let loads: Vec<_> = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, crate::opcode::Opcode::Load { .. })).collect();
+        assert_eq!(loads.iter().map(|&inst| Facts::of_instruction(function, inst).invariant()).collect::<Vec<_>>(), [true, false]);
+    }
 }
