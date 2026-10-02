@@ -2236,3 +2236,34 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let body = between(&assembly, "_f proc far\n", "_f endp");
     assert!(!body.contains(", 0\n"), "{body}");
 }
+
+/// A view's descriptor holds the data's pointer. The optimizer took a call
+/// of `first_even(values)` to read only the descriptor, and dropped the
+/// array's stores before it: the digits example printed "first even 0" on
+/// DOS at -O1 and -O2 (the callee reads the array through the pointer the
+/// descriptor holds, which `nocapture` says nothing of).
+#[test]
+fn test_a_call_reads_the_array_behind_the_view_it_is_given() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+fn first_even(values: &[i16]) -> i16:
+    for value in values:
+        if value % 2 == 0:
+            return value
+    return 0
+
+fn main() -> i16:
+    let values: i16[4] = [3, 7, 8, 9]
+    return first_even(values)
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "views.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 8, .. })), "{result:?}");
+}
