@@ -1,0 +1,20 @@
+# Global table: an 8 KB local array crashes the program (#356).
+var tile: i16[64, 64] = [[0] * 64] * 64
+
+fn bench_tile() -> i32:
+    let w: i16 = 40
+    let h: i16 = 25
+    let dx: i16 = 7
+    let dy: i16 = 61
+    let mut total: i32 = 0
+    for y in 0..h:
+        for x in 0..w:
+            total += tile[(y + dy) & 63, (x + dx) & 63]
+    return total
+
+fn main() -> i16:
+    for y in 0..64:
+        for x in 0..64:
+            tile[y, x] = (x * 3 + y * 5) & 255
+    print(bench_tile())
+    return 0
