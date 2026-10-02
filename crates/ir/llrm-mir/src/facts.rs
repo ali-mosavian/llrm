@@ -13,6 +13,7 @@
 
 use crate::module::Function;
 use crate::opcode::{Attribute, Flags};
+use crate::types::TypeId;
 
 /// The kind of thing a fact is stated of: a routine, one of its parameters,
 /// or one of its instructions. HIR names them; MIR has the carriers alone.
@@ -24,6 +25,8 @@ pub enum Kind {
     /// One operand of an instruction: a call argument, or a place.
     Operand,
     Object,
+    /// The terminator of a block: a loop's back edge carries what the language says of the loop.
+    Terminator,
 }
 
 macro_rules! facts {
@@ -79,23 +82,24 @@ macro_rules! facts {
                 match key { $($vkey => Some(Fact::$valued(value as $vty)),)* _ => None }
             }
 
-            /// The value a fact carries on the wire, if it carries one.
-            pub fn wire_value(self) -> Option<i64> {
+            /// The value a fact carries on the wire, and the second one a pair
+            /// carries, if it carries any.
+            pub fn wire_value(self) -> Option<(i64, Option<i64>)> {
                 match self {
                     $(Fact::$flag => None,)*
                     $(Fact::$bit => None,)*
-                    $(Fact::$valued(value) => Some(value as i64),)*
+                    $(Fact::$valued(value) => Some((value as i64, None)),)*
                     $(Fact::$custom(value) => Some(Wire::wire(value)),)*
                 }
             }
 
-            /// The fact of a wire name and value; none where either is not one's.
-            pub fn from_wire(key: &str, value: Option<i64>) -> Option<Fact> {
-                match (key, value) {
-                    $(($fkey, None) => Some(Fact::$flag),)*
-                    $(($bkey, None) => Some(Fact::$bit),)*
-                    $(($vkey, Some(value)) => Some(Fact::$valued(value as $vty)),)*
-                    $(($ckey, Some(value)) => <$cty as Wire>::unwire(value).map(Fact::$custom),)*
+            /// The fact of a wire name and values; none where either is not one's.
+            pub fn from_wire(key: &str, value: Option<i64>, second: Option<i64>) -> Option<Fact> {
+                match (key, value, second) {
+                    $(($fkey, None, None) => Some(Fact::$flag),)*
+                    $(($bkey, None, None) => Some(Fact::$bit),)*
+                    $(($vkey, Some(value), None) => Some(Fact::$valued(value as $vty)),)*
+                    $(($ckey, Some(value), second) => <$cty as Wire>::unwire(value, second).map(Fact::$custom),)*
                     _ => None,
                 }
             }
@@ -138,10 +142,10 @@ macro_rules! facts {
     };
 }
 
-/// A fact's value as a number on the wire.
+/// A fact's value as one number on the wire, or a pair.
 pub trait Wire: Sized {
-    fn wire(self) -> i64;
-    fn unwire(value: i64) -> Option<Self>;
+    fn wire(self) -> (i64, Option<i64>);
+    fn unwire(value: i64, second: Option<i64>) -> Option<Self>;
 }
 
 /// What a call may do to memory, as `memory(...)` states it.
@@ -186,18 +190,21 @@ impl Inlining {
 }
 
 impl Wire for Inlining {
-    fn wire(self) -> i64 {
-        self as i64
+    fn wire(self) -> (i64, Option<i64>) {
+        (self as i64, None)
     }
 
-    fn unwire(value: i64) -> Option<Inlining> {
-        [Inlining::Never, Inlining::Hint, Inlining::Always].into_iter().find(|one| *one as i64 == value)
+    fn unwire(value: i64, second: Option<i64>) -> Option<Inlining> {
+        [Inlining::Never, Inlining::Hint, Inlining::Always].into_iter().find(|one| *one as i64 == value && second.is_none())
     }
 }
 
 facts! {
     flags {
-        NoAlias no_alias "noalias" on [Param];
+        // Of a routine, its result: a pointer to memory nothing else names.
+        NoAlias no_alias "noalias" on [Param, Callable];
+        // The load reads what nothing writes after it is initialised.
+        Invariant invariant "invariant" on [Instruction];
         ReadOnly read_only "readonly" on [Param];
         // Touches no memory through the pointer, or at all, of a routine.
         ReadNone read_none "readnone" on [Param, Callable];
@@ -221,11 +228,15 @@ facts! {
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];
-        Align(u64) align "align" on [Param, Object];
+        Align(u64) align "align" on [Param, Object, Instruction];
         Initializes(u64) initializes "initializes" on [Operand];
+        // Of a loop's back edge: most copies the language lets be made. 0 forbids, `u32::MAX` is all.
+        Unroll(u32) unroll "unroll" on [Terminator];
     }
     custom {
         Memory(Effect) memory "memory" on [Callable];
+        // Of a routine, its result.
+        Range(Bounds) range "range" on [Param, Callable, Instruction];
         Inline(Inlining) inline "inline" on [Callable];
     }
     bits {
@@ -253,9 +264,46 @@ impl Fact {
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
-            Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
+            // A range wants the width of what it bounds: `typed_attribute`.
+            Fact::Invariant | Fact::Unroll(_) | Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
+    }
+
+    /// Whether it is carried as metadata (`!range`, `!llvm.loop`) or by the width of
+    /// what it bounds, where it is neither an attribute nor an instruction flag.
+    pub fn is_metadata(self) -> bool {
+        matches!(self, Fact::Range(_) | Fact::Invariant | Fact::Unroll(_))
+    }
+
+    /// Whether, stated of a routine, it is of the routine's result.
+    pub fn of_result(self) -> bool {
+        matches!(self, Fact::NoAlias | Fact::Range(_))
+    }
+
+    /// The attribute of an integer of `bits` that carries the fact: as
+    /// `attribute`, and a range as LLVM's half-open `[lo, hi + 1)` modulo 2^bits.
+    pub fn typed_attribute(self, ty: TypeId, bits: u32) -> Option<Attribute> {
+        match self {
+            Fact::Range(Bounds { lo, hi }) => {
+                let wrap = |value: i128| (value as u128) & (u128::MAX >> (128 - bits.clamp(1, 128)));
+                Some(Attribute::Range { ty, lower: wrap(lo as i128), upper: wrap(hi as i128 + 1) })
+            }
+            other => other.attribute(),
+        }
+    }
+
+    /// The fact a range attribute of an integer of `bits` states. `signed`
+    /// reads its bounds as signed, as a frontend that stated `-1..=1` meant them.
+    pub fn of_range(lower: u128, upper: u128, bits: u32, signed: bool) -> Option<Fact> {
+        let mask = u128::MAX >> (128 - bits.clamp(1, 128));
+        let value = |one: u128| {
+            let one = one & mask;
+            if signed && bits < 128 && one >> (bits - 1) & 1 == 1 { one as i128 - (1i128 << bits) } else { one as i128 }
+        };
+        let hi = value(upper.wrapping_sub(1));
+        let lo = value(lower);
+        (lo <= hi).then(|| Fact::Range(Bounds { lo: lo as i64, hi: hi as i64 }))
     }
 
     /// The attribute that carries a flag or valued fact; a fact that is carried otherwise has none.
@@ -283,12 +331,30 @@ impl Fact {
 }
 
 impl Wire for Effect {
-    fn wire(self) -> i64 {
-        self as i64
+    fn wire(self) -> (i64, Option<i64>) {
+        (self as i64, None)
     }
 
-    fn unwire(value: i64) -> Option<Effect> {
-        [Effect::None, Effect::Read, Effect::Write, Effect::Inaccessible].into_iter().find(|one| *one as i64 == value)
+    fn unwire(value: i64, second: Option<i64>) -> Option<Effect> {
+        [Effect::None, Effect::Read, Effect::Write, Effect::Inaccessible].into_iter().find(|one| *one as i64 == value && second.is_none())
+    }
+}
+
+/// The values an integer is within, both included, as the number it is: a
+/// byte read as unsigned is 0..=255, not -128..=127.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Bounds {
+    pub lo: i64,
+    pub hi: i64,
+}
+
+impl Wire for Bounds {
+    fn wire(self) -> (i64, Option<i64>) {
+        (self.lo, Some(self.hi))
+    }
+
+    fn unwire(value: i64, second: Option<i64>) -> Option<Bounds> {
+        second.filter(|&hi| value <= hi).map(|hi| Bounds { lo: value, hi })
     }
 }
 
@@ -323,6 +389,21 @@ impl Facts {
         Facts(facts)
     }
 
+    /// As `of`, and the ranges too, which need the width of the integer `bits_of` names;
+    /// read as signed where `signed` says.
+    pub fn of_typed(attributes: &[Attribute], bits_of: impl Fn(TypeId) -> Option<u32>, signed: bool) -> Facts {
+        let mut facts = Facts::of(attributes);
+        for attribute in attributes {
+            if let Attribute::Range { ty, lower, upper } = attribute
+                && let Some(fact) = bits_of(*ty).and_then(|bits| Fact::of_range(*lower, *upper, bits, signed))
+                && !facts.0.contains(&fact)
+            {
+                facts.0.push(fact);
+            }
+        }
+        facts
+    }
+
     /// The facts an instruction's flags state.
     pub fn of_flags(flags: Flags) -> Facts {
         Facts(Fact::of_flags(flags))
@@ -352,10 +433,11 @@ mod tests {
         for fact in Fact::examples() {
             match fact.attribute() {
                 Some(attribute) => assert_eq!(Fact::of_attribute(&attribute), Some(fact), "{}", fact.key()),
+                None if fact.is_metadata() => {}
                 None => assert!(Fact::of_flags(fact.flags()).contains(&fact), "{} is a flag", fact.key()),
             }
             assert!(Fact::is_named(fact.key()));
-            assert_eq!(Fact::from_wire(fact.key(), fact.wire_value()), Some(fact), "{} on the wire", fact.key());
+            assert_eq!(Fact::from_wire(fact.key(), fact.wire_value().map(|one| one.0), fact.wire_value().and_then(|one| one.1)), Some(fact), "{} on the wire", fact.key());
             assert!(!fact.kinds().is_empty(), "{} is of no subject", fact.key());
         }
     }
@@ -377,7 +459,23 @@ mod tests {
         let fact = Fact::Memory(Effect::Inaccessible);
         let attribute = fact.attribute().expect("an attribute");
         assert_eq!(Fact::of_attribute(&attribute), Some(fact));
-        assert_eq!(Fact::from_wire(fact.key(), fact.wire_value()), Some(fact));
+        assert_eq!(Fact::from_wire(fact.key(), fact.wire_value().map(|one| one.0), fact.wire_value().and_then(|one| one.1)), Some(fact));
+    }
+
+    /// A range reaches LLVM half-open and at its integer's width, and comes
+    /// back the bounds it was stated with; an empty one says nothing.
+    #[test]
+    fn a_range_is_its_attribute_at_the_width_of_what_it_bounds() {
+        let ty = crate::types::Types::default().int(16);
+        let bounds = |lo, hi| Fact::Range(Bounds { lo, hi });
+        assert_eq!(bounds(0, 1).typed_attribute(ty, 16), Some(Attribute::Range { ty, lower: 0, upper: 2 }));
+        assert_eq!(bounds(-1, 1).typed_attribute(ty, 16), Some(Attribute::Range { ty, lower: 0xffff, upper: 2 }));
+        assert_eq!(Fact::of_range(0xffff, 2, 16, true), Some(bounds(-1, 1)));
+        assert_eq!(Fact::of_range(0, 2, 16, false), Some(bounds(0, 1)));
+        let attributes = [bounds(3, 9).typed_attribute(ty, 8).unwrap(), Attribute::Flag("noalias".to_owned())];
+        let facts = Facts::of_typed(&attributes, |_| Some(8), false);
+        assert_eq!((facts.range(), facts.no_alias()), (Some(Bounds { lo: 3, hi: 9 }), true));
+        assert_eq!(Fact::from_wire("range", Some(5), Some(2)), None, "lo above hi is no range");
     }
 
     /// A pass asks the fact, never the attribute's spelling: no source outside
@@ -420,7 +518,7 @@ mod tests {
         for (how, name) in [(Inlining::Never, "noinline"), (Inlining::Hint, "inlinehint"), (Inlining::Always, "alwaysinline")] {
             assert_eq!(Fact::Inline(how).attribute(), Some(Attribute::Flag(name.to_owned())));
             assert_eq!(Facts::of(&[Attribute::Flag(name.to_owned())]).inline(), Some(how));
-            assert_eq!(Fact::from_wire("inline", Fact::Inline(how).wire_value()), Some(Fact::Inline(how)));
+            assert_eq!(Fact::from_wire("inline", Fact::Inline(how).wire_value().map(|one| one.0), None), Some(Fact::Inline(how)));
         }
         assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
     }

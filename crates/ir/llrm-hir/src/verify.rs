@@ -174,26 +174,32 @@ fn _operand_type(
 /// Each stated fact is of a subject kind it may be stated of, and of a
 /// subject the module has.
 fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
-    use crate::facts::Subject;
+    use crate::facts::{Index, Subject};
+    let index = Index::of(module);
+    let callables: HashSet<i64> = module.callables.iter().map(|one| one.id).collect();
+    let objects: HashSet<i64> = module.data.iter().map(|one| one.id).collect();
     for stated in &module.facts {
         let (fact, subject) = (stated.fact, stated.subject);
         if !fact.kinds().contains(&subject.kind()) {
             invalid!("{}: {} is not stated of a {}", module.name, fact.key(), Subject::kind_key(subject.kind()));
         }
-        let function = |id: i64| module.functions.iter().find(|one| one.id == id);
+        let function = |id: i64| index.function(id);
         let found = match subject {
-            Subject::Callable(id) => module.callables.iter().any(|one| one.id == id),
+            Subject::Callable(id) => callables.contains(&id),
             Subject::Param { function: id, index } => function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index)),
-            Subject::Instruction { function: id, id: at } => function(id).is_some_and(|one| one.blocks.iter().any(|block| block.instructions.iter().any(|i| i.id == at))),
-            Subject::Operand { function: id, instruction, operand } => function(id).is_some_and(|one| {
-                one.blocks.iter().flat_map(|block| &block.instructions).any(|i| {
-                    i.id == instruction
-                        && (0..i.operands.len() as i64).contains(&operand)
-                        // What a callee does with a pointer is stated of a call's argument.
-                        && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
-                })
+            Subject::Instruction { function: id, id: at } => index.instruction(id, at).is_some_and(|i| match fact {
+                // Of what it yields, and of what it accesses.
+                llrm_mir::facts::Fact::Range(_) => !i.results.is_empty(),
+                llrm_mir::facts::Fact::Align(_) => matches!(i.op, model::Op::Load | model::Op::Store),
+                _ => true,
             }),
-            Subject::Object(id) => module.data.iter().any(|one| one.id == id),
+            Subject::Operand { function: id, instruction, operand } => index.instruction(id, instruction).is_some_and(|i| {
+                (0..i.operands.len() as i64).contains(&operand)
+                    // What a callee does with a pointer is stated of a call's argument.
+                    && (i.op == model::Op::Call || matches!(fact, llrm_mir::facts::Fact::InBounds))
+            }),
+            Subject::Object(id) => objects.contains(&id),
+            Subject::Terminator { function: id, block } => function(id).is_some_and(|one| one.blocks.iter().any(|b| b.id == block)),
         };
         if !found {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));

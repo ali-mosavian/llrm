@@ -255,6 +255,12 @@ struct Tables<'h> {
     nounwind: &'h [String],
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
+    /// The metadata the language's facts give an instruction's result, by function and instruction id.
+    fact_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
+    /// The alignment the language states of an instruction's access.
+    accesses: HashMap<(i64, i64), u64>,
+    /// The metadata the language's facts give a block's terminator, by function and block id.
+    terminator_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
 }
@@ -274,6 +280,60 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
         });
     }
     nodes
+}
+
+/// The metadata `!range` and the like the language's facts give instructions,
+/// and the alignments they state of accesses.
+fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<FactNodes> {
+    let (mut nodes, mut accesses, mut terminators) = (HashMap::new(), HashMap::new(), HashMap::new());
+    let index = crate::facts::Index::of(hir);
+    for stated in &hir.facts {
+        if let (Subject::Terminator { function, block }, Fact::Unroll(copies)) = (stated.subject, stated.fact) {
+            terminators.entry((function, block)).or_insert_with(Vec::new).push(("llvm.loop", loop_node(module, copies)));
+            continue;
+        }
+        let Subject::Instruction { function, id } = stated.subject else { continue };
+        match stated.fact {
+            Fact::Invariant => {
+                module.metadata.push(MetadataNode { distinct: false, operands: Vec::new() });
+                nodes.entry((function, id)).or_insert_with(Vec::new).push(("invariant.load", MetadataId(module.metadata.len() as u32 - 1)));
+            }
+            Fact::Align(bytes) => {
+                accesses.insert((function, id), bytes);
+            }
+            Fact::Range(bounds) => {
+                let instruction = index.instruction(function, id).ok_or("a range of no instruction")?;
+                let result = instruction.results.first().ok_or("a range of an instruction with no result")?;
+                let hir_type = index.value_type(function, *result).map(|one| types[&one]).ok_or("a range of an unknown value")?;
+                let ty = value_type(&mut module.context.types, hir_type)?;
+                let bits = module.context.types.int_bits(ty).ok_or("a range of what is no integer")?;
+                let Some(llrm_mir::Attribute::Range { lower, upper, .. }) = Fact::Range(bounds).typed_attribute(ty, bits) else { continue };
+                let (lower, upper) = (module.context.int(ty, lower as i128), module.context.int(ty, upper as i128));
+                module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::Constant(lower), MetadataOperand::Constant(upper)] });
+                nodes.entry((function, id)).or_insert_with(Vec::new).push(("range", MetadataId(module.metadata.len() as u32 - 1)));
+            }
+            _ => {}
+        }
+    }
+    Ok((nodes, accesses, terminators))
+}
+
+/// What `fact_nodes` finds: metadata of instructions, alignments of accesses, metadata of terminators.
+type FactNodes = (HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>, HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>);
+
+/// A loop's `!llvm.loop` node: distinct, naming itself and what it says of unrolling.
+fn loop_node(module: &mut Module, copies: u32) -> MetadataId {
+    let i32 = module.context.types.int(32);
+    let hint = match copies {
+        0 => vec![MetadataOperand::String("llvm.loop.unroll.disable".to_owned())],
+        u32::MAX => vec![MetadataOperand::String("llvm.loop.unroll.full".to_owned())],
+        count => vec![MetadataOperand::String("llvm.loop.unroll.count".to_owned()), MetadataOperand::Constant(module.context.int(i32, i128::from(count)))],
+    };
+    module.metadata.push(MetadataNode { distinct: false, operands: hint });
+    let hint = MetadataId(module.metadata.len() as u32 - 1);
+    let this = MetadataId(module.metadata.len() as u32);
+    module.metadata.push(MetadataNode { distinct: true, operands: vec![MetadataOperand::Node(this), MetadataOperand::Node(hint)] });
+    this
 }
 
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
@@ -313,9 +373,16 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         classes: HashMap::new(),
         nounwind,
         lines: HashMap::new(),
+        fact_nodes: HashMap::new(),
+        accesses: HashMap::new(),
+        terminator_nodes: HashMap::new(),
         variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
+    match fact_nodes(&mut module, hir, &tables.types) {
+        Ok((nodes, accesses, terminators)) => (tables.fact_nodes, tables.accesses, tables.terminator_nodes) = (nodes, accesses, terminators),
+        Err(why) => refused.push((hir.name.clone(), why)),
+    }
     match class_tags(&mut module, &hir.alias_classes) {
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -365,6 +432,14 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
     for one in &hir.facts {
         if let Err(why) = lower_fact(&mut module, &tables, hir, &declared, &data, one) {
             refused.push((hir.name.clone(), why));
+        }
+    }
+    // What changes what the code after a call means is not a fact a pass may drop.
+    for callable in hir.callables.iter().filter(|one| one.returns_twice) {
+        let Some(&reference) = tables.callees.get(&callable.name) else { continue };
+        let llrm_mir::ConstantKind::Global(global) = module.context.get(reference).kind else { continue };
+        if let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind {
+            function.attrs.push(Attribute::Flag(RETURNS_TWICE.to_owned()));
         }
     }
     // Initialized once every function its data addresses is declared: one only addressed, far and C's.
@@ -713,7 +788,7 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
     let attribute = || stated.fact.attribute().ok_or_else(|| format!("{} is an instruction flag, not of a {}", stated.fact.key(), Subject::kind_key(stated.subject.kind())));
     let (global, parameter) = match stated.subject {
         // A call's arguments' facts are attributes of the call, made with it.
-        Subject::Instruction { .. } | Subject::Operand { .. } => return Ok(()),
+        Subject::Instruction { .. } | Subject::Operand { .. } | Subject::Terminator { .. } => return Ok(()),
         Subject::Object(id) => {
             let Some(&global) = data.get(&id) else { return Ok(()) };
             let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of a data object that is no variable".to_owned()) };
@@ -738,11 +813,24 @@ fn lower_fact(module: &mut Module, tables: &Tables, hir: &model::Module, declare
         }
     };
     let llrm_mir::GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { return Err("a fact of what is no function".to_owned()) };
-    let attrs = match parameter {
-        Some(index) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
-        None => &mut function.attrs,
+    let Type::Function { returns, parameters, .. } = module.context.types.get(function.ty).clone() else { return Err("a fact of a function with no function type".to_owned()) };
+    // What the fact bounds, when it is a range or states of a result.
+    let subject_type = match parameter {
+        Some(index) => *parameters.get(index as usize).ok_or("a fact of no parameter")?,
+        None => returns,
     };
-    let attribute = attribute()?;
+    let attrs = match (parameter, stated.fact.of_result()) {
+        (Some(index), _) => function.parameter_attrs.get_mut(index as usize).ok_or("a fact of no parameter")?,
+        (None, true) => &mut function.return_attrs,
+        (None, false) => &mut function.attrs,
+    };
+    let attribute = match module.context.types.int_bits(subject_type) {
+        Some(bits) => match stated.fact.typed_attribute(subject_type, bits) {
+            Some(typed) => typed,
+            None => attribute()?,
+        },
+        None => attribute()?,
+    };
     if !attrs.contains(&attribute) {
         attrs.push(attribute);
     }
@@ -1042,6 +1130,9 @@ fn interrupted(function: &model::Function) -> bool {
     function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
 }
 
+/// A routine that may return twice, LLVM's attribute: not a fact, since dropping it changes what the code means.
+pub const RETURNS_TWICE: &str = "returns_twice";
+
 /// What the language promises holds, LLVM's intrinsic.
 const ASSUME: &str = "llvm.assume";
 
@@ -1261,6 +1352,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for instruction in &block.instructions {
             let first = self.b.function.instruction_count();
             self.instruction(instruction)?;
+            self.stated(first, instruction);
             line = instruction.line.or(line);
             self.lined(first, line);
         }
@@ -1270,11 +1362,37 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let first = self.b.function.instruction_count();
             self.terminator(&block.terminator)?;
             self.lined(first, line);
+            if let Some(nodes) = self.tables.terminator_nodes.get(&(self.function.id, block.id))
+                && let Some(inst) = self.b.function.terminator(self.b.current().expect("a placed block"))
+            {
+                for &(kind, node) in nodes {
+                    self.b.function.annotate(inst, kind, node);
+                }
+            }
         }
         if block.cold {
             mark_cold(self.b.function, self.blocks[&block.id]);
         }
         Ok(())
+    }
+
+    /// What the language's facts say of the instruction lowered as the ones
+    /// made since the `first`th: metadata on its result's, an alignment on its accesses.
+    fn stated(&mut self, first: usize, instruction: &model::Instruction) {
+        let key = (self.function.id, instruction.id);
+        if let Some(nodes) = self.tables.fact_nodes.get(&key)
+            && let Some(Value::Value(value)) = instruction.results.first().and_then(|result| self.values.get(result)).copied()
+            && let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(value).def
+        {
+            for &(kind, node) in nodes {
+                self.b.function.annotate(inst, kind, node);
+            }
+        }
+        if let Some(&bytes) = self.tables.accesses.get(&key) {
+            for at in first..self.b.function.instruction_count() {
+                self.b.function.set_access_align(llrm_mir::InstId(at as u32), bytes);
+            }
+        }
     }
 
     /// Each instruction made since the `first`th, `line`'s: `!dbg`.

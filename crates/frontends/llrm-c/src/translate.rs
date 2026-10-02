@@ -67,8 +67,10 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
     let callables: Vec<h::Callable> = callables.into_values().filter(|one| one.defined || !defined.contains(one.name.as_str())).collect();
     let promises = h::RuntimePromises { reads_arguments: crate::libfunc::reads_arguments(callables.iter().map(|one| one.name.as_str())), ..Default::default() };
+    let mut callables = callables;
     for symbol in unit.symbols.values().filter(|one| one.proc()) {
-        if let Some(callable) = callables.iter().find(|one| one.name == symbol.object_name()) {
+        if let Some(callable) = callables.iter_mut().find(|one| one.name == symbol.object_name()) {
+            callable.returns_twice = crate::ow_facts::returns_twice(symbol.call_class) || crate::libfunc::returns_twice(&callable.name);
             for fact in crate::ow_facts::of_call_class(symbol.call_class)? {
                 facts.state(Subject::Callable(callable.id), fact);
             }
@@ -1984,6 +1986,7 @@ fn callable(callables: &mut IndexMap<String, h::Callable>, name: &str, defined: 
             segmented: Vec::new(),
             arrays: Vec::new(),
             defined,
+            returns_twice: false,
             symbol: None,
         })
         .id
