@@ -32,7 +32,7 @@ fn costs(call: i64) -> OperationCosts {
 /// Every call in `caller` that `candidates` admits, inlined.
 fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
     let layout = DataLayout::default();
-    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), Threshold::default());
+    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), Threshold::default(), true);
     let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)) };
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
@@ -138,9 +138,9 @@ b1:
 "
     ));
     let (private, layout) = (private(&module), DataLayout::default());
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), Threshold::default()), IndexMap::default());
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), Threshold::default(), true), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), Threshold::default()).len(), 1);
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), Threshold::default(), true).len(), 1);
 }
 
 const HELPERS: &str = "define internal i16 @scale(i16 %x) {
@@ -458,4 +458,40 @@ b1:
 ";
     let mut module = parsed(text);
     assert!(!inline_into(&mut module, "main", 40));
+}
+
+/// A callee of `ops` additions, carrying `attr`, called at `sites` sites of @main.
+fn chain(ops: usize, attr: &str, sites: usize) -> String {
+    let body: String = (0..ops).map(|at| format!("  %t{} = add i16 {}, {}\n", at + 1, if at == 0 { "%x".to_owned() } else { format!("%t{at}") }, at + 1)).collect();
+    let calls: String = (0..sites).map(|at| format!("  %r{at} = call i16 @big(i16 {at})\n")).collect();
+    let sum: String = (1..sites).map(|at| format!("  %s{at} = add i16 {}, %r{at}\n", if at == 1 { "%r0".to_owned() } else { format!("%s{}", at - 1) })).collect();
+    format!("define i16 @big(i16 %x) {attr} {{\nb1:\n{body}  ret i16 %t{ops}\n}}\n\ndefine i16 @main() {{\nb1:\n{calls}{sum}  ret i16 %{}\n}}\n", if sites == 1 { "r0".to_owned() } else { format!("s{}", sites - 1) })
+}
+
+#[test]
+fn test_a_callee_the_language_says_always_inline_is_inlined_at_any_size() {
+    // Forty operations at two sites: over the budget and dearer than the calls.
+    let mut plain = parsed(&chain(40, "", 2));
+    assert!(!inline_into(&mut plain, "main", 8));
+    let mut always = parsed(&chain(40, "alwaysinline", 2));
+    assert!(inline_into(&mut always, "main", 8));
+    assert!(!printed(&always).contains("call i16 @big"), "{}", printed(&always));
+    assert!(always.named("big").is_some(), "a public callee stays defined");
+}
+
+#[test]
+fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
+    // Eight operations, one private site: the budget at this call price is 6, a hint's 8.
+    let text = |attr: &str| chain(8, attr, 1).replace("define i16 @big", "define internal i16 @big");
+    let admits = |attr: &str, hints: bool| {
+        let module = parsed(&text(attr));
+        candidates(&module, &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), Threshold::default(), hints).len()
+    };
+    assert_eq!((admits("", true), admits("inlinehint", true), admits("inlinehint", false)), (0, 1, 0));
+}
+
+#[test]
+fn test_a_callee_the_language_says_never_inline_stays_even_if_always_is_stated_too() {
+    let mut module = parsed(&chain(2, "noinline alwaysinline", 1));
+    assert!(!inline_into(&mut module, "main", 8));
 }

@@ -37,6 +37,7 @@ use std::rc::Rc;
 use llrm_mir::callgraph::CallGraph;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, callee, has};
 use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
@@ -62,6 +63,15 @@ impl Threshold {
     fn budget(self, call_cost: i64) -> Option<i64> {
         (self.0 > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.0 / Self::default().0)
     }
+}
+
+/// LLVM's inline-hint threshold, 325, against its default of 225: what a
+/// body the language marks worth inlining may grow to, as a fraction.
+const HINT: (i64, i64) = (325, 225);
+
+/// What the language says of inlining `body`.
+fn stated(body: &Function) -> Option<Inlining> {
+    Facts::of(&body.attrs).inline()
 }
 
 /// The stack, in bytes, inlining may add to one function: a copy's frame is
@@ -147,11 +157,11 @@ fn addressed(module: &Module) -> BTreeSet<GlobalId> {
 }
 
 /// Whether `body` may be cloned into another function: it returns, `splice`
-/// carries it, and it is not recursive, `noinline` or `setjmp`-like.
+/// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
 fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
     !body.is_declaration()
         && carries(body)
-        && !has(&body.attrs, "noinline")
+        && stated(body) != Some(Inlining::Never)
         && !recursive.contains(&id)
         && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)
         && !body.walk().any(|(_, inst)| callee(&module.context, body, inst).and_then(|one| module.global(one).function()).is_some_and(|one| has(&one.attrs, "returns_twice")))
@@ -165,23 +175,32 @@ fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCo
 
 /// Functions worth moving into their direct callers.
 ///
-/// A candidate's size is bounded by the `Threshold`.  Inlining it at all
+/// A candidate's size is bounded by the `Threshold`; a routine the language
+/// says is `Always` inlined is a candidate at any size, and `Never` is none.
+/// Inlining it at all
 /// `count` sites leaves the body behind when it is public or its address is
 /// taken; a private one goes with the last site, so one site costs nothing.
 /// Each copy beyond that duplicates the body's priced work, which has to
 /// stay below the calls removed.
-pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
+pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold, hints: bool) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
-    let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
+    let budget = threshold.budget(call_cost);
     let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), addressed(module));
     let mut out = IndexMap::default();
     for (&name, &count) in calls {
         let Some(body) = body(module, name) else { continue };
-        if count == 0 || semantic_count(body) > budget || !cloneable(module, &recursive, name, body) {
+        if count == 0 || !cloneable(module, &recursive, name, body) {
             continue;
         }
+        let always = stated(body) == Some(Inlining::Always);
+        // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
+        let scale = |n: i64| if hints && stated(body) == Some(Inlining::Hint) { n * HINT.0 / HINT.1 } else { n };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
-        if copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < count * call_cost) {
+        let admitted = || {
+            budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
+                && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * call_cost)))
+        };
+        if always || admitted() {
             out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
     }
