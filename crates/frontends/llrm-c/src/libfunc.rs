@@ -70,7 +70,7 @@ pub fn three_way_compare(name: &str) -> bool {
 
 /// The C library's routines that return twice: once as called, once more
 /// from the `longjmp` that jumps back to them.
-const RETURNS_TWICE: [&str; 3] = ["setjmp", "sigsetjmp", "savectx"];
+const RETURNS_TWICE: [&str; 4] = ["setjmp", "sigsetjmp", "savectx", "vfork"];
 
 /// Whether the function of object name `name` is one of them.
 pub fn returns_twice(name: &str) -> bool {
@@ -103,7 +103,7 @@ mod tests {
     /// `setjmp` returns twice by its name, with or without the C decoration.
     #[test]
     fn setjmp_is_known_to_return_twice() {
-        assert!(super::returns_twice("_setjmp") && super::returns_twice("setjmp") && super::returns_twice("_sigsetjmp"));
+        assert!(super::returns_twice("_setjmp") && super::returns_twice("setjmp") && super::returns_twice("_sigsetjmp") && super::returns_twice("vfork"));
         assert!(!super::returns_twice("_longjmp") && !super::returns_twice("_setjmp2"));
     }
 }
