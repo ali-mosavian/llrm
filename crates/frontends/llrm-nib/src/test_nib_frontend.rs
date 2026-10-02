@@ -1495,7 +1495,9 @@ fn test_a_near_raw_pointer_to_a_module_struct_is_its_offset() {
 #[test]
 /// Any integer converts to a float: a parameter, a temporary, a constant, of
 /// any width or sign. Only one already in memory in an x87 format did;
-/// `f64(high)` of an i16 parameter was "integer-to-float conversion needs a place".
+/// `f64(high)` of an i16 parameter was "integer-to-float conversion needs a place",
+/// and the rich route refused every unsigned one: "UIToFP of a float".
+#[test]
 fn test_any_integer_operand_converts_to_a_float() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
@@ -1503,10 +1505,40 @@ fn test_any_integer_operand_converts_to_a_float() {
         "floats.nib",
         "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
-    let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
+    let options = llrm_core::driver::Options::of(nib_compile::machine());
+    let module = nib_compile::assembled_from_mir(&parsed(&source), "main", &options).unwrap_or_else(|error| panic!("{error}"));
+    let text = masm::text(&module).expect("prints");
     let mixed = between(&text, "MIXED proc far", "MIXED endp");
-    // u32 is loaded as a signed qword, u16 widened to a signed dword.
-    assert!(mixed.contains("fild qword ptr") && mixed.contains("movzx eax, cx"), "{mixed}");
+    // Each unsigned is read signed at twice its width: u8 a word, u16 a
+    // dword, u32 a qword whose high dword is zero.
+    assert!(mixed.contains("movzx ax, dl") && mixed.contains("movzx eax, cx"), "{mixed}");
+    let qword = Regex::new(r"mov dword ptr \[bp-(\d+)\], ebx\n\s*mov dword ptr \[bp-(\d+)\], 0\n\s*fild qword ptr \[bp-(\d+)\]").unwrap();
+    let cells = qword.captures(mixed).unwrap_or_else(|| panic!("{mixed}"));
+    let at = |group: usize| cells[group].parse::<i64>().unwrap();
+    assert_eq!((at(1), at(2)), (at(3), at(3) - 4), "{mixed}");
+}
+
+/// An unsigned integer converts to the float of its value, not of its bits
+/// read signed: 65535 as a u16 is 65535.0, not -1.0.
+#[test]
+fn test_an_unsigned_integer_converts_to_its_value() {
+    use llrm_mir::interpret::{self, Val};
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(
+        &directory,
+        "unsigned.nib",
+        "@export(\"cdecl16\")\nfn byte(x: u8) -> f64:\n    return f64(x)\n\n\
+         @export(\"cdecl16\")\nfn word(x: u16) -> f64:\n    return f64(x)\n\n\
+         @export(\"cdecl16\")\nfn long(x: u32) -> f64:\n    return f64(x)\n",
+    );
+    let program = parsed(&source);
+    let options = llrm_core::driver::Options::of(nib_compile::machine());
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    for (name, width, bits, value) in [("byte", 8, 0xff, 255.0), ("word", 16, 0xffff, 65535.0), ("long", 32, 0xffff_ffff, 4294967295.0_f64)] {
+        let got = interpret::run(&mir.modules[0], &format!("_{name}"), vec![Val::Int { bits, width }], 1_000).unwrap_or_else(|trap| panic!("{name}: {trap:?}"));
+        assert!(matches!(got, Val::Float(_, found) if found == f64::to_bits(value)), "{name}: {got:?}");
+    }
 }
 
 #[test]

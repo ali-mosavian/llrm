@@ -2353,6 +2353,26 @@ impl Selector<'_, '_, '_> {
                 let into = Held { value: self.value(result), width: FLOAT };
                 self.float_loaded(into, "fild", cell, held.width, false, at, out);
             }
+            // An unsigned integer of n bytes is exactly a signed one of 2n,
+            // zero-extended: fild reads a word, a dword or a qword.
+            CastOp::UIToFP => {
+                let held = self.held(operand, from, at, out)?;
+                let width = (2 * held.width).max(2);
+                let cell = self.temporary(i64::from(width));
+                if width <= 4 {
+                    let wide = self.fresh_held(width);
+                    out.push(insn(at, semantics(Operation::Extend, "movzx", vec![Loc::Held(wide)], vec![Loc::Held(held)])));
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell, width))], vec![Loc::Held(wide)])));
+                } else if width == 8 {
+                    let zero = Loc::Imm(Imm { value: 0, width: 4, address: None });
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell, 4))], vec![Loc::Held(held)])));
+                    out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(4), 4))], vec![zero])));
+                } else {
+                    return refuse(format!("an unsigned {}-byte integer to a float: x87 reads no signed integer wider than 8 bytes", held.width));
+                }
+                let into = Held { value: self.value(result), width: FLOAT };
+                self.float_loaded(into, "fild", cell, width, false, at, out);
+            }
             CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
             CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
             _ => return refuse(format!("{op:?} of a float")),

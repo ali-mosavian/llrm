@@ -2029,6 +2029,16 @@ done:
     assert_eq!(got[body + 1..body + 7], ["mov cl, byte ptr es:[si]", "mov byte ptr [bx], cl", "inc bx", "inc si", "dec ax", "jne L0_2"], "{got:?}");
 }
 
+/// An unsigned integer converts as the signed one twice its width it
+/// zero-extends to, which fild reads exactly; isel refused "UIToFP of a float".
+#[test]
+fn test_an_unsigned_integer_to_a_float_is_fild_of_twice_its_width() {
+    let converted = |ty: &str| inner(&format!("define double @f({ty} %x) addrspace(1) {{\n  %f = uitofp {ty} %x to double\n  ret double %f\n}}\n"));
+    assert_eq!(converted("i8"), ["movzx ax, byte ptr [bp+6]", "mov word ptr [bp-2], ax", "fild word ptr [bp-2]"]);
+    assert_eq!(converted("i16"), ["movzx eax, word ptr [bp+6]", "mov dword ptr [bp-4], eax", "fild dword ptr [bp-4]"]);
+    assert_eq!(converted("i32"), ["mov eax, dword ptr [bp+6]", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], 0", "fild qword ptr [bp-8]"]);
+}
+
 /// An i64 converted to a float is `fild qword` of its pair stored, as the
 /// old route's C `_wide` did; isel refused "SIToFP from an i64".
 #[test]
