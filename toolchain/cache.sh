@@ -1,11 +1,19 @@
 # Sourced. The toolchain's trees live under ~/.cache/llrm, shared by every
 # worktree and every cargo build running at once.
 #
+# claimed FILE: this process made FILE, holding its pid; one concurrent caller does,
+# the rest do not. Made by the shell with O_EXCL (noclobber), not by mkdir: uutils'
+# mkdir lets two concurrent callers both succeed.
+claimed() {
+    (set -C; echo $$ >"$1") 2>/dev/null
+}
+
 # cached DIR PRODUCER [ARG...]: DIR holds what PRODUCER made, complete or not
 # at all. DIR is named for what it was made from (a commit, a hash), never
 # changed after, and valid only once DIR/.complete exists, which is written
-# last. One process produces at a time (a lock directory, with its owner's pid
-# so a dead owner's lock is taken over); the others wait and use its result.
+# last. One process produces at a time (a lock file holding its owner's pid
+# so a dead owner's lock is taken over, once it has stayed the same for a second);
+# the others wait and use its result.
 # PRODUCER runs as `PRODUCER ARG... DIR`, DIR being empty.
 cached() {
     dir=$1
@@ -13,15 +21,19 @@ cached() {
     [ -f "$dir/.complete" ] && return 0
     mkdir -p "$(dirname "$dir")"
     lock="$dir.lock"
-    until mkdir "$lock" 2>/dev/null; do
+    until claimed "$lock"; do
         [ -f "$dir/.complete" ] && return 0
-        owner=$(cat "$lock/pid" 2>/dev/null || true)
+        owner=$(cat "$lock" 2>/dev/null || true)
         if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
-            rm -rf "$lock"
+            # Dead, and still the same lock a second on: an owner that finished
+            # has removed its lock and another may hold a new one.
+            sleep 1
+            if [ "$(cat "$lock" 2>/dev/null || true)" = "$owner" ] && [ ! -f "$dir/.complete" ]; then
+                rm -f "$lock"
+            fi
         fi
         sleep 1
     done
-    echo $$ >"$lock/pid"
     made=0
     if [ ! -f "$dir/.complete" ]; then
         rm -rf "$dir"
@@ -33,6 +45,6 @@ cached() {
             rm -rf "$dir"
         fi
     fi
-    rm -rf "$lock"
+    rm -f "$lock"
     return $made
 }
