@@ -4,7 +4,7 @@
 //! A load or store names its bytes. A call states the rest as LLVM does,
 //! with `memory(...)`, `readnone`, `readonly` or `writeonly` at the call site
 //! and on its callee, as `llrm_mir::memory` reads them, where the old code read the
-//! raise's `memory_complete` mark. A volatile access is the old barrier.
+//! raise's `memory_complete` mark. A volatile load or store names its bytes too.
 //!
 //! Division is C's and floating exceptions are the machine's, so the old
 //! list of trapping kinds and the body-wide `handles_errors` have no MIR
@@ -46,7 +46,6 @@ fn call_effects(context: &Context, declarations: &Declarations, function: &Funct
 /// What an instruction may do to memory its operands do not name.
 fn unmodeled(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> Effects {
     match function.instruction(inst).opcode {
-        Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. } => Effects::ANY,
         Opcode::Call(_) | Opcode::Invoke(_) => call_effects(context, declarations, function, inst, |location| location != Some("argmem")),
         _ => Effects::NONE,
     }
@@ -113,8 +112,8 @@ b:
         let insts: Vec<InstId> = f.walk().map(|(_, inst)| inst).collect();
         let writes: Vec<bool> = insts.iter().map(|&inst| unmodeled_write(&module.context, &declarations, f, inst)).collect();
         let reads: Vec<bool> = insts.iter().map(|&inst| unmodeled_read(&module.context, &declarations, f, inst)).collect();
-        assert_eq!(writes, [true, false, false, false, true, false, false]);
-        assert_eq!(reads, [true, false, true, false, true, false, false]);
+        assert_eq!(writes, [true, false, false, false, false, false, false]);
+        assert_eq!(reads, [true, false, true, false, false, false, false]);
     }
 
     /// Per instruction of `@f`: (unmodeled read, unmodeled write, touches memory).
@@ -235,8 +234,10 @@ b:
         assert_eq!(found[1], (false, false, false));
     }
 
+    /// A volatile access names its bytes as a plain one does: it was the
+    /// old barrier, unmodeled everywhere.
     #[test]
-    fn plain_accesses_and_arithmetic_are_modeled_but_volatile_ones_are_not() {
+    fn accesses_volatile_or_not_and_arithmetic_are_modeled() {
         let found = answers(
             "define void @f(ptr %p, ptr addrspace(1) %far) {
 b:
@@ -250,7 +251,7 @@ b:
         );
         assert_eq!(found.iter().map(|&(read, write, _)| (read, write)).collect::<Vec<_>>(), [
             (false, false),
-            (true, true),
+            (false, false),
             (false, false),
             (false, false),
             (false, false)
