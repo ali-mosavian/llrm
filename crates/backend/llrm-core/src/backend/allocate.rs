@@ -846,6 +846,8 @@ fn _allocated(
     let mut union: IndexMap<Register, Vec<u32>> = IndexMap::default();
     let mut r#where: IndexMap<u32, Register> = IndexMap::default();
     let mut stage: IndexMap<u32, Stage> = IndexMap::default();
+    // Rests whose pieces copy them back once, at their definition: spilled, as LLVM's spill mode.
+    let mut slotted: BTreeSet<u32> = BTreeSet::new();
     let mut spilled: BTreeSet<u32> = BTreeSet::new();
     let mut cost = 0.0;
     let mut cascades: IndexMap<u32, i64> = IndexMap::default();
@@ -933,7 +935,7 @@ fn _allocated(
         // a value there costs a restore and a prefix on every data access.
         order.sort_by_key(|one| _whole(*one) == segments.data);
         let width = facts.widths.get(&value).copied().unwrap_or(4);
-        if let Some(got) = _free(&mine, &order, &union, &facts.live, &facts.masks, width) {
+        if let Some(got) = (mine.weight == INF || !slotted.contains(&value)).then(|| _free(&mine, &order, &union, &facts.live, &facts.masks, width)).flatten() {
             r#where.insert(value, got);
             union.entry(_whole(got)).or_default().push(value);
             stage.insert(value, Stage::Done);
@@ -1030,6 +1032,9 @@ fn _allocated(
                 let fresh = splitkit::_next_value(&cut).max(floor);
                 floor = fresh + 1;
                 let moved = moves.iter().fold(region, |region, moved| region.moved(moved));
+                if splitkit::hoists(&cut, value, &moved) {
+                    slotted.insert(value);
+                }
                 if let Some((next, shifted)) = splitkit::carved_moving(&cut, value, fresh, width, &moved) {
                     cut = next;
                     moves.push(shifted);

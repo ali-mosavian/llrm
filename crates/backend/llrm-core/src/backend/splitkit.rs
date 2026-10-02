@@ -238,17 +238,8 @@ pub enum Crossing {
 /// LLVM's `hoistCopies`: the rest then holds it everywhere after.
 /// `carved` places these copies and `_benefit` prices them: one fact.
 pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate::Live, live_out: &allocate::Live) -> Vec<(Crossing, bool)> {
-    let defining: Vec<(i64, usize)> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter().enumerate().filter(|(_, one)| one.defines.contains(&value)).map(move |(at, _)| (block.at, at)))
-        .collect();
-    let inside: Vec<&(i64, usize)> = defining.iter().filter(|(block, at)| region.covers(*block, *at)).collect();
-    let hoisted = match (defining.as_slice(), inside.as_slice()) {
-        ([only], [_]) => Some(*only),
-        _ => None,
-    };
-    let written = hoisted.is_none() && !inside.is_empty();
+    let hoisted = _hoisted(body, value, region);
+    let written = hoisted.is_none() && _written(body, value, region);
     let mut out = Vec::new();
     if let Some((block, at)) = hoisted.and_then(|(at, position)| body.blocks.iter().find(|one| one.at == at).map(|one| (one, position))) {
         // After the parallel group the definition belongs to, not inside it.
@@ -285,6 +276,32 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate
         out.push((Crossing::Inside { block: body.entry, position: 0 }, true));
     }
     out
+}
+
+/// Where `region` holds `value`'s one definition, which its copy back follows.
+fn _hoisted(body: &LirBody, value: u32, region: &Region) -> Option<(i64, usize)> {
+    let mut defining = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter().enumerate().filter(|(_, one)| one.defines.contains(&value)).map(move |(at, _)| (block.at, at)));
+    let only = defining.next()?;
+    (defining.next().is_none() && region.covers(only.0, only.1)).then_some(only)
+}
+
+/// Whether `region` writes `value` anywhere.
+fn _written(body: &LirBody, value: u32, region: &Region) -> bool {
+    body.blocks.iter().any(|block| {
+        region.spans.get(&block.at).is_some_and(|ranges| {
+            ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
+        })
+    })
+}
+
+/// Whether carving `region` copies `value` back once, after its definition:
+/// the rest then lives in its slot (LLVM's spill mode), not in a register
+/// held across every piece.
+pub fn hoists(body: &LirBody, value: u32, region: &Region) -> bool {
+    _hoisted(body, value, &region.trimmed(body, value).snapped(body)).is_some()
 }
 
 /// Whether `value` is live just before each position of `block`, and at its end.
