@@ -154,6 +154,18 @@ pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
     _direct(unit, inst, &IndexMap::default()).ok().flatten().map(|provenance| nonnull(&provenance))
 }
 
+/// Whether `value` is a near pointer parameter the language states non-null,
+/// or dereferenceable for any bytes: in address space 0 a null address holds
+/// no object (DGROUP's first bytes are the runtime's, a frame never sits at
+/// 0), as LLVM's `isKnownNonZero` reads `dereferenceable` where null is not valid.
+pub fn nonnull_argument(unit: &Unit, value: ValueId) -> bool {
+    let function = unit.function;
+    let Some(at) = function.parameters().iter().position(|&one| one == value) else { return false };
+    let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(0)));
+    let facts = llrm_mir::facts::Facts::param(function, at);
+    near && (facts.non_null() || facts.dereferenceable().is_some_and(|bytes| bytes > 0))
+}
+
 /// Every value `points_to` could give a fact: every pointer.
 pub fn may_point(unit: &Unit) -> HashSet<ValueId> {
     let function = unit.function;

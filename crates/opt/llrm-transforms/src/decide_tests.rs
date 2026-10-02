@@ -404,6 +404,36 @@ no:
     }
 }
 
+/// A near parameter the language says is dereferenceable (QB's BYREF: the
+/// address of a variable) or non-null is never null; a far one may be 0000:0000
+/// and a plain one may be anything (#113).
+#[test]
+fn a_dereferenceable_near_parameter_is_never_null() {
+    for (attributes, parameter, decided) in [
+        ("dereferenceable(2)", "ptr", true),
+        ("nonnull", "ptr", true),
+        ("", "ptr", false),
+        ("dereferenceable(2)", "ptr addrspace(1)", false),
+    ] {
+        let mut module = parsed(&format!(
+            "define i16 @f({parameter} {attributes} %p) {{
+b0:
+  %c = icmp eq {parameter} %p, null
+  br i1 %c, label %yes, label %no
+
+yes:
+  ret i16 1
+
+no:
+  ret i16 2
+}}
+"
+        ));
+        decide(&mut module);
+        assert_eq!(!has(&module, "yes"), decided, "{parameter} {attributes}: {}", printed(&module));
+    }
+}
+
 /// An `&&`'s false edge reached a phi only to branch on it again: N$PQ4's
 /// loop exit tested a byte it had just set.
 #[test]
