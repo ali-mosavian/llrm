@@ -198,6 +198,23 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
         if !found {
             invalid!("{}: {} is stated of a {} the module lacks", module.name, fact.key(), Subject::kind_key(subject.kind()));
         }
+        // A freedom of floating arithmetic is of a floating operation, and a
+        // wrap fact of integer add, sub or mul: lowering gives a flag to nothing else.
+        if let Subject::Instruction { function: id, id: at } = subject {
+            use llrm_mir::facts::Fact;
+            let op = function(id).and_then(|one| one.blocks.iter().flat_map(|block| &block.instructions).find(|i| i.id == at)).map(|i| i.op);
+            let floating = matches!(op, Some(model::Op::Fadd | model::Op::Fsub | model::Op::Fmul | model::Op::Fdiv));
+            let integer = matches!(op, Some(model::Op::Add | model::Op::Sub | model::Op::Mul));
+            match fact {
+                Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal if !floating => {
+                    invalid!("{}: {} is stated of an instruction that is no floating operation", module.name, fact.key());
+                }
+                Fact::NoSignedWrap | Fact::NoUnsignedWrap if !integer => {
+                    invalid!("{}: {} is stated of an instruction that is no integer add, sub or mul", module.name, fact.key());
+                }
+                _ => {}
+            }
+        }
     }
     Ok(())
 }
