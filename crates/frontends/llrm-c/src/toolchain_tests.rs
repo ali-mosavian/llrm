@@ -35,6 +35,23 @@ fn test_concurrent_builds_of_one_tree_make_it_once_and_whole() {
     assert!(!directory.path().join("tree.lock").exists());
 }
 
+/// Of eight callers claiming one lock at once, exactly one wins, round after round. The lock
+/// was `mkdir`, which on a host with uutils coreutils 0.2.2 let two both succeed: a tree
+/// was then produced twice, one run in six.
+#[test]
+fn test_of_many_concurrent_claims_one_wins() {
+    let directory = tempfile::tempdir().unwrap();
+    for round in 0..30 {
+        let body = format!("claimed lock{round} && echo won >> won{round}; true");
+        let claims: Vec<_> = (0..8).map(|_| sh(directory.path(), &body)).collect();
+        for mut claim in claims {
+            assert!(claim.wait().unwrap().success());
+        }
+        let won = std::fs::read_to_string(directory.path().join(format!("won{round}"))).unwrap();
+        assert_eq!(won.lines().count(), 1, "round {round}: {won}");
+    }
+}
+
 /// A producer that fails leaves nothing a later build would take for a tree.
 #[test]
 fn test_a_failed_build_leaves_no_tree() {
@@ -54,8 +71,7 @@ fn test_a_failed_build_leaves_no_tree() {
 fn test_a_dead_builds_lock_is_taken_over() {
     let directory = tempfile::tempdir().unwrap();
     let dead = Command::new("true").spawn().and_then(|mut one| one.wait().map(|_| one.id())).unwrap();
-    std::fs::create_dir_all(directory.path().join("tree.lock")).unwrap();
-    std::fs::write(directory.path().join("tree.lock/pid"), dead.to_string()).unwrap();
+    std::fs::write(directory.path().join("tree.lock"), dead.to_string()).unwrap();
     let body = r#"
         producer() { echo whole > "$1/b"; }
         cached tree producer && [ -f tree/b ]
