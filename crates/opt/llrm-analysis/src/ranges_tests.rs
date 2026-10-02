@@ -661,3 +661,107 @@ fn an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
         assert_eq!(found.contains(&parsed.value("off")), exact, "{offset} {gep}");
     }
 }
+
+/// A `range` a callee states of its result, or a parameter states of itself,
+/// bounded nothing: no analysis read it. `LEN` (0 to 32767), `INSTR`, the
+/// runtime's counts and every frontend's stated range were dropped on the way
+/// to the pass that would have used them.
+#[test]
+fn a_stated_range_bounds_a_parameter_and_a_call_result() {
+    let parsed = Parsed::new(
+        "define range(i16 0, 100) i16 @len(ptr %p) {
+b0:
+  ret i16 0
+}
+
+declare i16 @plain(ptr)
+
+define i16 @f(i16 range(i16 -5, 6) %x, ptr %p) {
+b0:
+  %n = call i16 @len(ptr %p)
+  %m = call i16 @plain(ptr %p)
+  %o = call range(i16 1, 3) i16 @plain(ptr %p)
+  %c = icmp slt i16 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %n
+
+b2:
+  ret i16 %m
+}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        let at = &scoped[&cfg::id(parsed.block("b2"))];
+        assert_eq!(at.get(&parsed.value("x")), Some(&interval(0, 5, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("n")), Some(&interval(0, 99, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("o")), Some(&interval(1, 2, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("m")), None, "a call with no range says nothing");
+    }
+}
+
+/// What a block assumes bounds a value in the blocks it dominates, as the
+/// branch of a check does, in loops and out; not in its own block.
+#[test]
+fn an_assume_bounds_a_value_below_its_block() {
+    let parsed = Parsed::new(
+        "declare void @llvm.assume(i1)
+
+define i16 @f(i16 %x, i1 %c) {
+b0:
+  %low = icmp sge i16 %x, 0
+  %high = icmp slt i16 %x, 10
+  call void @llvm.assume(i1 %low)
+  call void @llvm.assume(i1 %high)
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %x
+
+b2:
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        for name in ["b1", "b2"] {
+            assert_eq!(scoped[&cfg::id(parsed.block(name))].get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{name}");
+        }
+        assert_eq!(scoped.get(&cfg::id(parsed.block("b0"))).and_then(|at| at.get(&parsed.value("x"))), None, "not in its own block");
+    }
+}
+
+#[test]
+fn an_assume_above_a_counted_loop_bounds_a_value_in_its_body() {
+    let parsed = Parsed::new(
+        "declare void @llvm.assume(i1)
+declare void @use(i16, i16)
+
+define void @f(i16 %x) {
+b0:
+  %low = icmp sge i16 %x, 0
+  %high = icmp slt i16 %x, 10
+  call void @llvm.assume(i1 %low)
+  call void @llvm.assume(i1 %high)
+  br label %body
+
+body:
+  %i = phi i16 [ 0, %b0 ], [ %next, %body ]
+  call void @use(i16 %i, i16 %x)
+  %next = add nsw i16 %i, 1
+  %more = icmp slt i16 %next, 8
+  br i1 %more, label %body, label %out
+
+out:
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let at = &bounded(&unit).unwrap()[&cfg::id(parsed.block("body"))];
+    assert!(at.contains_key(&parsed.value("i")), "the loop is counted: {at:?}");
+    assert_eq!(at.get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{at:?}");
+}
