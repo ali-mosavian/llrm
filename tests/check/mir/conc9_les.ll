@@ -1,3 +1,9 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum(
+; CHECK: define {{.*}} @fill_i16_1(
+; CHECK: define {{.*}} @run_f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum(
+; CHECK: define {{.*}} @main(
+
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
 
 @$var_f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum_a0 = internal global [600 x i8] zeroinitializer

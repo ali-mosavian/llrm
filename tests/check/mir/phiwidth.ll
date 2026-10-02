@@ -1,3 +1,6 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @_f(
+
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32"
 
 define i32 @_f(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, i16 %3, i16 %4, i16 %5) addrspace(1) memory(argmem: read) {

@@ -1,3 +1,6 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @_bench_matmul(
+
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32"
 
 define i32 @_bench_matmul(i16 %0) addrspace(1) memory(none) nounwind {

@@ -1,3 +1,5 @@
+' dialect: pds71
+' flags: -O2 --cpu 486 --huge-arrays
 ' $dynamic
 dim items(0 to 200, -2 to 198) as integer
 dim stepCount as integer

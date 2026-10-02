@@ -1,3 +1,8 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @Team.record(
+; CHECK: define {{.*}} @main(
+; CHECK: define {{.*}} @"best[i16]"(
+
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
 
 @$str1 = internal constant [7 x i8] c"\08\00\00\00\00\00\00"

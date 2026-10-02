@@ -171,6 +171,7 @@ dependencies = [
  "llrm-bcdriver",
  "llrm-c",
  "llrm-core",
+ "llrm-mir",
  "llrm-nib",
  "llrm-qb",
  "regex",

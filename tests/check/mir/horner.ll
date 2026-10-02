@@ -1,3 +1,6 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @_horner(
+
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
 
 define i32 @_horner(ptr nocapture readonly %0, i16 %1, i32 %2) addrspace(1) memory(argmem: read) {

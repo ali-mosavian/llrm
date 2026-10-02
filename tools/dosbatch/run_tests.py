@@ -7,6 +7,7 @@ diff stdout with NAME.out.
 A header comment holds a program's settings:
 
     ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486)
+    ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime
     ' known: #123              fails today, tracked by issue 123
 
 A known program that passes fails the run: remove its mark.
@@ -29,11 +30,10 @@ from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 RUN = ROOT / "tests" / "run"
 DEFAULT_FLAGS = ["-O2", "--cpu", "486"]
-KEYS = ("flags", "known", "bc", "diverges")
+KEYS = ("flags", "known", "bc", "diverges", "dialect")
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
-COMPILERS = {
-    ".bas": ["llrm-qb", "--dialect", "qb45", "--runtime", "qb45"],
-}
+COMPILERS = {".bas": ["llrm-qb"]}
+TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
 
 
 @dataclass
@@ -41,6 +41,7 @@ class Program:
     source: Path
     flags: list[str]
     known: str | None
+    dialect: str = "qb45"
 
     @property
     def name(self) -> str:
@@ -64,7 +65,7 @@ def discover(selected: list[str]) -> list[Program]:
     for source in sorted(RUN.glob("*/*")):
         if source.suffix in COMPILERS and source.with_suffix(".out").exists():
             settings = header(source)
-            programs.append(Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known")))
+            programs.append(Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known"), settings.get("dialect", "qb45")))
     if selected:
         programs = [p for p in programs if p.source.parent.name in selected or p.source.stem in selected or p.name in selected]
     return programs
@@ -85,7 +86,8 @@ def first_difference(want: list[str], got: list[str]) -> str:
 
 def compile_one(program: Program, obj: Path) -> str | None:
     tool, *rest = COMPILERS[program.source.suffix]
-    done = subprocess.run([str(BIN / tool), str(program.source), *rest, *program.flags, "-o", str(obj)],
+    dialect = ["--dialect", program.dialect, "--runtime", program.dialect]
+    done = subprocess.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)],
                           capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-600:]
@@ -107,8 +109,11 @@ def main() -> int:
     stems = {p.name: f"T{at:03d}" for at, p in enumerate(programs)}
     with ThreadPoolExecutor() as pool:
         failed = dict(zip((p.name for p in programs), pool.map(lambda p: compile_one(p, objs / f"{stems[p.name]}.obj"), programs)))
-    jobs = [Job(stems[p.name], "obj", objs / f"{stems[p.name]}.obj") for p in programs if not failed[p.name]]
-    ran = dosbatch.run(jobs, work) if jobs else {}
+    ran = {}
+    for dialect, tools in TOOLS.items():
+        jobs = [Job(stems[p.name], "obj", objs / f"{stems[p.name]}.obj") for p in programs if p.dialect == dialect and not failed[p.name]]
+        if jobs:
+            ran |= dosbatch.run(jobs, work / dialect, tools=tools)
     bad = passed = known = 0
     for program in programs:
         problem = failed[program.name]

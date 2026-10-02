@@ -1,3 +1,6 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @PLASMA(
+
 
 @"TOTALFRAMECOUNT%" = internal global [2 x i8] zeroinitializer
 @b$seg = internal global [2 x i8] zeroinitializer

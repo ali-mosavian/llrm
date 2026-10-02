@@ -1,3 +1,6 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @_tile_sum(
+
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32"
 
 @_tile = internal constant [8192 x i8] zeroinitializer

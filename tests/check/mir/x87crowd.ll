@@ -1,3 +1,6 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @_deep(
+
 ; x87crowd.c's _deep as the pipeline hands it to isel (llrm-c -O2, 06-rotate.ll).
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
 

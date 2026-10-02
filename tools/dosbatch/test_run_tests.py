@@ -20,6 +20,10 @@ class HeaderTests(unittest.TestCase):
     def test_flags_and_known_come_from_the_leading_comment(self):
         self.assertEqual(self.read("' flags: -Os --cpu P5\n' known: #123\nPRINT 1\n"), {"flags": "-Os --cpu P5", "known": "#123"})
 
+    def test_dialect_picks_the_compiler_dialect(self):
+        """hugerg and hugelp need PDS /Ah: built as QB 4.5 they died in the lowering with a Python repr."""
+        self.assertEqual(self.read("' dialect: pds71\nPRINT 1\n"), {"dialect": "pds71"})
+
     def test_a_comment_after_the_code_is_not_a_header(self):
         """A `known:` in the body would mark a program known by accident."""
         self.assertEqual(self.read("PRINT 1\n' known: #9\n"), {})

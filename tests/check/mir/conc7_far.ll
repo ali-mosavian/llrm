@@ -1,3 +1,6 @@
+; RUN: llrm-mir %s
+; CHECK: define {{.*}} @_f_conc7_s1102468_xi_bpf_index_n_st1_sum_counteraffine_permute622_dup1(
+
 target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
 
 @_f_conc7_s1102468_xi_bpf_index_n_st1_sum_counteraffine_permute622_dup1_a4 = addrspace(1) global [1800 x i8] zeroinitializer
