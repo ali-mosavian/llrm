@@ -3307,7 +3307,35 @@ fn total(values: &[i16]) -> i16:
 fn the_panic_routines_are_stated_to_end_the_program() {
     let hir = super::compile("fn main() -> i16:\n    let mut a: i16[4] = [0] * 4\n    let n: i16 = 3\n    return a[n]\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
     let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
-    assert!(stated("noreturn") >= 1 && stated("noreturn") == stated("memory"), "{hir}");
+    assert!(stated("noreturn") >= 1 && stated("memory") >= stated("noreturn"), "{hir}");
+}
+
+/// Printing a number touches only the runtime's own state: a loop's loads
+/// ahead of `print(i)` need not be redone after it. The routines were
+/// declared with no effects stated, so each call was assumed to write all
+/// of memory and a function that prints came out `memory(readwrite, argmem: read)`.
+#[test]
+fn the_runtime_routines_state_what_they_touch() {
+    use llrm_core::abi::nib;
+    let hir = super::compile("fn main() -> i16:\n    print(1)\n    return 0\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
+    // N$EDIV is called by start.asm, not by compiled code: it is not declared.
+    assert_eq!(stated("noreturn"), nib::TERMINATING.len() - 1);
+    assert_eq!(stated("memory"), stated("noreturn") + nib::RUNTIME_STATE_ONLY.len() + nib::READ_ONLY.len(), "{hir}");
+}
+
+/// A module variable's address is a multiple of its element's width, up to
+/// a dword, so a 486 reads each of its dwords whole; the layout put a
+/// `u8` before an `i32` array and left the array odd.
+#[test]
+fn a_module_variable_states_its_alignment() {
+    let source = "var flag: u8 = 1\nvar words: i32[4] = [1, 2, 3, 4]\nvar pair: i16 = 5\n\nfn main() -> i16:\n    print(words[1] + i32(flag) + i32(pair))\n    return 0\n";
+    let hir = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let facts: serde_json::Value = serde_json::from_str(&hir).expect("JSON");
+    let mut aligned: Vec<u64> = facts["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "align" && one["subject"] == "object").map(|one| one["value"].as_u64().unwrap()).collect();
+    aligned.sort();
+    // `flag` is a byte and has none to state.
+    assert_eq!(aligned, [2, 4], "{hir}");
 }
 
 /// Every element address safe code makes is stated in bounds: a `ptr_offset`
