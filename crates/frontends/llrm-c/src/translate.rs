@@ -1139,13 +1139,16 @@ impl<'a, 't> Body<'a, 't> {
             };
             return Ok(self.op(op, truth, vec![value_ref(a), value_ref(b)]));
         }
-        // A far pointer compares as its dword, as the old raise does. Near and
-        // huge pointers compare as pointers: how a huge pointer orders is
-        // isel's (its packed bits are no address, so no conversion to read).
+        // Borland orders far pointers by their offsets alone and compares
+        // them equal by all 32 bits. Near and huge pointers compare as
+        // pointers: how a huge pointer orders is isel's (its packed bits
+        // are no address, so no conversion to read).
+        let equality = matches!(cg_op.as_str(), "O_EQ" | "O_NE");
         let (a, b) = match self.space(a) {
             Some(FAR) => {
-                let dword = self.types.int(4, false);
-                (self.op(Op::Convert, dword, vec![value_ref(a)]), self.op(Op::Convert, dword, vec![value_ref(b)]))
+                let (op, width) = if equality { (Op::Convert, 4) } else { (Op::PointerOffset, 2) };
+                let part = self.types.int(width, false);
+                (self.op(op, part, vec![value_ref(a)]), self.op(op, part, vec![value_ref(b)]))
             }
             _ => (a, b),
         };
@@ -2186,6 +2189,21 @@ mod tests {
         let module = raised("bitfield.cgs");
         let failed = llrm_mir::interpret::run(&module, "_check", Vec::new(), 100_000).unwrap_or_else(|trap| panic!("{trap:?}"));
         assert_eq!(failed, llrm_mir::interpret::Val::Int { bits: 0, width: 16 }, "failed checks: {failed:?}");
+    }
+
+    /// Borland orders far pointers by their offsets (bcc -S: `cmp ax,
+    /// [bp+10]` then `jae`) and compares them equal by all 32 bits. llrm-c
+    /// ordered all 32 bits, so 2000:0010 was not below 1000:0020.
+    #[test]
+    fn test_a_far_pointer_orders_by_its_offset() {
+        use llrm_mir::interpret::{Val, run};
+        let module = raised("farorder.cgs");
+        let call = |function: &str, a: u64, b: u64| run(&module, function, vec![Val::Ptr(a), Val::Ptr(b)], 1_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        let (yes, no) = (Val::Int { bits: 1, width: 16 }, Val::Int { bits: 0, width: 16 });
+        assert_eq!(call("_below", 0x2000_0010, 0x1000_0020), yes);
+        assert_eq!(call("_below", 0x1000_0020, 0x2000_0010), no);
+        assert_eq!(call("_same", 0x2000_0010, 0x1000_0010), no);
+        assert_eq!(call("_same", 0x2000_0010, 0x2000_0010), yes);
     }
 
     /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
