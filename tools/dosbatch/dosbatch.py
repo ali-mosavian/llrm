@@ -69,6 +69,32 @@ class TooBig(Exception):
     pass
 
 
+class BuildError(Exception):
+    pass
+
+
+C_RUNTIME = ROOT / "tools" / "loops" / "runtime"
+
+
+def _host(command: list[str]) -> None:
+    done = subprocess.run(command, capture_output=True, text=True, timeout=300)
+    if done.returncode != 0:
+        raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
+
+
+def assemble(source: Path, obj: Path, *defines: str) -> None:
+    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
+
+
+def link_c(obj: Path, exe: Path, work: Path) -> None:
+    """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline."""
+    crt, ext = work / "CRT.OBJ", work / "EXT.OBJ"
+    if not crt.exists():
+        assemble(C_RUNTIME / "crt.asm", crt)
+        assemble(C_RUNTIME / "ext.asm", ext)
+    _host([str(BIN / "jwlink"), "option", "quiet", "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext)])
+
+
 @dataclass
 class Job:
     """One program. kind: exe (linked here), obj (an object to LINK there),
