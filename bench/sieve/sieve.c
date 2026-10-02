@@ -1,4 +1,6 @@
-/* Return prime count and sum below 1024 in one independently checkable word. */
+/* Prime count and sum below 1024 in one checkable word; sieve.bas/.nib mirror this. */
+extern void report(long value);
+
 unsigned long bench_sieve(unsigned short limit)
 {
     unsigned char composite[1024];
@@ -15,4 +17,10 @@ unsigned long bench_sieve(unsigned short limit)
                 composite[multiple] = 1;
     }
     return ((unsigned long)count << 16) ^ sum;
+}
+
+int main(void)
+{
+    report((long)bench_sieve(1024));
+    return 0;
 }
