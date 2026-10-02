@@ -454,10 +454,7 @@ impl FunctionCompiler<'_> {
         match subject {
             Subject::Scalar(operand, ..) => operand.clone(),
             Subject::Aggregate(view) => {
-                let value = self.value(layout.tag);
-                let place = self.projected_place(view, 0, layout.tag);
-                self.emit("load", vec![value], vec![place], None);
-                hir::Operand::Value(value)
+                hir::Operand::Value(self.load_tag(view, layout))
             }
             Subject::Array(..) | Subject::Sequence { .. } => unreachable!("a sequence has no tag"),
         }

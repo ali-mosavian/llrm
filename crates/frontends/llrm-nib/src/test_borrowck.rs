@@ -771,3 +771,34 @@ fn main() -> i16:
         "1\ndrop 1\n2\ndrop 2\n3\ndrop 3\ndrop 4\ndrop 3\ndrop 4\n7\ndrop 7\ndrop 9\ndrop 8\n7\ndrop 7\n9\ndrop 9\ndrop 8\n5\ndrop 5\ndrop 6\ndrop 5\ndrop 6\n"
     );
 }
+
+#[test]
+fn a_native_enums_tag_is_stated_to_hold_only_its_variants() {
+    // The tag was loaded and compared against each variant in turn, the
+    // last arm's test as live as the first: nothing said the tag has no
+    // other value.
+    let source = "\
+enum Shape:
+    dot
+    line(i16)
+    box(i16, i16)
+
+fn area(s: &Shape) -> i16:
+    match s:
+        .dot:
+            return 0
+        .line(n):
+            return n
+        .box(w, h):
+            return w * h
+
+fn main() -> i16:
+    let s = Shape.box(2, 3)
+    print(area(s))
+    return 0
+";
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let ranges: Vec<(i64, i64)> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "range" && one["subject"] == "instruction").map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap())).collect();
+    // One per tag load: each arm's test.
+    assert!(ranges.len() >= 2 && ranges.iter().all(|one| *one == (0, 2)), "{ranges:?}");
+}
