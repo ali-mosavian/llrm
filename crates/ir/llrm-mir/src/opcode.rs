@@ -201,6 +201,11 @@ impl Flags {
     pub const SAMESIGN: Flags = Flags(1 << 5);
     pub const INBOUNDS: Flags = Flags(1 << 6);
     pub const NUSW: Flags = Flags(1 << 7);
+    pub const REASSOC: Flags = Flags(1 << 8);
+    pub const NNAN: Flags = Flags(1 << 9);
+    pub const NINF: Flags = Flags(1 << 10);
+    pub const NSZ: Flags = Flags(1 << 11);
+    pub const ARCP: Flags = Flags(1 << 12);
     pub const FAST: Flags = Flags(0x7f << 8);
 
     pub const NAMES: [(Flags, &'static str); 16] = [
@@ -213,11 +218,11 @@ impl Flags {
         (Flags::NNEG, "nneg"),
         (Flags::SAMESIGN, "samesign"),
         (Flags::FAST, "fast"),
-        (Flags(1 << 8), "reassoc"),
-        (Flags(1 << 9), "nnan"),
-        (Flags(1 << 10), "ninf"),
-        (Flags(1 << 11), "nsz"),
-        (Flags(1 << 12), "arcp"),
+        (Flags::REASSOC, "reassoc"),
+        (Flags::NNAN, "nnan"),
+        (Flags::NINF, "ninf"),
+        (Flags::NSZ, "nsz"),
+        (Flags::ARCP, "arcp"),
         (Flags(1 << 13), "contract"),
         (Flags(1 << 14), "afn"),
     ];
@@ -232,6 +237,11 @@ impl Flags {
 
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// The flags both have.
+    pub fn intersect(self, other: Flags) -> Flags {
+        Flags(self.0 & other.0)
     }
 
     /// The words LLVM prints, `fast` standing for all seven fast-math flags.
@@ -274,7 +284,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 38] = [
+pub const FLAG_ATTRIBUTES: [&str; 39] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -282,6 +292,7 @@ pub const FLAG_ATTRIBUTES: [&str; 38] = [
     "dead_on_unwind",
     "hot",
     "immarg",
+    "inlinehint",
     "inreg",
     "minsize",
     "mustprogress",
