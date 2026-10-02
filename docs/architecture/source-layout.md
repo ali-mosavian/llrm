@@ -36,17 +36,15 @@ phases. The rest is grouped by responsibility:
 
 | Module | Responsibility |
 | --- | --- |
+| `driver` | The compile driver: HIR or lifted MIR through the pipeline to an object |
+| `flow` | The machine phases and their gate |
 | `hir` | The HIR interpreter, and `llrm-hir` re-exported |
 | `model` | LIR, decoded IR and phase interfaces |
 | `analysis` | Loops, intervals and block frequency over LIR |
 | `backend` | Instruction selection, allocation, frame/layout, peepholes, object writing |
 | `abi` | Runtime contracts (`llrm-qbruntime`, as `abi::runtime`) and the QB runtime ABI (`abi::qb`) |
 | `frontends::bc` | `llrm-bcmachine`'s BC decoding, re-exported |
-| `legacy` | `llrm-bcmachine`'s BC long-call shapes, read by selection |
 
-This organization makes ownership visible; it does not claim the architectural
-migration is finished. Existing dependency cycles and machine-aware MIR
-transformations remain debt documented in `split.md`. Recognition belongs in
-the frontend, machine-independent optimization above lowering, and physical
-placement in the backend. `model::ir` is the older decoded machine
-representation, not the machine-independent MIR contract.
+Recognition belongs in the frontend, machine-independent optimization in
+`llrm-transforms`, and physical placement in the backend; see `split.md`.
+`model::ir` is the decoded machine representation LIR uses, not MIR.

@@ -38,7 +38,7 @@ impl std::error::Error for Exception {}
 
 /// One transformation over a lowered body.
 ///
-/// The same contract as MIRTransform, one form down.
+/// A pass over LIR: takes a body and returns one.
 pub trait LIRTransform {
     /// `type(self).__name__`.
     fn class_name(&self) -> &'static str;

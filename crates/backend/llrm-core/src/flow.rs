@@ -1,4 +1,4 @@
-//! Port of `qbopt/flow.py`: so far the MIR fixed point, the machine phases and their gate.
+//! The machine phases and their gate: each LIR phase run, verified and checked.
 
 use std::cell::RefCell;
 use std::rc::Rc;
