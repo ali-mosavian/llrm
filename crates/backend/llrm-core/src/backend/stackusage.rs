@@ -10,6 +10,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_mir::callgraph::CallGraph;
+
 use crate::backend::masm::{self, Module};
 use crate::model::ir::{Loc, Operation};
 
@@ -25,10 +27,14 @@ pub enum Bound {
     Recursive,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Usage {
-    frames: BTreeMap<String, i64>,
-    calls: BTreeMap<String, BTreeSet<String>>,
+    names: Vec<String>,
+    frames: Vec<i64>,
+    graph: CallGraph<usize>,
+    /// Calls to routines the program does not define, by caller.
+    outside: BTreeMap<usize, BTreeSet<String>>,
+    bounds: BTreeMap<usize, Bound>,
 }
 
 /// The bytes a push or an `add sp` of `at` moves.
@@ -79,52 +85,83 @@ fn frame(procedure: &masm::Procedure) -> i64 {
 
 impl Usage {
     pub fn of(modules: &[Module]) -> Self {
-        let mut usage = Self::default();
-        for procedure in modules.iter().flat_map(|one| &one.procedures) {
-            usage.frames.insert(procedure.name.clone(), frame(procedure));
-            usage.calls.insert(procedure.name.clone(), procedure.callees.values().filter(|one| one.code.is_empty()).map(|one| one.name.clone()).collect());
+        let procedures: Vec<&masm::Procedure> = modules.iter().flat_map(|one| &one.procedures).collect();
+        let names: Vec<String> = procedures.iter().map(|one| one.name.clone()).collect();
+        let at: BTreeMap<&str, usize> = names.iter().enumerate().map(|(index, name)| (name.as_str(), index)).collect();
+        let mut callees = BTreeMap::<usize, BTreeSet<usize>>::new();
+        let mut outside = BTreeMap::<usize, BTreeSet<String>>::new();
+        for (index, procedure) in procedures.iter().enumerate() {
+            callees.entry(index).or_default();
+            for callee in procedure.callees.values().filter(|one| one.code.is_empty()) {
+                match at.get(callee.name.as_str()) {
+                    Some(&to) => {
+                        callees.entry(index).or_default().insert(to);
+                    }
+                    None => {
+                        outside.entry(index).or_default().insert(callee.name.clone());
+                    }
+                }
+            }
+        }
+        let graph = CallGraph::from_edges(callees);
+        let frames = procedures.iter().map(|one| frame(one)).collect::<Vec<_>>();
+        let mut usage = Self { names, frames, graph, outside, bounds: BTreeMap::new() };
+        // Callees first: each bound is its frame and the deepest of its callees' memoized ones.
+        for index in usage.graph.bottom_up() {
+            let bound = usage.settle(index);
+            usage.bounds.insert(index, bound);
         }
         usage
     }
 
-    /// What `name` can reach.
-    pub fn bound(&self, name: &str) -> Bound {
-        self.reach(name, &mut Vec::new())
-    }
-
-    fn reach(&self, name: &str, path: &mut Vec<String>) -> Bound {
-        let Some(&own) = self.frames.get(name) else { return Bound::AtLeast(0, BTreeSet::from([name.to_owned()])) };
-        if path.iter().any(|one| one == name) {
+    fn settle(&self, index: usize) -> Bound {
+        if self.graph.recursive(index) {
             return Bound::Recursive;
         }
-        path.push(name.to_owned());
         let mut deepest = Bound::Bytes(0);
-        for next in self.calls.get(name).into_iter().flatten() {
-            deepest = match (deepest, self.reach(next, path)) {
+        for next in self.graph.callees_of(index) {
+            deepest = match (deepest, self.bounds.get(&next).cloned().unwrap_or(Bound::Recursive)) {
                 (Bound::Recursive, _) | (_, Bound::Recursive) => Bound::Recursive,
                 (Bound::Bytes(one), Bound::Bytes(other)) => Bound::Bytes(one.max(other)),
                 (Bound::Bytes(one) | Bound::AtLeast(one, _), Bound::AtLeast(other, named)) | (Bound::AtLeast(one, named), Bound::Bytes(other)) => Bound::AtLeast(one.max(other), named),
                 (Bound::AtLeast(one, first), Bound::AtLeast(other, second)) => Bound::AtLeast(one.max(other), first.union(&second).cloned().collect()),
             };
         }
-        path.pop();
+        if let Some(named) = self.outside.get(&index) {
+            deepest = match deepest {
+                Bound::Bytes(bytes) => Bound::AtLeast(bytes, named.clone()),
+                Bound::AtLeast(bytes, more) => Bound::AtLeast(bytes, more.union(named).cloned().collect()),
+                Bound::Recursive => Bound::Recursive,
+            };
+        }
         match deepest {
-            Bound::Bytes(more) => Bound::Bytes(own + more),
-            Bound::AtLeast(more, named) => Bound::AtLeast(own + more, named),
+            Bound::Bytes(more) => Bound::Bytes(self.frames[index] + more),
+            Bound::AtLeast(more, named) => Bound::AtLeast(self.frames[index] + more, named),
             Bound::Recursive => Bound::Recursive,
+        }
+    }
+
+    /// What `name` can reach; a routine the program does not define, at least nothing and itself.
+    pub fn bound(&self, name: &str) -> Bound {
+        match self.names.iter().position(|one| one == name) {
+            Some(index) => self.bounds.get(&index).cloned().unwrap_or(Bound::Recursive),
+            None => Bound::AtLeast(0, BTreeSet::from([name.to_owned()])),
         }
     }
 
     /// The procedures nothing in the program calls.
     pub fn roots(&self) -> Vec<&str> {
-        let called: BTreeSet<&str> = self.calls.values().flatten().map(String::as_str).collect();
-        self.frames.keys().map(String::as_str).filter(|one| !called.contains(one)).collect()
+        let called: BTreeSet<usize> = (0..self.names.len()).flat_map(|one| self.graph.callees_of(one)).collect();
+        (0..self.names.len()).filter(|one| !called.contains(one)).map(|one| self.names[one].as_str()).collect()
     }
 
     /// Each procedure's frame and bound, one to a line.
     pub fn report(&self) -> String {
         let mut text = String::from("stack usage, bytes: procedure, its frame, the most it can reach\n");
-        for (name, frame) in &self.frames {
+        let mut order: Vec<usize> = (0..self.names.len()).collect();
+        order.sort_by_key(|&one| &self.names[one]);
+        for index in order {
+            let (name, frame) = (&self.names[index], self.frames[index]);
             let bound = match self.bound(name) {
                 Bound::Bytes(bytes) => bytes.to_string(),
                 Bound::AtLeast(bytes, named) => format!(">= {bytes} (and {})", named.into_iter().collect::<Vec<_>>().join(", ")),

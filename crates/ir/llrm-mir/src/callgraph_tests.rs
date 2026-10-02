@@ -45,3 +45,33 @@ fn an_indirect_call_reaches_what_callees_lists_and_otherwise_any() {
     assert!(!graph.reaches(unlisted, leaf), "an unknown call names no edge");
     assert!(!graph.calls_unknown(direct) && !graph.calls_unknown(leaf));
 }
+
+fn edges(list: &[(u32, u32)]) -> CallGraph<u32> {
+    let mut callees = std::collections::BTreeMap::<u32, std::collections::BTreeSet<u32>>::new();
+    for &(from, to) in list {
+        callees.entry(from).or_default().insert(to);
+        callees.entry(to).or_default();
+    }
+    CallGraph::from_edges(callees)
+}
+
+/// One answer to "is it in a cycle": agrees with a walk from each node to itself,
+/// on a self-call, a cycle, a diamond and cycles that touch.
+#[test]
+fn test_recursive_is_the_components_answer_and_agrees_with_walking() {
+    let graphs: [&[(u32, u32)]; 5] = [
+        &[(0, 0)],
+        &[(0, 1), (1, 2), (2, 0), (2, 3)],
+        &[(0, 1), (0, 2), (1, 3), (2, 3)],
+        &[(0, 1), (1, 0), (1, 2), (2, 3), (3, 2), (3, 4)],
+        &[(0, 1), (1, 2), (2, 1), (2, 2), (0, 3)],
+    ];
+    for list in graphs {
+        let graph = edges(list);
+        for node in 0..5 {
+            assert_eq!(graph.recursive(node), graph.reaches(node, node), "{list:?} node {node}");
+        }
+    }
+    let ring = edges(&[(0, 1), (1, 2), (2, 0), (3, 3)]);
+    assert!(ring.together(0, 2) && !ring.together(0, 3) && ring.recursive(3));
+}

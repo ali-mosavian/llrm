@@ -55,8 +55,8 @@ fn site(module: &Module, graph: &CallGraph, caller: GlobalId) -> Option<(InstId,
         let fits = info.function_type == body.ty
             && !matches!(module.context.types.get(body.ty), Type::Function { variadic: true, .. })
             && !body.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noinline" || flag == "optnone"))
-            && !graph.reaches(callee, callee)
-            && !graph.reaches(callee, caller)
+            && !graph.recursive(callee)
+            && !graph.together(callee, caller)
             && inlinable(body);
         fits.then_some((inst, callee))
     })
