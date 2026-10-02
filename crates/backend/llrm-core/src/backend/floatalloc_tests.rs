@@ -17,7 +17,6 @@ use crate::backend::phielim;
 use crate::backend::select;
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space, St};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
-use crate::model::mir::Op;
 
 fn sem(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
@@ -369,12 +368,10 @@ fn test_arithmetic_overwrites_the_operand_that_dies() {
 /// A call that lists its writes as sparing the frame leaves the cell; one
 /// that lists nothing may write it, and was read as writing nothing.
 fn _sparing_the_frame(body: LirBody) -> LirBody {
-    use crate::model::mir;
-    let mut call = mir::Op::new(0, mir::OpCode::nothing(), "call", vec![], vec![]);
-    call.kind = mir::Kind::Call;
-    call.memory_complete = true;
-    call.stores = vec![mir::MemRef { excludes: vec![mir::WHOLE_FRAME], ..mir::MemRef::new(None, 4) }];
-    let call = Arc::new(call);
+    let call = Arc::new(crate::model::lir::CallMemory {
+        effects: llrm_mir::memory::Effects { reads: false, writes: true },
+        private: vec![crate::model::mir::WHOLE_FRAME],
+    });
     let blocks = body
         .blocks
         .iter()
@@ -384,7 +381,7 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
                     .insns
                     .iter()
                     .map(|one| match &one.what {
-                        Some(what) if matches!(what.op, Operation::Call | Operation::Barrier) => Arc::new(Insn { op: Some(Arc::clone(&call)), ..Insn::clone(one) }),
+                        Some(what) if matches!(what.op, Operation::Call | Operation::Barrier) => Arc::new(Insn { call: Some(Arc::clone(&call)), ..Insn::clone(one) }),
                         _ => Arc::clone(one),
                     })
                     .collect(),
@@ -1012,7 +1009,7 @@ fn test_shared_producer_is_kept_across_two_arithmetic_consumers() {
     assert_eq!(what(duplicate).sources, vec![st(0)]);
     assert_eq!(what(duplicate).dests, vec![st(0)]);
     assert_eq!(select::emit(what(duplicate), 0, None, false, false, None).unwrap().code, [0xd9, 0xc0]);
-    assert!(duplicate.covers == Some((8, 8)) && duplicate.op.is_none());
+    assert!(duplicate.covers == Some((8, 8)) && duplicate.call.is_none());
     assert_eq!(what(&insns[4]).sources, vec![st(0), m(&cell)]);
 }
 
@@ -1195,9 +1192,7 @@ fn test_volatile_float_load_breaks_reload_equivalence() {
     let cell = frame_cell(-4, 4);
     let body = _body(vec![_load(1, &cell), _load(2, &cell), _load(3, &cell)]);
     let mut insns = body.insns();
-    let mut volatile = Op::new(8, None, "", vec![], vec![]);
-    volatile.volatile = true;
-    insns[1] = Arc::new(Insn { op: Some(Arc::new(volatile)), ..(*insns[1]).clone() });
+    insns[1] = Arc::new(Insn { volatile: true, ..(*insns[1]).clone() });
 
     assert!(_equivalent_loads(&insns, &Default::default()).is_empty());
 }

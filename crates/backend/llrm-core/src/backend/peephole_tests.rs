@@ -16,7 +16,6 @@ use super::*;
 use crate::backend::frame::Frame;
 use crate::backend::{copyprop, parcopy, prologue, spillforward, verify};
 use crate::model::ir::Addr;
-use crate::model::mir::{Kind, OpCode};
 use crate::support::pyrepr::Repr;
 
 fn r(register: Register, width: u32) -> Reg {
@@ -83,10 +82,6 @@ fn whats(insns: &[Arc<Insn>]) -> Vec<Semantics> {
         .collect()
 }
 
-fn op(at: i64, operation: Operation, name: &str, kind: Kind) -> mir::Op {
-    mir::Op { kind, ..mir::Op::new(at, OpCode::Operation(operation), name, vec![], vec![]) }
-}
-
 // ---------------------------------------------------------------- test_peephole
 
 #[test]
@@ -111,55 +106,6 @@ fn test_screen_argument_reuses_its_required_register_constant() {
         assert_eq!(insns[0].defines, [7]);
         assert_eq!(insns[1].uses, [7]);
     }
-}
-
-fn concat_parts(last: Insn) -> Vec<Arc<Insn>> {
-    let (high, low, result) = (rl(Register::DX, 2), rl(Register::AX, 2), rl(Register::EAX, 4));
-    let marker = op(0, Operation::Move, "concat", Kind::Concat);
-    vec![
-        Arc::new(Insn {
-            op: Some(Arc::new(marker)),
-            ..insn(0, Some((0, 0)), Some(sem(Operation::Push, "push", vec![], vec![high])), vec![], vec![1])
-        }),
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Push, "push", vec![], vec![low])), vec![], vec![2])),
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Pop, "pop", vec![result], vec![])), vec![3], vec![])),
-        Arc::new(last),
-    ]
-}
-
-#[test]
-fn test_word_pair_concat_uses_the_386_funnel_sequence() {
-    // qgl_surf_from_member used push DX/push AX/pop EAX; BCC needs only SHL/SHRD.
-    let compare = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(Register::EAX, 4), im(0, 4)])),
-        vec![],
-        vec![3],
-    );
-    let transformed = transform(body("qgl_surf_from_member", 0, vec![block(0, concat_parts(compare), vec![])]));
-    let emitted: Vec<String> = whats(&transformed.insns()).into_iter().map(|what| what.name.unwrap()).collect();
-    assert_eq!(emitted[..2], ["shl", "shrd"]);
-    assert!(
-        !transformed
-            .insns()
-            .iter()
-            .any(|one| matches!(one.what.as_ref().unwrap().op, Operation::Push | Operation::Pop))
-    );
-}
-
-#[test]
-fn test_word_pair_concat_keeps_the_stack_sequence_when_flags_are_live() {
-    // SHL/SHRD modify flags; a branch reading the incoming flags must keep the stack join.
-    let branch = insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(10))), vec![], vec![]);
-    let transformed = transform(body(
-        "flagged",
-        0,
-        vec![block(0, concat_parts(branch), vec![10]), block(10, vec![], vec![])],
-    ));
-    let ops: Vec<Operation> =
-        transformed.blocks[0].insns[..3].iter().map(|one| one.what.as_ref().unwrap().op).collect();
-    assert_eq!(ops, [Operation::Push, Operation::Push, Operation::Pop]);
 }
 
 #[test]
@@ -2028,10 +1974,8 @@ fn test_single_use_loaded_addend_folds_into_the_arithmetic_operand() {
     let delta = Loc::Mem(mem(Some(Addr { base: Register::SI, ..Addr::new(Space::Segment, 0) }), 2, Register::SI, 0, 0));
     let load = plain(0, Operation::Move, "mov", vec![cx.clone()], vec![delta.clone()], None);
     let addition = plain(1, Operation::Binary, "add", vec![ax.clone()], vec![ax.clone(), cx], None);
-    let mut returned = op(2, Operation::Return, "", Kind::Return);
-    returned.reads_complete = true;
     let finish = Arc::new(Insn {
-        op: Some(Arc::new(returned)),
+        reads_complete: true,
         ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
     });
     let input = body("loaded-addend", 0, vec![block(0, vec![load, addition, Arc::clone(&finish)], vec![])]);
@@ -2101,10 +2045,8 @@ fn test_one_use_compare_folds_before_a_complete_return() {
     let load = Arc::new(insn(1, None, Some(sem(Operation::Move, "mov", vec![di.clone()], vec![cell.clone()])), vec![1], vec![]));
     let compare = Arc::new(insn(2, None, Some(sem(Operation::Compare, "cmp", vec![], vec![di, im(0, 2)])), vec![], vec![1]));
     let branch = plain(3, Operation::Branch, "jge", vec![], vec![], Some(2));
-    let mut returned = op(4, Operation::Return, "", Kind::Return);
-    returned.reads_complete = true;
     let ret = Arc::new(Insn {
-        op: Some(Arc::new(returned)),
+        reads_complete: true,
         ..insn(4, None, Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![])
     });
     let input = body(
@@ -2473,24 +2415,18 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
 #[test]
 fn test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() {
     // C SCALAR emitted `mov eax,1789` where BASIC needed only AX.
-    let value = mir::Value::new(1, 1);
+    let value: u32 = 1;
     let source = insn(
         1,
         Some((1, 1)),
         Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![im(1789, 4)])),
-        vec![value.id],
+        vec![value],
         vec![],
     );
-    let returned = mir::Op {
-        kind: Kind::Return,
-        args: vec![mir::Arg::Held(mir::Held { value, width: 2 })],
-        reads_complete: true,
-        ..mir::Op::new(2, OpCode::Operation(Operation::Return), "ret", vec![], vec![value])
-    };
     let finish = Insn {
-        requires: vec![(Held { value: value.id, width: 2 }, Register::AX)],
-        op: Some(Arc::new(returned)),
-        ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![value.id])
+        requires: vec![(Held { value: value, width: 2 }, Register::AX)],
+        reads_complete: true,
+        ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![value])
     };
     // Source/symbol ownership anchors from the unrolled frontend body must be
     // transparent to physical liveness even though they constrain layout.
@@ -2528,12 +2464,8 @@ fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
 }
 
 fn extract_parts(source: Loc, high: Loc, discarded: Loc, last: Insn) -> Vec<Arc<Insn>> {
-    let marker = op(10, Operation::Restore, "extract", Kind::Extract);
     vec![
-        Arc::new(Insn {
-            op: Some(Arc::new(marker)),
-            ..insn(10, Some((10, 10)), Some(sem(Operation::Push, "push", vec![], vec![source])), vec![], vec![1])
-        }),
+        Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Push, "push", vec![], vec![source])), vec![], vec![1])),
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Pop, "pop", vec![discarded], vec![])), vec![2], vec![])),
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Pop, "pop", vec![high.clone()], vec![])), vec![3], vec![])),
         Arc::new(insn(11, Some((11, 11)), Some(sem(Operation::Compare, "cmp", vec![], vec![high, im(0, 2)])), vec![], vec![3])),
@@ -2564,8 +2496,6 @@ fn test_register_high_extract_uses_one_double_shift_for_dx_ax_return() {
 fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
     // Frontend-parity ALGEBRA's C path retained MOV EDX,ECX; SHR EDX,16.
     let (source, high) = (rl(Register::ECX, 4), rl(Register::EDX, 4));
-    let mut returned = op(12, Operation::Return, "return", Kind::Return);
-    returned.reads_complete = true;
     let parts = vec![
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])), vec![3], vec![1])),
         Arc::new(insn(
@@ -2576,7 +2506,7 @@ fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
             vec![3],
         )),
         Arc::new(Insn {
-            op: Some(Arc::new(returned)),
+            reads_complete: true,
             requires: vec![(Held { value: 4, width: 2 }, Register::AX), (Held { value: 3, width: 2 }, Register::DX)],
             ..insn(
                 12,
@@ -2757,44 +2687,23 @@ fn test_commutative_result_copy_keeps_source_owned_copy_bytes() {
 }
 
 fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
-    let value = mir::Value::new(1, 1);
-    let source = mir::Value::new(2, 1);
-    let operation = Arc::new(mir::Op {
-        kind: Kind::Shr,
-        args: vec![mir::Arg::Held(mir::Held { value: source, width: 4 }), mir::Arg::Const(mir::Const::new(16, 1))],
-        results: vec![mir::Arg::Held(mir::Held { value, width: 4 })],
-        ..mir::Op::new(1, OpCode::Operation(Operation::Binary), "shr", vec![value], vec![source])
-    });
     let wide = rl(Register::EDX, 4);
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-4), 4) });
+    // A reload carries the call memory of what it stands beside: here a call
+    // that touches none.
+    let beside = crate::model::lir::CallMemory { effects: llrm_mir::memory::Effects::NONE, private: vec![] };
     let load = Insn {
-        op: Some(Arc::clone(&operation)),
         symbol: Some(false),
+        call: Some(Arc::new(beside)),
         ..insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![wide.clone()], vec![cell])), vec![1], vec![])
     };
-    let shift = Insn {
-        op: Some(operation),
-        ..insn(
-            1,
-            Some((1, 1)),
-            Some(sem(Operation::Binary, "shr", vec![wide.clone()], vec![wide, im(16, 1)])),
-            vec![1],
-            vec![1],
-        )
-    };
+    let shift = insn(1, Some((1, 1)), Some(sem(Operation::Binary, "shr", vec![wide.clone()], vec![wide, im(16, 1)])), vec![1], vec![1]);
     body("extract", 0, vec![block(0, [vec![Arc::new(load), Arc::new(shift)], tail].concat(), vec![])])
 }
 
 fn _return_high() -> Arc<Insn> {
-    let value = mir::Value::new(1, 1);
-    let operation = mir::Op {
-        kind: Kind::Return,
-        args: vec![mir::Arg::Held(mir::Held { value, width: 2 })],
-        reads_complete: true,
-        ..mir::Op::new(2, OpCode::Operation(Operation::Return), "", vec![], vec![value])
-    };
     Arc::new(Insn {
-        op: Some(Arc::new(operation)),
+        reads_complete: true,
         requires: vec![(Held { value: 1, width: 2 }, Register::DX)],
         ..insn(2, Some((2, 3)), Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![1])
     })

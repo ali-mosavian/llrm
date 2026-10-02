@@ -30,7 +30,7 @@ pub const FIELDS: [&str; 15] = [
 ];
 
 /// Fields an override may set.
-pub const OVERRIDES: [&str; 7] = ["at", "covers", "symbol", "defines", "uses", "widths", "op"];
+pub const OVERRIDES: [&str; 7] = ["at", "covers", "symbol", "defines", "uses", "widths", "call"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Side {

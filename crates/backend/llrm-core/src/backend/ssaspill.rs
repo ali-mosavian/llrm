@@ -899,7 +899,7 @@ fn written(
                 Vec::new(),
                 Vec::new(),
             );
-            jump.op = beside.op.clone();
+            jump.call = beside.call.clone();
             insns.push(Arc::new(jump));
             bridges.push(LirBlock { succ: vec![*to], ..LirBlock::new(at, insns) });
             odds.rerouted(*from, &source.succ, *to, &[(at, 1.0)]);

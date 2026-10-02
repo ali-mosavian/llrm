@@ -135,8 +135,7 @@ pub fn promote(
         follower.defines = vec![value];
         follower.uses = vec![temporary];
         follower.widths = vec![(temporary, 2), (value, 4)];
-        follower.op = None;
-        follower.node = None;
+        follower.call = None;
         out[&at].splice(index..=index, [Arc::new(leader), Arc::new(follower)]);
     }
     Ok(out)

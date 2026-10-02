@@ -82,7 +82,7 @@ fn _held(one: &Insn, facts: Facts) -> (Facts, bool) {
     // is a load: reading it as a write to memory ended every fact at the very
     // instruction the facts were there to answer.
     let writing = what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)))
-        || !one.spill_reload && one.op.as_ref().is_some_and(|op| !op.stores.is_empty());
+        || !one.spill_reload && one.call.as_ref().is_some_and(|call| call.writes());
     let mut facts = facts;
     let written = if writing {
         let Some(written) = _frame_written(one) else {

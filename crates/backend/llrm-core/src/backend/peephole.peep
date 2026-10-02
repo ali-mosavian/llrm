@@ -304,7 +304,7 @@ rule memory_argument
     match   push v:held ; def v: mov v, c:mem
     when    free(@0, pushed_held), used_once(v), same_width(v, c), width_in(c, [16, 32]), frame_argument(c),
             free(@1, argument_load), defines_only(@1, v), unchanged(@1, @0)
-    rewrite @0: =@0 c {uses: [], op: @1.op, symbol: @1.symbol} ; drop @1
+    rewrite @0: =@0 c {uses: [], call: @1.call, symbol: @1.symbol} ; drop @1
 
 // Two word pushes of one dword's halves, the high first, as one dword
 // push: both leave the same four bytes, the low at the lower address. A
@@ -330,7 +330,7 @@ rule paired_loaded_low
     when    free(@0, pushed_word), free(@1, pushed_value), used_once(lv),
             free(@2, loaded_word), defines_only(@2, lv), !stack_based(l), unchanged(@2, @0),
             above(h, l), same_registers(h, l)
-    rewrite @1: =@1 dword_cell(l) {uses: @2.uses, op: @2.op, symbol: @2.symbol} ; drop @2
+    rewrite @1: =@1 dword_cell(l) {uses: @2.uses, call: @2.call, symbol: @2.symbol} ; drop @2
 
 rule paired_loads
     match   push hv:held16 ; push lv:held16 ; def hv: mov hv, h:mem16 ; def lv: mov lv, l:mem16
@@ -338,7 +338,7 @@ rule paired_loads
             free(@2, loaded_word), defines_only(@2, hv), !stack_based(h), unchanged(@2, @0),
             free(@3, loaded_word), defines_only(@3, lv), !stack_based(l), unchanged(@3, @0),
             above(h, l), same_registers(h, l)
-    rewrite @1: =@1 dword_cell(l) {uses: @3.uses, op: @3.op, symbol: @3.symbol} ; drop @2 ; drop @3
+    rewrite @1: =@1 dword_cell(l) {uses: @3.uses, call: @3.call, symbol: @3.symbol} ; drop @2 ; drop @3
 
 // Push a single-use immediate directly.
 group immediate_arguments

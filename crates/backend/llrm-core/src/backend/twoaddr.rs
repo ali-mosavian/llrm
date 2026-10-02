@@ -190,7 +190,7 @@ fn _nothing(beside: &Insn) -> (i64, i64) {
 
 fn _inserted(beside: &Insn, what: Semantics, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
     let mut made = Insn::new(beside.at, Some(_nothing(beside)), Some(what), defines, uses);
-    made.op = beside.op.clone();
+    made.call = beside.call.clone();
     Arc::new(made)
 }
 

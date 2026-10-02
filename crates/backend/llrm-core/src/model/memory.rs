@@ -287,21 +287,6 @@ pub struct Provenance {
 
 impl Provenance {
 
-    /// `Provenance.one` with its explicit slice and restrict arguments.
-    pub fn one_with_slice(
-        object: MemoryObject,
-        low: i64,
-        high: i64,
-        stride: i64,
-        width: i64,
-        restrict: BTreeSet<Identity>,
-    ) -> Result<Self, SliceError> {
-        Ok(Self {
-            slices: BTreeSet::from([Slice::new(object, low, high, stride, width)?]),
-            restrict,
-        })
-    }
-
     /// Direct port of `Provenance.intersects`.
     pub fn intersects(&self, other: &Self) -> bool {
         if !self.restrict.is_empty()

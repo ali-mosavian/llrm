@@ -234,7 +234,7 @@ fn _woven(
                 let mut placed = (**take).clone();
                 placed.at = one.at;
                 placed.covers = Some((one.at, one.at));
-                placed.op = one.op.clone();
+                placed.call = one.call.clone();
                 out.push(Arc::new(placed));
             }
         }
@@ -263,7 +263,7 @@ fn _adjust(beside: &Insn, by: i64) -> Arc<Insn> {
         Vec::new(),
         Vec::new(),
     );
-    one.op = beside.op.clone();
+    one.call = beside.call.clone();
     one.frame_adjust = true;
     Arc::new(one)
 }

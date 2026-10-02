@@ -2534,27 +2534,15 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// What a call may read and write: `effects`, and never the frame bytes
+    /// no exposed alloca occupies.
+    fn listed(&self, effects: llrm_mir::memory::Effects) -> Arc<crate::model::lir::CallMemory> {
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone() })
+    }
+
     /// A direct call: its arguments pushed as its convention orders them,
     /// its result delivered in ax or dx:ax, and what its contract says it
     /// destroys and who pops.
-    /// A call's MIR operation, listing what it may read and write as the
-    /// old route's `frame_bounded` did: anything but the frame bytes no
-    /// exposed alloca occupies.
-    fn listed(&self, at: i64, effects: llrm_mir::memory::Effects) -> Arc<crate::model::mir::Op> {
-        use crate::model::mir;
-        let reference = mir::MemRef { excludes: self.private.clone(), ..mir::MemRef::new(None, 4) };
-        let mut op = mir::Op::new(at, mir::OpCode::nothing(), "call", vec![], vec![]);
-        op.kind = mir::Kind::Call;
-        op.memory_complete = true;
-        if effects.reads {
-            op.loads = vec![reference.clone()];
-        }
-        if effects.writes {
-            op.stores = vec![reference];
-        }
-        Arc::new(op)
-    }
-
     fn call(&mut self, inst: InstId, convention: u32, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
@@ -2843,7 +2831,7 @@ impl Selector<'_, '_, '_> {
         };
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
-            op: Some(self.listed(at, effects)),
+            call: Some(self.listed(effects)),
             clobbers: call_clobbers(&contract, self.segments),
             clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),

@@ -207,7 +207,7 @@ fn _exits_copied(body: &LirBody) -> LirBody {
                         vec![result],
                         vec![value],
                     );
-                    one.op = block.insns.first().and_then(|first| first.op.clone());
+                    one.call = block.insns.first().and_then(|first| first.call.clone());
                     Arc::new(one)
                 });
                 LirBlock {
@@ -457,7 +457,7 @@ fn _copy(where_: &LirBlock, into: u32, out_of: u32, group: Option<i64>, width: u
         vec![out_of],
     );
     one.group = group;
-    one.op = last.and_then(|last| last.op.clone());
+    one.call = last.and_then(|last| last.call.clone());
     Arc::new(one)
 }
 
@@ -639,7 +639,7 @@ pub fn _split_edges(
 /// One instruction in a split block, claiming none of BC's own bytes.
 fn _made(beside: &Insn, at: i64, what: Semantics, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
     let mut one = Insn::new(at, Some((at, at)), Some(what), defines, uses);
-    one.op = beside.op.clone();
+    one.call = beside.call.clone();
     Arc::new(one)
 }
 
