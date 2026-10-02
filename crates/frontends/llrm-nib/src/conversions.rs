@@ -24,12 +24,6 @@ impl Rules {
         }
     }
 
-    /// An integer literal's own type: `int`, else `i32`, else `u32`, as C
-    /// types a hex constant; `None` past all three.
-    pub fn literal(&self, value: i64) -> Option<TypeName> {
-        [self.int, TypeName::I32, TypeName::U32].into_iter().find(|one| fits(value, *one))
-    }
-
     /// The usual arithmetic conversions; `None` when there is no common type.
     ///
     /// Where C would convert a signed operand to an unsigned type of the same
@@ -61,24 +55,6 @@ impl Rules {
             }
         })
     }
-}
-
-/// Whether `value` is one of `type_name`'s values.
-pub fn fits(value: i64, type_name: TypeName) -> bool {
-    match type_name {
-        TypeName::Char | TypeName::U8 => u8::try_from(value).is_ok(),
-        TypeName::I8 => i8::try_from(value).is_ok(),
-        TypeName::I16 => i16::try_from(value).is_ok(),
-        TypeName::U16 => u16::try_from(value).is_ok(),
-        TypeName::I32 => i32::try_from(value).is_ok(),
-        TypeName::U32 => u32::try_from(value).is_ok(),
-        _ => false,
-    }
-}
-
-/// The bits `value` takes: its magnitude's, and a sign bit when negative.
-pub fn literal_bits(value: i64) -> u32 {
-    if value < 0 { 65 - (!value).leading_zeros() } else { 64 - value.leading_zeros() }
 }
 
 /// Whether a type converts implicitly: the integers and floats.

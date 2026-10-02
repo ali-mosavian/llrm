@@ -9,7 +9,6 @@ pub mod frontends;
 pub mod hir;
 pub mod model;
 pub use llrm_omf as objectfile;
-pub mod optimize;
 pub use llrm_support as support;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

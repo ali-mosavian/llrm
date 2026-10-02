@@ -12,7 +12,6 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
-use crate::analysis::regions;
 use crate::backend::allocate::Error;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
@@ -917,11 +916,6 @@ pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Me
     result
 }
 
-/// `regions.addresses`. The Rust helper refuses a span Python's integers
-/// can state and `i64` cannot; overlap is the conservative answer.
-fn _addresses_meet(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> bool {
-    regions::addresses(one, one_width, other, other_width, None).unwrap_or(true)
-}
 
 /// Whether `cell` still holds what it held at `define` after `one`.
 fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: bool) -> bool {
@@ -932,9 +926,9 @@ fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: 
     // Sealed, an incoming argument cell is reached by the frame's own stores alone.
     let meets = |dest: &Mem| {
         if sealed && _incoming_frame(cell) {
-            _in_frame(dest) && _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)
+            _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
         } else {
-            dest.addr.is_none() || _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)
+            dest.addr.is_none() || crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
         }
     };
     holds && !_may_write(one, cell, sealed) && !written.iter().any(meets)
@@ -959,10 +953,10 @@ pub(crate) fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
     let call = one.call.as_deref();
     let written = _written(one, cell);
     if sealed && _incoming_frame(cell) {
-        return written.iter().any(|dest| _in_frame(dest) && _addresses_meet(cell.addr, cell.width, dest.addr, dest.width));
+        return written.iter().any(|dest| _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width));
     }
     if _exact_frame(cell) && !written.is_empty() && written.iter().all(|dest| _exact_frame(dest)) {
-        if written.iter().any(|dest| _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)) {
+        if written.iter().any(|dest| crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)) {
             return true;
         }
         if call.is_none_or(|call| written.len() >= usize::from(call.writes())) {
@@ -1219,7 +1213,7 @@ fn _holding(one: &Arc<Insn>, value: u32, home: &Mem, store: &Arc<Insn>, holds: b
         && !_may_write(one, home, false)
         && !written
             .iter()
-            .any(|cell| cell.addr.is_none() || _addresses_meet(home.addr, home.width, cell.addr, cell.width))
+            .any(|cell| cell.addr.is_none() || crate::backend::overlap::may_overlap(home.addr, home.width, cell.addr, cell.width))
 }
 
 /// Whether `home` holds `value` at every use of it but the store itself.
