@@ -1,0 +1,7 @@
+description = "Four-body f64 gravity kernel, 200 steps, result scaled to micro-units"
+repetitions = 1
+
+[region]
+bas = "BenchNbody"
+c = "bench_nbody"
+nib = "bench_nbody"

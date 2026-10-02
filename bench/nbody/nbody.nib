@@ -1,0 +1,26 @@
+# Four-body f64 kernel; u16 counters as in the C original.
+
+fn bench_nbody(steps: u16) -> i32:
+    let mut x: f64[4] = [-1.0, 1.0, 0.0, 0.0]
+    let mut y: f64[4] = [0.0, 0.0, -1.0, 1.0]
+    let mut vx: f64[4] = [0.0, 0.0, 0.0125, -0.0125]
+    let mut vy: f64[4] = [-0.0125, 0.0125, 0.0, 0.0]
+
+    for _step in 0..steps:
+        for i in 0..4:
+            for j in i + 1..4:
+                let dx = x[j] - x[i]
+                let dy = y[j] - y[i]
+                let scale = 0.00001 / (dx * dx + dy * dy + 0.125)
+                vx[i] += dx * scale
+                vy[i] += dy * scale
+                vx[j] -= dx * scale
+                vy[j] -= dy * scale
+        for i in 0..4:
+            x[i] += vx[i]
+            y[i] += vy[i]
+    return i32((x[0] + y[1] + x[2] + y[3]) * 1000000.0)
+
+fn main() -> i16:
+    print(bench_nbody(200))
+    return 0
