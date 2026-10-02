@@ -206,7 +206,8 @@ pub fn spill_forecast(
     let cells = spill::cells(function);
     let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
     let counted = |value: ValueId| spill::integer(context, function, value);
-    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, function, value))).flat_map(spill::Site::points);
+    let addressed = spill::addressed(function);
+    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, function, value), &|value| addressed.contains(&value))).flat_map(spill::Site::points);
     Some(spill::forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
 }
 

@@ -39,6 +39,12 @@ pub trait Machine {
         0
     }
 
+    /// Of `registers`, how many an address's pointer and index may be held
+    /// in, where only some can: none where any can.
+    fn address_registers(&self) -> i64 {
+        0
+    }
+
     /// Of `registers`, how many survive a call to `callee`, named where the
     /// call is direct: its own contract may keep more than any call does.
     fn kept_across(&self, _callee: Option<&str>) -> i64 {
