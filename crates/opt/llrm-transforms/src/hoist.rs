@@ -149,9 +149,7 @@ fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Acce
         | Opcode::InsertValue(_) => true,
         // Memory in a `noalias readonly` parameter is written by no one: a
         // slice's length, read past a store through its data pointer.
-        Opcode::Load { volatile: false, .. } => {
-            llrm_mir::memory::invariant(unit.context, unit.layout, unit.function, unit.function.instruction(inst).operands[0]) || _unwritten(unit.function, inst, insts, accesses, program)
-        }
+        Opcode::Load { volatile: false, .. } => llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, inst) || _unwritten(unit.function, inst, insts, accesses, program),
         _ => false,
     }
 }

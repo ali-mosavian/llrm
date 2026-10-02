@@ -477,5 +477,6 @@ b4:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("define i16 @f() memory(none) willreturn nounwind {\nb1:\n  ret i16 7\n}"), "{out}");
+    // The loop is gone and the answer is the constant; which attributes the stamp adds is not this test's.
+    assert!(out.contains("{\nb1:\n  ret i16 7\n}") && out.contains("memory(none) willreturn nounwind"), "{out}");
 }

@@ -44,8 +44,8 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("nsz", By(&["floating_freedoms_are_fast_math_flags", "test_nsz_lets_a_cancellation_be_positive_zero"])),
     ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result", "a_range_in_metadata_bounds_a_load_and_a_call_result", "a_range_a_frontend_states_of_an_instruction_bounds_its_result", "a_matched_enums_tag_is_bounded_by_its_variants_where_ranges_reads_it"])),
     ("arcp", By(&["test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation"])),
-    ("invariant", Unread("inline-readers: no pass reads !invariant.load yet")),
-    ("unroll", Unread("inline-readers: peelsize `admitted` does not read the hint yet")),
+    ("invariant", By(&["a_load_the_language_says_is_invariant_is_reused_across_a_call_that_may_write", "test_a_load_the_language_says_is_invariant_leaves_past_a_store", "a_loads_invariance_is_read_from_its_metadata"])),
+    ("unroll", By(&["a_loop_the_language_says_not_to_unroll_stays_rolled", "a_loop_the_language_permits_is_copied_past_the_budget_and_the_cap", "a_loops_unroll_hint_is_read_from_its_metadata"])),
 ];
 
 /// The facts a row is owed for: every one the table declares.
