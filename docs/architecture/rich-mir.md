@@ -1,7 +1,7 @@
 # Rich portable MIR
 
-Status: steps 0 to 6 landed; the frontends compile through it alone. Step 7,
-deleting the old MIR, is under way.
+Status: done. Steps 0 to 7 landed; the old MIR is deleted and every
+frontend compiles through this MIR alone.
 
 ## Decision
 
@@ -277,9 +277,10 @@ old MIR operation's.
 
 ### 7. Delete the old MIR
 
-- `Op`, `MemRef`, the decoded-operation fallbacks and their constructors, in
-  one bounded cleanup. Update `docs/architecture/split.md`,
-  `docs/architecture/mir-vocabulary.md` and the diagrams.
+Done (#323): the legacy route, then `Op`, `MemRef`, the old memory
+model and its analyses. LIR carries what it needs of a call as `CallMemory`;
+`backend/overlap.rs` compares machine addresses syntactically.
+`docs/history/mir-vocabulary.md` keeps the old vocabulary's story.
 
 ## Acceptance gates
 
