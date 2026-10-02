@@ -1139,16 +1139,13 @@ impl<'a, 't> Body<'a, 't> {
             };
             return Ok(self.op(op, truth, vec![value_ref(a), value_ref(b)]));
         }
-        // A far or huge pointer compares as its dword, as the old raise does;
-        // a near pointer as its word: compares order integers.
+        // A far pointer compares as its dword, as the old raise does. Near and
+        // huge pointers compare as pointers: how a huge pointer orders is
+        // isel's (its packed bits are no address, so no conversion to read).
         let (a, b) = match self.space(a) {
-            Some(FAR | HUGE) => {
+            Some(FAR) => {
                 let dword = self.types.int(4, false);
                 (self.op(Op::Convert, dword, vec![value_ref(a)]), self.op(Op::Convert, dword, vec![value_ref(b)]))
-            }
-            Some(_) => {
-                let word = self.types.int(2, false);
-                (self.op(Op::Convert, word, vec![value_ref(a)]), self.op(Op::Convert, word, vec![value_ref(b)]))
             }
             _ => (a, b),
         };
