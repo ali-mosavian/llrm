@@ -10,7 +10,7 @@ use crate::abi::machine::Machine;
 use crate::model::passes;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,11 +128,15 @@ pub struct Flags {
     pub sanitize: Sanitize,
     /// `-g`: CodeView debug information.
     pub debug: bool,
+    /// `-fstack-usage`.
+    pub stack_usage: bool,
+    /// `-Wstack-usage=N`.
+    pub stack_limit: Option<i64>,
 }
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -167,6 +171,11 @@ impl Flags {
                 let (option, name) = flag.split_once('=').expect("an =");
                 let cpu = CPUS.iter().find(|(gcc, _)| *gcc == name).ok_or_else(|| format!("unknown {option}={name}; choose i386, i486 or pentium"))?;
                 self.cpu = Some(cpu.1.to_owned());
+            }
+            "-fstack-usage" => self.stack_usage = true,
+            _ if flag.starts_with("-Wstack-usage=") => {
+                let limit = &flag["-Wstack-usage=".len()..];
+                self.stack_limit = Some(limit.parse().map_err(|_| format!("-Wstack-usage={limit}: expected a number of bytes"))?);
             }
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
@@ -239,7 +248,7 @@ impl Flags {
 
     /// The driver's options for `machine`.
     pub fn driver(&self, machine: Machine) -> super::Options {
-        super::Options { pipeline: self.pipeline(), ..super::Options::of(machine) }
+        super::Options { pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, ..super::Options::of(machine) }
     }
 }
 
