@@ -24,22 +24,9 @@ DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
 
-HEADER = re.compile(r"^\s*(?:'|//)\s*(flags|dialect):\s*(.*?)\s*$")
+sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
 
-
-def settings(source: str) -> list[str]:
-    """What a program's header asks of its compiler, but the opt level and cpu this tool sets: tests/run's `dialect:` and `flags:`."""
-    found = {}
-    for line in Path(source).read_text(encoding="latin1").splitlines():
-        match = HEADER.match(line)
-        if match:
-            found[match[1]] = match[2]
-        elif line.strip() and not line.lstrip().startswith(("'", "//")):
-            break
-    flags = found.get("flags", "").split()
-    kept = [one for at, one in enumerate(flags) if not one.startswith("-O") and one != "--cpu" and flags[at - 1 : at] != ["--cpu"]]
-    dialect = ["--dialect", found["dialect"], "--runtime", found["dialect"]] if "dialect" in found else []
-    return [*dialect, *kept]
+from run_tests import compiler_arguments as settings  # noqa: E402
 
 
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:

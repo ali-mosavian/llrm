@@ -79,6 +79,16 @@ def header(source: Path) -> dict[str, str]:
     return found
 
 
+def compiler_arguments(source: Path) -> list[str]:
+    """What a program's header asks of its compiler apart from the optimization level and cpu, which the caller sets:
+    `dialect:` and the rest of `flags:`."""
+    settings = header(Path(source))
+    flags = settings.get("flags", "").split()
+    kept = [one for at, one in enumerate(flags) if not one.startswith("-O") and one != "--cpu" and flags[at - 1 : at] != ["--cpu"]]
+    dialect = ["--dialect", settings["dialect"], "--runtime", settings["dialect"]] if "dialect" in settings else []
+    return [*dialect, *kept]
+
+
 def discover(selected: list[str]) -> list[Program]:
     programs = []
     for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*")), *sorted(BENCH.glob("*/*")), *sorted(BENCH.glob("parity/*/*"))]:
