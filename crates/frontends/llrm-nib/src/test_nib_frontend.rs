@@ -2236,3 +2236,37 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let body = between(&assembly, "_f proc far\n", "_f endp");
     assert!(!body.contains(", 0\n"), "{body}");
 }
+
+/// A payload-less variant stored only its tag, so the other bytes of the
+/// enum were undefined where the whole value then flowed as one integer:
+/// returned, compared, copied into a struct compared bytewise. Run on the
+/// unoptimized MIR, where nothing hides the read.
+#[test]
+fn test_an_enum_value_is_written_whole() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+fn first_even(a: i16, b: i16) -> Option[i16]:
+    if a % 2 == 0:
+        return .some(a)
+    if b % 2 == 0:
+        return .some(b)
+    return .none
+
+fn main() -> i16:
+    let x = first_even(1, 3)
+    let y = first_even(5, 7)
+    if x == y:
+        return 1
+    return 0
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "enum.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 1, .. })), "{result:?}");
+}
