@@ -261,3 +261,35 @@ fn a_nonnull_parameter_passed_null_is_reported() {
     assert_eq!(one_pointer("nonnull", reads, 16), int(0, 16));
     assert_eq!(one_pointer("", reads, 0), int(0, 16));
 }
+
+/// Runs `@g` of `text` checked on `arguments`.
+fn range_run(text: &str, arguments: Vec<Val>) -> Result<Val, Trap> {
+    let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n@cell = global i16 5\n{text}")).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    crate::interpret::run_checked(&module, "g", arguments, 10_000)
+}
+
+fn small(bits: u128) -> Val {
+    Val::Int { bits, width: 16 }
+}
+
+/// A value outside the `range` stated of a parameter, of the result, or of a
+/// load (`!range`) is a broken promise; a value inside, or an unchecked run, is not.
+#[test]
+fn a_value_outside_its_stated_range_is_reported() {
+    let parameter = "define i16 @g(i16 range(i16 0, 2) %p) {\nentry:\n  ret i16 %p\n}\n";
+    assert_eq!(range_run(parameter, vec![small(1)]), Ok(small(1)));
+    let trapped = range_run(parameter, vec![small(5)]).unwrap_err();
+    assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("parameter 0") && why.contains("[0, 2)")), "{trapped:?}");
+    let result = "define range(i16 0, 2) i16 @g(i16 %p) {\nentry:\n  ret i16 %p\n}\n";
+    assert_eq!(range_run(result, vec![small(0)]), Ok(small(0)));
+    assert!(matches!(range_run(result, vec![small(7)]).unwrap_err(), Trap::Undefined(why) if why.contains("the result")));
+    let load = "define i16 @g() {\nentry:\n  %v = load i16, ptr @cell, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 2}\n";
+    assert!(matches!(range_run(load, vec![]).unwrap_err(), Trap::Undefined(why) if why.contains("!range")));
+    let signed = "define i16 @g(i16 range(i16 -1, 2) %p) {\nentry:\n  ret i16 %p\n}\n";
+    assert_eq!(range_run(signed, vec![small(0xffff)]), Ok(small(0xffff)), "-1 is inside -1..=1");
+    assert!(range_run(signed, vec![small(2)]).is_err());
+    // Unchecked, the promise is not looked at.
+    let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{parameter}")).unwrap();
+    assert_eq!(crate::interpret::run(&module, "g", vec![small(5)], 100), Ok(small(5)));
+}
