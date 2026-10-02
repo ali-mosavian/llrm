@@ -482,10 +482,10 @@ impl<'m> Machine<'m> {
                 },
                 _ => None,
             };
-            if let (Some(lower), Some(upper)) = (bound(0), bound(1))
-                && Self::outside(*bits, *width, lower, upper)
-            {
-                return undefined(format!("a value {bits} outside its stated !range [{lower}, {upper})"));
+            // A list of pairs: the value is outside the promise only if outside every one.
+            let pairs: Vec<(u128, u128)> = (0..operands.len() / 2).filter_map(|one| Some((bound(2 * one)?, bound(2 * one + 1)?))).collect();
+            if !pairs.is_empty() && pairs.iter().all(|&(lower, upper)| Self::outside(*bits, *width, lower, upper)) {
+                return undefined(format!("a value {bits} outside its stated !range {pairs:?}"));
             }
         }
         Ok(())

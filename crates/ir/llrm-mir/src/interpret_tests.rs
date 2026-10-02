@@ -286,6 +286,14 @@ fn a_value_outside_its_stated_range_is_reported() {
     assert!(matches!(range_run(result, vec![small(7)]).unwrap_err(), Trap::Undefined(why) if why.contains("the result")));
     let load = "define i16 @g() {\nentry:\n  %v = load i16, ptr @cell, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 2}\n";
     assert!(matches!(range_run(load, vec![]).unwrap_err(), Trap::Undefined(why) if why.contains("!range")));
+    // Two pairs, 0..2 and 10..12: inside the second is inside.
+    let by_pair = |value: u128| {
+        let text = format!("define i16 @g() {{\nentry:\n  %v = load i16, ptr @cell3, !range !0\n  ret i16 %v\n}}\n\n@cell3 = global i16 {value}\n!0 = !{{i16 0, i16 2, i16 10, i16 12}}\n");
+        range_run(&text, vec![])
+    };
+    assert_eq!(by_pair(11), Ok(small(11)), "inside the second pair");
+    assert_eq!(by_pair(1), Ok(small(1)), "inside the first");
+    assert!(matches!(by_pair(5).unwrap_err(), Trap::Undefined(why) if why.contains("!range")), "between the pairs");
     let signed = "define i16 @g(i16 range(i16 -1, 2) %p) {\nentry:\n  ret i16 %p\n}\n";
     assert_eq!(range_run(signed, vec![small(0xffff)]), Ok(small(0xffff)), "-1 is inside -1..=1");
     assert!(range_run(signed, vec![small(2)]).is_err());
