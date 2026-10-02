@@ -116,8 +116,8 @@ fn test_assignment_keeps_block_frequencies_across_its_bridges() {
 /// its loop counter in a 1M-trip body, +7% executed instructions).
 #[test]
 fn test_a_value_defined_in_the_loop_is_not_stored_on_every_trip() {
-    let (body, mut phases) = before_phase(Calls::C, "hotstore.ll", "_f", "486", "SsaSpill");
-    let spilled = phases[0].transform(body).expect("spills");
+    let (body, _) = before_phase(Calls::C, "hotstore.ll", "_f", "486", "SsaSpill");
+    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN).expect("spills");
     let frequency = crate::analysis::frequency::Frequency::of(&spilled);
     let stores = |hot: bool| -> usize {
         spilled
