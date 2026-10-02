@@ -1,0 +1,7 @@
+description = "8x8 matrix product (i16 inputs, i32 results) and weighted checksum"
+repetitions = 1
+
+[region]
+bas = "BenchMatmul"
+c = "bench_matmul"
+nib = "bench_matmul"
