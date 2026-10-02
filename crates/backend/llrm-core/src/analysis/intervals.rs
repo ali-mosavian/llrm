@@ -13,7 +13,6 @@ use crate::support::hash::{IndexMap, IndexSet};
 use crate::analysis::loops as loopy;
 use crate::backend::allocate;
 use crate::model::lir::{Insn, LirBlock, LirBody};
-use crate::model::mir::MirBlock;
 
 pub const DEF: i64 = 1;
 pub const PER_INSN: i64 = 2;
@@ -230,17 +229,10 @@ pub fn _merged(mut runs: Vec<Segment>) -> Vec<Segment> {
     out
 }
 
-/// `loopy.loops` reads only `at` and `succ`; MIR blocks carry both.
-pub fn _graph(blocks: &[LirBlock]) -> Vec<MirBlock> {
-    blocks
-        .iter()
-        .map(|block| MirBlock::new(block.at, Vec::new(), Vec::new(), block.succ.clone()))
-        .collect()
-}
 
 /// How deeply each block is nested in loops.
 pub fn depths(body: &LirBody) -> IndexMap<i64, u32> {
-    depths_in(body, &loopy::loops(&_graph(&body.blocks), Some(body.entry)))
+    depths_in(body, &loopy::loops(&body.blocks, Some(body.entry)))
 }
 
 /// `depths`, from loops already found.

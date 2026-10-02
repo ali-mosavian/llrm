@@ -372,7 +372,7 @@ fn test_threading_preserves_an_exact_empty_loop_header() {
 
     assert!(result.blocks.iter().any(|block| block.at == 8));
     let headers: std::collections::BTreeSet<i64> =
-        loopy::loops(&intervals::_graph(&result.blocks), Some(result.entry)).iter().map(|one| one.header).collect();
+        loopy::loops(&result.blocks, Some(result.entry)).iter().map(|one| one.header).collect();
     assert_eq!(headers, [8, 10].into());
 }
 

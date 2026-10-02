@@ -1960,7 +1960,7 @@ fn _scoped_foldable_indexes(body: &LirBody, bases: &BTreeSet<u32>) -> BTreeSet<u
     }
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut indexes: BTreeSet<u32> = BTreeSet::new();
-    for found in loops::loops(&ranges::_graph(&body.blocks), Some(body.entry)) {
+    for found in loops::loops(&body.blocks, Some(body.entry)) {
         let cells: Vec<&Mem> = found
             .body
             .iter()

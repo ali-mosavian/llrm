@@ -15,7 +15,6 @@ use crate::abi::machine::{self, Machine};
 use crate::support::hash::IndexMap;
 
 use crate::model::ir::{self, Loc, Operation, Semantics};
-use crate::model::mir;
 use crate::support::pyset::PySet;
 
 // ---------------------------------------------------------------- registers
@@ -297,7 +296,7 @@ pub fn writes(what: &Semantics) -> IndexMap<Register, Need> {
 
 // Every register a value may be placed in: `mir.TRACKED`, what the raise
 // follows.
-pub const AVAILABLE: [Register; 6] = mir::TRACKED;
+pub const AVAILABLE: [Register; 6] = llrm_x86_code16::GENERAL;
 
 // What this may hand out for an operand that reaches memory, which is not
 // what the encoding permits: bp is a legal base and also the frame pointer.

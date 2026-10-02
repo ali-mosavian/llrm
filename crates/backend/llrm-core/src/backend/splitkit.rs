@@ -27,7 +27,7 @@ pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<
     }
     let mut result = body.clone();
     let mut kept: BTreeSet<u32> = BTreeSet::new();
-    for found in loops::loops(&ranges::_graph(&result.blocks), Some(result.entry)) {
+    for found in loops::loops(&result.blocks, Some(result.entry)) {
         let inside = &found.body;
         let references: IndexMap<u32, IndexMap<i64, Vec<usize>>> =
             values.iter().map(|value| (*value, _references(&result, *value))).collect();

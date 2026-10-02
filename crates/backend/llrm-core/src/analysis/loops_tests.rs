@@ -1,15 +1,15 @@
 //! Port of `tests/test_loops.py`.
 //!
-//! `MirBlock` stands in for `frontend.blocks.Block`: the walks read only a
-//! block's address and successors.
+//! An empty `LirBlock` stands in for a block: the walks read only its
+//! address and successors.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
-use crate::model::mir::MirBlock;
+use crate::model::lir::LirBlock;
 
-fn block(at: i64, succ: &[i64]) -> MirBlock {
-    MirBlock::new(at, vec![], vec![], succ.to_vec())
+fn block(at: i64, succ: &[i64]) -> LirBlock {
+    LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, vec![]) }
 }
 
 fn set(items: &[i64]) -> BTreeSet<i64> {

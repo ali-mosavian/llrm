@@ -19,7 +19,6 @@ use crate::backend::peephole::{Lane, Lanes, _lanes, _register_effects, id};
 use crate::backend::{select, target};
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::mir::MirBlock;
 
 /// Python's `frozenset[tuple[Lane, Lane]]`.
 pub type Relations = BTreeSet<(Lane, Lane)>;
@@ -243,8 +242,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
         pending.extend(blocks[&at].succ.iter().copied());
     }
     // `loops.predecessors` reads only `at` and `succ`.
-    let graph: Vec<MirBlock> =
-        body.blocks.iter().map(|block| MirBlock::new(block.at, Vec::new(), Vec::new(), block.succ.clone())).collect();
+    let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     // Start at the must-analysis top, then intersect paths to a fixed point.
     // Entry contributes no equality, so a backedge cannot invent its own proof.

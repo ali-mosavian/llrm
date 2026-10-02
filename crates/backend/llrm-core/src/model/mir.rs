@@ -16,14 +16,10 @@ use std::hash::{Hash, Hasher};
 use num_bigint::BigInt;
 
 use crate::model::floating::Semantics as FloatingSemantics;
-use crate::model::ir::{Loc, Operation, Semantics};
+use crate::model::ir::{Loc, Operation};
 use crate::model::memory::Provenance;
 use crate::objectfile::module::{Addr, Space};
 use crate::support::pyrepr::{self, Repr};
-use iced_x86::Register;
-
-/// The registers that become values, rooted.
-pub const TRACKED: [Register; 6] = llrm_x86_code16::GENERAL;
 
 /// One SSA variable, deliberately with no register or historical home.
 ///
@@ -339,8 +335,6 @@ pub enum Arg {
     Cell(Cell),
     Opaque(Opaque),
 }
-
-pub const WHOLE_FRAME: (Addr, u32) = (Addr::new(Space::Frame, -(1 << 15)), 1 << 16);
 
 /// Direct port of `qbopt.model.mir:_symbolic_ref`.
 ///
@@ -817,15 +811,6 @@ pub struct MirBlock {
 }
 
 impl MirBlock {
-    pub fn new(at: i64, phis: Vec<Phi>, ops: Vec<Op>, succ: Vec<i64>) -> Self {
-        Self {
-            at,
-            phis,
-            ops,
-            succ,
-            cold: false,
-        }
-    }
 
 }
 
@@ -872,24 +857,6 @@ const _: () = {
     const fn frozen<T: Sync>() {}
     frozen::<MirBody>();
 };
-
-/// Python `_outside`: the frame's bytes no range in `reach` covers, as exclusions.
-pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
-    let (start, size) = WHOLE_FRAME;
-    let (low, high) = (start.disp, start.disp + i64::from(size));
-    let mut out = Vec::new();
-    let mut at = low;
-    for &(start, end) in reach {
-        if start > at {
-            out.push((Addr::new(Space::Frame, at), (start - at) as u32));
-        }
-        at = at.max(end);
-    }
-    if at < high {
-        out.push((Addr::new(Space::Frame, at), (high - at) as u32));
-    }
-    out
-}
 
 impl Repr for Value {
     fn repr(&self) -> String {
