@@ -2162,6 +2162,39 @@ fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     assert!(result.is_ok(), "{:?}", result.err());
 }
 
+/// MIR infers each defined function's memory effects, per location, from
+/// its body and what its callees are stated to do (#113: Nib states effects
+/// only where no body shows them, the runtime's routines): a function with
+/// no `&mut` and no module-variable write reads memory and writes none, one
+/// that writes through a `&mut` writes only through it, and one of scalars
+/// touches none.
+#[test]
+fn test_mir_infers_what_a_nib_function_touches() {
+    use llrm_mir::{GlobalKind, Attribute};
+    let source = "@extern(\"cdecl16\")\nfn keep(x: i16) -> i16\n\nvar g: i16 = 3\n\nfn scalars(a: i16, b: i16) -> i16:\n    return a * b\n\nfn reads(p: &i16) -> i16:\n    return p + g\n\nfn writes(p: &mut i16) -> void:\n    p = 1\n\nfn main() -> i16:\n    unsafe:\n        let mut x: i16 = keep(2)\n        writes(x)\n        print(scalars(keep(x), reads(x)))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "effects.nib", source));
+    // As the compile does: each function by its name, `main` the entry that keeps the rest alive.
+    for function in &mut program.modules[0].functions {
+        function.symbol = Some(function.name.clone());
+        if function.name == "main" {
+            function.linkage = llrm_core::hir::model::FunctionLinkage::External;
+        }
+    }
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let module = &mir.modules[0];
+    let memory = |name: &str| -> Vec<(Option<String>, String)> {
+        let GlobalKind::Function(function) = &module.global(module.named(name).unwrap_or_else(|| panic!("{name} among {:?}", module.globals.iter().filter_map(|one| one.name.clone()).collect::<Vec<_>>()))).kind else { panic!("{name} is no function") };
+        function.attrs.iter().find_map(|one| if let Attribute::Memory(locations) = one { Some(locations.clone()) } else { None }).unwrap_or_default()
+    };
+    assert_eq!(memory("scalars"), [(None, "none".to_owned())]);
+    assert!(memory("reads").iter().all(|(_, access)| access != "write" && access != "readwrite"), "{:?}", memory("reads"));
+    assert_eq!(memory("writes"), [(Some("argmem".to_owned()), "write".to_owned())]);
+}
+
 /// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
 /// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
 /// in the loop.
