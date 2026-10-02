@@ -182,6 +182,11 @@ fn stored_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
 pub struct Tags {
     pub place: MetadataId,
     pub allocation: MetadataId,
+    /// The `!tbaa` access tag of each array allocation a function reaches through
+    /// its descriptor, by function and descriptor place: a type of its own
+    /// under `allocation`, so two arrays are apart and the generic tag, which
+    /// a parameter's array carries, covers them all.
+    pub arrays: HashMap<(i64, i64), MetadataId>,
 }
 
 impl Tags {
@@ -197,8 +202,52 @@ impl Tags {
             let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(root), zero.clone()]);
             node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()])
         };
-        Tags { place: tag("place"), allocation: tag("allocation") }
+        Tags { place: tag("place"), allocation: tag("allocation"), arrays: HashMap::new() }
     }
+
+    /// A tag for each array a function of `hir` reaches through a descriptor
+    /// it owns: a local, a static or a module's, not a parameter's, which may
+    /// be any caller's array and keeps the generic tag. One array is one tag,
+    /// however many functions name it.
+    pub fn arrays(&mut self, module: &mut Module, hir: &model::Module) {
+        let zero = module.context.types.int(64);
+        let zero = MetadataOperand::Constant(module.context.int(zero, 0));
+        // The type node `allocation` made: the first operand of its tag.
+        let parent = match &module.metadata[self.allocation.0 as usize].operands[0] {
+            MetadataOperand::Node(node) => *node,
+            _ => return,
+        };
+        let mut identities: HashMap<(i64, i64), MetadataId> = HashMap::new();
+        for function in &hir.functions {
+            let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
+            let described = function.blocks.iter().flat_map(|block| &block.instructions).flat_map(|one| &one.operands).filter_map(|operand| match operand {
+                Operand::IndirectPlace(one) => one.allocation,
+                _ => None,
+            });
+            for descriptor in described {
+                let Some(place) = places.get(&descriptor) else { continue };
+                // What names the array in every function: a data symbol, or this local.
+                let identity = match place.storage {
+                    Storage::Static | Storage::Module | Storage::Common => (-1 - match place.storage { Storage::Static => 0, Storage::Module => 1, _ => 2 }, place.symbol),
+                    Storage::Local => (function.id, place.id),
+                    Storage::Parameter | Storage::External => continue,
+                };
+                let tag = *identities.entry(identity).or_insert_with(|| {
+                    let name = format!("allocation.{}", identities_len(&self.arrays));
+                    module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::String(name), MetadataOperand::Node(parent), zero.clone()] });
+                    let ty = MetadataId(module.metadata.len() as u32 - 1);
+                    module.metadata.push(MetadataNode { distinct: false, operands: vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()] });
+                    MetadataId(module.metadata.len() as u32 - 1)
+                });
+                self.arrays.insert((function.id, descriptor), tag);
+            }
+        }
+    }
+}
+
+/// How many distinct array tags `arrays` holds, for naming the next.
+fn identities_len(arrays: &HashMap<(i64, i64), MetadataId>) -> usize {
+    arrays.values().collect::<std::collections::HashSet<_>>().len()
 }
 
 /// The `!tbaa` access tag of each type the language's aliasing classes
@@ -316,6 +365,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
+    tables.tags.arrays(&mut module, hir);
     match class_tags(&mut module, &hir.alias_classes) {
         Ok(classes) => tables.classes = classes,
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -1406,7 +1456,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let ty = stored_type(&mut self.b.context.types, self.tables.types[&one.r#type])?;
                 let inside = self.addresses.get(&one.base).is_some_and(|&size| one.offset >= 0 && one.offset + self.tables.types[&one.r#type].width <= size);
                 let tag = match one.allocation {
-                    Some(_) => Some(self.tables.tags.allocation),
+                    Some(descriptor) => Some(self.tables.tags.arrays.get(&(self.function.id, descriptor)).copied().unwrap_or(self.tables.tags.allocation)),
                     None => inside.then_some(self.tables.tags.place),
                 };
                 Ok((self.offset(base, one.offset, self.operand_flags(operand).contains(Flags::INBOUNDS)), ty, one.volatile, tag))
