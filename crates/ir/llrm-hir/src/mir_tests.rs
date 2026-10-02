@@ -963,3 +963,18 @@ fn an_assume_of_no_condition_or_with_a_result_is_refused() {
     function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Assume, vec![], vec![Operand::value_ref(3)]));
     assert!(crate::verify::verify(&program(function)).unwrap_err().0.contains("does not dominate"));
 }
+
+/// An assumption made of a comparison is made on the comparison's `i1`, not
+/// on its widened result tested again: a reader that runs before
+/// instcombine would otherwise see `icmp ne (sext c), 0` and nothing.
+#[test]
+fn an_assume_of_a_comparison_is_made_on_its_own_truth() {
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Lt, vec![4], vec![Operand::value_ref(1), Operand::value_ref(2)]));
+    function.blocks[0].instructions.insert(1, Instruction::new(3, Op::Assume, vec![], vec![Operand::value_ref(4)]));
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("%2 = icmp slt i16 %0, %1\n  %3 = sext i1 %2 to i16\n  call void @llvm.assume(i1 %2)"), "{text}");
+}
