@@ -8,5 +8,5 @@ pub mod target;
 pub mod timings;
 
 pub use cycles::report;
-pub use target::{Dos, GENERAL, PRESERVED, WORD_BASES, WORD_INDEXES};
+pub use target::{Dos, ENCODABLE_BASES, FRAME, GENERAL, PRESERVED, WORD_INDEXES, word_bases};
 pub use timings::ARCHS;
