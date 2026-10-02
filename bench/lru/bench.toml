@@ -1,0 +1,7 @@
+description = "LRU cache-list update through far pointers in a struct"
+repetitions = 1
+
+[region]
+bas = "BenchLru"
+c = "bench_lru"
+nib = "bench_lru"
