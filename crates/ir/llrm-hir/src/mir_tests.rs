@@ -917,3 +917,28 @@ fn inbounds_is_a_fact_of_an_operand() {
     assert_eq!(text.matches("getelementptr inbounds i8, ptr %0, i16 2").count(), 1, "{text}");
     assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
 }
+
+/// What a language lets a pass do to a floating operation reaches the
+/// instruction as its fast-math flags: `-on` and alternate math were stated
+/// nowhere, so no float fold could ask.
+#[test]
+fn floating_freedoms_are_fast_math_flags() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 2 }];
+    let add = Instruction::new(1, Op::Fadd, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    let block = Block::new(1, vec![add], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "double", TypeKind::Float, 8));
+    let mut facts = Builder::new("test");
+    for fact in [Fact::Reassoc, Fact::NoNaNs, Fact::NoInfs, Fact::NoSignedZeros, Fact::AllowReciprocal] {
+        facts.state(Subject::Instruction { function: 1, id: 1 }, fact);
+    }
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("= fadd reassoc nnan ninf nsz arcp double %0, %1"), "{text}");
+}
