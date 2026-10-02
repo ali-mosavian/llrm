@@ -28,8 +28,8 @@ bubble bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2
 bubble bas shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bubble c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bubble nib shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-chase bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-chase nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+chase bas invariant-loads #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+chase nib invariant-loads #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc10_s1102468_xi_bpf_index_n_st1_sum_as_end c relation-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc10_s1102468_xi_bpf_index_n_st1_sum_as_end c relation-size #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 conc10_s1102468_xi_bpf_index_n_st1_sum_as_ptr c relation-ivs #203 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
