@@ -12,7 +12,7 @@ fn object() -> Vec<Rc<omf::Record>> {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(machine) };
     let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
     omf::parse(&omfwrite::written(&built, "debug.c").expect("writes")).expect("parses")
