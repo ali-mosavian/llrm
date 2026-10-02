@@ -239,9 +239,10 @@ impl<'a> Machine<'a> {
     }
 
     /// Whether `held` fits `room` registers, and its values satisfy Hall's condition
-    /// over the classes: a byte value always (no other register has a byte half), an
-    /// address role only for the `acting` values, which an instruction needs in it
-    /// just now (a value waiting in another register costs a copy to act, not a place).
+    /// over the classes: a byte value always (no other register has a byte half), a
+    /// value confined to one register (an address base) only for the `acting` values,
+    /// which an instruction needs in it just now (a value waiting in another register
+    /// costs a copy to act, not a place).
     fn fits(&self, held: &BTreeSet<u32>, acting: &BTreeSet<u32>, room: usize) -> bool {
         if held.len() > room {
             return false;
@@ -249,7 +250,7 @@ impl<'a> Machine<'a> {
         let bytes: BTreeSet<Register> = [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().collect();
         self.classes.iter().all(|class| {
             let counted = |value: &u32| {
-                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || mine.is_subset(&bytes)))
+                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&bytes))))
             };
             held.iter().filter(|value| counted(value)).count() <= class.len()
         })
@@ -941,4 +942,23 @@ fn written(
     }
     blocks.extend(bridges);
     Ok(body.with_blocks(blocks))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two values that may only sit in BX (each is the base of an address
+    /// somewhere) were counted as a byte pair although only one acts: deedlines
+    /// COPPER evicted down to three held values in a six-register machine, and
+    /// its palette loop reloaded two addresses every iteration.
+    #[test]
+    fn test_two_base_only_values_fit_while_one_acts() {
+        let bx = BTreeSet::from([Register::EBX]);
+        let confined: Classes = [(1, bx.clone()), (2, bx), (3, BTreeSet::from([Register::ESI, Register::EDI]))].into_iter().collect();
+        let machine = Machine::of(&confined);
+        let held: BTreeSet<u32> = [1, 2, 3].into_iter().collect();
+        assert!(machine.fits(&held, &BTreeSet::from([1]), 6), "one acting BX value leaves the other waiting");
+        assert!(!machine.fits(&held, &BTreeSet::from([1, 2]), 6), "premise: two acting BX values cannot both sit in BX");
+    }
 }
