@@ -1041,6 +1041,7 @@ fn a_range_survives_the_codec() {
     let back = crate::codec::decode(&text).expect("decodes");
     assert_eq!(back.modules[0].facts, program.modules[0].facts);
     assert!(crate::codec::decode(&text.replace("\"second\":7", "\"second\":-9")).is_err());
+}
 
 /// The verifier a frontend's HIR meets refuses a value used where its
 /// definition does not dominate it.
