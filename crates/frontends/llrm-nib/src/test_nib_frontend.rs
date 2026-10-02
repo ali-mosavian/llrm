@@ -2239,8 +2239,9 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
 
 /// A payload-less variant stored only its tag, so the other bytes of the
 /// enum were undefined where the whole value then flowed as one integer:
-/// returned, compared, copied into a struct compared bytewise. Run on the
-/// unoptimized MIR, where nothing hides the read.
+/// returned, compared, copied into a struct compared bytewise. The MIR
+/// interpreter reads an unwritten byte as poison, which a copy of the whole
+/// value carries to the tag read after it.
 #[test]
 fn test_an_enum_value_is_written_whole() {
     use llrm_mir::interpret::{self, Val};
@@ -2254,10 +2255,12 @@ fn first_even(a: i16, b: i16) -> Option[i16]:
 
 fn main() -> i16:
     let x = first_even(1, 3)
-    let y = first_even(5, 7)
-    if x == y:
-        return 1
-    return 0
+    let y = x
+    match y:
+        .some(n):
+            return n
+        .none:
+            return 7
 ";
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "enum.nib", source));
@@ -2268,5 +2271,5 @@ fn main() -> i16:
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
-    assert!(matches!(result, Ok(Val::Int { bits: 1, .. })), "{result:?}");
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
