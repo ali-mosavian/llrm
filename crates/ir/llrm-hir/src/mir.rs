@@ -228,9 +228,10 @@ impl Tags {
                 let Some(place) = places.get(&descriptor) else { continue };
                 // What names the array in every function: a data symbol, or this local.
                 let identity = match place.storage {
-                    Storage::Static | Storage::Module | Storage::Common => (-1 - match place.storage { Storage::Static => 0, Storage::Module => 1, _ => 2 }, place.symbol),
+                    Storage::Static | Storage::Module => (-1 - i64::from(place.storage == Storage::Module), place.symbol),
                     Storage::Local => (function.id, place.id),
-                    Storage::Parameter | Storage::External => continue,
+                    // Another module may name the same object under another tag: generic.
+                    Storage::Parameter | Storage::External | Storage::Common => continue,
                 };
                 let tag = *identities.entry(identity).or_insert_with(|| {
                     let name = format!("allocation.{}", identities_len(&self.arrays));
