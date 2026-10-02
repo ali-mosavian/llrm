@@ -5,7 +5,7 @@ use llrm_core::hir::execute;
 use llrm_core::hir::model::Program;
 
 use super::driver as qb_driver;
-use super::test_hir::{between, rich_listing, written};
+use super::test_hir::{between, listing, written};
 
 /// Each dialect, on its runtime, that keeps the runtime's frame by default.
 const DIALECTS: [(&str, &str); 4] = [("qbasic11", "qb45"), ("qb45", "qb45"), ("pds71", "pds71"), ("vbdos", "vbdos")];
@@ -19,7 +19,7 @@ fn program(source: &str, dialect: &str, runtime: &str, own_frames: bool) -> Prog
 
 /// Procedure `name`'s listing on the rich route.
 fn procedure(source: &str, dialect: &str, runtime: &str, own_frames: bool, name: &str) -> String {
-    let listing = rich_listing(&program(source, dialect, runtime, own_frames));
+    let listing = listing(&program(source, dialect, runtime, own_frames));
     between(&listing, &format!("{name} proc"), &format!("{name} endp")).to_owned()
 }
 

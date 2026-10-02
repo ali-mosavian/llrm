@@ -28,6 +28,6 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 for source in "$root"/examples/*.nib; do
     name=$(basename "$source" .nib)
-    record "$out/nib/$name" "$bin/llrm-nib" "$source" -o "$scratch/$name.obj" --legacy --dump "$out/nib/$name"
+    record "$out/nib/$name" "$bin/llrm-nib" "$source" -o "$scratch/$name.obj" --dump "$out/nib/$name"
     [ -f "$scratch/$name.obj" ] && sha256sum <"$scratch/$name.obj" | cut -d' ' -f1 >"$out/nib/$name/object.sha256"
 done

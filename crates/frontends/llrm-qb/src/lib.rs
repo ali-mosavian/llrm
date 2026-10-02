@@ -5,7 +5,6 @@ pub mod compile;
 pub mod driver;
 pub mod cli;
 pub mod qbstages;
-pub mod stage_text;
 mod zero_fill;
 
 #[cfg(test)]

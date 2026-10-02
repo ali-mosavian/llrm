@@ -1,8 +1,7 @@
 # Rich portable MIR
 
-Status: steps 0 to 3 landed (`tools/baseline.sh`, `crates/ir/llrm-mir`, the
-rewrite ledger, LIR meta instructions, LLVM IR in `llrm-mir`); the compiler
-still runs on the old MIR.
+Status: steps 0 to 6 landed; the frontends compile through it alone. Step 7,
+deleting the old MIR, is under way.
 
 ## Decision
 

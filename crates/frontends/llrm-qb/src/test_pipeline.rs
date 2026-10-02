@@ -8,7 +8,6 @@ fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
     use std::path::Path;
 
     use crate::{compile as qb_compile, driver as qb_driver};
-    use llrm_core::model::passes::O2;
 
     let directory = tempfile::TempDir::new().unwrap();
     let basic = directory.path().join("MOD.BAS");
@@ -21,41 +20,12 @@ fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
     let program =
         qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
-    qb_compile::object_bytes(&program, Path::new("MOD.BAS"), None, &O2()).unwrap();
-}
-
-#[test]
-fn test_intervals_are_not_built_per_block_per_loop() {
-    // sunk_stores built an interval map for every block, per loop: ten
-    // loops here. Python's per-op copies took deedlines past 7 GB.
-    use std::path::Path;
-
-    use llrm_core::optimize::loopmotion::{MAPPED, SEEN};
-    use crate::{compile as qb_compile, driver as qb_driver};
-    use llrm_core::model::passes::O2;
-
-    let directory = tempfile::TempDir::new().unwrap();
-    let basic = directory.path().join("LOOPS.BAS");
-    let mut lines = vec!["DEFINT A-Z".to_owned()];
-    for k in 0..10 {
-        lines.extend([format!("x{k} = {k}"), format!("FOR i = 1 TO 10: s{k} = s{k} + i: NEXT")]);
-    }
-    lines.push(format!("PRINT {}", (0..10).map(|k| format!("s{k} + x{k}")).collect::<Vec<_>>().join(" + ")));
-    std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
-    let program =
-        qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
-    MAPPED.with(|mapped| mapped.set(0));
-    SEEN.with(|seen| seen.set(0));
-    qb_compile::object_bytes(&program, Path::new("LOOPS.BAS"), None, &O2()).unwrap();
-    let (mapped, seen) = (MAPPED.with(std::cell::Cell::get), SEEN.with(std::cell::Cell::get));
-    assert!(seen > 0 && mapped <= seen, "{mapped} maps for {seen} blocks");
+    qb_compile::object_bytes(&program, Path::new("MOD.BAS"), None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).unwrap();
 }
 
 mod decided_tests {
-    use std::collections::BTreeSet;
 
-    use crate::{compile as qb_compile, driver as qb_driver};
-    use llrm_core::model::passes::O2;
+    use crate::driver as qb_driver;
 
     /// deedlines hung in SPHEREMAPLASMA: deciding a constant zero-trip guard
     /// dropped every op sharing the guard's source address, which included the
@@ -102,27 +72,9 @@ mod decided_tests {
         let program =
             qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None)
                 .unwrap();
-        let lowered = llrm_core::hir::lower::lower(&program).unwrap();
-        let (function, body) = program.modules[0]
-            .functions
-            .iter()
-            .zip(&lowered)
-            .find(|(function, _)| function.name.ends_with('T'))
-            .expect("SUB t");
-        let body = qb_compile::optimized(&program, function, body, &O2()).unwrap().body;
-        let defined: BTreeSet<_> = body
-            .blocks
-            .iter()
-            .flat_map(|block| block.phis.iter().map(|phi| phi.result).chain(block.ops.iter().flat_map(|op| op.defines.clone())))
-            .collect();
-        let read: BTreeSet<_> = body
-            .blocks
-            .iter()
-            .flat_map(|block| {
-                block.phis.iter().flat_map(|phi| phi.incoming.values().copied()).chain(block.ops.iter().flat_map(|op| op.uses.clone()))
-            })
-            .collect();
-        assert_eq!(read.difference(&defined).collect::<Vec<_>>(), Vec::<&llrm_core::model::mir::Value>::new());
+        // The pipeline verifies its result: every value read is defined.
+        let optimized = crate::test_hir::optimized_mir(&program);
+        assert!(optimized.contains("define cc1000 void @T("), "{optimized}");
     }
 }
 

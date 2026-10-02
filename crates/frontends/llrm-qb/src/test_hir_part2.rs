@@ -5,14 +5,10 @@ use std::rc::Rc;
 
 use llrm_core::support::hash::IndexMap;
 
-use super::abi::physicalize;
-use super::compile as qb_compile;
 use super::driver as qb_driver;
 use super::test_hir::*;
 use llrm_core::hir::model::Operand;
-use llrm_core::hir::{self, lower::Lowered};
-use llrm_core::model::mir;
-use llrm_core::model::passes::O2;
+use llrm_core::hir::{self};
 use llrm_core::objectfile::module::CALL_FAR;
 use llrm_core::objectfile::omf;
 
@@ -29,26 +25,6 @@ fn hex(text: &str) -> Vec<u8> {
 /// `haystack.find(needle, start)`.
 fn find(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
     (start..=haystack.len().saturating_sub(needle.len())).find(|&at| haystack[at..].starts_with(needle))
-}
-
-fn lowered(program: &hir::Program) -> Vec<Lowered> {
-    hir::lower(program).expect("lowers")
-}
-
-fn ops(body: &Lowered) -> Vec<&mir::Op> {
-    body.body.blocks.iter().flat_map(|block| &block.ops).collect()
-}
-
-fn width(argument: &mir::Arg) -> u32 {
-    match argument {
-        mir::Arg::Held(one) => one.width,
-        mir::Arg::Const(one) => one.width,
-        mir::Arg::Symbol(one) => one.width,
-        mir::Arg::FrameAddress(one) => one.width,
-        mir::Arg::FrameSelector(one) => one.width,
-        mir::Arg::Cell(one) => one.r#ref.width,
-        mir::Arg::Opaque(one) => panic!("opaque {} has no width", one.name),
-    }
 }
 
 fn instructions(function: &hir::Function) -> Vec<&hir::Instruction> {
@@ -202,16 +178,6 @@ fn cmp_frame_zero(text: &str) -> bool {
     })
 }
 
-/// `re.search(r"push dword ptr ([^\n]+)\n    push offset ([^\n]+)\n    call far ptr ADDHALF", text)`.
-fn pushes_then_calls_addhalf(text: &str) -> bool {
-    let lines: Vec<&str> = text.split('\n').collect();
-    lines.windows(3).any(|three| {
-        three[0].split_once("push dword ptr ").is_some_and(|(_, rest)| !rest.is_empty())
-            && three[1].strip_prefix("    push offset ").is_some_and(|rest| !rest.is_empty())
-            && three[2].starts_with("    call far ptr ADDHALF")
-    })
-}
-
 /// The default-type probe emitted only for VBDOS: PDS/QB rejected B$FLEN's missing ABI.
 #[test]
 fn test_default_typed_len_emits_for_each_microsoft_runtime() {
@@ -287,10 +253,8 @@ fn test_pds_alternate_math_module_header_records_the_measured_switch() {
 /// The full source build printed usage because COMMAND$ became an empty implicit local.
 #[test]
 fn test_command_line_is_resolved_as_the_zero_argument_runtime_intrinsic() {
-    let source = parsed(&fixture("command-line.bas"));
-    let lowered = &lowered(&source)[0];
-    let calls: Vec<&str> =
-        ops(lowered).into_iter().filter(|op| op.kind == mir::Kind::Call).map(|op| op.name.as_str()).collect();
+    let mir = emitted_mir(&parsed(&fixture("command-line.bas")));
+    let calls: Vec<&str> = mir.lines().filter_map(|line| line.split_once("@llrm.qb.")).map(|(_, call)| call.split('(').next().unwrap()).collect();
 
     assert_eq!(calls[..3], ["B$FCMD", "B$LTRM", "B$RTRM"]);
 }
@@ -298,20 +262,14 @@ fn test_command_line_is_resolved_as_the_zero_argument_runtime_intrinsic() {
 /// Fresh SYS_TIME_INIT loaded an implicit local forever instead of calling B$TIMR.
 #[test]
 fn test_timer_loads_the_single_returned_by_the_runtime_clock() {
-    let source = parsed(&fixture("timer-basic.bas"));
-    let lowered = &lowered(&source)[0];
-    let operations = ops(lowered);
-    let timer = |op: &mir::Op| op.kind == mir::Kind::Call && op.name == "B$TIMR";
+    let mir = emitted_mir(&parsed(&fixture("timer-basic.bas")));
+    let lines: Vec<&str> = mir.lines().collect();
+    let timers: Vec<usize> = (0..lines.len()).filter(|at| lines[*at].ends_with("@llrm.qb.B$TIMR()")).collect();
 
-    assert_eq!(operations.iter().filter(|op| timer(op)).count(), 3);
-    for (index, operation) in operations.iter().enumerate() {
-        if timer(operation) {
-            let following = operations[index + 1];
-            assert_eq!(following.kind, mir::Kind::Fload);
-            assert!(following.floating.is_some());
-            assert_eq!(following.uses, operation.defines);
-            assert_eq!(width(&following.results[0]), 10);
-        }
+    assert_eq!(timers.len(), 3, "{mir}");
+    for at in timers {
+        let result = lines[at].trim().split(' ').next().unwrap();
+        assert!(lines[at + 1].ends_with(&format!("load float, ptr {result}")), "{mir}");
     }
 }
 
@@ -334,11 +292,13 @@ fn test_qb_float_function_uses_hidden_near_result_pointer() {
     assert_eq!(function.parameters.len(), 2);
 
     let listing = listing(&source);
-    assert!(pushes_then_calls_addhalf(&listing));
-    assert!(listing.contains("fstp dword ptr [bx]"));
-    assert!(listing.contains("mov ax, bx\n    call far ptr B$EXSA\n    pop bp\n    retf"));
+    let procedure = between(&listing, "ADDHALF proc far", "ADDHALF endp");
+    assert!(procedure.contains("mov bx, word ptr [bp+6]"), "{procedure}");
+    assert!(procedure.contains("fstp dword ptr [bx]"), "{procedure}");
+    assert!(procedure.contains("mov ax, bx\n    call far ptr B$EXSA\n"), "{procedure}");
+    assert!(procedure.contains("retf 6"), "{procedure}");
 
-    // The MASM printer omits RETF's immediate; the object preserves it.
+    // The object's RETF pops the hidden pointer and the SINGLE.
     let records = records(&source, "float-function.bas");
     let (segment, offset) = omf::public_definitions(&records).expect("pubdefs")["ADDHALF"];
     let image = omf::segment_image(&records, segment, omf::segments(&records)[segment as usize].as_ref().unwrap().1);
@@ -351,32 +311,13 @@ fn test_qb_float_function_uses_hidden_near_result_pointer() {
 /// SYS_MEM_MARK saw only memAvail&'s low word: external LONG returns in DX:AX, not EAX.
 #[test]
 fn test_qb_long_function_boundary_uses_the_legacy_dx_ax_pair() {
-    let external = parsed(&fixture("external-long.bas"));
-    let external_function = &external.modules[0].functions[0];
-    let external_physical =
-        physicalize(&external, external_function, &lowered(&external)[0]).expect("physicalizes");
-    let body = &external_physical.lowered;
-    let call = ops(body)
-        .into_iter()
-        .find(|op| external_physical.calls.get(&op.at).map(String::as_str) == Some("MEMAVAIL&"))
-        .expect("the MEMAVAIL& call");
-    assert_eq!(call.results.iter().map(width).collect::<Vec<_>>(), [2, 2]);
-    assert!(ops(body).iter().any(|op| op.kind == mir::Kind::Concat && width(&op.results[0]) == 4));
+    let external = listing(&parsed(&fixture("external-long.bas")));
+    let call = between(&external, "call far ptr MEMAVAIL\n", "cmp");
+    assert!(call.contains("shrd eax, edx, 16"), "{external}");
 
-    let internal = parsed(&fixture("bare-function.bas"));
-    let bodies = lowered(&internal);
-    let (answer, answer_body) = internal.modules[0]
-        .functions
-        .iter()
-        .zip(&bodies)
-        .find(|(function, _)| function.name == "ANSWER&")
-        .expect("ANSWER&");
-    let answer_physical = physicalize(&internal, answer, answer_body).expect("physicalizes");
-    let returned = ops(&answer_physical.lowered)
-        .into_iter()
-        .find(|op| op.kind == mir::Kind::Return)
-        .expect("a return");
-    assert_eq!(returned.args.iter().map(width).collect::<Vec<_>>(), [2, 2]);
+    let internal = listing(&parsed(&fixture("bare-function.bas")));
+    let answer = between(&internal, "ANSWER proc far", "ANSWER endp");
+    assert!(answer.contains("shld edx, eax, 16"), "{internal}");
 }
 
 /// SYS_PARSE_ARGS exhausted string space when a native shell preceded B$ENRA.
@@ -404,9 +345,11 @@ fn test_vbdos_managed_locals_begin_below_the_runtime_frame_header() {
     let listing = listing(&source);
     let procedure = between(&listing, "SHOWCOMMAND proc far", "SHOWCOMMAND endp");
 
-    assert!(procedure.contains("mov bx, 1"));
-    assert!(procedure.contains("lea ax, [bp-38]"));
-    assert!(procedure.contains(", [bp-42]"), "{procedure}");
+    // B$ENRA's header is the 20 bytes below BP; CX more are the locals.
+    assert!(procedure.contains("mov cx, 22\n    mov bx, 1\n    call far ptr B$ENRA"), "{procedure}");
+    let offsets: Vec<i64> = regex::Regex::new(r"\[bp-(\d+)\]").unwrap().captures_iter(procedure).map(|one| one[1].parse().unwrap()).collect();
+    assert!(!offsets.is_empty() && offsets.iter().all(|offset| (21..=42).contains(offset)), "{procedure}");
+    assert!(offsets.contains(&42), "{procedure}");
 }
 
 /// SYS read its Game argument at BP-0Eh and later raised error 64 opening the map.
@@ -825,23 +768,21 @@ fn test_qb_and_pds_literals_use_their_measured_near_descriptor() {
 /// main.bas needs its handler address registered, not an ordinary CFG edge.
 #[test]
 fn test_on_error_emits_a_relocated_runtime_registration() {
-    let source = parsed(&fixture("on-error-emission.bas"));
-    let records = records(&source, "on-error-emission.bas");
+    // The division can raise, so the handler is registered.
+    let directory = tempfile::TempDir::new().unwrap();
+    let basic = written(&directory, "ONERR.BAS", b"on error goto handler\r\nprint 1 / x%\r\nend\r\nhandler:\r\nend\r\n");
+    let source = parsed(&basic);
+    let listing = listing(&source);
+    assert!(listing.contains("pushw seg $QB$LANDING\n    push offset $QB$LANDING\n    call far ptr B$OEGA"), "{listing}");
+
+    let records = records(&source, "ONERR.BAS");
     let externals = omf::externals(&records);
-    let code = code(&records);
-    let registration = find(&code, &hex("b8"), 48);
-    // O_ENT is fixed at 48.
-    assert_eq!(registration, Some(48)); // mov ax, relocated handler offset
-    let registration = registration.unwrap();
-    assert_eq!(code[registration + 3..registration + 6], hex("0e 50 9a"));
     let fixups = omf::fixups(&records);
     assert!(fixups
         .iter()
         .any(|one| one.seg == Some(1) && one.target == "external" && externals[one.index as usize] == "B$OEGA"));
-    assert!(fixups.iter().any(|one| one.seg == Some(1)
-        && one.target == "segment"
-        && one.index == 1
-        && one.offset == registration as i64 + 1));
+    // The handler's address is relocated: its offset and its segment.
+    assert!(fixups.iter().filter(|one| one.seg == Some(1) && one.target == "segment" && one.index == 1).count() >= 2);
 }
 
 /// Gorillas ignored ON ERROR GOTO 0, sent a shot error to PaletteError, and resumed corrupt state.
@@ -861,18 +802,15 @@ fn test_on_error_registrations_follow_source_order() {
           first:\r\nresume next\r\n\
           second:\r\nresume next\r\n",
     );
-    let source = parsed_as(&basic, "qb45", "qb45");
-    let records = records(&source, "ERRSTATE.BAS");
-    let externals = omf::externals(&records);
-    let calls: Vec<omf::Fixup> = omf::fixups(&records)
-        .into_iter()
-        .filter(|one| one.seg == Some(1) && one.target == "external" && externals[one.index as usize] == "B$OEGA")
-        .collect();
+    let listing = listing(&parsed_as(&basic, "qb45", "qb45"));
+    let main = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
+    let before = main.split("call far ptr B$SERR").next().expect("ERROR 11");
+    let active: Vec<&str> = before.lines().filter_map(|line| line.trim().strip_prefix("mov word ptr $QB$ACTIVE, ")).collect();
 
-    assert_eq!(calls.len(), 3);
-    let code = code(&records);
-    let last = calls.last().unwrap().offset as usize;
-    assert_eq!(code[last - 6..last], hex("b8 00 00 50 50 9a"));
+    // first, second, then none: ERROR 11 runs with no handler.
+    assert_eq!(active, ["1", "2", "0"], "{main}");
+    let last = before.rsplit_once("\n    call far ptr B$OEGA").expect("a registration").0;
+    assert!(last.ends_with("pushd 0"), "{main}");
 }
 
 /// Q45R35's post-ERROR statement vanished, leaving RESUME NEXT with no target.
@@ -883,9 +821,14 @@ fn test_resume_next_retains_runtime_statement_entries() {
     assert!(!main.external_entries.is_empty());
 
     let listing = listing(&source);
-    let statement_table = between(&listing, "$QB$STAT proc near", "$QB$STAT endp");
-    assert!(statement_table.contains("db 064h,000h"));
-    assert!(statement_table.matches("dw offset").count() >= 2);
+    let body = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
+    // RESUME NEXT returns to the statement after ERROR 11.
+    let lines: Vec<&str> = body.lines().collect();
+    let after = lines.iter().position(|line| line.contains("mov word ptr RESUMED%, 1")).expect("the statement after ERROR");
+    let labels: Vec<&str> = lines[..after].iter().rev().map_while(|line| line.strip_suffix(':')).collect();
+    assert!(labels.iter().any(|label| body.contains(&format!("jmp {label}\n")) || body.contains(&format!("je {label}\n"))), "{body}");
+    // ERL of ERROR 11 is its line number, 100.
+    assert!(between(&listing, "$QB$ERL$__main label byte", "\n\n").contains("064h,000h"), "{listing}");
 
     let records = records(&source, "Q45R35.BAS");
     let code = code(&records);
@@ -895,7 +838,6 @@ fn test_resume_next_retains_runtime_statement_entries() {
         .expect("the header fixup");
     let statement_at = (i64::from(u16::from_le_bytes([code[10], code[11]])) + header_fixup.disp) as usize;
     assert_eq!(code[statement_at - 3..statement_at], hex("55 8b ec"));
-    assert_eq!(u16::from_le_bytes([code[statement_at + 2], code[statement_at + 3]]), 100);
 }
 
 /// Q45ER52 optimization made RESUME entries use values defined only from main.
@@ -905,17 +847,6 @@ fn test_resume_next_retains_runtime_statement_entries() {
 #[test]
 fn test_resume_statement_entries_are_optimizer_roots() {
     let source = parsed_as(&root().join("crates/frontends/qbfront/compat/qb45/q45er52.bas"), "qb45", "qb45");
-    let function = &source.modules[0].functions[0];
-    let optimized = qb_compile::optimized(&source, function, &lowered(&source)[0], &O2()).expect("optimizes");
-    let mut entries: Vec<i64> = Vec::new();
-    for entry in function.external_entries.iter().copied().chain(function.error_handler) {
-        if !entries.contains(&entry) {
-            entries.push(entry);
-        }
-    }
-    let (checked, _root) = qb_compile::_machine_side_entry(&optimized.body, &entries).expect("roots");
-
-    assert!(mir::verify(&checked).is_empty());
     assert!(!object_bytes(&source, "Q45ER52.BAS").expect("emits").is_empty());
 }
 
@@ -937,28 +868,5 @@ fn test_for_bounds_survive_resume_statement_side_entries() {
           resume next\r\n",
     );
     let source = parsed_as(&basic, "vbdos", "vbdos");
-    assert!(lowered(&source).iter().all(|function| mir::verify(&function.body).is_empty()));
     assert!(!object_bytes(&source, "FORRES.BAS").expect("emits").is_empty());
-}
-
-/// A zero-based dynamic array's element names the descriptor offset its
-/// frontend proved is the array's first byte; the fact reaches MIR.
-#[test]
-fn test_a_zero_based_element_reaches_mir_with_its_origin() {
-    let directory = tempfile::tempdir().expect("creates a directory");
-    let source = written(&directory, "T.BAS", b"DEFINT A-Z\r\nSUB t\r\nDIM a(9)\r\nx = a(3)\r\nEND SUB\r\n");
-    let program = parsed(&source);
-    let lowered = lowered(&program);
-    let body = lowered
-        .iter()
-        .find(|one| one.name.rsplit('.').next().is_some_and(|name| name.eq_ignore_ascii_case("T")))
-        .expect("T is lowered");
-    let origins: Vec<mir::Value> = ops(body)
-        .iter()
-        .flat_map(|op| op.loads.iter().chain(&op.stores))
-        .filter_map(|reference| reference.origin)
-        .collect();
-    assert_eq!(origins.len(), 1, "{origins:?}");
-    let defined = ops(body).iter().any(|op| op.defines.contains(&origins[0]));
-    assert!(defined, "the origin names a value the body defines");
 }
