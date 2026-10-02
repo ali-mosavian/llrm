@@ -11,6 +11,9 @@ pub mod debuginfo;
 pub mod dominators;
 pub mod edit;
 pub mod facts;
+mod facts_rewrite;
+#[cfg(test)]
+mod facts_coverage;
 pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;
@@ -25,6 +28,7 @@ pub mod print;
 pub mod program;
 pub mod scalarevolution;
 pub mod target;
+pub mod tbaa;
 pub mod transforms;
 pub mod types;
 pub mod valuetracking;
