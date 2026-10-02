@@ -243,16 +243,32 @@ impl<'a> FunctionCompiler<'a> {
                 base: pointer,
                 offset: view.offset + field_offset,
                 type_id: type_id(type_name),
-                inbounds: false,
+                inbounds: false, member: None,
             }
         } else {
             hir::Operand::ProjectedPlace {
                 place: view.place,
                 indices: view.indices.clone(),
                 offset: view.offset + field_offset,
-                type_id: type_id(type_name),
+                type_id: type_id(type_name), member: None,
             }
         }
+    }
+
+    /// `projected_place` of the member at `member_offset` of the aggregate type `owner`: it
+    /// says which member it is, so a fact stated once of the member reaches the access.
+    pub(super) fn member_access(
+        &self,
+        view: &StructView,
+        owner: u32,
+        member_offset: u32,
+        type_name: TypeName,
+    ) -> hir::Operand {
+        let mut place = self.projected_place(view, member_offset, type_name);
+        if let hir::Operand::ProjectedPlace { member, .. } | hir::Operand::IndirectPlace { member, .. } = &mut place {
+            *member = Some((owner, member_offset));
+        }
+        place
     }
 
     pub(super) fn struct_expression_type(
@@ -423,7 +439,7 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
-                                inbounds: false,
+                                inbounds: false, member: None,
                             },
                             Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
                             Storage::Lambda(_) => {

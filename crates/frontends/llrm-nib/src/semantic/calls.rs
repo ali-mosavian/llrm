@@ -468,7 +468,7 @@ impl<'a> FunctionCompiler<'a> {
                 place: descriptor,
                 indices: Vec::new(),
                 offset,
-                type_id,
+                type_id, member: None,
             };
             self.emit("store", Vec::new(), vec![place, value], None);
         }

@@ -797,10 +797,12 @@ fn main() -> i16:
     print(area(s))
     return 0
 ";
-    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
-    let ranges: Vec<(i64, i64)> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "range" && one["subject"] == "instruction").map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap())).collect();
-    // One per tag load: each arm's test.
-    assert!(ranges.len() >= 2 && ranges.iter().all(|one| *one == (0, 2)), "{ranges:?}");
+    let text = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let hir: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    let ranges: Vec<(i64, i64)> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "range" && one["subject"] == "field").map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap())).collect();
+    // Stated once, of the tag member of the enum; each arm's test loads it as that member.
+    assert_eq!(ranges, [(0, 2)]);
+    assert!(text.matches("\"member\"").count() >= 2, "{text}");
 }
 
 /// The `nocapture` facts the program states, as `function.ordinal` of each

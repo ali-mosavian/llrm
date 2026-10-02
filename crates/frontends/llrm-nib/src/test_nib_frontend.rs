@@ -41,6 +41,27 @@ fn refused(source: &Path) -> String {
     driver::parsed(source, &Default::default(), None).expect_err("the frontend refuses").0
 }
 
+/// A tag is within the tags its enum has, stated once of the tag's member, not of each load:
+/// every load of it, as many as the program makes, carries `!range` in the emitted MIR
+/// with no instruction fact from the frontend. A load a later change forgets to tag no
+/// longer loses the fact.
+#[test]
+fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
+    use llrm_core::hir::facts::Subject;
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "shape.nib", "enum Shape:\n    circle(radius: i16)\n    square(side: i16)\n    tri(base: i16, height: i16)\n\nfn area(shape: &Shape) -> i16:\n    match shape:\n        .circle(r):\n            return r * r * 3\n        .square(s):\n            return s * s\n        .tri(b, h):\n            return b * h // 2\n\nfn sides(shape: &Shape) -> i16:\n    match shape:\n        .circle(_):\n            return 0\n        .square(_):\n            return 4\n        .tri(_, _):\n            return 3\n\nfn main() -> i16:\n    let a = Shape.square(side=4)\n    return area(a) + sides(a)\n");
+    let program = parsed(&source);
+    let module = &program.modules[0];
+    let fields: Vec<_> = module.facts.iter().filter(|one| matches!(one.subject, Subject::Field { .. })).collect();
+    assert_eq!(fields.len(), 1, "one statement for the one enum");
+    assert!(module.facts.iter().all(|one| !(matches!(one.subject, Subject::Instruction { .. }) && matches!(one.fact, llrm_mir::facts::Fact::Range(bounds) if bounds.hi == 2))), "no load is stated of its own");
+    let emitted = hir::mir::emit(&program);
+    let text: String = emitted.iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    let tag_loads: Vec<&str> = text.lines().filter(|one| one.contains("load i8")).collect();
+    assert!(tag_loads.len() >= 2, "{text}");
+    assert!(tag_loads.iter().all(|one| one.contains("!range")), "{text}");
+}
+
 /// Every Nib program's emitted MIR lints clean: `lint::poison` called each stated
 /// wrap `poison` and each array filled an element at a time "stored after use",
 /// so `hir-mir` and the corpus tool dropped 56 of 124 programs, `sum_three` among them.
