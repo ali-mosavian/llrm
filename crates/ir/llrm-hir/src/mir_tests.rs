@@ -845,7 +845,7 @@ fn a_float_freedom_or_a_wrap_fact_of_the_wrong_operation_is_refused() {
         assert_eq!(stated(floats(), fact), Ok(()), "{}", fact.key());
     }
     for fact in [Fact::NoSignedWrap, Fact::NoUnsignedWrap] {
-        assert!(stated(floats(), fact).unwrap_err().contains("is stated of an instruction that is no integer add, sub or mul"), "{}", fact.key());
+        assert!(stated(floats(), fact).unwrap_err().contains("no integer add, sub, mul or neg"), "{}", fact.key());
         assert_eq!(stated(program(difference()), fact), Ok(()), "{}", fact.key());
     }
 }
