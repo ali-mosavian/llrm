@@ -58,6 +58,22 @@ fn c_lines_are_the_main_files() {
     assert_eq!(lines, [13, 15, 16, 17]);
 }
 
+/// HIR's codec writes a member's bit keys only for a bit field, so a program
+/// without one encodes as before, and a bit field's round-trips.
+#[test]
+fn bit_field_members_round_trip_through_the_codec_and_others_are_unchanged() {
+    let hir = |name: &str| {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
+        super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), name).unwrap()
+    };
+    let plain = llrm_core::hir::codec::encode(&hir("debug"), None).unwrap();
+    assert!(!plain.contains("bit_start") && plain.contains("\"members\""), "premise: debug members, none a bit field");
+    let fields = hir("debugbf");
+    let encoded = llrm_core::hir::codec::encode(&fields, None).unwrap();
+    assert!(encoded.contains("\"bit_start\""), "premise: a bit field member");
+    assert_eq!(llrm_core::hir::codec::decode(&encoded).unwrap(), fields);
+}
+
 /// A bit field read as its whole base type: `DBBitField`'s first bit and
 /// width were dropped, and a debugger showed `b` as the int at offset 0.
 /// Each is now QuickC's bitfield record of its width, sign and first bit.
