@@ -700,7 +700,9 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
         (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
         (Some(_), model::DataLinkage::Private) => Linkage::Private,
     };
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align: None };
+    // An external one has no type to lay out, and is constant as declared.
+    let constant = object.readonly && (ty.is_some() || object.linkage == model::DataLinkage::External);
+    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant, initializer: None, align: None };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { FAR } else { 0 };
     global

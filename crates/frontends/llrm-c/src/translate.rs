@@ -52,6 +52,8 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
         data.push(h::DataObject {
             linkage: DataLinkage::External,
             address: address(space(unit, Key::Symbol(symbol.id))),
+            // An extern const object: writing it, anywhere, is undefined.
+            readonly: symbol.constant(),
             addressed: !symbol.unaddressed(unit.switches),
             ..h::DataObject::new(id, &symbol.object_name(), Vec::new())
         });
