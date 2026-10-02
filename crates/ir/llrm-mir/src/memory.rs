@@ -36,6 +36,9 @@ pub struct Summary {
     /// It is `llvm.memset`: its first argument's bytes, as many as the
     /// third says, become the second.
     pub memset: bool,
+    /// It is `llvm.lifetime.start` or `.end`: the object its second argument
+    /// points to has its bytes live, or not, from here.
+    pub lifetime: bool,
 }
 
 pub type Callees = HashMap<GlobalId, Summary>;
@@ -47,8 +50,8 @@ pub fn callees(module: &Module) -> Callees {
         .enumerate()
         .filter_map(|(at, global)| match &global.kind {
             GlobalKind::Function(function) => {
-                let memset = global.name.as_deref().is_some_and(|name| name.starts_with("llvm.memset."));
-                Some((GlobalId(at as u32), Summary { memset, ..summary(function) }))
+                let named = |prefix: &str| global.name.as_deref().is_some_and(|name| name.starts_with(prefix));
+                Some((GlobalId(at as u32), Summary { memset: named("llvm.memset."), lifetime: named("llvm.lifetime."), ..summary(function) }))
             }
             GlobalKind::Variable(_) => None,
         })
@@ -64,6 +67,7 @@ pub fn summary(function: &Function) -> Summary {
         returns: returns(attrs),
         nocapture: function.parameter_attrs.iter().map(|one| Facts::of(one).no_capture()).collect(),
         memset: false,
+        lifetime: false,
     }
 }
 
@@ -72,6 +76,23 @@ pub fn memset(context: &Context, callees: &Callees, function: &Function, inst: I
     let summary = callees.get(&callee(context, function, inst)?)?;
     let operands = &function.instruction(inst).operands;
     (summary.memset && operands.len() == 5).then(|| (operands[0], operands[1], operands[2]))
+}
+
+/// A call to `llvm.lifetime.start` or `.end`: the pointer it is about.
+pub fn lifetime(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> Option<Operand> {
+    let summary = callees.get(&callee(context, function, inst)?)?;
+    let operands = &function.instruction(inst).operands;
+    (summary.lifetime && operands.len() == 3).then(|| operands[1])
+}
+
+/// Whether `function` calls a routine that returns twice (`setjmp`): the call or
+/// its callee says so. In such a function a stack slot another local used before the
+/// first return holds that local's value after the second, so no slot is shared.
+pub fn calls_returns_twice(module: &Module, function: &Function) -> bool {
+    function.walk().any(|(_, inst)| {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+        has(&info.attrs, "returns_twice") || callee(&module.context, function, inst).and_then(|one| module.global(one).function()).is_some_and(|one| has(&one.attrs, "returns_twice"))
+    })
 }
 
 /// Whether `attrs` carry the flag `flag`: for what is no fact (`returns_twice`,

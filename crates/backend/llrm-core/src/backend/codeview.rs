@@ -84,7 +84,10 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, TypeId>) -> Result<Type, S
             let fields = one
                 .members
                 .iter()
-                .map(|member| Ok(cvwrite::Field { name: member.name.clone(), r#type: node(member.r#type)?, offset: narrow(member.offset, "a field's offset")? }))
+                .map(|member| {
+                    let bits = member.bits.map(|(start, width)| Ok::<_, String>((narrow(start, "a bit field's start")?, narrow(width, "a bit field's width")?))).transpose()?;
+                    Ok(cvwrite::Field { name: member.name.clone(), r#type: node(member.r#type)?, offset: narrow(member.offset, "a field's offset")?, bits })
+                })
                 .collect::<Result<Vec<_>, String>>()?;
             Type::Struct { name: one.name.clone(), bytes: narrow(one.size, "a structure's size")?, fields }
         }

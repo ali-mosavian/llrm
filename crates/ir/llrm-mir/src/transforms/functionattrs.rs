@@ -61,8 +61,8 @@ impl ModulePass for FunctionAttrs {
             // A stated `memory(...)` stays: it was never wider than the truth.
             function.attrs.retain(|attr| !matches!(attr, Attribute::Memory(_)) || !added.iter().any(|one| matches!(one, Attribute::Memory(_))));
             function.attrs.extend(added);
-            let memset = callees.get(&id).is_some_and(|one| one.memset);
-            callees.insert(id, memory::Summary { memset, ..memory::summary(function) });
+            let (memset, lifetime) = callees.get(&id).map_or((false, false), |one| (one.memset, one.lifetime));
+            callees.insert(id, memory::Summary { memset, lifetime, ..memory::summary(function) });
             changed.push(id);
         }
         changed
