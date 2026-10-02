@@ -1,3 +1,5 @@
+extern void report(long value);
+
 #define PL_ACCELERATE 10.0f
 
 typedef struct {
@@ -24,7 +26,7 @@ void pl_ground_accel(Vec3 *vel, Vec3 *wishdir, float wishspeed, float dt)
     vel->y += accelspeed * wishdir->y;
 }
 
-long quake_move_demo(void)
+long bench_qmove(void)
 {
     Vec3 vel;
     Vec3 wishdir;
@@ -38,4 +40,10 @@ long quake_move_demo(void)
     pl_ground_accel(&vel, &wishdir, 10.0f, 0.25f);
 
     return (long)vel.x * 10000L + (long)vel.y * 100L + (long)vel.z;
+}
+
+int main(void)
+{
+    report(bench_qmove());
+    return 0;
 }

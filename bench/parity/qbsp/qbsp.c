@@ -1,3 +1,5 @@
+extern void report(long value);
+
 typedef struct {
     float x;
     float y;
@@ -37,7 +39,7 @@ short r_point_leaf(Vec3 *p, Node *nodes, Plane *planes)
     return (short)~nodenr;
 }
 
-long quake_bsp_demo(void)
+long bench_qbsp(void)
 {
     Vec3 p;
     Node nodes[2];
@@ -71,4 +73,10 @@ long quake_bsp_demo(void)
     c = r_point_leaf(&p, nodes, planes);
 
     return (long)a * 100L + (long)b * 10L + c;
+}
+
+int main(void)
+{
+    report(bench_qbsp());
+    return 0;
 }
