@@ -2870,7 +2870,7 @@ Status: *now* the carrier and a reader exist; *reader* the carrier exists and no
 | 18 | Stack lifetime | `Place` | `Lifetime{start, end}` | lifetime markers | none | carrier | K |
 | 19 | Callee set; non-recursive | `Instruction`, `Function` | `Callees(set)`, `NoRecurse` | `!callees`, `norecurse` | none | carrier | K |
 | 20 | Unique ownership | `Param`, `Place` | `Owned` | `noalias` | as row 3 | now | K |
-| 21 | Floating-point freedom | `Instruction` | `Float(flags)` | fast-math flags | `A/floatfacts.rs:268` reads `nsz` only | reader | K |
+| 21 | Floating-point freedom | `Instruction` | `Reassoc`, `NoNaNs`, `NoInfs`, `NoSignedZeros`, `AllowReciprocal` | fast-math flags `reassoc nnan ninf nsz arcp` | `M/transforms/instcombine.rs` (`float_simplified`, `arcp`, `reassoc`), `A/floatfacts.rs` (`nsz`) | now | K |
 
 Rows 2, 5 and 6 replace `Instruction.pure`, `CallAbi.promises` and `RuntimePromises`; rows 3, 4 and 20 replace `Promise`. Rows 18 and 19 are the ones whose carrier must be designed first; nothing lands for them until it is.
 

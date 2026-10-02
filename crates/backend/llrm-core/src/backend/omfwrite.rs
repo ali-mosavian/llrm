@@ -46,6 +46,19 @@ pub const CHUNK: usize = 1000;
 pub const ACBP: u8 = 0x48;
 /// relocatable, paragraph aligned, public, 16-bit
 pub const PARAGRAPH: u8 = 0x68;
+/// relocatable, dword aligned, public, 16-bit
+pub const DWORD: u8 = 0xA8;
+
+/// The segment alignment code a data item that asks for `to` bytes needs:
+/// the segment starts where its widest request holds, or the item's
+/// `align` pads to an offset that is not an address.
+fn alignment_for(to: usize) -> u8 {
+    match to {
+        0..=2 => ACBP,
+        3..=4 => DWORD,
+        _ => PARAGRAPH,
+    }
+}
 pub const SEGMENT_TARGET: u8 = 0;
 pub const GROUP_TARGET: u8 = 1;
 pub const EXTERNAL_TARGET: u8 = 2;
@@ -186,6 +199,8 @@ pub struct Segment {
     pub lines: Vec<(u32, usize)>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
+    /// The widest alignment a data item in it asks for.
+    pub align: usize,
 }
 
 impl Segment {
@@ -199,6 +214,7 @@ impl Segment {
             fixups: Vec::new(),
             lines: Vec::new(),
             bodies: Vec::new(),
+            align: 1,
         }
     }
 
@@ -786,6 +802,7 @@ pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols
                 pack_into(&mut segment.image, at, offset & 0xFFFF);
             }
             masm::Datum::Align(masm::Align { to }) => {
+                segment.align = segment.align.max(*to as usize);
                 segment.put(&vec![0; (-(segment.image.len() as i64)).rem_euclid(*to) as usize], &[]);
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
@@ -1035,7 +1052,7 @@ pub fn _records(
     for segment in segments.iter() {
         let (klass, name) = (lname(&segment.klass), lname(&segment.name));
         let size = segment.image.len();
-        let alignment = if module.selector_addressed(&segment.name) { PARAGRAPH } else { ACBP };
+        let alignment = if module.selector_addressed(&segment.name) { PARAGRAPH } else { alignment_for(segment.align) };
         let acbp = alignment | if size == 0x10000 { 2 } else { 0 };
         let mut body = vec![acbp];
         body.extend(((size & 0xFFFF) as u16).to_le_bytes());
@@ -1397,6 +1414,37 @@ mod tests {
         );
     }
 
+    /// `align 4` in a data segment pads to an offset, and an offset is an
+    /// address only where the segment starts aligned: the segment was word
+    /// aligned whatever its items asked, so a dword the data placed at 4 was
+    /// at 2 mod 4 wherever the linker put the segment.
+    #[test]
+    fn test_a_segment_is_aligned_as_its_widest_item_asks() {
+        let acbps = |to: Option<i64>| -> Vec<u8> {
+            let mut items = vec![label("_a"), masm::Datum::Bytes(vec![1])];
+            items.extend(to.map(|to| masm::Datum::Align(masm::Align { to })));
+            items.push(masm::Datum::Bytes(vec![2]));
+            let module = masm::Module {
+                code: "M_TEXT".into(),
+                names: IndexMap::default(),
+                externs: vec![],
+                publics: strings(&["_a"]),
+                data: vec![("_DATA".into(), items)],
+                procedures: vec![],
+                private: BTreeSet::new(),
+                requests: BTreeSet::new(),
+                debug: None,
+            };
+            let records = omf::parse(&written(&module, "m.c").unwrap()).unwrap();
+            // The code segment, then _DATA.
+            records.iter().filter(|one| one.r#type & 0xFE == omf::SEGDEF).map(|one| one.body[0]).collect()
+        };
+        assert_eq!(acbps(None)[1], ACBP);
+        assert_eq!(acbps(Some(2))[1], ACBP);
+        assert_eq!(acbps(Some(4))[1], DWORD);
+        assert_eq!(acbps(Some(16))[1], PARAGRAPH);
+    }
+
     /// Every datum kind, a private and a grouped extra segment, a reserved
     /// frame, a saved SI, a branch, a backward jump, a near call within the
     /// module and inline code: text and object bytes as Python writes them.
@@ -1489,7 +1537,7 @@ mod tests {
             written(&rich, "rich.c").unwrap(),
             hex("80080006726963682e633b9649000004434f444509524943485f544558540444415441055f4441544103425353045f\
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
-                 0201e9980700480d000504010298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
+                 0201e9980700a80d00050401a298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
                  ff02ff03ff054b8c0500025f6200ac9009000001025f660500009a900d000102065f7461626c65000000f3a02e0001\
                  0000568bf05ec3558bec83ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb009c18\
                  00c414140102c417140102c420140102c8225404c8255501eba0110002000001020300070707020000000000309c0a\

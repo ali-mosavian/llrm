@@ -205,10 +205,10 @@ fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]
         function.calling_convention = convention;
         function.attrs.extend(memory(contract, runtime::named_writes(name, family).is_some_and(|cells| !cells.is_empty())));
         if !contract.raises_error {
-            function.attrs.push(Attribute::Flag("nounwind".to_owned()));
+            function.attrs.push(llrm_mir::facts::Fact::NoUnwind.carrier());
         }
         if never_returns {
-            function.attrs.push(Attribute::Flag("noreturn".to_owned()));
+            function.attrs.push(llrm_mir::facts::Fact::NoReturn.carrier());
         }
     }
     let reference = module.reference(global);
