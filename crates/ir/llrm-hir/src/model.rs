@@ -454,6 +454,10 @@ str_enum!(Op {
     // The language promises operands[0], a condition, holds here: passes may
     // rely on it, as on LLVM's `llvm.assume`. No result.
     Assume("ASSUME") = "assume",
+    // The bytes of the place operands[0] are those of operands[1], as many as
+    // the constant operands[2] says: an aggregate assigned whole. Byte for
+    // byte, so an unwritten byte stays only that byte. No result.
+    CopyBytes("COPY_BYTES") = "copy_bytes",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
     // From here the local operands[0] names holds a value (start), or no longer (end): the

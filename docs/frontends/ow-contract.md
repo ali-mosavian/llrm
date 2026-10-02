@@ -2904,6 +2904,7 @@ Rows 2, 5 and 6 replace `Instruction.pure`, `CallAbi.promises` and `RuntimePromi
 The mechanism and the IR-proper items need no row: a frontend calls `state` for facts and sets the IR field for meaning. Rows that cannot be stated through the mechanism today:
 
 - **Rows 10 and 18** have no MIR carrier (`assume`, lifetime markers). The HIR call is defined; the row waits for the carrier.
+- **`copy_bytes`** is an IR-proper op, not a fact: `copy_bytes(to, from, n)` copies `n` bytes (a positive constant) between two places, byte for byte, lowered to `llvm.memcpy`. A frontend uses it for an aggregate assigned whole (a C struct, a QB TYPE, a Nib enum) where word loads and stores would read bytes it never wrote. The legacy lowering refuses it. No registry row: it states no fact.
 - **Rows 9, 15, 16, 17, 19 and 21** have carriers or none, and no reader that uses the stated fact. The fact is stated once; the reader is the work.
 - **Rows 3 and 4 for C** need the patched front end to emit the `FACT` record (the `const` qualifier and `static N` are in its type; `restrict` is already sent as `CGAttr n 3`).
 

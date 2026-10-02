@@ -1093,6 +1093,9 @@ impl<'a> _Scope<'a> {
         if matches!(instruction.op, model::Op::LifetimeStart | model::Op::LifetimeEnd) {
             return Ok(Vec::new());
         }
+        if instruction.op == model::Op::CopyBytes {
+            return Err(InvalidHIR(format!("{} is not lowered by the legacy route", instruction.op)));
+        }
         self.current = instruction.id;
         self.operands_at = instruction.operands.iter().map(|one| one as *const model::Operand as usize).collect();
         let mut before: Vec<mir::Op> = Vec::new();

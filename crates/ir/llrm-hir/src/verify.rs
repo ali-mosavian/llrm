@@ -37,7 +37,7 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
-        model::Op::PortOut | model::Op::Assume | model::Op::LifetimeStart | model::Op::LifetimeEnd => Some(Some(0)),
+        model::Op::PortOut | model::Op::Assume | model::Op::CopyBytes | model::Op::LifetimeStart | model::Op::LifetimeEnd => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -45,7 +45,7 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     }
 }
 
-const _PLACES: [model::Op; 5] = [model::Op::Load, model::Op::Store, model::Op::Address, model::Op::LifetimeStart, model::Op::LifetimeEnd];
+const _PLACES: [model::Op; 6] = [model::Op::Load, model::Op::Store, model::Op::Address, model::Op::CopyBytes, model::Op::LifetimeStart, model::Op::LifetimeEnd];
 const _FLOAT: [model::Op; 13] = [
     model::Op::Fadd,
     model::Op::Fsub,
@@ -544,6 +544,22 @@ fn _function(
                         | model::Operand::DescriptorPlace(_)
                 ) {
                     invalid!("{prefix}: store destination is not a place");
+                }
+            }
+            if instruction.op == model::Op::CopyBytes {
+                let place = |operand: &model::Operand| {
+                    matches!(
+                        operand,
+                        model::Operand::PlaceRef(_)
+                            | model::Operand::ArrayElement(_)
+                            | model::Operand::ProjectedPlace(_)
+                            | model::Operand::IndirectPlace(_)
+                            | model::Operand::DescriptorPlace(_)
+                    )
+                };
+                match &instruction.operands[..] {
+                    [destination, source, model::Operand::Constant(model::Constant { value: model::Number::Int(bytes), .. })] if place(destination) && place(source) && *bytes > 0 => {}
+                    _ => invalid!("{prefix}: {} takes two places and a positive constant byte count", instruction.op),
                 }
             }
             if matches!(instruction.op, model::Op::LifetimeStart | model::Op::LifetimeEnd) {

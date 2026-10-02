@@ -714,7 +714,9 @@ fn declare_data(module: &mut Module, object: &model::DataObject, ty: Option<Type
         (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
         (Some(_), model::DataLinkage::Private) => Linkage::Private,
     };
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant: object.readonly && ty.is_some(), initializer: None, align: None };
+    // An external one has no type to lay out, and is constant as declared.
+    let constant = object.readonly && (ty.is_some() || object.linkage == model::DataLinkage::External);
+    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant, initializer: None, align: None };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = if object.address == AddressKind::Far { FAR } else { 0 };
     global
@@ -954,6 +956,46 @@ fn frame_groups<'h>(types: &mut Types, tables: &Tables<'h>, function: &'h model:
 /// The memset a zeroed aggregate local calls.
 const MEMSET: &str = "llvm.memset.p0.i16";
 
+/// The memcpy of bytes from a pointer in address space `from` to one in `to`.
+fn memcpy_name(to: u32, from: u32) -> String {
+    format!("llvm.memcpy.p{to}.p{from}.i16")
+}
+
+fn memcpy_type(types: &mut Types, to: u32, from: u32) -> TypeId {
+    let (void, to, from, size, flag) = (types.void(), types.ptr(to), types.ptr(from), types.int(16), types.int(1));
+    function_type(types, void, vec![to, from, size, flag])
+}
+
+/// The address space the pointer to `operand`'s place is in.
+fn place_space(module: &mut Module, tables: &Tables, function: &model::Function, operand: &model::Operand) -> Emit<u32> {
+    let place = |module: &Module, id: i64| -> Emit<u32> {
+        let place = function.places.iter().find(|one| one.id == id).ok_or("a copy of an unknown place")?;
+        match place.storage {
+            Storage::Local | Storage::Parameter => Ok(0),
+            _ => match module.context.types.get(module.context.get(tables.data[&place.symbol]).ty) {
+                Type::Pointer(space) => Ok(*space),
+                _ => Err("a data object that is no pointer".to_owned()),
+            },
+        }
+    };
+    let held = |module: &mut Module, value: i64| -> Emit<u32> {
+        let typed = function.values.iter().find(|one| one.id == value).ok_or("a copy through an unknown value")?.r#type;
+        let ty = value_type(&mut module.context.types, tables.types[&typed])?;
+        match module.context.types.get(ty) {
+            Type::Pointer(space) => Ok(*space),
+            _ => Err("a copy through a value that is no pointer".to_owned()),
+        }
+    };
+    match operand {
+        model::Operand::PlaceRef(one) => place(module, one.place),
+        model::Operand::ArrayElement(one) => place(module, one.place),
+        model::Operand::ProjectedPlace(one) => place(module, one.place),
+        model::Operand::IndirectPlace(one) => held(module, one.base),
+        model::Operand::DescriptorPlace(one) => held(module, one.base),
+        _ => Err("a copy of what is no place".to_owned()),
+    }
+}
+
 /// What a scope's markers call: the lifetime of a local's bytes begins or ends.
 const LIFETIMES: [(Op, &str); 2] = [(Op::LifetimeStart, "llvm.lifetime.start.p0"), (Op::LifetimeEnd, "llvm.lifetime.end.p0")];
 
@@ -991,6 +1033,17 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             let global = module.add_function(name, ty, Linkage::External)?;
             let reference = module.reference(global);
             tables.callees.insert(name.to_owned(), reference);
+        }
+    }
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.op == Op::CopyBytes) {
+        let to = place_space(module, tables, function, &instruction.operands[0])?;
+        let from = place_space(module, tables, function, &instruction.operands[1])?;
+        let name = memcpy_name(to, from);
+        if !tables.callees.contains_key(&name) {
+            let ty = memcpy_type(&mut module.context.types, to, from);
+            let global = module.add_function(&name, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(name, reference);
         }
     }
     if tables.zeroed && !tables.callees.contains_key(MEMSET) {
@@ -1919,6 +1972,20 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let ty = lifetime_type(&mut self.b.context.types);
                 let size = self.b.int(64, i128::from(bytes));
                 self.b.call(ty, callee, &[size, pointer], "");
+            }
+            Op::CopyBytes => {
+                let (to, ..) = self.place(&instruction.operands[0])?;
+                let (from, ..) = self.place(&instruction.operands[1])?;
+                let Operand::Constant(model::Constant { value: model::Number::Int(bytes), .. }) = &instruction.operands[2] else { return Err("a byte copy of no constant length".to_owned()) };
+                let space = |this: &Self, pointer| match this.b.context.types.get(this.b.type_of(pointer)) {
+                    Type::Pointer(space) => *space,
+                    _ => 0,
+                };
+                let (to_space, from_space) = (space(self, to), space(self, from));
+                let callee = Value::Constant(self.tables.callees[&memcpy_name(to_space, from_space)]);
+                let ty = memcpy_type(&mut self.b.context.types, to_space, from_space);
+                let (size, volatile) = (self.b.int(16, i128::from(*bytes)), self.b.int(1, 0));
+                self.b.call(ty, callee, &[to, from, size, volatile], "");
             }
             Op::Copy | Op::Load => {
                 let value = self.value(&instruction.operands[0])?;

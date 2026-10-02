@@ -502,6 +502,54 @@ fn a_lifetime_marker_names_one_local() {
     assert!(error.to_string().contains("names one local place"), "{error}");
 }
 
+/// An aggregate assigned whole is a byte copy: `llvm.memcpy` of the bytes the instruction
+/// names, declared once. As word loads and stores it made an unwritten byte poison.
+#[test]
+fn a_byte_copy_is_a_memcpy_of_its_bytes() {
+    use crate::model::{Place, Storage};
+    let mut place = |id, offset| {
+        let mut one = Place::new(id, "X", 1, Storage::Local, offset);
+        one.extent = Some(6);
+        one
+    };
+    let places = vec![place(1, -6), place(2, -12)];
+    let copy = |at| Instruction::new(at, Op::CopyBytes, vec![], vec![Operand::place_ref(2), Operand::place_ref(1), Operand::constant(1, 6)]);
+    let block = Block::new(1, vec![copy(1), copy(2)], Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+    let program = program(Function::new(1, "F%", 1, Vec::new(), places, vec![block], 1));
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert_eq!(text.matches(", i16 6, i1 false)").count(), 2, "{text}");
+    assert_eq!(text.matches("declare void @llvm.memcpy.p0.p0.i16").count(), 1, "{text}");
+}
+
+/// A byte copy names two places and a positive constant count of bytes; anything else is a
+/// frontend's mistake a backend would copy wrongly.
+#[test]
+fn a_byte_copy_takes_two_places_and_a_byte_count() {
+    use crate::model::{Place, Storage};
+    let copying = |operands: Vec<Operand>| {
+        let instructions = vec![Instruction::new(1, Op::CopyBytes, vec![], operands)];
+        let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+        let mut places = vec![Place::new(1, "X", 1, Storage::Local, -2), Place::new(2, "Y", 1, Storage::Local, -4)];
+        places.iter_mut().for_each(|one| one.extent = Some(2));
+        program(Function::new(1, "F%", 1, Vec::new(), places, vec![block], 1))
+    };
+    let good = crate::verify::verify(&copying(vec![Operand::place_ref(1), Operand::place_ref(2), Operand::constant(1, 2)]));
+    assert!(good.is_ok(), "{good:?}");
+    for operands in [
+        vec![Operand::place_ref(1), Operand::place_ref(2)],
+        vec![Operand::place_ref(1), Operand::place_ref(2), Operand::constant(1, 0)],
+        vec![Operand::constant(1, 1), Operand::place_ref(2), Operand::constant(1, 2)],
+        vec![Operand::place_ref(1), Operand::place_ref(2), Operand::place_ref(2)],
+    ] {
+        let error = crate::verify::verify(&copying(operands.clone())).unwrap_err();
+        assert!(error.to_string().contains("two places and a positive constant byte count"), "{operands:?}: {error}");
+    }
+}
+
 /// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
 /// ask; with none, a view descriptor's loads never left a loop.
 #[test]
