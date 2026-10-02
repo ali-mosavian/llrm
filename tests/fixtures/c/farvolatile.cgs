@@ -1,0 +1,145 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/tmp/farvolatile.c" main=1
+- DBSrcCue f1 15 1
+SYM y1 name="video" base="video" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="ch" base="ch" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+SYM y3 name="at" base="at" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+SYM y4 name="screen" base="screen" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_LONG_POINTER
+SYM y5 name="o" base="o" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_INTEGER
+l4 BENewLabel
+l5 BENewLabel
+n6 CGFEName y4 TY_LONG_POINTER
+n7 CGInteger -1207959552 TY_LONG_POINTER
+n8 CGAssign n6 n7 TY_LONG_POINTER
+- CGDone n8
+n9 CGFEName y5 TY_INTEGER
+n10 CGInteger 0 TY_INTEGER
+n11 CGAssign n9 n10 TY_INTEGER
+- CGDone n11
+- CGControl O_LABEL n0 l4
+n12 CGFEName y5 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+n14 CGInteger 4000 TY_INTEGER
+n15 CGCompare O_LT n13 n14 TY_INTEGER
+- CGControl O_IF_FALSE n15 l5
+- DBBegBlock
+n16 CGFEName y4 TY_LONG_POINTER
+n17 CGUnary O_POINTS n16 TY_LONG_POINTER
+n18 CGFEName y5 TY_INTEGER
+n19 CGUnary O_POINTS n18 TY_INTEGER
+n20 CGBinary O_PLUS n17 n19 TY_LONG_POINTER
+n21 CGFEName y2 TY_POINTER
+n22 CGUnary O_POINTS n21 TY_POINTER
+n23 CGUnary O_POINTS n22 TY_INTEGER
+n24 CGFEName y5 TY_INTEGER
+n25 CGUnary O_POINTS n24 TY_INTEGER
+n26 CGInteger 15 TY_INTEGER
+n27 CGBinary O_AND n25 n26 TY_INTEGER
+n28 CGBinary O_PLUS n23 n27 TY_INTEGER
+n29 CGVolatile n20
+n30 CGAssign n29 n28 TY_UINT_1
+- CGDone n30
+n31 CGFEName y4 TY_LONG_POINTER
+n32 CGUnary O_POINTS n31 TY_LONG_POINTER
+n33 CGFEName y5 TY_INTEGER
+n34 CGUnary O_POINTS n33 TY_INTEGER
+n35 CGInteger 1 TY_INTEGER
+n36 CGBinary O_PLUS n34 n35 TY_INTEGER
+n37 CGBinary O_PLUS n32 n36 TY_LONG_POINTER
+n38 CGFEName y3 TY_POINTER
+n39 CGUnary O_POINTS n38 TY_POINTER
+n40 CGUnary O_POINTS n39 TY_INTEGER
+n41 CGVolatile n37
+n42 CGAssign n41 n40 TY_UINT_1
+- CGDone n42
+- DBEndBlock
+n43 CGFEName y5 TY_INTEGER
+n44 CGInteger 2 TY_INTEGER
+n45 CGPreGets O_PLUS n43 n44 TY_INTEGER
+- CGDone n45
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- CGReturn n0 TY_INTEGER
+- DBSrcCue f1 16 1
+SYM y6 name="conventional" base="conventional" pattern="_*" attr=0x7 seg=1
+CALLCONV y6 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y6 TY_INTEGER
+SYM y7 name="ch" base="ch" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y7 TY_POINTER
+SYM y8 name="at" base="at" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y8 TY_POINTER
+l46 CGLastParm
+t47 CGTemp TY_INTEGER
+SYM y9 name="screen" base="screen" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y9 TY_LONG_POINTER
+SYM y10 name="o" base="o" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y10 TY_INTEGER
+l48 BENewLabel
+l49 BENewLabel
+n50 CGFEName y9 TY_LONG_POINTER
+n51 CGInteger 305397760 TY_LONG_POINTER
+n52 CGAssign n50 n51 TY_LONG_POINTER
+- CGDone n52
+n53 CGFEName y10 TY_INTEGER
+n54 CGInteger 0 TY_INTEGER
+n55 CGAssign n53 n54 TY_INTEGER
+- CGDone n55
+- CGControl O_LABEL n0 l48
+n56 CGFEName y10 TY_INTEGER
+n57 CGUnary O_POINTS n56 TY_INTEGER
+n58 CGInteger 4000 TY_INTEGER
+n59 CGCompare O_LT n57 n58 TY_INTEGER
+- CGControl O_IF_FALSE n59 l49
+- DBBegBlock
+n60 CGFEName y9 TY_LONG_POINTER
+n61 CGUnary O_POINTS n60 TY_LONG_POINTER
+n62 CGFEName y10 TY_INTEGER
+n63 CGUnary O_POINTS n62 TY_INTEGER
+n64 CGBinary O_PLUS n61 n63 TY_LONG_POINTER
+n65 CGFEName y7 TY_POINTER
+n66 CGUnary O_POINTS n65 TY_POINTER
+n67 CGUnary O_POINTS n66 TY_INTEGER
+n68 CGFEName y10 TY_INTEGER
+n69 CGUnary O_POINTS n68 TY_INTEGER
+n70 CGInteger 15 TY_INTEGER
+n71 CGBinary O_AND n69 n70 TY_INTEGER
+n72 CGBinary O_PLUS n67 n71 TY_INTEGER
+n73 CGVolatile n64
+n74 CGAssign n73 n72 TY_UINT_1
+- CGDone n74
+n75 CGFEName y9 TY_LONG_POINTER
+n76 CGUnary O_POINTS n75 TY_LONG_POINTER
+n77 CGFEName y10 TY_INTEGER
+n78 CGUnary O_POINTS n77 TY_INTEGER
+n79 CGInteger 1 TY_INTEGER
+n80 CGBinary O_PLUS n78 n79 TY_INTEGER
+n81 CGBinary O_PLUS n76 n80 TY_LONG_POINTER
+n82 CGFEName y8 TY_POINTER
+n83 CGUnary O_POINTS n82 TY_POINTER
+n84 CGUnary O_POINTS n83 TY_INTEGER
+n85 CGVolatile n81
+n86 CGAssign n85 n84 TY_UINT_1
+- CGDone n86
+- DBEndBlock
+n87 CGFEName y10 TY_INTEGER
+n88 CGInteger 2 TY_INTEGER
+n89 CGPreGets O_PLUS n87 n88 TY_INTEGER
+- CGDone n89
+- CGControl O_GOTO n0 l48
+- CGControl O_LABEL n0 l49
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

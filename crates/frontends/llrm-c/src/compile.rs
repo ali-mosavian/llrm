@@ -447,6 +447,37 @@ mod tests {
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
     }
 
+    /// The loop of `function` in `fixture`'s listing as `llrm-c -O2 --cpu 486 -S`
+    /// writes it: from the label its backward branch takes to the branch.
+    fn driven_loop(fixture: &str, function: &str) -> Vec<String> {
+        let directory = tempfile::tempdir().unwrap();
+        let (source, out) = (Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs")), directory.path().join("out.asm"));
+        let argv = ["-O2", "--cpu", "486", "-S", source.to_str().unwrap(), "-o", out.to_str().unwrap()].map(str::to_owned);
+        assert_eq!(super::main(&argv), 0);
+        let asm = std::fs::read_to_string(out).unwrap();
+        let from = asm.find(&format!("{function} proc")).expect("the function");
+        let lines: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        let at = lines.iter().rposition(|one| one.starts_with('j') && !one.starts_with("jmp")).expect("a backward branch");
+        let label = format!("{}:", lines[at].split_whitespace().nth(1).unwrap());
+        let top = lines.iter().position(|one| *one == label).expect("its label");
+        lines[top..=at].iter().map(|one| (*one).to_owned()).collect()
+    }
+
+    /// A volatile store writes only the bytes it addresses: to video memory
+    /// it cannot change `*ch` or `*at`. Volatile was a barrier, and
+    /// `inttoptr 0xB8000000` was no known segment, so `video` read both
+    /// pointers and both cells again every trip, 4 loads (#257's regression).
+    /// At 0x1234, which may be the program's own data, they stay.
+    #[test]
+    fn test_a_volatile_far_store_to_video_memory_leaves_the_loop_its_cells() {
+        let loads = |body: &[String]| body.iter().filter(|one| one.contains("ptr [")).count();
+        let stores = |body: &[String]| body.iter().filter(|one| one.contains("byte ptr es:[")).count();
+        let video = driven_loop("farvolatile", "_video");
+        assert_eq!((loads(&video), stores(&video)), (0, 2), "{video:#?}");
+        let conventional = driven_loop("farvolatile", "_conventional");
+        assert_eq!((loads(&conventional), stores(&conventional)), (4, 2), "{conventional:#?}");
+    }
+
     /// `die` and `quit` do not return: nothing follows their calls. Without
     /// the call class stated, `f` kept a return after both, 11 instructions
     /// to 8.

@@ -614,8 +614,12 @@ pub struct MemRef {
     /// The selector of a far pointer made from one, as `segment:0`: old
     /// `segment`.
     pub segment: Option<Operand>,
-    /// `segment`'s number, where it is a constant.
+    /// The selector's number, where it is a constant: `segment`'s, or that
+    /// of a pair `root` an integer constant makes.
     pub selector: Option<i64>,
+    /// `root`'s offset in its segment where an integer constant makes it,
+    /// else 0: `disp` counts from it.
+    pub origin: i64,
     /// `root` is an object's own address, so `disp` is an offset in it:
     /// old `Space::Segment` and `Space::Frame`, as against a pointer.
     pub object: bool,
@@ -655,6 +659,7 @@ impl MemRef {
             base_width: 0,
             segment: None,
             selector: None,
+            origin: 0,
             object: false,
             space,
             index_bits,
@@ -691,6 +696,9 @@ impl MemRef {
         made.disp = wrapped(disp, index_bits);
         made.segment = segment(unit, root);
         made.selector = made.segment.and_then(|one| unit.int_constant(one)).map(|bits| bits as i64);
+        if let Some((selector, origin)) = pair_constant(unit, root) {
+            (made.selector, made.origin) = (Some(selector), origin);
+        }
         made.object = object_of(unit, root).is_some();
         made
     }
@@ -743,6 +751,7 @@ impl MemRef {
             base_width: 0,
             segment: None,
             selector: None,
+            origin: 0,
             object: false,
             space: 0,
             index_bits: 16,
@@ -903,6 +912,30 @@ fn segment(unit: &Unit, root: Operand) -> Option<Operand> {
         Some((_, made)) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => Some(made.operands[0]),
         _ => Some(from),
     }
+}
+
+/// The selector and offset of a pair pointer `root` an integer constant
+/// makes: a pair's integer form is its selector word, then its offset word.
+fn pair_constant(unit: &Unit, root: Operand) -> Option<(i64, i64)> {
+    let space = unit.space(root)?;
+    if !unit.layout.is_pair(space) {
+        return None;
+    }
+    let integer = match root {
+        Operand::Value(_) => match unit.defining(root)? {
+            (_, made) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => made.operands[0],
+            _ => return None,
+        },
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => Operand::Constant(*value),
+            _ => return None,
+        },
+        Operand::Block(_) => return None,
+    };
+    let bits = unit.int_constant(integer)?;
+    let offset = unit.layout.offset_bits(space);
+    let word = |shift: u32| ((bits >> shift) & ((1 << offset) - 1)) as i64;
+    Some((word(offset), word(0)))
 }
 
 /// The name of the `!tbaa` access type `inst` carries.

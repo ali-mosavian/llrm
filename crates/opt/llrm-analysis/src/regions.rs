@@ -95,23 +95,23 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, prog
         let word = |one: i64| one.rem_euclid(0x1_0000);
         (high - low < 0x1_0000 && word(low) <= word(high)).then(|| (word(low), word(high)))
     };
-    let selectors = match (reference.selector, reference.segment?) {
+    let selectors = match (reference.selector, reference.segment) {
         (Some(selector), _) => words(selector.into(), selector.into())?,
-        (None, Operand::Value(segment)) => {
+        (None, Some(Operand::Value(segment))) => {
             let selector = known?.get(&segment)?;
             words(selector.low.clone(), selector.high.clone())?
         }
         (None, _) => return None,
     };
-    let disp = BigInt::from(reference.disp);
+    let disp = BigInt::from(reference.origin) + reference.disp;
     let offsets = match reference.base {
         None => words(disp.clone(), disp),
         Some(base) => known
             .and_then(|known| known.get(&base))
             .filter(|interval| interval.width == reference.base_width)
             .and_then(|interval| {
-                let (low, high) = scaled(interval, reference.disp, reference.scale);
-                words(low, high)
+                let (low, high) = scaled(interval, 0, reference.scale);
+                words(low + &disp, high + &disp)
             }),
     }
     .unwrap_or((0, 0xFFFF));
@@ -1011,6 +1011,40 @@ b0:
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
             assert_eq!(!may_alias(load, store, None, None, Some(&dos)).unwrap(), apart, "segment {segment:#x}");
+        }
+    }
+
+    /// A far pointer an integer constant makes is its selector and offset,
+    /// the integer's high and low words: C's `(char far *)0xB8000010L` is
+    /// video memory, apart from the program's global. It was no known
+    /// segment, so a loop storing there read its other variables again. At
+    /// 0x1234 it may be the program's data.
+    #[test]
+    fn test_a_far_pointer_made_from_a_constant_is_placed_by_its_words() {
+        for (integer, apart) in [(0xB800_0010_u32, true), (0x1234_0010, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f() {{
+b0:
+  %a = load i16, ptr @g
+  %far = inttoptr i32 {} to ptr addrspace(1)
+  %at = getelementptr i8, ptr addrspace(1) %far, i16 2
+  store volatile i8 0, ptr addrspace(1) %at
+  ret void
+}}
+",
+                integer as i32
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let dos = dos(&module);
+            let mut unit = Unit::of(&module, &dl, f);
+            unit.program = Some(&dos);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!((store.selector, store.origin, store.disp), (Some(i64::from(integer >> 16)), 0x10, 2));
+            assert_eq!(!may_alias(load, store, None, None, Some(&dos)).unwrap(), apart, "{integer:#x}");
         }
     }
 
