@@ -9,7 +9,9 @@ use super::{Block, Operand};
 /// reaches before any store to it, as `(place, instruction)`.
 ///
 /// Anything else that names a place (an address for a runtime reader, a
-/// BYREF argument) may write it, so it counts as an assignment.  A call in
+/// BYREF argument) may write it, so it counts as an assignment; under
+/// `Named::MayRead` it may also read it first, so it counts as a read too.
+/// A call in
 /// `assigns_all` (a user procedure that may share module variables) assigns
 /// every place.  Blocks entered from outside the CFG (`entries`: RESUME
 /// targets, error handlers) start with everything assigned: they are
@@ -19,6 +21,7 @@ pub(super) fn unassigned_reads(
     tracked: &BTreeSet<u32>,
     assigns_all: &BTreeSet<u32>,
     entries: &[u32],
+    named: Named,
 ) -> Vec<(u32, u32)> {
     let Some(entry) = blocks.first().map(|block| block.id) else {
         return Vec::new();
@@ -58,7 +61,7 @@ pub(super) fn unassigned_reads(
             let mut state = entry_state(&exits, block.id);
             if let Some(assigned) = &mut state {
                 for instruction in &block.instructions {
-                    transfer(instruction, tracked, assigns_all, assigned, &mut |_| {});
+                    transfer(instruction, tracked, assigns_all, named, assigned, &mut |_| {});
                 }
             }
             if exits[&block.id] != state {
@@ -74,7 +77,7 @@ pub(super) fn unassigned_reads(
             continue;
         };
         for instruction in &block.instructions {
-            transfer(instruction, tracked, assigns_all, &mut assigned, &mut |place| {
+            transfer(instruction, tracked, assigns_all, named, &mut assigned, &mut |place| {
                 if reported.insert(place) {
                     reads.push((place, instruction.id));
                 }
@@ -84,10 +87,21 @@ pub(super) fn unassigned_reads(
     reads
 }
 
+/// What an operand naming a place, other than a load's or a store's, does
+/// to it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Named {
+    /// Writes it: no warning for a variable INPUT or a BYREF call fills.
+    Assigns,
+    /// May read it before writing it: a BYREF callee sees its value.
+    MayRead,
+}
+
 fn transfer(
     instruction: &super::Instruction,
     tracked: &BTreeSet<u32>,
     assigns_all: &BTreeSet<u32>,
+    named: Named,
     assigned: &mut BTreeSet<u32>,
     unassigned_read: &mut dyn FnMut(u32),
 ) {
@@ -103,9 +117,14 @@ fn transfer(
         ("store", [Operand::Place(place), ..]) => {
             assigned.insert(*place);
         }
-        _ => assigned.extend(instruction.operands.iter().filter_map(|operand| match operand {
-            Operand::Place(place) => Some(*place),
-            _ => None,
-        })),
+        _ => {
+            for operand in &instruction.operands {
+                let Operand::Place(place) = operand else { continue };
+                if named == Named::MayRead && tracked.contains(place) && !assigned.contains(place) {
+                    unassigned_read(*place);
+                }
+                assigned.insert(*place);
+            }
+        }
     }
 }
