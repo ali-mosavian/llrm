@@ -68,7 +68,7 @@ impl Level {
 const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 11] = [
     ("unroll-loops", |options, on| options.unroll = on),
     ("peel-loops", |options, on| options.peel = on),
-    ("inline-functions", |options, on| options.inline = if !on { Threshold(0) } else if options.inline.0 == 0 { Threshold::default() } else { options.inline }),
+    ("inline-functions", |options, on| options.inline = if !on { Threshold::new(0) } else if options.inline.limit == 0 { Threshold { limit: Threshold::default().limit, ..options.inline } } else { options.inline }),
     ("strength-reduce", |options, on| options.strength = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),

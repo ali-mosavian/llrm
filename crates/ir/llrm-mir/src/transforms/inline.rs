@@ -9,6 +9,7 @@ use crate::callgraph::{CallGraph, CallGraphAnalysis};
 use crate::context::{Context, GlobalId};
 use crate::memory::callee;
 use crate::edit::Position;
+use crate::facts::{Facts, Inlining};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, ValueId};
 use crate::opcode::{Attribute, Flags, Opcode};
 use crate::passes::{ModuleAnalyses, ModulePass};
@@ -54,7 +55,8 @@ fn site(module: &Module, graph: &CallGraph, caller: GlobalId) -> Option<(InstId,
         let Opcode::Call(info) = &function.instruction(inst).opcode else { return None };
         let fits = info.function_type == body.ty
             && !matches!(module.context.types.get(body.ty), Type::Function { variadic: true, .. })
-            && !body.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "noinline" || flag == "optnone"))
+            && Facts::of(&body.attrs).inline() != Some(Inlining::Never)
+            && !body.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optnone"))
             && !graph.recursive(callee)
             && !graph.together(callee, caller)
             && inlinable(body);
@@ -62,9 +64,9 @@ fn site(module: &Module, graph: &CallGraph, caller: GlobalId) -> Option<(InstId,
     })
 }
 
-/// Small enough, and nothing a copy cannot carry.
+/// Small enough, or the language says always, and nothing a copy cannot carry.
 fn inlinable(body: &Function) -> bool {
-    carries(body) && body.walk().count() <= THRESHOLD
+    carries(body) && (Facts::of(&body.attrs).inline() == Some(Inlining::Always) || body.walk().count() <= THRESHOLD)
 }
 
 /// Whether a copy of `body` can stand in another function: no unwind edge,

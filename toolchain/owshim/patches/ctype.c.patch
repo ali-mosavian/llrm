@@ -1,0 +1,74 @@
+--- a/bld/cc/c/ctype.c
++++ b/bld/cc/c/ctype.c
+@@ -1038,6 +1038,7 @@
+     decl_info           info;
+     static field_level_stype struct_level = 0;
+     const_val           cval;
++    long                borland_bits;
+ 
+     struct_level++;
+     prev_unqualified_type = TYP_VOID;   /* so it doesn't match 1st time */
+@@ -1050,6 +1051,14 @@
+      */
+     struct_size = start;
+     next_offset = start;
++    /*
++     * qbopt: Borland C lays a struct's bit fields out as a stream of bits,
++     * not in units of the declared type: a field starts where the last one
++     * ended unless it would leave the 16 bits that begin at that byte, and
++     * then at the next byte; the next member, and the struct's end, at the
++     * next byte. -1 outside a run of bit fields.
++     */
++    borland_bits = -1;
+     for(;;) {
+         if( CurToken == T_SEMI_COLON && CompFlags.extensions_enabled ) {
+             NextToken();
+@@ -1115,6 +1124,36 @@
+                 } else {
+                     bits_width = U64Low( cval.value );
+                 }
++                if( decl->decl_type != TYP_UNION ) {
++                    unsigned    window = TypeSize( typ ) * CHAR_BIT;
++                    unsigned    at;
++
++                    if( window < 16 )
++                        window = 16;
++                    if( borland_bits < 0 )
++                        borland_bits = (long)next_offset * CHAR_BIT;
++                    if( bits_width == 0 || ( borland_bits % CHAR_BIT ) + bits_width > window )
++                        borland_bits = _RoundUp( borland_bits, CHAR_BIT );
++                    at = borland_bits % CHAR_BIT;
++                    if( field != NULL ) {
++                        field->offset = borland_bits / CHAR_BIT;
++                        field->field_type = EnumFieldType( typ, plain_int, (bitfield_width)at, (bitfield_width)bits_width );
++                        /* Read through the narrowest unit that holds it, as Borland does. */
++                        if( at + bits_width <= CHAR_BIT ) {
++                            field->field_type->u.f.field_type = ( field->field_type->decl_type == TYP_FIELD ) ? TYP_CHAR : TYP_UCHAR;
++                        } else if( at + bits_width <= 16 && window > 16 ) {
++                            field->field_type->u.f.field_type = ( field->field_type->decl_type == TYP_FIELD ) ? TYP_SHORT : TYP_USHORT;
++                        }
++                    }
++                    borland_bits += bits_width;
++                    next_offset = ( borland_bits + CHAR_BIT - 1 ) / CHAR_BIT;
++                    if( next_offset > struct_size )
++                        struct_size = next_offset;
++                    if( CurToken != T_COMMA )
++                        break;
++                    NextToken();
++                    continue;
++                }
+                 if( bits_width > bits_available || bits_width == 0 ) {
+                     scalar_size = TypeSize( typ );
+                     if( bits_available != bits_total ) {
+@@ -1139,6 +1178,11 @@
+                 }
+                 bits_available -= bits_width;
+             } else {
++                if( borland_bits >= 0 ) {
++                    next_offset = ( borland_bits + CHAR_BIT - 1 ) / CHAR_BIT;
++                    borland_bits = -1;
++                    bits_available = bits_total;
++                }
+                 if( bits_available != bits_total ) { //changed from bit field to non
+                     next_offset += bits_total / CHAR_BIT;
+                     field->offset = next_offset;

@@ -842,6 +842,8 @@ pub fn recorded(source: &Path, includes: &[String], debug: bool) -> Result<Strin
     // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
     // double, byte-packed structs, 16-bit enums, x87 inline, no stack probes, no
     // default library. -fp3 is for inline assembly: qcport's own uses 387 instructions.
+    // Borland's ABI is the only one: wccq also lays bit fields out as BCC 3.1 does,
+    // with no switch, since no other struct or call ABI exists here to match.
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
     let flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
