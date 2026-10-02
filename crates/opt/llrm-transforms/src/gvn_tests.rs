@@ -435,6 +435,68 @@ b0:
     assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
 }
 
+/// The program's global is read again after a store to a device: through a
+/// pointer in the fixed-address space the store cannot change it, so the
+/// second read is the first; through a far pointer it may, and stays.
+#[test]
+fn test_a_store_at_a_fixed_address_keeps_a_global_loaded_before() {
+    for (space, reloaded) in [(4, false), (1, true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global i16 0
+
+define i16 @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr @g
+  store i8 1, ptr addrspace({space}) %p
+  %b = load i16, ptr @g
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let mut module = parsed(&text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr @g").count() == 2, reloaded, "space {space}\n{after}");
+    }
+}
+
+/// The device is read again after a store to the program's global: through
+/// the fixed-address space the store cannot have changed it, so the second
+/// read is the first; through a far pointer it may have, and stays.
+#[test]
+fn test_a_store_to_a_global_keeps_a_fixed_address_read_before() {
+    for (space, reloaded) in [(4, false), (1, true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global i16 0
+
+define i16 @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr addrspace({space}) %p
+  store i16 1, ptr @g
+  %b = load i16, ptr addrspace({space}) %p
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let mut module = parsed(&text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches(&format!("load i16, ptr addrspace({space})")).count() == 2, reloaded, "space {space}\n{after}");
+    }
+}
+
 /// Two pointers a constructor returns are apart: a store through one does
 /// not change what the other holds, so a second read of the other is the
 /// first. A callee that states its result `noalias` is a constructor; one that

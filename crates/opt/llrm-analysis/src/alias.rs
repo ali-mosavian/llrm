@@ -30,7 +30,7 @@
 //! its `memory_complete` flag: a call's effect is a side table.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -1500,8 +1500,9 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
             let op = function.instruction(inst);
             let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
             let (Opcode::Binary(kind), [left, right], Some(width)) = (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value))) else { continue };
+            // A value nothing is known of is a multiple of 1: `x << 1` is a multiple of 2 all the same.
             let fact = |one: Operand| match one {
-                Operand::Value(source) => result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))),
+                Operand::Value(source) => Some(result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))).unwrap_or_else(|| (BigInt::from(1), BigInt::from(0)))),
                 _ => unit.int_constant(one).map(|n| (BigInt::from(0), BigInt::from(n))),
             };
             let (Some(mut a), Some(mut b)) = (fact(*left), fact(*right)) else { continue };
@@ -1525,6 +1526,9 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
                 }
                 _ => continue,
             };
+            if found.0 == BigInt::from(1) {
+                continue;
+            }
             result.insert(value, found);
             changed = true;
         }
@@ -1588,6 +1592,13 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
                 got = Some(foreign);
             }
+        }
+        // An access the language says is at a fixed address names linear
+        // memory, whatever its pointer was made from.
+        // The frontend states it only where the target says the address is outside
+        // the program; where the selector is a constant here, the target is asked again.
+        if reference.space == llrm_mir::datalayout::FIXED_SPACE && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
+            got = Some(regions::fixed_provenance());
         }
         Ok(MemRef { provenance: got, ..reference.clone() })
     };

@@ -46,9 +46,13 @@ impl Builder {
         self.intern(DebugKind::Sized, "", Some(element), bytes, DebugReach::Near, Vec::new())
     }
 
-    /// `name`, `bytes` long, of (field, type, offset) `fields`.
-    pub fn structure(&mut self, name: &str, bytes: i64, fields: &[(&str, i64, i64)]) -> i64 {
-        let members = fields.iter().map(|&(name, r#type, offset)| DebugMember { name: name.to_owned(), r#type, offset }).collect();
+    /// `name`, `bytes` long, of (field, type, offset, bit field's start and
+    /// width) `fields`.
+    pub fn structure(&mut self, name: &str, bytes: i64, fields: &[(&str, i64, i64, Option<(i64, i64)>)]) -> i64 {
+        let members = fields
+            .iter()
+            .map(|&(name, r#type, offset, bits)| DebugMember { name: name.to_owned(), r#type, offset, bit_start: bits.map(|one| one.0), bit_width: bits.map(|one| one.1) })
+            .collect();
         self.intern(DebugKind::Struct, name, None, bytes, DebugReach::Near, members)
     }
 
@@ -88,7 +92,7 @@ impl Builder {
 
     /// A procedure returning `result`, None nothing, of `parameters`.
     pub fn procedure(&mut self, result: Option<i64>, parameters: &[i64]) -> i64 {
-        let members = parameters.iter().map(|&r#type| DebugMember { name: String::new(), r#type, offset: 0 }).collect();
+        let members = parameters.iter().map(|&r#type| DebugMember { name: String::new(), r#type, offset: 0, bit_start: None, bit_width: None }).collect();
         self.intern(DebugKind::Procedure, "", result, 0, DebugReach::Near, members)
     }
 

@@ -1,42 +1,24 @@
 //! llrm's optimizer over MIR, each pass one of LLVM's: MIR in, MIR out,
 //! and no machine named (agents.md, the fifth rule).
 
-pub mod adce;
-pub mod earlycse;
 pub mod functionattrs;
-pub mod indvars;
 pub mod inline;
-pub mod ipsccp;
 pub mod instcombine;
-pub mod licm;
-pub mod loopdeletion;
-pub mod loopreduce;
-pub mod mem2reg;
-pub mod simplifycfg;
 
 use crate::module::Module;
 use crate::passes::{Pass, PassManager};
 
 /// The default pipeline, in order.
-const PIPELINE: &[&str] = &["mem2reg", "instcombine", "simplifycfg", "ipsccp", "instcombine", "simplifycfg", "indvars", "instcombine", "simplifycfg", "function-attrs", "instcombine", "inline", "mem2reg", "instcombine", "simplifycfg", "earlycse", "licm", "earlycse", "loop-reduce", "instcombine", "simplifycfg", "earlycse", "instcombine", "loop-deletion", "adce", "simplifycfg"];
+const PIPELINE: &[&str] = &["instcombine", "function-attrs", "instcombine", "inline", "instcombine"];
 
 fn pass(name: &str) -> Result<Pass, String> {
     match name {
         "inline" => return Ok(Pass::Module(Box::new(inline::Inline))),
-        "ipsccp" => return Ok(Pass::Module(Box::new(ipsccp::Ipsccp))),
         "function-attrs" => return Ok(Pass::Module(Box::new(functionattrs::FunctionAttrs))),
         _ => {}
     }
     Ok(Pass::Function(match name {
-        "mem2reg" => Box::new(mem2reg::Mem2Reg),
         "instcombine" => Box::new(instcombine::InstCombine),
-        "simplifycfg" => Box::new(simplifycfg::SimplifyCfg),
-        "adce" => Box::new(adce::Adce),
-        "earlycse" => Box::new(earlycse::EarlyCse),
-        "licm" => Box::new(licm::Licm),
-        "loop-deletion" => Box::new(loopdeletion::LoopDeletion),
-        "indvars" => Box::new(indvars::IndVars),
-        "loop-reduce" => Box::new(loopreduce::LoopReduce),
         _ => return Err(format!("no MIR pass {name}")),
     }))
 }

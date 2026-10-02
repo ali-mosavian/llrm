@@ -407,3 +407,25 @@ declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) no
     let after = printed(&module);
     assert!(!after.contains("call void @llvm.memset") && after.matches("store i16").count() == 2, "{after}");
 }
+
+/// A local's lifetime ending is the end of what its bytes hold: the store before it,
+/// which promotion left once it replaced the load, is dead. The markers read the cell
+/// (`memory(argmem: readwrite)`), so it stayed.
+#[test]
+fn test_a_store_before_the_lifetime_end_is_dead() {
+    let after = promoted(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca i16
+  call void @llvm.lifetime.start.p0(i64 2, ptr %s)
+  store i16 %x, ptr %s
+  %v = load i16, ptr %s
+  call void @llvm.lifetime.end.p0(i64 2, ptr %s)
+  ret i16 %v
+}
+",
+    );
+    assert!(!after.contains("store "), "{after}");
+}
