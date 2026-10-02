@@ -313,6 +313,7 @@ pub fn assigned(
     }
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut bridges: Vec<LirBlock> = Vec::new();
+    let mut odds = body.odds.clone();
     for ((from, to), pairs) in &on_edge {
         let at = blocks.iter().position(|block| block.at == *from).ok_or("an edge from no block")?;
         let source = blocks[at].clone();
@@ -350,6 +351,7 @@ pub fn assigned(
                     _ => Arc::clone(one),
                 })
                 .collect();
+            odds.rerouted(*from, &source.succ, *to, &[(bridge, 1.0)]);
             let succ = source.succ.iter().map(|one| if one == to { bridge } else { *one }).collect();
             blocks[at] = LirBlock { succ, ..source.with_insns(retargeted) };
             if let Some(target) = blocks.iter_mut().find(|block| block.at == *to) {
@@ -365,7 +367,9 @@ pub fn assigned(
     }
     blocks.extend(bridges);
     // What phis are left (values no general register holds) phi elimination lowers now: the body leaves SSA here.
-    let mut done = crate::backend::phielim::eliminated(&body.with_blocks(blocks))?;
+    let mut bridged = body.with_blocks(blocks);
+    bridged.odds = odds;
+    let mut done = crate::backend::phielim::eliminated(&bridged)?;
     // The coalescer keeps values pinned apart apart.
     done.pins.extend(pins.iter().map(|(value, register)| (*value, *register)));
     Ok((done, pins))

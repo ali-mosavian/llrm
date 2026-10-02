@@ -78,12 +78,7 @@ impl LIRTransform for SsaSpill {
             *self.colours.borrow_mut() = ssacolour::coloured(&out, &untouchable(&out), &IndexMap::default(), &self.segments);
         }
         if std::env::var_os("LLRM_SSA_ASSIGN").is_some() {
-            let floats = floating(&out);
-            let confined = allocate::classes(&out, &BTreeSet::new(), &self.segments);
-            let machine = Machine::of(&confined);
-            let general = |value: u32| machine.registered(value) && !floats.contains(&value);
-            let colours = ssacolour::coloured(&out, &floats, &out.pins, &self.segments);
-            match ssaassign::assigned(&out, &colours, &general, &self.segments) {
+            match assigned(&out, &self.segments) {
                 Ok((assigned, pins)) => {
                     *self.assigned.borrow_mut() = pins;
                     self.left_ssa = true;
@@ -322,6 +317,16 @@ pub(crate) fn untouchable(body: &LirBody) -> BTreeSet<u32> {
 }
 
 /// Values no general register holds: x87 values and wider ones, and every phi web they join.
+/// The spilled SSA `body` coloured and taken out of SSA in those colours, and the register each value keeps.
+pub(crate) fn assigned(body: &LirBody, segments: &Segments) -> Result<(LirBody, IndexMap<u32, Register>), String> {
+    let floats = floating(body);
+    let confined = allocate::classes(body, &BTreeSet::new(), segments);
+    let machine = Machine::of(&confined);
+    let general = |value: u32| machine.registered(value) && !floats.contains(&value);
+    let colours = ssacolour::coloured(body, &floats, &body.pins, segments);
+    ssaassign::assigned(body, &colours, &general, segments)
+}
+
 pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     let mut out: BTreeSet<u32> = BTreeSet::new();
     for one in body.insns() {
