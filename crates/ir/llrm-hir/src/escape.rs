@@ -11,7 +11,7 @@ use llrm_support::hash::IndexMap;
 
 use crate::model;
 
-const _NAMING: [model::Op; 3] = [model::Op::Load, model::Op::Store, model::Op::Copy];
+const _NAMING: [model::Op; 5] = [model::Op::Load, model::Op::Store, model::Op::Copy, model::Op::LifetimeStart, model::Op::LifetimeEnd];
 
 /// Data symbols whose address may be held by something other than a direct
 /// reference. Another module's symbol is, unless it is declared unaddressed.

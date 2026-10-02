@@ -268,9 +268,7 @@ impl FunctionCompiler<'_> {
             .enum_of(ElementType::Struct(view.struct_id))
             .cloned()
         {
-            let tag = self.value(layout.tag);
-            let place = self.projected_place(view, 0, layout.tag);
-            self.emit("load", vec![tag], vec![place], None);
+            let tag = self.load_tag(view, &layout);
             for variant in &layout.variants {
                 if !variant
                     .fields

@@ -462,6 +462,46 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     assert!(text.contains(entry), "{text}");
 }
 
+/// A block local's scope is its lifetime markers, over the bytes of its place; the markers
+/// are declared once, and verify.
+#[test]
+fn a_locals_scope_is_its_lifetime_markers() {
+    use crate::model::{Place, Storage};
+    let instructions = vec![
+        Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Store, vec![], vec![Operand::place_ref(1), Operand::constant(1, 5)]),
+        Instruction::new(3, Op::LifetimeEnd, vec![], vec![Operand::place_ref(1)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+    let function = Function::new(1, "F%", 1, Vec::new(), vec![Place::new(1, "X", 1, Storage::Local, -2)], vec![block], 1);
+    let program = program(function);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  call void @llvm.lifetime.start.p0(i64 2, ptr %0)\n"), "{text}");
+    assert!(text.contains("  call void @llvm.lifetime.end.p0(i64 2, ptr %0)\n"), "{text}");
+    assert_eq!(text.matches("declare void @llvm.lifetime.start.p0").count(), 1, "{text}");
+}
+
+/// A lifetime is a block local's: a marker on anything else is a frontend's mistake, which
+/// a layout reading it would turn into a wrong frame.
+#[test]
+fn a_lifetime_marker_names_one_local() {
+    use crate::model::{Place, Storage};
+    let marked = |mut place: Place| {
+        place.extent = Some(2);
+        let instructions = vec![Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)])];
+        let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+        program(Function::new(1, "F%", 1, Vec::new(), vec![place], vec![block], 1))
+    };
+    let good = crate::verify::verify(&marked(Place::new(1, "X", 1, Storage::Local, -2)));
+    assert!(good.is_ok(), "{good:?}");
+    let error = crate::verify::verify(&marked(Place::new(1, "P", 1, Storage::Parameter, 4))).unwrap_err();
+    assert!(error.to_string().contains("names one local place"), "{error}");
+}
+
 /// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
 /// ask; with none, a view descriptor's loads never left a loop.
 #[test]
@@ -1277,4 +1317,29 @@ fn a_callable_that_returns_twice_is_declared_so() {
     program.modules[0].callables[0] = callable(false);
     assert!(!crate::codec::encode(&program, None).expect("encodes").contains("returns_twice"));
     assert!(!llrm_mir::print::module(&emit(&program).remove(0).module).contains("returns_twice"));
+}
+
+/// A pointer the frontend says is at a fixed address is a pointer in the
+/// fixed-address space; whether its accesses are ordered is the access's
+/// own promise, `volatile`, which the frontend states and lowering keeps.
+#[test]
+fn a_fixed_address_pointer_is_in_the_fixed_space() {
+    use crate::model::{AddressKind, IndirectPlace};
+    for (volatile, word) in [(false, "load"), (true, "load volatile")] {
+        let mut pointer = Type::new(2, "device", TypeKind::Pointer, 4);
+        pointer.address = AddressKind::Fixed;
+        let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }];
+        let at = Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile, origin: None, allocation: None });
+        let load = Instruction::new(1, Op::Load, vec![2], vec![at]);
+        let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+        let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
+        function.parameters = vec![1];
+        let mut program = program(function);
+        program.modules[0].types.push(pointer);
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains("p4:32:16:16:16") && text.contains("(ptr addrspace(4) %0)") && text.contains(&format!("{word} i16, ptr addrspace(4) %0")), "{text}");
+    }
 }

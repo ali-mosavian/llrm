@@ -359,7 +359,7 @@ impl _Plain for model::Module {
     }
 }
 plain_record!(CellWriters, None, cell => "cell", routines => "routines");
-// `reads_arguments` only when made, so that promises read as they always have.
+// `reads_arguments` and `no_return` only when made, so that promises read as they always have.
 impl _Plain for model::RuntimePromises {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -368,6 +368,9 @@ impl _Plain for model::RuntimePromises {
         out.insert("nounwind".to_owned(), self.nounwind._plain());
         if !self.reads_arguments.is_empty() {
             out.insert("reads_arguments".to_owned(), self.reads_arguments._plain());
+        }
+        if !self.no_return.is_empty() {
+            out.insert("no_return".to_owned(), self.no_return._plain());
         }
         Json::Dict(out)
     }
@@ -1403,6 +1406,7 @@ static RUNTIME_PROMISES: _Record = _Record {
         ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
         ("nounwind", _Hint::Tuple(&_Hint::Str), false),
         ("reads_arguments", _Hint::Tuple(&_Hint::Str), false),
+        ("no_return", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::RuntimePromises {
@@ -1410,6 +1414,7 @@ static RUNTIME_PROMISES: _Record = _Record {
             writers: _default(args, "writers", Vec::new())?,
             nounwind: _default(args, "nounwind", Vec::new())?,
             reads_arguments: _default(args, "reads_arguments", Vec::new())?,
+            no_return: _default(args, "no_return", Vec::new())?,
         })
     },
 };

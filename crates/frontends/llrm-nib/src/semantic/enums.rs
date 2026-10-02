@@ -17,6 +17,22 @@ pub(super) struct EnumLayout {
     pub(super) variants: Vec<VariantLayout>,
 }
 
+impl FunctionCompiler<'_> {
+    /// The tag of the enum at `view`, loaded: a native enum holds only the
+    /// tags its variants have, and says so.
+    pub(super) fn load_tag(&mut self, view: &StructView, layout: &EnumLayout) -> u32 {
+        let tag = self.value(layout.tag);
+        let place = self.projected_place(view, 0, layout.tag);
+        let load = self.emit("load", vec![tag], vec![place], None);
+        let (lo, hi) = layout.variants.iter().fold((i64::MAX, i64::MIN), |(lo, hi), variant| (lo.min(variant.tag), hi.max(variant.tag)));
+        if lo <= hi {
+            let subject = llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(load) };
+            self.stated.state(subject, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo, hi }));
+        }
+        tag
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct VariantLayout {
     pub(super) name: String,
