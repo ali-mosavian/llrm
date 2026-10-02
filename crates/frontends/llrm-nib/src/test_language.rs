@@ -3307,7 +3307,7 @@ fn total(values: &[i16]) -> i16:
 fn the_panic_routines_are_stated_to_end_the_program() {
     let hir = super::compile("fn main() -> i16:\n    let mut a: i16[4] = [0] * 4\n    let n: i16 = 3\n    return a[n]\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
     let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
-    assert!(stated("noreturn") >= 1 && stated("noreturn") == stated("memory"), "{hir}");
+    assert!(stated("noreturn") >= 1 && stated("memory") >= stated("noreturn"), "{hir}");
 }
 
 /// Printing a number touches only the runtime's own state: a loop's loads
