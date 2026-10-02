@@ -23,7 +23,7 @@ use crate::support::pyset::PySet;
 pub static ADDRESSING: LazyLock<BTreeSet<Register>> =
     LazyLock::new(|| BTreeSet::from([Register::BX, Register::BP, Register::SI, Register::DI]));
 // `[bx+si]`: a word base and a word index are each confined to their half.
-pub static WORD_BASES: LazyLock<BTreeSet<Register>> = LazyLock::new(|| llrm_x86_code16::WORD_BASES.into());
+pub static WORD_BASES: LazyLock<BTreeSet<Register>> = LazyLock::new(|| llrm_x86_code16::word_bases().into_iter().collect());
 pub static WORD_INDEXES: LazyLock<BTreeSet<Register>> = LazyLock::new(|| llrm_x86_code16::WORD_INDEXES.into());
 
 /// Where an operand has to live: one register, or any of a set.
@@ -578,6 +578,15 @@ pub fn name_of(register: Register) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The allocator's bases are the encodable ones less the frame register: a new frame rule changes one place.
+    #[test]
+    fn test_the_allocators_bases_are_the_encodable_ones_but_the_frame() {
+        let encodable: BTreeSet<Register> = llrm_x86_code16::ENCODABLE_BASES.into_iter().collect();
+        let held: BTreeSet<Register> = encodable.iter().copied().filter(|&one| one != llrm_x86_code16::FRAME).collect();
+        assert_eq!(*WORD_BASES, held);
+        assert!(crate::backend::select::_WORD_BASES.iter().all(|one| encodable.contains(one)));
+    }
 
     /// The spill model counts the registers an address may use as the allocator restricts to.
     #[test]
