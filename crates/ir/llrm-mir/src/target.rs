@@ -39,6 +39,13 @@ pub trait Machine {
         0
     }
 
+    /// Whether an arithmetic result is made in the register of its first
+    /// operand (x86: `sub dst, src`), so a first operand that stays live is
+    /// copied before the result is made.
+    fn two_address(&self) -> bool {
+        false
+    }
+
     /// Of `registers`, how many an address's pointer and index may be held
     /// in, where only some can: none where any can.
     fn address_registers(&self) -> i64 {

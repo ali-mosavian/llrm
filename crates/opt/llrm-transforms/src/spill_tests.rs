@@ -307,3 +307,43 @@ exit:
     assert_eq!(_peak(text, room(4)), 0, "three pointers and the index fit four");
     assert_eq!(_peak(text, room(3)), 1, "one more than three hold");
 }
+
+const HALVED: &str = "define i32 @f(ptr %base, i16 %bound) {
+b1:
+  br label %b2
+
+b2:
+  %iv = phi i16 [ 0, %b1 ], [ %next, %b3 ]
+  %i = phi i16 [ 0, %b1 ], [ %i1, %b3 ]
+  %sum = phi i32 [ 0, %b1 ], [ %sum1, %b3 ]
+  %more = icmp slt i16 %i, %bound
+  br i1 %more, label %b3, label %b4
+
+b3:
+  %sign = ashr i16 %i, 15
+  %biased = sub i16 %i, %sign
+  %half = ashr i16 %biased, 1
+  %at = getelementptr i8, ptr %base, i16 %half
+  %v = load i16, ptr %at
+  %w = sext i16 %v to i32
+  %sum1 = add i32 %sum, %w
+  %i1 = add i16 %i, 1
+  %next = add i16 %iv, 2
+  br label %b2
+
+b4:
+  ret i32 %sum
+}
+";
+
+/// A result made in its first operand's register copies an operand that stays
+/// live: `x / 2` is `mov cx, dx; sub cx, di` with `dx` (the index) live after, so
+/// base, bound, index, sum, a second counter and the sign held six values and the
+/// copy made a seventh. No point held it: lsr then added the counter, the bound
+/// went to `[bp+8]`, and the loop reloaded it each trip (#242).
+#[test]
+fn test_an_arithmetic_result_copies_the_first_operand_that_stays_live() {
+    let room = |two_address| Room { registers: 6, across_call: 2, two_address, ..Room::default() };
+    assert_eq!(_peak(HALVED, room(false)), 0, "six values in six registers");
+    assert_eq!(_peak(HALVED, room(true)), 1, "the copy is a seventh");
+}
