@@ -1,0 +1,16 @@
+# Parity kernel; i16 parameters by value (the C original passes pointers).
+fn parity_control(value: i16, limit: i16) -> i32:
+    let mut total: i32 = 0
+    for index in 0..limit:
+        if (index & 1) == 0:
+            total += i32(value) + i32(index)
+        else:
+            total -= i32(value) - i32(index)
+    return total
+
+fn bench_control() -> i32:
+    return parity_control(7, 6) * 1000 + parity_control(-3, 5)
+
+fn main() -> i16:
+    print(bench_control())
+    return 0
