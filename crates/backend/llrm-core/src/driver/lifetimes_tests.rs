@@ -12,8 +12,9 @@ use crate::backend::masm;
 fn program(markers: bool) -> Program {
     let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
     integer.signed = Some(true);
-    let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
-    let values: Vec<Value> = (1..=5).map(|id| Value { id, r#type: 1 }).collect();
+    let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer, Type::new(2, "boolean", TypeKind::Boolean, 2)];
+    let mut values: Vec<Value> = (1..=4).map(|id| Value { id, r#type: 1 }).collect();
+    values[1].r#type = 2;
     let arm = |id: i64, place: i64, load: i64, results: i64| {
         let mut instructions = Vec::new();
         if markers {
