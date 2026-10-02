@@ -308,8 +308,11 @@ impl _Plain for crate::facts::Stated {
             out.insert("part".to_owned(), part._plain());
         }
         out.insert("fact".to_owned(), Json::Str(self.fact.key().to_owned()));
-        if let Some(value) = self.fact.wire_value() {
+        if let Some((value, second)) = self.fact.wire_value() {
             out.insert("value".to_owned(), value._plain());
+            if let Some(second) = second {
+                out.insert("second".to_owned(), second._plain());
+            }
         }
         if self.source.is_some() {
             out.insert("source".to_owned(), self.source._plain());
@@ -1342,6 +1345,7 @@ static STATED_FACT: _Record = _Record {
         ("part", OPTIONAL_INT, false),
         ("fact", _Hint::Str, true),
         ("value", OPTIONAL_INT, false),
+        ("second", OPTIONAL_INT, false),
         ("source", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
     ],
     build: |args| {
@@ -1351,7 +1355,8 @@ static STATED_FACT: _Record = _Record {
         let subject = crate::facts::Subject::of(kind, _default(args, "function", None)?, _default(args, "id", None)?, _default(args, "part", None)?)
             .ok_or_else(|| InvalidHIR(format!("a {key} fact needs its function and id")))?;
         let value: Option<i64> = _default(args, "value", None)?;
-        let fact = llrm_mir::facts::Fact::from_wire(&name, value).ok_or_else(|| InvalidHIR(format!("{name:?} with value {value:?} is not a fact")))?;
+        let second: Option<i64> = _default(args, "second", None)?;
+        let fact = llrm_mir::facts::Fact::from_wire(&name, value, second).ok_or_else(|| InvalidHIR(format!("{name:?} with values {value:?} {second:?} is not a fact")))?;
         _object(crate::facts::Stated { subject, fact, source: _default(args, "source", None)? })
     },
 };
