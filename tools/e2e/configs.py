@@ -91,7 +91,7 @@ def switches_for(config: Config, program: str) -> str:
 # own and compares it against the golden instead, which is the only thing worth
 # judging either against once the two are known to differ on purpose.
 #
-# tests/suite/cmpof.bas is here because BC is wrong and the rewrite is right. B$CPI4
+# tests/run/qb/cmpof.bas is here because BC is wrong and the rewrite is right. B$CPI4
 # rebuilds a signed answer out of unsigned flags through sahf, which cannot
 # write OF -- so BC's own jl/jle/jg/jge read a flag left over from an unrelated
 # 16-bit compare and answer backwards whenever the high words are equal and the

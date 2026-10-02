@@ -3462,7 +3462,7 @@ mod tests {
 
     /// A PRINT item followed by ELSE was refused ("invalid generated-grammar
     /// statement"): only a new line or colon ended it, not the ELSE of a
-    /// one-line IF. tests/suite/flags.bas did not compile.
+    /// one-line IF. tests/run/qb/flags.bas did not compile.
     /// LPRINT and WRITE were refused ("unsupported opStLPrint"/"opStWrite"):
     /// both are a PRINT with a preamble, and WRITE's items are comma-separated.
     #[test]
@@ -3510,7 +3510,7 @@ mod tests {
     }
 
     /// ON n GOTO|GOSUB parsed to no statement ("invalid generated-grammar
-    /// statement"): the grammar emitted no opcode for it. tests/suite/jumps.bas
+    /// statement"): the grammar emitted no opcode for it. tests/run/qb/jumps.bas
     /// did not compile.
     #[test]
     fn on_goto_and_on_gosub_select_the_nth_label() {

@@ -9,42 +9,19 @@ how the oracle is checked against BASIC's own compiler.
 
 from __future__ import annotations
 
-import os
-import re
 import sys
-import json
-import shutil
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 
 from build import BIN, HERE, ROOT, CompileError
 
-sys.path.insert(0, str(ROOT / "tools" / "e2e"))
+sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
 
-from dosbox import read_dos  # noqa: E402
+import dosbatch  # noqa: E402
+from dosbatch import QB45, Job  # noqa: E402,F401
 
-QB45 = Path.home() / "work/42-labs/mini-qb/dosbox/qb45"
 NIB_RUNTIME = ROOT / "crates/frontends/llrm-nib/src/runtime"
-CONF = """\
-[sdl]
-priority=higher,normal
-output=surface
-[dosbox]
-memsize=32
-startquiet=true
-startbanner=false
-quit warning=false
-[cpu]
-core=normal
-cputype=pentium
-cycles=max
-[dos]
-xms=true
-ems=true
-[mixer]
-nosound=true
-"""
 
 
 @dataclass
@@ -53,16 +30,6 @@ class Stopped:
 
     why: str
     partial: list[int]
-
-
-@dataclass
-class Job:
-    """One program. kind: exe (linked here), obj (a BASIC object to LINK
-    there), bas (a BASIC source for BC, then LINK)."""
-
-    stem: str  # at most 8 characters
-    kind: str
-    path: Path
 
 
 def _run(command: list[str], cwd: Path | None = None) -> None:
@@ -75,21 +42,11 @@ def assemble(source: Path, obj: Path, *defines: str) -> None:
     _run([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
 
 
-# What DOSBox leaves a program of its 640K: the rest is DOS, the shell and the
-# environment. A bigger one stops with "Unable to run program (errcode=8)".
-LOAD_LIMIT = 560_000
-
-
 def check_loads(exe: Path) -> None:
-    """Raise CompileError for an EXE too big for DOS memory, so a batch that
-    outgrew it is run case by case, as one that did not link is."""
-    head = exe.read_bytes()[:14]
-    if head[:2] != b"MZ":
-        return
-    last, pages, _, header, minimum = (int.from_bytes(head[at : at + 2], "little") for at in (2, 4, 6, 8, 10))
-    image = pages * 512 - (512 - last if last else 0) - header * 16
-    if image + minimum * 16 > LOAD_LIMIT:
-        raise CompileError(f"{exe.name} needs {image + minimum * 16} bytes, more than DOS has: {LOAD_LIMIT}")
+    try:
+        dosbatch.check_loads(exe)
+    except dosbatch.TooBig as error:
+        raise CompileError(str(error))
 
 
 def link_c(obj: Path, exe: Path, work: Path) -> None:
@@ -118,74 +75,17 @@ def link_nib(obj: Path, exe: Path, work: Path, opt: str) -> None:
           "file", str(parts["start"]), "file", str(obj), "file", str(runtime), "file", str(ext), "file", str(parts["dos"])])
 
 
-def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000) -> dict[str, list[int] | str]:
-    """Every job's report stream, or why there is none. One dosrun launch: a
-    first job builds (BC, LINK), then each program runs as its own job with
-    `budget_ms` of emulated time, so a hang ends that program alone."""
-    if work.exists():
-        shutil.rmtree(work)
-    work.mkdir(parents=True)
-    head = [f"mount c {work}", f"mount v {QB45}", r"set LIB=V:\LIB", "c:"]
-    building = []
-    for job in jobs:
-        u = job.stem.upper()
-        if job.kind == "exe":
-            shutil.copy(job.path, work / f"{u}.EXE")
-        elif job.kind == "obj":
-            shutil.copy(job.path, work / f"{u}.OBJ")
-            building.append(f"V:\\LINK /NOE {u}.OBJ,{u}.EXE,,V:\\LIB\\BCOM45.LIB; > {u}.LNK")
-        else:
-            shutil.copy(job.path, work / f"{u}.BAS")
-            building.append(f"V:\\BC /O /FPi {u}.BAS,{u}.OBJ; > {u}.BCO")
-            building.append(f"V:\\LINK /NOE {u}.OBJ,{u}.EXE,,V:\\LIB\\BCOM45.LIB; > {u}.LNK")
-    script = [":ms 1200000", *head, *building, "."]
-    for job in jobs:
-        u = job.stem.upper()
-        script += [f":ms {budget_ms}", *head, f"if exist {u}.EXE {u}.EXE > {u}.TXT", "."]
-    (work / "job.conf").write_text(CONF)
-    (work / "jobs.txt").write_text("\n".join(script) + "\n")
-    events = work / "events.txt"
-    with open(work / "jobs.txt") as stdin, open(events, "w") as sink:
-        try:
-            subprocess.run([str(BIN / "dosbox-x"), "-nolog", "-conf", str(work / "job.conf")], stdin=stdin,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
-                           env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())},
-                           timeout=timeout)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"DOSBox did not finish in {timeout}s ({work})")
-    return collect(jobs, work, events)
+def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000) -> dict[str, list[int] | str | Stopped]:
+    """Every job's report stream, or why there is none."""
+    return {stem: reports(one) for stem, one in dosbatch.run(jobs, work, timeout, budget_ms).items()}
 
 
-def collect(jobs: list[Job], work: Path, events: Path) -> dict[str, list[int] | str | Stopped]:
-    """Each job's reports, from a launch's events and files."""
-    lines = [json.loads(line) for line in events.read_text().splitlines() if line.startswith('{"ev":')]
-    ends = [one for one in lines if one["ev"] == "end"]
-    # A stopped program never closes its output, so DOS leaves the file
-    # empty; what it wrote is in the events.
-    written: dict[str, str] = {}
-    for one in lines:
-        if one["ev"] == "out" and one.get("file"):
-            written[one["file"].upper()] = written.get(one["file"].upper(), "") + one["text"]
-    if len(ends) != len(jobs) + 1:
-        raise RuntimeError(f"DOSBox ran {len(ends)} of {len(jobs) + 1} jobs ({events})")
-    out = {}
-    for job, end in zip(jobs, ends[1:]):
-        u = job.stem.upper()
-        severe = re.search(r"(\d+) Severe\s+Error", read_dos(work, f"{u}.BCO"))
-        if severe and int(severe.group(1)):
-            # LINK makes an EXE of what BC refused: never run it
-            out[job.stem] = "not built: BC: " + read_dos(work, f"{u}.BCO").strip()[-600:]
-            continue
-        if not (work / f"{u}.EXE").exists():
-            out[job.stem] = "not built: " + (read_dos(work, f"{u}.BCO") + read_dos(work, f"{u}.LNK")).strip()[-600:]
-            continue
-        text = read_dos(work, f"{u}.TXT")
-        if end.get("reason") != "exit":
-            partial = [int(one) for one in written.get(f"{u}.TXT", "").split() if one.lstrip("-").isdigit()]
-            out[job.stem] = Stopped(f"{end.get('reason')} after {end.get('ms')} ms ({events})", partial)
-            continue
-        try:
-            out[job.stem] = [int(one) for one in text.split()]
-        except ValueError:
-            out[job.stem] = "unreadable output: " + text.strip()[:300]
-    return out
+def reports(one: dosbatch.Result) -> list[int] | str | Stopped:
+    if one.status == "not built":
+        return "not built: " + one.detail
+    if one.status == "stopped":
+        return Stopped(one.detail, [int(w) for w in one.text.split() if w.lstrip("-").isdigit()])
+    try:
+        return [int(w) for w in one.text.split()]
+    except ValueError:
+        return "unreadable output: " + one.text.strip()[:300]

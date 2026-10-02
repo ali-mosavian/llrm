@@ -37,7 +37,7 @@ Its `/D` builds print the same answer before/after on all three compilers.
 Artifacts and complete PDS stage dumps:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-native-jbt83893`.
 `tests/fixtures/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
-output from `tests/suite/harr.bas` with the named configuration plus `/D`.
+output from `tests/run/qb/harr.bas` with the named configuration plus `/D`.
 An additional focused expression check uses unequal dimensions and negative
 lower bounds, because HARR's square zero-based allocation cannot detect a
 swapped dimension formula. Unestablished allocation layouts stay refused.
@@ -68,7 +68,7 @@ barriers, so this is exposure of address arithmetic, not yet a claim that every
 address has become a loop-carried induction value.
 
 Regression fixtures `tests/fixtures/regressions/arridx-bounds-{p-g2,q-o,v-g3}.obj`
-are unchanged BC output from `tests/suite/arridx.bas`, using each named configuration
+are unchanged BC output from `tests/run/qb/arridx.bas`, using each named configuration
 plus `/D`. All three execute with output 1260, with checks both enabled and
 disabled (six runs). This also exposed an independent INTO normal-path SSA bug:
 invented register results made ARRIDX print 630/0. INTO now observes flags

@@ -1734,7 +1734,7 @@ fn test_a_masked_use_moves_with_a_counter_to_zero() {
 fn test_a_counter_stepped_before_other_work_still_tests_its_own_flags() {
     // rcflip's third RAMP loop stepped `inc ax` before `add bx, 2`, which
     // overwrote its flags, so the header kept `or ax, ax` every trip.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/suite/rcflip.bas");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/rcflip.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = text.find("RAMP proc").expect("RAMP proc");
@@ -1756,7 +1756,7 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     // `cdq` and `idiv` each took their own copy of i \ 5's dividend in EAX,
     // so the extended value sat in EDI across both and one of stride's three
     // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/suite/stride.bas");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/stride.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
     assert!(!body.contains("[bp") && body.contains("cdq") && body.matches("idiv").count() == 1, "{body}");
@@ -1767,7 +1767,7 @@ fn test_a_sum_read_after_its_loop_is_copied_out_where_the_loop_ends() {
     // segld's sum is printed after both loops, across a runtime call, so as
     // one value with the loop's it could only live in SI: the loop added into
     // SI and copied back to CX on a split back edge, `mov cx, si` and `jmp`.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/suite/segld.bas");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/segld.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
     let copies = regex::Regex::new(r"mov [a-z]{2}, [a-z]{2}\n").unwrap();
@@ -2021,7 +2021,7 @@ fn test_the_runtime_frame_zeroes_the_locals() {
 #[test]
 fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
-        let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/suite/{name}.bas"));
+        let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/run/qb/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
         qb_compile::assembled(&program, None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).unwrap_or_else(|error| panic!("{name}: {error}"));
     }

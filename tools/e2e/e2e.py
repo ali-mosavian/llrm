@@ -40,7 +40,7 @@ from cache import toolchain_identity
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SUITE = ROOT / "tests/suite"
+SUITE = ROOT / "tests/run/qb"
 BUILD = ROOT / "build" / "e2e"
 
 
@@ -147,7 +147,7 @@ def link_report(work: Path, names: list[str]) -> dict[str, str]:
 def judge(
     work: Path,
     name: str,
-    golden_dir: Path = SUITE / "golden",
+    golden_dir: Path = SUITE,
     link_text: str = "",
     run: Run | None = None,
 ) -> Verdict:
@@ -169,7 +169,7 @@ def judge(
     opt = lines(read_dos(work, f"O_{run_name}.TXT"))
     if not base:
         return Verdict(name, "RUNFAIL", "the baseline produced no output")
-    golden = lines((golden_dir / f"{name}.txt").read_text())
+    golden = lines((golden_dir / f"{name}.out").read_text())
 
     diverges = name in DIVERGES
     if base != golden and not diverges:
@@ -235,7 +235,7 @@ def run(
     work: Path | None = None,
     names: list[str] | None = None,
     source_dir: Path = SUITE,
-    golden_dir: Path = SUITE / "golden",
+    golden_dir: Path = SUITE,
 ) -> Result:
     cfg = CONFIGS[tag]
     if not cfg.available:

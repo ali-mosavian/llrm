@@ -8,7 +8,7 @@ bugs (evaluator or BC, versus llrm) and byte-diff against BC cannot tell them
 apart once an optimizing pass starts emitting different code on purpose.
 
 Every generated program runs through tools/e2e.py's own compile/link/run/judge
-machinery -- the same one tests/suite/*.bas gets -- pointed at a disposable program
+machinery -- the same one tests/run/qb/*.bas gets -- pointed at a disposable program
 set via `names`/`source_dir`/`golden_dir` rather than a parallel harness. Two
 passes per configuration:
 
@@ -87,7 +87,7 @@ def build_corpus(seed: int, count: int, work: Path) -> tuple[Path, Path, list[st
     for i, name in enumerate(names):
         program = generate_program(seed=seed * 1_000_000 + i)
         (source_dir / f"{name}.bas").write_text(render_program(program))
-        (golden_dir / f"{name}.txt").write_text("\n".join(golden_lines(program)) + "\n")
+        (golden_dir / f"{name}.out").write_text("\n".join(golden_lines(program)) + "\n")
     return source_dir, golden_dir, names
 
 

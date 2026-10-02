@@ -1035,7 +1035,7 @@ fn test_a_value_read_across_an_inner_loop_is_its_own_counter() {
     assert!(per_column.is_empty(), "{printed}");
 }
 
-/// `tests/suite/addrm.bas`: a word array read at `i` and `i + 1`, and a
+/// `tests/run/qb/addrm.bas`: a word array read at `i` and `i + 1`, and a
 /// dword one stored `i` at `i`.
 const ADDRM: &str = "  br label %l1
 

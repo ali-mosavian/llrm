@@ -63,8 +63,8 @@ fn debug_symbols_read_as_bc_writes_them() {
         ("byref2", "omf/byref2-q-o-zi", "qb45"),
         ("byref2", "cv/byref2-p-g2-zi", "pds71"),
         ("byref2", "cv/byref2-v-g3-zi", "vbdos"),
-        ("cvonly/byval", "cv/byval-p-g2-zi", "pds71"),
-        ("cvonly/byval", "cv/byval-v-g3-zi", "vbdos"),
+        ("byval", "cv/byval-p-g2-zi", "pds71"),
+        ("byval", "cv/byval-v-g3-zi", "vbdos"),
         ("udt", "cv/udt-q-o-zi", "qb45"),
         ("udt", "cv/udt-p-g2-zi", "pds71"),
         ("udt", "cv/udt-v-g3-zi", "vbdos"),
@@ -73,7 +73,10 @@ fn debug_symbols_read_as_bc_writes_them() {
         ("arrays", "cv/arrays-v-g3-zi", "vbdos"),
         ("nestud", "omf/nestud-q-o-zi", "qb45"),
     ] {
-        let source = std::fs::read_to_string(root().join(format!("tests/suite/{program}.bas"))).expect("reads");
+        let source = ["tests/run/qb", "tests/inputs/codeview"]
+            .iter()
+            .find_map(|dir| std::fs::read_to_string(root().join(format!("{dir}/{program}.bas"))).ok())
+            .expect("reads");
         let bc = shape(&omf::read(root().join(format!("tests/fixtures/{fixture}.obj"))).expect("reads"));
         assert!(!bc.is_empty(), "{fixture} carries no symbols");
         assert_eq!(shape(&object(&source, &[], dialect, dialect, true)), bc, "{fixture}");

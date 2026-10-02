@@ -3,7 +3,7 @@
     python3 tools/sizes.py BASE_BIN_DIR [NEW_BIN_DIR] [-O2|-Os|-Oz|-O3]... [--frames]
 
 Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
-defaults to target/release). A program is tests/suite, bench and examples, plus the
+defaults to target/release). A program is tests/run/qb, bench and examples, plus the
 QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's;
 instructions and memory operands are the backend's `cost` estimate per call,
 summed (not a timing). With --frames, also the bytes each program reserves below BP
@@ -31,7 +31,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         if not DEMOS.is_dir():
             sys.exit(f"{DEMOS} is missing: set QBDEMOS, or the demos cannot be counted")
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
-    for pattern, tool in (("tests/suite/*.bas", qb), ("bench/*.bas", qb), ("bench/general/*.BAS", qb), ("bench/parity/*.bas", qb), ("bench/c/*.c", cc), ("bench/general/*.c", cc), ("bench/parity/*.c", cc), ("examples/*.nib", nib)):
+    for pattern, tool in (("tests/run/qb/*.bas", qb), ("bench/*.bas", qb), ("bench/general/*.BAS", qb), ("bench/parity/*.bas", qb), ("bench/c/*.c", cc), ("bench/general/*.c", cc), ("bench/parity/*.c", cc), ("examples/*.nib", nib)):
         out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, file]) for file in sorted(glob.glob(str(ROOT / pattern)))]
     return out
 

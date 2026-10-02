@@ -36,7 +36,7 @@ allocator's information and could not have had it.
 callers asked `op.made or op.node.semantics` -- "what does this compute, in
 x86" -- and for an operation a pass had already rewritten they got the
 *original instruction*. A fold kept the fixup of the read it replaced, and
-`tests/suite/jumps.bas` took the CASE ELSE arm for `k = 1`.
+`tests/run/qb/jumps.bas` took the CASE ELSE arm for `k = 1`.
 
 **An idiom recognised in a pass is recognised in the wrong place.** What a
 long pair *is*, what an absorbable call *is*: those are questions about the
