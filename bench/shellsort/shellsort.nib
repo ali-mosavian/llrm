@@ -1,0 +1,24 @@
+# Same algorithm as shellsort.c.
+
+fn bench_shellsort(seed: u16) -> u32:
+    let mut values: u16[64] = [0] * 64
+    let mut checksum: u32 = 0
+    for i in 0..64:
+        values[i] = u16((u32(i) * 109 + 37) ^ (u32(i) << 7) ^ u32(seed))
+    let mut gap: u16 = 32
+    while gap != 0:
+        for i in gap..64:
+            let mut at: u16 = i
+            let value: u16 = values[i]
+            while at >= gap && values[at - gap] > value:
+                values[at] = values[at - gap]
+                at -= gap
+            values[at] = value
+        gap >>= 1
+    for i in 0..64:
+        checksum += u32(values[i]) * u32(i + 1)
+    return checksum
+
+fn main() -> i16:
+    print(i32(bench_shellsort(0)))
+    return 0
