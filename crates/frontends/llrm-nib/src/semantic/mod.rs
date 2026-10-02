@@ -1456,11 +1456,22 @@ fn program(
     }
     callables.extend(templates.borrow().callables(&mut types));
     let functions = checked(compiled, &builtin_ids, &literals)?;
-    // A routine that ends the program touches nothing a caller's loop reads back.
+    // What the runtime's routines do, which no body shows: one that ends the
+    // program touches nothing a caller's loop reads back, and one that prints
+    // a value touches only the runtime's own state.
     let mut stated = llrm_core::hir::facts::Builder::new("nib");
-    for callable in callables.iter().filter(|one| !one.defined && llrm_core::abi::nib::TERMINATING.contains(&one.name.as_str())) {
+    for callable in callables.iter().filter(|one| !one.defined) {
+        use llrm_core::abi::nib as routines;
         let subject = llrm_core::hir::facts::Subject::Callable(i64::from(callable.id));
-        stated.state(subject, llrm_mir::facts::Fact::NoReturn).state(subject, llrm_mir::facts::Fact::Memory(llrm_mir::facts::Effect::Inaccessible));
+        let name = callable.name.as_str();
+        if routines::TERMINATING.contains(&name) {
+            stated.state(subject, llrm_mir::facts::Fact::NoReturn);
+        }
+        if routines::RUNTIME_STATE_ONLY.contains(&name) || routines::TERMINATING.contains(&name) {
+            stated.state(subject, llrm_mir::facts::Fact::Memory(llrm_mir::facts::Effect::Inaccessible));
+        } else if routines::READ_ONLY.contains(&name) {
+            stated.state(subject, llrm_mir::facts::Fact::Memory(llrm_mir::facts::Effect::Read));
+        }
     }
     let debug = frontend.debug.then(|| debug::described(&functions, &types));
     let program = hir::Program {
