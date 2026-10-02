@@ -1801,6 +1801,10 @@ impl<'a> FunctionCompiler<'a> {
                 // A reference is made from a place, so it is not null and points at
                 // the whole of what it borrows; a shared one cannot write it. Whether
                 // nothing else reaches it depends on its callers (`unaliased`).
+                // An owned aggregate is the caller's private copy, made for this call:
+                // nothing else reaches it, so it is as unaliased as a borrow proven
+                // so, and by construction.
+                SignatureParameter::Owned { .. } => compiler.references.push(subject),
                 SignatureParameter::Borrowed { mutable, target, .. } => {
                     if let Some(bytes) = compiler.types.referent_bytes(target) {
                         compiler.stated.state(subject, llrm_mir::facts::Fact::NonNull).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(bytes)));
