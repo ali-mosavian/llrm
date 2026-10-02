@@ -161,15 +161,62 @@ pub enum Effect {
     Inaccessible,
 }
 
+/// What the language says of inlining a routine; `Never` outranks the rest.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Inlining {
+    /// Not at any call (`noinline`).
+    Never,
+    /// Worth a larger body than usual (`inlinehint`, C's `inline`).
+    #[default]
+    Hint,
+    /// At every call it can be (`alwaysinline`).
+    Always,
+}
+
+impl Inlining {
+    fn flag(self) -> &'static str {
+        match self {
+            Inlining::Never => "noinline",
+            Inlining::Hint => "inlinehint",
+            Inlining::Always => "alwaysinline",
+        }
+    }
+
+    fn of_flag(name: &str) -> Option<Inlining> {
+        [Inlining::Never, Inlining::Hint, Inlining::Always].into_iter().find(|one| one.flag() == name)
+    }
+}
+
+impl Wire for Inlining {
+    fn wire(self) -> (i64, Option<i64>) {
+        (self as i64, None)
+    }
+
+    fn unwire(value: i64, second: Option<i64>) -> Option<Inlining> {
+        [Inlining::Never, Inlining::Hint, Inlining::Always].into_iter().find(|one| *one as i64 == value && second.is_none())
+    }
+}
+
 facts! {
     flags {
         // Of a routine, its result: a pointer to memory nothing else names.
         NoAlias no_alias "noalias" on [Param, Callable];
         ReadOnly read_only "readonly" on [Param];
+        // Touches no memory through the pointer, or at all, of a routine.
+        ReadNone read_none "readnone" on [Param, Callable];
         NonNull non_null "nonnull" on [Param];
         NoCapture no_capture "nocapture" on [Param, Operand];
         WriteOnly write_only "writeonly" on [Operand];
         NoReturn no_return "noreturn" on [Callable];
+        // Every loop of it that does nothing observable ends: the language says
+        // so of every loop, as LLVM's function-level `mustprogress`. C's promise is
+        // per loop (C11 6.8.5p6), as `llvm.loop.mustprogress`, not this.
+        MustProgress must_progress "mustprogress" on [Callable];
+        // Of a routine: it raises nothing, comes back, calls nothing of the module, is rare.
+        NoUnwind no_unwind "nounwind" on [Callable];
+        WillReturn will_return "willreturn" on [Callable];
+        NoCallback no_callback "nocallback" on [Callable];
+        Cold cold "cold" on [Callable];
         // The result is a three-way compare of the data: its sign says which
         // is greater, nothing about how often. LLVM knows strcmp's by name
         // (LibFunc); here the language states it of the routine.
@@ -184,11 +231,20 @@ facts! {
         Memory(Effect) memory "memory" on [Callable];
         // Of a routine, its result.
         Range(Bounds) range "range" on [Param, Callable, Instruction];
+        Inline(Inlining) inline "inline" on [Callable];
     }
     bits {
         NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction];
         NoUnsignedWrap no_unsigned_wrap "nuw" Flags::NUW, on [Instruction];
         InBounds in_bounds "inbounds" Flags::INBOUNDS, on [Instruction, Operand];
+        // What the language lets a pass do to a floating operation: sums and
+        // products regroup, no operand is NaN or infinite, a zero's sign is
+        // not observed, a division is a multiply by the reciprocal.
+        Reassoc reassoc "reassoc" Flags::REASSOC, on [Instruction];
+        NoNaNs no_nans "nnan" Flags::NNAN, on [Instruction];
+        NoInfs no_infs "ninf" Flags::NINF, on [Instruction];
+        NoSignedZeros no_signed_zeros "nsz" Flags::NSZ, on [Instruction];
+        AllowReciprocal allow_reciprocal "arcp" Flags::ARCP, on [Instruction];
     }
 }
 
@@ -201,8 +257,9 @@ impl Fact {
             Fact::Dereferenceable(value) | Fact::Align(value) => Some(Attribute::Int(self.key().to_owned(), value)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
+            Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
             // A range wants the width of what it bounds: `typed_attribute`.
-            Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds => None,
+            Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
     }
@@ -237,10 +294,15 @@ impl Fact {
         (lo <= hi).then(|| Fact::Range(Bounds { lo: lo as i64, hi: hi as i64 }))
     }
 
+    /// The attribute that carries a flag or valued fact; a fact that is carried otherwise has none.
+    pub fn carrier(self) -> Attribute {
+        self.attribute().unwrap_or_else(|| panic!("{} has no attribute", self.key()))
+    }
+
     /// The fact a carrier states, if it states one.
     pub fn of_attribute(attribute: &Attribute) -> Option<Fact> {
         match attribute {
-            Attribute::Flag(name) => Fact::flag(name),
+            Attribute::Flag(name) => Fact::flag(name).or_else(|| Inlining::of_flag(name).map(Fact::Inline)),
             Attribute::Int(name, value) => Fact::valued(name, *value),
             Attribute::Initializes(ranges) => match ranges[..] {
                 [(0, bytes)] => Some(Fact::Initializes(bytes as u64)),
@@ -371,7 +433,7 @@ mod tests {
     /// A pass asks the fact, not the attribute's spelling.
     #[test]
     fn facts_are_read_from_attributes_and_others_are_ignored() {
-        let attributes = vec![Attribute::Flag("noalias".to_owned()), Attribute::Flag("nocallback".to_owned()), Attribute::Flag("noalias".to_owned())];
+        let attributes = vec![Attribute::Flag("noalias".to_owned()), Attribute::Flag("builtin".to_owned()), Attribute::Flag("noalias".to_owned())];
         let facts = Facts::of(&attributes);
         assert!(facts.no_alias());
         assert_eq!(facts.iter().count(), 1);
@@ -402,5 +464,50 @@ mod tests {
         let facts = Facts::of_typed(&attributes, |_| Some(8), false);
         assert_eq!((facts.range(), facts.no_alias()), (Some(Bounds { lo: 3, hi: 9 }), true));
         assert_eq!(Fact::from_wire("range", Some(5), Some(2)), None, "lo above hi is no range");
+    }
+
+    /// A pass asks the fact, never the attribute's spelling: no source outside
+    /// the fact table, the parser and printer, and the tests names one as a
+    /// flag. Every `Attribute::Flag("noalias")` or `has(attrs, "nocapture")`
+    /// left behind is a second way to state a fact.
+    #[test]
+    fn no_pass_reads_a_fact_by_the_name_of_its_attribute() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let keys: Vec<&str> = Fact::examples().into_iter().filter(|fact| matches!(fact.attribute(), Some(Attribute::Flag(_)))).map(|fact| fact.key()).collect();
+        let mut found = Vec::new();
+        let mut directories = vec![root];
+        while let Some(directory) = directories.pop() {
+            for entry in std::fs::read_dir(&directory).expect("a directory").flatten() {
+                let path = entry.path();
+                let name = path.file_name().and_then(|one| one.to_str()).unwrap_or_default().to_owned();
+                if path.is_dir() {
+                    if !matches!(name.as_str(), "target" | "tests" | "fixtures") {
+                        directories.push(path);
+                    }
+                } else if name.ends_with(".rs") && !name.contains("test") && !matches!(name.as_str(), "facts.rs" | "parse.rs" | "print.rs" | "opcode.rs") {
+                    let text = std::fs::read_to_string(&path).expect("source");
+                    // Test modules sit at the end of a file.
+                    let source = text.split("#[cfg(test)]").next().unwrap_or_default();
+                    for (at, line) in source.lines().enumerate() {
+                        let reads = line.contains("Attribute::Flag(") || line.contains("has(") || line.contains("states(");
+                        if reads && keys.iter().any(|key| line.contains(&format!("\"{key}\""))) {
+                            found.push(format!("{}:{}: {}", path.display(), at + 1, line.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(found, Vec::<String>::new());
+    }
+
+    /// Each way to state inlining is its own attribute, reads back, and `Never` outranks.
+    #[test]
+    fn each_inlining_has_its_attribute() {
+        for (how, name) in [(Inlining::Never, "noinline"), (Inlining::Hint, "inlinehint"), (Inlining::Always, "alwaysinline")] {
+            assert_eq!(Fact::Inline(how).attribute(), Some(Attribute::Flag(name.to_owned())));
+            assert_eq!(Facts::of(&[Attribute::Flag(name.to_owned())]).inline(), Some(how));
+            assert_eq!(Fact::from_wire("inline", Fact::Inline(how).wire_value().map(|one| one.0), None), Some(Fact::Inline(how)));
+        }
+        assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
     }
 }

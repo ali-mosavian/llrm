@@ -27,6 +27,7 @@ pub mod floatregions;
 pub mod inline_asm;
 pub mod fpu;
 pub mod frame;
+pub mod stackusage;
 pub mod jumps;
 pub mod lanes;
 pub mod layout;

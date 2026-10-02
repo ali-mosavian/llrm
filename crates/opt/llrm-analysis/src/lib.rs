@@ -8,6 +8,7 @@
 //! analysis manager; `manager` makes the memory analyses its entries.
 
 pub mod alias;
+pub mod assumptions;
 pub mod avail;
 pub mod branchprob;
 pub mod cellmap;
