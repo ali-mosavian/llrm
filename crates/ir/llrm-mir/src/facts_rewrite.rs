@@ -18,12 +18,15 @@
 //! after the original did. So every fact here survives. A fact that made the
 //! instruction undefined behaviour outright (LLVM's `noundef`, `!dereferenceable`
 //! on a load) would not, and answers `false` below. Checked when this was
-//! written: `hoist`, `licm`, `loopmotion`, `lsr` (induction steps), `exitsink`,
+//! written, on the passes `llrm_transforms::pipeline` runs: `hoist`,
+//! `loopmotion`, `lsr` (induction steps), `exitsink` (through `indvars`),
 //! `gvn::joined` (insertion on an edge) and `loadjoins` (a load cloned into
 //! predecessors) move or insert an instruction with its flags, and are sound
 //! by the argument above; `algebraic` reassociation changes operands and
-//! already clears the flags (`set_flags(.., Flags::default())`); `simplifycfg`
-//! only joins a block to its single predecessor.
+//! already clears the flags (`set_flags(.., Flags::default())`). The passes of
+//! `llrm_mir::transforms` (`licm`, `earlycse`, `simplifycfg`, ...) are not run by
+//! the compile route (#237); they do the same, and a pass that moves into the route
+//! comes under this audit.
 //!
 //! The argument needs one more thing: no reader takes a flag or `!range` off
 //! an instruction to conclude something about its operands, or about another
@@ -38,7 +41,7 @@
 //! value tracking read no flag. The test below lists the files that name a
 //! no-wrap or inbounds flag, so a new reader is checked before it is added.
 
-use crate::facts::{Effect, Fact, Facts};
+use crate::facts::{Bounds, Effect, Fact, Facts};
 
 impl Fact {
     /// The fact that holds of the one instruction two stated instructions
@@ -50,6 +53,9 @@ impl Fact {
             (Fact::Align(a), Fact::Align(b)) => Some(Fact::Align(a.min(b))),
             (Fact::Initializes(a), Fact::Initializes(b)) => Some(Fact::Initializes(a.min(b))),
             (Fact::Memory(a), Fact::Memory(b)) => Self::effects(a, b).map(Fact::Memory),
+            // Both bounds hold of the one value that is either's: the hull.
+            (Fact::Range(a), Fact::Range(b)) => Some(Fact::Range(Bounds { lo: a.lo.min(b.lo), hi: a.hi.max(b.hi) })),
+            (Fact::Unroll(a), Fact::Unroll(b)) => Some(Fact::Unroll(a.min(b))),
             (a, b) if a == b => Some(a),
             _ => None,
         }
@@ -92,7 +98,11 @@ impl Fact {
             | Fact::NoNaNs
             | Fact::NoInfs
             | Fact::NoSignedZeros
-            | Fact::AllowReciprocal => true,
+            | Fact::AllowReciprocal
+            | Fact::Invariant
+            | Fact::Unroll(_)
+            | Fact::MustProgress
+            | Fact::Range(_) => true,
         }
     }
 }
@@ -134,6 +144,8 @@ mod tests {
         assert_eq!(merged.memory(), Some(Effect::Read));
         assert_eq!(facts(&[Fact::NoSignedWrap]).merged(&facts(&[])).iter().count(), 0, "one side's promise alone is not kept");
         assert_eq!(facts(&[Fact::Memory(Effect::Read)]).merged(&facts(&[Fact::Memory(Effect::Write)])).memory(), None);
+        let hull = facts(&[Fact::Range(Bounds { lo: 0, hi: 3 })]).merged(&facts(&[Fact::Range(Bounds { lo: 2, hi: 9 })]));
+        assert_eq!(hull.range(), Some(Bounds { lo: 0, hi: 9 }), "a merged range is the hull");
     }
 
     /// Every fact survives being run where it did not run, today: the users

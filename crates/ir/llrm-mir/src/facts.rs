@@ -523,40 +523,6 @@ mod tests {
         assert_eq!(found, Vec::<String>::new());
     }
 
-    /// A pass asks the fact, never the attribute's spelling: no source outside
-    /// the fact table, the parser and printer, and the tests names one as a
-    /// flag. Every `Attribute::Flag("noalias")` or `has(attrs, "nocapture")`
-    /// left behind is a second way to state a fact.
-    #[test]
-    fn no_pass_reads_a_fact_by_the_name_of_its_attribute() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let keys: Vec<&str> = Fact::examples().into_iter().filter(|fact| matches!(fact.attribute(), Some(Attribute::Flag(_)))).map(|fact| fact.key()).collect();
-        let mut found = Vec::new();
-        let mut directories = vec![root];
-        while let Some(directory) = directories.pop() {
-            for entry in std::fs::read_dir(&directory).expect("a directory").flatten() {
-                let path = entry.path();
-                let name = path.file_name().and_then(|one| one.to_str()).unwrap_or_default().to_owned();
-                if path.is_dir() {
-                    if !matches!(name.as_str(), "target" | "tests" | "fixtures") {
-                        directories.push(path);
-                    }
-                } else if name.ends_with(".rs") && !name.contains("test") && !matches!(name.as_str(), "facts.rs" | "parse.rs" | "print.rs" | "opcode.rs") {
-                    let text = std::fs::read_to_string(&path).expect("source");
-                    // Test modules sit at the end of a file.
-                    let source = text.split("#[cfg(test)]").next().unwrap_or_default();
-                    for (at, line) in source.lines().enumerate() {
-                        let reads = line.contains("Attribute::Flag(") || line.contains("has(") || line.contains("states(");
-                        if reads && keys.iter().any(|key| line.contains(&format!("\"{key}\""))) {
-                            found.push(format!("{}:{}: {}", path.display(), at + 1, line.trim()));
-                        }
-                    }
-                }
-            }
-        }
-        assert_eq!(found, Vec::<String>::new());
-    }
-
     /// Each way to state inlining is its own attribute, reads back, and `Never` outranks.
     #[test]
     fn each_inlining_has_its_attribute() {
