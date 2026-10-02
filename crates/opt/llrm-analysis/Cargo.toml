@@ -16,4 +16,5 @@ num-traits = { workspace = true }
 testing = []
 
 [dev-dependencies]
+llrm-hir = { workspace = true }
 llrm-x86-code16 = { workspace = true }

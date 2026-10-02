@@ -48,7 +48,7 @@ b4:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @sum(i16 %n) memory(none) willreturn {
+        "define i16 @sum(i16 %n) memory(none) willreturn norecurse {
 b1:
   br label %b2
 
@@ -116,7 +116,7 @@ b3:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i16 %i, i16 %n) memory(none) willreturn {
+        "define i16 @f(i16 %i, i16 %n) memory(none) willreturn norecurse {
 b1:
   %0 = icmp ult i16 %i, %n
   br i1 %0, label %b2, label %b3
@@ -160,7 +160,7 @@ b5:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i16 %x) memory(none) willreturn {
+        "define i16 @f(i16 %x) memory(none) willreturn norecurse {
 b1:
   %0 = add i16 %x, 1
   ret i16 %0
@@ -193,7 +193,7 @@ b5:
 ";
     assert_eq!(
         optimized(text),
-        "define i16 @f(i1 %c, i1 %d, i16 %x) memory(none) willreturn {
+        "define i16 @f(i1 %c, i1 %d, i16 %x) memory(none) willreturn norecurse {
 b1:
   br i1 %c, label %b2, label %b5
 
@@ -865,7 +865,7 @@ b1:
 }
 ";
     let out = through(&["function-attrs", "instcombine"], text);
-    assert!(out.contains("define internal i16 @quiet(i16 %n) memory(none) willreturn {"), "{out}");
+    assert!(out.contains("define internal i16 @quiet(i16 %n) memory(none) willreturn norecurse {"), "{out}");
     assert!(!out.contains("call i16 @quiet"), "{out}");
     assert!(out.contains("call i16 @loud"), "{out}");
 }
@@ -942,6 +942,96 @@ b4:
     assert!(out.contains("define i16 @f() {\nb1:\n  ret i16 7\n}"), "{out}");
 }
 
+/// Which functions of `text` `function-attrs` marks `norecurse`.
+fn norecurse(text: &str) -> Vec<String> {
+    let out = through(&["function-attrs"], text);
+    let mut found = Vec::new();
+    for line in out.lines().filter(|line| line.starts_with("define")) {
+        if line.contains("norecurse") {
+            let name = line.split('@').nth(1).and_then(|rest| rest.split('(').next()).expect("a name");
+            found.push(name.to_owned());
+        }
+    }
+    found
+}
+
+/// A function that nothing can enter while it runs says so: a leaf, one that
+/// calls a `nocallback` declaration or an intrinsic. Not one that calls
+/// itself, its mutual caller, an unbounded pointer, a declaration that may
+/// call back, or anything reaching those. Inline kept its own `recursive` set
+/// and the rest of the pipeline had none.
+#[test]
+fn test_function_attrs_infers_norecurse_where_nothing_can_reenter() {
+    let text = "declare void @quiet() nocallback
+declare void @loud()
+declare i16 @llvm.smax.i16(i16, i16)
+
+define void @leaf() {
+b0:
+  ret void
+}
+
+define void @calls_quiet() {
+b0:
+  call void @quiet()
+  ret void
+}
+
+define void @calls_loud() {
+b0:
+  call void @loud()
+  ret void
+}
+
+define i16 @calls_intrinsic(i16 %c) {
+b0:
+  %m = call i16 @llvm.smax.i16(i16 %c, i16 0)
+  ret i16 %m
+}
+
+define void @self() {
+b0:
+  call void @self()
+  ret void
+}
+
+define void @ping() {
+b0:
+  call void @pong()
+  ret void
+}
+
+define void @pong() {
+b0:
+  call void @ping()
+  ret void
+}
+
+define void @pointer(ptr %p) {
+b0:
+  call void %p()
+  ret void
+}
+
+define void @listed(ptr %p) {
+b0:
+  call void %p(), !callees !0
+  ret void
+}
+
+define void @through() {
+b0:
+  call void @pointer(ptr null)
+  ret void
+}
+
+!0 = !{ptr @leaf}
+";
+    let mut found = norecurse(text);
+    found.sort();
+    assert_eq!(found, ["calls_intrinsic", "calls_quiet", "leaf", "listed"]);
+}
+
 /// `body` over `double %x`, through instcombine, as one function's text.
 fn floated(body: &str) -> String {
     through(&["instcombine"], &format!("define double @f(double %x) {{\nb1:\n{body}\n}}\n"))
@@ -980,4 +1070,77 @@ fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation()
     stays("  %r = fsub nnan double %x, %x\n  ret double %r");
     // the multiply by one needs no flag
     assert!(floated("  %r = fmul double 1.0, %x\n  ret double %r").contains("ret double %x"));
+}
+
+fn spin(attrs: &str, load: &str) -> String {
+    format!(
+        "define i16 @spin(ptr %p) {attrs} {{
+b0:
+  br label %b1
+
+b1:
+  %v = {load} i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %b1, label %b2
+
+b2:
+  ret i16 0
+}}
+"
+    )
+}
+
+/// A loop no counter bounds ended only where the language says it must: C11
+/// lets a loop that does nothing observable be assumed to end, and
+/// `mustprogress` is that promise. `willreturn` waited for a counted bound
+/// and so was never inferred for `while (*p)`; an observable loop (a volatile
+/// load) may legally run forever and stays unmarked.
+#[test]
+fn test_function_attrs_takes_mustprogress_for_a_loop_it_cannot_count() {
+    let willreturn = |text: &str| through(&["function-attrs"], text).lines().find(|line| line.starts_with("define")).is_some_and(|line| line.contains("willreturn"));
+    assert!(willreturn(&spin("mustprogress", "load")));
+    assert!(!willreturn(&spin("", "load")), "no promise: an uncounted loop may not end");
+    assert!(!willreturn(&spin("mustprogress", "load volatile")), "an observable loop may run forever");
+}
+
+/// C11 6.8.5p6 lets only a loop whose controlling expression is not constant be
+/// assumed to end, so clang marks each such loop (`llvm.loop.mustprogress`), never
+/// the function: `for (;;) {}` hangs. A function whose every uncounted loop is marked
+/// is `willreturn`; one with a `for (;;)` among them is not, however the rest are marked.
+#[test]
+fn test_willreturn_needs_every_uncounted_loop_marked_and_for_forever_is_never_marked() {
+    let willreturn = |text: &str| through(&["function-attrs"], text).lines().find(|line| line.starts_with("define")).is_some_and(|line| line.contains("willreturn"));
+    let function = |second: &str, marks: &str| {
+        format!(
+            "define void @f(ptr %p) {{
+b0:
+  br label %first
+
+first:
+  %v = load i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %first, label %next, !llvm.loop !0
+
+next:
+  br label %second
+
+second:
+{second}
+done:
+  ret void
+}}
+
+!0 = distinct !{{!0, !1}}
+!1 = !{{!\"llvm.loop.mustprogress\"}}
+{marks}"
+        )
+    };
+    let counted = "  %w = load i16, ptr %p\n  %again = icmp ne i16 %w, 0\n  br i1 %again, label %second, label %done, !llvm.loop !2\n";
+    let forever = "  %w = load i16, ptr %p\n  br label %second, !llvm.loop !2\n";
+    let marked = "!2 = distinct !{!2, !1}\n";
+    let unmarked = "!2 = distinct !{!2}\n";
+    assert!(willreturn(&function(counted, marked)), "both loops marked");
+    assert!(!willreturn(&function(counted, unmarked)), "the second is not");
+    assert!(!willreturn(&function(forever, marked)), "an unconditional loop is no loop a language promises ends, even if some pass marked it");
+    assert!(!willreturn(&function(forever, unmarked)));
 }

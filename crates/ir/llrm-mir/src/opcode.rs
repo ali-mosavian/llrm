@@ -284,7 +284,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 38] = [
+pub const FLAG_ATTRIBUTES: [&str; 39] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -292,6 +292,7 @@ pub const FLAG_ATTRIBUTES: [&str; 38] = [
     "dead_on_unwind",
     "hot",
     "immarg",
+    "inlinehint",
     "inreg",
     "minsize",
     "mustprogress",

@@ -38,7 +38,7 @@ use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::facts::Facts;
 use llrm_mir::memory::Effects;
-use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
+use llrm_mir::module::{InstId, Linkage, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
@@ -143,6 +143,12 @@ fn nonnull(provenance: &Provenance) -> bool {
 /// as LLVM's `isKnownNonZero` reads a pointer's underlying object instead
 /// of solving every pointer; `None` where only the whole solve can say.
 pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
+    // A parameter the language states non-null, as a reference is.
+    if let ValueDef::Argument(at) = unit.function.value(value).def
+        && llrm_mir::facts::Facts::param(unit.function, at as usize).non_null()
+    {
+        return Some(true);
+    }
     if let Some(seed) = seeds(unit).get(&value) {
         return Some(nonnull(seed));
     }
@@ -380,7 +386,7 @@ pub fn read_arguments(unit: &Unit, at: InstId) -> Vec<Operand> {
 /// at the site or on the callee's parameter.
 fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
-    let nocapture = |attrs: &[Attribute]| llrm_mir::memory::has(attrs, "nocapture");
+    let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
     info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs)) || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
 }
