@@ -15,6 +15,7 @@ use crate::support::hash::IndexMap;
 use crate::analysis::intervals::{self as ranges, Indexes, Interval, Segment};
 use crate::analysis::loops;
 use crate::backend::spillplacement::{self, Border, Constraint};
+use crate::analysis::frequency::Frequency;
 use crate::backend::{allocate, spiller};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -198,7 +199,7 @@ impl Region {
     }
 
     /// Ranges widened to whole parallel groups: a copy never lands inside one.
-    fn snapped(&self, body: &LirBody) -> Self {
+    pub fn snapped(&self, body: &LirBody) -> Self {
         let mut out = Self::default();
         for block in &body.blocks {
             let Some(ranges) = self.spans.get(&block.at) else { continue };
@@ -238,7 +239,29 @@ pub enum Crossing {
 /// LLVM's `hoistCopies`: the rest then holds it everywhere after.
 /// `carved` places these copies and `_benefit` prices them: one fact.
 pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate::Live, live_out: &allocate::Live) -> Vec<(Crossing, bool)> {
-    let hoisted = _hoisted(body, value, region);
+    let at_exits = _crossings(body, value, region, live_in, live_out, None);
+    let Some(hoisted) = _hoisted(body, value, region) else {
+        return at_exits;
+    };
+    // As LLVM's hoistCopies: one copy after the definition only where it runs
+    // less often than the copies back it replaces.
+    let frequency = Frequency::of(body);
+    let back = |found: &[(Crossing, bool)]| -> f64 {
+        found
+            .iter()
+            .filter(|(_, entering)| !entering)
+            .map(|(at, _)| match at {
+                Crossing::Inside { block, .. } => frequency.block(*block),
+                Crossing::Edge { from, to } => frequency.edge(*from, *to),
+            })
+            .sum()
+    };
+    let once = _crossings(body, value, region, live_in, live_out, Some(hoisted));
+    if back(&once) < back(&at_exits) { once } else { at_exits }
+}
+
+/// `crossings` with the copy back at every exit, or once after `hoisted`.
+fn _crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate::Live, live_out: &allocate::Live, hoisted: Option<(i64, usize)>) -> Vec<(Crossing, bool)> {
     let written = hoisted.is_none() && _written(body, value, region);
     let mut out = Vec::new();
     if let Some((block, at)) = hoisted.and_then(|(at, position)| body.blocks.iter().find(|one| one.at == at).map(|one| (one, position))) {
@@ -301,7 +324,12 @@ fn _written(body: &LirBody, value: u32, region: &Region) -> bool {
 /// the rest then lives in its slot (LLVM's spill mode), not in a register
 /// held across every piece.
 pub fn hoists(body: &LirBody, value: u32, region: &Region) -> bool {
-    _hoisted(body, value, &region.trimmed(body, value).snapped(body)).is_some()
+    let region = region.trimmed(body, value).snapped(body);
+    let Some(hoisted) = _hoisted(body, value, &region) else {
+        return false;
+    };
+    let (live_in, live_out) = allocate::live(body);
+    crossings(body, value, &region, &live_in, &live_out) == _crossings(body, value, &region, &live_in, &live_out, Some(hoisted))
 }
 
 /// Whether `value` is live just before each position of `block`, and at its end.
