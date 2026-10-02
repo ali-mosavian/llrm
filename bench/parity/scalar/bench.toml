@@ -1,8 +1,7 @@
 description = "Sum of products in a scalar loop (parity without the array)"
 repetitions = 1
 
-# "*": the compiler folds the kernel away at -O2, so the whole program is counted
 [region]
-bas = "*"
-c = "*"
-nib = "*"
+bas = "BenchScalar"
+c = "bench_scalar"
+nib = "bench_scalar"

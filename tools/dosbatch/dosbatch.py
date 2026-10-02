@@ -88,7 +88,7 @@ def assemble(source: Path, obj: Path, *defines: str) -> None:
     _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
 
 
-def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None) -> None:
+def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline."""
     crt, ext = work / "CRT.OBJ", work / "EXT.OBJ"
     with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
@@ -96,7 +96,7 @@ def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None) -> Non
             assemble(C_RUNTIME / "crt.asm", crt)
             assemble(C_RUNTIME / "ext.asm", ext)
     mapping = ["option", f"map={listing}"] if listing else []
-    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext)])
+    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext), *after])
 
 
 @dataclass
@@ -115,6 +115,7 @@ class Job:
     objects: tuple[Path, ...] = ()  # more objects to link with an obj job's
     files: tuple[Path, ...] = ()  # files the program reads, copied beside it under their upper-case names
     map: bool = False  # LINK /MAP: NAME.MAP lists the public symbols too
+    runner: str = ""  # a program that runs this one (it must be among `files`), e.g. a timer
 
 
 @dataclass
@@ -151,7 +152,7 @@ def read_dos(workdir: Path, name: str) -> str:
     return ""
 
 
-def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS) -> dict[str, Result]:
+def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
@@ -181,8 +182,8 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     script = [f":ms {build_ms}", *head, *building, "."]
     for job in jobs:
         u = job.stem.upper()
-        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {u}.EXE {job.args} > {u}.TXT", "."]
-    (work / "job.conf").write_text(CONF)
+        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {job.runner} {u}.EXE {job.args} > {u}.TXT", "."]
+    (work / "job.conf").write_text(conf)
     (work / "jobs.txt").write_text("\n".join(script) + "\n")
     events = work / "events.txt"
     with open(work / "jobs.txt") as stdin, open(events, "w") as sink:

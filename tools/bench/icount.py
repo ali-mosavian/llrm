@@ -52,10 +52,9 @@ def _decode(raw: bytes) -> tuple[int, bool, bool]:
     return memory, one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
 
 
-def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None, whole: bool = False) -> Run:
+def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None) -> Run:
     """`exe` to its exit; `entry` is the linear address, from the image's first byte, of the function whose
-    work is counted (None: count nothing, only run); `whole` counts the whole program instead, for one whose function the
-    compiler folds away. Files the program opens live in `cwd`."""
+    work is counted (None: count nothing, only run). Files the program opens live in `cwd`."""
     data = exe.read_bytes()
     (_, last, pages, nrel, header, _, _, ss, sp, _, ip, cs, relocations, _) = struct.unpack("<2sHHHHHHHHHHHHH", data[:28])
     size = (pages - 1) * 512 + (last or 512)
@@ -75,7 +74,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         uc.reg_write(register, value)
 
     result = Run()
-    state = {"active": whole, "done": False, "entry_sp": 0, "files": {}, "next": 5}
+    state = {"active": False, "done": False, "entry_sp": 0, "files": {}, "next": 5, "vectors": {}}
     counts = Counts()
     decoded: dict[int, tuple[int, bool, bool]] = {}
     target = None if entry is None else LOAD * 16 + entry
@@ -118,11 +117,18 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         ah = ax >> 8
         if watch is not None:
             watch.add(("int", number, ax, read(UC_X86_REG_BX), read(UC_X86_REG_CX), read(UC_X86_REG_DX), read(UC_X86_REG_ES)))
-        if number == 0x21:
+        if number in state["vectors"] and number != 0x21:
+            # an interrupt the program installed a handler for (BC's floating-point emulator, on INT 34h-3Dh): enter it
+            segment, offset = state["vectors"][number]
+            sp, ss = read(UC_X86_REG_SP), read(UC_X86_REG_SS)
+            frame = struct.pack("<HHH", read(UC_X86_REG_IP) & 0xFFFF, read(UC_X86_REG_CS), read(UC_X86_REG_EFLAGS) & 0xFFFF)
+            uc.mem_write(ss * 16 + ((sp - 6) & 0xFFFF), frame)
+            write(UC_X86_REG_SP, (sp - 6) & 0xFFFF)
+            write(UC_X86_REG_CS, segment)
+            write(UC_X86_REG_IP, offset)
+        elif number == 0x21:
             if ah == 0x4C:
                 result.exit_code = ax & 0xFF
-                if whole:
-                    state["active"], state["done"] = False, True
                 uc.emu_stop()
             elif ah in (0x3C, 0x3D):
                 name = cstring(read(UC_X86_REG_DS), read(UC_X86_REG_DX))
@@ -171,8 +177,9 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
                 write(UC_X86_REG_CX, 0)
                 write(UC_X86_REG_DX, 0)
             elif ah == 0x35:
-                write(UC_X86_REG_BX, 0)
-                write(UC_X86_REG_ES, 0)
+                segment, offset = state["vectors"].get(ax & 0xFF, (0, 0))
+                write(UC_X86_REG_BX, offset)
+                write(UC_X86_REG_ES, segment)
                 carry(False)
             elif ah == 0x33:
                 write(UC_X86_REG_DX, read(UC_X86_REG_DX) & 0xFF00)  # break checking off
@@ -192,7 +199,10 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
                     carry(True)
                 else:
                     carry(False)
-            elif ah in (0x25, 0x1A, 0x0E, 0x42):
+            elif ah == 0x25:
+                state["vectors"][ax & 0xFF] = (read(UC_X86_REG_DS), read(UC_X86_REG_DX))
+                carry(False)
+            elif ah in (0x1A, 0x0E, 0x42):
                 carry(False)
             else:
                 result.error = f"int 21h ah={ah:#x}"
@@ -206,7 +216,7 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
                 write(UC_X86_REG_AX, 0x5003)
                 write(UC_X86_REG_BX, 0)
         elif number == 0x11:
-            write(UC_X86_REG_AX, 0x0021)
+            write(UC_X86_REG_AX, 0x0023)  # a floppy, an 8087, 80x25 colour
         elif number == 0x12:
             write(UC_X86_REG_AX, 640)
         elif number == 0x16:
@@ -229,8 +239,8 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         result.error = result.error or f"emulator: {error} at {uc.reg_read(UC_X86_REG_CS):x}:{uc.reg_read(UC_X86_REG_IP):x}"
     for handle, file in state["files"].items():
         file.close()
-    if (entry is not None or whole) and state["done"]:
+    if entry is not None and state["done"]:
         result.region = counts
-    elif (entry is not None or whole) and not result.error:
+    elif entry is not None and not result.error:
         result.error = "the region was entered but never returned" if state["active"] else "the region was never entered"
     return result

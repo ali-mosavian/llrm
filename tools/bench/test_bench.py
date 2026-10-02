@@ -48,3 +48,16 @@ class KnownTests(unittest.TestCase):
         got = {("fpbench", "c", "O2"): dict(BASE), ("fpbench", "c", "Os"): dict(BASE)}
         marked = bench.mark_known(got, [self.variant()], ["O2", "Os"])
         self.assertIn("xpass", marked[("fpbench", "c", "O2")])
+
+
+class BlessTests(unittest.TestCase):
+    def test_a_reason_with_quotes_leaves_a_readable_file(self):
+        """--reason 'VAL("0")' wrote reason = "...VAL("0")...": the next gate run died on the TOML."""
+        import tempfile
+        import tomllib
+
+        with tempfile.TemporaryDirectory() as where:
+            bench.write_expected(Path(where), {("x", "c", "O2"): dict(BASE)}, "x", 'folded VAL("0") \\ away')
+            read = tomllib.loads((Path(where) / "expected.toml").read_text())
+        self.assertEqual(read["reason"], 'folded VAL("0") \\ away')
+        self.assertEqual(read["c"]["O2"], BASE)
