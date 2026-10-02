@@ -1,4 +1,6 @@
 /* Four-body scalar kernel; result quantization is part of the oracle. */
+extern void report(long value);
+
 long bench_nbody(unsigned short steps)
 {
     double x[4], y[4], vx[4], vy[4];
@@ -23,4 +25,10 @@ long bench_nbody(unsigned short steps)
         }
     }
     return (long)((x[0] + y[1] + x[2] + y[3]) * 1000000.0);
+}
+
+int main(void)
+{
+    report(bench_nbody(200));
+    return 0;
 }
