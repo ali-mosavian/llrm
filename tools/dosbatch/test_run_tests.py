@@ -18,12 +18,11 @@ class HeaderTests(unittest.TestCase):
             return run_tests.header(source)
 
     def test_flags_and_known_come_from_the_leading_comment(self):
-        flags, known = self.read("' flags: -Os --cpu P5\n' known: #123\nPRINT 1\n")
-        self.assertEqual((flags, known), (["-Os", "--cpu", "P5"], "#123"))
+        self.assertEqual(self.read("' flags: -Os --cpu P5\n' known: #123\nPRINT 1\n"), {"flags": "-Os --cpu P5", "known": "#123"})
 
     def test_a_comment_after_the_code_is_not_a_header(self):
         """A `known:` in the body would mark a program known by accident."""
-        self.assertEqual(self.read("PRINT 1\n' known: #9\n"), (run_tests.DEFAULT_FLAGS, None))
+        self.assertEqual(self.read("PRINT 1\n' known: #9\n"), {})
 
 
 class DiffTests(unittest.TestCase):

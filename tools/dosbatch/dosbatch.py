@@ -61,6 +61,7 @@ class Job:
     kind: str
     path: Path
     budget_ms: int | None = None
+    switches: str = "/O /FPi"  # BC's, for a bas job
 
 
 @dataclass
@@ -82,6 +83,11 @@ def check_loads(exe: Path) -> None:
     image = pages * 512 - (512 - last if last else 0) - header * 16
     if image + minimum * 16 > LOAD_LIMIT:
         raise TooBig(f"{exe.name} needs {image + minimum * 16} bytes, more than DOS has: {LOAD_LIMIT}")
+
+
+def crlf(source: bytes) -> bytes:
+    """BC ends a line at CR LF only: a LF-only source is one long line, a comment if it opens with one."""
+    return source.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 
 
 def read_dos(workdir: Path, name: str) -> str:
@@ -109,9 +115,9 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
             shutil.copy(job.path, work / f"{u}.OBJ")
             building.append(f"V:\\LINK /NOE {u}.OBJ,{u}.EXE,,V:\\LIB\\BCOM45.LIB; > {u}.LNK")
         else:
-            shutil.copy(job.path, work / f"{u}.BAS")
-            building.append(f"V:\\BC /O /FPi {u}.BAS,{u}.OBJ; > {u}.BCO")
-            building.append(f"V:\\LINK /NOE {u}.OBJ,{u}.EXE,,V:\\LIB\\BCOM45.LIB; > {u}.LNK")
+            (work / f"{u}.BAS").write_bytes(crlf(job.path.read_bytes()))
+            building.append(f"V:\\BC {job.switches} {u}.BAS,{u}.OBJ; > {u}.BCO")
+            building.append(f"V:\\LINK {u}.OBJ,{u}.EXE,,V:\\LIB\\BCOM45.LIB; > {u}.LNK")
     script = [f":ms {build_ms}", *head, *building, "."]
     for job in jobs:
         u = job.stem.upper()

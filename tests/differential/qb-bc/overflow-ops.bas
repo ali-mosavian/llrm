@@ -1,3 +1,5 @@
+' bc: /O /E /X /D
+' flags: -ftrapv
 ' INTEGER overflow under BC /D and llrm -ftrapv, where the two agree: the target keeps its old value.
 DEFINT A-Z
 DIM l AS LONG, m AS LONG, r AS LONG

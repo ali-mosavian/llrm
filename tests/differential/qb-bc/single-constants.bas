@@ -1,3 +1,4 @@
+' bc: /O /E /X
 ' BC folds a constant subexpression at compile time to its type (a SINGLE one is a SINGLE
 ' constant, as CONST's is); run-time arithmetic keeps the x87's precision. Prints each result's DOUBLE bytes.
 DEFINT I-N

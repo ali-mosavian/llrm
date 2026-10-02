@@ -1,3 +1,6 @@
+' bc: /O /E /X /D
+' flags: -ftrapv
+' diverges: BC stores the wrapped sum first
 ' On an INTEGER overflow llrm leaves the target unchanged, whatever the statement's shape.
 ' BC /D stores the wrapped sum first for x = x + e and x = x - e (it adds into the variable):
 ' docs/frontends/qb/divergences.md.

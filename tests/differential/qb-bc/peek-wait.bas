@@ -1,3 +1,4 @@
+' bc: /O /E /X
 ' PEEK reads memory every time, whatever DEF SEG says: the BIOS tick wait ends.
 DEFINT A-Z
 DEF SEG = &H40
