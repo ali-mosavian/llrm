@@ -727,3 +727,24 @@ fn test_a_diamonds_likelier_arm_falls_into_its_join() {
     // `LIKELY` and over: the likely arm falls through, the rare one leaves its join.
     assert_eq!(order(0.1), vec![1, 20, 30, 10]);
 }
+
+/// For size a diamond keeps both arms before its join, and its arm order
+/// is free where both arms keep short jumps either way: the likelier arm
+/// goes second, into the join, at no byte's cost. Not past a short jump's
+/// reach, where the order could change a jump's size.
+#[test]
+fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
+    let order = |body: LirBody| _placed(&body, true).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    // The premise: both arms are a few bytes, so either order uses short jumps.
+    let small = weighted_diamond(0.7);
+    assert!(small.blocks.iter().filter(|one| [10, 20].contains(&one.at)).all(|one| _arm_bytes(one).is_some_and(|bytes| bytes < 16)));
+    assert_eq!(order(small), vec![1, 20, 10, 30]);
+    // Arm 10 past a short jump's reach: the order stays the source's.
+    let mut large = weighted_diamond(0.7);
+    let arm = large.blocks.iter_mut().find(|one| one.at == 10).unwrap();
+    let mut insns: Vec<Arc<Insn>> = (0..60).map(|_| _move(10, imm(4660))).collect();
+    insns.push(_jump(11, 30));
+    arm.insns = insns;
+    assert!(_arm_bytes(large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
+    assert_eq!(order(large), vec![1, 10, 20, 30]);
+}
