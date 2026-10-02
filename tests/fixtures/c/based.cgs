@@ -1,0 +1,109 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+SEG 10000 attr=0x6 name="TABLES" align=2
+START
+SYM y1 name=".TABLES" base=".TABLES" pattern="_*" attr=0x1042 seg=10000
+b1 BENewBack y1
+SETSEG 10000
+- DGLabel b1
+TYPE T25 size=4 align=1
+SETSEG 11
+SYM y2 name="cp" base="cp" pattern="_*" attr=0x6 seg=11
+b2 BENewBack y2
+- DGLabel b2
+- DGUBytes 2
+SETSEG 11
+SYM y3 name="dp" base="dp" pattern="_*" attr=0x6 seg=11
+b3 BENewBack y3
+- DGLabel b3
+- DGUBytes 2
+SETSEG 11
+SYM y4 name="tp" base="tp" pattern="_*" attr=0x6 seg=11
+b4 BENewBack y4
+- DGLabel b4
+- DGUBytes 2
+SETSEG 4
+SYM y5 name="x" base="x" pattern="_*" attr=0x6 seg=4
+b5 BENewBack y5
+- DGLabel b5
+- DGInteger 42 TY_UINT_1
+SETSEG 10000
+SYM y6 name="table" base="table" pattern="_*" attr=0x6 seg=10000
+b6 BENewBack y6
+- DGLabel b6
+- DGInteger 5 TY_UINT_1
+- DGInteger 6 TY_UINT_1
+- DGInteger 7 TY_UINT_1
+- DGInteger 8 TY_UINT_1
+f7 DBSrcFile "fixtures/c/based.c"
+- DBSrcCue f7 11 1
+SYM y7 name="read_data" base="read_data" pattern="_*" attr=0x7 seg=1
+CALLCONV y7 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y7 TY_INTEGER
+l8 CGLastParm
+t9 CGTemp TY_INTEGER
+- DBSrcCue f7 13 1
+n10 CGFEName y3 TY_NEAR_POINTER
+n11 CGFEName y5 TY_INT_1
+n12 CGUnary O_CONVERT n11 TY_NEAR_POINTER
+n13 CGAssign n10 n12 TY_NEAR_POINTER
+- CGDone n13
+- DBSrcCue f7 14 1
+SYM y8 name=".DS" base=".DS" pattern="_*" attr=0x1042 seg=4
+n14 CGFEName y8 TY_UINT_2
+n15 CGFEName y3 TY_NEAR_POINTER
+n16 CGUnary O_POINTS n15 TY_NEAR_POINTER
+n17 CGBinary O_CONVERT n16 n14 TY_LONG_POINTER
+n18 CGUnary O_POINTS n17 TY_INT_1
+n19 CGUnary O_CONVERT n18 TY_INTEGER
+n20 CGTempName t9 TY_INTEGER
+n21 CGAssign n20 n19 TY_INTEGER
+- CGDone n21
+- DBSrcCue f7 15 1
+n22 CGTempName t9 TY_INTEGER
+n23 CGUnary O_POINTS n22 TY_INTEGER
+- CGReturn n23 TY_INTEGER
+- DBSrcCue f7 17 1
+SYM y9 name="read_code" base="read_code" pattern="_*" attr=0x7 seg=1
+CALLCONV y9 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y9 TY_INTEGER
+l24 CGLastParm
+t25 CGTemp TY_INTEGER
+n26 CGFEName y9 TY_LONG_CODE_PTR
+n27 CGFEName y2 TY_NEAR_POINTER
+n28 CGUnary O_POINTS n27 TY_NEAR_POINTER
+n29 CGBinary O_CONVERT n28 n26 TY_LONG_POINTER
+n30 CGUnary O_POINTS n29 TY_INT_1
+n31 CGUnary O_CONVERT n30 TY_INTEGER
+n32 CGTempName t25 TY_INTEGER
+n33 CGAssign n32 n31 TY_INTEGER
+- CGDone n33
+n34 CGTempName t25 TY_INTEGER
+n35 CGUnary O_POINTS n34 TY_INTEGER
+- CGReturn n35 TY_INTEGER
+- DBSrcCue f7 18 1
+SYM y10 name="read_table" base="read_table" pattern="_*" attr=0x7 seg=1
+CALLCONV y10 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y10 TY_INTEGER
+l36 CGLastParm
+t37 CGTemp TY_INTEGER
+n38 CGFEName y1 TY_UINT_2
+n39 CGFEName y4 TY_NEAR_POINTER
+n40 CGUnary O_POINTS n39 TY_NEAR_POINTER
+n41 CGBinary O_CONVERT n40 n38 TY_LONG_POINTER
+n42 CGInteger 2 TY_INTEGER
+n43 CGBinary O_PLUS n41 n42 TY_LONG_POINTER
+n44 CGUnary O_POINTS n43 TY_INT_1
+n45 CGUnary O_CONVERT n44 TY_INTEGER
+n46 CGTempName t37 TY_INTEGER
+n47 CGAssign n46 n45 TY_INTEGER
+- CGDone n47
+n48 CGTempName t37 TY_INTEGER
+n49 CGUnary O_POINTS n48 TY_INTEGER
+- CGReturn n49 TY_INTEGER
+STOP
+FINI
