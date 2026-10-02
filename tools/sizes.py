@@ -49,7 +49,8 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         if not DEMOS.is_dir():
             sys.exit(f"{DEMOS} is missing: set QBDEMOS, or the demos cannot be counted")
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
-    for pattern, tool in (("tests/run/qb/*.bas", qb), ("bench/*.bas", qb), ("bench/general/*.BAS", qb), ("bench/parity/*.bas", qb), ("bench/c/*.c", cc), ("bench/general/*.c", cc), ("bench/parity/*.c", cc), ("examples/*.nib", nib)):
+    for pattern, tool in (("tests/run/qb/*.bas", qb), ("bench/*/*.bas", qb), ("bench/parity/*/*.bas", qb), ("bench/*/*.c", cc), ("bench/parity/*/*.c", cc),
+                          ("bench/*/*.nib", nib), ("bench/parity/*/*.nib", nib), ("examples/*.nib", nib)):
         out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, file, *settings(file)]) for file in sorted(glob.glob(str(ROOT / pattern)))]
     return out
 

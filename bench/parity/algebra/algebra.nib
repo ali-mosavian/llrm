@@ -1,0 +1,11 @@
+# Parity kernel; i16 parameters by value (the C original passes pointers).
+fn parity_algebra(a: i16, b: i16) -> i32:
+    let value: i32 = i32(a) * 9 + i32(b) * 5
+    return value * 3 - i32(a)
+
+fn bench_algebra() -> i32:
+    return parity_algebra(23, 7) * 1000 + parity_algebra(-11, 4)
+
+fn main() -> i16:
+    print(bench_algebra())
+    return 0

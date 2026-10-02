@@ -1,6 +1,6 @@
 # Residue
 
-What survives absorption and widening, on `bench/nbody.bas`'s rewritten object,
+What survives absorption and widening, on `bench/nbody_fixed/nbody_fixed.bas`'s rewritten object,
 found by manually tracing register liveness through the full disassembly
 rather than by running the pass's own tests. None of this is wrong -- every
 number in `docs/measurement/numbers.md` is real -- but the rewritten object is 137 bytes
@@ -16,7 +16,7 @@ which hid a genuine dead case) before this document was written.
 
 **Re-measured 2026-08-30**, after this session's own comparison-absorption
 correctness fix (`f2b6f05`) and G and H's own closure (below) both changed
-what code sits next to what survives. `bench/nbody.bas`'s rewritten object
+what code sits next to what survives. `bench/nbody_fixed/nbody_fixed.bas`'s rewritten object
 is, right now, **80 bytes *larger*** than BC's own (1440 against 1360, +5.9
 per cent) -- not smaller, and not the 137/1447/1310 figures above, which
 predate both fixes and are kept here only as history. The corpus-wide census
@@ -31,14 +31,14 @@ would not by itself flip the sign on this file, because most of what grew it
 was `f2b6f05`'s own necessary correctness cost.
 
 **Re-measured again 2026-08-30**, after D, I and B's own closures (see their
-own sections and the Priority table, below). `bench/nbody.bas`'s rewritten
+own sections and the Priority table, below). `bench/nbody_fixed/nbody_fixed.bas`'s rewritten
 object is now **35 bytes larger** than BC's own (1395 against 1360, +2.6 per
 cent) -- down from +80, still not smaller. D, I and B accounted for a real,
 measured 45 of those 80 bytes (-5, -16, -24); the rest is F and E, both still
 architectural and open.
 
 **Re-measured a third time 2026-08-30**, after E's own closure (see E's own
-section and the Priority table, below). `bench/nbody.bas`'s rewritten object
+section and the Priority table, below). `bench/nbody_fixed/nbody_fixed.bas`'s rewritten object
 is now **26 bytes larger** than BC's own (1386 against 1360, +1.9 per cent).
 F's own recognition gap is also closed for two of its four sub-shapes this
 round, but -- measured, not assumed -- it does not change this object's byte
@@ -140,7 +140,7 @@ what the popped value is then used for: `push <hi>/push <lo>/pop <root>`
 reconstructs the exact bit pattern the register pair held before the restore
 ran, as a mechanical fact about the stack, not about any one absorbed
 routine's own semantics -- so this fires identically whether the next edit
-is `MULTIPLY`/`DIVIDE`/`REMAINDER`'s single pop. On `bench/nbody.bas`
+is `MULTIPLY`/`DIVIDE`/`REMAINDER`'s single pop. On `bench/nbody_fixed/nbody_fixed.bas`
 (measured after D and I, both below, are already
 in): all 3 instances gone, 24 bytes, the object's own code segment 1419 ->
 1395 bytes, and `tools/residue_census.py`'s own B count on the freshly
@@ -234,7 +234,7 @@ lost once already. The imm8-sign-extension-vs-imm16 reconstruction itself
 (the risk flagged before implementation) was independently re-derived by
 Opus against real iced_x86 output, not just re-read from this prose, and
 found correct as designed. Corpus-wide `tools/matrix.py`: 12/12.
-`tools/fuzzcheck.py --count 80`: 0 qbopt regressions. On `bench/nbody.bas`:
+`tools/fuzzcheck.py --count 80`: 0 qbopt regressions. On `bench/nbody_fixed/nbody_fixed.bas`:
 the local three-site win is smaller than the 18-byte floor above suggested
 -- `0x017e`'s own site is now net zero (6 bytes either way) and `0x02ea`'s
 drops from 6 to 4 -- because the real payoff, as flagged, was region
@@ -366,7 +366,7 @@ is the original regression test, and `tools/mutate.py`'s
 `bridge-crosses-control-flow` (the jump case, below) put all three shapes of
 the bug back and confirm the tests notice.
 
-Worked example, real addresses, `bench/nbody.bas`'s rewritten object
+Worked example, real addresses, `bench/nbody_fixed/nbody_fixed.bas`'s rewritten object
 (`build/bench/v-g3/NBODY.OBJ`, VBDOS `/G3`, current addresses -- they have
 moved since the original 2026-08-30 measurement above, as every prior fix in
 this document also shifted them):
@@ -384,7 +384,7 @@ this document also shifted them):
 
 Region `0x113-0x14c` (57 bytes, extending past the worked statement above
 into the next, cx:bx-paired one right after it) is **taken**, 57 -> 46 bytes.
-`bench/nbody.bas`'s own rewritten object: **1395 -> 1386 bytes**, all of it
+`bench/nbody_fixed/nbody_fixed.bas`'s own rewritten object: **1395 -> 1386 bytes**, all of it
 this one region -- corpus-wide (`tests/inputs/omf`'s 110 objects), the static
 census does not move at all (26446 -> 21302 bytes, unchanged from the D/I/B
 census): none of the 110 small, single-statement fixtures happen to interleave
@@ -488,7 +488,7 @@ plus `cwd`'s one (three total), or five against `mov ax,[bp-18h]`'s three
 plus `cwd`'s one (four total). The instruction-count win the original F
 section describes is real, but the *byte* count is a wash or a one-byte loss
 before anything downstream is counted, and every one of the 9 measured `cwd`
-sites in `bench/nbody.bas`'s object is still refused by `plan()`'s own
+sites in `bench/nbody_fixed/nbody_fixed.bas`'s object is still refused by `plan()`'s own
 growth check today -- confirmed by direct measurement, not assumed: the
 region either has nothing following the `cwd` that lift.py itself
 recognises (a lone `movsx` plus its own restore, strictly larger than the
@@ -498,7 +498,7 @@ exactly cancelled by two MOVSX sites' own one-byte tax plus a restore
 `dead_pairs_after()` cannot prove unneeded -- the same call-conservatism gap
 this document's own I section already flags as open (a far call's real
 routine may not touch dx/bx at all, but nothing here has established which
-ones, so it is charged as reading everything). `bench/nbody.bas`'s object is
+ones, so it is charged as reading everything). `bench/nbody_fixed/nbody_fixed.bas`'s object is
 unchanged by this alone: 1386 bytes before and after `Op.MOVSX` is added
 (E's own -9 bytes, from 1395, holds either way), and the corpus-wide census
 does not move a single byte (`tests/inputs/omf`: 26446 -> 21302, identical to
@@ -518,7 +518,7 @@ byte-neutral on their own -- and, worse, recognising the push at all shifted
 a nearby region's own byte length just enough that pattern B's own
 restore/re-push fold (`drop_restore_repush_round_trips()`, an exact byte-adjacency
 match) stopped firing on an unrelated, adjacent site: 1386 -> 1394 bytes on
-`bench/nbody.bas` (an 8-byte *loss* from `Op.PUSH` alone, against E's own
+`bench/nbody_fixed/nbody_fixed.bas` (an 8-byte *loss* from `Op.PUSH` alone, against E's own
 1386), and 26446 -> 21302 corpus-wide became 26596 -> 21456 (5140 bytes saved
 against 5144, a 4-byte net loss) with `Op.PUSH` active. `Op.PUSH`,
 `_push_step()` and `PUSH_PAIR` were removed rather than shipped net-negative;
@@ -603,7 +603,7 @@ two -- call plus widened tail -- into one ordinary `Edit`, going through the
 exact same `needed()`/`refuse()`/`emit_region()` machinery (and the same
 DIVERGENT flags gate) an ordinary widening region already does; anything
 that does not work out falls straight through to the unmodified, narrow-
-boundary standalone `absorb()` this project already had. On `bench/nbody.bas`
+boundary standalone `absorb()` this project already had. On `bench/nbody_fixed/nbody_fixed.bas`
 specifically: 12 call sites folded, 59 bytes saved over what standalone
 absorption plus an un-widened tail would have produced. Corpus-wide
 (`tests/inputs/omf`, 110 much smaller, more varied programs), 19 instances, 57
@@ -806,13 +806,13 @@ but 57 bytes better, net, than before it. D, I and B: `qbopt/legacy/lift.py`'s
 to exercise I or B at all -- see each pattern's own paragraph). E:
 `qbopt/legacy/lift.py`'s `_bridges()`, `Bridge`, and the `committed` gate;
 corpus-wide static census does not move (110 tests/inputs/omf objects do not
-happen to interleave an unrelated instruction the way `bench/nbody.bas`
-does), `bench/nbody.bas` itself -9 bytes. F: `qbopt/legacy/lift.py`'s `Op.MOVSX`
+happen to interleave an unrelated instruction the way `bench/nbody_fixed/nbody_fixed.bas`
+does), `bench/nbody_fixed/nbody_fixed.bas` itself -9 bytes. F: `qbopt/legacy/lift.py`'s `Op.MOVSX`
 and `_sign_extend_step()`; corpus-wide static census does not move either,
-and neither does `bench/nbody.bas`'s own object. See `docs/measurement/numbers.md` for
+and neither does `bench/nbody_fixed/nbody_fixed.bas`'s own object. See `docs/measurement/numbers.md` for
 the full progression.
 
-`bench/nbody.bas`'s rewritten object, tracked closely through this whole
+`bench/nbody_fixed/nbody_fixed.bas`'s rewritten object, tracked closely through this whole
 document, moved from **80 bytes larger** than BC's own (1440 against 1360)
 before this round to **35 bytes larger** (1395 against 1360, +2.6 per cent)
 after D, I and B: D -5, I -16, B -24, in that order (1440 -> 1435 -> 1419 ->

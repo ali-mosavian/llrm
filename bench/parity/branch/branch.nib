@@ -1,0 +1,12 @@
+# Parity kernel; i16 parameter by value (the C original passes a pointer).
+fn parity_branch(value: i16) -> i32:
+    if value < 0:
+        return i32(value) * 7 + 3
+    return i32(value) * 5 - 9
+
+fn bench_branch() -> i32:
+    return parity_branch(-13) * 1000 + parity_branch(21)
+
+fn main() -> i16:
+    print(bench_branch())
+    return 0

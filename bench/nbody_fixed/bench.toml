@@ -1,0 +1,7 @@
+description = "Six-body Q9 fixed-point 2D integrator, 1000 steps, 32-bit signed arithmetic"
+repetitions = 1
+
+[region]
+bas = "BenchNbodyFixed"
+c = "bench_nbody_fixed"
+nib = "bench_nbody_fixed"

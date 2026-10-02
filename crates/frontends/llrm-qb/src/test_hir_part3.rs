@@ -146,7 +146,7 @@ fn bound_call_labels(text: &str) -> BTreeSet<String> {
 }
 
 fn sum_three(unchecked: bool) -> String {
-    let source = root().join("bench/parity/sum_three.bas");
+    let source = root().join("tests/inputs/qb/sum_three.bas");
     let program = parsed_with(&source, "vbdos", "vbdos", "column-major", false, unchecked);
     let text = listing(&program);
     let start = text.find("SUMTHREE proc").expect("SUMTHREE proc");
@@ -1621,7 +1621,7 @@ fn test_a_def_seg_known_only_to_promotion_is_not_rebuilt_per_poke() {
 fn test_merged_fields_share_one_pointer() {
     // Merged, the six fields' starts differed by constants below a sum, so each
     // kept its own pointer and four lived in the frame: 18 instructions for 9.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bench/general/PARTICLE.BAS");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/particle.bas");
     let frontend = qb_driver::Frontend { array_merging: true, ..qb_driver::Frontend::new("qb45", "qb45") };
     let program = qb_driver::parsed(&basic, &frontend, None).expect("parses");
     let text = listing(&program);
@@ -1662,9 +1662,9 @@ fn test_a_cell_based_on_a_named_objects_address_is_that_object() {
     assert!(!text[start..end].contains("offset"), "{}", &text[start..end]);
 }
 
-/// RING.BAS's RingSum loop, from its backward jump.
+/// ring.bas's RingSum loop, from its backward jump.
 fn ring_loop() -> String {
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bench/general/RING.BAS");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/ring.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = regex::Regex::new(r"RINGSUM\S* proc").unwrap().find(&text).expect("RINGSUM proc").start();
@@ -1693,7 +1693,7 @@ fn test_a_loaded_addend_fuses_though_the_exit_splits_a_long() {
 fn test_a_masked_subscripts_scale_steps_with_its_recurrence() {
     // `buf(((i * 5 + 3) AND 1023) + 1)` shifted the masked index every trip:
     // `and si, 1023 / inc si / shl si, 2`, 9 instructions for 7.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bench/general/RING.BAS");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/ring.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = regex::Regex::new(r"RINGSUM\S* proc").unwrap().find(&text).expect("RINGSUM proc").start();
@@ -1707,7 +1707,7 @@ fn test_a_pointer_takes_control_of_a_loop_to_a_symbolic_bound() {
     // With the FOR promise, `-n TO n` was bounded by the whole width, too
     // many trips for a step-2 pointer, so the counter kept its own `dec`
     // beside the pointer's `add`: 12 instructions for 11.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bench/general/PARTICLE.BAS");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/particle.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = text.find("ADVANCE proc").expect("ADVANCE proc");
@@ -1721,7 +1721,7 @@ fn test_a_masked_use_moves_with_a_counter_to_zero() {
     // `POKE o, ch + (o AND 15)` read the counter through a mask, so FILL kept
     // `cmp si, 0F9Eh` every trip. The bias 4000 is a multiple of 16: the mask
     // reads the same bits of the rebased counter.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bench/general/TEXTFILL.BAS");
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/textfill.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = text.find("FILL proc").expect("FILL proc");
@@ -2617,7 +2617,7 @@ fn a_for_counters_add_states_the_wrap_its_type_cannot_do() {
 fn a_poke_to_video_memory_leaves_the_loop_its_variables_and_segment() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let out = directory.path().join("textfill.asm");
-    let source = root().join("bench/general/TEXTFILL.BAS");
+    let source = root().join("tests/inputs/qb/textfill.bas");
     let argv = [source.to_str().unwrap(), "-O2", "--cpu", "486", "-S", "-o", out.to_str().unwrap()].map(str::to_owned);
     assert_eq!(crate::cli::main(&argv), 0);
     let text = std::fs::read_to_string(&out).expect("the listing");

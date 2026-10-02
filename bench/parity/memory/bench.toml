@@ -1,0 +1,7 @@
+description = "Two calls through short pointers, results combined"
+repetitions = 1
+
+[region]
+bas = "BenchMemory"
+c = "bench_memory"
+nib = "bench_memory"

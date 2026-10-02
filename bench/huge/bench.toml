@@ -1,0 +1,6 @@
+description = "Fill and sum a 200x201 INTEGER array over 64K (huge)"
+repetitions = 1
+
+[region]
+bas = "BenchHuge"
+c = "bench_huge"

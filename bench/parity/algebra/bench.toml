@@ -1,0 +1,7 @@
+description = "Parity kernel algebra: two calls combined as first*1000+second"
+repetitions = 1
+
+[region]
+bas = "BenchAlgebra"
+c = "bench_algebra"
+nib = "bench_algebra"

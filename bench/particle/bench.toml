@@ -1,0 +1,7 @@
+description = "100 steps of a 101-particle integer position/velocity update, then a weighted checksum"
+repetitions = 1
+
+[region]
+bas = "BenchParticle"
+c = "bench_particle"
+nib = "bench_particle"

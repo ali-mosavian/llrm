@@ -1,0 +1,19 @@
+# Nib has no raw pointers: &mut i16 / &i16 references stand in for short *.
+var demo_value: i16 = 0
+var demo_delta: i16 = 0
+
+fn parity_memory(value: &mut i16, delta: &i16) -> i32:
+    value = value * 3 + delta
+    return i32(value) * i32(value)
+
+fn bench_memory() -> i32:
+    demo_value = 7
+    demo_delta = -2
+    let first = parity_memory(&mut demo_value, &demo_delta)
+    demo_value = -4
+    demo_delta = 11
+    return first * 1000 + parity_memory(&mut demo_value, &demo_delta)
+
+fn main() -> i16:
+    print(bench_memory())
+    return 0

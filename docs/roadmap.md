@@ -777,7 +777,7 @@ six and `B$CPI4` ten.
 
 - [ ] **and `--native-fpu` does not work on qb-qrender.** It hangs, and both
       halves of the fifteen modules hang independently, so it is systematic
-      rather than one module. `bench/fpbench.bas` runs correctly under the
+      rather than one module. `bench/fpbench/fpbench.bas` runs correctly under the
       same flag and the same DOSBox (1.88x), so the flag is not simply
       broken.
 
@@ -846,7 +846,7 @@ configurations.
 `matrix.py` and `fuzzcheck.py` found every real bug this session. The host
 suite was green for all of them.
 
-A benchmark found the one they missed. `bench/fpbench.bas` printed
+A benchmark found the one they missed. `bench/fpbench/fpbench.bas` printed
 -2147483648 for every coordinate: `forward.py` read the base register of
 `fld dword ptr [si]` as the load's destination, so two pushes of the same
 address looked like a load and a redundant reload, and deleting the second

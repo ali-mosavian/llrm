@@ -935,7 +935,7 @@ l3:
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
-/// `bench/c/mandel.c` as the pass meets it, over two rows: `cx`, the
+/// `bench/mandel/mandel.c` as the pass meets it, over two rows: `cx`, the
 /// column's `xOffset - 512 + 24 * px`, read across the inner loop.
 const MANDEL: &str = "define i32 @f(i16 %0) {
 b1:

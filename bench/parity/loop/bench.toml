@@ -1,0 +1,7 @@
+description = "Parity kernel loop: two calls combined as first*1000+second"
+repetitions = 1
+
+[region]
+bas = "BenchLoop"
+c = "bench_loop"
+nib = "bench_loop"

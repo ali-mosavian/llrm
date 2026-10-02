@@ -1,0 +1,10 @@
+fn bench_scalar() -> i32:
+    let mut total: i32 = 17
+    for index in 0..8:
+        let i: i16 = index
+        total += i32(i * 3 + 1) * i32(29 - i * 2)
+    return total
+
+fn main() -> i16:
+    print(bench_scalar())
+    return 0
