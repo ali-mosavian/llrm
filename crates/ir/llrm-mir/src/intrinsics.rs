@@ -390,7 +390,7 @@ impl Intrinsic {
     /// The function's attributes and each parameter's.
     pub fn attributes(self) -> (Vec<Attribute>, Vec<Vec<Attribute>>) {
         if matches!(self, Intrinsic::Code | Intrinsic::Asm) {
-            return (vec![Attribute::Flag("nounwind".to_owned())], Vec::new());
+            return (vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new());
         }
         let spec = self.spec();
         let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
