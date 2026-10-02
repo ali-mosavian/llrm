@@ -23,10 +23,7 @@ impl FunctionCompiler<'_> {
     pub(super) fn load_tag(&mut self, view: &StructView, layout: &EnumLayout) -> u32 {
         let tag = self.value(layout.tag);
         // The range of the tag is stated once, of the member (see `tag_ranges`).
-        let place = match layout.element {
-            ElementType::Struct(owner) => self.member_access(view, owner, 0, layout.tag),
-            ElementType::Scalar(_) => self.projected_place(view, 0, layout.tag),
-        };
+        let place = self.field_place(view, 0, layout.tag);
         self.emit("load", vec![tag], vec![place], None);
         tag
     }
@@ -365,7 +362,7 @@ impl FunctionCompiler<'_> {
         }
         let variant = layout.variant(name, span)?.clone();
         stores.push(Store::One(
-            self.projected_place(destination, 0, layout.tag),
+            self.field_place(destination, 0, layout.tag),
             hir::Operand::Constant(type_id(layout.tag), variant.tag),
         ));
         let formals: Vec<_> = variant

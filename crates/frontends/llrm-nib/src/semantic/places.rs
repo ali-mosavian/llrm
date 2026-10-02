@@ -177,7 +177,7 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.coerced(value, type_name)?;
                 self.consume(&value, span)?;
                 stores.push(Store::One(
-                    self.projected_place(destination, field.offset, type_name),
+                    self.field_place(destination, field.offset, type_name),
                     required(value, span)?,
                 ));
             }
@@ -255,17 +255,22 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    /// `projected_place` of the member at `member_offset` of the aggregate type `owner`: it
-    /// says which member it is, so a fact stated once of the member reaches the access.
-    pub(super) fn member_access(
-        &self,
-        view: &StructView,
-        owner: u32,
-        member_offset: u32,
-        type_name: TypeName,
-    ) -> hir::Operand {
+    /// The aggregate type whose members `view` reaches: the struct it views, or, in a fixed
+    /// array's view, the array's element struct.
+    fn owner_of(&self, view: &StructView) -> Option<u32> {
+        match self.types.array_types.get(&view.struct_id) {
+            Some((ElementType::Struct(element), _)) => Some(*element),
+            Some(_) => None,
+            None => Some(view.struct_id),
+        }
+    }
+
+    /// `projected_place` of the member of the viewed aggregate at `member_offset`: the access
+    /// says which member it is, so a fact stated once of the member reaches it. For a field,
+    /// a tag or a payload, not for a piece of a copy.
+    pub(super) fn field_place(&self, view: &StructView, member_offset: u32, type_name: TypeName) -> hir::Operand {
         let mut place = self.projected_place(view, member_offset, type_name);
-        if let hir::Operand::ProjectedPlace { member, .. } | hir::Operand::IndirectPlace { member, .. } = &mut place {
+        if let (Some(owner), hir::Operand::ProjectedPlace { member, .. } | hir::Operand::IndirectPlace { member, .. }) = (self.owner_of(view), &mut place) {
             *member = Some((owner, member_offset));
         }
         place
@@ -409,7 +414,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 Ok(match member.type_ {
                     ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
-                        self.projected_place(&parent, member.offset, type_name),
+                        self.field_place(&parent, member.offset, type_name),
                         type_name,
                     ),
                     ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
@@ -524,7 +529,7 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         Ok((
-            self.projected_place(&view, field.offset, type_name),
+            self.field_place(&view, field.offset, type_name),
             type_name,
             view.mutable,
             view.owner,
