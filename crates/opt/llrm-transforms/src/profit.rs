@@ -131,9 +131,13 @@ pub fn proven_trips(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> In
     trips
 }
 
+/// What one execution of the entry weighs in `_frequencies`: a block taken a
+/// third of the time weighs a third of it.
+pub const UNIT: i64 = 256;
+
 /// Block frequencies as `branchprob` estimates them (the heuristics, a loop's
-/// proven `trips` by latch), per entry, rounded and never below 1: this
-/// model counts whole executions, so a cold arm weighs as the entry. `None`
+/// proven `trips` by latch), per entry, in `UNIT`ths of an execution and never
+/// below one, so a cold arm is near free but still ordered. `None`
 /// for conflicting proofs.
 pub fn _frequencies(context: &Context, globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let shape = cfg::Shape::of(function);
@@ -150,7 +154,7 @@ pub fn _frequencies(context: &Context, globals: &Declarations, function: &Functi
         }
     }
     let odds = branchprob::estimated(context, globals, function, &shape, &counted);
-    Some(cfg::graph(function).iter().map(|block| (block.at, odds.frequency.get(&block.at).map_or(1, |one| (one.round() as i64).max(1)))).collect())
+    Some(cfg::graph(function).iter().map(|block| (block.at, odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)))).collect())
 }
 
 /// Block frequencies as a product of the trips of each loop around a block, ten where none is
