@@ -56,10 +56,12 @@ pub fn emit(program: &model::Program) -> Vec<Emitted> {
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the
-/// named cells are the external data each HIR module marks unaddressed.
+/// named cells are the data each HIR module shares with other modules and
+/// marks unaddressed, which other code names but never takes the address of.
 pub fn runtime(emitted: &[(&Emitted, &model::Module)], promises: &model::RuntimePromises) -> Emit<Module> {
     let named = emitted.iter().map(|(emitted, hir)| {
-        let cells = hir.data.iter().filter(|one| one.linkage == model::DataLinkage::External && !one.addressed);
+        let shared = |one: &&model::DataObject| matches!(one.linkage, model::DataLinkage::External | model::DataLinkage::Exported);
+        let cells = hir.data.iter().filter(shared).filter(|one| !one.addressed);
         (&emitted.module, cells.map(|one| (one.name.as_str(), emitted.data[&one.id])).collect())
     });
     promised(&named.collect::<Vec<_>>(), promises)
