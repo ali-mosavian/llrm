@@ -1,7 +1,7 @@
 //! Every value an instruction or terminator uses is defined where the
 //! definition dominates the use: earlier in the same block, or in a block
 //! that dominates it. A parameter dominates everything. The one dominator
-//! computation is `llrm-analysis`'s.
+//! computation is `llrm-support`'s (`graph`).
 
 use llrm_support::graph::{Node, dominance};
 use llrm_support::hash::HashMap;
