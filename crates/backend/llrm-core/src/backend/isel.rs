@@ -238,8 +238,8 @@ const FLOAT: u32 = 10;
 /// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
 
-/// The most load and store pairs a memcpy expands to, as LLVM's x86 MaxStoresPerMemcpy.
-const MEMCPY_MOVES: i64 = 8;
+/// The most load and store pairs a memcpy expands to: past it a string move would be shorter, which is not selected yet.
+const MEMCPY_MOVES: i64 = 32;
 
 /// The bytes of a constant memset's `rep stosb` through es:di, as
 /// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
