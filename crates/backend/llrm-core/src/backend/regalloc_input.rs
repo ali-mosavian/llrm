@@ -73,7 +73,7 @@ pub fn before_phase_skipping<'a>(
     let pinned = selected.body.pins.clone();
     let mut body = selected.body;
     let phases =
-        crate::flow::machine_with(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN, true).unwrap();
+        crate::flow::machine(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN, true).unwrap();
     let mut phases = phases.into_iter();
     for mut phase in phases.by_ref() {
         if phase.class_name() == phase_class {

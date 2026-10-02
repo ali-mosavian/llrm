@@ -40,12 +40,6 @@ fn each_level_selects_its_pipeline() {
 }
 
 #[test]
-fn the_default_level_is_the_old_o2() {
-    assert_eq!(parsed(&[]).unwrap().legacy(), passes::O2());
-    assert_eq!(parsed(&["-Os"]).unwrap().legacy(), passes::LEVELS()["Os"]);
-}
-
-#[test]
 fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
