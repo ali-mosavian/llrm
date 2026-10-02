@@ -3382,12 +3382,39 @@ fn main() -> i16:
     assert_eq!(volatile, [("other".to_owned(), false), ("ticks".to_owned(), true)]);
 }
 
-/// What a pointer reaches is a borrowed place or what foreign code hands
-/// over: no integer makes one, so no Nib program names a port or a fixed
-/// address as memory (a port is reached only inside `asm`, which declares
-/// what it touches). That is why Nib states no memory kind (#113).
+/// A far pointer is 32 bits, its segment in the high word: in `unsafe`, a
+/// literal that fits `u32` is one, as C's `(char far *)0xB8000000L`. The
+/// literal was typed `int` for want of an integer context, refused as
+/// "expected *far pointer, found i16", a type it never had.
 #[test]
-fn an_integer_is_not_a_pointer() {
-    let refused = refused("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 753664\n        p[0] = 1\n    return 0\n");
-    assert!(refused.contains("expected *far pointer, found i16"), "{refused}");
+fn an_integer_literal_is_a_raw_pointer_in_unsafe() {
+    assert!(super::compile("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0xB8000000\n        p[0] = 1\n    return 0\n", "t").is_ok());
+    assert!(super::compile("fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0xFFFF\n        p[0] = 1\n    return 0\n", "t").is_ok());
+    let near = refused("fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0x10000\n        p[0] = 1\n    return 0\n");
+    assert!(near.contains("integer literal 65536 is 17 bits, wider than a *near pointer"), "{near}");
+    let far = refused("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0x100000000\n        p[0] = 1\n    return 0\n");
+    assert!(far.contains("integer literal 4294967296 is 33 bits, wider than a *far pointer"), "{far}");
+    let safe = refused("fn main() -> i16:\n    let p: *far mut u8 = 0xB8000000\n    return 0\n");
+    assert!(safe.contains("unsafe"), "{safe}");
+    assert!(super::compile("fn main() -> i16:\n    let p: *far mut u8 = 0\n    return 0\n", "t").is_ok());
+}
+
+/// A literal's own type follows its value: `int`, else `i32`, else `u32`.
+/// Past `u32` the error names the literal's width, not a type it never had
+/// ("does not fit i32" for 0xB8000000, which fits `u32`).
+#[test]
+fn an_integer_literal_is_int_then_i32_then_u32() {
+    let printed = |literal: &str| {
+        let source = format!("fn main() -> i16:\n    let x = {literal}\n    let y = x + 1\n    print(y)\n    return 0\n");
+        let program = llrm_core::hir::codec::decode(&super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message))).unwrap();
+        llrm_core::hir::execute::run(&program, "main", &[]).unwrap().output
+    };
+    assert_eq!(printed("0x7FFF"), "-32768\n");
+    assert_eq!(printed("0x8000"), "32769\n");
+    assert_eq!(printed("0xFFFFFFFF"), "0\n");
+    assert_eq!(printed("0xB8000000"), "3087007745\n");
+    let wide = refused("fn main() -> i16:\n    let x = 0x100000000\n    return 0\n");
+    assert!(wide.contains("integer literal 4294967296 is 33 bits, wider than u32"), "{wide}");
+    let low = refused("fn main() -> i16:\n    let x = -0x80000001\n    return 0\n");
+    assert!(low.contains("is 33 bits, wider than i32"), "{low}");
 }
