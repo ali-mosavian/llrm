@@ -128,7 +128,7 @@ fn assert_matches_golden(case: &CompatCase) {
 
 #[test]
 fn checked_in_legacy_ast_goldens_cover_the_accepted_compat_cases() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("compat");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/differential/conformance");
     let cases = golden_cases(&root);
     for case in cases {
         let golden = golden_path(&case);
@@ -143,7 +143,7 @@ fn checked_in_legacy_ast_goldens_cover_the_accepted_compat_cases() {
 
 #[test]
 fn generated_parser_matches_checked_in_legacy_ast_goldens_when_accepted() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("compat");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/differential/conformance");
     let mut compared = 0;
     for case in golden_cases(&root) {
         let source =
@@ -162,7 +162,7 @@ fn generated_parser_matches_checked_in_legacy_ast_goldens_when_accepted() {
 
 #[test]
 fn generated_parser_matches_all_legacy_ast_goldens_before_the_switch() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("compat");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/differential/conformance");
     let cases = golden_cases(&root);
     for case in &cases {
         assert_matches_golden(case);
