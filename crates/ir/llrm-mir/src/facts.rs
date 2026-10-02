@@ -203,8 +203,6 @@ facts! {
     flags {
         // Of a routine, its result: a pointer to memory nothing else names.
         NoAlias no_alias "noalias" on [Param, Callable];
-        // The load reads what nothing writes after it is initialised.
-        Invariant invariant "invariant" on [Instruction];
         ReadOnly read_only "readonly" on [Param];
         // Touches no memory through the pointer, or at all, of a routine.
         ReadNone read_none "readnone" on [Param, Callable];
@@ -265,15 +263,9 @@ impl Fact {
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
             // A range wants the width of what it bounds: `typed_attribute`.
-            Fact::Invariant | Fact::Unroll(_) | Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
+            Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
-    }
-
-    /// Whether it is carried as metadata (`!range`, `!llvm.loop`) or by the width of
-    /// what it bounds, where it is neither an attribute nor an instruction flag.
-    pub fn is_metadata(self) -> bool {
-        matches!(self, Fact::Range(_) | Fact::Invariant | Fact::Unroll(_))
     }
 
     /// Whether, stated of a routine, it is of the routine's result.
@@ -433,7 +425,7 @@ mod tests {
         for fact in Fact::examples() {
             match fact.attribute() {
                 Some(attribute) => assert_eq!(Fact::of_attribute(&attribute), Some(fact), "{}", fact.key()),
-                None if fact.is_metadata() => {}
+                None if fact.key() == "range" => {}
                 None => assert!(Fact::of_flags(fact.flags()).contains(&fact), "{} is a flag", fact.key()),
             }
             assert!(Fact::is_named(fact.key()));

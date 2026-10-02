@@ -259,8 +259,6 @@ struct Tables<'h> {
     fact_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     /// The alignment the language states of an instruction's access.
     accesses: HashMap<(i64, i64), u64>,
-    /// The metadata the language's facts give a block's terminator, by function and block id.
-    terminator_nodes: HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>,
     /// Each frame variable's `!var` node, by its function and place.
     variables: HashMap<(i64, i64), MetadataId>,
 }
@@ -284,20 +282,12 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
 
 /// The metadata `!range` and the like the language's facts give instructions,
 /// and the alignments they state of accesses.
-fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<FactNodes> {
-    let (mut nodes, mut accesses, mut terminators) = (HashMap::new(), HashMap::new(), HashMap::new());
+fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<(HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>)> {
+    let (mut nodes, mut accesses) = (HashMap::new(), HashMap::new());
     let index = crate::facts::Index::of(hir);
     for stated in &hir.facts {
-        if let (Subject::Terminator { function, block }, Fact::Unroll(copies)) = (stated.subject, stated.fact) {
-            terminators.entry((function, block)).or_insert_with(Vec::new).push(("llvm.loop", loop_node(module, copies)));
-            continue;
-        }
         let Subject::Instruction { function, id } = stated.subject else { continue };
         match stated.fact {
-            Fact::Invariant => {
-                module.metadata.push(MetadataNode { distinct: false, operands: Vec::new() });
-                nodes.entry((function, id)).or_insert_with(Vec::new).push(("invariant.load", MetadataId(module.metadata.len() as u32 - 1)));
-            }
             Fact::Align(bytes) => {
                 accesses.insert((function, id), bytes);
             }
@@ -315,25 +305,7 @@ fn fact_nodes(module: &mut Module, hir: &model::Module, types: &HashMap<i64, &mo
             _ => {}
         }
     }
-    Ok((nodes, accesses, terminators))
-}
-
-/// What `fact_nodes` finds: metadata of instructions, alignments of accesses, metadata of terminators.
-type FactNodes = (HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>, HashMap<(i64, i64), u64>, HashMap<(i64, i64), Vec<(&'static str, MetadataId)>>);
-
-/// A loop's `!llvm.loop` node: distinct, naming itself and what it says of unrolling.
-fn loop_node(module: &mut Module, copies: u32) -> MetadataId {
-    let i32 = module.context.types.int(32);
-    let hint = match copies {
-        0 => vec![MetadataOperand::String("llvm.loop.unroll.disable".to_owned())],
-        u32::MAX => vec![MetadataOperand::String("llvm.loop.unroll.full".to_owned())],
-        count => vec![MetadataOperand::String("llvm.loop.unroll.count".to_owned()), MetadataOperand::Constant(module.context.int(i32, i128::from(count)))],
-    };
-    module.metadata.push(MetadataNode { distinct: false, operands: hint });
-    let hint = MetadataId(module.metadata.len() as u32 - 1);
-    let this = MetadataId(module.metadata.len() as u32);
-    module.metadata.push(MetadataNode { distinct: true, operands: vec![MetadataOperand::Node(this), MetadataOperand::Node(hint)] });
-    this
+    Ok((nodes, accesses))
 }
 
 fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
@@ -375,12 +347,11 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
         lines: HashMap::new(),
         fact_nodes: HashMap::new(),
         accesses: HashMap::new(),
-        terminator_nodes: HashMap::new(),
         variables: HashMap::new(),
     };
     tables.lines = line_nodes(&mut module, hir);
     match fact_nodes(&mut module, hir, &tables.types) {
-        Ok((nodes, accesses, terminators)) => (tables.fact_nodes, tables.accesses, tables.terminator_nodes) = (nodes, accesses, terminators),
+        Ok((nodes, accesses)) => (tables.fact_nodes, tables.accesses) = (nodes, accesses),
         Err(why) => refused.push((hir.name.clone(), why)),
     }
     match class_tags(&mut module, &hir.alias_classes) {
