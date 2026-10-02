@@ -806,7 +806,7 @@ fn a_fact_of_the_wrong_subject_is_refused() {
         program.modules[0].facts = vec![Stated { subject, fact: Fact::NoAlias, source: None }];
         crate::verify::verify(&program).unwrap_err().0
     };
-    assert!(refusal(Subject::Callable(1)).contains("noalias is not stated of a callable"));
+    assert!(refusal(Subject::Operand { function: 1, instruction: 1, operand: 0 }).contains("noalias is not stated of a operand"));
     assert!(refusal(Subject::Param { function: 1, index: 2 }).contains("noalias is stated of a param the module lacks"));
     assert!(refusal(Subject::Param { function: 9, index: 0 }).contains("the module lacks"));
     let mut program = program(difference());
@@ -952,6 +952,142 @@ fn inbounds_is_a_fact_of_an_operand() {
     assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
 }
 
+/// A program that calls `B$NEAR`, a routine of one `Callable`, with the
+/// facts `stated` of it.
+fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> String {
+    use crate::facts::Builder;
+    use crate::model::{CallAbi, CallDistance, Callable, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(1)]);
+    call.callee = Some("B$NEAR".to_owned());
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.push(call);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
+    function.calls = vec![CallAbi { instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    program.modules[0].callables.push(Callable {
+        id: 1,
+        name: "B$NEAR".to_owned(),
+        result_type: Some(1),
+        parameter_types: vec![1],
+        by_value: vec![true],
+        segmented: vec![false],
+        arrays: vec![false],
+        defined: false,
+        symbol: None,
+    });
+    let mut facts = Builder::new("test");
+    for (subject, fact) in stated {
+        facts.state(subject, fact);
+    }
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    llrm_mir::print::module(&emitted.module)
+}
+
+/// A range stated of a routine's parameter and of its result is the
+/// attribute LLVM reads, half-open and at the integer's width: a boolean
+/// 0..=1 is `range(i16 0, 2)`; one stated of a result of a signed
+/// -1..=1 wraps its upper bound.
+#[test]
+fn a_range_of_a_routines_parameter_and_result_is_its_attribute() {
+    use crate::facts::Subject;
+    use llrm_mir::facts::{Bounds, Fact};
+    let text = calling(vec![
+        (Subject::Param { function: 1, index: 0 }, Fact::Range(Bounds { lo: 0, hi: 1 })),
+        (Subject::Callable(1), Fact::Range(Bounds { lo: -1, hi: 1 })),
+        (Subject::Callable(1), Fact::NoAlias),
+    ]);
+    assert!(text.contains("(i16 range(i16 0, 2) %0,"), "{text}");
+    assert!(text.contains("declare cc1000 range(i16 -1, 2) noalias i16 @B$NEAR"), "{text}");
+}
+
+/// A range stated of a load's result is `!range` on that load; a byte
+/// read as unsigned, 0..=255, is the whole of it and says nothing.
+#[test]
+fn a_range_of_an_instruction_is_its_metadata() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    let mut function = difference();
+    function.blocks[0].instructions[0].results = vec![3];
+    let mut program = program(function);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, Fact::Range(Bounds { lo: -4, hi: 9 }));
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("!range"), "{text}");
+    assert!(text.contains("i16 -4, i16 10"), "{text}");
+}
+
+/// An alignment stated of an instruction is the alignment of its access.
+#[test]
+fn an_alignment_of_an_access_is_stated_of_its_instruction() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::IndirectPlace;
+    use llrm_mir::facts::Fact;
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None })]);
+    function.blocks[0].instructions.insert(0, load);
+    function.values.iter_mut().find(|one| one.id == 1).expect("a").r#type = 2;
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "pointer", TypeKind::Pointer, 2));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Align(1));
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("load i16, ptr %0, align 1"), "{text}");
+}
+
+/// A range is stated of what yields a value, an alignment of an access;
+/// either of another instruction would be lowered onto whatever came out.
+#[test]
+fn a_range_or_alignment_of_the_wrong_instruction_is_refused() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    let refusal = |fact| {
+        let mut program = program(difference());
+        let mut facts = Builder::new("test");
+        facts.state(Subject::Instruction { function: 1, id: 1 }, fact);
+        program.modules[0].facts = facts.finish();
+        crate::verify::verify(&program)
+    };
+    assert!(refusal(Fact::Range(Bounds { lo: 0, hi: 1 })).is_ok());
+    assert!(refusal(Fact::Align(2)).unwrap_err().0.contains("align is stated of a instruction the module lacks"));
+}
+
+/// A pair travels the wire whole, and a pair the wrong way round is no fact.
+#[test]
+fn a_range_survives_the_codec() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 0 }, Fact::Range(Bounds { lo: -3, hi: 7 }));
+    program.modules[0].facts = facts.finish();
+    let text = crate::codec::encode(&program, None).expect("encodes");
+    assert!(text.contains("\"second\":7") && text.contains("\"value\":-3"), "{text}");
+    let back = crate::codec::decode(&text).expect("decodes");
+    assert_eq!(back.modules[0].facts, program.modules[0].facts);
+    assert!(crate::codec::decode(&text.replace("\"second\":7", "\"second\":-9")).is_err());
+}
+
+/// The verifier a frontend's HIR meets refuses a value used where its
+/// definition does not dominate it.
+#[test]
+fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
+    let mut function = difference();
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Add, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]));
+    function.values.push(Value { id: 4, r#type: 1 });
+    let error = crate::verify::verify(&program(function)).unwrap_err();
+    assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
+}
+
 /// What a language lets a pass do to a floating operation reaches the
 /// instruction as its fast-math flags: `-on` and alternate math were stated
 /// nowhere, so no float fold could ask.
@@ -975,17 +1111,6 @@ fn floating_freedoms_are_fast_math_flags() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("= fadd reassoc nnan ninf nsz arcp double %0, %1"), "{text}");
-}
-
-/// The verifier a frontend's HIR meets refuses a value used where its
-/// definition does not dominate it.
-#[test]
-fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
-    let mut function = difference();
-    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Add, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]));
-    function.values.push(Value { id: 4, r#type: 1 });
-    let error = crate::verify::verify(&program(function)).unwrap_err();
-    assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
 }
 
 /// A condition the language promises holds is `llvm.assume` of its test.
