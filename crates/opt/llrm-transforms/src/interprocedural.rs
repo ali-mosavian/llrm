@@ -30,6 +30,7 @@ use llrm_analysis::manager::{GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
 use llrm_mir::callgraph::{CallGraph, CallGraphAnalysis, Defined};
 use llrm_mir::context::GlobalId;
+use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
@@ -396,9 +397,9 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape));
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
-        let states = |flag: &str| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, flag));
-        let returns = facts::returns_without_looping(function) && states("willreturn");
-        let nounwind = states("nounwind") && facts::cannot_fault(module, layout, function);
+        let states = |fact: Fact| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, fact));
+        let returns = facts::returns_without_looping(function) && states(Fact::WillReturn);
+        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, function);
         let volatile = function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }));
         let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
         for &inst in &calls {
@@ -410,10 +411,9 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let function = function_mut(module, id).1;
         let before = (function.attrs.clone(), function.parameter_attrs.clone());
         _narrowed(&mut function.attrs, summary, hidden);
-        let has = llrm_mir::memory::has;
-        for (flag, proved) in [("willreturn", returns), ("nounwind", nounwind)] {
-            if proved && !has(&function.attrs, flag) {
-                function.attrs.push(Attribute::Flag(flag.to_owned()));
+        for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind)] {
+            if proved && !Facts::of(&function.attrs).contains(fact) {
+                function.attrs.extend(fact.attribute());
             }
         }
         for (index, attrs) in function.parameter_attrs.iter_mut().enumerate().filter(|(index, _)| pointers[*index]) {
@@ -421,21 +421,22 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
             if summary.captures.contains(&identity) {
                 continue;
             }
-            if !has(attrs, "nocapture") {
-                attrs.push(Attribute::Flag("nocapture".to_owned()));
+            if !Facts::of(attrs).no_capture() {
+                attrs.extend(Fact::NoCapture.attribute());
             }
             let through = |slices: &BTreeSet<Slice>| slices.iter().any(|one| one.object.kind == MemoryKind::Parameter && one.object.identity == identity);
             let (reads, writes) = (through(&summary.reads) || summary.unknown_read, through(&summary.writes) || summary.unknown_write);
             let access = match (reads, writes) {
-                (false, false) => Some("readnone"),
-                (true, false) => Some("readonly"),
-                (false, true) => Some("writeonly"),
+                (false, false) => Some(Fact::ReadNone),
+                (true, false) => Some(Fact::ReadOnly),
+                (false, true) => Some(Fact::WriteOnly),
                 (true, true) => None,
             };
+            let stated = Facts::of(attrs);
             if let Some(access) = access
-                && !["readnone", "readonly", "writeonly"].iter().any(|one| has(attrs, one))
+                && !(stated.read_none() || stated.read_only() || stated.write_only())
             {
-                attrs.push(Attribute::Flag(access.to_owned()));
+                attrs.extend(access.attribute());
             }
             if !initialized[index].is_empty() && !attrs.iter().any(|one| matches!(one, Attribute::Initializes(_))) {
                 attrs.push(Attribute::Initializes(initialized[index].clone()));
@@ -488,8 +489,8 @@ fn _narrowed(attrs: &mut Vec<Attribute>, summary: &Summary, hidden: Effects) {
     // What `readnone`, `readonly` or `writeonly` said, it now says.
     attrs.retain(|one| match one {
         Attribute::Memory(_) => false,
-        Attribute::Flag(flag) => !["readnone", "readonly", "writeonly"].contains(&flag.as_str()),
-        _ => true,
+        // Said again by the `memory` attribute that replaces them.
+        other => !matches!(Fact::of_attribute(other), Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)),
     });
     attrs.push(Attribute::Memory(locations));
 }

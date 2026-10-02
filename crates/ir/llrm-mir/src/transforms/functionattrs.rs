@@ -49,7 +49,7 @@ impl ModulePass for FunctionAttrs {
                 }
             }
             if !memory::returns(&function.attrs) && returns(context, &callees, function) {
-                added.push(Attribute::Flag("willreturn".to_owned()));
+                added.extend(crate::facts::Fact::WillReturn.attribute());
             }
             if added.is_empty() {
                 continue;
