@@ -339,6 +339,8 @@ pub struct LirBody {
     /// Estimated branch probabilities, by edge, as isel found them; an
     /// edge made since has none.
     pub odds: BlockOdds,
+    /// It calls a routine that returns twice (`setjmp`): no frame slot is shared.
+    pub returns_twice: bool,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -418,6 +420,7 @@ impl LirBody {
             sealed_arguments: false,
             variables: Vec::new(),
             odds: BlockOdds::default(),
+            returns_twice: false,
         }
     }
 
@@ -438,6 +441,7 @@ impl LirBody {
             sealed_arguments: self.sealed_arguments,
             variables: self.variables.clone(),
             odds: self.odds.clone(),
+            returns_twice: self.returns_twice,
         }
     }
 

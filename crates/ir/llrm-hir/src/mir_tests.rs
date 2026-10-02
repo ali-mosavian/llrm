@@ -228,8 +228,39 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !4\n"), "{text}");
-    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!3 = !{!\"allocation\", !0, i64 0}\n"), "{text}");
+    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"), "{text}");
+    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!5 = !{!\"allocation.0\", !3, i64 0}\n"), "{text}");
+}
+
+/// Another module may name a COMMON array under its own tag path, and the
+/// interprocedural passes meet both in one body: per-array tags would call the
+/// same bytes apart. A COMMON array keeps the generic `allocation` tag.
+#[test]
+fn a_common_array_keeps_the_generic_allocation_tag() {
+    use crate::model::{AddressKind, IndirectPlace, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
+    let instructions = vec![
+        Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
+        Instruction::new(3, Op::Store, vec![], vec![indirect(1, 0, Some(1)), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let places = vec![Place::new(1, "D", 4, Storage::Common, 0)];
+    let mut function = Function::new(1, "FILL", 0, values, places, vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    let mut descriptor = Type::new(4, "descriptor", TypeKind::Array, 4);
+    (descriptor.element, descriptor.rank, descriptor.bounds) = (Some(1), 1, vec![(0, 1)]);
+    program.modules[0].types.extend([far, Type::new(3, "near", TypeKind::Pointer, 2), descriptor]);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(!text.contains("allocation."), "{text}");
 }
 
 /// A far pointer advanced by a displacement moves its offset alone: a GEP
@@ -429,6 +460,46 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     let text = llrm_mir::print::module(&emitted.module);
     let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 4, i1 false)\n  store i16 0, ptr %1\n";
     assert!(text.contains(entry), "{text}");
+}
+
+/// A block local's scope is its lifetime markers, over the bytes of its place; the markers
+/// are declared once, and verify.
+#[test]
+fn a_locals_scope_is_its_lifetime_markers() {
+    use crate::model::{Place, Storage};
+    let instructions = vec![
+        Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Store, vec![], vec![Operand::place_ref(1), Operand::constant(1, 5)]),
+        Instruction::new(3, Op::LifetimeEnd, vec![], vec![Operand::place_ref(1)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+    let function = Function::new(1, "F%", 1, Vec::new(), vec![Place::new(1, "X", 1, Storage::Local, -2)], vec![block], 1);
+    let program = program(function);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  call void @llvm.lifetime.start.p0(i64 2, ptr %0)\n"), "{text}");
+    assert!(text.contains("  call void @llvm.lifetime.end.p0(i64 2, ptr %0)\n"), "{text}");
+    assert_eq!(text.matches("declare void @llvm.lifetime.start.p0").count(), 1, "{text}");
+}
+
+/// A lifetime is a block local's: a marker on anything else is a frontend's mistake, which
+/// a layout reading it would turn into a wrong frame.
+#[test]
+fn a_lifetime_marker_names_one_local() {
+    use crate::model::{Place, Storage};
+    let marked = |mut place: Place| {
+        place.extent = Some(2);
+        let instructions = vec![Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)])];
+        let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+        program(Function::new(1, "F%", 1, Vec::new(), vec![place], vec![block], 1))
+    };
+    let good = crate::verify::verify(&marked(Place::new(1, "X", 1, Storage::Local, -2)));
+    assert!(good.is_ok(), "{good:?}");
+    let error = crate::verify::verify(&marked(Place::new(1, "P", 1, Storage::Parameter, 4))).unwrap_err();
+    assert!(error.to_string().contains("names one local place"), "{error}");
 }
 
 /// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
