@@ -1,4 +1,5 @@
 /* Dynamic far-struct fields from qc-port's cache-list update. */
+extern void report(long value);
 typedef struct {
     short far *bord, far *bprev, far *bnext;
     long far *bstamp;
@@ -52,4 +53,10 @@ long bench_lru(short block)
     return cache.clock + bstamp[block] * 3L + bprev[block] * 5L
         + (bnext[block] + 1) * 7L + bnext[0] * 11L
         + cache.lhead[2] * 13L + cache.ltail[2] * 17L;
+}
+
+int main(void)
+{
+    report(bench_lru(1));
+    return 0;
 }
