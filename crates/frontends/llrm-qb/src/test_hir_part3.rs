@@ -575,14 +575,16 @@ fn test_pds_resume_target_and_numbered_erl_survive_distinct_identity_spaces() {
     assert!(procedure.lines().any(|line| line.contains("ptr @\"RECOVERYCOUNT%\"") && line.trim().starts_with("store")), "{procedure}");
 }
 
-/// PDHUGE wrapped/aliased beyond 64 KiB when /Ah was dropped and B$HARY was guessed inline.
+/// PDHUGE wrapped/aliased beyond 64 KiB when /Ah was dropped and its
+/// elements were addressed as far ones. A huge element is addressed inline,
+/// its offset carrying into the selector, with no B$HARY.
 #[test]
-fn test_pds_huge_array_uses_measured_ddim_and_hary_abi() {
+fn test_pds_huge_array_uses_measured_ddim_and_inline_huge_addresses() {
     let source = parsed_with(&compat("pds71/pdhuge.bas"), "pds71", "pds71", "row-major", true, false);
     let assembly = listing(&source);
     assert!(assembly.contains("call far ptr B$DDIM"));
-    assert_eq!(assembly.matches("call far ptr B$HARY").count(), 10);
-    // 123 is stored through the selector B$HARY returned.
+    assert!(!assembly.contains("B$HARY"), "{assembly}");
+    // 123 is stored through a computed selector.
     assert!(regex::Regex::new(r"mov word ptr es:\[\w+\], 123").unwrap().is_match(&assembly), "{assembly}");
 }
 

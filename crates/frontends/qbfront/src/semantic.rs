@@ -383,7 +383,7 @@ pub struct Options {
     pub row_major: bool,
     /// /Ah.
     pub huge_arrays: bool,
-    /// /D: every element through B$HARY.
+    /// /D: every subscript checked against its dimension.
     pub checked_arrays: bool,
     /// /D's division check: integer division raises its error 11 in code,
     /// not by the processor's divide trap, whose statement the rich route
@@ -4752,15 +4752,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
+                if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.options.checked_arrays {
-                        "checked"
-                    } else {
-                        variable.descriptor_data
-                    };
-                    let pointer =
-                        self.descriptor_element(descriptor, element, arguments, address)?;
+                    let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
                     return Ok((
                         Operand::Indirect {
                             base: pointer,
@@ -4781,8 +4775,16 @@ impl Compiler {
                     if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
                         return self.fail(format!("array {name} subscript is not numeric"));
                     }
-                    if matches!(type_id, SINGLE | DOUBLE | BYTE) {
+                    let type_id = if matches!(type_id, SINGLE | DOUBLE | BYTE) {
                         operand = self.convert(operand, type_id, INTEGER)?;
+                        INTEGER
+                    } else {
+                        type_id
+                    };
+                    if self.options.checked_arrays {
+                        let (lower, upper) = variable.bounds[indices.len()];
+                        let long = |value: i64| Operand::Constant(LONG, Number::Integer(value));
+                        self.subscript_checked(operand.clone(), type_id, long(lower), long(upper - lower + 1))?;
                     }
                     indices.push(operand);
                 }
@@ -4848,15 +4850,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
+                if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.options.checked_arrays {
-                        "checked"
-                    } else {
-                        variable.descriptor_data
-                    };
-                    let pointer =
-                        self.descriptor_element(descriptor, element, arguments, address)?;
+                    let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
                     return Ok((ProjectionBase::Indirect(pointer, false, true), 0, element));
                 }
                 if arguments.len() != variable.bounds.len() {
@@ -4868,8 +4864,16 @@ impl Compiler {
                     if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
                         return self.fail(format!("array {name} subscript is not numeric"));
                     }
-                    if matches!(type_id, SINGLE | DOUBLE | BYTE) {
+                    let type_id = if matches!(type_id, SINGLE | DOUBLE | BYTE) {
                         operand = self.convert(operand, type_id, INTEGER)?;
+                        INTEGER
+                    } else {
+                        type_id
+                    };
+                    if self.options.checked_arrays {
+                        let (lower, upper) = variable.bounds[indices.len()];
+                        let long = |value: i64| Operand::Constant(LONG, Number::Integer(value));
+                        self.subscript_checked(operand.clone(), type_id, long(lower), long(upper - lower + 1))?;
                     }
                     indices.push(operand);
                 }
@@ -5019,37 +5023,6 @@ impl Compiler {
         if indices.is_empty() {
             return self.fail("array element requires at least one subscript");
         }
-        if matches!(address, "split_huge" | "checked") {
-            // PDS /Ah and /D do not inline descriptor arithmetic. BC evaluates
-            // source subscripts, pushes them so record 0's is last, then the
-            // rank, supplies the near descriptor in BX, and B$HARY returns ES:BX.
-            // Keep both returned words explicit until CONCAT makes the whole
-            // pointer consumed by the element load/store.
-            let mut operands = Vec::new();
-            for index in indices {
-                let (index, index_type) = self.subscript(index)?;
-                operands.push(self.convert(index, index_type, INTEGER)?);
-            }
-            operands.push(Operand::Constant(
-                INTEGER,
-                Number::Integer(indices.len() as i64),
-            ));
-            operands.push(Operand::Value(descriptor));
-            let mut order: Vec<_> = self.record_dimensions(indices.len()).into_iter().rev().collect();
-            order.extend(indices.len()..indices.len() + 2);
-            let offset = self.value(INTEGER);
-            let selector = self.value(INTEGER);
-            self.emit_call("B$HARY", vec![offset, selector], operands, order, false);
-            self.tag_last(Tag::ElementOffset { descriptor, origin: None });
-            let pointer_type = self.whole_pointer_type(element);
-            let pointer = self.value(pointer_type);
-            self.emit(
-                "concat",
-                vec![pointer],
-                vec![Operand::Value(selector), Operand::Value(offset)],
-            );
-            return Ok(pointer);
-        }
         let pointer_type = match address {
             "near" => self.pointer_type(element),
             "split_far" => self.far_pointer_type(element),
@@ -5064,10 +5037,18 @@ impl Compiler {
         // descriptor field: a subscript can call a function that REDIMs.
         let mut subscripts = Vec::new();
         for index in indices {
+            // A subscript is an INTEGER, as BC passes one.
             let (index, index_type) = self.subscript(index)?;
-            subscripts.push(self.convert(index, index_type, offset_type)?);
+            let index = self.convert(index, index_type, INTEGER)?;
+            subscripts.push(self.convert(index, INTEGER, offset_type)?);
         }
-        let linear = Some(self.element_number(descriptor, &subscripts, offset_type)?);
+        if self.options.checked_arrays {
+            self.descriptor_checked(descriptor, &subscripts, offset_type)?;
+        }
+        // A huge array's offset at +0Ah wraps at 64K, so its lower bounds
+        // are subtracted here and its elements counted from the data at +0.
+        let huge = address == "split_huge";
+        let linear = Some(self.element_number(descriptor, &subscripts, offset_type, huge)?);
         let bytes = self.value(offset_type);
         self.emit(
             "mul",
@@ -5119,6 +5100,33 @@ impl Compiler {
         Ok(pointer)
     }
 
+    /// /D: ERROR 9, Subscript out of range, unless the array is allocated
+    /// and each subscript is within its dimension, as B$HARY checks.
+    fn descriptor_checked(&mut self, descriptor: u32, subscripts: &[Operand], offset_type: u32) -> Result<(), SemanticError> {
+        let selector = self.descriptor_field(descriptor, 2, INTEGER);
+        let unallocated = self.computed("eq", BOOLEAN, vec![Operand::Value(selector), Operand::Constant(INTEGER, Number::Integer(0))]);
+        self.raise_if(unallocated, 9)?;
+        for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
+            let lower = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
+            let lower = self.convert(Operand::Value(lower), INTEGER, LONG)?;
+            let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
+            let count = self.convert(Operand::Value(count), INTEGER, LONG)?;
+            self.subscript_checked(subscripts[dimension].clone(), offset_type, lower, count)?;
+        }
+        Ok(())
+    }
+
+    /// ERROR 9 unless `subscript` of `type_id` less `lower` is below `count`,
+    /// both LONG.
+    fn subscript_checked(&mut self, subscript: Operand, type_id: u32, lower: Operand, count: Operand) -> Result<(), SemanticError> {
+        let subscript = self.convert(subscript, type_id, LONG)?;
+        let from = self.computed("sub", LONG, vec![subscript, lower]);
+        let below = self.computed("lt", BOOLEAN, vec![from.clone(), Operand::Constant(LONG, Number::Integer(0))]);
+        self.raise_if(below, 9)?;
+        let above = self.computed("ge", BOOLEAN, vec![from, count]);
+        self.raise_if(above, 9)
+    }
+
     /// An array subscript's value and numeric type.
     /// An array subscript. A sized integer widens to INTEGER or LONG.
     fn subscript(&mut self, index: &Expr) -> Result<(Operand, u32), SemanticError> {
@@ -5141,16 +5149,25 @@ impl Compiler {
 
     /// The element number of `subscripts`, one per source dimension, from
     /// the descriptor's counts: record 0's subscript is the most significant.
-    /// The lower bounds are already in the adjusted offset at +0Ah.
+    /// The lower bounds are in the adjusted offset at +0Ah, else `lower`
+    /// subtracts each.
     fn element_number(
         &mut self,
         descriptor: u32,
         subscripts: &[Operand],
         offset_type: u32,
+        lower: bool,
     ) -> Result<Operand, SemanticError> {
         let mut linear: Option<Operand> = None;
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
-            let subscript = subscripts[dimension].clone();
+            let mut subscript = subscripts[dimension].clone();
+            if lower {
+                let bound = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
+                let bound = self.convert(Operand::Value(bound), INTEGER, offset_type)?;
+                let from = self.value(offset_type);
+                self.emit("sub", vec![from], vec![subscript, bound]);
+                subscript = Operand::Value(from);
+            }
             linear = Some(match linear {
                 None => subscript,
                 Some(previous) => {

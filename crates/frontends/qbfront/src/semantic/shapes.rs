@@ -35,8 +35,8 @@ pub(super) enum Identity {
 #[derive(Clone, Debug, Default)]
 struct Known {
     unknown: bool,
-    zero_based: bool,
     counts: Option<Vec<i64>>,
+    lowers: Option<Vec<i64>>,
     origin: Option<i64>,
     allocations: usize,
 }
@@ -49,23 +49,30 @@ impl Known {
             Operand::Constant(_, Number::Integer(value)) => Some(*value),
             _ => None,
         };
-        let zero_based = records.iter().all(|(lower, _)| constant(lower) == Some(0));
         let counts: Option<Vec<i64>> = records
             .iter()
             .map(|(lower, upper)| Some(constant(upper)? - constant(lower)? + 1))
             .collect();
+        let lowers: Option<Vec<i64>> = records.iter().map(|(lower, _)| constant(lower)).collect();
         if self.allocations == 0 {
-            (self.zero_based, self.counts, self.origin) = (zero_based, counts, origin);
+            (self.counts, self.lowers, self.origin) = (counts, lowers, origin);
         } else {
-            self.zero_based &= zero_based;
             if self.counts != counts {
                 self.counts = None;
+            }
+            if self.lowers != lowers {
+                self.lowers = None;
             }
             if self.origin != origin {
                 self.origin = None;
             }
         }
         self.allocations += 1;
+    }
+
+    /// Whether every allocation's lower bounds are zero.
+    fn zero_based(&self) -> bool {
+        self.lowers.as_ref().is_some_and(|lowers| lowers.iter().all(|&lower| lower == 0))
     }
 
     /// Whether anything here is a fact.
@@ -266,15 +273,14 @@ pub(super) fn applied(compiler: &mut Compiler) {
         for block in &mut function.blocks {
             for one in &mut block.instructions {
                 match one.tag {
-                    Some(Tag::DescriptorField { descriptor, field: Slot::Count(record) }) => {
-                        let Some(counts) = fact(descriptor).and_then(|fact| fact.counts) else {
-                            continue;
-                        };
-                        let Some(&count) = counts.get(record) else {
+                    Some(Tag::DescriptorField { descriptor, field: field @ (Slot::Count(record) | Slot::Lower(record)) }) => {
+                        let fact = fact(descriptor);
+                        let bounds = if matches!(field, Slot::Count(_)) { fact.and_then(|fact| fact.counts) } else { fact.and_then(|fact| fact.lowers) };
+                        let Some(&bound) = bounds.as_ref().and_then(|bounds| bounds.get(record)) else {
                             continue;
                         };
                         one.op = "copy";
-                        one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(count))];
+                        one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(bound))];
                     }
                     Some(Tag::DescriptorField { descriptor, field: Slot::Origin }) if one.op == "load" => {
                         let Some(origin) = fact(descriptor).and_then(|fact| fact.origin) else {
@@ -283,11 +289,11 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         one.op = "copy";
                         one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(origin))];
                     }
-                    Some(Tag::ElementOffset { descriptor, origin: Some(origin) }) => {
-                        if fact(descriptor).is_some_and(|fact| fact.zero_based) {
+                    Some(Tag::ElementOffset { descriptor, origin }) => {
+                        if let Some(origin) = origin.filter(|_| fact(descriptor).is_some_and(|fact| fact.zero_based())) {
                             function.origins.extend(one.results.iter().map(|result| (*result, origin)));
                         }
-                        // A far array's element is in its own allocation.
+                        // An element is in its own array's allocation.
                         if let Some(place) = owner(descriptor) {
                             function.allocations.extend(one.results.iter().map(|result| (*result, place)));
                         }
