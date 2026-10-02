@@ -441,3 +441,36 @@ no:
     );
     assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Zero));
 }
+
+/// GCC's call heuristic counts only a call that may write memory or do I/O;
+/// an intrinsic is an operation. BASIC's SIN, SQR and CINT are intrinsics:
+/// 29 of the 49 branches it decided in the three demos called only those,
+/// each arm taken 33 times in 100 as if it called out.
+#[test]
+fn test_an_intrinsic_or_a_read_only_call_is_no_call() {
+    for (callee, declared, heuristic) in [
+        ("llvm.sqrt.f32", "declare float @llvm.sqrt.f32(float)", Heuristic::Even),
+        ("look", "declare float @look(float) memory(read)", Heuristic::Even),
+        ("log", "declare float @log(float)", Heuristic::Call),
+    ] {
+        let (odds, at) = estimate(&format!(
+            "{declared}
+define i16 @f(i16 %x, i16 %y, float %v) {{
+entry:
+  %c = icmp ugt i16 %x, %y
+  br i1 %c, label %calls, label %quiet
+calls:
+  %r = call float @{callee}(float %v)
+  br label %join
+quiet:
+  br label %join
+join:
+  ret i16 %x
+}}
+"
+        ));
+        assert_eq!(odds.by.get(&at("entry")), Some(&heuristic), "{callee}");
+        let want = if heuristic == Heuristic::Call { 33.0 / 100.0 } else { 0.5 };
+        assert!(close(odds.probability(at("entry"), at("calls")), want), "{callee}");
+    }
+}

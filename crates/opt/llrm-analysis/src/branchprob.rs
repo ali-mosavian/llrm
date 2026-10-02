@@ -20,14 +20,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::module::{BlockId, Function, Operand, ValueDef};
+use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::facts::Facts;
 use llrm_mir::types::Type;
 use llrm_mir::{ConstantKind, Context};
 
 use crate::cfg::{self, Shape, id};
-use crate::effects::Declarations;
+use crate::effects::{self, Declarations};
 use crate::noreturn;
 
 /// Why a block's successors have the probabilities they do.
@@ -125,7 +126,9 @@ fn weighed(context: &Context, declarations: &Declarations, function: &Function, 
             return (heuristic, vec![when_true, when_false]);
         }
     }
-    let calls = |at: i64| function.block(cfg::block(at)).instructions().iter().any(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)));
+    // GCC's: a call that may only read, or an intrinsic (an operation, not a
+    // call), signals nothing exceptional.
+    let calls = |at: i64| function.block(cfg::block(at)).instructions().iter().any(|&inst| signalling(context, declarations, function, inst));
     if let Some(weights) = split(&|at| !calls(at), CALL) {
         return (Heuristic::Call, weights);
     }
@@ -134,6 +137,17 @@ fn weighed(context: &Context, declarations: &Declarations, function: &Function, 
         return (Heuristic::Return, weights);
     }
     (Heuristic::Even, vec![1.0; successors.len()])
+}
+
+/// Whether `inst` calls a function, not an intrinsic, that may write memory
+/// or do I/O.
+fn signalling(context: &Context, declarations: &Declarations, function: &Function, inst: InstId) -> bool {
+    let intrinsic = || {
+        llrm_mir::memory::callee(context, function, inst)
+            .and_then(|callee| declarations.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named))
+            .is_some()
+    };
+    matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) && !intrinsic() && effects::writes_memory(context, declarations, function, inst)
 }
 
 trait Swap {
