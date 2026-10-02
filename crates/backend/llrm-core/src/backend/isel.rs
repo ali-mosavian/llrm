@@ -374,6 +374,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let body = selector.body(name, &convention)?;
     let mut body = lined(module, function, &selector.ats, body);
     body.variables = parameters(module, name, &convention);
+    body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
@@ -979,7 +980,8 @@ impl Selector<'_, '_, '_> {
     fn alloca_groups(&self, layout: &[BlockId]) -> (IndexMap<InstId, usize>, Vec<i64>) {
         let function = self.function;
         let positions: IndexMap<InstId, i64> = layout.iter().flat_map(|&block| function.block(block).instructions().iter().copied()).enumerate().map(|(at, inst)| (inst, at as i64)).collect();
-        let live = crate::backend::lifetimes::intervals(function, layout, &positions, |inst| self.lifetime(inst));
+        // After a second return from `setjmp` a slot another local used holds that local's value.
+        let live = if llrm_mir::memory::calls_returns_twice(self.module, function) { IndexMap::default() } else { crate::backend::lifetimes::intervals(function, layout, &positions, |inst| self.lifetime(inst)) };
         let allocas: Vec<(InstId, i64)> = positions
             .keys()
             .filter_map(|&inst| match function.instruction(inst).opcode {

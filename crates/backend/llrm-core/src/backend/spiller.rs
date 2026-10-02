@@ -735,6 +735,13 @@ fn _color_slots(
     }
     let mut pending: Vec<u32> =
         values.iter().copied().filter(|value| !frame.slots.contains_key(&SlotKey::from(*value))).collect();
+    // After a second return from `setjmp` a slot another value used holds that value: none is shared.
+    if body.returns_twice {
+        for value in pending {
+            frame.slot(value, widths[&value])?;
+        }
+        return Ok(());
+    }
     pending.sort_by_key(|value| (-i64::from(widths[value].max(WORD)), *value));
     let copies = _copied_with(body, &pending.iter().copied().collect());
     for value in pending {
@@ -3118,6 +3125,22 @@ mod tests {
         spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
         assert_eq!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 4);
+    }
+
+    /// A body that calls `setjmp` shares no slot: after the second return one a dead value used
+    /// holds that value. Another value's dead slot is otherwise reused, as the test above shows.
+    #[test]
+    fn test_no_spill_slot_is_shared_in_a_body_that_calls_setjmp() {
+        let shared = |twice: bool| {
+            let mut frame = Frame::new(0);
+            let [wide, use_wide] = _wide_pair(1, 10, 11, 0x10);
+            let mut body = _body(vec![wide, use_wide, _move(2, 20, None, 0x14), _add(21, 2, 0x16)]);
+            body.returns_twice = twice;
+            let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame)).expect("spills");
+            spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
+            frame.slots[&slot(1)] == frame.slots[&slot(2)]
+        };
+        assert_eq!((shared(false), shared(true)), (true, false));
     }
 
     #[test]

@@ -3459,3 +3459,29 @@ fn test_a_local_used_outside_its_lifetime_shares_no_slot() {
     let text = scopes(true, false).replace("  ret i16 %v\n", "  %again = load volatile i16, ptr %p\n  ret i16 %again\n");
     assert_eq!(frame_bytes(&text), 32);
 }
+
+/// After a second return from `setjmp` a slot another local used holds that local's value:
+/// in a function that calls a routine returning twice, no slot is shared, whatever the
+/// markers say.
+#[test]
+fn test_no_slot_is_shared_in_a_function_that_calls_setjmp() {
+    let text = scopes(true, false).replace("define i16 @f(i16 %a, i16 %c) addrspace(1) {", "declare i16 @setjmp(i16) returns_twice\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {").replace("  %t = icmp sgt i16 %a, 0\n", "  %j = call i16 @setjmp(i16 %a)\n  %t = icmp sgt i16 %a, 0\n");
+    assert_eq!(frame_bytes(&text), 32);
+}
+
+/// The flag reaches the allocator: the assembled procedure's body still says it calls `setjmp`.
+#[test]
+fn test_a_body_that_calls_setjmp_says_so_to_the_allocator() {
+    let text = "declare i16 @setjmp(i16) returns_twice
+define i16 @f(i16 %a) addrspace(1) {
+  %j = call i16 @setjmp(i16 %a)
+  ret i16 %j
+}
+define i16 @g(i16 %a) addrspace(1) {
+  ret i16 %a
+}
+";
+    let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
+    let says = |name: &str| module.procedures.iter().find(|one| one.name.contains(name)).map(|one| one.body.returns_twice);
+    assert_eq!((says("f"), says("g")), (Some(true), Some(false)));
+}

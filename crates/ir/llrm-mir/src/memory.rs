@@ -85,6 +85,16 @@ pub fn lifetime(context: &Context, callees: &Callees, function: &Function, inst:
     (summary.lifetime && operands.len() == 3).then(|| operands[1])
 }
 
+/// Whether `function` calls a routine that returns twice (`setjmp`): the call or
+/// its callee says so. In such a function a stack slot another local used before the
+/// first return holds that local's value after the second, so no slot is shared.
+pub fn calls_returns_twice(module: &Module, function: &Function) -> bool {
+    function.walk().any(|(_, inst)| {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+        has(&info.attrs, "returns_twice") || callee(&module.context, function, inst).and_then(|one| module.global(one).function()).is_some_and(|one| has(&one.attrs, "returns_twice"))
+    })
+}
+
 /// Whether `attrs` carry the flag `flag`.
 pub fn has(attrs: &[Attribute], flag: &str) -> bool {
     attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag))
