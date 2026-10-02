@@ -41,7 +41,7 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("ninf", Unread("scev-forms: the folds live in llrm_mir::transforms::instcombine, which the compile route does not run (#237)")),
     ("nsz", By(&["floating_freedoms_are_fast_math_flags", "test_nsz_lets_a_cancellation_be_positive_zero"])),
     ("arcp", Unread("scev-forms: the folds live in llrm_mir::transforms::instcombine, which the compile route does not run (#237)")),
-    ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result", "a_range_in_metadata_bounds_a_load_and_a_call_result", "a_range_a_frontend_states_of_an_instruction_bounds_its_result"])),
+    ("range", By(&["a_stated_range_bounds_a_parameter_and_a_call_result", "a_range_in_metadata_bounds_a_load_and_a_call_result", "a_range_a_frontend_states_of_an_instruction_bounds_its_result", "a_matched_enums_tag_is_bounded_by_its_variants_where_ranges_reads_it"])),
     ("invariant", Unread("inline-readers: no pass reads !invariant.load yet")),
     ("unroll", Unread("inline-readers: peelsize `admitted` does not read the hint yet")),
     ("mustprogress", Unread("compile-time-104: no pass reads it yet")),

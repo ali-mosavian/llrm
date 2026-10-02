@@ -915,3 +915,45 @@ fn main() -> i16:
     let noalias: Vec<i64> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "noalias" && one["function"].as_i64() == Some(take)).map(|one| one["id"].as_i64().unwrap()).collect();
     assert_eq!(noalias, [0, 1]);
 }
+
+/// What a Nib match states of a tag reached the reader: the enum's tag load, bounded
+/// by its variants, from source through the HIR's facts and their lowering to the
+/// interval ranges reads. The `!range` was written and nothing read it.
+#[test]
+fn a_matched_enums_tag_is_bounded_by_its_variants_where_ranges_reads_it() {
+    let source = "\
+enum Shape:
+    dot
+    line(i16)
+    box(i16, i16)
+
+fn area(s: &Shape) -> i16:
+    match s:
+        .dot:
+            return 0
+        .line(n):
+            return n
+        .box(w, h):
+            return w * h
+
+fn main() -> i16:
+    let s = Shape.box(2, 3)
+    print(area(s))
+    return 0
+";
+    let text = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let program = llrm_hir::codec::decode(&text).expect("HIR");
+    let module = llrm_hir::mir::emit(&program).remove(0).module;
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref().is_some_and(|name| name.contains("area"))).expect("area").2;
+    let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
+    let known = llrm_analysis::ranges::scoped(&unit).expect("ranges");
+    let tag_loads: Vec<_> = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }) && function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "range")).collect();
+    assert!(!tag_loads.is_empty(), "the tag loads carry !range");
+    for (block, inst) in tag_loads {
+        let result = function.instruction(inst).result.expect("a tag");
+        let found = known.get(&llrm_analysis::cfg::id(block)).and_then(|at| at.get(&result));
+        let bound = found.map(|one| (one.low.clone(), one.high.clone()));
+        assert_eq!(bound, Some((0.into(), 2.into())), "the tag in block {}", llrm_analysis::cfg::id(block));
+    }
+}
