@@ -108,9 +108,10 @@ pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
             out.insert(Occurrence::new("dest", 1), Register::EDI);
         }
     }
-    // A string move reads cx cells from ds:si to es:di, leaving si and di
-    // past them and cx empty; a single move has no count. The segments are
-    // the last two sources, each in its register where an operand.
+    // A string move reads cx cells from si to es:di, leaving si and di past
+    // them and cx empty; a single move has no count. The last two sources
+    // are the segments: the source's, which the instruction names as an
+    // override (fs where it is a value), and es.
     if what.op == Operation::Copy && matches!(what.sources.len(), 4 | 5) {
         let first = what.sources.len() - 4;
         if first == 1 {
@@ -119,7 +120,7 @@ pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
         out.insert(Occurrence::new("source", first), Register::ESI);
         out.insert(Occurrence::new("source", first + 1), Register::EDI);
         if matches!(what.sources[first + 2], Loc::Held(_)) {
-            out.insert(Occurrence::new("source", first + 2), Register::DS);
+            out.insert(Occurrence::new("source", first + 2), Register::FS);
         }
         if matches!(what.sources[first + 3], Loc::Held(_)) {
             out.insert(Occurrence::new("source", first + 3), Register::ES);
@@ -619,8 +620,8 @@ mod tests {
     }
 
     /// A string move reads cx cells from ds:si to es:di and leaves si, di
-    /// and cx past them: the rep form pins all three and both segments, the
-    /// single one has no count.
+    /// and cx past them: the rep form pins all three and both segments (the
+    /// source's as an fs override), the single one has no count.
     #[test]
     fn test_a_string_move_names_its_registers() {
         let held = |value: u32| Loc::Held(ir::Held { value, width: 2 });
@@ -633,7 +634,7 @@ mod tests {
         let wanted = requirements(&repeated);
         let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
         assert_eq!((at("source", 0), at("source", 1), at("source", 2)), (Some(Register::ECX), Some(Register::ESI), Some(Register::EDI)));
-        assert_eq!((at("source", 3), at("source", 4)), (Some(Register::DS), Some(Register::ES)));
+        assert_eq!((at("source", 3), at("source", 4)), (Some(Register::FS), Some(Register::ES)));
         assert_eq!((at("dest", 1), at("dest", 2), at("dest", 3)), (Some(Register::ESI), Some(Register::EDI), Some(Register::ECX)));
         let single = semantics(
             Operation::Copy,

@@ -846,12 +846,17 @@ fn test_an_immediate_too_wide_raises_the_same_text_on_every_compiler() {
     assert_eq!(i32_of(1 << 40), Err("out of range integral type conversion attempted".to_owned()));
 }
 
+fn decoded_over(segment: Register) -> (Register, usize) {
+    let code = made(copy("movsw", segment, 0, false)).code;
+    (decoded(&code, 0).segment_prefix(), code.len())
+}
+
 /// A string move is `movs` with the width in its name, and `rep` where it
 /// repeats; 16-bit code spells the dword form with the operand-size prefix.
 #[test]
 fn test_a_string_move_encodes_by_width_and_repeat() {
     let decoded = |name: &str, repeated: bool| {
-        let code = made(copy(name, 0, repeated)).code;
+        let code = made(copy(name, Register::None, 0, repeated)).code;
         let one = decoded(&code, 0);
         (one.mnemonic(), one.has_rep_prefix(), code.len())
     };
@@ -860,5 +865,9 @@ fn test_a_string_move_encodes_by_width_and_repeat() {
     assert_eq!(decoded("movsd", false), (Mnemonic::Movsd, false, 2));
     assert_eq!(decoded("movsw", true), (Mnemonic::Movsw, true, 2));
     assert_eq!(decoded("movsd", true), (Mnemonic::Movsd, true, 3));
-    assert!(copy("movsq", 0, false).is_none());
+    assert!(copy("movsq", Register::None, 0, false).is_none());
+    // The source read through another segment is an override on the move.
+    let over = decoded_over(Register::SS);
+    assert_eq!(over, (Register::SS, 2));
+    assert_eq!(decoded_over(Register::FS), (Register::FS, 2));
 }
