@@ -7,6 +7,40 @@
 
 pub use llrm_mir::facts::{Effect, Fact, Kind};
 
+/// A module's functions and instructions by id, found once, for every fact
+/// that names one.
+pub struct Index<'m> {
+    functions: std::collections::HashMap<i64, &'m crate::model::Function>,
+    instructions: std::collections::HashMap<(i64, i64), &'m crate::model::Instruction>,
+    value_types: std::collections::HashMap<(i64, i64), i64>,
+}
+
+impl<'m> Index<'m> {
+    pub fn of(module: &'m crate::model::Module) -> Self {
+        let functions = module.functions.iter().map(|one| (one.id, one)).collect();
+        let instructions = module
+            .functions
+            .iter()
+            .flat_map(|function| function.blocks.iter().flat_map(|block| &block.instructions).map(move |instruction| ((function.id, instruction.id), instruction)))
+            .collect();
+        let value_types = module.functions.iter().flat_map(|function| function.values.iter().map(move |value| ((function.id, value.id), value.r#type))).collect();
+        Self { functions, instructions, value_types }
+    }
+
+    pub fn function(&self, id: i64) -> Option<&'m crate::model::Function> {
+        self.functions.get(&id).copied()
+    }
+
+    /// The HIR type of value `id` of `function`.
+    pub fn value_type(&self, function: i64, id: i64) -> Option<i64> {
+        self.value_types.get(&(function, id)).copied()
+    }
+
+    pub fn instruction(&self, function: i64, id: i64) -> Option<&'m crate::model::Instruction> {
+        self.instructions.get(&(function, id)).copied()
+    }
+}
+
 /// What a fact is stated of, by HIR ids. A routine is one subject, whether
 /// the module defines it or only calls it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
