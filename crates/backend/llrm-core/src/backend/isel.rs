@@ -778,7 +778,7 @@ impl Selector<'_, '_, '_> {
     /// successors it has.
     fn odds(&self, made: &IndexMap<BlockId, Vec<LirBlock>>, block_at: &IndexMap<BlockId, i64>) -> BlockOdds {
         let unit = Unit::of(self.module, &self.layout, self.function);
-        let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.globals, self.function, &unit.shape(), &std::collections::BTreeMap::new());
+        let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.metadata, &self.module.globals, self.function, &unit.shape(), &std::collections::BTreeMap::new());
         let mut odds = BlockOdds::default();
         for (block, chain) in made {
             let taken: IndexMap<i64, f64> = self
@@ -2448,6 +2448,8 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
+                // A fact for the passes: no code.
+                Some(Intrinsic::Assume) => Ok(()),
                 _ => refuse(format!("@{name}")),
             };
         }

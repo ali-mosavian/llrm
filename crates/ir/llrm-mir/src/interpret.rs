@@ -377,7 +377,7 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare => void,
+            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare | Intrinsic::Assume => void,
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
                 (Val::Ptr(a), Val::Ptr(b), Some(width)) => Val::Int { bits: u128::from(a.wrapping_sub(b)) & mask(width), width },
