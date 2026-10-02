@@ -81,7 +81,7 @@ def header(source: Path) -> dict[str, str]:
 
 def discover(selected: list[str]) -> list[Program]:
     programs = []
-    for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*")), *sorted(BENCH.glob("*/*"))]:
+    for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*")), *sorted(BENCH.glob("*/*")), *sorted(BENCH.glob("parity/*/*"))]:
         if source.suffix in COMPILERS:
             settings = header(source)
             program = Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known"),
