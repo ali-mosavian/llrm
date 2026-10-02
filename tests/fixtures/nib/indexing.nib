@@ -1,0 +1,35 @@
+struct H:
+    mut items: i16[4]
+
+fn arr(i: u16) -> i16:
+    let mut a: i16[4] = [1, 2, 3, 4]
+    a[i] = 9
+    return a[i]
+
+fn vecx(v: &mut vec[i16], i: u16) -> i16:
+    v[i] = 5
+    return v[i]
+
+fn text(s: &string, i: u16) -> char:
+    return s[i]
+
+fn field(h: &mut H, i: u16) -> i16:
+    h.items[i] = 7
+    return h.items[i]
+
+fn grid(g: &mut i16[2, 3], i: u16, j: u16) -> i16:
+    g[i, j] = 3
+    return g[i, j]
+
+fn view(a: &mut [i16], i: u16) -> i16:
+    a[i] = 1
+    return a[i]
+
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2, 3]
+    let mut h = H(items=[1, 2, 3, 4])
+    let mut g: i16[2, 3] = [[1, 2, 3], [4, 5, 6]]
+    let mut w: i16[3] = [1, 2, 3]
+    print(arr(1) + vecx(v, 1) + field(h, 1) + grid(g, 1, 2) + view(w, 1))
+    print(text("abc", 1))
+    return 0
