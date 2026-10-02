@@ -7,7 +7,7 @@ use llrm_analysis::{cfg, liveness};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module, ValueId};
 
-use super::{Room, Site, Traffic, cells, forecast, integer, segment_view, sites, spilled, transient, traffic, words};
+use super::{Room, Site, Traffic, addressed, cells, forecast, integer, segment_view, sites, spilled, transient, traffic, words};
 use crate::profit::OperationCosts;
 
 fn module(text: &str) -> Module {
@@ -141,7 +141,7 @@ entry:
     let cells = cells(function);
     let room = Room { registers: 3, across_call: 1, ..Room::default() };
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_, _| 0, &cells, &integer, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_, _| 0, &cells, &integer, &|_| false, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
     let prices = traffic(function, &looped(function), &cells, &costs(), &|_| true, &|_| 1);
     // Each of `a` and `b` is stored once and loaded once.
     assert_eq!(spilled(points, |one| prices.get(&one).map_or(0, |one| one.price(&costs()))), 2);
@@ -165,7 +165,10 @@ entry:
     let layout = llrm_analysis::testing::layout(&module);
     let room = Room { registers: 6, across_call: 2, far_access: 1, ..Room::default() };
     let loads = function.layout().iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect::<Vec<_>>();
-    let taken = loads.iter().map(|&inst| super::transient(&module.context, &layout, function, inst, room, &Default::default())).collect::<Vec<_>>();
+    let taken = loads.iter().map(|&inst| {
+        let live = function.instruction(inst).operands.iter().filter_map(|one| if let llrm_mir::module::Operand::Value(value) = one { Some(*value) } else { None }).collect();
+        super::transient(&module.context, &layout, function, inst, room, &live)
+    }).collect::<Vec<_>>();
     assert_eq!(taken, [1, 0]);
 }
 
@@ -196,7 +199,7 @@ entry:
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
-        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
+        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views, &|_| false).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
     };
     let held = at(3);
     assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
@@ -205,8 +208,22 @@ entry:
     assert!(none.segments.residents.is_empty() && none.before.residents.iter().filter(|&&one| views(one)).count() == 2, "no segment registers: general ones");
 }
 
+fn _peak(text: &str, room: Room) -> i64 {
+    let module = module(text);
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let found = liveness::live(function);
+    let cells = cells(function);
+    let integer = |value: ValueId| integer(&module.context, function, value);
+    let views = |value: ValueId| segment_view(&module.context, &layout, function, value);
+    let addressed = addressed(function);
+    let routed = |value: ValueId| addressed.contains(&value);
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| 2, &|inst, live| transient(&module.context, &layout, function, inst, room, live), &cells, &integer, &views, &routed)).flat_map(Site::points);
+    forecast(points, |_| 1).peak
+}
+
 fn _walk(registers: i64) -> i64 {
-    let module = module("define i16 @f(ptr %p) {
+    _peak("define i16 @f(ptr %p) {
 entry:
   br label %loop
 loop:
@@ -219,16 +236,7 @@ loop:
 exit:
   ret i16 %n
 }
-");
-    let function = function(&module);
-    let layout = llrm_analysis::testing::layout(&module);
-    let found = liveness::live(function);
-    let cells = cells(function);
-    let integer = |value: ValueId| integer(&module.context, function, value);
-    let views = |value: ValueId| segment_view(&module.context, &layout, function, value);
-    let room = Room { registers, across_call: 2, ..Room::default() };
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| 2, &|inst, live| transient(&module.context, &layout, function, inst, room, live), &cells, &integer, &views)).flat_map(Site::points);
-    forecast(points, |_| 1).peak
+", Room { registers, across_call: 2, ..Room::default() })
 }
 
 /// An address only its own access takes is folded into the access: it is not
@@ -240,4 +248,62 @@ exit:
 fn test_an_address_folded_into_its_access_takes_no_register_of_its_own() {
     assert_eq!(_walk(2), 0, "the pointer and the index fit two registers");
     assert_eq!(_walk(1), 1, "one more than one register holds");
+}
+
+/// `p[i + 8]` is two `getelementptr`s, one the other's base, and one access:
+/// folded together, the chain holds no register but its pointer and index. The
+/// inner one counted as a third, so a loop of one pointer and one index
+/// forecast a spill on two registers.
+#[test]
+fn test_a_chain_of_addresses_folds_into_its_access() {
+    let text = "define i16 @f(ptr %p) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %n, %loop ]
+  %a = getelementptr i8, ptr %p, i16 %i
+  %b = getelementptr i8, ptr %a, i16 16
+  %v = load i16, ptr %b
+  %n = add i16 %i, 2
+  %more = icmp ne i16 %n, 100
+  br i1 %more, label %loop, label %exit
+exit:
+  ret i16 %n
+}
+";
+    assert_eq!(_peak(text, Room { registers: 2, across_call: 2, ..Room::default() }), 0);
+}
+
+/// 16-bit addresses hold a pointer in BX, SI or DI: three pointers and an
+/// index live through a loop did not fit three address registers though six
+/// registers held them, and the allocator reloaded one every trip (conc3's
+/// 40 reloads) where the model forecast no spill.
+#[test]
+fn test_pointers_and_an_index_fit_the_registers_an_address_may_use() {
+    let text = "define i16 @f(ptr %a, ptr %b, ptr %c) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %n, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s3, %loop ]
+  %ga = getelementptr i16, ptr %a, i16 %i
+  %va = load i16, ptr %ga
+  %s1 = add i16 %s, %va
+  %gb = getelementptr i16, ptr %b, i16 %i
+  %vb = load i16, ptr %gb
+  %s2 = add i16 %s1, %vb
+  %gc = getelementptr i16, ptr %c, i16 %i
+  %vc = load i16, ptr %gc
+  %s3 = add i16 %s2, %vc
+  %n = add i16 %i, 1
+  %more = icmp ne i16 %n, 100
+  br i1 %more, label %loop, label %exit
+exit:
+  ret i16 %s3
+}
+";
+    let room = |addresses| Room { registers: 6, across_call: 2, addresses, ..Room::default() };
+    assert_eq!(_peak(text, room(0)), 0, "no address constraint");
+    assert_eq!(_peak(text, room(4)), 0, "three pointers and the index fit four");
+    assert_eq!(_peak(text, room(3)), 1, "one more than three hold");
 }

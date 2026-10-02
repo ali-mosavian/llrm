@@ -535,7 +535,9 @@ fn _fixed(
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
     let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
     let segment = |value: ValueId| spill::segment_view(view.context, view.layout, function, value);
-    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment))).collect()
+    let addressed = spill::addressed(function);
+    let routed = |value: ValueId| addressed.contains(&value);
+    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.

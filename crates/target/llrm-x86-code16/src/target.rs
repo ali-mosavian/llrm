@@ -11,6 +11,11 @@ use crate::timings;
 /// The registers a value may be placed in.
 pub const GENERAL: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
 
+/// The registers a 16-bit address's pointer is held in, `[bx+si]`: a base is
+/// BX or BP and an index SI or DI, and BP is the frame's.
+pub const WORD_BASES: [Register; 1] = [Register::BX];
+pub const WORD_INDEXES: [Register; 2] = [Register::SI, Register::DI];
+
 /// Those a C callee keeps, as their word halves.
 pub const PRESERVED: [(Register, Register); 2] = [(Register::ESI, Register::SI), (Register::EDI, Register::DI)];
 
@@ -82,6 +87,10 @@ impl Machine for Dos {
 
     fn segment_registers(&self) -> i64 {
         SEGMENT_REGISTERS
+    }
+
+    fn address_registers(&self) -> i64 {
+        (WORD_BASES.len() + WORD_INDEXES.len()) as i64
     }
 
     fn address_forms(&self) -> Vec<AddressForm> {
