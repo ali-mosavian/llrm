@@ -245,7 +245,14 @@ struct StructLayout {
     /// struct's scalar leaves and arrays, an enum's whole words, since its
     /// variants' fields overlap.
     copy: Vec<(u32, TypeName, u32)>,
+    /// Whether a copy moves the value's bytes whole: an enum no larger than
+    /// `BYTE_COPY`, whose variants leave different bytes unwritten.
+    bytes: bool,
 }
+
+/// The most bytes of an enum a copy moves as one byte copy, which the
+/// backend expands in moves: the widest it selects.
+const BYTE_COPY: u32 = 32;
 
 #[derive(Clone, Copy, Debug)]
 struct FieldLayout {
@@ -480,9 +487,15 @@ impl TypeRegistry {
                 fields,
                 order,
                 copy,
+                bytes: false,
             },
         );
         id
+    }
+
+    /// The bytes a copy of `id` moves whole, if it moves them so.
+    fn byte_copy(&self, id: u32) -> Option<u32> {
+        self.structure(id).filter(|layout| layout.bytes).map(|_| self.width(id))
     }
 
     fn copy_units(&self, element: ElementType) -> Vec<(u32, TypeName, u32)> {
@@ -1011,6 +1024,8 @@ struct StructView {
 #[derive(Clone, Debug)]
 enum Store {
     One(hir::Operand, hir::Operand),
+    /// `count` bytes of `source`, copied byte for byte.
+    Bytes { destination: StructView, source: StructView, count: u32 },
     Run {
         destination: StructView,
         element: ElementType,

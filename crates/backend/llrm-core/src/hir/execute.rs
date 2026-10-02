@@ -721,6 +721,28 @@ impl<'p> Machine<'p> {
                 let value = self.scalar(activation, &operands[0])?;
                 return self.define(activation, instruction, vec![value]);
             }
+            Op::CopyBytes => {
+                let (to, from) = (self.location(activation, &operands[0])?, self.location(activation, &operands[1])?);
+                let Operand::Constant(model::Constant { value: model::Number::Int(bytes), .. }) = &operands[2] else {
+                    return fail("copy_bytes without a constant byte count");
+                };
+                let (to_range, from_range) = (span(&to, *bytes as usize)?, span(&from, *bytes as usize)?);
+                let (data, held): (Vec<u8>, Vec<_>) = {
+                    let cells = from.memory.borrow();
+                    let held = cells
+                        .pointers
+                        .iter()
+                        .filter(|((offset, width), _)| from.offset <= *offset && offset + width <= from.offset + bytes)
+                        .map(|((offset, width), address)| ((offset - from.offset, *width), address.clone()))
+                        .collect();
+                    (cells.bytes[from_range].to_vec(), held)
+                };
+                let mut cells = to.memory.borrow_mut();
+                cells.bytes[to_range].copy_from_slice(&data);
+                cells.pointers.retain(|(offset, width), _| !(to.offset < offset + width && *offset < to.offset + bytes));
+                cells.pointers.extend(held.into_iter().map(|((offset, width), address)| ((to.offset + offset, width), address)));
+                return Ok(());
+            }
             Op::Store => {
                 let value = self.scalar(activation, &operands[1])?;
                 return store(&self.location(activation, &operands[0])?, value);

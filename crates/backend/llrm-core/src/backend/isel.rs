@@ -238,6 +238,9 @@ const FLOAT: u32 = 10;
 /// The most stores a memset expands to, as LLVM's x86 MaxStoresPerMemset.
 const MEMSET_STORES: i64 = 16;
 
+/// The most load and store pairs a memcpy expands to, as LLVM's x86 MaxStoresPerMemcpy.
+const MEMCPY_MOVES: i64 = 8;
+
 /// The bytes of a constant memset's `rep stosb` through es:di, as
 /// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
 /// the count, the fill, and DI's save in the frame.
@@ -2523,6 +2526,7 @@ impl Selector<'_, '_, '_> {
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
+                Some(Intrinsic::MemCpy) => self.memcpy(arguments, at, out),
                 Some(Intrinsic::Unary(function)) => {
                     let Some(&(_, name)) = FLOAT_FUNCTIONS.iter().find(|(one, _)| *one == function) else { return refuse(format!("{function:?}")) };
                     let a = self.float(arguments[0], at, out)?;
@@ -2840,6 +2844,32 @@ impl Selector<'_, '_, '_> {
         let each = if dwords > 1 { 4 } else { 8 };
         let setup = if dwords > 1 { 6 } else { 0 };
         setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
+    }
+
+    /// A memcpy of a constant length, as LLVM's getMemcpy lowers one in few
+    /// enough moves: each a load into a register and a store from it, widest
+    /// first. Only the bytes it names are read, so an unwritten byte stays
+    /// only that byte.
+    fn memcpy(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let &[destination, source, length, volatile] = arguments else { return refuse("a memcpy of other than four operands") };
+        let Some(length) = self.constant(length, 2) else { return refuse("a memcpy of a length not constant") };
+        if length / 4 + (length % 4).count_ones() as i64 > MEMCPY_MOVES {
+            return refuse(format!("a memcpy of {length} bytes"));
+        }
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
+        let mut offset = 0;
+        for width in [4, 2, 1] {
+            while length - offset >= i64::from(width) {
+                let held = self.fresh_held(width);
+                let load = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(from.moved(offset), width))]);
+                let store = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(to.moved(offset), width))], vec![Loc::Held(held)]);
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, load) }));
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, store) }));
+                offset += i64::from(width);
+            }
+        }
+        Ok(())
     }
 
     /// A memset, as LLVM's getMemset lowers one: a constant byte over a

@@ -379,6 +379,19 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
+            Intrinsic::MemCpy => {
+                let (Val::Ptr(to), Val::Ptr(from), Val::Int { bits: length, .. }) = (argument(0), argument(1), argument(2)) else { return undefined("a memcpy of a poison address or length") };
+                let length = length as u64;
+                if length > 0 {
+                    self.check_bounds(to, length)?;
+                    self.check_bounds(from, length)?;
+                }
+                let (to, from, length) = (to as usize, from as usize, length as usize);
+                let (bytes, poison) = (self.memory[from..from + length].to_vec(), self.poison[from..from + length].to_vec());
+                self.memory[to..to + length].copy_from_slice(&bytes);
+                self.poison[to..to + length].copy_from_slice(&poison);
+                void
+            }
             Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::DbgDeclare | Intrinsic::Assume => void,
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {

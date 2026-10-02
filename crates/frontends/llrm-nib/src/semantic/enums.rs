@@ -218,13 +218,11 @@ impl TypeRegistry {
                 }
                 previous = within;
             }
-            ElementType::Struct(self.aggregate(
-                &declaration.name,
-                size,
-                fields,
-                vec![TAG.to_owned()],
-                copy,
-            ))
+            let id = self.aggregate(&declaration.name, size, fields, vec![TAG.to_owned()], copy);
+            if size <= BYTE_COPY {
+                self.structs.get_mut(&declaration.name).expect("the layout just made").bytes = true;
+            }
+            ElementType::Struct(id)
         } else {
             let type_id = self.types.len() as u32 + 1;
             self.types.push(plain_type(
