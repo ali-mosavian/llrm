@@ -354,6 +354,25 @@ fn test_a_constant_under_two_variable_indexes_is_the_displacement_of_the_access(
     assert!(!got.lines().any(|line| line.starts_with("add ") && line.contains("6072")), "{got}");
 }
 
+/// Pointers are ordered where `icmp ult ptr` is lowered, not through an
+/// integer: a huge pointer's selector then offset (`sub`, `sbb`, as the old
+/// raise), a near pointer's offset, both unsigned (qcport-rich's request).
+#[test]
+fn test_ordered_compares_of_pointers_are_unsigned_and_lowered_here() {
+    let below = |space: &str| {
+        listing(
+            &format!("define i16 @f(ptr{space} %a, ptr{space} %b) addrspace(1) {{\n  %c = icmp ult ptr{space} %a, %b\n  %r = zext i1 %c to i16\n  ret i16 %r\n}}\n"),
+            "f",
+        )
+        .join("\n")
+    };
+    let huge = below(" addrspace(3)");
+    assert!(huge.contains("sbb") && !huge.contains("jl") && !huge.contains("setl") && !huge.contains("ptrtoint"), "{huge}");
+    let near = below("");
+    assert!(near.contains("cmp") && (near.contains("jb") || near.contains("setb") || near.contains("sbb")), "{near}");
+    assert!(!near.contains("jl") && !near.contains("setl"), "{near}");
+}
+
 #[test]
 fn test_a_switch_is_a_chain_of_compares() {
     let text = "define i16 @f(i16 %a) addrspace(1) {

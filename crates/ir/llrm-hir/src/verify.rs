@@ -653,9 +653,13 @@ fn _function(
                 } else {
                     result_types.iter().chain(operand_types.iter()).copied().collect()
                 };
-                let unsigned = involved
-                    .iter()
-                    .all(|one| types[one].kind == model::TypeKind::Integer && types[one].signed == Some(false));
+                // An ordered compare also orders pointers, as LLVM's `icmp ult ptr`: how
+                // a space's pointers order is the lowering's, not a conversion's.
+                let ordered_pointers = _COMPARE.contains(&instruction.op);
+                let unsigned = involved.iter().all(|one| {
+                    (types[one].kind == model::TypeKind::Integer && types[one].signed == Some(false))
+                        || (ordered_pointers && types[one].kind == model::TypeKind::Pointer)
+                });
                 if !unsigned {
                     invalid!("{prefix}: {} requires unsigned integer operands", instruction.op);
                 }
