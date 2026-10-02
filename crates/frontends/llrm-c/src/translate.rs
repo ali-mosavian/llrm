@@ -407,6 +407,9 @@ enum Got {
     Function(i64),
     /// A call's result, before O_POINTS reads it; none from a void call.
     Returned(Option<i64>),
+    /// A bit field: `width` bits from `start` of the unit of type `unit` at
+    /// an address, accessed volatile or not; signed fields extend their sign.
+    Bits { pointer: i64, volatile: bool, start: i64, width: i64, unit: i64, signed: bool },
 }
 
 /// A block being built.
@@ -1205,6 +1208,7 @@ impl<'a, 't> Body<'a, 't> {
                 Ok(value)
             }
             Got::Returned(None) => self.refuse("a void call's value"),
+            Got::Bits { .. } => self.refuse("a bit field's address"),
         }
     }
 
@@ -1301,6 +1305,11 @@ impl<'a, 't> Body<'a, 't> {
             ("CGAssign", [target, source, type_]) if self.types.aggregate(type_).is_none() => {
                 let value = self.value_as(source, type_)?;
                 let got = self.eval(target)?;
+                if let Got::Bits { signed, .. } = got {
+                    let stored = self.write_bits(got, value)?;
+                    let ty = self.ty(type_)?;
+                    return Ok(Got::Value(self.resized(stored, signed, ty)));
+                }
                 let (pointer, volatile) = self.address(got)?;
                 self.store(value, pointer, volatile, type_)?;
                 Got::Value(value)
@@ -1314,6 +1323,16 @@ impl<'a, 't> Body<'a, 't> {
             }
             ("CGPostGets" | "CGPreGets", [cg_op, target, source, type_]) => {
                 let got = self.eval(target)?;
+                if let Got::Bits { signed, .. } = got {
+                    let ty = self.ty(type_)?;
+                    let read = self.read_bits(got)?;
+                    let old = self.resized(read, signed, ty);
+                    let by = self.value_as(source, type_)?;
+                    let new = self.arithmetic(cg_op, old, by, type_)?;
+                    let stored = self.write_bits(got, new)?;
+                    let stored = self.resized(stored, signed, ty);
+                    return Ok(Got::Value(if call == "CGPostGets" { old } else { stored }));
+                }
                 let (pointer, volatile) = self.address(got)?;
                 let old = self.load(pointer, volatile, type_)?;
                 let new = if self.space(old).is_some() {
@@ -1372,6 +1391,12 @@ impl<'a, 't> Body<'a, 't> {
                 let got = self.eval(inner)?;
                 Got::Volatile(self.address(got)?.0)
             }
+            ("CGBitMask", [inner, start, width, type_]) => {
+                let got = self.eval(inner)?;
+                let (pointer, volatile) = self.address(got)?;
+                let number = |text: &str| text.parse::<i64>().map_err(|_| hir::Unsupported(format!("a bit field's {text}")));
+                Got::Bits { pointer, volatile, start: number(start)?, width: number(width)?, unit: self.ty(type_)?, signed: signed(&self.unit.canonical_type(type_)) }
+            }
             _ => return self.refuse(format!("{} {}", tree.call, tree.args.join(" "))),
         })
     }
@@ -1394,8 +1419,60 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
+    /// A bit field's value, in its unit's type.
+    fn read_bits(&mut self, got: Got) -> R<i64> {
+        let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field read of a non-field") };
+        let bits = self.types.get(unit).width * 8;
+        let whole = self.op(Op::Load, unit, vec![Operand::IndirectPlace(indirect(pointer, 0, unit, volatile))]);
+        Ok(if signed {
+            let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
+            let raised = self.op(Op::Shl, unit, vec![value_ref(whole), value_ref(up)]);
+            self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
+        } else {
+            let (shift, mask) = (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(((1i64 << width) - 1).into())));
+            let lowered = self.op(Op::Shr, unit, vec![value_ref(whole), value_ref(shift)]);
+            self.op(Op::And, unit, vec![value_ref(lowered), value_ref(mask)])
+        })
+    }
+
+    /// `value` stored in a bit field, the unit's other bits kept: what the
+    /// field then reads, in its unit's type.
+    fn write_bits(&mut self, got: Got, value: i64) -> R<i64> {
+        let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field write to a non-field") };
+        let bits = self.types.get(unit).width * 8;
+        let field = ((1i64 << width) - 1) << start;
+        let kept = !field & ((1i64 << bits) - 1);
+        let value = self.resized(value, signed, unit);
+        let place = || Operand::IndirectPlace(indirect(pointer, 0, unit, volatile));
+        let whole = self.op(Op::Load, unit, vec![place()]);
+        let (shift, inside, outside) = (
+            self.constant(unit, Number::Int(start.into())),
+            self.constant(unit, Number::Int(field.into())),
+            self.constant(unit, Number::Int(kept.into())),
+        );
+        let placed = self.op(Op::Shl, unit, vec![value_ref(value), value_ref(shift)]);
+        let part = self.op(Op::And, unit, vec![value_ref(placed), value_ref(inside)]);
+        let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
+        let joined = self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)]);
+        self.instruction(Op::Store, Vec::new(), vec![place(), value_ref(joined)]);
+        Ok(if signed {
+            let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
+            let raised = self.op(Op::Shl, unit, vec![value_ref(part), value_ref(up)]);
+            self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
+        } else {
+            let lowered = self.op(Op::Shr, unit, vec![value_ref(part), value_ref(shift)]);
+            let mask = self.constant(unit, Number::Int(((1i64 << width) - 1).into()));
+            self.op(Op::And, unit, vec![value_ref(lowered), value_ref(mask)])
+        })
+    }
+
     /// O_POINTS: what `got` addresses, read as `type_`.
     fn points(&mut self, got: Got, type_: &str) -> R<Got> {
+        if let Got::Bits { signed, .. } = got {
+            let read = self.read_bits(got)?;
+            let ty = self.ty(type_)?;
+            return Ok(Got::Value(self.resized(read, signed, ty)));
+        }
         if let Got::Returned(value) = got {
             let Some(value) = value else { return self.refuse("a void call's value") };
             return Ok(Got::Value(value));
@@ -2093,6 +2170,16 @@ mod tests {
         site.order.iter_mut().for_each(|one| *one += 1);
         let why = llrm_core::hir::verify::verify(&program).unwrap_err();
         assert!(format!("{why:?}").contains("invalid argument order"), "{why:?}");
+    }
+
+    /// Bit fields were refused ("CGBitMask"). Written through its fields, the
+    /// struct holds Borland's bytes, and each field reads back, signed ones
+    /// with their sign, through `++`, `--` and an assignment's value.
+    #[test]
+    fn test_bit_fields_read_and_write_borlands_layout() {
+        let module = raised("bitfield.cgs");
+        let failed = llrm_mir::interpret::run(&module, "_check", Vec::new(), 100_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        assert_eq!(failed, llrm_mir::interpret::Val::Int { bits: 0, width: 16 }, "failed checks: {failed:?}");
     }
 
     /// C99 6.7.3.1: the three restrict parameters of `add` reach distinct objects.
