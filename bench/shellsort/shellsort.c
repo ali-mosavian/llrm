@@ -1,3 +1,5 @@
+extern void report(long value);
+
 unsigned long bench_shellsort(unsigned short seed)
 {
     unsigned short values[64];
@@ -16,4 +18,10 @@ unsigned long bench_shellsort(unsigned short seed)
         }
     for (i = 0; i < 64; ++i) checksum += (unsigned long)values[i] * (i + 1);
     return checksum;
+}
+
+int main(void)
+{
+    report((long)bench_shellsort(0));
+    return 0;
 }
