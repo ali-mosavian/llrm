@@ -203,6 +203,10 @@ impl<'a> FunctionCompiler<'a> {
         source: &StructView,
         stores: &mut Vec<Store>,
     ) -> Result<(), Diagnostic> {
+        if let Some(count) = self.types.byte_copy(destination.struct_id) {
+            stores.push(Store::Bytes { destination: destination.clone(), source: source.clone(), count });
+            return Ok(());
+        }
         let copy = self
             .types
             .copy_units(ElementType::Struct(destination.struct_id));

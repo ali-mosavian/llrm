@@ -669,6 +669,26 @@ define i16 @f(i16 %a) addrspace(1) {
     assert_eq!(listing(text, "f"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "pop bp", "retf"]);
 }
 
+/// A memcpy of a constant length is loads and stores, widest first, each
+/// through a register: no string move, and a byte not named is not read.
+#[test]
+fn test_a_small_memcpy_is_moves_widest_first() {
+    let text = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f() addrspace(1) {
+  %a = alloca [7 x i8]
+  %b = alloca [7 x i8]
+  store i16 3, ptr %a
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 7, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}
+";
+    let moves = listing(text, "f").into_iter().filter(|one| one.starts_with("mov") && one.contains('[')).collect::<Vec<_>>();
+    assert!(moves.iter().any(|one| one.contains("dword ptr")), "{moves:?}");
+    assert!(moves.iter().any(|one| one.contains("byte ptr")), "{moves:?}");
+    assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
+}
+
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest
 /// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
 /// `stosb`, as the old route's `_fill`.
@@ -3539,4 +3559,54 @@ define i16 @g(i16 %a) addrspace(1) {
     let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
     let says = |name: &str| module.procedures.iter().find(|one| one.name.contains(name)).map(|one| one.body.returns_twice);
     assert_eq!((says("f"), says("g")), (Some(true), Some(false)));
+}
+
+/// A memcpy past the unrolled moves is `rep movsd` through es:di, the source
+/// read through ss as an override and the tail by `movsw`: a refusal failed
+/// every program with a copy that long.
+#[test]
+fn test_a_long_memcpy_is_a_string_move() {
+    let text = |size: &str| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f(i16 %n) addrspace(1) {{
+  %a = alloca [70 x i8]
+  %b = alloca [70 x i8]
+  store i16 3, ptr %a
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 {size}, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}}
+"
+        )
+    };
+    let moves = |size: &str| listing(&text(size), "f").into_iter().filter(|one| one.contains("movs") || one.starts_with("shr") || one.starts_with("and") || one.starts_with("mov cx")).collect::<Vec<_>>();
+    assert_eq!(
+        moves("70"),
+        [
+            "mov cx, 17",
+            "rep movs dword ptr es:[di], dword ptr ss:[si]",
+            "movs word ptr es:[di], word ptr ss:[si]",
+        ]
+    );
+    // A length not constant is the dwords it holds and the bytes it leaves.
+    let dynamic = moves("%n");
+    assert!(dynamic.contains(&"shr cx, 2".to_owned()) && dynamic.contains(&"and ax, 3".to_owned()), "{dynamic:?}");
+    assert_eq!(dynamic.iter().filter(|one| one.starts_with("rep movs")).count(), 2, "{dynamic:?}");
+}
+
+/// A far source is read through fs, loaded with its selector.
+#[test]
+fn test_a_long_memcpy_from_a_far_pointer_reads_through_fs() {
+    let text = "declare void @llvm.memcpy.p0.p1.i16(ptr, ptr addrspace(1), i16, i1)
+define i16 @f(ptr addrspace(1) %p) addrspace(1) {
+  %b = alloca [70 x i8]
+  call void @llvm.memcpy.p0.p1.i16(ptr %b, ptr addrspace(1) %p, i16 70, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}
+";
+    let lines = listing(text, "f");
+    assert!(lines.iter().any(|one| one.starts_with("lfs ") || one.starts_with("mov fs, ")), "{lines:?}");
+    assert!(lines.contains(&"rep movs dword ptr es:[di], dword ptr fs:[si]".to_owned()), "{lines:?}");
 }

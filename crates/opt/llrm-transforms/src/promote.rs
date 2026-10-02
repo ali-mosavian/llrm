@@ -31,8 +31,7 @@
 //!   no array request; `MemRef::at` decomposes an address.
 //! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated`
 //!   narrows constant indices and follows exact pointers.
-//! - `_split_copies` and its helpers: no frontend moves an aggregate by one
-//!   load and one store.
+//! - `_split_copies` and its helpers: `splitcopy`, for a `llvm.memcpy`.
 //! - `loop_only`: no caller set it.
 
 use std::cell::RefCell;
@@ -220,8 +219,11 @@ impl FunctionPass for Sroa {
 }
 
 fn run(unit: &mut passes::Unit, analyses: &mut Analyses, aggregate_only: bool, name: &str) -> PreservedAnalyses {
+    // A copy of an aggregate is its leaves' loads and stores before they are promoted.
+    let split = aggregate_only && crate::splitcopy::split(unit.context, unit.layout, unit.function, analyses.outer());
     match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
         Ok(true) => PreservedAnalyses::none(),
+        Ok(false) if split => PreservedAnalyses::none(),
         Ok(false) => PreservedAnalyses::all(),
         Err(error) => panic!("{name}: {error}"),
     }

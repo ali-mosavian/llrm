@@ -218,13 +218,9 @@ impl TypeRegistry {
                 }
                 previous = within;
             }
-            ElementType::Struct(self.aggregate(
-                &declaration.name,
-                size,
-                fields,
-                vec![TAG.to_owned()],
-                copy,
-            ))
+            let id = self.aggregate(&declaration.name, size, fields, vec![TAG.to_owned()], copy);
+            self.structs.get_mut(&declaration.name).expect("the layout just made").bytes = true;
+            ElementType::Struct(id)
         } else {
             let type_id = self.types.len() as u32 + 1;
             self.types.push(plain_type(
@@ -351,19 +347,14 @@ impl FunctionCompiler<'_> {
         }
         let variant = layout.variant(name, span)?.clone();
         // An enum that fits a register or a pair flows on as one integer,
-        // returned, compared or copied whole, and every byte of it is
-        // written: what the variant leaves (padding, another variant's
-        // payload) is zeroed, the tag's store widened over the bytes after
-        // it where they are among them. A larger one is copied word by word,
-        // and a match reads the tag and the active variant's fields alone: the
-        // word holding the tag is written whole, the rest of the payload not.
+        // returned or compared whole, and every byte of it is written: what
+        // the variant leaves (padding, another variant's payload) is zeroed,
+        // the tag's store widened over the bytes after it where they are
+        // among them. A larger one is copied byte for byte and a match reads
+        // the tag, then the active variant's fields: no byte more is written.
         let width = self.types.width(destination.struct_id);
         let whole = width <= 4;
         let mut covered = vec![!whole; width as usize];
-        if !whole {
-            let tag_end = self.types.width(type_id(layout.tag));
-            covered[tag_end.min(2) as usize..2.min(width) as usize].fill(false);
-        }
         let mut mark = |from: u32, bytes: u32| covered[from as usize..(from + bytes).min(width) as usize].fill(true);
         mark(0, self.types.width(type_id(layout.tag)));
         for (_, field) in &variant.fields {

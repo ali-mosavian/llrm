@@ -262,6 +262,29 @@ fn a_nonnull_parameter_passed_null_is_reported() {
     assert_eq!(one_pointer("", reads, 0), int(0, 16));
 }
 
+/// A memcpy moves bytes: one the source never wrote stays only that byte
+/// undefined, so the byte written beside it reads back. Copied as an i16
+/// load and store it was the whole word that went poison.
+#[test]
+fn a_memcpy_keeps_an_unwritten_byte_apart_from_the_written_one() {
+    let text = |read: &str| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i8 @f() {{
+  %from = alloca [4 x i8]
+  %to = alloca [4 x i8]
+  store i8 7, ptr %from
+  call void @llvm.memcpy.p0.p0.i16(ptr %to, ptr %from, i16 4, i1 false)
+  {read}
+  ret i8 %v
+}}
+"
+        )
+    };
+    assert_eq!(result(&text("%v = load i8, ptr %to")), int(7, 8));
+    assert_eq!(result(&text("%at = getelementptr i8, ptr %to, i16 1\n  %v = load i8, ptr %at")), Ok(Val::Poison));
+}
+
 /// Runs `@g` of `text` checked on `arguments`.
 fn range_run(text: &str, arguments: Vec<Val>) -> Result<Val, Trap> {
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n@cell = global i16 5\n{text}")).unwrap_or_else(|error| panic!("{error}"));

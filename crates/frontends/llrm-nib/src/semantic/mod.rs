@@ -245,6 +245,9 @@ struct StructLayout {
     /// struct's scalar leaves and arrays, an enum's whole words, since its
     /// variants' fields overlap.
     copy: Vec<(u32, TypeName, u32)>,
+    /// Whether a copy moves the value's bytes whole: an enum, whose variants
+    /// leave different bytes unwritten, or a struct holding one.
+    bytes: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -418,7 +421,11 @@ impl TypeRegistry {
             .iter()
             .map(|one| one.name.clone())
             .collect();
+        let holds_enum = fields.values().any(|field| self.byte_copy(field.type_.id()).is_some());
         let id = self.aggregate(&declaration.name, width, fields, order, copy);
+        if holds_enum {
+            self.structs.get_mut(&declaration.name).expect("the layout just made").bytes = true;
+        }
         if declaration.pack.is_some() {
             self.represented.insert(id);
         }
@@ -480,9 +487,15 @@ impl TypeRegistry {
                 fields,
                 order,
                 copy,
+                bytes: false,
             },
         );
         id
+    }
+
+    /// The bytes a copy of `id` moves whole, if it moves them so.
+    fn byte_copy(&self, id: u32) -> Option<u32> {
+        self.structure(id).filter(|layout| layout.bytes).map(|_| self.width(id))
     }
 
     fn copy_units(&self, element: ElementType) -> Vec<(u32, TypeName, u32)> {
@@ -1011,6 +1024,8 @@ struct StructView {
 #[derive(Clone, Debug)]
 enum Store {
     One(hir::Operand, hir::Operand),
+    /// `count` bytes of `source`, copied byte for byte.
+    Bytes { destination: StructView, source: StructView, count: u32 },
     Run {
         destination: StructView,
         element: ElementType,
