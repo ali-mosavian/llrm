@@ -1,0 +1,10 @@
+# No volatile in Nib; precision per iteration is whatever the backend keeps. u16 counter.
+fn bench_floats(iterations: u16) -> i32:
+    let mut value: f64 = 1.0
+    for i in 0..iterations:
+        value = (value * 1.0009765625 + 0.125) / 1.00048828125
+    return i32(value * 1000.0)
+
+fn main() -> i16:
+    print(bench_floats(1000))
+    return 0
