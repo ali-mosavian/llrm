@@ -225,7 +225,6 @@ mod tests {
     use crate::backend::peephole::_lanes;
     use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
-    use crate::model::mir::{self, Kind, OpCode};
 
     const AX: Reg = Reg { register: Register::AX, width: 2 };
     const DX: Reg = Reg { register: Register::DX, width: 2 };
@@ -262,9 +261,6 @@ mod tests {
         // Every return read every register; one the raise wrote reads its
         // results and the registers the return itself needs.
         let cx = Reg { register: Register::CX, width: 2 };
-        let mut returned = mir::Op::new(3, OpCode::Operation(Operation::Return), "", vec![], vec![]);
-        returned.kind = Kind::Return;
-        returned.reads_complete = true;
         let mut ret = Insn::new(
             3,
             Some((3, 3)),
@@ -273,7 +269,7 @@ mod tests {
             vec![1],
         );
         ret.requires = vec![(Held { value: 1, width: 2 }, Register::AX)];
-        ret.op = Some(Arc::new(returned));
+        ret.reads_complete = true;
         let block = LirBlock::new(
             1,
             vec![_insn(1, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(AX)]), Arc::new(ret)],

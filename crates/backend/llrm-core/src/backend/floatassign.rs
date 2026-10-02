@@ -221,11 +221,7 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
             return true;
         }
         let framed = cell.addr.is_some_and(|addr| addr.space == Space::Frame);
-        let listed = one.op.as_ref().map_or(&[][..], |op| op.stores.as_slice());
-        if listed.iter().any(|reference| {
-            !(framed && reference.spares(crate::backend::spiller::_frame_disp(cell), cell.width))
-                && (reference.addr.is_none() || regions::addresses(reference.addr, reference.width, _reached(cell), cell.width, None).unwrap_or(true))
-        }) {
+        if one.call.as_ref().is_some_and(|call| call.writes() && !(framed && call.spares(crate::backend::spiller::_frame_disp(cell), cell.width))) {
             return true;
         }
     }

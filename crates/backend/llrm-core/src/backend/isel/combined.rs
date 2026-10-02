@@ -240,7 +240,7 @@ fn _rematerialized_arguments(
                     what.sources = vec![Loc::Imm(immediate.clone())];
                     rewritten.what = Some(what);
                     rewritten.uses = vec![];
-                    rewritten.op = definition.op.clone();
+                    rewritten.call = definition.call.clone();
                     rewritten.symbol = Some(immediate.address.is_some());
                     rewritten.rematerialized = true;
                     one = Arc::new(rewritten);

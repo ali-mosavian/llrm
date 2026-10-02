@@ -129,7 +129,7 @@ fn _expanded(one: &Arc<Insn>) -> Result<Vec<Arc<Insn>>, Malformed> {
     let mut pop = (**one).clone();
     pop.what = Some(semantics(Operation::Pop, "pop", vec![Loc::Mem(into)], vec![]));
     pop.covers = Some((one.at, one.at));
-    pop.op = None;
+    pop.call = None;
     pop.defines = vec![];
     pop.uses = vec![];
     pop.spread = vec![];

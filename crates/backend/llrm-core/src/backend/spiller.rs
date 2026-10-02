@@ -19,8 +19,7 @@ use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::target;
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::memory::MemoryKind;
-use crate::model::mir::{self, MemRef};
+
 use crate::model::passes::LIRTransform;
 use crate::support::pyset::PySet;
 
@@ -954,17 +953,10 @@ fn _incoming_frame(cell: &Mem) -> bool {
     _exact_frame(cell) && cell.addr.is_some_and(|addr| addr.disp >= 0)
 }
 
-/// Whether provenance confines an access to this activation's objects.
-fn _proven_local_frame(reference: &MemRef) -> bool {
-    reference.provenance.as_ref().is_some_and(|provenance| {
-        !provenance.slices.is_empty() && provenance.slices.iter().all(|one| one.object.kind == MemoryKind::Frame)
-    })
-}
-
 /// Whether the MIR operation may change `cell`; in a `sealed` body an
 /// incoming argument changes only where a frame store names it.
 pub(crate) fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
-    let op = one.op.as_deref();
+    let call = one.call.as_deref();
     let written = _written(one, cell);
     if sealed && _incoming_frame(cell) {
         return written.iter().any(|dest| _in_frame(dest) && _addresses_meet(cell.addr, cell.width, dest.addr, dest.width));
@@ -973,28 +965,14 @@ pub(crate) fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
         if written.iter().any(|dest| _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)) {
             return true;
         }
-        if op.is_none_or(|op| written.len() >= op.stores.len()) {
+        if call.is_none_or(|call| written.len() >= usize::from(call.writes())) {
             return false;
         }
     }
     if one.unmodeled_write() {
         return true;
     }
-    let Some(op) = op else {
-        return false;
-    };
-    for reference in &op.stores {
-        if _in_frame(cell) && reference.spares(_frame_disp(cell), cell.width) {
-            continue;
-        }
-        if _incoming_frame(cell) && _proven_local_frame(reference) {
-            continue;
-        }
-        if reference.addr.is_none() || _addresses_meet(cell.addr, cell.width, reference.addr, reference.width) {
-            return true;
-        }
-    }
-    false
+    call.is_some_and(|call| call.writes() && !(_in_frame(cell) && call.spares(_frame_disp(cell), cell.width)))
 }
 
 /// A fixed frame cell's displacement; none for one indexed or based.
@@ -1008,13 +986,8 @@ fn _in_frame(cell: &Mem) -> bool {
 
 /// The memory this instruction names as written that could be `cell`.
 fn _written(one: &Insn, cell: &Mem) -> Vec<Mem> {
-    let op = one.op.as_deref();
-    let spared = _in_frame(cell)
-        && op.is_some_and(|op| {
-            !op.stores.is_empty() && op.stores.iter().all(|reference| reference.excludes.contains(&mir::WHOLE_FRAME))
-        });
-    let written: Vec<Mem> = one
-        .what
+    let spared = _in_frame(cell) && one.call.as_ref().is_some_and(|call| call.writes() && call.spares_the_frame());
+    one.what
         .iter()
         .flat_map(|what| &what.dests)
         .filter_map(|dest| match dest {
@@ -1025,16 +998,7 @@ fn _written(one: &Insn, cell: &Mem) -> Vec<Mem> {
             }
             _ => None,
         })
-        .collect();
-    // A proven local object stays proven however selection spelled it.
-    if _incoming_frame(cell)
-        && op.is_some_and(|op| {
-            !op.stores.is_empty() && written.len() <= op.stores.len() && op.stores.iter().all(_proven_local_frame)
-        })
-    {
-        return Vec::new();
-    }
-    written
+        .collect()
 }
 
 /// The predecessors of every block, `at`s outside the body ignored.
@@ -2040,7 +2004,7 @@ pub fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
 fn _inserted(beside: &Insn, what: Semantics, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
     let at = beside.covers.map_or(beside.at, |covers| covers.0);
     let mut made = Insn::new(beside.at, Some((at, at)), Some(what), defines, uses);
-    made.op = beside.op.clone();
+    made.call = beside.call.clone();
     Arc::new(made)
 }
 
@@ -2284,8 +2248,6 @@ mod tests {
     use crate::backend::{omfwrite, select};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
-    use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
-    use crate::model::mir::{self, MemRef, OpCode};
 
     fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
         Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
@@ -2462,9 +2424,7 @@ mod tests {
 
     #[test]
     fn test_parameter_is_reloaded_across_what_spares_the_frame() {
-        for between in
-            ["call sparing the frame", "call", "call unstated", "call with no MIR", "pointer store sparing the frame", "pointer store"]
-        {
+        for between in ["call sparing the frame", "call", "call listing nothing"] {
             let param = mem(Addr::new(Space::Frame, 6), 2, Register::BP, 0, 2);
             let load = insn(
                 0x100,
@@ -2473,48 +2433,16 @@ mod tests {
                 &[1],
                 &[],
             );
-            let spared = if between.ends_with("sparing the frame") { vec![mir::WHOLE_FRAME] } else { vec![] };
-            let middle = if between.starts_with("call") {
-                let reach = if between == "call unstated" {
-                    vec![]
-                } else {
-                    vec![MemRef { excludes: spared.clone(), ..MemRef::new(None, 4) }]
-                };
-                let mut site = mir::Op::new(0x101, OpCode::Operation(Operation::Nothing), "", vec![], vec![]);
-                site.kind = mir::Kind::Call;
-                site.stores = reach;
-                if between != "call unstated" {
-                    site.memory_complete = true;
-                }
-                let mut middle =
-                    insn(0x101, (0x101, 0x101), semantics(Operation::Call, "call", vec![], vec![]), &[], &[]);
-                // A call lowered from the new MIR carries no old operation: it may write anything.
-                middle.op = (between != "call with no MIR").then(|| Arc::new(site));
-                middle.clobbers = BTreeSet::from([Register::EAX]);
-                middle
-            } else {
-                let base = mir::Value::new(9, 0);
-                let reference = MemRef {
-                    base: Some(base),
-                    space: Some(Space::Literal),
-                    base_width: 2,
-                    excludes: spared.clone(),
-                    ..MemRef::new(Some(Addr::new(Space::Literal, 10)), 2)
-                };
-                let mut site = mir::Op::new(0x101, OpCode::Operation(Operation::Nothing), "", vec![], vec![base]);
-                site.kind = mir::Kind::Store;
-                site.stores = vec![reference];
-                let cell = mem(Addr::new(Space::Literal, 10), 2, Register::BX, 10, 2);
-                let mut middle = insn(
-                    0x101,
-                    (0x101, 0x101),
-                    semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![imm(0, 2)]),
-                    &[],
-                    &[],
-                );
-                middle.op = Some(Arc::new(site));
-                middle
-            };
+            let spared = between.ends_with("sparing the frame");
+            let mut middle = insn(0x101, (0x101, 0x101), semantics(Operation::Call, "call", vec![], vec![]), &[], &[]);
+            // A call listing nothing it touches may write anything.
+            middle.call = (between != "call listing nothing").then(|| {
+                Arc::new(crate::model::lir::CallMemory {
+                    effects: llrm_mir::memory::Effects::ANY,
+                    private: if spared { vec![crate::model::mir::WHOLE_FRAME] } else { vec![] },
+                })
+            });
+            middle.clobbers = BTreeSet::from([Register::EAX]);
             let got = _out(&_body(vec![load, middle, _add(2, 1, 0x102)]), &[1]);
             let slots: Vec<&Loc> = got
                 .iter()
@@ -2522,7 +2450,7 @@ mod tests {
                 .flat_map(|what| &what.dests)
                 .filter(|place| matches!(place, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)))
                 .collect();
-            assert_eq!(slots.is_empty(), !spared.is_empty(), "{between}: {got:?}");
+            assert_eq!(slots.is_empty(), spared, "{between}: {got:?}");
         }
     }
 
@@ -2552,57 +2480,30 @@ mod tests {
     #[test]
     fn test_parameter_rematerializes_across_an_exact_disjoint_local_store() {
         let local = mem(Addr::new(Space::Frame, -2), 2, Register::BP, 0, 2);
-        let vague_local = MemRef { space: Some(Space::Frame), ..MemRef::new(None, 2) };
-        let mut op =
-            mir::Op::new(0x101, OpCode::Operation(Operation::Move), "mov", vec![], vec![mir::Value::new(2, 0)]);
-        op.kind = mir::Kind::Store;
-        op.stores = vec![vague_local];
-        let mut store = insn(
+        let store = insn(
             0x101,
             (0x101, 0x101),
             semantics(Operation::Move, "mov", vec![Loc::Mem(local)], vec![held(2, 2)]),
             &[],
             &[2],
         );
-        store.op = Some(Arc::new(op));
         _assert_parameter_rematerialized(store);
     }
 
     #[test]
-    fn test_parameter_rematerializes_across_a_proven_local_array_store() {
+    fn test_parameter_rematerializes_across_a_local_array_store() {
         let local = Mem {
             index: Some(Held { value: 4, width: 2 }),
             index_through: Register::SI,
             ..mem(Addr::new(Space::Frame, -132), 2, Register::BP, 0, 2)
         };
-        let object = MemoryObject {
-            identity: Some(Identity::Tuple(vec![Identity::Int(7), Identity::Int(-132), Identity::Int(-4)])),
-            extent: Some(128),
-            ..MemoryObject::new(MemoryKind::Frame)
-        };
-        let indexed_local = MemRef {
-            base: Some(mir::Value::new(4, 0)),
-            space: Some(Space::Frame),
-            provenance: Some(Provenance::one_with_slice(object, 0, 128, 2, 2, BTreeSet::new()).unwrap()),
-            ..MemRef::new(None, 2)
-        };
-        let mut op = mir::Op::new(
-            0x101,
-            OpCode::Operation(Operation::Move),
-            "mov",
-            vec![],
-            vec![mir::Value::new(2, 0), mir::Value::new(4, 0)],
-        );
-        op.kind = mir::Kind::Store;
-        op.stores = vec![indexed_local];
-        let mut store = insn(
+        let store = insn(
             0x101,
             (0x101, 0x101),
             semantics(Operation::Move, "mov", vec![Loc::Mem(local)], vec![held(2, 2)]),
             &[],
             &[2, 4],
         );
-        store.op = Some(Arc::new(op));
         _assert_parameter_rematerialized(store);
     }
 

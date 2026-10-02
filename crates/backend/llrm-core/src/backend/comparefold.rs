@@ -140,7 +140,7 @@ pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>, exposed: &BTree
             .collect::<IndexSet<u32>>()
             .into_iter()
             .collect();
-        folded.op = if load.symbol == Some(true) { load.op.clone() } else { compare.op.clone() };
+        folded.call = if load.symbol == Some(true) { load.call.clone() } else { compare.call.clone() };
         folded.symbol = if load.symbol == Some(true) { Some(true) } else { compare.symbol };
         out[compare_at] = Arc::new(folded);
         // Keep source ownership and anchors while deleting the virtual range

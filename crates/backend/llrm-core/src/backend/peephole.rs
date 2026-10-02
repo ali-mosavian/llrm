@@ -21,7 +21,6 @@ use crate::backend::{
 use crate::frontends::bc::declen;
 use crate::model::ir::{self, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::mir;
 use crate::model::passes::LIRTransform;
 
 pub use crate::backend::lanes::{Lane, Lanes};
@@ -138,7 +137,6 @@ impl LIRTransform for Peephole {
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
         let body = regthrash::thrashed(phielim::unsplit(&body));
-        let body = concatenated(&body);
         let body = frame_copies(&body, &self.cpu)?;
         let body = copyprop::forwarded(&body);
         let body = extensions(&body);
@@ -198,102 +196,6 @@ pub fn popped_arguments(body: &LirBody, cpu: &Profile) -> Result<LirBody, String
     Ok(LirBody { blocks, ..body.clone() })
 }
 
-/// Pack two word halves without using the stack.
-///
-/// CONCAT_LOW lowers portably to `push high; push low; pop wide` before
-/// allocation.  Once the low word and the wide result share a physical root,
-/// a 386 has BCC's two-instruction answer instead: shift the unknown upper
-/// half away, then funnel the high word in with SHRD.  The original sequence
-/// preserves flags, so this is legal only where physical flag liveness proves
-/// the SHRD flags dead.
-pub fn concatenated(body: &LirBody) -> LirBody {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let mut insns = block.insns.clone();
-        for index in 0..insns.len().saturating_sub(2) {
-            let (high_push, low_push, wide_pop) =
-                (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]), Arc::clone(&insns[index + 2]));
-            if high_push.op.as_ref().map(|op| op.kind) != Some(mir::Kind::Concat)
-                || [&high_push, &low_push, &wide_pop].into_iter().any(|one| one.what.is_none()
-                || !one.clobbers.is_empty()
-                || !one.clobbers_high.is_empty()
-                || !one.requires.is_empty()
-                || !one.delivers.is_empty()
-                || !one.spread.is_empty()
-                || one.group.is_some()
-                || one.symbol == Some(true)
-                || one.frame_adjust
-                || one.spill_reload
-                || one.spill_store)
-            {
-                continue;
-            }
-            let (Some(first), Some(second), Some(third)) = (&high_push.what, &low_push.what, &wide_pop.what) else {
-                continue;
-            };
-            let (high, low, result) = match (
-                (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-                (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice()),
-                (third.op, third.name.as_deref(), third.dests.as_slice(), third.sources.as_slice()),
-            ) {
-                (
-                    (Operation::Push, Some("push"), [], [Loc::Reg(high)]),
-                    (Operation::Push, Some("push"), [], [Loc::Reg(low)]),
-                    (Operation::Pop, Some("pop"), [Loc::Reg(result)], []),
-                ) => {
-                    if high.width != low.width
-                        || high.width != 2
-                        || result.width != 4
-                        || ir::root(low.register) != ir::root(result.register)
-                        || ir::root(high.register) == ir::root(result.register)
-                    {
-                        continue;
-                    }
-                    (*high, *low, *result)
-                }
-                _ => continue,
-            };
-            let _ = low;
-            let count = Loc::Imm(imm(16, 1));
-            let wide_high = reg(target::named(high.register, 4), 4);
-            let shifted = semantics(
-                Operation::Binary,
-                "shl",
-                vec![Loc::Reg(result)],
-                vec![Loc::Reg(result), count.clone()],
-            );
-            let funnelled = semantics(
-                Operation::Funnel,
-                "shrd",
-                vec![Loc::Reg(result)],
-                vec![Loc::Reg(result), Loc::Reg(wide_high), count],
-            );
-            let encoded: Vec<Option<select::Emitted>> = [&shifted, &funnelled].into_iter().map(emit).collect();
-            if encoded.iter().any(Option::is_none) {
-                continue;
-            }
-            let mut modified_flags = Lanes::new();
-            for made in &encoded {
-                let code = made.as_ref().map_or(Vec::new(), |made| made.code.clone());
-                let mut decoder = Decoder::new(16, &code, DecoderOptions::NONE);
-                for insn in &mut decoder {
-                    modified_flags.extend(_flag_lanes(insn.rflags_modified()));
-                }
-            }
-            if !modified_flags.is_subset(&dead_after[&id(&wide_pop)]) {
-                continue;
-            }
-            insns[index] = lir::anchor(Arc::clone(&high_push));
-            insns[index + 1] = Arc::new(with_what(&low_push, shifted));
-            insns[index + 2] = Arc::new(with_what(&wide_pop, funnelled));
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
-}
-
 /// Use a dead GPR for an allocated frame-to-frame parallel copy.
 ///
 /// Parallel-copy scheduling has to work even when every GPR is live, so its
@@ -341,7 +243,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
             }
             if pushed.at != popped.at
                 || popped.covers != Some((pushed.at, pushed.at))
-                || popped.op.is_some()
+                || popped.call.is_some()
                 || !pushed.defines.is_empty()
                 || !pushed.uses.is_empty()
                 || !popped.defines.is_empty()
@@ -760,12 +662,9 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
     // Only a synthetic reload may be narrowed.  A source memory operation can
     // be volatile, fault on bytes no longer read, or otherwise make its full
     // access width observable.
-    let source = load.op.as_ref();
     if !load.inserted()
         || load.symbol != Some(false)
-        || source.is_none_or(|source| {
-            source.source_backed || !source.loads.is_empty() || !source.stores.is_empty() || source.volatile
-        })
+        || load.call.as_ref().is_none_or(|call| call.effects.reads || call.effects.writes)
     {
         return None;
     }
@@ -1029,13 +928,8 @@ pub fn _frame_written(one: &Insn) -> Option<Mem> {
     if cells.len() != 1 || !_frame_cell(cells[0]) {
         return None;
     }
-    let stores: &[mir::MemRef] = one.op.as_ref().map_or(&[], |op| op.stores.as_slice());
-    if !one.spill_store
-        && (stores.len() > 1
-            || stores.iter().any(|reference| {
-                reference.addr.is_none_or(|addr| addr.space != Space::Frame) || reference.base.is_some()
-            }))
-    {
+    // A call that may write names no frame cell.
+    if !one.spill_store && one.call.as_ref().is_some_and(|call| call.writes()) {
         return None;
     }
     Some(cells[0].clone())
@@ -1574,7 +1468,7 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
             }
         }
         let extension = Arc::new(Insn {
-            op: definition.op.clone(),
+            call: definition.call.clone(),
             ..Insn::new(
                 definition.at,
                 Some((definition.at, definition.at)),
