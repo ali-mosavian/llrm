@@ -963,7 +963,7 @@ def _repeated(ctx: _Ctx, left: Expr) -> Expr | None:
     chance -- which in practice it never did. It is the shape that broke
     llrm: `fld dword ptr [si]` twice running are two pushes, and a pass
     that read si as the destination deleted the second as a redundant
-    reload. bench/fpbench.bas found that; nothing generated here could
+    reload. bench/fpbench/fpbench.bas found that; nothing generated here could
     have.
 
     Only a Var or an Index is repeated, so the copy reads memory and
@@ -1249,7 +1249,7 @@ def generate_program(
     # One of each width. It was 2, and the widths are handed out in the
     # order INT, LNG, SNG, DBL -- so a float array was never once generated
     # and float array access went entirely uncovered. That is where the
-    # miscompile bench/fpbench.bas found was living.
+    # miscompile bench/fpbench/fpbench.bas found was living.
     n_arrays: int = 4,
     n_subs: int = 2,
     n_funcs: int = 2,

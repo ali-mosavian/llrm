@@ -5,7 +5,7 @@ bytes selected by the fresh OMF path, records the source and normalized
 assembly hashes, and emits the assembly used for every number:
 
 ```sh
-uv run python tools/quality.py bench/c/*.c --cpu all \
+uv run python tools/quality.py bench/*/*.c --cpu all \
   --references --dump build/quality --json build/quality/report.json
 ```
 
@@ -100,7 +100,7 @@ and has an assembly hash different from the candidate being measured.  The
 quality gate fails both missing targets and ratios over 1.10:
 
 ```sh
-uv run python tools/quality.py bench/c/*.c --cpu 386 --gate
+uv run python tools/quality.py bench/*/*.c --cpu 386 --gate
 ```
 
 Therefore `NO TARGET` is an unfinished obligation, not a passing score.  Add a

@@ -1,2 +1,0 @@
-RESULT= 120
-DONE

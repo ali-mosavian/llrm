@@ -11,7 +11,7 @@ staged plan for removing it.
 
 Absorption leaves a split/rejoin idiom at every site boundary, because
 `calls.py` emits each site in isolation and has no view past its own call.
-In `bench/nbody.bas` there are 24 of these triples, 23 of them inside
+In `bench/nbody_fixed/nbody_fixed.bas` there are 24 of these triples, 23 of them inside
 loops and 8 at loop depth 3 -- the innermost hot loop:
 
 ```

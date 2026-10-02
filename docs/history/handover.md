@@ -54,7 +54,7 @@ program means. `tools/mutate.py` catches 14 of 14 seeded bugs.
 ## Open, in the order they are worth doing
 
 **`docs/optimizations/residue.md` catalogs what survives absorption and widening.** A
-manual liveness trace of `bench/nbody.bas`'s rewritten object, not its tests:
+manual liveness trace of `bench/nbody_fixed/nbody_fixed.bas`'s rewritten object, not its tests:
 the object is 137 bytes larger than BC's own, and eight distinct, addressed
 patterns account for essentially all of it, from a genuinely trivial one-line
 fix (`popped_into()` recombines two words that were already contiguous) to
@@ -124,7 +124,7 @@ was not absorbed at all and carried a pre-absorption census line. Measured:
 eighteen bytes for the divide, twenty-one for the remainder, against fifteen
 under `/G3` and twenty-one elsewhere. `calls.py`'s emitter is `dividing` now.
 
-**A real dynamic number exists.** `bench/nbody.bas` is `tests/run/qb/nbody.bas`'s
+**A real dynamic number exists.** `bench/nbody_fixed/nbody_fixed.bas` is `tests/run/qb/nbody.bas`'s
 Q23.9 integrator, and BC alone builds the base half of the comparison.
 `tools/bench.py` reads
 the 8253 the way `docs/measurement/readme.md` prescribes; getting a repeatable
@@ -134,7 +134,7 @@ regardless -- see `docs/measurement/readme.md`. See `docs/measurement/numbers.md
 figure and the two intermediate ones that preceded it.
 
 **`calls.py` absorbs a call whose operands were never a named address at
-all.** The gap `bench/nbody.bas` exposed: BC's optimizer routinely pushes a
+all.** The gap `bench/nbody_fixed/nbody_fixed.bas` exposed: BC's optimizer routinely pushes a
 value straight from the register it was just computed in rather than
 reloading it, sometimes with a backing store and sometimes without one, and
 sometimes leaves one argument stranded on the stack under an entirely
@@ -148,7 +148,7 @@ while its own push stays on the stack would leak four bytes per call,
 forever, which is what an earlier, unreviewed draft of this would have done.
 Verified byte-identical on every site already absorbed; `tests/run/qb/arrays.bas`
 (added because the corpus has zero indexed or stranded-call examples) goes
-from 1 of 8 call sites absorbed to 8 of 8. `bench/nbody.bas` goes from 3
+from 1 of 8 call sites absorbed to 8 of 8. `bench/nbody_fixed/nbody_fixed.bas` goes from 3
 regions taken to 26 of 28, and the timing number above moved with it.
 
 ## The one deliberate behaviour change

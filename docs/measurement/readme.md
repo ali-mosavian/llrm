@@ -55,7 +55,7 @@ Read the 8253 instead: latch channel 0 with `OUT &H43, &H00`, read `INP(&H40)`
 twice, and combine with the BIOS tick at `0040:006C`. That is 838 ns rather
 than 54.9 ms in principle -- in `dosbox-x` it is not, in practice. Retrying
 when the tick changes between the two reads is not enough: `tools/bench.py`'s
-first version, `bench/nbody.bas`'s first version, measured a one-tick-period
+first version, `bench/nbody_fixed/nbody_fixed.bas`'s first version, measured a one-tick-period
 tear anyway, on the *same binary, same pinned conf*, repeated. Masking IRQ0 at
 the 8259 around the read (BASIC has no `CLI`) did not close it either, which
 says the tear is not guest-side -- DOSBox-X updates that memory location on a

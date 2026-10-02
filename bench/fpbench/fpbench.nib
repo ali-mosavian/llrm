@@ -1,3 +1,4 @@
+# known: #358
 # Six-body f32 n-body; checksum = weighted sum of truncated (pos*64).
 
 fn bench_fpbench(steps: i16) -> i32:

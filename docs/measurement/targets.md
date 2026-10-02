@@ -1478,7 +1478,7 @@ long multiply and the segment normalisation happen inside it, so **none of
 the cost appears in the caller's instructions at all** -- which is why every
 measure in this file missed it until the helper was priced.
 
-`bench/huge.bas`, on QuickBASIC 4.5 with `/AH`:
+`bench/huge/huge.bas`, on QuickBASIC 4.5 with `/AH`:
 
 ```
 003c  mov cx,3E8h         | ; es and bx set once, outside
