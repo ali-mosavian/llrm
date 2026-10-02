@@ -60,6 +60,12 @@ impl ControlFlow<'_> {
         if crate::support::debug::enabled("cost") {
             llrm_support::debug!("cost", "{}", executed::summary(&placed, self.cpu));
         }
+        if crate::support::debug::enabled("blocks") {
+            let frequency = crate::analysis::frequency::Frequency::of(&placed);
+            for block in &placed.blocks {
+                llrm_support::debug!("blocks", "{} {:#06x} freq {}", placed.name, block.at, frequency.block(block.at));
+            }
+        }
         Ok(placed)
     }
 }

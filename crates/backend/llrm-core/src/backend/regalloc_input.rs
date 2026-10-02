@@ -27,6 +27,12 @@ pub fn before_regalloc<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (Lir
 /// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
 /// phase before `RegAlloc`; the body, and the phases from `RegAlloc` on.
 pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    before_phase(calls, fixture, name, cpu_name, "RegAlloc")
+}
+
+/// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
+/// phase before the one of class `phase`; the body, and the phases from it on.
+pub fn before_phase<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str, phase_class: &str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir").join(fixture);
     let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
     let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
@@ -50,12 +56,12 @@ pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name:
         crate::flow::machine(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN).unwrap();
     let mut phases = phases.into_iter();
     for mut phase in phases.by_ref() {
-        if phase.class_name() == "RegAlloc" {
+        if phase.class_name() == phase_class {
             return (body, std::iter::once(phase).chain(phases).collect());
         }
         body = phase.transform(body).unwrap();
     }
-    panic!("no RegAlloc phase");
+    panic!("no {phase_class} phase");
 }
 
 /// `body` through every phase given, in order.
