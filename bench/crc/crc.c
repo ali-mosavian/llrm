@@ -1,4 +1,6 @@
-/* Canonical CRC-32/ISO-HDLC check vector: "123456789" -> CBF43926. */
+/* CRC-32/ISO-HDLC of "123456789" (CBF43926), reported as signed 32-bit. */
+extern void report(long value);
+
 unsigned long bench_crc(unsigned long salt)
 {
     static const unsigned char data[] = "123456789";
@@ -11,4 +13,10 @@ unsigned long bench_crc(unsigned long salt)
             crc = (crc >> 1) ^ (0xedb88320UL & (0UL - (crc & 1UL)));
     }
     return crc ^ 0xffffffffUL;
+}
+
+int main(void)
+{
+    report((long)bench_crc(0));
+    return 0;
 }
