@@ -780,5 +780,5 @@ fn _function(
         missing.sort();
         invalid!("{prefix}: undefined values {}", pyrepr::list(&missing));
     }
-    Ok(())
+    crate::dominance::check(function).map_err(|why| InvalidHIR(format!("{prefix}: {why}")))
 }

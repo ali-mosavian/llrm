@@ -278,6 +278,7 @@ dependencies = [
 name = "llrm-hir"
 version = "0.1.0"
 dependencies = [
+ "llrm-analysis",
  "llrm-mir",
  "llrm-support",
 ]

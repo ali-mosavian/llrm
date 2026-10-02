@@ -100,6 +100,11 @@ fn spill_model(program: &Program) {
 /// its promises describe; and each module's data objects' globals, by the
 /// objects' ids.
 pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
+    // Whichever frontend made it, a program is checked before it is lowered.
+    // Dominance alone, not `llrm_hir::verify::verify`: llrm-c's HIR does not pass the rest yet (#NNN).
+    for function in program.modules.iter().flat_map(|module| &module.functions) {
+        llrm_hir::dominance::check(function).map_err(|why| format!("{}: {why}", function.name))?;
+    }
     let emitted = crate::hir::mir::emit(program);
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
