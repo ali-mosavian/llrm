@@ -850,6 +850,15 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
                 slot.insert(module.reference(global));
             }
         }
+        if instruction.op == Op::Assume {
+            let types = &mut module.context.types;
+            let (void, i1) = (types.void(), types.int(1));
+            if let Entry::Vacant(slot) = tables.callees.entry(ASSUME.to_owned()) {
+                let ty = function_type(types, void, vec![i1]);
+                let global = module.add_function(slot.key(), ty, Linkage::External)?;
+                slot.insert(module.reference(global));
+            }
+        }
         if let Some(called) = called(instruction.op) {
             let types = &mut module.context.types;
             let hir = |operand| tables.types[&operand_type(operand, &values, &places)];
@@ -1033,6 +1042,9 @@ fn interrupted(function: &model::Function) -> bool {
     function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Interrupt)
 }
 
+/// What the language promises holds, LLVM's intrinsic.
+const ASSUME: &str = "llvm.assume";
+
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
 
@@ -1164,6 +1176,8 @@ struct Body<'b, 'm, 'h> {
     places: HashMap<i64, &'h model::Place>,
     blocks: HashMap<i64, BlockId>,
     values: HashMap<i64, Value>,
+    /// The `i1` each comparison's result was widened from: what an assumption is made of.
+    truths: HashMap<i64, Value>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
     /// Where a variadic function's variadic arguments start, if a parameter lives with them.
@@ -1198,6 +1212,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             places: function.places.iter().map(|one| (one.id, one)).collect(),
             blocks: HashMap::new(),
             values,
+            truths: HashMap::new(),
             frame: HashMap::new(),
             passed: None,
             objects: Vec::new(),
@@ -1578,6 +1593,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // BASIC's truth is all ones; an unsigned boolean's, as C's, is one.
             let one = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
             let result = self.b.cast(if one { CastOp::ZExt } else { CastOp::SExt }, truth, ty, "");
+            self.truths.insert(instruction.results[0], truth);
             self.define(instruction, result);
             return Ok(());
         }
@@ -1600,6 +1616,28 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     }
                 }
             }
+            return Ok(());
+        }
+        if op == Op::Assume {
+            // A comparison's own `i1`, so that a reader before instcombine sees the test.
+            let made = match &instruction.operands[0] {
+                Operand::ValueRef(one) => self.truths.get(&one.value).copied(),
+                _ => None,
+            };
+            let holds = match made {
+                Some(truth) => truth,
+                None => {
+                    let condition = self.value(&instruction.operands[0])?;
+                    let ty = self.b.type_of(condition);
+                    let zero = self.b.int(self.b.context.types.int_bits(ty).ok_or("an assumption that is no integer")?, 0);
+                    self.b.icmp(IntPredicate::Ne, condition, zero, "")
+                }
+            };
+            let i1 = self.b.context.types.int(1);
+            let void = self.b.context.types.void();
+            let ty = function_type(&mut self.b.context.types, void, vec![i1]);
+            let callee = Value::Constant(*self.tables.callees.get(ASSUME).ok_or("@llvm.assume undeclared")?);
+            self.b.call(ty, callee, &[holds], "");
             return Ok(());
         }
         if let Some(called) = called(op) {

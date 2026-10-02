@@ -987,3 +987,53 @@ fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
     let error = crate::verify::verify(&program(function)).unwrap_err();
     assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
 }
+
+/// A condition the language promises holds is `llvm.assume` of its test.
+#[test]
+fn an_assume_is_an_llvm_assume_of_its_condition() {
+    let mut function = difference();
+    let check = Instruction::new(2, Op::Assume, vec![], vec![Operand::value_ref(3)]);
+    function.blocks[0].instructions.push(check);
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("icmp ne i16 %2, 0") && text.contains("call void @llvm.assume(i1 %3)"), "{text}");
+}
+
+/// An assume has one condition and no result; the dominance rule is the
+/// verifier's for every operand.
+#[test]
+fn an_assume_of_no_condition_or_with_a_result_is_refused() {
+    let with = |results: Vec<i64>, operands: Vec<Operand>| {
+        let mut function = difference();
+        if !results.is_empty() {
+            function.values.push(Value { id: 4, r#type: 1 });
+        }
+        function.blocks[0].instructions.push(Instruction::new(2, Op::Assume, results, operands));
+        crate::verify::verify(&program(function))
+    };
+    let ok = with(vec![], vec![Operand::value_ref(3)]);
+    assert!(ok.is_ok(), "{ok:?}");
+    assert!(with(vec![], vec![]).unwrap_err().0.contains("assume 2 takes one condition"));
+    assert!(with(vec![4], vec![Operand::value_ref(3)]).unwrap_err().0.contains("has 1 results, expected 0"));
+    // Before the value it asks about is made.
+    let mut function = difference();
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Assume, vec![], vec![Operand::value_ref(3)]));
+    assert!(crate::verify::verify(&program(function)).unwrap_err().0.contains("does not dominate"));
+}
+
+/// An assumption made of a comparison is made on the comparison's `i1`, not
+/// on its widened result tested again: a reader that runs before
+/// instcombine would otherwise see `icmp ne (sext c), 0` and nothing.
+#[test]
+fn an_assume_of_a_comparison_is_made_on_its_own_truth() {
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Lt, vec![4], vec![Operand::value_ref(1), Operand::value_ref(2)]));
+    function.blocks[0].instructions.insert(1, Instruction::new(3, Op::Assume, vec![], vec![Operand::value_ref(4)]));
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("%2 = icmp slt i16 %0, %1\n  %3 = sext i1 %2 to i16\n  call void @llvm.assume(i1 %2)"), "{text}");
+}

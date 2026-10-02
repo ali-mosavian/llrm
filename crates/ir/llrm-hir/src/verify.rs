@@ -37,7 +37,7 @@ macro_rules! invalid {
 fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
     match op {
         model::Op::Store => Some(Some(0)),
-        model::Op::PortOut => Some(Some(0)),
+        model::Op::PortOut | model::Op::Assume => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
         model::Op::Divmod => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
@@ -553,6 +553,11 @@ fn _function(
                 if !operand_types.iter().all(|one| word(one) || near(one)) || !result_types.iter().all(word) {
                     invalid!("{prefix}: asm {} moves only 16-bit integers and near pointers", instruction.id);
                 }
+            }
+            if instruction.op == model::Op::Assume
+                && (instruction.operands.len() != 1 || operand_types.iter().any(|one| !matches!(types[one].kind, model::TypeKind::Boolean | model::TypeKind::Integer)))
+            {
+                invalid!("{prefix}: assume {} takes one condition", instruction.id);
             }
             if matches!(instruction.op, model::Op::PortIn | model::Op::PortOut) {
                 let widths: Vec<i64> = operand_types.iter().map(|one| types[one].width).collect();
