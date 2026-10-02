@@ -2341,3 +2341,40 @@ fn main() -> i16:
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
     assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
 }
+
+/// `small`'s byte sits at offset 2 and byte 3 is never written, yet an enum
+/// is copied as raw i16 words: the word at offset 2 is poison, and so is the
+/// payload read from the copy.
+#[test]
+fn test_a_small_payload_of_a_large_enum_survives_a_copy() {
+    use llrm_mir::interpret::{self, Val};
+    let source = "\
+enum E:
+    small(a: u8)
+    big(a: i16, b: i16, c: i16)
+
+fn make() -> E:
+    return .small(7)
+
+fn main() -> i16:
+    let x = make()
+    let y = x
+    match y:
+        .small(a):
+            if a == 7:
+                return 7
+            return 1
+        .big(a, b, c):
+            return 2
+";
+    let directory = tempfile::tempdir().unwrap();
+    let mut program = parsed(&written(&directory, "small.nib", source));
+    program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
+    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
+    assert!(matches!(result, Ok(Val::Int { bits: 7, .. })), "{result:?}");
+}
