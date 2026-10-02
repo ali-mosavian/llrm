@@ -3,6 +3,7 @@
 
 pub mod codec;
 pub mod debug;
+pub mod dominance;
 pub mod escape;
 pub mod facts;
 pub mod mir;

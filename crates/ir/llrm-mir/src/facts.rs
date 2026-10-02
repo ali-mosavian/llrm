@@ -221,6 +221,14 @@ facts! {
         NoSignedWrap no_signed_wrap "nsw" Flags::NSW, on [Instruction];
         NoUnsignedWrap no_unsigned_wrap "nuw" Flags::NUW, on [Instruction];
         InBounds in_bounds "inbounds" Flags::INBOUNDS, on [Instruction, Operand];
+        // What the language lets a pass do to a floating operation: sums and
+        // products regroup, no operand is NaN or infinite, a zero's sign is
+        // not observed, a division is a multiply by the reciprocal.
+        Reassoc reassoc "reassoc" Flags::REASSOC, on [Instruction];
+        NoNaNs no_nans "nnan" Flags::NNAN, on [Instruction];
+        NoInfs no_infs "ninf" Flags::NINF, on [Instruction];
+        NoSignedZeros no_signed_zeros "nsz" Flags::NSZ, on [Instruction];
+        AllowReciprocal allow_reciprocal "arcp" Flags::ARCP, on [Instruction];
     }
 }
 
@@ -234,7 +242,7 @@ impl Fact {
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
-            Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds => None,
+            Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
     }
