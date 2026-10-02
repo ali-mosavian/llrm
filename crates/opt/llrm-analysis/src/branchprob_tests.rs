@@ -441,3 +441,34 @@ no:
     );
     assert_eq!(odds.by.get(&at("entry")), Some(&Heuristic::Zero));
 }
+
+/// A loop's proven trips say how often it is left, not which way: tail
+/// duplication gave SPHEREMAPLASMA's counted loop two exits, 3 to 5, and
+/// each took half of the leaving mass, which sent more into a nest below
+/// and read the procedure 2.7% hotter (#217).
+#[test]
+fn test_a_counted_loops_exits_share_by_their_odds() {
+    let (latches, body) = (BTreeSet::from([2]), BTreeSet::from([2]));
+    let cycles = [Cycle { header: 2, latches: &latches, body: &body, trips: Some(4) }];
+    let successors = |at: i64| match at {
+        1 => vec![2],
+        2 => vec![2, 3, 4],
+        _ => vec![],
+    };
+    let predecessors = |at: i64| match at {
+        2 => vec![1, 2],
+        3 | 4 => vec![2],
+        _ => vec![],
+    };
+    let given = |from: i64, to: i64| match (from, to) {
+        (1, 2) => 1.0,
+        (2, 2) => 31.0 / 32.0,
+        (2, 3) => 0.375 / 32.0,
+        (2, 4) => 0.625 / 32.0,
+        _ => 0.0,
+    };
+    let frequency = propagated(&[1, 2, 3, 4], &predecessors, &successors, &cycles, &given);
+    assert!(close(frequency.get(&2).copied(), 4.0), "premise: the trips decide the loop: {:?}", frequency.get(&2));
+    assert!(close(frequency.get(&3).copied(), 0.375), "{frequency:?}");
+    assert!(close(frequency.get(&4).copied(), 0.625), "{frequency:?}");
+}

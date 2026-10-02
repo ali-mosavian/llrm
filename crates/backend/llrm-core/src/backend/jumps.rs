@@ -132,16 +132,9 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
                 insns.push(_unowned(&made, jump));
             }
             // The edge to the tail becomes the tail's edges, at its share.
-            // A parent's only edge carries no odds: it is certain.
-            let only = (parent.succ.len() == 1).then_some(lir::BlockOdds::CERTAIN as u32);
-            if let Some(through) = tried.taken.shift_remove(&(parent.at, tail.at)).or(only) {
-                for next in &tail.succ {
-                    if let Some(taken) = body.odds.taken.get(&(tail.at, *next)) {
-                        let share = (f64::from(through) * f64::from(*taken) / lir::BlockOdds::CERTAIN).round() as u32;
-                        *tried.taken.entry((parent.at, *next)).or_default() += share;
-                    }
-                }
-            }
+            // The edge to the tail becomes the tail's edges, at their odds.
+            let into: Vec<(i64, f64)> = tail.succ.iter().map(|next| (*next, body.odds.chance(tail.at, &tail.succ, *next))).collect();
+            tried.rerouted(parent.at, &parent.succ, tail.at, &into);
             // The parent's own branches keep their targets.
             let mut succ: Vec<i64> = parent.succ.iter().copied().filter(|at| *at != tail.at).collect();
             succ.extend(tail.succ.iter().filter(|at| !succ.contains(at)).copied().collect::<Vec<_>>());
@@ -913,8 +906,13 @@ pub fn _step(body: &LirBody) -> (LirBody, bool) {
         }
         let target = _through(&blocks, &at, last_what.target, &protected);
         if target != last_what.target {
-            blocks[index] = _retargeted(&block, last, target.expect("a passage names its target"));
-            return (_reachable(body, blocks), true);
+            let onward = target.expect("a passage names its target");
+            let mut odds = body.odds.clone();
+            if let Some(old) = last_what.target {
+                odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
+            }
+            blocks[index] = _retargeted(&block, last, onward);
+            return (_reachable(&LirBody { odds, ..body.clone() }, blocks), true);
         }
         if last_what.op == Operation::Jump && target == after {
             // A fall-through needs no machine jump.  A decoded jump may still
