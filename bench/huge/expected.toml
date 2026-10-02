@@ -1,4 +1,4 @@
-reason = "QB addresses a huge element inline, no B$HARY call per element; huge.bas walks memory in C's order"
+reason = "Nib has huge var arrays (#362): huge.nib's first baseline"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -16,3 +16,11 @@ memory_operands = 202400
 [c.Os]
 instructions = 1735413
 memory_operands = 242400
+
+[nib.O2]
+instructions = 1452613
+memory_operands = 121600
+
+[nib.Os]
+instructions = 1452613
+memory_operands = 121600
