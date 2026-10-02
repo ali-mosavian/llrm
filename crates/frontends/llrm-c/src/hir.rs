@@ -17,6 +17,9 @@ use llrm_core::support::pyrepr::{self, Repr, Tuple};
 pub const FE_PROC: i64 = 0x1;
 pub const FE_CONSTANT: i64 = 0x10;
 pub const FE_VOLATILE: i64 = 0x800;
+pub const FE_ADDR_TAKEN: i64 = 0x400;
+/// INIT `sw`: Watcom's -oa, relaxed alias checking.
+pub const CGSW_GEN_RELAX_ALIAS: i64 = 0x0020_0000;
 pub const FE_INTERNAL: i64 = 0x1000;
 pub const FE_GLOBAL: i64 = 0x4;
 pub const FE_IMPORT: i64 = 0x8;
@@ -144,6 +147,12 @@ impl Symbol {
 
     pub fn imported(&self) -> bool {
         self.attr & FE_IMPORT != 0
+    }
+
+    /// Whether no pointer reaches it but one its unit makes: under -oa,
+    /// what a unit never takes the address of, no other unit does either.
+    pub fn unaddressed(&self, switches: i64) -> bool {
+        switches & CGSW_GEN_RELAX_ALIAS != 0 && self.attr & FE_ADDR_TAKEN == 0
     }
 
     pub fn constant(&self) -> bool {
@@ -298,6 +307,8 @@ pub struct Unit {
     pub procs: Vec<Proc>,
     /// Compiled with -d2.
     pub debug: Option<Debug>,
+    /// INIT's code-generator switches (`CGSW_GEN_*`).
+    pub switches: i64,
 }
 
 impl Unit {
@@ -385,6 +396,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             }
             "INIT" => {
                 made.target = hex(field(one, "target"));
+                made.switches = hex(field(one, "sw"));
                 // CGSW_GEN_DBG_TYPES or CGSW_GEN_DBG_LOCALS
                 if hex(field(one, "sw")) & 0x0018_0000 != 0 {
                     made.debug = Some(Debug::default());
