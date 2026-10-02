@@ -3540,3 +3540,23 @@ define i16 @g(i16 %a) addrspace(1) {
     let says = |name: &str| module.procedures.iter().find(|one| one.name.contains(name)).map(|one| one.body.returns_twice);
     assert_eq!((says("f"), says("g")), (Some(true), Some(false)));
 }
+
+/// The encoded object of `fixture` at -Os when `machined` tries only `candidates`.
+fn sized_with(candidates: assemble::Candidates, text: &str) -> usize {
+    assemble::trying(candidates, || {
+        let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
+        let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+        crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes").len()
+    })
+}
+
+/// The spiller decides on the general registers alone; where the allocator's pressure is elsewhere
+/// its spill code came on top of the allocator's own (QCport d_alias at -Os: 15723 bytes, 16811
+/// with it, +7%). The function costs what the cheaper route costs.
+#[test]
+fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/mir/matmul.ll")).unwrap();
+    let (spiller, allocator) = (sized_with(assemble::Candidates::SpillerOnly, &text), sized_with(assemble::Candidates::AllocatorOnly, &text));
+    assert!(spiller > allocator, "premise: the spiller's route is larger ({spiller} against {allocator})");
+    assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);
+}

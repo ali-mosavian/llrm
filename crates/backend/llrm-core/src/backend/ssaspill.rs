@@ -34,6 +34,15 @@ const FAR: i64 = 1 << 40;
 /// Leaving a loop: what is used after it is used far from inside it.
 const EXIT: i64 = 1 << 20;
 
+thread_local! {
+    static CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many bodies this phase has changed on this thread: what a caller reads to learn whether a run did anything.
+pub fn changes() -> usize {
+    CHANGES.with(std::cell::Cell::get)
+}
+
 pub struct SsaSpill {
     pub frame: Rc<RefCell<Frame>>,
     pub segments: Segments,
@@ -54,7 +63,11 @@ impl LIRTransform for SsaSpill {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
-        Ok(changed(&body, &mut self.frame.borrow_mut(), &self.segments)?.unwrap_or(body))
+        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments)?;
+        if made.is_some() {
+            CHANGES.with(|count| count.set(count.get() + 1));
+        }
+        Ok(made.unwrap_or(body))
     }
 }
 

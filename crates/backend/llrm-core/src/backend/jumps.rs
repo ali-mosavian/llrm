@@ -20,7 +20,7 @@ use crate::analysis::frequency::Frequency;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
 use crate::backend::omfwrite::{SHORT_JUMP, short_reaches};
-use crate::backend::{cpu, executed, machinedce, masm, select};
+use crate::backend::{cpu, machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
@@ -57,9 +57,6 @@ impl ControlFlow<'_> {
     /// `optimized`, its executed work on the `cost` channel.
     fn placed(&self, body: &LirBody) -> Result<LirBody, masm::Unprintable> {
         let placed = optimized(body, self.cpu.size)?;
-        if crate::support::debug::enabled("cost") {
-            llrm_support::debug!("cost", "{}", executed::summary(&placed, self.cpu));
-        }
         if crate::support::debug::enabled("blocks") {
             let frequency = crate::analysis::frequency::Frequency::of(&placed);
             for block in &placed.blocks {
