@@ -18,24 +18,11 @@ use crate::backend::verify::{self, Malformed};
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
 
-/// Every phase between lowering and emission, in order, for the legacy routes that lower
-/// by themselves (`--legacy`, the BC machine-code route): the spiller is left out, which
-/// is what those routes were pinned and measured with. The rich route asks `machine_with`.
-pub fn machine<'a>(
-    pinned: &IndexMap<u32, Register>,
-    frame: Option<Rc<RefCell<Frame>>>,
-    pool: Option<Rc<RefCell<Pool>>>,
-    calls: Option<&IndexMap<i64, String>>,
-    basic_semantics: bool,
-    cpu: impl Into<ProfileOrName<'a>>,
-    segments: &Segments,
-) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, false)
-}
 
-/// `machine`, with the spiller in front of the allocator or left out.
+/// Every phase between instruction selection and emission, in order, with the
+/// spiller in front of the allocator or left out.
 #[allow(clippy::too_many_arguments)]
-pub fn machine_with<'a>(
+pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,
     frame: Option<Rc<RefCell<Frame>>>,
     pool: Option<Rc<RefCell<Pool>>>,

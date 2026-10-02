@@ -3713,3 +3713,20 @@ fn test_adjacent_volatile_word_stores_stay_two_word_stores() {
     assert_eq!(plain.len(), 1, "{plain:?}");
     assert!(plain[0].starts_with("mov dword ptr"), "{plain:?}");
 }
+
+/// A volatile load is not delayed past another volatile access: the
+/// peephole folded `mov r,[g]` into its consumer after the read of `h`, so
+/// a device saw `h` read before `g` (`sub`, `add [g]` and `push [g]` alike).
+#[test]
+fn test_a_volatile_load_is_not_folded_past_another_volatile_access() {
+    let globals = "@g = global [2 x i8] zeroinitializer\n@h = global [2 x i8] zeroinitializer\ndeclare void @k(i16, i16) addrspace(1)\n";
+    for body in [
+        "define i16 @f() addrspace(1) {\n  %a = load volatile i16, ptr @g\n  %b = load volatile i16, ptr @h\n  %s = sub i16 %b, %a\n  ret i16 %s\n}\n",
+        "define i16 @f() addrspace(1) {\n  %a = load volatile i16, ptr @g\n  %b = load volatile i16, ptr @h\n  %s = add i16 %a, 3\n  store volatile i16 %s, ptr @g\n  ret i16 %b\n}\n",
+        "define void @f() addrspace(1) {\n  %a = load volatile i16, ptr @g\n  %b = load volatile i16, ptr @h\n  call addrspace(1) void @k(i16 %b, i16 %a)\n  ret void\n}\n",
+    ] {
+        let lines = listing(&format!("{globals}{body}"), "f");
+        let first = |name: &str| lines.iter().position(|line| line.contains(&format!("word ptr {name}"))).unwrap_or_else(|| panic!("no {name}: {lines:?}"));
+        assert!(first("g") < first("h"), "{lines:?}");
+    }
+}

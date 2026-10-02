@@ -7,7 +7,6 @@ use llrm_transforms::inline::Threshold;
 use llrm_transforms::pipeline;
 
 use crate::abi::machine::Machine;
-use crate::model::passes;
 
 /// The options' usage line, for a frontend's own.
 pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
@@ -38,18 +37,6 @@ impl Level {
             "g" => Self::Og,
             _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os, -Oz or -Og")),
         })
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::O0 => "O0",
-            Self::O1 => "O1",
-            Self::O2 => "O2",
-            Self::O3 => "O3",
-            Self::Os => "Os",
-            Self::Oz => "Oz",
-            Self::Og => "Og",
-        }
     }
 
     pub fn options(self) -> pipeline::Options {
@@ -202,33 +189,6 @@ impl Flags {
             PASSES[pass].1(&mut options, on);
         }
         options
-    }
-
-    /// The old MIR's options, for `--legacy`.
-    pub fn legacy(&self) -> passes::Options {
-        let options = self.pipeline();
-        let on = |pass: bool| options.optimize && pass;
-        passes::Options {
-            level: self.level.name().to_owned(),
-            max_unroll_iterations: options.limits.max_unroll_iterations,
-            max_unrolled_operations: options.limits.max_unrolled_operations,
-            grows: options.limits.grows,
-            lcssa: on(options.lcssa),
-            floatloop: on(options.floatloop),
-            fold: on(options.fold),
-            decide: on(options.decide),
-            dead: on(options.dead),
-            hoist: on(options.hoist),
-            forward: on(options.forward),
-            drop_loads: on(options.drop_loads),
-            drop_stores: on(options.drop_stores),
-            promote: on(options.promote),
-            strength: on(options.strength),
-            unroll: on(options.unroll),
-            peel: on(options.peel),
-            fill: on(options.fill),
-            unswitch: on(options.unswitch),
-        }
     }
 
     /// `default`, or the `--machine` description, on the CPU named.

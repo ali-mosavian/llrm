@@ -213,6 +213,10 @@ pub fn delays(_: &Cx, load: &Insn, crossed: &Arc<Insn>) -> bool {
     let Some(crossed_what) = &crossed.what else {
         return false;
     };
+    // Two volatile accesses keep their order: the device sees each.
+    if load.volatile && crossed.volatile {
+        return false;
+    }
     if !crossed.clobbers.is_empty()
         || !crossed.requires.is_empty()
         || !crossed.delivers.is_empty()

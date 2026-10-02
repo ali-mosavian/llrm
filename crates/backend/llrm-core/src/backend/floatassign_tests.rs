@@ -27,7 +27,7 @@ fn before_float_assign() -> (LirBody, Frame) {
     let shared = Rc::new(RefCell::new(made));
     let pinned = selected.body.pins.clone();
     let mut body = selected.body;
-    for mut phase in crate::flow::machine(&pinned, Some(Rc::clone(&shared)), Some(Rc::clone(&pool)), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN).unwrap() {
+    for mut phase in crate::flow::machine(&pinned, Some(Rc::clone(&shared)), Some(Rc::clone(&pool)), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN, false).unwrap() {
         if phase.class_name() == "FloatAssign" {
             break;
         }
