@@ -360,14 +360,32 @@ impl Selector<'_, '_, '_> {
 
     // Costs.
 
+    /// Bytes of `chain`'s shifts, adds and subtracts. The copy that seeds it is not counted:
+    /// the allocator drops it where the source dies, as `add si, si` shows.
+    fn chain_bytes(chain: &[(&str, i64)], width: i64) -> i64 {
+        use llrm_x86_code16::target::{register_bytes, shift_bytes};
+        chain.iter().map(|&(name, count)| if name == "shl" { shift_bytes(count, width) } else { register_bytes(width) }).sum()
+    }
+
+    /// Bytes first, clocks to break a tie: both are under 100.
+    fn by_size(bytes: i64, clocks: i64) -> i64 {
+        bytes * 100 + clocks
+    }
+
     fn cost_immediate_multiply(&self, m: &Match, factor: Operand) -> Result<i64, Unselected> {
         let width = self.width(self.function.instruction(m.inst).ty)?;
         let n = self.constant(factor, width).expect("an integer factor");
+        if self.cpu.size {
+            return Ok(Self::by_size(llrm_x86_code16::target::imul_immediate_bytes(n, i64::from(width)), arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)?));
+        }
         arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)
     }
 
     fn cost_scaled(&self, m: &Match, factor: Operand) -> Result<i64, Unselected> {
-        Ok(self.chain(m, factor).expect("a scalable factor").1)
+        let (chain, clocks) = self.chain(m, factor).expect("a scalable factor");
+        // Tuned for size, the two compete in bytes, as they compete in clocks otherwise.
+        let width = self.width(self.function.instruction(m.inst).ty)?;
+        Ok(if self.cpu.size { Self::by_size(Self::chain_bytes(&chain, i64::from(width)), clocks) } else { clocks })
     }
 
     // Hooks: what is selected by hand.

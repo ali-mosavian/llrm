@@ -1,4 +1,4 @@
-reason = "the kernel work now depends on an opaque input (keep(0), VAL(\"0\")): the compiler folded the old one to a constant, and the baseline counted the whole program"
+reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
 blessed = "2026-10-03"
 
 [bas.O2]

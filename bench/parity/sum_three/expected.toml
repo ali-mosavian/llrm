@@ -1,4 +1,4 @@
-reason = "LBOUND/UBOUND carry no allocated or rank check without -fsanitize=bounds; rank is a compile-time fact"
+reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
 blessed = "2026-10-03"
 
 [bas.O2]
