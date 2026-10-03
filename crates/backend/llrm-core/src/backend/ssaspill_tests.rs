@@ -324,3 +324,37 @@ fn test_an_invariant_load_is_read_in_place_not_remade_each_trip() {
     assert!(done.remats <= 272.0, "{} remakes executed", done.remats);
     assert!(done.stores < 272.0, "{} stores executed", done.stores);
 }
+
+/// The most values of one register file live at once in `body`, where `member` picks the file's values.
+fn most_live(body: &LirBody, member: impl Fn(u32) -> bool) -> usize {
+    let (_, live_out) = crate::backend::allocate::live(body);
+    let mut most = 0;
+    for block in &body.blocks {
+        let mut live: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| member(*value)).collect();
+        most = most.max(live.len());
+        for one in block.insns.iter().rev() {
+            for value in &one.defines {
+                live.remove(value);
+            }
+            live.extend(one.uses.iter().copied().filter(|value| member(*value)));
+            most = most.max(live.len());
+        }
+    }
+    most
+}
+
+/// Six far pointers read in one loop, three selector registers to hold them (the built-in machine's es, fs, gs).
+/// The spiller left all six live at once for the allocator to juggle (`mov gs, [slot]` before most reads, and a
+/// selector kept in a general register); the pressure of each register file now fits its size.
+#[test]
+fn test_selectors_live_at_once_fit_the_segment_registers() {
+    let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
+    let selectors = |body: &LirBody| {
+        let classes = crate::backend::allocate::classes(body, &BTreeSet::new(), &target::BUILT_IN);
+        most_live(body, |value| classes.get(&value).is_some_and(|class| class.iter().all(|one| target::BUILT_IN.selectors.contains(one))))
+    };
+    assert!(selectors(&body) > target::BUILT_IN.selectors.len(), "premise: more selectors live than registers");
+    let spilled = phases[0].transform(body).expect("spills");
+    let live = selectors(&spilled);
+    assert!(live <= target::BUILT_IN.selectors.len(), "{live} selectors live at once");
+}

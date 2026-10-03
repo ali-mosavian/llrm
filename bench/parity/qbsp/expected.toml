@@ -1,13 +1,13 @@
-reason = "a duplicate phi is its earlier twin: fpbench bas -O2 -1.4%, qlight -5 instructions each; sum_three bas -O2/-Os +2/+1 instructions for -2/-3 memory operands (a different register assignment)"
+reason = "#407: SsaSpill holds selectors in the segment registers as it holds words in the general ones; particle bas -800 instructions and -900 memory operands at -O2, qbsp bas -20 and -15"
 blessed = "2026-10-04"
 
 [bas.O2]
-instructions = 1392
-memory_operands = 648
+instructions = 1372
+memory_operands = 633
 
 [bas.Os]
-instructions = 1401
-memory_operands = 660
+instructions = 1372
+memory_operands = 633
 
 [c.O2]
 instructions = 337

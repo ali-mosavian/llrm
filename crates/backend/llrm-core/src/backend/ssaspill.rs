@@ -64,19 +64,6 @@ impl LIRTransform for SsaSpill {
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
         let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments)?;
-        if std::env::var("TRACELIR").is_ok_and(|name| name == body.name) {
-            for block in made.as_ref().unwrap_or(&body).blocks.iter() {
-                eprintln!("TL @{:#x} succ {:?}", block.at, block.succ);
-                for phi in &block.phis {
-                    eprintln!("TL   v{} = phi {:?}", phi.result, phi.incoming);
-                }
-                for one in &block.insns {
-                    let name = one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default();
-                    let tag = if one.spill_store { " store" } else if one.rematerialized { " remat" } else { "" };
-                    eprintln!("TL   {name} {:?} <- {:?}{tag} {:?} dg {}", one.defines, one.uses, one.what.as_ref().map(|w| w.op), target::needs_data_group(one));
-                }
-            }
-        }
         if made.is_some() {
             CHANGES.with(|count| count.set(count.get() + 1));
         }
@@ -443,13 +430,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let mut result = Simulated::default();
     let mut selectors: BTreeSet<u32> = BTreeSet::new();
     for file in [File::General, File::Selector] {
-        if file == File::Selector && std::env::var_os("NOSEL").is_some() {
-            continue;
-        }
         let machine = Machine::of(&confined, file, segments);
-        if std::env::var_os("TRACESEL").is_some() {
-            eprintln!("TS {} {:?} {:?} data {:?}", body.name, file, machine.general, segments.data);
-        }
         if machine.general.is_empty() {
             continue;
         }
@@ -802,9 +783,6 @@ fn simulated(
                     }
                 }
             }
-        }
-        if header && std::env::var_os("TRACESEL").is_some() {
-            eprintln!("TS {} {:?} @{at:#x} candidates {:?} held {:?} spare {spare} dropped {:?}", body.name, machine.file, candidates, held, dropped.get(at));
         }
         done.w_in = held.clone();
         done.leaves_at_top = block.arrives().into_iter().filter(|value| wanted(*value) && !held.contains(value)).collect();
