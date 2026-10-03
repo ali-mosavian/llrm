@@ -30,6 +30,11 @@ impl<'a> FunctionCompiler<'a> {
                 let field = self.types.structure(parent)?.fields.get(field)?;
                 match (field.type_, field.shape) {
                     (ElementType::Struct(id), None) => id,
+                    // A reference to a struct is seen as the struct it refers to.
+                    (ElementType::Scalar(reference), None) => match self.types.referent(reference)? {
+                        ElementType::Struct(id) if self.types.array_of(id).is_none() => id,
+                        _ => return None,
+                    },
                     _ => return None,
                 }
             }

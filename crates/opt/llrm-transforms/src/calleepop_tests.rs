@@ -86,3 +86,14 @@ b0:
     assert!(!run_for(text, true).contains("fastcc"));
     assert!(run_for(text, false).contains("define internal fastcc i16 @work"));
 }
+
+/// What a call saves is the words its arguments take, not how many there are: a dword argument is
+/// two words (two pops), so two calls of a function with one return pay for `ret 4` where two
+/// calls of a one-word function do not.
+#[test]
+fn an_argument_of_two_words_counts_two_words_of_cleanup() {
+    let callee = |ty: &str| format!("define internal i16 @work({ty} %a) {{\nb0:\n  ret i16 0\n}}\n");
+    let callers = |ty: &str, value: &str| format!("define void @f() {{\nb0:\n  %p = call i16 @work({ty} {value})\n  %q = call i16 @work({ty} {value})\n  ret void\n}}\n");
+    assert!(run(&format!("{}{}", callee("i32"), callers("i32", "1"))).contains("fastcc"));
+    assert!(!run(&format!("{}{}", callee("i16"), callers("i16", "1"))).contains("fastcc"));
+}

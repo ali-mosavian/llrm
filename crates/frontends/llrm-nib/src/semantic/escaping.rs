@@ -42,7 +42,7 @@ struct Field {
 
 impl TypeRegistry {
     /// An owner no binding has: what a frame's field holds.
-    fn lent_root(&mut self) -> u32 {
+    pub(super) fn lent_root(&mut self) -> u32 {
         self.next_lent_root -= 1;
         self.next_lent_root
     }
@@ -92,7 +92,7 @@ impl FunctionCompiler<'_> {
     fn check_in_place(&mut self, callee: &str, function: &Function, span: Span) -> Result<(), Diagnostic> {
         let arguments = function.parameters.iter().map(|one| Expr::Name(one.name.clone(), span)).collect();
         let iterable = Expr::Call { name: callee.into(), type_arguments: Vec::new(), arguments, span };
-        let consume = Statement::For { mode: IterationMode::Value, name: "$checked".into(), iterable, body: Vec::new(), span };
+        let consume = Statement::For { mode: IterationMode::Value, name: "$checked".into(), iterable, body: Vec::new(), returned: false, span };
         let check = Function {
             name: format!("$check_{callee}"),
             generics: Vec::new(),
