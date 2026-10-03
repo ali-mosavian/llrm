@@ -1490,3 +1490,16 @@ fn members_and_their_facts_survive_the_codec() {
     let plain = crate::codec::encode(&two_loads(None), None).expect("encodes");
     assert!(!plain.contains("member"), "{plain}");
 }
+
+/// Blocks only RESUME reaches were emitted in id order after the entry's,
+/// so a use came before a definition that dominates it: `ON ERROR GOTO h:
+/// REDIM g(5): ERROR 5: PRINT UBOUND(g)`, whose UBOUND reads the rank in a
+/// block numbered after the one using it, was refused with "value 6 used
+/// before its definition".
+#[test]
+fn a_block_only_resume_reaches_follows_its_dominators() {
+    let program = crate::codec::decode(include_str!("fixtures/resumed_out_of_order.json")).expect("decodes");
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+}

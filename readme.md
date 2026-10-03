@@ -236,7 +236,8 @@ BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 --own-frames -O3
 DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
 DECLARE FUNCTION Dot& (a() AS INTEGER, b() AS INTEGER)
 
-DIM p(9) AS INTEGER, q(7) AS INTEGER
+n = 9: m = 7
+REDIM p(n) AS INTEGER, q(m) AS INTEGER
 PRINT Dot&(p(), q())
 
 FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
@@ -256,93 +257,58 @@ END FUNCTION
 DOT proc near
     push bp                         ; --own-frames: a plain frame, not B$ENRA; near, as --whole-program
     mov bp, sp                      ; sees every caller. a() is [bp+6], b() [bp+4]
-    sub sp, 6                       ; three slots: the saved descriptors and UBOUND(a)
     push si
     push di
 L1_0:
     mov di, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
     mov si, word ptr [bp+4]         ; b() descriptor
-    cmp word ptr [di+2], 0          ; UBOUND(a): the bound is in the descriptor, or B$UBND asks
-    jne L1_4
-L1_17:
-    push di
-    pushw 1                         ; B$UBND(a, 1)
-    mov word ptr [bp-2], si
-    mov word ptr [bp-4], di
-    call far ptr B$UBND
-    mov di, word ptr [bp-4]
-    mov si, word ptr [bp-2]
-    mov word ptr [bp-6], ax
-    jmp L1_19
-L1_4:
-    movzx bx, byte ptr [di+8]
-    dec bx
-    shl bx, 2                       ; the last dimension's entry
-    mov ax, word ptr [bx+di+16]
-    add ax, word ptr [bx+di+14]
-    dec ax                          ; ax = UBOUND(a): lower bound + count - 1
-    mov word ptr [bp-6], ax         ; kept in the frame across the next UBOUND
-L1_19:
-    cmp word ptr [si+2], 0          ; UBOUND(b), the same way
-    jne L1_24
-L1_37:
-    push si
-    pushw 1
-    mov word ptr [bp-2], si
-    mov word ptr [bp-4], di
-    call far ptr B$UBND
-    mov di, word ptr [bp-4]
-    mov si, word ptr [bp-2]
-    jmp L1_39
-L1_24:
-    movzx bx, byte ptr [si+8]
-    dec bx
-    shl bx, 2
-    mov ax, word ptr [bx+si+16]
-    add ax, word ptr [bx+si+14]
-    dec ax
-L1_39:
-    cmp word ptr [bp-6], ax         ; [inlined] Min%: no call, ax = the smaller bound
-    jge L1_44
-L1_42:
-    mov ax, word ptr [bp-6]
-L1_44:
+    mov bx, word ptr [di+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
+    dec bx                          ; so the bound is its count less 1; no allocated test
+    mov ax, word ptr [si+14]
+    dec ax                          ; UBOUND(b)
+    cmp bx, ax                      ; [inlined] Min%: no call, bx = the smaller bound
+    jl L1_12
+L1_11:
+    mov bx, ax
+L1_12:
     mov es, word ptr [di+2]         ; [hoisted] es = a's data segment
-    mov cx, word ptr [di+10]        ; [hoisted] a's data offset
+    mov ax, word ptr [di+10]        ; [hoisted] a's data offset
     mov fs, word ptr [si+2]         ; [hoisted] fs = b's data segment
     mov di, word ptr [si+10]        ; [hoisted] di = b's data offset
-    lea dx, [eax+eax]               ; dx = 2 * bound
-    mov bx, dx
-    neg bx
-    add bx, -2                      ; [one induction variable] bx = -2 * (bound + 1)
-    mov si, cx
+    lea dx, [ebx+ebx]               ; dx = 2 * bound
+    mov cx, dx
+    neg cx
+    add cx, -2                      ; [one induction variable] cx = -2 * (bound + 1)
+    mov si, ax
     add si, dx                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
     add di, dx                      ; [biased] b's offset + 2 * bound; displacement
-    xor ecx, ecx                    ; total = 0 on the no-iteration path
-    or ax, ax
-    jl L1_79                        ; [loop rotation] bound < 0: no iterations
-L1_81:
     xor eax, eax                    ; total = 0
-L1_64:
+    or bx, bx
+    jl L1_49                        ; [loop rotation] bound < 0: no iterations
+L1_51:
+    mov bx, cx
+L1_34:
     movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
     movsx edx, word ptr fs:[bx+di+2] ; b(i)
     imul ecx, edx                   ; CLNG(a(i)) * b(i)
     add eax, ecx                    ; total += product
     add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
-    jne L1_64
-L1_82:
-    mov ecx, eax
-L1_79:
-    shld edx, ecx, 16               ; the long returns in DX:AX
-    mov ax, cx
+    jne L1_34
+L1_49:
+    shld edx, eax, 16               ; the long returns in DX:AX
     pop di
     pop si
-    leave
+    pop bp
     ret 4                           ; the callee pops the two arguments
 DOT endp
 ```
 
 An array is a descriptor: its segment goes in `es` or `fs` before the loop.
+`UBOUND` is two loads and a decrement: the rank is the declaration's, so the count's
+slot is fixed, and nothing tests that the array is allocated, as BC does not without
+`/D`. `-fsanitize=bounds` brings the test and the cold `B$UBND` call back, except
+where every caller passes an array a `DIM` or `REDIM` dominates, as here. Where a
+procedure's own `DIM` or `REDIM` states a bound, `UBOUND` is that value and reads nothing.
 `--own-frames` replaces the runtime's `B$ENRA` and `B$EXSA` frame with a plain one.
 `Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
 lets the inliner take it; by reference it stays a call

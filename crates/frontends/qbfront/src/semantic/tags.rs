@@ -24,6 +24,8 @@ pub(super) enum Tag {
     Reallocate(Shape),
     /// ERASE.
     Release { descriptor: u32 },
+    /// The test that `descriptor` has data: true wherever an allocation dominates it.
+    Allocated { descriptor: u32 },
     /// A load of one descriptor field.
     DescriptorField { descriptor: u32, field: Slot },
     /// An element's address or offset from `descriptor`: the descriptor's
@@ -63,6 +65,10 @@ pub(super) enum Slot {
     Count(usize),
     /// Dimension record `k`'s lower bound.
     Lower(usize),
+    /// Source dimension `d`'s count or lower bound, read where the rank is
+    /// known only at run time: record rank - `d`.
+    CountOf(usize),
+    LowerOf(usize),
 }
 
 impl Slot {
