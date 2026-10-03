@@ -2025,7 +2025,9 @@ done:
 ";
     let got = listing(text, "copy");
     let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
-    assert_eq!(got[body + 1..body + 7], ["mov cl, byte ptr es:[si]", "mov byte ptr [bx], cl", "inc bx", "inc si", "dec ax", "jne L0_2"], "{got:?}");
+    let mut steps = got[body + 3..body + 5].to_vec();
+    steps.sort();
+    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec ax".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
 }
 
 /// An unsigned integer converts as the signed one twice its width it
@@ -3380,6 +3382,34 @@ done:
     let mask = regex::Regex::new(r"sbb (\w+), (\w+)\nand (\w+), 4096").unwrap();
     let masked = mask.captures(&got).is_some_and(|one| one[1] == one[2] && one[2] == one[3]);
     assert!(masked && !got.contains("sar ") && got.contains("jb "), "{got}");
+}
+
+/// A far pointer stepped in a loop and read after it is stepped once: the
+/// exit read the step remade from the old pointer, so both lived at the
+/// latch and every trip copied one into the other (copy1d's windows, seven
+/// instructions a trip for five).
+#[test]
+fn test_a_far_step_read_after_its_loop_is_made_once() {
+    let text = "define i16 @f(ptr addrspace(1) %p, i16 %n) addrspace(1) {
+entry:
+  br label %loop
+loop:
+  %q = phi ptr addrspace(1) [ %p, %entry ], [ %q.next, %loop ]
+  %c = phi i16 [ %n, %entry ], [ %c.next, %loop ]
+  store i16 7, ptr addrspace(1) %q
+  %q.next = getelementptr i8, ptr addrspace(1) %q, i16 2
+  %c.next = sub i16 %c, 1
+  %t = icmp ne i16 %c.next, 0
+  br i1 %t, label %loop, label %done
+done:
+  %h = addrspacecast ptr addrspace(1) %q.next to ptr addrspace(3)
+  %v = load i16, ptr addrspace(3) %h
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    let steps = got.iter().filter(|line| line.starts_with("add ") && line.ends_with(", 2")).count();
+    assert!(steps == 1 && !got.iter().any(|line| line.starts_with("jmp ")), "{got:?}");
 }
 
 /// A window over a huge pointer moves its offset's whole paragraphs into

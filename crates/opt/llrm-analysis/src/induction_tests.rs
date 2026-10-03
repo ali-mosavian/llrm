@@ -1933,3 +1933,33 @@ fn test_a_signed_counter_from_zero_climbing_is_also_unsigned_nowrap() {
     assert_eq!(climbing("%a", "nsw").counted(false).len(), 0, "nsw from a value that may be negative");
     assert_eq!(climbing("-1", "nsw").counted(false).len(), 0, "nsw from below zero");
 }
+
+/// `i < (n & 3)` from zero runs at most three trips: a bound's range bounds
+/// the trips where no constant does. `window` priced such a loop at an
+/// estimated ten trips and split it into windows that cost more than the
+/// carries three trips save.
+#[test]
+fn test_a_bound_known_by_its_range_bounds_the_trips() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %n) {
+b0:
+  %m = and i16 %n, 3
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i16 %i, %m
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add nsw i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+",
+    );
+    let maxima = parsed.counted(false).into_iter().map(|proof| proof.maximum).collect::<Vec<_>>();
+    assert_eq!(maxima, vec![Some(BigInt::from(3))]);
+}

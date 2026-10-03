@@ -1927,6 +1927,23 @@ impl Selector<'_, '_, '_> {
             })
     }
 
+    /// Whether a phi, or an instruction of another block, reads `value` as
+    /// a value: an access there folds it into its address instead.
+    fn read_elsewhere(&self, value: ValueId) -> bool {
+        let function = self.function;
+        let ValueDef::Instruction(made) = function.value(value).def else { return false };
+        let block = function.parent(made);
+        function.users(value).iter().any(|one| {
+            let user = function.instruction(one.user);
+            let accessed = match (&user.opcode, one.index) {
+                (Opcode::Load { .. }, 0) | (Opcode::Store { .. }, 1) => true,
+                (Opcode::GetElementPtr { .. }, 0) => user.result.is_some_and(|result| self.only_addressed(result)),
+                _ => false,
+            };
+            user.opcode == Opcode::Phi || function.parent(one.user) != block && !accessed
+        })
+    }
+
     /// Whether every reader of `value` takes it as the address of a load or
     /// a store, directly or through a constant offset.
     fn only_addressed(&self, value: ValueId) -> bool {
@@ -2286,6 +2303,12 @@ impl Selector<'_, '_, '_> {
                 held
             });
             return Ok((halves[0], halves[1]));
+        }
+        // An address made once where it is defined is that value wherever read.
+        if let Operand::Value(value) = operand
+            && let Some(&(Some(base), selector)) = self.fars.get(&value)
+        {
+            return Ok((base, selector));
         }
         match self.pointer(operand)? {
             Pointer::Far { selector, base: Some(base), index: None, offset: 0, .. } => Ok((base, selector)),

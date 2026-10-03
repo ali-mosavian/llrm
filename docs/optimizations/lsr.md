@@ -92,11 +92,15 @@ a constant, the step pays a borrow spread to a mask, cut to the selector's
 stride and added to it (`carry_step`). So LSR walks a huge array with a huge
 pointer, in C, BASIC and Nib alike.
 
-`window` runs after LSR. A counted loop whose huge pointer reaches less than
-the target's window (`Machine::huge_window`: 64K less 15 bytes on DOS) has
-its start normalized once before the loop (`llrm.ia16.window`), and the loop
-runs on a far pointer with no carry. A 2D array's rows get this; a walk past
-64K keeps its huge steps.
+`window` runs after LSR. A counted loop's huge recurrences are split into
+windows, as LLVM's IRCE splits off the range where a check cannot fire, with
+the carry as the check. At each window every recurrence is normalized
+(`llrm.ia16.window`) and the loop runs as many whole trips as the target's
+window holds (`Machine::huge_window`: 64K less 15 bytes on DOS) on far
+pointers that never carry; an outer loop walks the windows. Where the trips
+fit one window there is no outer loop. The split is priced: a window's setup
+against the carries it saves, over the trips or `UNKNOWN_TRIPS`, or in
+bytes at -Os; its branches carry the trips as weights.
 
 ## What it replaced
 
