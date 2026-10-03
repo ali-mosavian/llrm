@@ -528,8 +528,14 @@ impl<'a> FunctionCompiler<'a> {
                 name,
                 iterable,
                 body,
+                returned,
                 span,
-            } => self.for_statement(*mode, name, iterable, body, *span)?,
+            } => {
+                if *returned {
+                    self.check_handed_over(iterable, *span)?;
+                }
+                self.for_statement(*mode, name, iterable, body, *span)?
+            }
             Statement::ForRange {
                 name,
                 start,
