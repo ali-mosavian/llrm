@@ -1611,8 +1611,13 @@ fn _affine_address(
     let replaced = &parts[..=last];
     let partial: HashSet<Register> = terms.iter().map(|term| term.0).collect();
     let stalls = if dest.width < 4 { partial.len() as i64 * cpu.partial_register_stall } else { 0 };
-    // A word address has no prefix and reads no dword register.
-    let price = if word { cpu.operations.address } else { cpu.operations.address + cpu.operations.prefix + stalls };
+    // The target's own price of the form (`three_operand`): a word address has no prefix and reads no dword register.
+    let scale = address.scale;
+    let width = i64::from(dest.width);
+    let Some(form) = llrm_mir::target::three_operand(&cpu.operations, &cpu.address_forms, width, scale, word) else {
+        return Ok(None);
+    };
+    let price = form + if word { 0 } else { stalls };
     if price > old {
         return Ok(None);
     }
