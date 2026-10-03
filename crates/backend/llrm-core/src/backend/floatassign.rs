@@ -220,8 +220,7 @@ fn _may_write(one: &Insn, cell: &Mem) -> bool {
         if one.unmodeled_write() {
             return true;
         }
-        let framed = cell.addr.is_some_and(|addr| addr.space == Space::Frame);
-        if one.call.as_ref().is_some_and(|call| call.writes() && !(framed && call.spares(crate::backend::spiller::_frame_disp(cell), cell.width))) {
+        if one.call.as_ref().is_some_and(|call| call.may_write(cell)) {
             return true;
         }
     }

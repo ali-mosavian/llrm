@@ -370,6 +370,8 @@ fn test_arithmetic_overwrites_the_operand_that_dies() {
 fn _sparing_the_frame(body: LirBody) -> LirBody {
     let call = Arc::new(crate::model::lir::CallMemory {
         effects: llrm_mir::memory::Effects { reads: false, writes: true },
+        accessible: llrm_mir::memory::Effects { reads: false, writes: true },
+        spared: vec![],
         private: vec![crate::model::lir::WHOLE_FRAME],
     });
     let blocks = body

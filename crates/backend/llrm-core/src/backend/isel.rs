@@ -770,6 +770,17 @@ impl Selector<'_, '_, '_> {
                 self.scratch = 0;
                 self.instruction(inst, &block_at, &mut insns, convention)?;
                 insns.splice(start..start, std::mem::take(&mut self.materialized));
+                if matches!(instruction.opcode, Opcode::Store { .. }) && std::env::var_os("NOSTORESPARE").is_none() {
+                    let spared = self.spared(inst);
+                    if !spared.is_empty() {
+                        let spared = Arc::new(spared);
+                        for one in &mut insns[start..] {
+                            if one.what.as_ref().is_some_and(|what| what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)))) {
+                                Arc::make_mut(one).spares = Some(Arc::clone(&spared));
+                            }
+                        }
+                    }
+                }
             }
             self.scratch = 0;
             let terminator = function.terminator(block).expect("a terminator");
@@ -1590,6 +1601,7 @@ impl Selector<'_, '_, '_> {
             };
             return Ok(Pointer::Far { selector, base: Some(base), index: None, scale: 1, offset });
         }
+        debug_assert_eq!(crate::backend::globals::addr(self.module, global, 0).space, space);
         Ok(Pointer::Global { space, index: i64::from(global.0), offset, base: None, scale: 1, plus: None })
     }
 
@@ -2594,10 +2606,37 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// The near global objects the call is stamped to leave alone.
+    fn spared(&self, inst: InstId) -> Vec<(crate::model::ir::Addr, u32)> {
+        if std::env::var_os("NOCALLSPARE").is_some() && !matches!(self.function.instruction(inst).opcode, Opcode::Store { .. }) {
+            return Vec::new();
+        }
+        let Some((_, node)) = self.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "llrm.spares") else { return Vec::new() };
+        let operands = &self.module.metadata[node.0 as usize].operands;
+        operands
+            .iter()
+            .filter_map(|one| {
+                let llrm_mir::MetadataOperand::Constant(id) = one else { return None };
+                let ConstantKind::Global(global) = self.module.context.get(*id).kind else { return None };
+                let llrm_mir::GlobalKind::Variable(variable) = &self.module.global(global).kind else { return None };
+                (self.module.global(global).address_space == 0).then(|| {
+                    let size = self.layout.alloc_size(&self.module.context.types, variable.ty);
+                    (crate::backend::globals::addr(self.module, global, 0), size as u32)
+                })
+            })
+            .collect()
+    }
+
     /// What a call may read and write: `effects`, and never the frame bytes
     /// no exposed alloca occupies.
-    fn listed(&self, effects: llrm_mir::memory::Effects) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone() })
+    fn listed(&self, inst: InstId, effects: llrm_mir::memory::Effects) -> Arc<crate::model::lir::CallMemory> {
+        let accessible = llrm_mir::memory::accessible(&self.module.context, &self.callees, self.function, inst);
+        Arc::new(crate::model::lir::CallMemory { effects, accessible, private: self.private.clone(), spared: self.spared(inst) })
+    }
+
+    /// `listed` for a call MIR does not state: nothing is spared.
+    fn listed_sparing(&self, effects: llrm_mir::memory::Effects, spared: Vec<(crate::model::ir::Addr, u32)>) -> Arc<crate::model::lir::CallMemory> {
+        Arc::new(crate::model::lir::CallMemory { effects, accessible: effects, private: self.private.clone(), spared })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,
@@ -2892,7 +2931,7 @@ impl Selector<'_, '_, '_> {
         };
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
-            call: Some(self.listed(effects)),
+            call: Some(self.listed(inst, effects)),
             clobbers: call_clobbers(&contract, self.segments),
             clobbers_high: call_clobbered_high(&contract, self.segments),
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
@@ -3345,7 +3384,13 @@ impl Selector<'_, '_, '_> {
             let value = self.held(arguments[1], type_of(arguments[1]), at, out)?;
             semantics(Operation::Barrier, "out", vec![], vec![port, Loc::Held(value)])
         };
-        out.push(insn(at, what));
+        // What the port reaches is what MIR says of its call.
+        let mut port = insn(at, what);
+        let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
+        if let Some(one) = Arc::get_mut(&mut port) {
+            one.call = Some(self.listed(inst, effects));
+        }
+        out.push(port);
         Ok(())
     }
 
