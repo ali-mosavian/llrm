@@ -1725,6 +1725,29 @@ fn test_a_multiply_by_a_constant_tuned_for_size_is_the_smaller_form() {
     assert!(on(false).contains("shl eax") && !on(false).contains("imul"), "{}", on(false));
 }
 
+/// Tuned for size, a dword constant argument is the two word pushes where they are fewer
+/// bytes: `pushd 7340144` is 6, `push 112; push 112` 4. QCport -Os had some 800 of them (the
+/// fixed-point and float arguments), and `dword_push` joined any two word pushes.
+#[test]
+fn test_a_dword_constant_argument_tuned_for_size_is_the_fewer_bytes_of_one_push_or_two() {
+    let text = "declare void @use(i32, float, i32, i32)
+define void @f() addrspace(1) {
+  call void @use(i32 7340144, float 1.0, i32 7, i32 -3)
+  ret void
+}
+";
+    let on = |size: bool| {
+        let cpu = crate::backend::cpu::tuned("486", size).expect("a target");
+        let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    let pushes = |listing: String| listing.lines().map(str::trim).filter(|line| line.starts_with("push")).map(str::to_owned).collect::<Vec<_>>();
+    // Last argument first: -3 and 7 are byte-immediate dword pushes; 1.0 is two words (5 bytes);
+    // 7340144 is two (4), the first's zero low word joining the next word as `pushd 112` (3 for 4).
+    assert_eq!(pushes(on(true)), ["pushd -3", "pushd 7", "pushw 16256", "pushd 112", "pushw 112"], "{}", on(true));
+    assert_eq!(pushes(on(false)), ["pushd -3", "pushd 7", "pushd 1065353216", "pushd 7340144"], "{}", on(false));
+}
+
 /// A dword load read only as its words is those words loaded, as the old
 /// route's narrow selects: the high word cost a copy and a shift.
 #[test]

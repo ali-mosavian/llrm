@@ -226,6 +226,11 @@ impl<'a> Facts<'a> {
         Self { body: None, cpu: None, counts: Some(counts), exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
     }
 
+    /// The same, pricing for `cpu`.
+    pub fn with_cpu(self, cpu: &'a Profile) -> Self {
+        Self { cpu: Some(cpu), ..self }
+    }
+
     fn body(&self) -> &'a LirBody {
         self.body.expect("a group reading the body runs on one")
     }
