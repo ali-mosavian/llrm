@@ -790,6 +790,16 @@ fn a_routine_reading_its_arguments_is_argmem_read() {
     assert!(runtime.contains("declare i16 @_strlen(ptr nocapture) memory(argmem: read)\n") && !runtime.contains("puts"), "{runtime}");
 }
 
+/// A routine that keeps no pointer it is handed, nor any it reads out of
+/// what they point to: the table's `captures = "NONE"`.
+#[test]
+fn a_routine_retaining_nothing_is_noretain() {
+    let module = llrm_mir::parse::module("declare void @erase(ptr)\ndeclare void @puts(ptr)\n").unwrap();
+    let promises = crate::model::RuntimePromises { no_retain: vec!["erase".to_owned()], ..Default::default() };
+    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
+    assert!(runtime.contains("declare void @erase(ptr nocapture noretain)\n") && !runtime.contains("puts"), "{runtime}");
+}
+
 /// The blocks of `function` reached from `from`.
 fn reached(function: &Function, from: impl IntoIterator<Item = i64>) -> std::collections::BTreeSet<i64> {
     let mut seen = std::collections::BTreeSet::new();

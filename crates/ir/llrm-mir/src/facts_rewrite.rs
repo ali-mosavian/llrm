@@ -78,6 +78,7 @@ impl Fact {
             | Fact::ReadNone
             | Fact::NonNull
             | Fact::NoCapture
+            | Fact::NoRetain
             | Fact::WriteOnly
             | Fact::NoReturn
             | Fact::NoUnwind

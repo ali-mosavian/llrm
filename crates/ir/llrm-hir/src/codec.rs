@@ -396,6 +396,9 @@ impl _Plain for model::RuntimePromises {
         if !self.reads_arguments.is_empty() {
             out.insert("reads_arguments".to_owned(), self.reads_arguments._plain());
         }
+        if !self.no_retain.is_empty() {
+            out.insert("no_retain".to_owned(), self.no_retain._plain());
+        }
         if !self.no_return.is_empty() {
             out.insert("no_return".to_owned(), self.no_return._plain());
         }
@@ -1446,6 +1449,7 @@ static RUNTIME_PROMISES: _Record = _Record {
         ("writers", _Hint::Tuple(&_Hint::Record(&CELL_WRITERS)), false),
         ("nounwind", _Hint::Tuple(&_Hint::Str), false),
         ("reads_arguments", _Hint::Tuple(&_Hint::Str), false),
+        ("no_retain", _Hint::Tuple(&_Hint::Str), false),
         ("no_return", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
@@ -1454,6 +1458,7 @@ static RUNTIME_PROMISES: _Record = _Record {
             writers: _default(args, "writers", Vec::new())?,
             nounwind: _default(args, "nounwind", Vec::new())?,
             reads_arguments: _default(args, "reads_arguments", Vec::new())?,
+            no_retain: _default(args, "no_retain", Vec::new())?,
             no_return: _default(args, "no_return", Vec::new())?,
         })
     },
