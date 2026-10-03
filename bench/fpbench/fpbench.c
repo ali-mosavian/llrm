@@ -1,4 +1,3 @@
-// known: #358
 /* Six-body float n-body; checksum = weighted sum of truncated (pos*64). */
 extern void report(long value);
 

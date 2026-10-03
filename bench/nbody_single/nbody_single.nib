@@ -1,4 +1,3 @@
-# known: #358
 # Six-body integrator in f32, 1000 steps. Module vars cannot be floats: arrays are locals.
 const BODIES: i32 = 6
 

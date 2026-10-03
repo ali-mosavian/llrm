@@ -572,6 +572,15 @@ fn _price(cpu: &Profile, form: &str) -> f64 {
 
 /// A stretch of one value in a register: from a definition, a restore or a
 /// block's entry, to its death, a boundary, or a block's exit.
+/// One instruction of a step: what it reloads, itself, what it stores, and the cells it reads.
+struct Piece {
+    reloads: Vec<Arc<Insn>>,
+    members: Vec<Arc<Insn>>,
+    stores: Vec<Arc<Insn>>,
+    reads_cells: Vec<Mem>,
+    writes_cells: Vec<Mem>,
+}
+
 #[derive(Default)]
 struct Segment {
     value: u32,
@@ -1071,11 +1080,13 @@ impl Plan<'_> {
             for (index, (first, last)) in steps.iter().copied().enumerate() {
                 restore(&mut insns, first, block.insns[first].at, frame, &mut home)?;
                 let survives = |value: u32| after[index].contains(&value);
-                let (mut reloads, mut members, mut stores) = (Vec::new(), Vec::new(), Vec::new());
+                let mut pieces: Vec<Piece> = Vec::new();
                 for position in first..=last {
                     let one = &block.insns[position];
+                    let (mut reloads, mut members, mut stores, mut reads_cells, mut writes_cells) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
                     let Some(what) = one.what.as_ref().filter(|what| what.sources.iter().chain(&what.dests).any(_floating)) else {
                         members.push(Arc::clone(one));
+                        pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
                         continue;
                     };
                     let is_spilled = |value: u32, table: &HashMap<(i64, usize, u32), usize>| {
@@ -1091,12 +1102,15 @@ impl Plan<'_> {
                             && cells.get(&result).is_some_and(|cell| cells.get(&source) == Some(cell))
                         {
                             members.push(_vacated(one));
+                            reads_cells.push(cell_of(&*home(source, frame)?).clone());
+                            pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
                             continue;
                         }
                     }
                     if let [only] = writes.as_slice() {
                         if self.homes.contains_key(only) && is_spilled(*only, &self.allocnos.at_def) {
                             members.push(_vacated(one));
+                            pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
                             continue;
                         }
                     }
@@ -1119,6 +1133,7 @@ impl Plan<'_> {
                         None => reloaded.extend(reads.iter().copied()),
                     }
                     for value in reloaded {
+                        reads_cells.push(cell_of(&*home(value, frame)?).clone());
                         reloads.push(_restored(&*home(value, frame)?, value, one.at));
                     }
                     members.push(made);
@@ -1127,13 +1142,40 @@ impl Plan<'_> {
                         let root = self.allocnos.root(segment);
                         if !self.homes.contains_key(&value) && spilled.contains(&root) {
                             let cell = cell_of(&*home(value, frame)?).clone();
+                            writes_cells.push(cell.clone());
                             stores.push(_stored(value, &cell, one.at));
                         }
                     }
+                    pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
                 }
-                insns.extend(reloads);
-                insns.extend(members);
-                insns.extend(stores);
+                // A copy's stores wait for every read of the step only where a later copy reads a cell
+                // they write; otherwise each copy completes before the next, holding one value, not all.
+                let group = &block.insns[first..=last];
+                let overwrites = |index: usize| {
+                    let written = _held_floats(&group[index].what.as_ref().map_or(&[][..], |what| &what.dests[..]));
+                    group[index + 1..].iter().filter_map(|later| later.what.as_ref()).any(|what| _held_floats(&what.sources).iter().any(|value| written.contains(value)))
+                };
+                let clobbers = pieces.iter().enumerate().any(|(index, piece)| {
+                    let written = &piece.writes_cells;
+                    overwrites(index) || pieces[index + 1..].iter().any(|later| later.reads_cells.iter().any(|cell| written.contains(cell)))
+                });
+                let pieces_len = pieces.len();
+                if clobbers {
+                    insns.extend(pieces.iter().flat_map(|piece| piece.reloads.clone()));
+                    insns.extend(pieces.iter().flat_map(|piece| piece.members.clone()));
+                    insns.extend(pieces.iter().flat_map(|piece| piece.stores.clone()));
+                } else {
+                    // No longer simultaneous, so no longer a group.
+                    let ungrouped = |one: Arc<Insn>| {
+                        if pieces_len > 1 && one.group.is_some() {
+                            let mut one = (*one).clone();
+                            one.group = None;
+                            return Arc::new(one);
+                        }
+                        one
+                    };
+                    insns.extend(pieces.into_iter().flat_map(|piece| piece.reloads.into_iter().chain(piece.members.into_iter().map(ungrouped)).chain(piece.stores)));
+                }
             }
             let here = block.insns.get(cut).or(block.insns.last()).map_or(at, |one| one.at);
             restore(&mut insns, cut, here, frame, &mut home)?;
