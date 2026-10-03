@@ -3418,3 +3418,13 @@ fn an_integer_literal_is_int_then_i32_then_u32() {
     let low = refused("fn main() -> i16:\n    let x = -0x80000001\n    return 0\n");
     assert!(low.contains("is 33 bits, wider than i32"), "{low}");
 }
+
+#[test]
+fn a_borrow_covers_only_the_place_it_names_and_ends_at_its_last_use() {
+    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/examples/borrow_puzzles.nib")).expect("the example");
+    assert_eq!(output_without_leaks(&source), "southwest\n3\n6\n6\n");
+    // Each puzzle's twin, where the places do overlap or the borrow is still live, is refused.
+    assert!(refused(&source.replace("add_into(p.a, p.b)", "add_into(p.a, p.a)")).contains("aliases a mutable argument"));
+    assert!(refused(&source.replace("struct Bag:\n    items:", "struct Bag:\n    mut items:").replace("self.total += x", "self.items.push(x)")).contains("is borrowed here"));
+    assert!(refused(&source.replace("        sum += e\n    v.push(sum)", "        v.push(e)")).contains("is borrowed here"));
+}

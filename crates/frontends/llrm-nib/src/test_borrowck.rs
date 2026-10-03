@@ -959,3 +959,25 @@ fn main() -> i16:
         assert_eq!(bound, Some((0.into(), 2.into())), "the tag in block {}", llrm_analysis::cfg::id(block));
     }
 }
+
+#[test]
+fn a_borrow_is_refused_wherever_it_could_outlive_or_overlap_a_change() {
+    let longer = "fn longer(a: &string, b: &string) -> &string:\n    if a.len >= b.len:\n        return a\n    return b\n\n";
+    let cases = [
+        // A view of the buffer that `push` may move.
+        ("fn main() -> i16:\n    let mut v: vec[i16] = [1, 2, 3]\n    let w = &v[1:3]\n    v.push(9)\n    print(w[0])\n    return 0\n".to_owned(), "4: \"v\" is borrowed here, so it cannot be changed"),
+        // The result may be either argument, so both stay borrowed.
+        (format!("{longer}fn main() -> i16:\n    let x = \"north\"\n    let mut y = \"east\"\n    let r = longer(x, y)\n    y = \"changed\"\n    print(r)\n    return 0\n"), "10: \"y\" is borrowed here, so it cannot be changed"),
+        // A field reseated to a local of an inner block.
+        ("struct Holder:\n    mut r: &i16\n\nfn main() -> i16:\n    let a: i16 = 1\n    let mut h = Holder(r=a)\n    if a > 0:\n        let b: i16 = 5\n        h.r = &b\n    print(h.r)\n    return 0\n".to_owned(), "9: \"h\" would outlive \"b\", which it borrows"),
+        // A borrow held across the loop's back edge.
+        ("fn main() -> i16:\n    let mut v: vec[i16] = [5]\n    let last = &v[0]\n    for i in 0..3:\n        v.push(i)\n        print(last)\n    return 0\n".to_owned(), "5: \"v\" is borrowed here, so it cannot be changed"),
+        // A method taking all of `self` while one field is walked.
+        ("struct Bag:\n    mut items: vec[i16]\n\nfn Bag.add(self: &mut Bag, x: i16) -> void:\n    self.items.push(x)\n\nfn Bag.double(self: &mut Bag) -> void:\n    for x in &self.items:\n        self.add(x)\n\nfn main() -> i16:\n    let mut b = Bag(items=[1, 2])\n    b.double()\n    return 0\n".to_owned(), "9: \"self\" is borrowed here, so it cannot be changed"),
+        // A borrow of a local returned inside a struct.
+        ("struct Holder:\n    r: &i16\n\nfn make() -> Holder:\n    let local: i16 = 3\n    return Holder(r=local)\n\nfn main() -> i16:\n    print(make().r)\n    return 0\n".to_owned(), "6: a returned borrow of \"local\" would dangle; only a borrowed parameter's can be returned"),
+    ];
+    for (source, refusal) in cases {
+        assert_eq!(refused_at(&source), refusal, "{source}");
+    }
+}
