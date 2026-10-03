@@ -153,6 +153,10 @@ fn moved(summary: &Summary, from: &Module, to: &Module) -> Summary {
     let mut out = summary.clone();
     out.reads = carried(&summary.reads, from, to, &mut out.unknown_read);
     out.writes = carried(&summary.writes, from, to, &mut out.unknown_write);
+    // A global reached as unknown memory has no access type here.
+    if out.unknown_write {
+        out.unknown_write_types = None;
+    }
     out
 }
 
