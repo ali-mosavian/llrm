@@ -52,6 +52,18 @@ fn sunk(function: &mut Function) -> bool {
         let made = built(function, &plan, at);
         function.replace_all_uses_with(result, made);
         function.erase(phi).expect("its uses were replaced");
+        // What only the phi read is dead: an arm's copy of the address.
+        let mut orphans = arms;
+        while let Some(operand) = orphans.pop() {
+            let Operand::Value(value) = operand else { continue };
+            let ValueDef::Instruction(def) = function.value(value).def else { continue };
+            let op = function.instruction(def);
+            if !function.users(value).is_empty() || !matches!(op.opcode, Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc) | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)) || function.is_erased(def) {
+                continue;
+            }
+            orphans.extend(op.operands.clone());
+            function.erase(def).expect("no one reads it");
+        }
         changed = true;
     }
     changed
