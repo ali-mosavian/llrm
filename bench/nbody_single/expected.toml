@@ -1,26 +1,14 @@
-reason = "fpbench and nbody_single compile (#358): first baselines. nbody -1 instruction: one fxch fewer where spilled phi copies are sequenced"
+reason = "nbody_single's -Os output is still wrong (#360, marked known); -O2 baselines"
 blessed = "2026-10-03"
 
 [bas.O2]
 instructions = 978202
 memory_operands = 217153
 
-[bas.Os]
-instructions = 1187216
-memory_operands = 138118
-
 [c.O2]
-instructions = 1116131
-memory_operands = 164102
-
-[c.Os]
-instructions = 1187196
-memory_operands = 138111
+instructions = 1116130
+memory_operands = 164101
 
 [nib.O2]
-instructions = 972148
-memory_operands = 199100
-
-[nib.Os]
-instructions = 1350406
-memory_operands = 230138
+instructions = 972147
+memory_operands = 199099

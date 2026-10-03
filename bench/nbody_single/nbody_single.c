@@ -1,3 +1,4 @@
+// known: #360
 /* Six-body integrator in float (the fixed-point nbody_fixed state as floats), 1000 steps. */
 extern void report(long value);
 

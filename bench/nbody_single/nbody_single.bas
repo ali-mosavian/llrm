@@ -1,3 +1,4 @@
+' known: #360
 ' Six-body integrator in SINGLE (the fixed-point nbody_fixed state as floats), 1000 steps.
 DEFINT A-Z
 CONST BODIES = 6

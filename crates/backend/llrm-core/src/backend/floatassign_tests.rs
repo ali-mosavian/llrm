@@ -72,7 +72,19 @@ fn test_a_compare_crowded_before_its_branches_spills() {
 /// body with "floating instruction requires too many stack operands".
 #[test]
 fn test_spilled_phi_copies_are_not_all_held_at_once() {
-    let (body, mut frame) = before("x87phis", "_k");
+    refuses_nothing("x87phis", "_k");
+}
+
+/// Ten floats rotate through a loop: its phi copies are one cycle, each reading what the next
+/// writes. A step of such copies fell back to all-at-once and was refused; the order is one
+/// copy at a time, the cycle broken with one temporary.
+#[test]
+fn test_a_cycle_of_spilled_phi_copies_is_ordered_not_held_at_once() {
+    refuses_nothing("x87rotate", "_rot");
+}
+
+fn refuses_nothing(file: &str, function: &str) {
+    let (body, mut frame) = before(file, function);
     let cpu = crate::backend::cpu::profile("486").unwrap();
     let assigned = assigned(&body, Some(&mut frame), None, false, cpu).expect("assigns");
     let mut alloc = crate::backend::floatalloc::FloatAlloc { frame: Some(Rc::new(RefCell::new(frame))) };
