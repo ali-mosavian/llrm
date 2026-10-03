@@ -622,7 +622,9 @@ A parameter's type says how it is passed: `fn f(x: Point)` takes ownership,
 `fn f(x: &Point)` borrows, and `fn f(x: &mut Point)` borrows exclusively.
 Call sites write the argument alone, without `&`. A borrow held in a field
 reads and writes what it refers to wherever a value is expected; assigning it
-a borrow reseats it. A borrow cannot outlive its owner. While an exclusive borrow exists, no other borrow may access the same
+a borrow reseats it, as it does a `let mut` binding's. A `&string` or `&[T]`
+field holds the view's 8-byte descriptor (section 9.1), and borrows what the
+view does. A borrow cannot outlive its owner. While an exclusive borrow exists, no other borrow may access the same
 value. While shared borrows exist, the value may not be mutated or moved.
 
 A returned borrow is conservatively tied to every borrowed input from which it

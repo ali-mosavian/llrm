@@ -3418,3 +3418,111 @@ fn an_integer_literal_is_int_then_i32_then_u32() {
     let low = refused("fn main() -> i16:\n    let x = -0x80000001\n    return 0\n");
     assert!(low.contains("is 33 bits, wider than i32"), "{low}");
 }
+
+#[test]
+fn a_loader_returns_its_table_and_a_failed_load_drops_the_half_built_one() {
+    let source = include_str!("../../../../examples/loader.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/loader.out"));
+    // The entry moved into the table; a use after the push is refused.
+    assert_eq!(
+        refused(&source.replace("table.entries.push(entry)\n", "table.entries.push(entry)\n        print(entry.key)\n")),
+        "\"entry\" was moved; copy it with .copy() to keep using it"
+    );
+    // The table is the callee's own: a view of its name would dangle.
+    let dangling = "fn title(text: &string) -> &string:\n    match load(\"x\", text):\n        .ok(t):\n            return t.name\n        .err(_):\n            return text\n\nfn report";
+    assert_eq!(
+        refused(&source.replace("fn report", dangling)),
+        "a returned borrow of \"t\" would dangle; only a borrowed parameter's can be returned"
+    );
+}
+
+#[test]
+fn channels_close_once_on_every_exit_in_reverse_order_and_a_drop_type_moves_whole() {
+    let source = include_str!("../../../../examples/channels.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/channels.out"));
+    // Taking a field out of a Link would close the channel twice.
+    assert_eq!(
+        refused(&source.replace("print(f\"{link.near.name} to {link.far.name}\")", "let n = link.near\n            print(f\"{n.name} to {link.far.name}\")")),
+        "cannot move a field out of Link, which has a drop"
+    );
+    // `drop` is the compiler's to call.
+    assert_eq!(
+        refused(&source.replace("print(f\"kept {c.name}\")\n        .none:\n            print(\"closed\")\n    match pass_on(Channel(name=\"f\")", "c.drop()\n            print(f\"kept {c.name}\")\n        .none:\n            print(\"closed\")\n    match pass_on(Channel(name=\"f\")")),
+        "drop runs when its owner ends; it cannot be called"
+    );
+}
+
+#[test]
+fn tickets_move_through_a_vec_an_option_and_a_struct_without_a_leak() {
+    let source = include_str!("../../../../examples/desk.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/desk.out"));
+    // A ticket in `aside` is not also in `closed`.
+    assert_eq!(
+        refused(&source.replace("            aside.push(ticket)\n", "            aside.push(ticket)\n            self.closed.push(ticket)\n")),
+        "\"ticket\" was moved; copy it with .copy() to keep using it"
+    );
+    // Closing moves the ticket into the desk.
+    assert_eq!(
+        refused(&source.replace("desk.close(ticket)\n        .none:\n            print(\"no email", "desk.close(ticket)\n            print(ticket.title)\n        .none:\n            print(\"no email")),
+        "\"ticket\" was moved; copy it with .copy() to keep using it"
+    );
+}
+
+#[test]
+fn borrows_of_a_returned_catalog_hold_the_catalog_still_until_their_last_use() {
+    let source = include_str!("../../../../examples/catalog.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/catalog.out"));
+    // The generator holds the parts for the whole loop.
+    assert!(
+        refused(&source.replace("    for part in scarce(a.parts, 5):\n        print(", "    for part in scarce(a.parts, 5):\n        a.add(\"nut\", 1, 500)\n        print("))
+            .contains("\"a\" is borrowed here, so it cannot be changed")
+    );
+    // A result may come from either catalog, so both stay put.
+    let changed = source
+        .replace("    let b = south()", "    let mut b = south()")
+        .replace("            print(f\"{part.name}: {part.stock} at {part.price}\")", "            b.add(\"x\", 1, 1)\n            print(f\"{part.name}: {part.stock} at {part.price}\")");
+    assert!(refused(&changed).contains("\"b\" is borrowed here, so it cannot be changed"));
+    // A name of a catalog the function built itself is gone with it.
+    assert_eq!(
+        refused(&source.replace("fn main", "fn title() -> &string:\n    let c = north()\n    return c.parts[0].name\n\nfn main")),
+        "a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned"
+    );
+}
+
+#[test]
+fn a_scanner_holding_a_borrow_is_passed_down_and_back_and_cannot_outlive_its_source() {
+    let source = include_str!("../../../../examples/scanner.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/scanner.out"));
+    // The source cannot grow while the scanner and a view of it are in use.
+    let grown = source
+        .replace("    let src = Source(", "    let mut src = Source(")
+        .replace("    text: string", "    mut text: string")
+        .replace("    print(f\"{tally.words}", "    src.text.push('x')\n    print(f\"{tally.words}");
+    assert!(refused(&grown).contains("\"src\" is borrowed here, so it cannot be changed"));
+    // Reseated to a source of an inner block, it would outlive it.
+    let inner = source.replace("    let mut s = skip(scan(src), 4)\n", "    let mut s = skip(scan(src), 4)\n    if true:\n        let other = Source(text=\"x\")\n        s = scan(other)\n");
+    assert!(refused(&inner).contains("\"s\" would outlive \"other\", which it borrows"));
+}
+
+#[test]
+fn a_void_function_value_is_called_and_returns_nothing() {
+    // #416: the dispatcher of a `fn() -> void` type was `return member()`,
+    // "void function cannot return a value" at 0:0; a lambda's body too.
+    let source = "\
+fn hi() -> void:
+    print(1)
+
+fn run(cb: fn() -> void) -> void:
+    cb()
+
+fn each(cb: fn(i16) -> void) -> void:
+    cb(2)
+
+fn main() -> i16:
+    run(hi)
+    each(|x| print(x))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "1\n2\n");
+    assert_eq!(refused("fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"), "void function cannot return a value");
+}

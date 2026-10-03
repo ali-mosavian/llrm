@@ -125,6 +125,12 @@ pub struct OperationCosts {
     pub r#move: i64,
     pub call: i64,
     pub return_: i64,
+    /// What a caller pays to take `n` words of arguments off the stack: the cheaper of `n` pops
+    /// (`pop` each) and one `adjust` of the stack pointer.
+    pub pop: i64,
+    pub adjust: i64,
+    /// What a return popping its callee's arguments costs more than a plain one.
+    pub return_pops: i64,
     pub float_add: i64,
     pub float_multiply: i64,
     pub float_divide: i64,
@@ -133,6 +139,13 @@ pub struct OperationCosts {
     pub extend: i64,
     pub fill: i64,
     pub fill_cell: i64,
+}
+
+impl OperationCosts {
+    /// What a caller pays to take `words` words of arguments off the stack.
+    pub fn cleanup(&self, words: i64) -> i64 {
+        (words * self.pop).min(self.adjust)
+    }
 }
 
 impl Default for OperationCosts {
@@ -153,6 +166,9 @@ impl Default for OperationCosts {
             r#move: 1,
             call: 1,
             return_: 1,
+            pop: 1,
+            adjust: 1,
+            return_pops: 0,
             float_add: 1,
             float_multiply: 1,
             float_divide: 1,

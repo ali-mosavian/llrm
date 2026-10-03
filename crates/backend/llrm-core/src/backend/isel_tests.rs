@@ -1768,6 +1768,26 @@ define i16 @f() addrspace(1) {{
     assert_eq!(xors(0x20005), ["xor ax, 5", "xor dx, 2"]);
 }
 
+/// An internal function given `fastcc` pops its own arguments: `ret 6`, and its caller's
+/// cleanup is the callee's, not an `add sp,6` too (QCport -Os: some 720 of those).
+#[test]
+fn test_a_fastcc_function_pops_its_arguments_and_its_caller_does_not() {
+    let text = "define internal fastcc i16 @work(i16 %a, i16 %b, i16 %c) {
+  %x = add i16 %a, %b
+  %y = add i16 %x, %c
+  ret i16 %y
+}
+define i16 @f(i16 %x) {
+  %p = call fastcc i16 @work(i16 %x, i16 2, i16 3)
+  ret i16 %p
+}
+";
+    let work = listing(text, "work");
+    assert_eq!(work.last().map(String::as_str), Some("ret 6"), "{work:?}");
+    let caller = listing(text, "f");
+    assert!(caller.iter().any(|line| line.starts_with("call")) && !caller.iter().any(|line| line.starts_with("add sp") || line == "pop cx"), "{caller:?}");
+}
+
 /// A dword load read only as its words is those words loaded, as the old
 /// route's narrow selects: the high word cost a copy and a shift.
 #[test]

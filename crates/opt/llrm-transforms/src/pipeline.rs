@@ -35,7 +35,7 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    algebraic, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
+    addresssink, algebraic, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
     promote, rotate, unroll, unswitch, window,
 };
 
@@ -138,7 +138,7 @@ impl Options {
             "gvn" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
-            "indvars" | "lsr" | "window" | "gepoffset" => self.strength,
+            "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
@@ -237,6 +237,10 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
+    // Once the callers that remain are the ones that stay: an internal function they all call directly pops its own arguments.
+    if applied.options.wanted("calleepop") {
+        manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as a shift.
     if applied.options.wanted("fixednarrow") {
         manager.add(fixednarrow::FixedNarrow);
@@ -260,6 +264,10 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
+    }
+    // After gvn's last partial redundancy elimination, which makes the phis it sinks.
+    if applied.options.wanted("addresssink") {
+        manager.add(addresssink::AddressSink);
     }
     manager.run(program)
 }

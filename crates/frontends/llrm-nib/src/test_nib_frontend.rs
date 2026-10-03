@@ -154,6 +154,14 @@ fn level(name: &str) -> Options {
     flags.driver(nib_compile::machine())
 }
 
+/// -Os with no inlining: the function under test stays a function, as it does where more than
+/// one call reaches it (tuned for size the last call of a private function is inlined).
+fn os_calls_kept() -> Options {
+    let mut options = level("Os");
+    options.pipeline.inline = llrm_transforms::inline::Threshold::new(0);
+    options
+}
+
 /// -O2 with neither unrolling nor peeling.
 fn unrolled_or_peeled_none() -> Options {
     let mut options = level("O2");
@@ -425,7 +433,7 @@ fn test_nbody_native_loops_eliminate_redundant_index_arithmetic() {
 #[test]
 fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
     // -O2 unrolls the loop away.
-    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &level("Os"));
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &os_calls_kept());
     let function = between(&assembly, "_nbody proc far", "_nbody endp");
     // The innermost loop closing on `jne` that adds each velocity to its position.
     let loop_ = Regex::new(r"(?m)^(L\w+):\n")
@@ -495,7 +503,7 @@ fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
     let source = written(&directory, "stride.nib", STRIDE);
 
     // -O2 unrolls the loop away.
-    let assembly = listing_on(&parsed(&source), "main", &level("Os"), "486");
+    let assembly = listing_on(&parsed(&source), "main", &os_calls_kept(), "486");
     let update = between(&assembly, "_update proc far", "_update endp");
 
     // -5 * sizeof(sample), with sizeof(sample) == 10.
@@ -611,7 +619,8 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
     assert!(main.contains("call far ptr _bump"));
-    assert!(main.contains("add sp, 4"));
+    // `bump` is internal and called directly: it pops its own view, `retf 4`.
+    assert!(!main.contains("add sp, 4") && bump.contains("retf 4"), "{main}{bump}");
     assert!(bump.contains("es:["));
     assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }

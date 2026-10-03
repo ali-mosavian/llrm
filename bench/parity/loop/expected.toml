@@ -1,4 +1,4 @@
-reason = "-Os pushes a dword constant as two word pushes where they are fewer bytes (pushd imm32 is 6): -Os only, a few more instructions in the kernels, -O2 unchanged"
+reason = "an internal function whose callers are all direct takes fastcc: the callee pops its arguments (ret N) and no caller adds sp, so fewer instructions at -O2 and -Os"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -14,13 +14,13 @@ instructions = 141
 memory_operands = 14
 
 [c.Os]
-instructions = 141
+instructions = 139
 memory_operands = 14
 
 [nib.O2]
-instructions = 133
+instructions = 130
 memory_operands = 6
 
 [nib.Os]
-instructions = 133
+instructions = 127
 memory_operands = 6

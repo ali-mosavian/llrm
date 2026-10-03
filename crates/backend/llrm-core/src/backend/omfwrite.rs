@@ -552,7 +552,9 @@ pub fn _code_by(
             }
         }
     }
-    let labels = _relaxed(&mut items)?;
+    // Tuned for size, a long conditional jump may go through a `jmp` within reach.
+    let size = !group.is_empty() && group.iter().all(|&number| module.procedures[number].size);
+    let labels = if size { _trampolined(&mut items)? } else { _relaxed(&mut items)? };
     let mut at = 0;
     for item in &items {
         match item {
@@ -711,6 +713,64 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
         if !changed {
             return Ok(labels);
         }
+    }
+}
+
+/// Tuned for size, [`_relaxed`], then each conditional jump still long (a 386 `jcc rel16`, 4
+/// bytes) aimed at a label some `jmp` to it lies within short reach of becomes a short jump to
+/// that `jmp`, which carries on: 2 bytes saved, and the 3 clocks of a taken `jmp` more.
+/// Repeated while the shorter layout brings more within reach; Watcom's `SetBranches`.
+pub fn _trampolined(items: &mut Vec<Encoded>) -> Result<IndexMap<String, i64>, Unencodable> {
+    let mut labels = _relaxed(items)?;
+    loop {
+        let mut starts = Vec::with_capacity(items.len());
+        let mut at = 0i64;
+        for item in items.iter() {
+            starts.push(at);
+            at += _length(item) as i64;
+        }
+        let mut jumps: IndexMap<&str, Vec<usize>> = IndexMap::default();
+        for (index, item) in items.iter().enumerate() {
+            if let Encoded::Jump(Jump { name, label, .. }) = item {
+                if name == "jmp" {
+                    jumps.entry(label.as_str()).or_default().push(index);
+                }
+            }
+        }
+        let mut retargeted: Vec<(usize, usize)> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let Encoded::Jump(Jump { name, label, long: true }) = item else { continue };
+            if name == "jmp" {
+                continue;
+            }
+            let near = jumps.get(label.as_str()).into_iter().flatten().find(|&&jump| short_reaches(starts[jump] - (starts[index] + SHORT_JUMP)));
+            if let Some(&jump) = near {
+                retargeted.push((index, jump));
+            }
+        }
+        if retargeted.is_empty() {
+            return Ok(labels);
+        }
+        // A label before each `jmp` taken, from the back so the indices below stay.
+        let mut taken: Vec<usize> = retargeted.iter().map(|(_, jump)| *jump).collect();
+        taken.sort_unstable();
+        taken.dedup();
+        let name = |jump: usize| format!("{}$t{jump}", match &items[jump] { Encoded::Jump(one) => one.label.as_str(), _ => unreachable!("a jump") });
+        let named: IndexMap<usize, String> = taken.iter().map(|&jump| (jump, name(jump))).collect();
+        for (index, jump) in &retargeted {
+            if let Encoded::Jump(item) = &mut items[*index] {
+                item.label = named[jump].clone();
+            }
+        }
+        for &jump in taken.iter().rev() {
+            items.insert(jump, Encoded::Label(masm::Label { name: named[&jump].clone() }));
+        }
+        for item in items.iter_mut() {
+            if let Encoded::Jump(item) = item {
+                item.long = false;
+            }
+        }
+        labels = _relaxed(items)?;
     }
 }
 
@@ -998,7 +1058,7 @@ mod tests {
     }
 
     fn procedure(name: &str, far: bool, body: lir::LirBody, reserve: i64, callees: Vec<(i64, masm::Callee)>) -> masm::Procedure {
-        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None }
+        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None, size: false, entry: 0 }
     }
 
     fn reg(register: Register) -> Loc {
@@ -1079,6 +1139,31 @@ mod tests {
         let long = |item: &Encoded| matches!(item, Encoded::Jump(Jump { long: true, .. }));
         assert_eq!((long(&items[0]), long(&items[3])), (true, false));
         assert_eq!(labels["far"], 3 + 126 + 2 + 200);
+    }
+
+    /// A `jcc rel16` (4 bytes) to a label a `jmp` to it is within short reach of is a short `jcc`
+    /// to that `jmp` (2): tuned for size, 141 of QCport's 1333 long conditional jumps. One with no
+    /// such `jmp`, or one out of reach, stays.
+    #[test]
+    fn test_a_long_conditional_jump_goes_through_a_jump_to_its_target_within_reach() {
+        let layout = |between: usize, jump_to: &str| {
+            let mut items = vec![
+                Encoded::Jump(Jump::new("je", "far")),
+                Encoded::Piece(Piece::new(vec![0; between])),
+                Encoded::Jump(Jump::new("jmp", jump_to)),
+                Encoded::Piece(Piece::new(vec![0; 300])),
+                Encoded::Label(masm::Label { name: "far".into() }),
+                Encoded::Label(masm::Label { name: "elsewhere".into() }),
+            ];
+            let labels = _trampolined(&mut items).unwrap();
+            (items.iter().map(_length).sum::<usize>(), labels["far"])
+        };
+        // 2 for the `je` short, the piece, a 3-byte `jmp`, and the 300 bytes: 2 + 20 + 3 + 300.
+        assert_eq!(layout(20, "far"), (2 + 20 + 3 + 300, 2 + 20 + 3 + 300));
+        // The `jmp` aims elsewhere: the `je` is 4 long.
+        assert_eq!(layout(20, "elsewhere").0, 4 + 20 + 3 + 300);
+        // The `jmp` is past a short jump's reach.
+        assert_eq!(layout(200, "far").0, 4 + 200 + 3 + 300);
     }
 
     /// The module of `test_externals_are_declared_in_the_order_jwasm_declares_them`,

@@ -1,4 +1,4 @@
-reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
+reason = "an internal function whose callers are all direct takes fastcc: the callee pops its arguments (ret N) and no caller adds sp, so fewer instructions at -O2 and -Os"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -14,13 +14,13 @@ instructions = 66
 memory_operands = 16
 
 [c.Os]
-instructions = 62
+instructions = 60
 memory_operands = 16
 
 [nib.O2]
-instructions = 70
+instructions = 67
 memory_operands = 16
 
 [nib.Os]
-instructions = 65
+instructions = 60
 memory_operands = 16

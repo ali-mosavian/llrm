@@ -1,4 +1,4 @@
-reason = "word LEA for mov+add/sub; a call no longer reads flags before it, so more pairs fold: fewer instructions everywhere, parity -O2 +1 memory operand (allocation moved a spill) for 6 fewer instructions"
+reason = "an internal function whose callers are all direct takes fastcc: the callee pops its arguments (ret N) and no caller adds sp, so fewer instructions at -O2 and -Os"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -10,17 +10,17 @@ instructions = 11167809
 memory_operands = 3586023
 
 [c.O2]
-instructions = 4742140
+instructions = 4562091
 memory_operands = 420099
 
 [c.Os]
-instructions = 4802140
+instructions = 4291991
 memory_operands = 420099
 
 [nib.O2]
-instructions = 6202233
+instructions = 5947159
 memory_operands = 570147
 
 [nib.Os]
-instructions = 6112184
+instructions = 5677059
 memory_operands = 570147

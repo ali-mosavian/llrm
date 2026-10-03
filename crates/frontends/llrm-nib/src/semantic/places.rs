@@ -288,6 +288,10 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(call) = self.method_as_call(expression) {
             return self.struct_expression_type(&call, span);
         }
+        // `v.len` of a view a field keeps is a property, not a field of its descriptor.
+        if self.sequence_property(expression).is_some() {
+            return Ok(None);
+        }
         match expression {
             Expr::StructLiteral { name, .. } if self.types.bits.contains_key(name) => Ok(None),
             Expr::Tuple(items, _) => self

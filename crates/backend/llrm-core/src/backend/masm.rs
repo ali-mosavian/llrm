@@ -80,6 +80,13 @@ pub struct Procedure {
     /// An interrupt handler's data group, whose selector it loads into DS
     /// and ES; `None` for a procedure entered by a call.
     pub interrupt: Option<Addr>,
+    /// Tuned for size (-Os): fewer bytes at the price of clocks, as the frame's `push bp; mov
+    /// bp,sp; sub sp,N` as `enter N,0` (4 bytes for 6, 14 clocks for 3 on the 486), and the
+    /// jumps `omfwrite` lays out.
+    pub size: bool,
+    /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
+    /// procedure shows: its header and the locals `cx` names.
+    pub entry: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -295,13 +302,16 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
     let mut enter: Vec<Semantics> = Vec::new();
-    if framed {
+    if framed && reserve != 0 && procedure.size {
+        let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
+        enter.push(semantics(Operation::Nothing, "enter", vec![], vec![count(reserve, 2), count(0, 1)]));
+    } else if framed {
         enter.extend([
             semantics(Operation::Push, "push", vec![], vec![bp.clone()]),
             semantics(Operation::Move, "mov", vec![bp], vec![sp.clone()]),
         ]);
     }
-    if reserve != 0 {
+    if reserve != 0 && !(framed && procedure.size) {
         enter.push(semantics(
             Operation::Binary,
             "sub",
@@ -628,6 +638,8 @@ pub fn _instruction(
         Operation::Nothing => {
             if matches!(name, "" | "nop") {
                 vec![]
+            } else if name == "enter" {
+                vec![format!("enter {}, {}", sources[0], sources[1])]
             } else {
                 vec![name.to_owned()]
             }
@@ -936,12 +948,16 @@ mod tests {
     }
 
     fn _printed(sources: Vec<Loc>, reserve: i64) -> Vec<String> {
+        _printed_entering(sources, reserve, false)
+    }
+
+    fn _printed_entering(sources: Vec<Loc>, reserve: i64, enter: bool) -> Vec<String> {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], sources));
         let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0 };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -973,6 +989,19 @@ mod tests {
         assert!(!has(&lines, "mov sp, bp") && !has(&lines, "pop bp"));
     }
 
+    /// Tuned for size, a frame with locals opens with `enter N,0` (4 bytes) where `push bp; mov
+    /// bp,sp; sub sp,N` is 6: 407 QCport functions. One with no locals keeps `push bp; mov bp,sp`.
+    #[test]
+    fn test_a_frame_with_locals_opens_with_enter_where_asked() {
+        let entered = _printed_entering(vec![through_bp()], 4, true);
+        assert_eq!(entered[1], "enter 4, 0");
+        assert!(!has(&entered, "push bp") && !has(&entered, "sub sp, 4"), "{entered:?}");
+        let plain = _printed_entering(vec![through_bp()], 4, false);
+        assert_eq!(plain[1..4], ["push bp", "mov bp, sp", "sub sp, 4"]);
+        let bare = _printed_entering(vec![through_bp()], 0, true);
+        assert_eq!(bare[1..3], ["push bp", "mov bp, sp"]);
+    }
+
     /// Return-tail layout must count the pop/leave absent from allocated LIR.
     #[test]
     fn test_return_overhead_prices_the_implicit_frame_teardown() {
@@ -988,6 +1017,8 @@ mod tests {
             reserve,
             callees: IndexMap::default(),
             interrupt: None,
+            size: false,
+            entry: 0,
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);

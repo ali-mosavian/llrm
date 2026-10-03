@@ -31,8 +31,12 @@ fn costs(call: i64) -> OperationCosts {
 
 /// Every call in `caller` that `candidates` admits, inlined.
 fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
+    inline_with(module, caller, call, Threshold::default())
+}
+
+fn inline_with(module: &mut Module, caller: &str, call: i64, threshold: Threshold) -> bool {
     let layout = DataLayout::default();
-    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), Threshold::default());
+    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), threshold);
     let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)) };
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
@@ -521,8 +525,9 @@ fn test_a_callee_the_language_says_always_inline_is_inlined_at_any_size() {
 
 #[test]
 fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
-    // Eight operations, one private site: the budget at this call price is 6, a hint's 8.
-    let text = |attr: &str| chain(8, attr, 1).replace("define i16 @big", "define internal i16 @big");
+    // Eight operations, two private sites (the last call of one, tuned for size, inlines at any
+    // size): the budget at this call price is 6, a hint's 8.
+    let text = |attr: &str| chain(8, attr, 2).replace("define i16 @big", "define internal i16 @big");
     let admits = |attr: &str, threshold: Threshold| {
         let module = parsed(&text(attr));
         candidates(&module, &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), threshold).len()
@@ -577,4 +582,24 @@ b3:
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
     // Where size outranks speed a loop buys nothing.
     assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, Threshold::default().for_size()).is_empty());
+}
+
+/// Tuned for size, the last call of a private function inlines at any size: no copy is made, and
+/// the call, its arguments and the return go (QCport -Os, -548 bytes). Tuned for speed a body
+/// over the budget stays a call; so does one called twice, at any level.
+#[test]
+fn test_the_only_call_of_a_large_private_function_inlines_tuned_for_size() {
+    let body: String = (0..40).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { "%x".to_owned() } else { format!("%t{}", at - 1) })).collect();
+    let text = |calls: usize| {
+        let calls: String = (0..calls).map(|at| format!("  %r{at} = call i16 @big(i16 %x)\n")).collect();
+        format!("define internal i16 @big(i16 %x) {{\nb0:\n{body}  ret i16 %t39\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n{calls}  ret i16 %r0\n}}\n")
+    };
+    let sized = Threshold::default().for_size();
+    let mut one = parsed(&text(1));
+    assert!(inline_with(&mut one, "main", 8, sized), "{}", printed(&one));
+    assert!(!printed(&one).contains("call "));
+    let mut fast = parsed(&text(1));
+    assert!(!inline_with(&mut fast, "main", 8, Threshold::default()));
+    let mut two = parsed(&text(2));
+    assert!(!inline_with(&mut two, "main", 8, sized));
 }

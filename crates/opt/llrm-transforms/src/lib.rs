@@ -20,6 +20,9 @@ pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
 pub mod floatloop;
+pub mod calleepop;
+#[cfg(test)]
+mod calleepop_tests;
 pub mod globalopt;
 pub mod fold;
 pub mod splitcopy;
@@ -27,6 +30,7 @@ pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
 pub mod fixednarrow;
+pub mod addresssink;
 pub mod gepoffset;
 pub mod gvn;
 pub mod hoist;

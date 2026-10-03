@@ -63,16 +63,19 @@ pub struct Threshold {
     pub limit: i64,
     pub hint: (i64, i64),
     pub hot: (i64, i64),
+    /// The last call of a function nothing else reaches inlines at any size: where code size
+    /// outranks speed.
+    pub single: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225) }
+        Self { limit, hint: (325, 225), hot: (525, 225), single: false }
     }
 
     /// The same where code size outranks speed: a hint or a loop buys nothing.
     pub fn for_size(self) -> Self {
-        Self { hint: (1, 1), hot: (1, 1), ..self }
+        Self { hint: (1, 1), hot: (1, 1), single: true, ..self }
     }
 }
 
@@ -148,34 +151,6 @@ pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
 }
 
-/// Functions whose address is taken: named anywhere but as a callee.
-fn addressed(module: &Module) -> BTreeSet<GlobalId> {
-    let context = &module.context;
-    let mut out = BTreeSet::new();
-    let mut work = Vec::new();
-    for (_, _, function) in module.functions() {
-        for (_, inst) in function.walk() {
-            let instruction = function.instruction(inst);
-            let skip = usize::from(callee(context, function, inst).is_some());
-            let kept = instruction.operands.len() - skip;
-            work.extend(instruction.operands[..kept].iter().filter_map(|&operand| if let Operand::Constant(id) = operand { Some(id) } else { None }));
-        }
-    }
-    work.extend(module.globals.iter().filter_map(|global| if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }));
-    while let Some(id) = work.pop() {
-        match &context.get(id).kind {
-            ConstantKind::Global(global) => {
-                out.insert(*global);
-            }
-            ConstantKind::Aggregate(members) => work.extend(members),
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => work.extend(operands),
-            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
-            _ => {}
-        }
-    }
-    out
-}
-
 /// Whether `body` may be cloned into another function: it returns, `splice`
 /// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
 fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
@@ -239,8 +214,9 @@ fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
 pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
     let budget = threshold.budget(call_cost);
-    let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), addressed(module));
+    let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
+    let mut lasts = IndexMap::default();
     for (&name, &count) in calls {
         let Some(body) = body(module, name) else { continue };
         if count == 0 || !cloneable(module, &recursive, name, body) {
@@ -250,10 +226,15 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
         let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
+        // The last call of a function nothing else reaches moves its body: no copy, and the call,
+        // its arguments and the return gone (LLVM's last-call-to-static bonus).
         let admitted = || {
             budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
                 && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * call_cost)))
         };
+        // Only once nothing else is: a body that a call in it is about to be inlined into would
+        // be copied with that call still in it, and the call's callee counted once too many.
+        let last = threshold.single && budget.is_some() && copies == 0 && !always && !admitted();
         let verdict = always || admitted();
         llrm_support::debug!(
             "inline",
@@ -265,7 +246,12 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         );
         if verdict {
             out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
+        } else if last {
+            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
+    }
+    if out.is_empty() {
+        out = lasts;
     }
     out
 }
