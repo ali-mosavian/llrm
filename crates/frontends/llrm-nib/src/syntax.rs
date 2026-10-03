@@ -519,6 +519,8 @@ pub enum Statement {
         name: String,
         iterable: Expr,
         body: Vec<Statement>,
+        /// Made of a `return items` in a generator: `iterable` is handed over.
+        returned: bool,
         span: Span,
     },
     ForRange {
@@ -1151,6 +1153,7 @@ impl Statement {
                 name,
                 iterable,
                 body,
+                returned: false,
                 span,
             },
         }

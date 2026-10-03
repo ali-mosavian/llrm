@@ -959,3 +959,35 @@ fn main() -> i16:
         assert_eq!(bound, Some((0.into(), 2.into())), "the tag in block {}", llrm_analysis::cfg::id(block));
     }
 }
+
+#[test]
+fn a_returned_generator_does_not_borrow_the_returning_functions_local() {
+    // #415: `return evens(local)` was accepted when `make()` was consumed in
+    // place, though refused once it escaped: the returned generator's state
+    // would hold a borrow of `make`'s local.
+    let source = "\
+fn evens(v: &vec[i16]) -> iter[i16]:
+    for x in v:
+        if x % 2 == 0:
+            yield x
+
+fn make() -> iter[i16]:
+    let local: vec[i16] = [1, 2, 3, 4]
+    return evens(local)
+
+fn main() -> i16:
+    for x in make():
+        print(x)
+    return 0
+";
+    let message = "8: a returned borrow of \"local\" would dangle; only a borrowed parameter's can be returned";
+    assert_eq!(refused_at(source), message);
+    assert_eq!(refused_at(&source.replace("for x in make():", "let it = make()\n    for x in it:")), message);
+    // What the caller lent outlives the returned generator.
+    let lent = source.replace("fn make() -> iter[i16]:\n    let local: vec[i16] = [1, 2, 3, 4]\n    return evens(local)", "fn make(local: &vec[i16]) -> iter[i16]:\n    return evens(local)")
+        .replace("for x in make():", "let local: vec[i16] = [1, 2, 3, 4]\n    for x in make(local):");
+    assert_eq!(output(&lent), "2\n4\n");
+    // A generator expression over the local is the same state.
+    let expression = source.replace("return evens(local)", "return (x for x in local if x % 2 == 0)");
+    assert_eq!(refused_at(&expression), message);
+}
