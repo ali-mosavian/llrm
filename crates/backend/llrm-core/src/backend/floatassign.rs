@@ -13,6 +13,8 @@ use iced_x86::Register;
 
 use crate::analysis::frequency::Frequency;
 use crate::backend::overlap;
+use crate::backend::parcopy;
+use crate::backend::spiller::_next_value;
 use crate::backend::allocate::{Live, live};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
@@ -572,13 +574,64 @@ fn _price(cpu: &Profile, form: &str) -> f64 {
 
 /// A stretch of one value in a register: from a definition, a restore or a
 /// block's entry, to its death, a boundary, or a block's exit.
-/// One instruction of a step: what it reloads, itself, what it stores, and the cells it reads.
+/// One instruction of a step: what it reloads, itself, what it stores, and the places (values and
+/// cells) it reads and writes. A copy's `(result, source)` is kept to take its source early.
 struct Piece {
     reloads: Vec<Arc<Insn>>,
     members: Vec<Arc<Insn>>,
     stores: Vec<Arc<Insn>>,
-    reads_cells: Vec<Mem>,
-    writes_cells: Vec<Mem>,
+    reads: Vec<String>,
+    writes: Vec<String>,
+    copy: Option<(u32, u32)>,
+}
+
+impl Piece {
+    fn new(members: Vec<Arc<Insn>>) -> Self {
+        Self { reloads: Vec::new(), members, stores: Vec::new(), reads: Vec::new(), writes: Vec::new(), copy: None }
+    }
+
+    fn emitted(self, out: &mut Vec<Arc<Insn>>) {
+        out.extend(self.reloads.into_iter().chain(self.members).chain(self.stores));
+    }
+
+    /// The source read into `fresh` before anything is written, and the copy reading it from there:
+    /// a cycle of copies is broken with one temporary.
+    fn source_taken_first(&mut self, fresh: u32, out: &mut Vec<Arc<Insn>>) {
+        let (_, source) = self.copy.expect("only a copy is broken out of a cycle");
+        let member = Arc::clone(&self.members[0]);
+        if let Some(load) = self.reloads.first() {
+            self.reloads = vec![_restored(load, fresh, member.at)];
+            out.extend(self.reloads.drain(..));
+        } else {
+            out.push(_renamed(&member, None, Some(fresh)));
+        }
+        self.members[0] = _renamed(&member, Some((source, fresh)), None);
+        self.reads.clear();
+    }
+}
+
+/// A cell as one comparable place, beside a value's `v{n}`.
+fn _place(cell: &Loc) -> String {
+    parcopy::_named(cell).expect("a cell is a place")
+}
+
+/// `one` reading `fresh` where it read `source`, or writing `fresh` where it wrote.
+fn _renamed(one: &Insn, source: Option<(u32, u32)>, dest: Option<u32>) -> Arc<Insn> {
+    let mut made = one.clone();
+    let what = made.what.as_mut().expect("a copy has semantics");
+    let held = |value: u32| Loc::Held(Held { value, width: 10 });
+    if let Some((from, to)) = source {
+        what.sources = vec![held(to)];
+        made.uses = made.uses.iter().map(|value| if *value == from { to } else { *value }).collect();
+        made.widths.push((to, 10));
+    }
+    if let Some(to) = dest {
+        what.dests = vec![held(to)];
+        made.defines = vec![to];
+        made.widths.push((to, 10));
+    }
+    made.group = None;
+    Arc::new(made)
 }
 
 #[derive(Default)]
@@ -1055,6 +1108,7 @@ impl Plan<'_> {
         };
         let price = |form: &str| _price(cpu, form);
         let mut out = self.body.clone();
+        let mut fresh = _next_value(self.body);
         for block in &mut out.blocks {
             let at = block.at;
             let cut = _terminators(block);
@@ -1083,10 +1137,10 @@ impl Plan<'_> {
                 let mut pieces: Vec<Piece> = Vec::new();
                 for position in first..=last {
                     let one = &block.insns[position];
-                    let (mut reloads, mut members, mut stores, mut reads_cells, mut writes_cells) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                    let mut piece = Piece::new(Vec::new());
                     let Some(what) = one.what.as_ref().filter(|what| what.sources.iter().chain(&what.dests).any(_floating)) else {
-                        members.push(Arc::clone(one));
-                        pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
+                        piece.members.push(Arc::clone(one));
+                        pieces.push(piece);
                         continue;
                     };
                     let is_spilled = |value: u32, table: &HashMap<(i64, usize, u32), usize>| {
@@ -1101,16 +1155,17 @@ impl Plan<'_> {
                             && !self.homes.contains_key(&source)
                             && cells.get(&result).is_some_and(|cell| cells.get(&source) == Some(cell))
                         {
-                            members.push(_vacated(one));
-                            reads_cells.push(cell_of(&*home(source, frame)?).clone());
-                            pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
+                            piece.members.push(_vacated(one));
+                            let place = _place(&Loc::Mem(cell_of(&*home(source, frame)?).clone()));
+                            (piece.reads, piece.writes) = (vec![place.clone()], vec![place]);
+                            pieces.push(piece);
                             continue;
                         }
                     }
                     if let [only] = writes.as_slice() {
                         if self.homes.contains_key(only) && is_spilled(*only, &self.allocnos.at_def) {
-                            members.push(_vacated(one));
-                            pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
+                            piece.members.push(_vacated(one));
+                            pieces.push(piece);
                             continue;
                         }
                     }
@@ -1133,48 +1188,52 @@ impl Plan<'_> {
                         None => reloaded.extend(reads.iter().copied()),
                     }
                     for value in reloaded {
-                        reads_cells.push(cell_of(&*home(value, frame)?).clone());
-                        reloads.push(_restored(&*home(value, frame)?, value, one.at));
+                        piece.reads.push(_place(&Loc::Mem(cell_of(&*home(value, frame)?).clone())));
+                        piece.reloads.push(_restored(&*home(value, frame)?, value, one.at));
                     }
-                    members.push(made);
+                    piece.members.push(made);
+                    piece.copy = _float_copy(one);
+                    piece.reads.extend(_held_floats(&what.sources).into_iter().map(|value| format!("v{value}")));
+                    piece.writes.extend(writes.iter().map(|value| format!("v{value}")));
                     for value in writes {
                         let segment = self.allocnos.at_def[&(at, position, value)];
                         let root = self.allocnos.root(segment);
                         if !self.homes.contains_key(&value) && spilled.contains(&root) {
                             let cell = cell_of(&*home(value, frame)?).clone();
-                            writes_cells.push(cell.clone());
-                            stores.push(_stored(value, &cell, one.at));
+                            piece.writes.push(_place(&Loc::Mem(cell.clone())));
+                            piece.stores.push(_stored(value, &cell, one.at));
                         }
                     }
-                    pieces.push(Piece { reloads, members, stores, reads_cells, writes_cells });
+                    pieces.push(piece);
                 }
-                // A copy's stores wait for every read of the step only where a later copy reads a cell
-                // they write; otherwise each copy completes before the next, holding one value, not all.
-                let group = &block.insns[first..=last];
-                let overwrites = |index: usize| {
-                    let written = _held_floats(&group[index].what.as_ref().map_or(&[][..], |what| &what.dests[..]));
-                    group[index + 1..].iter().filter_map(|later| later.what.as_ref()).any(|what| _held_floats(&what.sources).iter().any(|value| written.contains(value)))
-                };
-                let clobbers = pieces.iter().enumerate().any(|(index, piece)| {
-                    let written = &piece.writes_cells;
-                    overwrites(index) || pieces[index + 1..].iter().any(|later| later.reads_cells.iter().any(|cell| written.contains(cell)))
-                });
-                let pieces_len = pieces.len();
-                if clobbers {
-                    insns.extend(pieces.iter().flat_map(|piece| piece.reloads.clone()));
-                    insns.extend(pieces.iter().flat_map(|piece| piece.members.clone()));
-                    insns.extend(pieces.iter().flat_map(|piece| piece.stores.clone()));
-                } else {
-                    // No longer simultaneous, so no longer a group.
-                    let ungrouped = |one: Arc<Insn>| {
-                        if pieces_len > 1 && one.group.is_some() {
-                            let mut one = (*one).clone();
-                            one.group = None;
-                            return Arc::new(one);
+                // A step with spilled copies is written in an order where each reads before it is
+                // overwritten, one copy at a time, not all reloaded, all made, all stored: two x87
+                // slots whatever the step's width. A step of registers stays a group, which
+                // floatalloc renames for free.
+                if pieces.len() > 1 && pieces.iter().any(|piece| !piece.reloads.is_empty() || !piece.stores.is_empty()) {
+                    let mut left: Vec<usize> = (0..pieces.len()).collect();
+                    while !left.is_empty() {
+                        let (reads, writes): (Vec<Vec<String>>, Vec<Vec<String>>) = pieces.iter().map(|piece| (piece.reads.clone(), piece.writes.clone())).unzip();
+                        let ready = parcopy::ready(&reads, &writes, &left);
+                        if ready.is_empty() {
+                            let Some(broken) = parcopy::in_cycle(&reads, &writes, &left).filter(|one| pieces[*one].copy.is_some()) else {
+                                return Err(unlowered("a floating copy step has no order"));
+                            };
+                            pieces[broken].source_taken_first(fresh, &mut insns);
+                            fresh += 1;
+                            continue;
                         }
-                        one
-                    };
-                    insns.extend(pieces.into_iter().flat_map(|piece| piece.reloads.into_iter().chain(piece.members.into_iter().map(ungrouped)).chain(piece.stores)));
+                        for one in ready {
+                            let mut piece = std::mem::replace(&mut pieces[one], Piece::new(Vec::new()));
+                            piece.members = piece.members.iter().map(|member| if member.group.is_some() { _renamed(member, None, None) } else { Arc::clone(member) }).collect();
+                            piece.emitted(&mut insns);
+                            left.retain(|other| *other != one);
+                        }
+                    }
+                } else {
+                    for piece in pieces {
+                        piece.emitted(&mut insns);
+                    }
                 }
             }
             let here = block.insns.get(cut).or(block.insns.last()).map_or(at, |one| one.at);

@@ -1,4 +1,4 @@
-reason = "nbody_single is overdamped (#360): /8 not /16 and a rounded checksum; same loops, so it measures the same kernel"
+reason = "nbody_single is overdamped (#360): /8 not /16 and a rounded checksum; same loops"
 blessed = "2026-10-03"
 
 [bas.O2]
