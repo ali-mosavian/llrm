@@ -64,6 +64,19 @@ impl LIRTransform for SsaSpill {
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
         let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments)?;
+        if std::env::var("TRACELIR").is_ok_and(|name| name == body.name) {
+            for block in made.as_ref().unwrap_or(&body).blocks.iter() {
+                eprintln!("TL @{:#x} succ {:?}", block.at, block.succ);
+                for phi in &block.phis {
+                    eprintln!("TL   v{} = phi {:?}", phi.result, phi.incoming);
+                }
+                for one in &block.insns {
+                    let name = one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default();
+                    let tag = if one.spill_store { " store" } else if one.rematerialized { " remat" } else { "" };
+                    eprintln!("TL   {name} {:?} <- {:?}{tag}", one.defines, one.uses);
+                }
+            }
+        }
         if made.is_some() {
             CHANGES.with(|count| count.set(count.get() + 1));
         }
@@ -231,9 +244,20 @@ impl Flow {
     }
 }
 
-/// The registers a block's values may sit in: all of them, or one class's.
+/// A register file the spiller keeps within its size: the general registers, or the segment registers a selector value sits in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum File {
+    General,
+    Selector,
+}
+
+/// The registers one file's values may sit in: all of them, or one class's.
 struct Machine<'a> {
     confined: &'a Classes,
+    file: File,
+    /// The data segment register, which an instruction that needs the data group takes from the selectors.
+    data: Register,
+    /// The file's registers (whole, as the allocator names them).
     general: BTreeSet<Register>,
     classes: BTreeSet<BTreeSet<Register>>,
     /// The registers with byte halves.
@@ -241,19 +265,25 @@ struct Machine<'a> {
 }
 
 impl<'a> Machine<'a> {
-    fn of(confined: &'a Classes) -> Self {
-        let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
+    fn of(confined: &'a Classes, file: File, segments: &Segments) -> Self {
+        let general: BTreeSet<Register> = match file {
+            File::General => target::AVAILABLE.iter().map(|one| _whole(*one)).collect(),
+            File::Selector => segments.selectors.iter().copied().collect(),
+        };
         let classes = confined
             .values()
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>())
             .filter(|class| !class.is_empty() && class.len() < general.len())
             .collect();
-        Self { confined, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
+        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
     }
 
-    /// A value that lives in a general register at all.
+    /// A value that lives in a register of this file at all: a selector only where the program names it so.
     fn registered(&self, value: u32) -> bool {
-        self.confined.get(&value).is_none_or(|class| class.iter().any(|one| self.general.contains(&_whole(*one))))
+        match (self.file, self.confined.get(&value)) {
+            (File::General, class) => class.is_none_or(|class| class.iter().any(|one| self.general.contains(&_whole(*one)))),
+            (File::Selector, class) => class.is_some_and(|class| class.iter().any(|one| self.general.contains(&_whole(*one)))),
+        }
     }
 
     fn class(&self, value: u32) -> Option<BTreeSet<Register>> {
@@ -403,46 +433,33 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
-    let machine = Machine::of(&confined);
     let skip = untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
-    // A value a loop's back edge must reload each trip is not worth holding at its header.
-    let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
-    // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
-    let room = loop_room(body, &flow, &machine, &skip, &loops);
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
     let remakes = remakable(body, &all);
     let frequency = Frequency::of(body);
     let headers: BTreeSet<i64> = loops.iter().map(|found| found.header).collect();
-    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
-    // A loop header keeps a value its back edge must reload only while those
-    // reloads run at most half as often as reloads at its first uses inside one trip.
-    for _ in 0..4 {
-        let mut more = false;
-        for ((from, to), values) in &result.across {
-            if place[from] < place[to] {
-                continue;
-            }
-            let Some(within) = loops.iter().find(|one| one.header == *to) else { continue };
-            for value in values {
-                let keep: f64 = body
-                    .blocks
-                    .iter()
-                    .filter(|block| block.succ.contains(to) && !result.edits[&block.at].w_out.contains(value))
-                    .map(|block| frequency.edge(block.at, *to))
-                    .sum();
-                let drop = first_uses(&flow, &frequency, &within.body, *to, *value);
-                // Holding the value costs its register through the trip as well: keep it only when the back edge reloads it rarely.
-                if 2.0 * keep >= drop {
-                    more |= dropped.entry(*to).or_default().insert(*value);
-                }
-            }
+    let mut result = Simulated::default();
+    let mut selectors: BTreeSet<u32> = BTreeSet::new();
+    for file in [File::General, File::Selector] {
+        if file == File::Selector && std::env::var_os("NOSEL").is_some() {
+            continue;
         }
-        if !more {
-            break;
+        let machine = Machine::of(&confined, file, segments);
+        if machine.general.is_empty() {
+            continue;
         }
-        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
+        // A selector is read from its cell or loaded into a register: never a constant it is made from.
+        let kept: IndexMap<u32, Arc<Insn>> = match file {
+            File::General => remakes.clone(),
+            File::Selector => remakes.iter().filter(|(value, one)| remade_cell(one, **value).is_some()).map(|(value, one)| (*value, Arc::clone(one))).collect(),
+        };
+        if file == File::Selector {
+            selectors.extend(kept.keys().copied().filter(|value| machine.registered(*value)));
+        }
+        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops);
+        result.merge(one);
     }
     if result.stored.is_empty() {
         return Ok(simple);
@@ -475,7 +492,75 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         .collect();
     let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &at_leaves, &remakes, frame)?;
     let held: IndexMap<i64, BTreeSet<u32>> = result.edits.iter().map(|(at, edit)| (*at, edit.w_in.clone())).collect();
-    Ok(Some(ssarepair::repaired(&spilled, &result.stored, &held)))
+    Ok(Some(without_dead_remakes(ssarepair::repaired(&spilled, &result.stored, &held), &selectors)))
+}
+
+/// `body` without the definitions of remade selectors that nothing reads any more: each read made its own.
+fn without_dead_remakes(body: LirBody, remade: &BTreeSet<u32>) -> LirBody {
+    let read: BTreeSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter().flat_map(|one| one.uses.iter().copied()).chain(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value))))
+        .collect();
+    let dead = |one: &Arc<Insn>| match one.defines.as_slice() {
+        [value] => remade.contains(value) && !read.contains(value) && !one.rematerialized && one.uses.is_empty() && one.what.as_ref().is_some_and(|what| what.op == Operation::Move),
+        _ => false,
+    };
+    if !body.blocks.iter().any(|block| block.insns.iter().any(dead)) {
+        return body;
+    }
+    let blocks = body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !dead(one)).cloned().collect())).collect();
+    body.with_blocks(blocks)
+}
+
+/// The simulation of one register file's values over every block, to a fixed point of the values a loop header does not keep.
+#[allow(clippy::too_many_arguments)]
+fn simulated_in(
+    body: &LirBody,
+    flow: &Flow,
+    machine: &Machine<'_>,
+    skip: &BTreeSet<u32>,
+    remakes: &IndexMap<u32, Arc<Insn>>,
+    order: &[i64],
+    place: &IndexMap<i64, usize>,
+    frequency: &Frequency,
+    headers: &BTreeSet<i64>,
+    loops: &[crate::analysis::loops::Loop],
+) -> Simulated {
+    // A value a loop's back edge must reload each trip is not worth holding at its header.
+    let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
+    // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
+    let room = loop_room(body, flow, machine, skip, loops);
+    let mut result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers);
+    // A loop header keeps a value its back edge must reload only while those
+    // reloads run at most half as often as reloads at its first uses inside one trip.
+    for _ in 0..4 {
+        let mut more = false;
+        for ((from, to), values) in &result.across {
+            if place[from] < place[to] {
+                continue;
+            }
+            let Some(within) = loops.iter().find(|one| one.header == *to) else { continue };
+            for value in values {
+                let keep: f64 = body
+                    .blocks
+                    .iter()
+                    .filter(|block| block.succ.contains(to) && !result.edits[&block.at].w_out.contains(value))
+                    .map(|block| frequency.edge(block.at, *to))
+                    .sum();
+                let drop = first_uses(flow, frequency, &within.body, *to, *value);
+                // Holding the value costs its register through the trip as well: keep it only when the back edge reloads it rarely.
+                if 2.0 * keep >= drop {
+                    more |= dropped.entry(*to).or_default().insert(*value);
+                }
+            }
+        }
+        if !more {
+            break;
+        }
+        result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers);
+    }
+    result
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
@@ -535,11 +620,47 @@ fn remade(one: &Insn, beside: &Insn) -> Arc<Insn> {
     Arc::new(made)
 }
 
+#[derive(Default)]
 struct Simulated {
     edits: IndexMap<i64, Edits>,
     across: IndexMap<(i64, i64), Vec<u32>>,
     left: IndexMap<(i64, i64), Vec<u32>>,
     stored: BTreeSet<u32>,
+}
+
+impl Simulated {
+    /// This with the simulation of another file's values, which are other values.
+    fn merge(&mut self, other: Simulated) {
+        for (at, edit) in other.edits {
+            self.edits.entry(at).or_default().merge(edit);
+        }
+        for (edge, values) in other.across {
+            self.across.entry(edge).or_default().extend(values);
+        }
+        for (edge, values) in other.left {
+            self.left.entry(edge).or_default().extend(values);
+        }
+        self.stored.extend(other.stored);
+    }
+}
+
+impl Edits {
+    fn merge(&mut self, other: Edits) {
+        for (position, values) in other.before {
+            self.before.entry(position).or_default().extend(values);
+        }
+        self.at_end.extend(other.at_end);
+        for (position, values) in other.folded {
+            self.folded.entry(position).or_default().extend(values);
+        }
+        for (position, values) in other.leaves {
+            self.leaves.entry(position).or_default().extend(values);
+        }
+        self.leaves_at_end.extend(other.leaves_at_end);
+        self.leaves_at_top.extend(other.leaves_at_top);
+        self.w_in.extend(other.w_in);
+        self.w_out.extend(other.w_out);
+    }
 }
 
 fn simulated(
@@ -649,7 +770,10 @@ fn simulated(
             }
             evict(&mut held, &mut leaving, &used, k);
             // What the instruction states it takes leaves less for what lives through it.
-            let taken = stated(one, &machine.general);
+            let mut taken = stated(one, &machine.general);
+            if machine.file == File::Selector && machine.general.contains(&machine.data) && target::needs_data_group(one) {
+                taken.insert(machine.data);
+            }
             // A register a value of this instruction sits in is that value's, not one more.
             let mut covered: BTreeSet<Register> = one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)).collect();
             if let Some(what) = &one.what {
@@ -1021,7 +1145,7 @@ mod tests {
     fn test_two_base_only_values_fit_while_one_acts() {
         let bx = BTreeSet::from([Register::EBX]);
         let confined: Classes = [(1, bx.clone()), (2, bx), (3, BTreeSet::from([Register::ESI, Register::EDI]))].into_iter().collect();
-        let machine = Machine::of(&confined);
+        let machine = Machine::of(&confined, File::General, &target::BUILT_IN);
         let held: BTreeSet<u32> = [1, 2, 3].into_iter().collect();
         assert!(machine.fits(&held, &BTreeSet::from([1]), 6), "one acting BX value leaves the other waiting");
         assert!(!machine.fits(&held, &BTreeSet::from([1, 2]), 6), "premise: two acting BX values cannot both sit in BX");
