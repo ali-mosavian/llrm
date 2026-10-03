@@ -87,6 +87,32 @@ fn a_private_global_whose_address_leaves_is_forgotten() {
     assert_eq!(kept(&elsewhere, "call void @outside(ptr null)"), None);
 }
 
+/// A global's far address stored through a pointer parameter, as a struct
+/// returned by value holds it, left `-O2` reading `@g` as it was before
+/// the call that wrote it through that struct: Nib printed 0, not 5.
+#[test]
+fn a_global_whose_far_address_is_stored_through_a_parameter_is_forgotten() {
+    let globals = format!(
+        "{PRIVATE}
+define internal void @mk(ptr addrspace(1) %out) addrspace(1) {{
+b0:
+  %far = addrspacecast ptr @g to ptr addrspace(1)
+  store ptr addrspace(1) %far, ptr addrspace(1) %out
+  ret void
+}}
+
+define internal void @set(ptr addrspace(1) nocapture %s) addrspace(1) {{
+b0:
+  %p = load ptr addrspace(1), ptr addrspace(1) %s
+  store i16 5, ptr addrspace(1) %p
+  ret void
+}}
+"
+    );
+    let call = "%a = alloca [4 x i8]\n  %s = addrspacecast ptr %a to ptr addrspace(1)\n  call addrspace(1) void @mk(ptr addrspace(1) %s)\n  call addrspace(1) void @set(ptr addrspace(1) %s)";
+    assert_eq!(kept(&globals, call), None);
+}
+
 #[test]
 fn an_external_global_is_forgotten() {
     assert_eq!(kept("@g = global i16 0\n\ndeclare void @outside(ptr) nocallback\n", "call void @outside(ptr null)"), None);

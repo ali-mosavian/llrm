@@ -703,11 +703,13 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
         if effect.unknown_read {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
+            effect.reads.extend(NONLOCAL.slices.clone());
             effect.reads.extend(_tracked(&procedure.unit));
         }
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
+            effect.writes.extend(NONLOCAL.slices.clone());
             effect.writes.extend(_tracked(&procedure.unit));
         }
         let fills = _fills(&procedure.unit, &facts, at);
