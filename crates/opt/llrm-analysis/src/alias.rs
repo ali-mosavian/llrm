@@ -1272,7 +1272,7 @@ pub fn points_to(
                         let objects = one.slices.iter().map(|one| one.object.clone());
                         if kept(index)? {
                             newly.extend(objects)
-                        } else if reads(index) {
+                        } else if reads(index) && !llrm_mir::memory::noretain(unit.context, unit.globals, unit.function, inst, index) {
                             lent.extend(objects)
                         }
                     }

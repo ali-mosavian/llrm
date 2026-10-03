@@ -1,13 +1,13 @@
-reason = "#357: a call that writes through an unknown pointer reaches captured globals (NONLOCAL); lru.nib now correct, particle.bas 6 fewer instructions"
+reason = "#402: a dead private initializer holds no address; lru.bas -5 instructions, -5 memory operands"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 171
-memory_operands = 74
+instructions = 166
+memory_operands = 69
 
 [bas.Os]
-instructions = 197
-memory_operands = 83
+instructions = 192
+memory_operands = 78
 
 [c.O2]
 instructions = 132

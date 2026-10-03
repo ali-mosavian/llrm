@@ -332,3 +332,13 @@ d:
     };
     assert_eq!((counted("f"), counted("g")), (2, 1), "a counter and a walked pointer, then a counter and a pointer that stays");
 }
+
+/// `noretain` read and written back, stated of a parameter and of a call's
+/// argument; before it existed the parser refused the attribute.
+#[test]
+fn noretain_is_a_parameter_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndeclare void @erase(ptr nocapture noretain)\n\ndefine void @f(ptr %p) {{\nb0:\n  call void @erase(ptr noretain %p)\n  ret void\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("declare void @erase(ptr nocapture noretain)") && once.contains("call void @erase(ptr noretain %p)"), "{once}");
+    assert_eq!(round(&once), once);
+}

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::context::{ConstantKind, Context, GlobalId};
 use crate::facts::Facts;
 use crate::datalayout::DataLayout;
-use crate::module::{Function, GlobalKind, InstId, Module, Operand, ValueDef};
+use crate::module::{Function, GlobalKind, GlobalValue, InstId, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, Opcode};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -111,6 +111,16 @@ pub fn nocapture(context: &Context, callees: &Callees, function: &Function, inst
     let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
     info.argument_attrs.get(index).is_some_and(|attrs| Facts::of(attrs).no_capture())
         || callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.nocapture.get(index) == Some(&true))
+}
+
+/// Whether the call `inst` keeps neither its argument `index` nor any pointer
+/// read out of what that points to: `noretain` at the site or on the callee
+/// among `globals`.
+pub fn noretain(context: &Context, globals: &[GlobalValue], function: &Function, inst: InstId, index: usize) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    let declared = callee(context, function, inst).and_then(|one| globals.get(one.0 as usize)).and_then(|one| one.function());
+    info.argument_attrs.get(index).is_some_and(|attrs| Facts::of(attrs).no_retain())
+        || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| Facts::of(attrs).no_retain())
 }
 
 /// Whether `attrs` confine every access to memory the pointer arguments
