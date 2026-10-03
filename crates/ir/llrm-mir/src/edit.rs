@@ -262,6 +262,13 @@ impl Function {
         self.changes.push(Change::Rewritten(inst));
     }
 
+    /// Gives the call `inst` calling convention `convention`.
+    pub fn set_call_convention(&mut self, inst: InstId, convention: u32) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+        info.calling_convention = convention;
+        self.changes.push(Change::Rewritten(inst));
+    }
+
     /// Says the access `inst` is aligned to `align` bytes; any other instruction is left as it is.
     pub fn set_access_align(&mut self, inst: InstId, bytes: u64) {
         let (Opcode::Load { align, .. } | Opcode::Store { align, .. }) = &mut self.instructions[inst.0 as usize].opcode else { return };

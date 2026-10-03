@@ -84,6 +84,7 @@ static _MODULE: LazyLock<(
     //                         486  P5  P6  K5  K6  K7 Core
     let mut cost: IndexMap<&'static str, [i64; 7]> = IndexMap::from_iter([
         ("alu_rr", [1, 1, 1, 1, 1, 1, 1]), // add/and/or/xor/sub/cmp reg,reg
+        ("alu_ri", [1, 1, 1, 1, 1, 1, 1]), // ... reg,imm
         ("alu_rm", [2, 2, 1, 1, 1, 1, 1]), // ... reg,[mem]
         ("alu_mr", [3, 3, 1, 1, 1, 1, 1]), // ... [mem],reg
         ("mov_rr", [1, 1, 1, 1, 1, 1, 1]),
@@ -114,6 +115,8 @@ static _MODULE: LazyLock<(
         ("jcc", [3, 1, 1, 1, 1, 1, 1]),       // predicted
         ("call_far", [18, 4, 21, 4, 4, 5, 22]), // real mode, no gate
         ("ret_far", [13, 4, 17, 4, 4, 5, 18]),
+        // RET imm16: the same clocks as RET, 2 bytes more.
+        ("ret_pop", [13, 4, 17, 4, 4, 5, 18]),
         ("unknown", [2, 2, 2, 2, 2, 2, 2]),
     ]);
 
@@ -242,6 +245,7 @@ mod tests {
             cost_keys,
             [
                 "alu_rr",
+                "alu_ri",
                 "alu_rm",
                 "alu_mr",
                 "mov_rr",
@@ -269,6 +273,7 @@ mod tests {
                 "jcc",
                 "call_far",
                 "ret_far",
+                "ret_pop",
                 "unknown",
                 "mul_r16",
                 "div_r16",
@@ -331,6 +336,8 @@ mod tests {
                 "lahf",
                 "sahf",
                 "unknown",
+                "alu_ri",
+                "ret_pop",
                 "lea",
                 "rep_stos",
                 "rep_stos_cell",

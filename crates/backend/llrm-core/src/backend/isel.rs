@@ -86,6 +86,8 @@ fn passing(convention: u32) -> Result<Passing, Unselected> {
     match convention {
         0 => Ok(Passing { in_order: false, pops: false }),
         llrm_mir::opcode::BASIC => Ok(Passing { in_order: true, pops: true }),
+        // The compiler's own, for a function it sees every caller of: C's order, the callee pops.
+        llrm_mir::opcode::FAST => Ok(Passing { in_order: false, pops: true }),
         // Its parameters are the registers its frame saved; iret pops the rest.
         llrm_mir::opcode::X86_INTR => Ok(Passing { in_order: false, pops: false }),
         other => refuse(format!("calling convention {other}")),

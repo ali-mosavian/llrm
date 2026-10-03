@@ -35,7 +35,7 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    algebraic, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
+    algebraic, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
     promote, rotate, unroll, unswitch, window,
 };
 
@@ -237,6 +237,10 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
+    // Once the callers that remain are the ones that stay: an internal function they all call directly pops its own arguments.
+    if applied.options.wanted("calleepop") {
+        manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as a shift.
     if applied.options.wanted("fixednarrow") {
         manager.add(fixednarrow::FixedNarrow);
