@@ -240,6 +240,23 @@ pub fn integer(context: &Context, function: &Function, value: ValueId) -> bool {
     }
 }
 
+/// Whether `value` is read only as an address: by loads and stores through
+/// it and `getelementptr`s that are such addresses. Each takes it in an
+/// addressing form; a register to hold it across blocks is the allocator's.
+pub fn address_only(function: &Function, value: ValueId, depth: u32) -> bool {
+    let users = function.users(value);
+    !users.is_empty()
+        && users.iter().all(|one| {
+            let user = function.instruction(one.user);
+            match user.opcode {
+                Opcode::Load { .. } => user.operands.first() == Some(&Operand::Value(value)),
+                Opcode::Store { .. } => user.operands.get(1) == Some(&Operand::Value(value)) && user.operands.first() != Some(&Operand::Value(value)),
+                Opcode::GetElementPtr { .. } => depth > 0 && user.result.is_some_and(|result| address_only(function, result, depth - 1)),
+                _ => false,
+            }
+        })
+}
+
 /// Whether `value` is an address only memory accesses of its own block, and
 /// `getelementptr`s that are such addresses, take: folded into their
 /// addressing modes, it takes no register.
