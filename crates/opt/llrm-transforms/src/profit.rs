@@ -184,6 +184,26 @@ pub fn _loop_products(function: &Function, trips: Option<&IndexMap<i64, i64>>) -
     Some(frequency)
 }
 
+/// `_loop_products`, each block weighed by the share of its innermost loop's
+/// trips that reach it, as `_frequencies` finds the share: the latch runs once
+/// a trip, so a block behind a branch runs `odds[block] / odds[latch]` of them.
+/// A block the odds lean towards, or leave even, weighs the whole product, as
+/// before: an even split is what the heuristics say of what they cannot tell.
+pub fn _loop_products_by_branch(context: &Context, metadata: &[llrm_mir::module::MetadataNode], globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+    let mut weight = _loop_products(function, trips)?;
+    let odds = _frequencies(context, metadata, globals, function, trips)?;
+    let loops = cfg::Shape::of(function).loops;
+    for (at, count) in weight.iter_mut() {
+        let Some(innermost) = loops.iter().filter(|one| one.body.contains(at)).min_by_key(|one| one.body.len()) else { continue };
+        let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
+        let here = odds.get(at).copied().unwrap_or(UNIT);
+        if here * 2 < trip {
+            *count = (*count * here / trip).max(1);
+        }
+    }
+    Some(weight)
+}
+
 /// Profile-free expected work at `frequency`, a block's executions per entry
 /// (`_frequencies`, or the older `_loop_products`).
 pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
