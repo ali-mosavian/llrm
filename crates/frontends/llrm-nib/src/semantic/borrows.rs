@@ -359,6 +359,7 @@ impl FunctionCompiler<'_> {
                 self.reseatable.insert(own);
                 Binding { storage: Storage::Slice(own), ..binding }
             }
+            (true, Binding { storage: Storage::Reference(_), .. }) if !self.owns(&binding.storage) => self.reseatable_reference(name, binding),
             _ => binding,
         };
         self.record_borrow(&binding, source);
@@ -388,7 +389,11 @@ impl FunctionCompiler<'_> {
                 descriptor
             }
         };
+        let first = self.current_block_mut().instructions.len();
         self.copy_view(source, own, element, rank);
+        let block = self.current;
+        let stores: Vec<usize> = (first..self.current_block_mut().instructions.len()).filter(|at| self.current_block_mut().instructions[*at].op == "store").collect();
+        self.reseats.extend(stores.into_iter().map(|at| (block, at)));
         let roots = self.roots(value);
         self.borrowed_from.insert(BorrowKey::Value(own), roots);
         Ok(true)
@@ -565,6 +570,12 @@ impl FunctionCompiler<'_> {
             let held = identity(&binding.storage).filter(|key| borrows(self.held.get(key)));
             holders.extend(lent.into_iter().chain(held));
         }
+        // What a `let mut` reference's cell holds outlives each pointer loaded from it.
+        for cell in &self.reference_cells {
+            if holders.contains(&BorrowKey::Value(cell.latest)) {
+                holders.insert(BorrowKey::Place(cell.place));
+            }
+        }
         holders
     }
 
@@ -697,7 +708,7 @@ pub(super) fn check_disjoint(lent: &[Lent], spans: &[Span]) -> Result<(), Diagno
 }
 
 /// Errs unless `target` may hold a borrow of each of `roots`.
-fn check_holds(target: &Root, roots: &BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
+pub(super) fn check_holds(target: &Root, roots: &BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
     match roots.iter().find(|root| !target.life.may_hold(root)) {
         Some(root) => Err(Diagnostic::new(span, format!("{:?} would outlive {:?}, which it borrows", target.name, root.name))),
         None => Ok(()),

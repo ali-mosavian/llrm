@@ -18,6 +18,7 @@ impl<'a> FunctionCompiler<'a> {
                 let span = statement.span();
                 self.line = if span.module == 0 { span.line as u32 } else { 0 };
             }
+            self.reload_references(statement);
             match self.prepared(statement)? {
                 Some(rewritten) => self.statement(&rewritten)?,
                 None => self.statement(statement)?,
@@ -291,7 +292,7 @@ impl<'a> FunctionCompiler<'a> {
                     return self.statement(&settled);
                 }
                 if let (AssignTarget::Name(name), None) = (target, operation) {
-                    if self.reseat(name, value, *span)? {
+                    if self.reseat_reference(name, value, *span)? || self.reseat(name, value, *span)? {
                         return Ok(());
                     }
                 }
@@ -688,6 +689,7 @@ impl<'a> FunctionCompiler<'a> {
         self.terminate(jump(condition_block));
 
         self.current = condition_block;
+        self.reload_named(&condition.names());
         // `loop:` leaves only by `break`.
         let endless = matches!(condition, Expr::Boolean(true, _));
         if endless {
