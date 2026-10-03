@@ -490,7 +490,12 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     (TypeName::Void, None) => Vec::new(),
                     // `return f()` of a void `f` returns nothing, as in Rust.
-                    (TypeName::Void, Some(call @ (Expr::Call { .. } | Expr::MethodCall { .. }))) if self.expression(call, None)?.operand.is_none() => Vec::new(),
+                    (TypeName::Void, Some(call @ (Expr::Call { .. } | Expr::MethodCall { .. }))) => {
+                        if self.expression(call, None)?.operand.is_some() {
+                            return Err(Diagnostic::new(*span, "void function cannot return a value"));
+                        }
+                        Vec::new()
+                    }
                     (TypeName::Void, Some(_)) => {
                         return Err(Diagnostic::new(
                             *span,
