@@ -63,16 +63,19 @@ pub struct Threshold {
     pub limit: i64,
     pub hint: (i64, i64),
     pub hot: (i64, i64),
+    /// The last call of a function nothing else reaches inlines at any size: where code size
+    /// outranks speed.
+    pub single: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225) }
+        Self { limit, hint: (325, 225), hot: (525, 225), single: false }
     }
 
     /// The same where code size outranks speed: a hint or a loop buys nothing.
     pub fn for_size(self) -> Self {
-        Self { hint: (1, 1), hot: (1, 1), ..self }
+        Self { hint: (1, 1), hot: (1, 1), single: true, ..self }
     }
 }
 
@@ -213,6 +216,7 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
     let budget = threshold.budget(call_cost);
     let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
+    let mut lasts = IndexMap::default();
     for (&name, &count) in calls {
         let Some(body) = body(module, name) else { continue };
         if count == 0 || !cloneable(module, &recursive, name, body) {
@@ -222,10 +226,15 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
         let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
+        // The last call of a function nothing else reaches moves its body: no copy, and the call,
+        // its arguments and the return gone (LLVM's last-call-to-static bonus).
         let admitted = || {
             budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
                 && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies * std::env::var("WK").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(1) < scale(count * call_cost)))
         };
+        // Only once nothing else is: a body that a call in it is about to be inlined into would
+        // be copied with that call still in it, and the call's callee counted once too many.
+        let last = threshold.single && budget.is_some() && copies == 0 && !always && !admitted();
         let verdict = always || admitted();
         llrm_support::debug!(
             "inline",
@@ -237,7 +246,12 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         );
         if verdict {
             out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
+        } else if last {
+            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
+    }
+    if out.is_empty() {
+        out = lasts;
     }
     out
 }

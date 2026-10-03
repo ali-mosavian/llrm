@@ -573,6 +573,16 @@ impl TypeRegistry {
                 _ => Err(Diagnostic::new(span, "a foreign function pointer is 'extern \"abi\" fn(A) -> R'")),
             },
             TypeSpec::Applied { name, args } if name.starts_with('&') => match args.as_slice() {
+                // A view, `&string` or `&[T]`, kept as the descriptor it is (section 9.1).
+                [TypeAnnotation::Value(TypeSpec::Primitive(TypeName::String))] if name == "&" => {
+                    let id = self.kept_view(ElementType::Scalar(TypeName::Char), 1, false, span)?;
+                    Ok(ElementType::Struct(id))
+                }
+                [TypeAnnotation::Slice { element, rank }] => {
+                    let element = self.resolve_element(element, span)?;
+                    let id = self.kept_view(element, *rank, name == "&mut", span)?;
+                    Ok(ElementType::Struct(id))
+                }
                 [TypeAnnotation::Value(target)] => {
                     let target = self.resolve_element(target, span)?;
                     Ok(ElementType::Scalar(self.reference(target, name == "&mut")))
@@ -1694,6 +1704,11 @@ struct FunctionCompiler<'a> {
     huge_address: bool,
     /// Changes to borrowed owners, refused if a holder is used after one.
     conflicts: Vec<liveness::Conflict>,
+    /// The stores that give a reseated view a new descriptor, by block and
+    /// instruction: each redefines the view, as an assignment does a name.
+    reseats: BTreeSet<(u32, usize)>,
+    /// The `let mut` references, whose pointers live in a place each.
+    reference_cells: Vec<references::ReferenceCell>,
     /// Module variables borrowed across a call, lent to it if the holder is
     /// used after it.
     across: Vec<liveness::Across>,
@@ -1783,6 +1798,8 @@ impl<'a> FunctionCompiler<'a> {
             statement_span: Span::new(0, 0, 0),
             huge_address: false,
             conflicts: Vec::new(),
+            reseats: BTreeSet::new(),
+            reference_cells: Vec::new(),
             across: Vec::new(),
             references: Vec::new(),
             borrowed: Vec::new(),
@@ -1861,15 +1878,20 @@ impl<'a> FunctionCompiler<'a> {
                 if matches!(resolved, SignatureParameter::Borrowed { .. }) {
                     compiler.note_borrowed_parameter(owner, ordinal);
                 }
-                // A value passed in holds only what the caller lent.
+                // A value passed in, or one a borrow reaches, holds only what the
+                // caller lent: an owner of its own, below none of this parameter's.
                 let passed = match binding.type_ {
                     BindingType::Scalar(type_name) => Some(ElementType::Scalar(type_name)),
                     BindingType::Struct(id) => Some(ElementType::Struct(id)),
                     _ => None,
                 };
-                if life == borrows::Life::Frame && passed.is_some_and(|one| compiler.holds_reference(one)) {
-                    let root = borrows::Root { exact: false, ..borrows::Root::new(owner, &parameter.name, borrows::Life::Lent) };
+                if passed.is_some_and(|one| compiler.holds_reference(one)) {
+                    let held = borrows::BorrowKey::Place(compiler.types.lent_root());
+                    let root = borrows::Root { exact: false, ..borrows::Root::new(held, &parameter.name, borrows::Life::Lent) };
                     compiler.held.insert(owner, BTreeSet::from([root]));
+                    if matches!(resolved, SignatureParameter::Borrowed { .. }) {
+                        compiler.note_borrowed_parameter(held, ordinal);
+                    }
                 }
             }
             compiler.scopes.last_mut().expect("scope").insert(parameter.name.clone(), binding);

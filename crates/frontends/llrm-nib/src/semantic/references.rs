@@ -21,7 +21,118 @@ impl TypeRegistry {
     }
 }
 
+/// A `let mut` reference: its pointer lives in `place`, which assigning a
+/// borrow rewrites. The binding holds `latest`, loaded from it before each
+/// statement that names it, so every use sees the pointer as of then.
+#[derive(Clone, Debug)]
+pub(super) struct ReferenceCell {
+    pub(super) name: String,
+    pub(super) depth: usize,
+    pub(super) place: u32,
+    pub(super) reference: TypeName,
+    pub(super) latest: u32,
+}
+
 impl FunctionCompiler<'_> {
+    /// `binding`, a reference bound as `name` with `let mut`, kept in a cell.
+    pub(super) fn reseatable_reference(&mut self, name: &str, binding: Binding) -> Binding {
+        let element = match binding.type_ {
+            BindingType::Scalar(type_name) => ElementType::Scalar(type_name),
+            BindingType::Struct(id) => ElementType::Struct(id),
+            BindingType::Array { .. } | BindingType::Slice { .. } => return binding,
+        };
+        let Storage::Reference(pointer) = binding.storage else {
+            return binding;
+        };
+        let reference = self.types.reference(element, binding.mutable);
+        let hir::Operand::Value(pointer) = self.as_reference_pointer(pointer, type_id(reference), element) else {
+            unreachable!("a reference is a value")
+        };
+        let hidden = self.hidden("reference");
+        let place = self.place(&hidden, reference, true);
+        self.emit("store", Vec::new(), vec![hir::Operand::Place(place), hir::Operand::Value(pointer)], None);
+        let depth = self.scopes.len() - 1;
+        self.reference_cells.push(ReferenceCell { name: name.to_owned(), depth, place, reference, latest: pointer });
+        Binding { storage: Storage::Reference(pointer), ..binding }
+    }
+
+    /// Reloads the cell of each reference `statement` names, but a name it
+    /// only reseats.
+    pub(super) fn reload_references(&mut self, statement: &Statement) {
+        if self.reference_cells.is_empty() {
+            return;
+        }
+        let mut names = Vec::new();
+        let mut named = statement.clone();
+        let Ok(()) = named.walk_mut(&mut |one| -> Result<(), std::convert::Infallible> {
+            if let Expr::Name(name, _) = one {
+                names.push(name.clone());
+            }
+            Ok(())
+        });
+        match statement {
+            Statement::Assign { target: AssignTarget::Name(name), operation, value, .. } => {
+                if operation.is_some() || !self.reseating(name, value) {
+                    names.push(name.clone());
+                }
+            }
+            Statement::Assign { target: AssignTarget::Member { base, .. } | AssignTarget::Index { base, .. }, .. } => names.extend(base.names()),
+            _ => {}
+        }
+        self.reload_named(&names);
+    }
+
+    /// Reloads the cell of each reference in `names`.
+    pub(super) fn reload_named(&mut self, names: &[String]) {
+        for index in 0..self.reference_cells.len() {
+            let cell = self.reference_cells[index].clone();
+            if !names.contains(&cell.name) {
+                continue;
+            }
+            let Some(binding) = self.scopes.get(cell.depth).and_then(|scope| scope.get(&cell.name)) else {
+                continue;
+            };
+            if !matches!(binding.storage, Storage::Reference(latest) if latest == cell.latest) {
+                continue;
+            }
+            let pointer = self.value_type(type_id(cell.reference));
+            self.emit("load", vec![pointer], vec![hir::Operand::Place(cell.place)], None);
+            if let Some(roots) = self.borrowed_from.get(&borrows::BorrowKey::Value(cell.latest)).cloned() {
+                self.borrowed_from.insert(borrows::BorrowKey::Value(pointer), roots);
+            }
+            self.scopes[cell.depth].get_mut(&cell.name).expect("checked").storage = Storage::Reference(pointer);
+            self.reference_cells[index].latest = pointer;
+        }
+    }
+
+    /// The cell of the reference `name` names here.
+    fn reference_cell(&self, name: &str) -> Option<ReferenceCell> {
+        let (depth, binding) = self.scopes.iter().enumerate().rev().find_map(|(depth, scope)| Some((depth, scope.get(name)?)))?;
+        self.reference_cells.iter().find(|cell| cell.depth == depth && cell.name == name && matches!(binding.storage, Storage::Reference(latest) if latest == cell.latest)).cloned()
+    }
+
+    /// Whether `name = value` seats another borrow in a `let mut` reference.
+    fn reseating(&self, name: &str, value: &Expr) -> bool {
+        self.reference_cell(name).is_some_and(|cell| self.seats(cell.reference, None, value))
+    }
+
+    /// `name = value` of a reference bound with `let mut`, which borrows
+    /// `value` from now on. `false` when `name` is no such reference.
+    pub(super) fn reseat_reference(&mut self, name: &str, value: &Expr, span: Span) -> Result<bool, Diagnostic> {
+        let Some(cell) = self.reference_cell(name).filter(|cell| self.seats(cell.reference, None, value)) else {
+            return Ok(false);
+        };
+        if let Some(target) = self.named_root(name) {
+            borrows::check_holds(&target, &self.roots(value), span)?;
+        }
+        let pointer = self.reference_to(value, cell.reference, span)?.operand.expect("a reference");
+        let roots = self.roots(value);
+        self.emit("store", Vec::new(), vec![hir::Operand::Place(cell.place), pointer], None);
+        self.borrowed_from.insert(borrows::BorrowKey::Value(cell.latest), roots);
+        self.reload_named(&[name.to_owned()]);
+        Ok(true)
+    }
+
     /// A name for the reference `operand`: its referent, read through it.
     pub(super) fn reference_binding(&mut self, operand: hir::Operand, type_name: TypeName) -> Option<Binding> {
         let target = self.types.referent(type_name)?;
@@ -42,7 +153,7 @@ impl FunctionCompiler<'_> {
     /// `pointer`, a binding's, as the reference pointer `pointer_type`: an
     /// element of a vec is reached by a near pointer, so its far address
     /// is taken.
-    fn as_reference_pointer(&mut self, pointer: u32, pointer_type: u32, target: ElementType) -> hir::Operand {
+    pub(super) fn as_reference_pointer(&mut self, pointer: u32, pointer_type: u32, target: ElementType) -> hir::Operand {
         let found = self.type_of(pointer);
         if found == pointer_type {
             return hir::Operand::Value(pointer);
