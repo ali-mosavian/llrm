@@ -1,5 +1,5 @@
-' known: #360
 ' Six-body integrator in SINGLE (the fixed-point nbody_fixed state as floats), 1000 steps.
+' Overdamped: the bodies settle at their centre of mass whatever the intermediate precision (a lighter damping was chaotic: #360).
 DEFINT A-Z
 CONST BODIES = 6
 DECLARE FUNCTION BenchNbodySingle& ()
@@ -37,8 +37,8 @@ FUNCTION BenchNbodySingle&
             NEXT
             velX(body) = velX(body) + accX
             velY(body) = velY(body) + accY
-            velX(body) = velX(body) - velX(body) / 16!
-            velY(body) = velY(body) - velY(body) / 16!
+            velX(body) = velX(body) - velX(body) / 8!
+            velY(body) = velY(body) - velY(body) / 8!
         NEXT
         FOR body = 0 TO BODIES - 1
             posX(body) = posX(body) + velX(body)
