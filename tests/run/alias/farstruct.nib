@@ -1,0 +1,20 @@
+# A far pointer to a global, returned inside a struct by value: a store through it is the global's.
+struct S:
+    mut p: *far mut i16
+
+var g: i16[2] = [0] * 2
+
+fn set(s: &mut S) -> void:
+    unsafe:
+        s.p[1] = 5
+
+fn mk() -> S:
+    unsafe:
+        return S(p=&mut g)
+
+fn main() -> i16:
+    let mut s = mk()
+    g[1] = 0
+    set(&mut s)
+    print(g[1])
+    return 0
