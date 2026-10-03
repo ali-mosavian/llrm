@@ -1676,41 +1676,9 @@ pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
-    let Some(what) = &one.what else {
-        return false;
-    };
-    // A call reads no flag its LIR names (`_flags_live_out`, liveness::effect) and clobbers
-    // them all: what stood before it was never read, as `add sp,N` after it never is.
-    if what.op == Operation::Call && !one.clobbers.is_empty() {
-        return true;
-    }
-    if !one.clobbers.is_empty() {
-        return false;
-    }
-    match (what.op, what.name.as_deref()) {
-        (Operation::Compare, Some("cmp" | "test")) => true,
-        (Operation::Binary, Some("add" | "sub" | "and" | "or" | "xor")) => true,
-        (Operation::Unary, Some("neg")) => true,
-        // INC/DEC preserve carry, but a carry which is dead afterwards
-        // is dead beforehand too.  Other arithmetic flags are replaced
-        // by the operation, so an all-dead state crosses it unchanged.
-        (Operation::Unary, Some("inc" | "dec")) => flags_dead,
-        (Operation::Move, Some("mov")) | (Operation::Address, Some("lea")) => flags_dead,
-        (Operation::Extend, Some("movsx" | "movzx" | "cwd" | "cdq")) => flags_dead,
-        (Operation::Push, Some("push")) | (Operation::Pop, Some("pop")) => flags_dead,
-        (Operation::Nothing, None | Some("")) | (Operation::Jump, _) | (Operation::Fill | Operation::Copy, _) => flags_dead,
-        _ => {
-            // Anything else by what it encodes: a far load writes no flag, and
-            // missing from the list above it kept `mov ax,0` from becoming `xor`.
-            let Some((reads, writes)) = _register_effects(one, false, true) else {
-                return false;
-            };
-            if !reads.is_disjoint(&_ARITHMETIC_LANES) {
-                return false;
-            }
-            flags_dead || _ARITHMETIC_LANES.is_subset(&writes)
-        }
-    }
+    let (reads, writes) = _flag_effect(one);
+    let dead = if flags_dead { _ARITHMETIC_LANES.clone() } else { Lanes::new() };
+    _ARITHMETIC_LANES.is_subset(&dead.or(&writes).minus(&reads))
 }
 
 /// What each conditional jump in the instruction description reads.
@@ -1871,6 +1839,44 @@ fn _flag_source(blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &R
     None
 }
 
+/// The flag lanes `one` reads and writes: the one answer flags liveness has, forwards and back.
+/// What a callee, a caller after a return, and whatever runs after the body leaves may read:
+/// no calling convention passes the adjust flag in or out, so only an instruction here
+/// that reads AF reads it.
+fn _exit_flags() -> Lanes {
+    _flag_lanes(_ARITHMETIC).minus(&_ADJUST)
+}
+
+pub fn _flag_effect(one: &Insn) -> (Lanes, Lanes) {
+    let every = _flag_lanes(_ARITHMETIC);
+    if _nothing(one) {
+        // One that clobbers is an opaque barrier, which may observe any flag.
+        return if one.clobbers.is_empty() { (Lanes::new(), Lanes::new()) } else { (every, Lanes::new()) };
+    }
+    if let Some(effect) = liveness::effect(one) {
+        let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
+        return (flags(&effect.reads), flags(&effect.writes));
+    }
+    if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
+        return (_exit_flags(), Lanes::new());
+    }
+    // Bytes this cannot encode -- a relocated operand, an x87 form --
+    // still name their instruction, and only a few instructions read
+    // a flag. Writes stay unknown, which only keeps flags live longer.
+    if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
+        if !name.is_empty() && !_reads_flags(name) {
+            let written = match name {
+                "add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "neg" => every,
+                // They keep the carry.
+                "inc" | "dec" => every.minus(&_flag_lanes(RflagsBits::CF)),
+                _ => Lanes::new(),
+            };
+            return (Lanes::new(), written);
+        }
+    }
+    (every, Lanes::new())
+}
+
 static _ADJUST: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::AF));
 /// Every mnemonic iced-x86 knows to read an arithmetic flag, and every
 /// interrupt: it hands the flags to the handler.
@@ -1977,34 +1983,8 @@ fn _sets_from(one: &Insn, register: &Reg) -> bool {
 
 /// Which flag lanes something may read after each block's last instruction.
 pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
-    let every = _flag_lanes(_ARITHMETIC);
-    // No calling convention passes the adjust flag in or out: a callee, a
-    // caller after a return, and whatever runs after the body leaves may read
-    // any other flag, but only an instruction here that reads AF reads it.
-    let exits: Lanes = every.minus(&_ADJUST);
-
-    // The flag lanes of each instruction's effect, as liveness reads it.
-    let effects = |one: &Insn| -> (Lanes, Lanes) {
-        if _nothing(one) {
-            return (Lanes::new(), Lanes::new());
-        }
-        if let Some(effect) = liveness::effect(one) {
-            let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
-            return (flags(&effect.reads), flags(&effect.writes));
-        }
-        if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
-            return (exits.clone(), Lanes::new());
-        }
-        // Bytes this cannot encode -- a relocated operand, an x87 form --
-        // still name their instruction, and only a few instructions read
-        // a flag. Writes stay unknown, which only keeps flags live longer.
-        if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
-            if !name.is_empty() && !_reads_flags(name) {
-                return (Lanes::new(), Lanes::new());
-            }
-        }
-        (every.clone(), Lanes::new())
-    };
+    let exits = _exit_flags();
+    let effects = |one: &Insn| _flag_effect(one);
 
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> = body
         .blocks

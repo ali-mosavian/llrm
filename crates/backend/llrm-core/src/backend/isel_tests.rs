@@ -408,7 +408,7 @@ other:
             "cmp ax, 9",
             "je L0_1",
             "L0_4:",
-            "mov ax, 0",
+            "xor ax, ax",
             "pop bp",
             "retf",
             "L0_1:",
@@ -477,7 +477,7 @@ no:
             "and bl, dl",
             "jne L0_6",
             "L0_8:",
-            "mov ax, 0",
+            "xor ax, ax",
             "pop bp",
             "retf",
             "L0_6:",
@@ -1005,7 +1005,7 @@ small:
             "sahf",
             "ja L1_8",
             "L1_10:",
-            "mov ax, 0",
+            "xor ax, ax",
             "leave",
             "retf",
             "L1_8:",
@@ -2067,7 +2067,7 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 ";
     let got = inner(text);
     let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
-    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "mov ebx, 0", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
+    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "xor ebx, ebx", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
 }
 
 /// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
@@ -2143,7 +2143,7 @@ define void @f(i16 %n) addrspace(1) {
             "mov di, offset g",
             "pushw seg g",
             "pop es",
-            "mov eax, 0",
+            "xor eax, eax",
             "rep stosd",
             "mov cx, bx",
             "rep stosb",
