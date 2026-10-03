@@ -145,7 +145,7 @@ impl LIRTransform for Peephole {
         let body = storecombine::combined(&body);
         let body = pushed_constants(&body);
         let body = far_loads(&fused(&overwritten(&shuttles(&restored_copies(&high_extracts(
-            &transferred(&commuted(&constants(&pushes(&body)))),
+            &transferred(&commuted(&constants(&pushes(&body, &self.cpu)))),
             &self.cpu,
         )?)))));
         let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
@@ -351,8 +351,8 @@ fn _code_windows<E>(
 }
 
 /// Two adjacent immediate word pushes have one dword's stack layout (`peephole.peep`).
-pub fn pushes(body: &LirBody) -> LirBody {
-    peep::pushes(body, &Facts::new(body, None))
+pub fn pushes(body: &LirBody, cpu: &Profile) -> LirBody {
+    peep::pushes(body, &Facts::new(body, Some(cpu)))
 }
 
 pub fn _lanes(register: Register) -> Lanes {

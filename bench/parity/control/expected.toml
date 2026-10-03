@@ -1,4 +1,4 @@
-reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
+reason = "-Os pushes a dword constant as two word pushes where they are fewer bytes (pushd imm32 is 6): -Os only, a few more instructions in the kernels, -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -22,5 +22,5 @@ instructions = 169
 memory_operands = 6
 
 [nib.Os]
-instructions = 167
+instructions = 169
 memory_operands = 6

@@ -362,6 +362,22 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
     }
 }
 
+/// `push 112; push 112` joined into `pushd 7340144` at -Os: 6 bytes for 4. Tuned for size two
+/// word pushes join only where the dword is no longer (`push 0; push 0` is `pushd 0`, 3 for 4).
+#[test]
+fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() {
+    for (high, low, joined, size) in [(0x70i64, 0x70i64, false, true), (0x70, 0x70, true, false), (0, 0, true, true), (0x3F80, 0, false, true)] {
+        let push = |at: i64, number: i64| {
+            Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
+        };
+        let input = body("arguments", 0, vec![block(0, vec![push(0, high), push(3, low)], vec![])]);
+
+        let result = pushes(&input, crate::backend::cpu::tuned("486", size).unwrap()).insns();
+
+        assert_eq!(result.len(), if joined { 1 } else { 2 }, "{high:#x}:{low:#x} size={size}");
+    }
+}
+
 #[test]
 fn test_constant_push_pair_preserves_stack_bytes() {
     for (high, low) in [(0x43F3i64, 0xC000i64), (-1, -2), (0, 0), (0x8000, 0x7FFF)] {
@@ -369,7 +385,7 @@ fn test_constant_push_pair_preserves_stack_bytes() {
             Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
         };
         let pair = vec![push(0, high), push(3, low)];
-        let result = pushes(&body("arguments", 0, vec![block(0, pair, vec![])])).insns();
+        let result = pushes(&body("arguments", 0, vec![block(0, pair, vec![])]), crate::backend::cpu::tuned("486", false).unwrap()).insns();
         assert!(result.len() == 1 && result[0].covers == Some((0, 6)));
         let Loc::Imm(operand) = &result[0].what.as_ref().unwrap().sources[0] else { unreachable!() };
         let expected: Vec<u8> = ((low & 0xFFFF) as u16)
@@ -413,7 +429,7 @@ fn test_constant_push_fusion_stops_at_boundaries() {
             vec![block(0, insns, vec![])]
         };
         let input = body("boundary", 0, blocks);
-        assert_eq!(pushes(&input), input, "{barrier}");
+        assert_eq!(pushes(&input, crate::backend::cpu::tuned("486", false).unwrap()), input, "{barrier}");
     }
 }
 
@@ -423,14 +439,14 @@ fn test_constant_push_fusion_stops_at_boundaries() {
 fn test_a_byte_gap_does_not_stop_push_fusion() {
     let first = insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
     let second = Insn { at: 4, covers: Some((4, 7)), ..first.clone() };
-    let fused = pushes(&body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]));
+    let fused = pushes(&body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
     let code: Vec<_> = fused.insns().into_iter().filter(|one| !one.is_meta()).collect();
     assert_eq!(code.len(), 1, "{code:?}");
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 4, 5, 6]);
 
     // Nor does a marker between them.
     let marker = insn(3, Some((3, 4)), Some(lir::inert()), vec![], vec![]);
-    let fused = pushes(&body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]));
+    let fused = pushes(&body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
     assert_eq!(fused.insns().iter().filter(|one| !one.is_meta()).count(), 1, "{:?}", fused.insns());
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 3, 4, 5, 6]);
 }

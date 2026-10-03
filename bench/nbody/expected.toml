@@ -1,4 +1,4 @@
-reason = "word LEA for mov+add/sub; a call no longer reads flags before it, so more pairs fold: fewer instructions everywhere, parity -O2 +1 memory operand (allocation moved a spill) for 6 fewer instructions"
+reason = "-Os pushes a dword constant as two word pushes where they are fewer bytes (pushd imm32 is 6): -Os only, a few more instructions in the kernels, -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -6,7 +6,7 @@ instructions = 63307
 memory_operands = 30307
 
 [bas.Os]
-instructions = 68656
+instructions = 68660
 memory_operands = 26068
 
 [c.O2]

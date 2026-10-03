@@ -96,7 +96,7 @@ group pushes
 
 rule dword_push
     match   push h:imm16 ; push l:imm16
-    when    free(@0, bare_push), free(@1, bare_push)
+    when    free(@0, bare_push), free(@1, bare_push), joins_no_larger(h, l)
     rewrite @0: push dword(h, l) ; drop @1
 
 
@@ -351,9 +351,16 @@ rule paired_loads
             above(h, l), same_registers(h, l)
     rewrite @1: =@1 dword_cell(l) {uses: @3.uses, call: @3.call, symbol: @3.symbol} ; drop @2 ; drop @3
 
-// Push a single-use immediate directly.
+// Push a single-use immediate directly. Tuned for size, a dword one whose words are
+// shorter pushes than the dword is two word pushes.
 group immediate_arguments
     walk window
+
+rule split_immediate_argument
+    match   mov v:held, i:imm32 ; push v
+    when    free(@0, held_copy), free(@1, pushed_held), same_width(v, i), used_once(v),
+            defines_only(@0, v), uses_only(@1, v), splits_smaller(i)
+    rewrite @0: =@1 high_word(i) {defines: [], uses: []} ; @1: =@1 low_word(i) {defines: [], uses: []}
 
 rule immediate_argument
     match   mov v:held, i:sym ; push v
