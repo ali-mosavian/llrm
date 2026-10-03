@@ -4,6 +4,7 @@
 //! This emission boundary is a procedure module: it emits far Pascal
 //! SUB/FUNCTION bodies and their data inside the BASIC module envelope.
 
+use llrm_core::backend::stackusage::stack_to_add;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
@@ -456,8 +457,14 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         frames,
         line_numbers: module.line_numbers.iter().copied().collect(),
     };
-    Ok(basic::compiled(program, &object, codegen)?)
+    let mut compiled = basic::compiled(program, &object, codegen)?;
+    compiled.stack = stack_to_add(&compiled, STACK_BASE)?;
+    Ok(compiled)
 }
+
+/// The stack the BASIC runtime's crt0 links (`inc/stack2.inc`, STACK_SIZE), as the
+/// link maps of BC's and llrm-qb's objects both show; the object's own adds to it.
+pub const STACK_BASE: i64 = 0x800;
 
 /// Compile one QB HIR module to the shared assembly model.
 pub fn assembled(

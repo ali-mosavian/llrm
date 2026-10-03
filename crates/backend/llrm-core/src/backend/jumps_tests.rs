@@ -77,6 +77,7 @@ fn listed(body: LirBody, name: &str) -> Vec<String> {
         callees: IndexMap::default(),
         interrupt: None,
         size: false,
+        entry: 0,
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0)
         .unwrap()

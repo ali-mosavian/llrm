@@ -374,6 +374,12 @@ pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Resu
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
         omfwrite::_data(&mut segments[index], index, items, &mut symbols);
     }
+    if module.stack > 0 {
+        let mut stack = omfwrite::Segment::new("STACK", "STACK", true);
+        stack.image = vec![0; module.stack as usize];
+        stack.stack = true;
+        segments.push(stack);
+    }
     let every: Vec<usize> = (0..module.procedures.len()).collect();
     omfwrite::_code_by(&mut segments[0], 0, module, &every, &mut symbols, _basic_listing).map_err(|error| error.to_string())?;
 
@@ -738,6 +744,7 @@ fn procedure(
     let finalized = finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
     let mut reserve = 0;
+    let mut entry = 0;
     let mut statics = 0;
     let (body, framed) = if !super::framed(module, id) {
         (finalized.body, IndexMap::default())
@@ -746,7 +753,10 @@ fn procedure(
         (_static_frame(&finalized.body, statics), IndexMap::default())
     } else {
         match frame {
-            Frame::Runtime { strings } => _runtime_frame(&finalized.body, machined.reserve, runtime, strings)?,
+            Frame::Runtime { strings } => {
+                entry = machined.reserve + (machined.reserve & 1) + _RUNTIME_FRAME_HEADER(runtime)?;
+                _runtime_frame(&finalized.body, machined.reserve, runtime, strings)?
+            }
             Frame::Own => {
                 reserve = machined.reserve;
                 (finalized.body, IndexMap::default())
@@ -781,6 +791,7 @@ fn procedure(
         callees,
         interrupt: None,
         size: false,
+        entry,
     };
     Ok((procedure, machined.landing, statics))
 }
