@@ -40,27 +40,12 @@ pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::dri
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
     let mut compiled = llrm_core::driver::compiled(&public, options)?.swap_remove(0);
-    compiled.stack = stack_to_add(&compiled)?;
+    compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, STACK_BASE)?;
     Ok(compiled)
 }
 
 /// The stack `runtime/start.asm` reserves; the object's own adds to it.
 pub const STACK_BASE: i64 = 4096;
-/// What the runtime's routines, DOS and an interrupt use below the program's
-/// deepest chain, which the call graph cannot see.
-pub const STACK_RESERVE: i64 = 512;
-/// A stack is one segment, and DGROUP's data and heap share it.
-const STACK_LIMIT: i64 = 0xF000;
-
-/// The bytes the program's stack segment adds to `STACK_BASE`, so the deepest
-/// chain of frames fits. A chain that cannot fit any segment is an error.
-fn stack_to_add(module: &masm::Module) -> Result<i64, String> {
-    let need = llrm_core::backend::stackusage::Usage::of(std::slice::from_ref(module)).deepest() + STACK_RESERVE;
-    if need > STACK_LIMIT {
-        return Err(format!("the deepest chain of calls needs {need} bytes of stack, more than the {STACK_LIMIT} a stack segment can hold"));
-    }
-    Ok((need - STACK_BASE).max(0))
-}
 
 /// Makes each export no symbol in `used` names internal, so that it and
 /// what only it calls are dropped: a linker's own elimination keeps

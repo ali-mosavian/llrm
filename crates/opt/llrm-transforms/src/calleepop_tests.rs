@@ -1,0 +1,88 @@
+use llrm_mir::passes::{ModuleAnalyses, ModulePass};
+
+use crate::calleepop::CalleePop;
+use crate::testing::{parsed, printed};
+
+/// `text` after the pass.
+fn run(text: &str) -> String {
+    run_for(text, true)
+}
+
+/// `text` after the pass, priced in bytes (`size`) or in clocks, on the real-mode target.
+fn run_for(text: &str, size: bool) -> String {
+    let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_code16::Dos::default()));
+    CalleePop { size }.run(&mut module, &mut analyses);
+    printed(&module)
+}
+
+const CALLEE: &str = "define internal i16 @work(i16 %a, i16 %b, i16 %c) {
+b0:
+  %x = add i16 %a, %b
+  %y = add i16 %x, %c
+  ret i16 %y
+}
+";
+
+/// QCport -Os spent `add sp,N` at some 720 calls of internal functions: 3 bytes each, where
+/// the callee popping them is `ret N` once. The function and each call of it take one
+/// convention, so the call's cleanup and the function's `ret N` cannot disagree.
+#[test]
+fn an_internal_function_called_directly_twice_pops_its_own_arguments() {
+    let after = run(&format!("{CALLEE}define i16 @f(i16 %x) {{
+b0:
+  %p = call i16 @work(i16 %x, i16 2, i16 3)
+  %q = call i16 @work(i16 3, i16 %x, i16 1)
+  %s = add i16 %p, %q
+  ret i16 %s
+}}
+"));
+    assert!(after.contains("define internal fastcc i16 @work"), "{after}");
+    assert_eq!(after.matches("call fastcc i16 @work").count(), 2, "{after}");
+}
+
+/// Where a caller outside the module's sight, or an indirect one, may reach it, the callee
+/// popping would unbalance that caller's stack: an external function, one whose address is
+/// stored or passed, one called with another convention, and a variadic one stay as they are.
+#[test]
+fn a_function_something_else_may_call_keeps_the_caller_cleaning() {
+    let caller = "define i16 @f(i16 %x) {
+b0:
+  %p = call i16 @work(i16 %x, i16 2, i16 3)
+  %q = call i16 @work(i16 3, i16 %x, i16 1)
+  %s = add i16 %p, %q
+  ret i16 %s
+}
+";
+    let external = run(&format!("{}{caller}", CALLEE.replace("internal ", "")));
+    assert!(!external.contains("fastcc"), "{external}");
+    let taken = run(&format!("@table = global ptr @work\n{CALLEE}{caller}"));
+    assert!(!taken.contains("fastcc"), "{taken}");
+    let passed = run(&format!("declare void @take(ptr)\n{CALLEE}{caller}define void @g() {{\nb0:\n  call void @take(ptr @work)\n  ret void\n}}\n"));
+    assert!(!passed.contains("fastcc"), "{passed}");
+}
+
+/// `ret 6` costs 2 bytes more than `ret` at each return, and a call saves 3: one call of a
+/// function that returns twice loses a byte, so it keeps the caller's cleanup in bytes; in
+/// clocks `ret N` costs nothing and the call saves its `add sp`, so -O2 takes it.
+#[test]
+fn a_function_the_convention_would_cost_bytes_keeps_the_caller_cleaning_only_for_size() {
+    let text = "define internal i16 @work(i16 %a, i16 %b, i16 %c) {
+b0:
+  %t = icmp eq i16 %a, 0
+  br i1 %t, label %one, label %two
+one:
+  ret i16 %b
+two:
+  ret i16 %c
+}
+
+define i16 @f(i16 %x) {
+b0:
+  %p = call i16 @work(i16 %x, i16 2, i16 3)
+  ret i16 %p
+}
+";
+    assert!(!run_for(text, true).contains("fastcc"));
+    assert!(run_for(text, false).contains("define internal fastcc i16 @work"));
+}

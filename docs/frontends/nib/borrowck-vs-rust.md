@@ -32,7 +32,7 @@ Probes are in `~/scratch/nibborrow-probe/p` (copied below). Each was compiled wi
 
 ### S1 Shadowed parameter name — #120 (fixed in #126)
 
-```nib
+```python
 fn pick(x: &i16, c: bool) -> &i16:
     if c:
         let x: i16 = 5
@@ -50,7 +50,7 @@ fn main() -> i16:
 
 ### S2 Borrow of an owned parameter returned — #121 (fixed in #126)
 
-```nib
+```python
 fn first(v: vec[i16]) -> &i16:
     return v[0]
 fn main() -> i16:
@@ -63,7 +63,7 @@ Accepted. Optimised MIR of `first`: `call N$BDRP(v2)` (drop the buffer) then `re
 
 ### S3 Write through a `&T` field — #122 (fixed in #126)
 
-```nib
+```python
 struct H:
     mut r: &i16
 fn main() -> i16:
@@ -78,7 +78,7 @@ Accepted; prints `7`: an immutable `let` is changed through a shared reference. 
 
 ### S4 Module variable lent and written by the callee — #124 (fixed in #126)
 
-```nib
+```python
 struct P:
     mut n: i16
 var g: P = P(n=1)
@@ -96,7 +96,7 @@ Accepted; prints `99` from a `&P` that is supposed to be read-only. The `&mut` f
 
 ### S5 Borrow of a local pushed into a caller's `vec[&T]` — #123 (fixed in #126)
 
-```nib
+```python
 fn stash(out: &mut vec[&i16]) -> void:
     let local: i16 = 7
     out.push(local)

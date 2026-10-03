@@ -470,3 +470,8 @@ impl Opcode {
         }
     }
 }
+
+/// LLVM's `fastcc`, the convention the compiler gives a function it sees every caller of: here
+/// arguments pushed right to left and popped by the callee (`ret N`), which a caller's
+/// `add sp,N` then does not repeat.
+pub const FAST: u32 = 8;
