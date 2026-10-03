@@ -848,3 +848,11 @@ fn test_an_extension_in_place_takes_its_shortest_form() {
         assert_eq!(hex(&made(emitted(&what)).code), expected, "{name}");
     }
 }
+
+/// `enter N,0` is c8 N N 00: the frame `push bp; mov bp,sp; sub sp,N` in 4 bytes of 6.
+#[test]
+fn test_enter_encodes_its_size_and_nesting_level() {
+    let what = sem(Operation::Nothing, Some("enter"), vec![], vec![imm(300, 2), imm(0, 1)], None, false);
+    assert_eq!(hex(&made(emitted(&what)).code), "c82c0100");
+}
+

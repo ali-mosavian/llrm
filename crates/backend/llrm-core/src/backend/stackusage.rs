@@ -56,6 +56,11 @@ fn frame(procedure: &masm::Procedure) -> i64 {
         .iter()
         .map(|one| match one.op {
             Operation::Push => moved(one),
+            // The saved BP and the locals.
+            Operation::Nothing if one.name.as_deref() == Some("enter") => match one.sources.first() {
+                Some(Loc::Imm(amount)) => 2 + amount.value,
+                _ => 0,
+            },
             Operation::Binary if one.name.as_deref() == Some("sub") => match one.sources.get(1) {
                 Some(Loc::Imm(amount)) => amount.value,
                 _ => 0,
