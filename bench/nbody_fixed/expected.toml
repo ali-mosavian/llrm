@@ -1,4 +1,4 @@
-reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+reason = "nib uses fixed types: Q9 products and divides are smul.fix/sdiv.fix, tdiv chains gone (nib -O2 5090115 -> 3209357)"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -18,9 +18,9 @@ instructions = 1494168
 memory_operands = 326049
 
 [nib.O2]
-instructions = 5090115
-memory_operands = 893039
+instructions = 3209357
+memory_operands = 692062
 
 [nib.Os]
-instructions = 5430286
-memory_operands = 914060
+instructions = 3658502
+memory_operands = 800068
