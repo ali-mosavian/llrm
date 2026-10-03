@@ -18,6 +18,11 @@ pub fn space(module: &Module, global: GlobalId) -> Space {
     }
 }
 
+/// How an `Addr` names `offset` bytes into the near global `global`.
+pub fn addr(module: &Module, global: GlobalId, offset: i64) -> crate::model::ir::Addr {
+    crate::model::ir::Addr { index: i64::from(global.0), ..crate::model::ir::Addr::new(space(module, global), offset) }
+}
+
 /// Each global's assembler name, keyed as an `Addr` names it: its name as
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
 /// is free, so one no assembler takes becomes `G$n`; an external one must

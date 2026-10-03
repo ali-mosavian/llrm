@@ -703,8 +703,8 @@ fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: 
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
-/// what reads nothing (a constant, an address), and what a cell nothing
-/// changes holds. Each maps to the one instruction that makes it.
+/// what reads nothing (a constant, an address), what a cell nothing
+/// changes holds, and what a plain store left in a global. Each maps to the one instruction that makes it.
 fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>> {
     let mut defining: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.insns() {
@@ -756,6 +756,10 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             what.dests = vec![Loc::Held(crate::model::ir::Held { value: *value, width: dest.width })];
         }
         out.insert(*value, Arc::new(copy));
+    }
+    // What a plain store left in a global: read back from it, no slot to store into.
+    for (value, (store, cell)) in spiller::_stored_cells(body, values).into_iter() {
+        out.entry(value).or_insert_with(|| spiller::_reload(&store, value, &cell));
     }
     out
 }
