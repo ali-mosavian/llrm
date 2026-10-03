@@ -1,12 +1,12 @@
-reason = "#402: a dead private initializer holds no address; lru.bas -5 instructions, -5 memory operands"
-blessed = "2026-10-03"
+reason = "#402: a dead private initializer holds no address, lru.bas -5 instructions and -5 memory operands (-Os too); lru.nib works (#357)"
+blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 166
 memory_operands = 69
 
 [bas.Os]
-instructions = 192
+instructions = 200
 memory_operands = 78
 
 [c.O2]
@@ -22,5 +22,5 @@ instructions = 177
 memory_operands = 96
 
 [nib.Os]
-instructions = 306
+instructions = 312
 memory_operands = 147
