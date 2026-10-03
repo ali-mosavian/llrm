@@ -237,6 +237,7 @@ impl Compiler {
         if let Some(call) = call {
             let data = self.descriptor_field(descriptor, 2, INTEGER);
             let allocated = self.computed("ne", super::BOOLEAN, vec![Operand::Value(data), Operand::Constant(INTEGER, Number::Integer(0))]);
+            self.tag_last(Tag::Allocated { descriptor });
             let read = self.new_block();
             self.terminate("branch", vec![allocated], vec![read, call])?;
             self.select_block(read);

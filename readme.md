@@ -262,8 +262,8 @@ DOT proc near
 L1_0:
     mov di, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
     mov si, word ptr [bp+4]         ; b() descriptor
-    mov bx, word ptr [di+14]        ; UBOUND(a): every array Dot gets has one dimension from 0,
-    dec bx                          ; so the bound is its count less 1
+    mov bx, word ptr [di+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
+    dec bx                          ; so the bound is its count less 1; no allocated test
     mov ax, word ptr [si+14]
     dec ax                          ; UBOUND(b)
     cmp bx, ax                      ; [inlined] Min%: no call, bx = the smaller bound
@@ -304,6 +304,11 @@ DOT endp
 ```
 
 An array is a descriptor: its segment goes in `es` or `fs` before the loop.
+`UBOUND` is two loads and a decrement: the rank is the declaration's, so the count's
+slot is fixed, and nothing tests that the array is allocated, as BC does not without
+`/D`. `-fsanitize=bounds` brings the test and the cold `B$UBND` call back, except
+where every caller passes an array a `DIM` or `REDIM` dominates, as here. Where a
+procedure's own `DIM` or `REDIM` states a bound, `UBOUND` is that value and reads nothing.
 `--own-frames` replaces the runtime's `B$ENRA` and `B$EXSA` frame with a plain one.
 `Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
 lets the inliner take it; by reference it stays a call

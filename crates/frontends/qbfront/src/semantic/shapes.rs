@@ -15,10 +15,10 @@
 //! parameter of an externally callable procedure -- has no fact, nor has one
 //! handed to a callee this module does not define.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::tags::{Passing, Slot, Tag};
-use super::{Compiler, Function, Number, Operand, Place};
+use super::{Compiler, Function, Instruction, Number, Operand, Place};
 
 /// A descriptor, independently of the value that points to it.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -259,11 +259,181 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
     (classes, out)
 }
 
+/// A function's entry block.
+const ENTRY: u32 = 1;
+
+/// The descriptors a function holds allocated before each instruction that
+/// asks, walking its blocks to a fixed point: a DIM or REDIM allocates, ERASE
+/// releases, and a call of a user procedure releases whatever it can reach --
+/// the `shared` module arrays, parameters and arrays handed whole. Every external entry
+/// starts with none. `entry` is what the function's own entry holds.
+fn allocated_before(
+    function: &Function,
+    pointers: &BTreeMap<u32, Identity>,
+    entry: &BTreeSet<Identity>,
+    statics: &BTreeSet<Identity>,
+    shared: &BTreeSet<Identity>,
+) -> BTreeMap<u32, BTreeSet<Identity>> {
+    let transfer = |one: &Instruction, state: &mut BTreeSet<Identity>| match &one.tag {
+        Some(Tag::Allocate(shape) | Tag::Reallocate(shape)) => state.extend(pointers.get(&shape.descriptor)),
+        Some(Tag::Release { descriptor }) => {
+            if let Some(identity) = pointers.get(descriptor) {
+                state.remove(identity);
+            }
+        }
+        Some(Tag::Invoke { arguments }) => {
+            state.retain(|identity| matches!(identity, Identity::Local(..)) || (matches!(identity, Identity::Global(..)) && !shared.contains(identity)));
+            for passing in arguments {
+                if let Passing::Array(value) = passing {
+                    state.remove(pointers.get(value).unwrap_or(&Identity::Global(u32::MAX, 0)));
+                }
+            }
+        }
+        _ => {}
+    };
+    let mut predecessors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for block in &function.blocks {
+        for target in block.terminator.iter().flat_map(|one| &one.targets) {
+            predecessors.entry(*target).or_default().push(block.id);
+        }
+    }
+    // None is "every descriptor": a block no walk has reached yet.
+    let mut out: BTreeMap<u32, Option<BTreeSet<Identity>>> = function.blocks.iter().map(|block| (block.id, None)).collect();
+    let before = |block: &super::Block, out: &BTreeMap<u32, Option<BTreeSet<Identity>>>| -> BTreeSet<Identity> {
+        if block.id == ENTRY {
+            return entry.clone();
+        }
+        if function.external_entries.contains(&block.id) {
+            return BTreeSet::new();
+        }
+        let mut joined: Option<BTreeSet<Identity>> = None;
+        for from in predecessors.get(&block.id).into_iter().flatten() {
+            if let Some(state) = &out[from] {
+                joined = Some(match joined {
+                    None => state.clone(),
+                    Some(joined) => joined.intersection(state).copied().collect(),
+                });
+            }
+        }
+        joined.unwrap_or_default()
+    };
+    loop {
+        let mut changed = false;
+        for block in &function.blocks {
+            let reached = block.id == ENTRY
+                || function.external_entries.contains(&block.id)
+                || predecessors.get(&block.id).into_iter().flatten().any(|from| out[from].is_some());
+            if !reached {
+                continue;
+            }
+            let mut state = before(block, &out);
+            block.instructions.iter().for_each(|one| transfer(one, &mut state));
+            if out[&block.id].as_ref() != Some(&state) {
+                out.insert(block.id, Some(state));
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut found = BTreeMap::new();
+    for block in &function.blocks {
+        let mut state = before(block, &out);
+        for one in &block.instructions {
+            if matches!(one.tag, Some(Tag::Allocated { .. } | Tag::Invoke { .. })) {
+                let mut seen = state.clone();
+                seen.extend(statics.iter().copied());
+                found.insert(one.id, seen);
+            }
+            transfer(one, &mut state);
+        }
+    }
+    found
+}
+
+/// The class roots of array parameters that every call hands an allocated
+/// array: optimistically all, then each class one call does not.
+fn entered_allocated(
+    compiler: &Compiler,
+    classes: &mut Classes,
+    known: &BTreeMap<Identity, Known>,
+    statics: &BTreeSet<Identity>,
+    shared: &BTreeSet<Identity>,
+) -> BTreeSet<Identity> {
+    let defined: BTreeSet<u32> = compiler
+        .functions
+        .iter()
+        .filter_map(|function| compiler.signatures.get(super::canonical(&function.name)).map(|signature| signature.symbol))
+        .collect();
+    let mut ok: BTreeSet<Identity> = BTreeSet::new();
+    for function in &compiler.functions {
+        for index in 0..function.parameters.len() {
+            let root = classes.root(Identity::Parameter(function.id, index));
+            if known.get(&root).is_some_and(Known::proven) {
+                ok.insert(root);
+            }
+        }
+    }
+    loop {
+        let before = ok.len();
+        for function in &compiler.functions {
+            let pointers = pointers(function);
+            let mut entry = BTreeSet::new();
+            for index in 0..function.parameters.len() {
+                let identity = Identity::Parameter(function.id, index);
+                if ok.contains(&classes.root(identity)) {
+                    entry.insert(identity);
+                }
+            }
+            let states = allocated_before(function, &pointers, &entry, statics, shared);
+            for one in function.blocks.iter().flat_map(|block| &block.instructions) {
+                let Some(Tag::Invoke { arguments }) = &one.tag else { continue };
+                let reaches = function.calls.iter().find(|call| call.instruction == one.id).and_then(|call| call.callee).is_some_and(|symbol| defined.contains(&symbol));
+                if !reaches {
+                    continue;
+                }
+                for passing in arguments {
+                    let Passing::Array(value) = passing else { continue };
+                    let Some(identity) = pointers.get(value) else { continue };
+                    if !states[&one.id].contains(identity) {
+                        ok.remove(&classes.root(*identity));
+                    }
+                }
+            }
+        }
+        if ok.len() == before {
+            return ok;
+        }
+    }
+}
+
 /// Fold each proven fact into the HIR.
 pub(super) fn applied(compiler: &mut Compiler) {
     let (mut classes, known) = known(compiler);
+    let statics: BTreeSet<Identity> = compiler
+        .functions
+        .iter()
+        .flat_map(|function| function.places.iter().map(move |place| (function, place)))
+        .filter(|(_, place)| compiler.static_shapes.contains_key(&place.id))
+        .map(|(function, place)| identity(function, place))
+        .collect();
+    // A module array two procedures name is one a call may ERASE.
+    let mut named: BTreeMap<Identity, BTreeSet<u32>> = BTreeMap::new();
+    for function in &compiler.functions {
+        for one in pointers(function).into_values().filter(|one| matches!(one, Identity::Global(..))) {
+            named.entry(one).or_default().insert(function.id);
+        }
+    }
+    let shared: BTreeSet<Identity> = named.into_iter().filter(|(_, users)| users.len() > 1).map(|(one, _)| one).collect();
+    let entered = entered_allocated(compiler, &mut classes, &known, &statics, &shared);
     for function in &mut compiler.functions {
         let pointers = pointers(function);
+        let entry: BTreeSet<Identity> = (0..function.parameters.len())
+            .map(|index| Identity::Parameter(function.id, index))
+            .filter(|identity| entered.contains(&classes.root(*identity)))
+            .collect();
+        let held = allocated_before(function, &pointers, &entry, &statics, &shared);
         let mut fact = |descriptor: u32| {
             let identity = pointers.get(&descriptor)?;
             known.get(&classes.root(*identity)).filter(|one| one.proven()).cloned()
@@ -293,6 +463,13 @@ pub(super) fn applied(compiler: &mut Compiler) {
                         };
                         one.op = "copy";
                         one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(bound))];
+                    }
+                    Some(Tag::Allocated { descriptor }) if one.op == "ne" => {
+                        if !pointers.get(&descriptor).is_some_and(|identity| held[&one.id].contains(identity)) {
+                            continue;
+                        }
+                        one.op = "copy";
+                        one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(1))];
                     }
                     Some(Tag::DescriptorField { descriptor, field: Slot::Rank }) => {
                         let Some(rank) = fact(descriptor).and_then(|fact| fact.rank) else {
@@ -576,6 +753,38 @@ mod tests {
         let t = function(&compiler, "t");
         assert_eq!(folded(t, |field| matches!(field, Slot::Rank)), [1]);
         assert_eq!(folded(t, |field| matches!(field, Slot::LowerOf(1))), [3]);
+    }
+
+    /// How many allocated tests of `function` became true.
+    fn proven_allocated(function: &Function) -> usize {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|one| matches!(one.tag, Some(Tag::Allocated { .. })) && one.op == "copy")
+            .count()
+    }
+
+    const CHECKED_BOUND: &str = "DEFINT A-Z\nDECLARE FUNCTION u (q())\nREDIM a(5)\nREDIM b(7)\nPRINT u(a()); u(b())\n\
+         FUNCTION u (q())\nu = UBOUND(q)\nEND FUNCTION\n";
+
+    /// UBOUND of a parameter called B$UBND on an unallocated test although
+    /// every caller DIMs the array it passes.
+    #[test]
+    fn test_a_parameter_every_caller_allocates_is_allocated() {
+        let compiler = applied_with(CHECKED_BOUND, &Options { whole_program: true, checked_arrays: true, ..Options::default() });
+        assert_eq!(proven_allocated(function(&compiler, "u")), 1);
+    }
+
+    /// One caller passing an ERASEd array, or a public procedure any other
+    /// module may call, leaves the test.
+    #[test]
+    fn test_a_parameter_a_caller_erased_or_a_public_one_is_not() {
+        let erased = CHECKED_BOUND.replace("PRINT u(a())", "ERASE a\nPRINT u(a())");
+        let compiler = applied_with(&erased, &Options { whole_program: true, checked_arrays: true, ..Options::default() });
+        assert_eq!(proven_allocated(function(&compiler, "u")), 0);
+        let compiler = applied_with(CHECKED_BOUND, &Options { checked_arrays: true, ..Options::default() });
+        assert_eq!(proven_allocated(function(&compiler, "u")), 0);
     }
 
     #[test]
