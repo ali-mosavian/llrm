@@ -33,7 +33,7 @@ use llrm_mir::print;
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassManager, PreservedAnalyses, Stage, Unit};
 use llrm_mir::program::Program;
 
-use crate::interprocedural::{Interprocedural, Seen, Snapshot};
+use crate::interprocedural::Interprocedural;
 use crate::{
     algebraic, dead, decide, dse, fill, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
     promote, rotate, unroll, unswitch, window,
@@ -224,8 +224,6 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     if applied.options.wanted("ports") {
         manager.add(ports::Ports);
     }
-    let seen = Seen::default();
-    manager.add_program(Snapshot(seen.clone()));
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
@@ -235,7 +233,6 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
         proved: None,
         inline: applied.options.inline,
         size: applied.options.prefers_size(),
-        seen,
     });
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.

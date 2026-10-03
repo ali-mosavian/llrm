@@ -20,9 +20,7 @@
 //!
 //! The old module had no tests of its own.
 
-use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::rc::Rc;
 
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
@@ -62,34 +60,6 @@ pub struct Interprocedural {
     pub inline: inline::Threshold,
     /// Inlining weighs code bytes, not clocks.
     pub size: bool,
-    /// The globals each module's pipeline ran with tracked; see `Seen`.
-    pub seen: Seen,
-}
-
-/// Each module's tracked globals as `Snapshot` took them. The function pipeline reads
-/// GlobalsAA as it was before its own cleanup, so a global whose only escape was dead
-/// code is untracked for the whole run; `Interprocedural` sends a module's bodies back
-/// through once the cleanup shows more tracked.
-pub type Seen = Rc<RefCell<Vec<BTreeSet<GlobalId>>>>;
-
-/// Records `Seen`, ahead of the function pipeline.
-pub struct Snapshot(pub Seen);
-
-impl ProgramPass for Snapshot {
-    fn name(&self) -> &'static str {
-        "snapshot"
-    }
-
-    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
-        let mut modules = managers(program, analyses);
-        *self.0.borrow_mut() = (0..modules.len()).map(|at| tracked(&mut modules[at], &program.modules[at])).collect::<Result<_, _>>()?;
-        Ok(())
-    }
-}
-
-fn tracked(analyses: &mut ModuleAnalyses, module: &Module) -> Result<BTreeSet<GlobalId>, String> {
-    let globals = analyses.get::<GlobalsAA>(module);
-    Result::as_ref(&*globals).map(|one| one.tracked_globals().clone()).map_err(String::clone)
 }
 
 impl ProgramPass for Interprocedural {
@@ -102,27 +72,6 @@ impl ProgramPass for Interprocedural {
         let costs = if self.size { program.target.size_costs() } else { program.target.costs() };
         let roots = roots(program);
         let mut modules = managers(program, analyses);
-        loop {
-            let mut again = false;
-            for at in 0..modules.len() {
-                let now = tracked(&mut modules[at], &program.modules[at])?;
-                let mut seen = self.seen.borrow_mut();
-                let Some(before) = seen.get_mut(at) else { continue };
-                if now.is_subset(before) {
-                    continue;
-                }
-                before.extend(now);
-                for id in procedures(program, at) {
-                    modules[at].changed(id);
-                    modules[at].invalidate(&PreservedAnalyses::none());
-                    pipeline(&mut program.modules[at], &mut modules[at], id, "tracked.");
-                }
-                again = true;
-            }
-            if !again {
-                break;
-            }
-        }
         let proved = optimized::<String>(
             program,
             &mut modules,
