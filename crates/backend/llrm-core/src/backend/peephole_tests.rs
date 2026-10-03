@@ -3062,3 +3062,19 @@ fn test_a_borrow_mask_needs_no_zero() {
     assert_eq!(names(&result.insns().into_iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing)).collect::<Vec<_>>()), ["add", "sbb", "and"]);
     assert!(result.insns().iter().any(|one| one.what == Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), si.clone()]))));
 }
+
+/// A dword copy and add run under the operand-size prefix each, so on a CPU
+/// that charges a prefix they cost two more than their prices: `mov edx,ecx;
+/// add edx,1024` is four against the 67h lea's four, and one instruction.
+/// Priced without it, 2 against 3 kept both (SPHEREMAPLASMA, #386; mandel
+/// -3% instructions when it became lea).
+#[test]
+fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
+    let (dest, source) = (rl(Register::EDX, 4), rl(Register::ECX, 4));
+    let copy = insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![2], vec![1]);
+    let add = insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![dest.clone()], vec![dest.clone(), im(1024, 4)])), vec![2], vec![2]);
+    let compare = insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])), vec![], vec![2]);
+    let input = body("dword-offset", 0, vec![block(0, vec![Arc::new(copy), Arc::new(add), Arc::new(compare)], vec![])]);
+    let result = addresses(&input, "486").unwrap().insns();
+    assert_eq!(names(&result), ["lea", "cmp"]);
+}

@@ -1,4 +1,4 @@
-reason = "-Os is priced in bytes now (size_costs forwarded): ret N only where its calls save more than 2 bytes a return, and the inliner weighs bodies in bytes; -O2 unchanged"
+reason = "a dword copy and add are priced with their operand-size prefixes, so the peephole makes the lea: mandel -3% instructions, nothing worse"
 blessed = "2026-10-04"
 
 [bas.O2]
@@ -14,7 +14,7 @@ instructions = 4562091
 memory_operands = 420099
 
 [c.Os]
-instructions = 4351991
+instructions = 4291991
 memory_operands = 420099
 
 [nib.O2]
@@ -22,5 +22,5 @@ instructions = 5947159
 memory_operands = 570147
 
 [nib.Os]
-instructions = 5812084
+instructions = 5677059
 memory_operands = 570147

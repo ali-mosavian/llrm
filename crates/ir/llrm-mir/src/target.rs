@@ -148,6 +148,25 @@ impl OperationCosts {
     pub fn cleanup(&self, words: i64) -> i64 {
         (words * self.pop).min(self.adjust)
     }
+
+    /// `price` for an operation on `width`-byte values: a dword one in real
+    /// mode runs under the operand-size prefix.
+    pub fn sized(&self, price: i64, width: i64) -> i64 {
+        price + if width == 4 { self.prefix } else { 0 }
+    }
+}
+
+/// What one `lea` of `width`-byte values costs, where the target has an
+/// address form for it. A `word` one is a plain address (a base and an
+/// index, unscaled, no prefix); any other takes a form that scales, which
+/// costs its address-size prefix, and runs under the operand-size prefix a
+/// dword does.
+pub fn three_operand(costs: &OperationCosts, forms: &[AddressForm], width: i64, scale: i64, word: bool) -> Option<i64> {
+    if word {
+        return forms.iter().any(|form| !form.secondary).then_some(costs.address);
+    }
+    let form = forms.iter().find(|form| form.secondary && form.scales.contains(&scale))?;
+    Some(costs.sized(costs.address, width) + form.use_cost)
 }
 
 impl Default for OperationCosts {

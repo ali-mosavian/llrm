@@ -1,5 +1,5 @@
-reason = "-Os opens a frame with locals with enter N,0 (one instruction for three; 14 clocks for 3 on the 486, so -Os only); -O2 unchanged"
-blessed = "2026-10-03"
+reason = "a dword copy and add are priced with their operand-size prefixes, so the peephole makes the lea: mandel -3% instructions, nothing worse"
+blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 42417

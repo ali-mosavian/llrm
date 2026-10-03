@@ -92,6 +92,7 @@ fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTre
         || _cast_pair(context, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
+        || _duplicate_phi(function, inst)
         || _negated_difference(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst)
@@ -500,6 +501,28 @@ fn _phi_of_casts(context: &mut Context, function: &mut Function, inst: InstId) -
     let cast = function.create_instruction(Opcode::Cast(kind), function.instruction(inst).ty, vec![Operand::Value(function.instruction(phi).result.expect("a value"))], Flags::default(), None);
     function.insert(cast, Position::Before(first)).expect("a placed instruction");
     _forward(function, inst, Operand::Value(function.instruction(cast).result.expect("a value")));
+    true
+}
+
+/// A phi that takes the values of an earlier phi of its block, from the same
+/// predecessors, is that phi: SimplifyCFG's `EliminateDuplicatePHINodes`.
+/// gvn's partial redundancy elimination made two where one stood, and the
+/// loop carried both in registers (SPHEREMAPLASMA, #386).
+fn _duplicate_phi(function: &mut Function, inst: InstId) -> bool {
+    if function.instruction(inst).opcode != Opcode::Phi {
+        return false;
+    }
+    let block = function.parent(inst).expect("a placed phi");
+    let mine = &function.instruction(inst).operands;
+    let ty = function.instruction(inst).ty;
+    // One arm per predecessor: the same count, and each arm of this one among the other's.
+    let earlier = function.block(block).instructions().iter().copied().take_while(|&one| one != inst).find(|&one| {
+        let other = function.instruction(one);
+        other.opcode == Opcode::Phi && other.ty == ty && other.operands.len() == mine.len() && mine.chunks(2).all(|arm| other.operands.chunks(2).any(|theirs| theirs == arm))
+    });
+    let Some(earlier) = earlier else { return false };
+    let with = Operand::Value(function.instruction(earlier).result.expect("a phi's value"));
+    _forward(function, inst, with);
     true
 }
 
