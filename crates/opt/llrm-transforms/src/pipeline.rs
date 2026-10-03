@@ -36,7 +36,7 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     algebraic, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, unroll, unswitch, window,
+    promote, rotate, spares, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -261,6 +261,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     if applied.options.wanted("gepoffset") {
         manager.add(gepoffset::GepOffset);
     }
+    // Last: the machine side reads what each call spares, and nothing after moves a call.
+    manager.add(spares::Spares);
     manager.run(program)
 }
 

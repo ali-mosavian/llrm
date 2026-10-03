@@ -917,6 +917,92 @@ pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Me
 }
 
 
+/// Values a `mov [cell], value` writes to a global right after defining them,
+/// the cell unchanged before every use: read back from the cell they are what
+/// a spill slot would hold, without the store into the slot. The store is not
+/// itself a use that is remade, and each definition of the value loses the
+/// cell, so a value made again by a later trip is not read from the last one's.
+pub fn _stored_cells(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, (Arc<Insn>, Mem)> {
+    let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
+    let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = values.iter().map(|value| (*value, Vec::new())).collect();
+    for one in body.insns() {
+        for value in values.intersection(&_set(&one.uses)) {
+            uses[value].push(one.clone());
+        }
+        for value in values.intersection(&_set(&one.defines)) {
+            definitions.entry(*value).or_default().push(one.clone());
+        }
+    }
+    let mut result = IndexMap::default();
+    for block in &body.blocks {
+        for pair in block.insns.windows(2) {
+            let (define, store) = (&pair[0], &pair[1]);
+            let [value] = define.defines.as_slice() else { continue };
+            let Some(cell) = _global_store(store, *value) else { continue };
+            if !_defined_width(define, *value, cell.width) {
+                continue;
+            }
+            if let Some(made) = _remade_from(body, &definitions, &uses, define, store, *value, &cell) {
+                result.insert(*value, made);
+            }
+        }
+    }
+    result
+}
+
+fn _remade_from(
+    body: &LirBody,
+    definitions: &IndexMap<u32, Vec<Arc<Insn>>>,
+    uses: &IndexMap<u32, Vec<Arc<Insn>>>,
+    define: &Arc<Insn>,
+    store: &Arc<Insn>,
+    value: u32,
+    cell: &Mem,
+) -> Option<(Arc<Insn>, Mem)> {
+    if !definitions.get(&value).is_some_and(|found| found.len() == 1 && Arc::ptr_eq(&found[0], define)) {
+        return None;
+    }
+    let read: Vec<Arc<Insn>> = uses.get(&value)?.iter().filter(|one| !Arc::ptr_eq(one, store)).cloned().collect();
+    if read.is_empty() || read.iter().any(|one| one.group.is_some()) {
+        return None;
+    }
+    let redefines = |one: &Insn| one.defines.contains(&value);
+    let ok = _unchanged_but(body, store, cell, &read, &redefines);
+    ok.then(|| (Arc::clone(store), cell.clone()))
+}
+
+/// The global cell `store` writes `value` to whole and plain, if it is that.
+fn _global_store(store: &Insn, value: u32) -> Option<Mem> {
+    let what = store.what.as_ref()?;
+    if what.op != Operation::Move || what.name.as_deref() != Some("mov") {
+        return None;
+    }
+    let ([Loc::Mem(cell)], [Loc::Held(held)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+    let addr = cell.addr?;
+    let plain = held.value == value
+        && held.width == cell.width
+        && matches!(cell.width, 1 | 2)
+        && addr.base == Register::None
+        && addr.segment == Register::None
+        && matches!(addr.space, Space::Segment | Space::External)
+        && cell.base.is_none()
+        && cell.index.is_none()
+        && cell.selector.is_none()
+        && store.uses == [value]
+        && !store.volatile
+        && store.symbol != Some(true)
+        && store.group.is_none()
+        && store.spread.is_empty()
+        && !store.spill_store;
+    plain.then(|| cell.clone())
+}
+
+/// Whether `define` makes `value` as wide as the cell it is stored to.
+fn _defined_width(define: &Insn, value: u32, width: u32) -> bool {
+    define.what.as_ref().is_some_and(|what| what.dests.iter().any(|dest| matches!(dest, Loc::Held(held) if held.value == value && held.width == width)))
+}
+
+
 /// Whether `cell` still holds what it held at `define` after `one`.
 fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: bool) -> bool {
     if Arc::ptr_eq(one, define) {
@@ -966,7 +1052,7 @@ pub(crate) fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
     if one.unmodeled_write() {
         return true;
     }
-    call.is_some_and(|call| call.writes() && !(_in_frame(cell) && call.spares(_frame_disp(cell), cell.width)))
+    call.is_some_and(|call| call.may_write(cell))
 }
 
 /// A fixed frame cell's displacement; none for one indexed or based.
@@ -981,6 +1067,10 @@ fn _in_frame(cell: &Mem) -> bool {
 /// The memory this instruction names as written that could be `cell`.
 fn _written(one: &Insn, cell: &Mem) -> Vec<Mem> {
     let spared = _in_frame(cell) && one.call.as_ref().is_some_and(|call| call.writes() && call.spares_the_frame());
+    // A store the MIR proves leaves this global alone writes none of it.
+    if one.spares.as_ref().is_some_and(|list| lir::CallMemory::spares_cell(list, cell)) {
+        return Vec::new();
+    }
     one.what
         .iter()
         .flat_map(|what| &what.dests)
@@ -1010,6 +1100,12 @@ fn _predecessors(body: &LirBody) -> IndexMap<i64, Vec<i64>> {
 
 /// Whether every use of the loaded value sees the cell the load saw.
 fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]) -> bool {
+    _unchanged_but(body, define, cell, uses, &|_| false)
+}
+
+/// `_unchanged`, the cell counting as lost wherever `redefines` holds.
+fn _unchanged_but(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>], redefines: &dyn Fn(&Insn) -> bool) -> bool {
+    let kept = |one: &Arc<Insn>, holds: bool| !redefines(one) && _keeps(one, define, cell, holds, body.sealed_arguments);
     let predecessors = _predecessors(body);
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
@@ -1020,7 +1116,7 @@ fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]
         for (at, block) in &blocks {
             let mut holds = into[at];
             for one in &block.insns {
-                holds = _keeps(one, define, cell, holds, body.sealed_arguments);
+                holds = kept(one, holds);
             }
             if outof.get(at) != Some(&holds) {
                 outof.insert(*at, holds);
@@ -1046,7 +1142,7 @@ fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]
             if wanted.contains(&key(one)) && !holds {
                 return false;
             }
-            holds = _keeps(one, define, cell, holds, body.sealed_arguments);
+            holds = kept(one, holds);
         }
     }
     true
@@ -2433,6 +2529,8 @@ mod tests {
             middle.call = (between != "call listing nothing").then(|| {
                 Arc::new(crate::model::lir::CallMemory {
                     effects: llrm_mir::memory::Effects::ANY,
+                    accessible: llrm_mir::memory::Effects::ANY,
+                    spared: vec![],
                     private: if spared { vec![crate::model::lir::WHOLE_FRAME] } else { vec![] },
                 })
             });

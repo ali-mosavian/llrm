@@ -479,8 +479,8 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
-/// what reads nothing (a constant, an address), and what a cell nothing
-/// changes holds. Each maps to the one instruction that makes it.
+/// what reads nothing (a constant, an address), what a cell nothing
+/// changes holds, and what a plain store left in a global. Each maps to the one instruction that makes it.
 fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>> {
     let mut defining: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.insns() {
@@ -509,6 +509,10 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
         if let Some([only]) = defining.get(value).map(Vec::as_slice) {
             out.insert(*value, Arc::clone(only));
         }
+    }
+    // What a plain store left in a global: read back from it, no slot to store into.
+    for (value, (store, cell)) in spiller::_stored_cells(body, values).into_iter().filter(|_| std::env::var_os("NOSTORED").is_none()) {
+        out.entry(value).or_insert_with(|| spiller::_reload(&store, value, &cell));
     }
     out
 }
@@ -562,7 +566,7 @@ fn simulated(
     for at in order {
         let block = by_at[at];
         // What is stored where it is defined, as often as this block runs, costs a store each time it leaves: evicted last.
-        let hot = |value: &u32| made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
+        let hot = |value: &u32| !remakes.contains_key(value) && made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
         let mut done = Edits::default();
         let ends: Vec<&BTreeSet<u32>> = preds.get(at).into_iter().flatten().filter_map(|from| edits.get(from)).map(|one| &one.w_out).collect();
         let mut candidates: Vec<(usize, i64, u32)> = flow.live_in[at]

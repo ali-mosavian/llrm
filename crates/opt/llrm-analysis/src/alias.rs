@@ -514,6 +514,28 @@ fn outlives(slice: &Slice) -> bool {
     !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)
 }
 
+/// The tracked globals the store `inst` may write, when it can write no other:
+/// its bytes lie in objects found, or in memory only an escaped address
+/// reaches (a pointer loaded, or made from an integer). None where it may
+/// be an incoming pointer's, or the analysis lost its address.
+pub fn writes_only(unit: &Unit, facts: &PointsTo, inst: InstId) -> Option<BTreeSet<GlobalId>> {
+    let reference = MemRef::of(unit, inst)?;
+    let Some(provenance) = facts.reference(unit, &reference) else {
+        return from_integer(unit, inst).then(BTreeSet::new);
+    };
+    let mut out = BTreeSet::new();
+    for slice in &provenance.slices {
+        match (slice.object.kind, &slice.object.identity) {
+            (MemoryKind::Global, Some(Identity::Global(global))) => {
+                out.insert(GlobalId(*global));
+            }
+            (MemoryKind::Frame | MemoryKind::Stack | MemoryKind::Allocation | MemoryKind::Unknown | MemoryKind::Nonlocal, _) => {}
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 /// Whether the address `inst` accesses is an integer made a pointer, moved by
 /// GEPs and casts: LLVM's `inttoptr`, which `_lost` publishes the escape of.
 fn from_integer(unit: &Unit, inst: InstId) -> bool {

@@ -40,7 +40,12 @@ pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallMemory {
     pub effects: llrm_mir::memory::Effects,
+    /// `effects` on memory the program can name: not a device's or the runtime's own.
+    pub accessible: llrm_mir::memory::Effects,
     pub private: Vec<(Addr, u32)>,
+    /// Whole global objects, by their `Addr` at offset 0 and their size, that the
+    /// MIR proves it leaves as they were (`!llrm.spares`).
+    pub spared: Vec<(Addr, u32)>,
 }
 
 impl CallMemory {
@@ -48,6 +53,29 @@ impl CallMemory {
     #[must_use]
     pub fn writes(&self) -> bool {
         self.effects.writes
+    }
+
+    /// Whether the global object `cell` lies in is one of `spared`.
+    #[must_use]
+    pub fn spares_cell(spared: &[(Addr, u32)], cell: &crate::model::ir::Mem) -> bool {
+        let Some(addr) = cell.addr else { return false };
+        let plain = addr.base == iced_x86::Register::None && addr.segment == iced_x86::Register::None && cell.base.is_none() && cell.index.is_none() && cell.selector.is_none();
+        plain && spared.iter().any(|(whole, size)| whole.space == addr.space && whole.index == addr.index && 0 <= addr.disp && addr.disp + i64::from(cell.width) <= i64::from(*size))
+    }
+
+    /// Whether it may write `cell`: it writes memory, and neither spares the
+    /// frame bytes `cell` is nor the global object it lies in.
+    #[must_use]
+    pub fn may_write(&self, cell: &crate::model::ir::Mem) -> bool {
+        if !self.accessible.writes {
+            return false;
+        }
+        let Some(addr) = cell.addr else { return true };
+        if addr.space == Space::Frame {
+            let exact = cell.through == iced_x86::Register::BP && cell.base.is_none() && cell.index.is_none();
+            return !self.spares(exact.then_some(addr.disp), cell.width);
+        }
+        !Self::spares_cell(&self.spared, cell)
     }
 
     /// Whether no byte of the frame is reachable from it.
@@ -85,6 +113,9 @@ pub struct Insn {
     pub spread: Vec<(i64, i64)>,
     /// What a call may touch, as the MIR's answers say.
     pub call: Option<Arc<CallMemory>>,
+    /// Whole global objects, by `Addr` and size, the MIR proves this store
+    /// leaves as they were (`!llrm.spares`): a far or loaded pointer's.
+    pub spares: Option<Arc<Vec<(Addr, u32)>>>,
     pub group: Option<i64>,
     pub requires: Vec<(Held, iced_x86::Register)>,
     pub delivers: Vec<(Held, iced_x86::Register)>,
@@ -123,6 +154,7 @@ impl Insn {
             clobbers_high: BTreeSet::new(),
             spread: Vec::new(),
             call: None,
+            spares: None,
             group: None,
             requires: Vec::new(),
             delivers: Vec::new(),
