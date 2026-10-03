@@ -1787,6 +1787,38 @@ fn test_a_huge_pointer_walk_is_not_swapped_for_an_offset_that_carries_too() {
     assert!(!printed.contains("lsr.iv"), "{printed}");
 }
 
+/// A huge array indexed by a counter, as each frontend states one.
+const HUGE_INDEXED: &str = "@g = addrspace(1) global [120000 x i8] zeroinitializer
+
+define i16 @f() {
+start:
+  %b = addrspacecast ptr addrspace(1) @g to ptr addrspace(3)
+  br label %l
+
+l:
+  %i = phi i32 [ 0, %start ], [ %i.next, %l ]
+  %o = mul i32 %i, 4
+  %p = getelementptr inbounds i8, ptr addrspace(3) %b, i32 %o
+  store i32 %i, ptr addrspace(3) %p
+  %i.next = add nsw i32 %i, 1
+  %c = icmp slt i32 %i.next, 30000
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 0
+}
+";
+
+/// A huge pointer stepped by a constant carries by a mask; built from a
+/// counter it pays the whole carry each use. Priced alike, bench/huge kept
+/// the counter and carried twice an element in C, BASIC and Nib.
+#[test]
+fn test_a_huge_array_indexed_by_a_counter_is_walked_by_a_huge_pointer() {
+    let machine = Tuned { costs: OperationCosts { carry: 11, carry_step: 4, ..target().costs }, ..target() };
+    let (_, printed) = reduced_for(HUGE_INDEXED, machine);
+    assert!(printed.contains("phi ptr addrspace(3)"), "{printed}");
+}
+
 /// Two arrays walked by pointers beside their counter, where a copy loop
 /// reads one and writes the other.
 const POINTER_WALK: &str = "@a = global [64 x i16] zeroinitializer

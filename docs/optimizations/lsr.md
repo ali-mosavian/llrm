@@ -84,6 +84,20 @@ frees an instruction and makes none that cost more; a sum a compare also
 reads stays whole, as the address would hold one register more. The new
 `gep`s are not `inbounds`.
 
+## Huge pointers
+
+A huge pointer's displacement carries into its selector. Built from a
+counter, each use pays the whole carry (`OperationCosts::carry`); stepped by
+a constant, the step pays a borrow spread to a mask, cut to the selector's
+stride and added to it (`carry_step`). So LSR walks a huge array with a huge
+pointer, in C, BASIC and Nib alike.
+
+`window` runs after LSR. A counted loop whose huge pointer reaches less than
+the target's window (`Machine::huge_window`: 64K less 15 bytes on DOS) has
+its start normalized once before the loop (`llrm.ia16.window`), and the loop
+runs on a far pointer with no carry. A 2D array's rows get this; a walk past
+64K keeps its huge steps.
+
 ## What it replaced
 
 `strength`, `ivshare`'s twin and offset counters, `affine`'s address

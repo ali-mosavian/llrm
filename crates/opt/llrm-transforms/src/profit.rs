@@ -60,10 +60,11 @@ fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
 
 /// What advancing a pointer of type `ty` costs: `plain`, the price of the
 /// advance as its caller makes it, or the carry into the selector where its
-/// space's displacement has one (`DataLayout::carries`). The one place the
-/// carry's price is stated.
-pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, plain: i64, costs: &OperationCosts) -> i64 {
+/// space's displacement has one (`DataLayout::carries`), less by a
+/// `constant` displacement. The one place the carry's price is stated.
+pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, plain: i64, constant: bool, costs: &OperationCosts) -> i64 {
     match context.types.get(ty) {
+        Type::Pointer(space) if layout.carries(*space) && constant => costs.carry_step,
         Type::Pointer(space) if layout.carries(*space) => costs.carry,
         _ => plain,
     }
@@ -82,7 +83,10 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
-        Opcode::GetElementPtr { .. } => advance(context, layout, function.value(instruction.result?).ty, costs.address, costs),
+        Opcode::GetElementPtr { .. } => {
+            let constant = instruction.operands[1..].iter().all(|&index| matches!(index, Operand::Constant(_)));
+            advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs)
+        }
         Opcode::Alloca { .. } => costs.address,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,

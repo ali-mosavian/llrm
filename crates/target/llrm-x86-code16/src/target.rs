@@ -114,6 +114,13 @@ impl Machine for Dos {
         crate::machine::BUILT_IN.access_may_trap(width, align)
     }
 
+    /// A far pointer (`p1`) whose offset is below one selector step: 64K
+    /// from it, less that step's last byte, never carries.
+    fn huge_window(&self) -> Option<(u32, i64)> {
+        let step = 1_i64 << (16 - crate::machine::BUILT_IN.huge_shift()?);
+        Some((1, (1 << 16) - (step - 1)))
+    }
+
     /// The description's: `dos.toml` states each device's reach.
     fn port_touches_memory(&self, ports: (i64, i64)) -> bool {
         crate::machine::BUILT_IN.port_memory(ports) != crate::machine::PortMemory::None
@@ -163,6 +170,7 @@ fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
         shift: cost("shift_ri"),
         address: cost("lea"),
         carry: llrm_mir::target::carry_cost(cost("movzx"), cost("alu_rr"), cost("shift_ri"), cost("mov_rr")),
+        carry_step: llrm_mir::target::step_cost(cost("alu_rr")),
         load: cost("mov_rm"),
         store: cost("mov_mr"),
         memory_update: cost("alu_mr"),

@@ -3357,7 +3357,8 @@ define ptr addrspace(1) @g(ptr addrspace(3) %p) addrspace(1) {
 }
 
 /// A loop over a huge array: its pointer carries each trip, and its end
-/// compare is across both words.
+/// compare is across both words. A constant step's carry is a mask of the
+/// borrow cut to the selector's stride, not the dword shifted down and up.
 #[test]
 fn test_a_loop_walks_a_huge_pointer_to_its_end() {
     let text = "define i16 @f(ptr addrspace(3) %p, ptr addrspace(3) %e) addrspace(1) {
@@ -3376,7 +3377,29 @@ done:
 }
 ";
     let got = listing(text, "f").join("\n");
-    assert!(got.contains("sar edi, 16") && got.contains("shl edi, 12") && got.contains("sbb di, cx") && got.contains("jb "), "{got}");
+    let mask = regex::Regex::new(r"sbb (\w+), (\w+)\nand (\w+), 4096").unwrap();
+    let masked = mask.captures(&got).is_some_and(|one| one[1] == one[2] && one[2] == one[3]);
+    assert!(masked && !got.contains("sar ") && got.contains("jb "), "{got}");
+}
+
+/// A window over a huge pointer moves its offset's whole paragraphs into
+/// the selector: the offset left is below 16, so the far pointer reaches
+/// 64K less 15 bytes with no carry (`window`).
+#[test]
+fn test_a_window_normalizes_its_huge_pointer() {
+    let text = "declare ptr addrspace(1) @llrm.ia16.window.p1.p3(ptr addrspace(3))
+
+define i16 @f(ptr addrspace(3) %p) addrspace(1) {
+entry:
+  %w = call ptr addrspace(1) @llrm.ia16.window.p1.p3(ptr addrspace(3) %p)
+  %q = getelementptr i8, ptr addrspace(1) %w, i16 300
+  %v = load i16, ptr addrspace(1) %q
+  ret i16 %v
+}
+";
+    let got = listing(text, "f").join("\n");
+    let normal = regex::Regex::new(r"shr (\w+), 4\n(?:.*\n)*?add \w+, (\w+)\n(?:.*\n)*?and \w+, 15").unwrap();
+    assert!(normal.captures(&got).is_some_and(|one| one[1] == one[2]) && got.contains("+300]"), "{got}");
 }
 
 /// A huge pointer made of a global's address and a constant past 64K is a

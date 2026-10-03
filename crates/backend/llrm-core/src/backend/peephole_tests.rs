@@ -2882,3 +2882,22 @@ fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
     let names = tested(&body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
 }
+
+#[test]
+fn test_a_borrow_mask_needs_no_zero() {
+    // A huge pointer's step spread its borrow as `mov si,0 ; sbb si,0`, one
+    // instruction more than `sbb si,si` each element of bench/huge.
+    let (dx, si) = (rl(Register::DX, 2), rl(Register::SI, 2));
+    let insns = vec![
+        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), im(4, 2)])), vec![1], vec![1])),
+        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![si.clone()], vec![im(0, 2)])), vec![2], vec![])),
+        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), im(0, 2)])), vec![2], vec![2])),
+        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Binary, "and", vec![si.clone()], vec![si.clone(), im(4096, 2)])), vec![2], vec![2])),
+    ];
+    let input = body("borrow", 0, vec![block(0, insns, vec![])]);
+
+    let result = borrows(&input);
+
+    assert_eq!(names(&result.insns().into_iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing)).collect::<Vec<_>>()), ["add", "sbb", "and"]);
+    assert!(result.insns().iter().any(|one| one.what == Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), si.clone()]))));
+}

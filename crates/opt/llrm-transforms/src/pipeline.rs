@@ -36,7 +36,7 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     algebraic, dead, decide, dse, fill, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, unroll, unswitch,
+    promote, rotate, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -138,7 +138,7 @@ impl Options {
             "gvn" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
-            "indvars" | "lsr" | "gepoffset" => self.strength,
+            "indvars" | "lsr" | "window" | "gepoffset" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
@@ -240,6 +240,10 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
         manager.add(lsr::Lsr);
+    }
+    // On the pointers LSR chose: a huge one a loop keeps in one window is far there.
+    if applied.options.wanted("window") {
+        manager.add(window::Window);
     }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.

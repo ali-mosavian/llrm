@@ -241,6 +241,17 @@ rule decrement
     rewrite @0: dec d, d
 
 
+// A borrow spread to a mask: `0 - 0 - CF` is `r - r - CF`, flags and all,
+// and needs no zero. The mov between keeps the borrow.
+group borrows
+    walk window skip meta
+
+rule borrow_mask
+    match   mov r:reg, #0 ; sbb r, r, #0
+    when    free(@0, exact), free(@1, exact)
+    rewrite drop @0 ; @1: sbb r, r, r
+
+
 // `shl r,1` as `add r,r` where the target prices the add lower. Every flag
 // the shift defines, the add sets the same way.
 group doubled

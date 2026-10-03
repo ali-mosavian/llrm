@@ -554,7 +554,7 @@ fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64
 
 /// What a trip pays to advance `one`: an add, or a pointer's own advance.
 fn _step(view: &memory::Unit, target: &Target, one: &Candidate) -> i64 {
-    one.pointer.map_or(target.costs.add, |ty| profit::advance(view.context, view.layout, ty, target.costs.add, &target.costs))
+    one.pointer.map_or(target.costs.add, |ty| profit::advance(view.context, view.layout, ty, target.costs.add, one.of.step.known().is_some(), &target.costs))
 }
 
 /// The candidates: each use's own recurrence, less its symbols and its
@@ -858,7 +858,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             let native = target.forms.first()?;
             // An integer cannot index a pair in a carrying space: the use advances
             // the pointer by it, and pays what an advance there costs over an address's.
-            let advance = profit::advance(view.context, view.layout, view.function.value(site.one.value).ty, costs.address, costs);
+            let advance = profit::advance(view.context, view.layout, view.function.value(site.one.value).ty, costs.address, false, costs);
             price.cost += advance - costs.address;
             if pointer_base(&fit) {
                 // A global is a displacement beside two registers; a frame object
@@ -939,12 +939,17 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             }
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
+            // A pointer made from an integer, in a carrying space, carries into its selector.
+            let made = |constant| {
+                let ty = view.function.value(site.one.value).ty;
+                if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
+            };
             if symbolic {
                 let whole = fit.rest.plus(&Scev::constant(fit.constant.clone(), fit.rest.width));
                 price.held.push(_interned(keys, (if pointer { None } else { fit.base }, whole)));
-                price.cost += costs.add;
+                price.cost += made(false);
             } else if fit.constant != BigInt::from(0) || fit.base.is_some() {
-                price.cost += costs.add;
+                price.cost += made(fit.k == BigInt::from(0));
             }
             if site.one.kind == UseKind::Compare {
                 price.cost += costs.add;

@@ -399,6 +399,8 @@ impl<'m> Machine<'m> {
                 (Val::Ptr(a), Val::Ptr(b), Some(width)) => Val::Int { bits: u128::from(a.wrapping_sub(b)) & mask(width), width },
                 _ => Val::Poison,
             },
+            // Flat memory: the same address.
+            Intrinsic::Window => argument(0),
             Intrinsic::PortIn | Intrinsic::PortOut => return unsupported("an I/O port"),
             Intrinsic::VaStart => return unsupported("a variadic argument list"),
             Intrinsic::Code => return unsupported("inline code"),

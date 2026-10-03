@@ -19,7 +19,7 @@ FUNCTION BenchPairs&
     NEXT i
     t = 0
     FOR i = 0 TO 9999
-        t = t + p(i).y - p(i).x
+        t = t + (p(i).y - p(i).x)
     NEXT i
     BenchPairs& = t
 END FUNCTION

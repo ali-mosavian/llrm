@@ -396,7 +396,7 @@ fn _wants(side: &[(Held, Register)], swap: &dyn Fn(u32) -> u32) -> Vec<(Held, Re
 }
 
 /// One instruction with every joined value naming its survivor.
-fn _renamed(one: &Arc<Insn>, swap: &dyn Fn(u32) -> u32) -> Arc<Insn> {
+pub(crate) fn _renamed(one: &Arc<Insn>, swap: &dyn Fn(u32) -> u32) -> Arc<Insn> {
     let mut made = (**one).clone();
     if let Some(what) = &one.what {
         made.what = Some(Semantics {

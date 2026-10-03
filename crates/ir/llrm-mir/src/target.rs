@@ -74,6 +74,13 @@ pub trait Machine {
         true
     }
 
+    /// Where `Intrinsic::Window` makes a huge pointer far: the far pointers'
+    /// space, and the bytes from the one it makes that no displacement
+    /// carries out of. None where the target has no such window.
+    fn huge_window(&self) -> Option<(u32, i64)> {
+        None
+    }
+
     /// Whether an I/O access to a port in the inclusive range `ports` may
     /// read or write memory. By default any may.
     fn port_touches_memory(&self, _ports: (i64, i64)) -> bool {
@@ -89,6 +96,13 @@ pub const fn carry_cost(extend: i64, add: i64, shift: i64, r#move: i64) -> i64 {
     extend + 2 * add + 2 * shift + 3 * r#move
 }
 
+/// What advancing a pair pointer in a carrying space by a constant costs:
+/// the offset's sum, its carry spread to a mask, the mask cut to the
+/// selector's stride, and added to the selector.
+pub const fn step_cost(add: i64) -> i64 {
+    4 * add
+}
+
 /// Machine-neutral costs a MIR profitability decision may compare.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperationCosts {
@@ -101,6 +115,8 @@ pub struct OperationCosts {
     /// selector (a huge pointer's): the offset's sum, its carry, and the
     /// selector stepped by it.
     pub carry: i64,
+    /// The same advance by a constant (`step_cost`).
+    pub carry_step: i64,
     pub load: i64,
     pub store: i64,
     pub memory_update: i64,
@@ -128,6 +144,7 @@ impl Default for OperationCosts {
             shift: 1,
             address: 1,
             carry: 1,
+            carry_step: 1,
             load: 1,
             store: 1,
             memory_update: 1,

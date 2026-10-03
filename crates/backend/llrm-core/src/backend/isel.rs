@@ -1826,6 +1826,24 @@ impl Selector<'_, '_, '_> {
             self.fars.insert(address, (Some(offset), selector));
             return Ok(());
         }
+        let bits = self.offset_bits(instruction.ty);
+        let magnitude = (constant as i64).unsigned_abs();
+        if variable.is_empty() && magnitude < 1 << bits {
+            // A constant moves the offset, and its carry, or its borrow, the
+            // selector by one stride: the borrow spread to a mask, cut to it.
+            let (moving, stepping) = if constant > 0 { ("add", "add") } else { ("sub", "sub") };
+            let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+            let moved = self.fresh_held(2);
+            out.push(insn(at, semantics(Operation::Binary, moving, vec![Loc::Held(moved)], vec![Loc::Held(offset), word(magnitude as i64)])));
+            let mask = self.fresh_held(2);
+            out.push(insn(at, semantics(Operation::Binary, "sbb", vec![Loc::Held(mask)], vec![word(0), word(0)])));
+            let stride = self.fresh_held(2);
+            out.push(insn(at, semantics(Operation::Binary, "and", vec![Loc::Held(stride)], vec![Loc::Held(mask), word(1 << shift)])));
+            let stepped = self.fresh_held(2);
+            out.push(insn(at, semantics(Operation::Binary, stepping, vec![Loc::Held(stepped)], vec![Loc::Held(selector), Loc::Held(stride)])));
+            self.fars.insert(address, (Some(moved), stepped));
+            return Ok(());
+        }
         let dword = |value: i64| Loc::Imm(Imm { value, width: 4, address: None });
         let byte = |value: i64| Loc::Imm(Imm { value, width: 1, address: None });
         let mut sum = self.fresh_held(4);
@@ -1872,6 +1890,25 @@ impl Selector<'_, '_, '_> {
         let stepped = self.fresh_held(2);
         out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(stepped)], vec![Loc::Held(selector), Loc::Held(Held { width: 2, ..carry })])));
         self.fars.insert(address, (Some(Held { width: 2, ..sum }), stepped));
+        Ok(())
+    }
+
+    /// A huge pointer normalized: whole selector steps of its offset moved
+    /// into the selector, at the target's stride, leaving an offset below one.
+    fn window(&mut self, inst: InstId, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let Some(shift) = self.segments.huge_shift else { return refuse("a window on a machine that states no selector stride") };
+        let huge = self.function.operand_type(&self.module.context, arguments[0]).expect("a typed pointer");
+        let below = self.offset_bits(huge) - i64::from(shift);
+        let (offset, selector) = self.far(arguments[0], at, out)?;
+        let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+        let steps = self.fresh_held(2);
+        out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(steps)], vec![Loc::Held(offset), Loc::Imm(Imm { value: below, width: 1, address: None })])));
+        let stepped = self.fresh_held(2);
+        out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(stepped)], vec![Loc::Held(selector), Loc::Held(steps)])));
+        let low = self.fresh_held(2);
+        out.push(insn(at, semantics(Operation::Binary, "and", vec![Loc::Held(low)], vec![Loc::Held(offset), word((1 << below) - 1)])));
+        let result = self.function.instruction(inst).result.expect("a window's value");
+        self.fars.insert(result, (Some(low), stepped));
         Ok(())
     }
 
@@ -2583,6 +2620,7 @@ impl Selector<'_, '_, '_> {
                     self.called(inst, convention, Callee::Inline(name, block.code), arguments, at, out)
                 }
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
+                Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
                 Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
                 // Where a local's bytes are live: read by the frame layout, no code.

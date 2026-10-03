@@ -40,6 +40,10 @@ pub enum Intrinsic {
     /// The bytes between two pointers into one object, as a wrapping integer:
     /// a target's own, where a pointer's integer form is not its address.
     PtrDiff,
+    /// The far pointer naming the same byte as its huge argument, its offset
+    /// as low as the selector allows: a target's own window over the bytes
+    /// from there that no displacement carries out of (`Machine::huge_window`).
+    Window,
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
@@ -215,7 +219,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 32] = [
+const TABLE: [Spec; 33] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -337,6 +341,15 @@ const TABLE: [Spec; 32] = [
         memory: NO_MEMORY,
     },
     Spec {
+        name: "llrm.ia16.window",
+        intrinsic: Intrinsic::Window,
+        overloads: &[Kind::Pointer, Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Any(1), &[])],
+        attrs: PURE,
+        memory: NO_MEMORY,
+    },
+    Spec {
         name: "llrm.ia16.out",
         intrinsic: Intrinsic::PortOut,
         overloads: &[Kind::Int],
@@ -365,6 +378,11 @@ pub(crate) fn declare(function: &mut Function, name: &str) {
 
 /// Whether `name` is in LLVM's reserved namespace, or llrm's own for
 /// its target's intrinsics.
+/// `Intrinsic::Window`'s name, from `huge` pointers to `far` ones.
+pub fn window_name(types: &Types, far: TypeId, huge: TypeId) -> String {
+    format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
+}
+
 pub fn is_reserved(name: &str) -> bool {
     name.starts_with("llvm.") || name.starts_with("llrm.ia16.")
 }
