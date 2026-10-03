@@ -1,0 +1,90 @@
+# Resources that close themselves. Each Channel closes in `drop`, once, on
+# every way out of its scope, in reverse order of opening. A function that
+# opens two and fails on the second closes the first.
+
+enum Fault:
+    busy
+
+struct Channel:
+    name: string
+
+fn Channel.open(name: &string, free: bool) -> Result[Channel, Fault]:
+    if !free:
+        print(f"{name} is busy")
+        return .err(.busy)
+    print(f"open {name}")
+    return .ok(Channel(name=name.copy()))
+
+fn Channel.drop(self: &mut Channel) -> void:
+    print(f"close {self.name}")
+
+struct Link:
+    near: Channel
+    far: Channel
+
+fn Link.drop(self: &mut Link) -> void:
+    print(f"link {self.near.name}-{self.far.name} down")
+
+# On failure of the second open, `near` is closed by the `?`.
+fn connect(near: &string, far: &string, free: bool) -> Result[Link, Fault]:
+    let a = Channel.open(near, true)?
+    let b = Channel.open(far, free)?
+    return .ok(Link(near=a, far=b))
+
+# Either returns `c` to the caller or closes it on the way out.
+fn pass_on(c: Channel, keep: bool) -> Option[Channel]:
+    if keep:
+        return .some(c)
+    return .none
+
+# A log for the whole visit and a channel per name, each closed at the end of
+# its `with`: by `continue`, `break`, falling out, or `?` failing.
+fn visit(names: &vec[string], busy: &string) -> Result[u16, Fault]:
+    let mut done: u16 = 0
+    with log = Channel.open("log", true)?:
+        for name in names:
+            if name.len == 0:
+                continue
+            with c = Channel.open(name, name != busy)?:
+                if c.name == "stop":
+                    break
+                done += 1
+        print(f"{log.name} saw {done}")
+    return .ok(done)
+
+fn show(result: Result[u16, Fault]) -> void:
+    match result:
+        .ok(n):
+            print(f"visited {n}")
+        .err(_):
+            print("visit failed")
+
+fn main() -> i16:
+    match connect("a", "b", true):
+        .ok(link):
+            print(f"{link.near.name} to {link.far.name}")
+        .err(_):
+            print("no link")
+    print("--")
+    match connect("c", "d", false):
+        .ok(_):
+            print("linked")
+        .err(_):
+            print("no link")
+    print("--")
+    match pass_on(Channel(name="e"), true):
+        .some(c):
+            print(f"kept {c.name}")
+        .none:
+            print("closed")
+    match pass_on(Channel(name="f"), false):
+        .some(c):
+            print(f"kept {c.name}")
+        .none:
+            print("closed")
+    print("--")
+    let first: vec[string] = ["p", "", "q", "stop", "r"]
+    show(visit(first, "z"))
+    let second: vec[string] = ["p", "q", "r"]
+    show(visit(second, "q"))
+    return 0

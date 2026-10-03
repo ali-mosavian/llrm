@@ -1,0 +1,33 @@
+open a
+open b
+a to b
+link a-b down
+close b
+close a
+--
+open c
+d is busy
+close c
+no link
+--
+kept e
+close e
+close f
+closed
+--
+open log
+open p
+close p
+open q
+close q
+open stop
+close stop
+log saw 2
+close log
+visited 2
+open log
+open p
+close p
+q is busy
+close log
+visit failed

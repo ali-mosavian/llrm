@@ -1,0 +1,10 @@
+video: 3 entries
+  width = 320
+  height = 200
+  depth = 8
+early: 2 entries
+  a = 1
+  b = 2
+nonumber: line 3 is not a number
+noequals: line 2 has no '='
+repeat: line 3 repeats a key
