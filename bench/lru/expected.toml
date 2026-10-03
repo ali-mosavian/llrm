@@ -1,13 +1,13 @@
-reason = "#402: a dead private initializer holds no address; lru.bas -5 instructions, -5 memory operands"
+reason = "-Os stores a literal run through one dead register (xor r,r once, then register stores): fewer bytes, a load more per run; -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 166
-memory_operands = 69
+instructions = 171
+memory_operands = 74
 
 [bas.Os]
-instructions = 192
-memory_operands = 78
+instructions = 205
+memory_operands = 83
 
 [c.O2]
 instructions = 132
@@ -17,10 +17,6 @@ memory_operands = 63
 instructions = 159
 memory_operands = 72
 
-[nib.O2]
-instructions = 177
-memory_operands = 96
-
 [nib.Os]
-instructions = 306
+instructions = 312
 memory_operands = 147
