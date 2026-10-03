@@ -712,6 +712,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         private: object.private.clone(),
         requests: object.requests.clone(),
         debug,
+        stack: 0,
     })
 }
 

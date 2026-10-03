@@ -119,6 +119,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
         private: BTreeSet::new(),
         requests: BTreeSet::new(),
         debug,
+        stack: 0,
     })
 }
 

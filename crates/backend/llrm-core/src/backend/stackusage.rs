@@ -155,6 +155,20 @@ impl Usage {
         (0..self.names.len()).filter(|one| !called.contains(one)).map(|one| self.names[one].as_str()).collect()
     }
 
+    /// The most any entry can reach: a bound the program's own procedures give,
+    /// not counting what a routine it does not define adds. An entry that
+    /// recurses has none and is left out.
+    pub fn deepest(&self) -> i64 {
+        self.roots()
+            .into_iter()
+            .filter_map(|name| match self.bound(name) {
+                Bound::Bytes(bytes) | Bound::AtLeast(bytes, _) => Some(bytes),
+                Bound::Recursive => None,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Each procedure's frame and bound, one to a line.
     pub fn report(&self) -> String {
         let mut text = String::from("stack usage, bytes: procedure, its frame, the most it can reach\n");
