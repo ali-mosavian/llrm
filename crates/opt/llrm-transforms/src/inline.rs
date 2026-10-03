@@ -151,34 +151,6 @@ pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
     module.functions().map(|(id, _, _)| id).filter(|&id| graph.recursive(id)).collect()
 }
 
-/// Functions whose address is taken: named anywhere but as a callee.
-fn addressed(module: &Module) -> BTreeSet<GlobalId> {
-    let context = &module.context;
-    let mut out = BTreeSet::new();
-    let mut work = Vec::new();
-    for (_, _, function) in module.functions() {
-        for (_, inst) in function.walk() {
-            let instruction = function.instruction(inst);
-            let skip = usize::from(callee(context, function, inst).is_some());
-            let kept = instruction.operands.len() - skip;
-            work.extend(instruction.operands[..kept].iter().filter_map(|&operand| if let Operand::Constant(id) = operand { Some(id) } else { None }));
-        }
-    }
-    work.extend(module.globals.iter().filter_map(|global| if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }));
-    while let Some(id) = work.pop() {
-        match &context.get(id).kind {
-            ConstantKind::Global(global) => {
-                out.insert(*global);
-            }
-            ConstantKind::Aggregate(members) => work.extend(members),
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => work.extend(operands),
-            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => work.push(*value),
-            _ => {}
-        }
-    }
-    out
-}
-
 /// Whether `body` may be cloned into another function: it returns, `splice`
 /// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
 fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
@@ -242,7 +214,7 @@ fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
 pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
     let budget = threshold.budget(call_cost);
-    let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), addressed(module));
+    let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
     for (&name, &count) in calls {
         let Some(body) = body(module, name) else { continue };

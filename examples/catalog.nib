@@ -1,0 +1,80 @@
+# Borrows of data a loader returned. `north` and `south` allocate and return
+# catalogs; everything after only looks: a result borrowed from one of two
+# catalogs, a view of a range of parts, a slice of a name, and a generator
+# lent the parts for one loop.
+
+struct Part:
+    name: string
+    price: u16
+    stock: u16
+
+struct Catalog:
+    mut parts: vec[Part]
+
+fn Catalog.add(self: &mut Catalog, name: &string, price: u16, stock: u16) -> void:
+    self.parts.push(Part(name=name.copy(), price=price, stock=stock))
+
+fn north() -> Catalog:
+    let mut c = Catalog(parts=[])
+    c.add("bolt", 5, 40)
+    c.add("gear", 30, 3)
+    c.add("cog", 12, 0)
+    return c
+
+fn south() -> Catalog:
+    let mut c = Catalog(parts=[])
+    c.add("gear", 28, 9)
+    c.add("pin", 2, 100)
+    return c
+
+# Borrowed from `first` or `second`, whichever holds the part: neither may
+# change while the result is in use.
+fn find(first: &Catalog, second: &Catalog, name: &string) -> Option[&Part]:
+    for i in 0..first.parts.len:
+        if first.parts[i].name == name:
+            return .some(first.parts[i])
+    for i in 0..second.parts.len:
+        if second.parts[i].name == name:
+            return .some(second.parts[i])
+    return .none
+
+# The lower-priced of two, as a borrow of one of them.
+fn cheaper(a: &Part, b: &Part) -> &Part:
+    return a.price <= b.price ? a : b
+
+# A view of the parts up to the first one over `limit`.
+fn affordable(c: &Catalog, limit: u16) -> &[Part]:
+    let mut end: u16 = 0
+    while end < c.parts.len && c.parts[end].price <= limit:
+        end += 1
+    return &c.parts[0:end]
+
+fn initial(part: &Part) -> &string:
+    return &part.name[0:1]
+
+fn scarce(parts: &[Part], below: u16) -> iter[&Part]:
+    for part in parts:
+        if part.stock < below:
+            yield part
+
+fn main() -> i16:
+    let mut a = north()
+    let b = south()
+    match find(a, b, "pin"):
+        .some(part):
+            print(f"{part.name}: {part.stock} at {part.price}")
+        .none:
+            print("no pin")
+    match (find(a, b, "gear"), find(b, a, "gear")):
+        (.some(x), .some(y)):
+            let best = cheaper(x, y)
+            print(f"cheapest gear {best.price}")
+        _:
+            print("no gear")
+    let few = affordable(a, 20)
+    print(f"{few.len} under 20, first {initial(few[0])}")
+    for part in scarce(a.parts, 5):
+        print(f"low: {part.name} ({part.stock})")
+    a.add("nut", 1, 500)
+    print(f"{a.parts.len} parts")
+    return 0
