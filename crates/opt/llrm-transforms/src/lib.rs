@@ -40,6 +40,7 @@ pub mod loopmotion;
 pub mod loopclone;
 pub mod loopsimplify;
 pub mod lsr;
+pub mod window;
 pub mod peel;
 pub mod pipeline;
 pub mod ports;

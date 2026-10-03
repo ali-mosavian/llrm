@@ -151,7 +151,7 @@ impl LIRTransform for Peephole {
         let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
-        let body = increments(&body);
+        let body = borrows(&increments(&body));
         let body = doubled(&body, &self.cpu)?;
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
@@ -1658,6 +1658,11 @@ fn _affine_address(
 /// Select compact INC/DEC for a unit add whose carry result is dead (`peephole.peep`).
 pub fn increments(body: &LirBody) -> LirBody {
     peep::increments(body, &Facts::new(body, None))
+}
+
+/// `mov r,0 ; sbb r,0` as `sbb r,r` (`peephole.peep`).
+pub fn borrows(body: &LirBody) -> LirBody {
+    peep::borrows(body, &Facts::new(body, None))
 }
 
 /// `shl r,1` as `add r,r` where the target prices the add lower (`peephole.peep`).

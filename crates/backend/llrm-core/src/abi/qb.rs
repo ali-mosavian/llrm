@@ -858,6 +858,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.address_forms()
     }
 
+    fn huge_window(&self) -> Option<(u32, i64)> {
+        self.machine.huge_window()
+    }
+
     fn multiply_by(&self, factor: i64) -> i64 {
         use crate::backend::arithmetic;
         let multiply = arithmetic::immediate_multiply(self.cpu, factor).unwrap_or_else(|_| self.machine.costs().multiply);
