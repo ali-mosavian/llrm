@@ -1,26 +1,26 @@
-reason = "an internal function whose callers are all direct takes fastcc: the callee pops its arguments (ret N) and no caller adds sp, so fewer instructions at -O2 and -Os"
-blessed = "2026-10-03"
+reason = "a duplicate phi is its earlier twin: fpbench bas -O2 -1.4%, qlight -5 instructions each; sum_three bas -O2/-Os +2/+1 instructions for -2/-3 memory operands (a different register assignment)"
+blessed = "2026-10-04"
 
 [bas.O2]
-instructions = 294
+instructions = 289
 memory_operands = 93
 
 [bas.Os]
-instructions = 282
+instructions = 275
 memory_operands = 93
 
 [c.O2]
-instructions = 113
+instructions = 106
 memory_operands = 12
 
 [c.Os]
-instructions = 105
+instructions = 98
 memory_operands = 12
 
 [nib.O2]
-instructions = 145
+instructions = 140
 memory_operands = 12
 
 [nib.Os]
-instructions = 133
+instructions = 126
 memory_operands = 12

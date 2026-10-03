@@ -1,5 +1,5 @@
-reason = "-Os opens a frame with locals with enter N,0 (one instruction for three; 14 clocks for 3 on the 486, so -Os only); -O2 unchanged"
-blessed = "2026-10-03"
+reason = "a duplicate phi is its earlier twin: fpbench bas -O2 -1.4%, qlight -5 instructions each; sum_three bas -O2/-Os +2/+1 instructions for -2/-3 memory operands (a different register assignment)"
+blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 42417

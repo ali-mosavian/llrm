@@ -1,5 +1,5 @@
-reason = "lsr weighs a use behind a branch by its odds and prices the counters the loop has: sieve.nib no longer carries a 32-bit counter for a movzx on the primes (#386)"
-blessed = "2026-10-03"
+reason = "lsr weighs a use behind a branch by its odds and prices the counters the loop has: sieve.nib no longer carries a 32-bit counter for a movzx on the primes (#386); a duplicate phi is its earlier twin (#434)"
+blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 18692
