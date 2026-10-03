@@ -1282,8 +1282,8 @@ pub fn points_to(
                 }
             }
             newly.extend(_lost(unit, inst, &values));
-            // Returned, or turned into an integer: found from outside.
-            if matches!(op.opcode, Opcode::Ret | Opcode::Cast(CastOp::PtrToInt)) {
+            // Returned, or turned into an integer something reads: found from outside.
+            if op.opcode == Opcode::Ret || (op.opcode == Opcode::Cast(CastOp::PtrToInt) && op.result.is_none_or(|result| _read(function, result, &mut BTreeSet::new()))) {
                 newly.extend(provenances(&op.operands, &values));
             }
             match (&op.opcode, MemRef::of(unit, inst)) {
@@ -1362,6 +1362,19 @@ pub fn points_to(
     let escaped = named(&every);
     let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
     Ok(PointsTo { values, escaped, escaped_before })
+}
+
+/// Whether anything that stays reads `value`: a use that is no pure operation, or a pure
+/// one whose own result is read. The dead-code fact, without the callee summaries a call
+/// would need, so a call reads.
+fn _read(function: &llrm_mir::module::Function, value: ValueId, seen: &mut BTreeSet<ValueId>) -> bool {
+    if !seen.insert(value) {
+        return false;
+    }
+    function.users(value).iter().any(|one| {
+        let user = function.instruction(one.user);
+        !llrm_mir::memory::pure_operation(&user.opcode) || user.result.is_some_and(|result| _read(function, result, seen))
+    })
 }
 
 /// Objects whose address `inst` turns into what no pointer fact follows,

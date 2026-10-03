@@ -531,9 +531,19 @@ b0:
 #[test]
 fn a_returned_or_integer_address_escapes_and_a_frame_spill_does_not() {
     assert_eq!(escaped("ret ptr %a").len(), 1);
-    assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  ret ptr null").len(), 1);
+    assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  %m = inttoptr i16 %n to ptr\n  ret ptr %m").len(), 1);
+    assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = inttoptr i16 %m to ptr\n  ret ptr %k").len(), 1);
     assert!(escaped("store ptr %a, ptr %slot\n  ret ptr null").is_empty());
     assert_eq!(escaped("store ptr %a, ptr %slot\n  ret ptr %slot").len(), 2);
+}
+
+/// PDS and VB FPDEEP: the raise left `ptrtoint` of `i`'s global and an `add` of it, nothing
+/// reading either, and the global counted as escaped, so each PRINT might have written `i`
+/// and its loop stayed rolled.
+#[test]
+fn an_integer_address_nothing_reads_escapes_nothing() {
+    assert!(escaped("%n = ptrtoint ptr %a to i16\n  ret ptr null").is_empty());
+    assert!(escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = add i16 %m, 2\n  ret ptr null").is_empty());
 }
 
 #[test]

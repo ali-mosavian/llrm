@@ -140,11 +140,18 @@ pub fn callee(context: &Context, function: &Function, inst: InstId) -> Option<Gl
 /// memory to a function that always comes back.
 pub fn only_value(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
     match function.instruction(inst).opcode {
-        Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
-        | Opcode::FNeg | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Freeze | Opcode::Alloca { .. } | Opcode::Load { volatile: false, .. } => true,
         Opcode::Call(_) => call_returns(context, callees, function, inst) && of(context, callees, function, inst) == Effects::NONE,
-        _ => false,
+        ref opcode => pure_operation(opcode),
     }
+}
+
+/// Whether `opcode` is an operation, a plain load among them, whose only effect is its value.
+pub fn pure_operation(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
+            | Opcode::FNeg | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Freeze | Opcode::Alloca { .. } | Opcode::Load { volatile: false, .. }
+    )
 }
 
 /// What `memory(...)`, `readnone`, `readonly` or `writeonly` among `attrs`

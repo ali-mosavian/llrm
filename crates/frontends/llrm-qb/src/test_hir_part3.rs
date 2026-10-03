@@ -593,8 +593,12 @@ fn test_pds_huge_array_uses_measured_ddim_and_inline_huge_addresses() {
 #[test]
 fn test_byref_call_keeps_the_temporary_values_it_publishes() {
     let text = optimized_mir(&parsed_as(&compat("qb45/q45p04.bas"), "qb45", "qb45"));
-    assert!(text.contains("100000"), "{text}");
-    assert!(text.contains(" 23"), "{text}");
+    // The sum is known: the program prints its PASS. A call to addLong that stays reads
+    // the slots its caller stores, so they stay too.
+    assert!(text.contains("PASS procedures") && !text.contains("FAIL"), "{text}");
+    if text.lines().any(|line| line.contains("call") && line.contains("ADDLONG")) {
+        assert!(text.contains("100000") && text.contains(" 23"), "{text}");
+    }
 }
 
 /// FSTKBR's ``PICK = -1/0`` formerly left a volatile FILD live over its arm jump.
@@ -1293,7 +1297,12 @@ fn test_a_global_is_one_object_in_every_function() {
 SUB a\r\nn% = 5\r\nDEF SEG = VARSEG(arr%(0))\r\nb\r\nDEF SEG = &HA000\r\nPOKE 1, n%\r\nEND SUB\r\n\
 SUB b\r\nPOKE 5, PEEK(4)\r\nEND SUB\r\n";
     let optimized = optimized_sub(text, "A");
-    assert_eq!(optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count(), 2, "{optimized}");
+    // b inlined, its PEEK reads through the segment a stored for it: VARSEG's, not b's own
+    // stale b$seg. That store is then dead, a's last one the only one kept.
+    let loads = optimized.lines().filter(|line| line.contains("load i16") && line.contains("ptr @b$seg")).count();
+    assert_eq!(loads, 0, "{optimized}");
+    let kept = optimized.lines().filter(|line| line.trim().starts_with("store i16 ") && line.contains("ptr @b$seg")).count();
+    assert!(optimized.contains("ptrtoint ptr addrspace(2)") && (1..=2).contains(&kept), "{optimized}");
 }
 
 #[test]
