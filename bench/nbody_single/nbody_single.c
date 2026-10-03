@@ -1,4 +1,5 @@
 /* Six-body integrator in float (the fixed-point nbody_fixed state as floats), 1000 steps. */
+/* Overdamped: the bodies settle at their centre of mass whatever the intermediate precision (a lighter damping was chaotic: #360). */
 extern void report(long value);
 
 #define BODIES 6
@@ -32,8 +33,8 @@ long bench_nbody_single(void)
             }
             vel_x[body] = vel_x[body] + acc_x;
             vel_y[body] = vel_y[body] + acc_y;
-            vel_x[body] = vel_x[body] - vel_x[body] / 16.0f;
-            vel_y[body] = vel_y[body] - vel_y[body] / 16.0f;
+            vel_x[body] = vel_x[body] - vel_x[body] / 8.0f;
+            vel_y[body] = vel_y[body] - vel_y[body] / 8.0f;
         }
         for (body = 0; body < BODIES; ++body) {
             pos_x[body] = pos_x[body] + vel_x[body];
@@ -43,7 +44,7 @@ long bench_nbody_single(void)
     sum = 0.0f;
     for (body = 0; body < BODIES; ++body)
         sum = sum + (float)(body + 1) * (pos_x[body] + 3.0f * pos_y[body] + 5.0f * vel_x[body] + 7.0f * vel_y[body]);
-    return (long)(sum * 1024.0f);
+    return (long)(sum * 1024.0f + 0.5f);
 }
 
 int main(void)

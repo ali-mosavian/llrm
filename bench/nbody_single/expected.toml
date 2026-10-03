@@ -1,4 +1,4 @@
-reason = "fpbench and nbody_single compile (#358): first baselines. nbody -1 instruction: one fxch fewer where spilled phi copies are sequenced"
+reason = "nbody_single is overdamped (#360): /8 not /16 and a rounded checksum; same loops, so it measures the same kernel"
 blessed = "2026-10-03"
 
 [bas.O2]
