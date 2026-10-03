@@ -105,6 +105,47 @@ b3:
     }
 }
 
+/// FPDEEP built by PDS or VB kept its `FOR i = 1 TO 3` rolled, three PRINTs and their
+/// float chains computed at run time: the raise leaves a dead `ptrtoint` of the global
+/// holding `i`, GlobalsAA took it as an escape, and the dead code went only after the
+/// call-clobbered reload of `i` had been priced; a second pipeline run folded all of it.
+#[test]
+fn a_global_whose_only_escape_is_dead_code_is_tracked_after_the_cleanup() {
+    let mut module = llrm_analysis::testing::parsed(
+        "@i = internal global i16 0
+
+declare void @print(i16) nocallback
+
+define void @main() {
+b0:
+  %p = ptrtoint ptr @i to i16
+  %q = add i16 %p, 2
+  br label %b1
+
+b1:
+  %v = phi i16 [ 1, %b0 ], [ %n, %b2 ]
+  store i16 %v, ptr @i
+  %go = icmp sgt i16 %v, 3
+  br i1 %go, label %b3, label %b2
+
+b2:
+  call void @print(i16 %v)
+  %w = load i16, ptr @i
+  %n = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret void
+}
+",
+    );
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    let text = llrm_mir::print::module(&module);
+    for trip in 1..=3 {
+        assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
+    }
+}
+
 /// Zero stores merged into a memset mid-pipeline left a call in the loop
 /// that loop motion could not see past: nbodys' `accX = 0: accY = 0` kept
 /// posY's loads in its inner loop, 1.9% more instructions. The merge waits
