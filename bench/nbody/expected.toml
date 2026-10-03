@@ -1,20 +1,20 @@
-reason = "fpbench and nbody_single compile (#358): first baselines. nbody -1 instruction: one fxch fewer where spilled phi copies are sequenced"
+reason = "word LEA for mov+add/sub; a call no longer reads flags before it, so more pairs fold: fewer instructions everywhere, parity -O2 +1 memory operand (allocation moved a spill) for 6 fewer instructions"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 64107
+instructions = 63307
 memory_operands = 30307
 
 [bas.Os]
-instructions = 69456
+instructions = 68656
 memory_operands = 26068
 
 [c.O2]
-instructions = 57279
+instructions = 56679
 memory_operands = 25450
 
 [c.Os]
-instructions = 58261
+instructions = 57661
 memory_operands = 20845
 
 [nib.O2]

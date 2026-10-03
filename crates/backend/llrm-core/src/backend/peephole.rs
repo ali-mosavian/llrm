@@ -1568,7 +1568,7 @@ fn _affine_address(
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
     let (mut terms, mut disp): (affine::Terms, i64) = (vec![(full32(source.register), 1)], 0);
-    let mut best: Option<(usize, Address, i64)> = None;
+    let mut best: Option<(usize, Address, i64, bool)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(one, cpu) else {
             break;
@@ -1598,17 +1598,21 @@ fn _affine_address(
         if !dead.contains(&id(one)) {
             continue;
         }
-        if let Some(address) = affine::form(&terms, disp, &wide.scales) {
-            best = Some((at, address, old));
+        if dest.width == 2 && let Some(address) = affine::word_form(&terms, disp) {
+            best = Some((at, address, old, true));
+        } else if let Some(address) = affine::form(&terms, disp, &wide.scales) {
+            best = Some((at, address, old, false));
         }
     }
-    let Some((last, address, old)) = best else {
+    let Some((last, address, old, word)) = best else {
         return Ok(None);
     };
     let replaced = &parts[..=last];
     let partial: HashSet<Register> = terms.iter().map(|term| term.0).collect();
     let stalls = if dest.width < 4 { partial.len() as i64 * cpu.partial_register_stall } else { 0 };
-    if cpu.operations.address + cpu.operations.prefix + stalls > old {
+    // A word address has no prefix and reads no dword register.
+    let price = if word { cpu.operations.address } else { cpu.operations.address + cpu.operations.prefix + stalls };
+    if price > old {
         return Ok(None);
     }
     let what = semantics(Operation::Address, "lea", vec![Loc::Reg(dest)], vec![Loc::Address(address)]);
@@ -1675,6 +1679,11 @@ fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
     let Some(what) = &one.what else {
         return false;
     };
+    // A call reads no flag its LIR names (`_flags_live_out`, liveness::effect) and clobbers
+    // them all: what stood before it was never read, as `add sp,N` after it never is.
+    if what.op == Operation::Call && !one.clobbers.is_empty() {
+        return true;
+    }
     if !one.clobbers.is_empty() {
         return false;
     }

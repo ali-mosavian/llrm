@@ -1,4 +1,4 @@
-reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
+reason = "word LEA for mov+add/sub; a call no longer reads flags before it, so more pairs fold: fewer instructions everywhere, parity -O2 +1 memory operand (allocation moved a spill) for 6 fewer instructions"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -10,11 +10,11 @@ instructions = 11167809
 memory_operands = 3586023
 
 [c.O2]
-instructions = 4817164
+instructions = 4742140
 memory_operands = 420099
 
 [c.Os]
-instructions = 4877164
+instructions = 4802140
 memory_operands = 420099
 
 [nib.O2]

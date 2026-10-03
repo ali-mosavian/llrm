@@ -1031,6 +1031,53 @@ fn test_affine_address_sees_flags_dead_past_its_block() {
     assert_eq!(names(&result.blocks[0].insns), ["lea"]);
 }
 
+/// `mov ax,di; sub ax,4` stayed two instructions (5 bytes) at 486: the only LEA the pass
+/// built was the 67h dword form, priced at its prefix. The word form `lea ax,[di-4]` is 3 bytes
+/// and no prefix: QCport -Os had some 700 such pairs.
+#[test]
+fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
+    for (label, source, then, expected, through, index, offset) in [
+        ("base and offset", Register::DI, ("sub", im(4, 2)), vec!["lea", "call"], Register::DI, Register::None, -4),
+        ("base and index", Register::BX, ("add", rl(Register::SI, 2)), vec!["lea", "call"], Register::BX, Register::SI, 0),
+        ("not an address register", Register::CX, ("sub", im(4, 2)), vec!["mov", "sub", "call"], Register::None, Register::None, 0),
+        ("two indexes", Register::SI, ("add", rl(Register::DI, 2)), vec!["mov", "add", "call"], Register::None, Register::None, 0),
+    ] {
+        let ax = rl(Register::AX, 2);
+        let insns = vec![
+            Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![rl(source, 2)])), vec![], vec![])),
+            Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, then.0, vec![ax.clone()], vec![ax.clone(), then.1])), vec![], vec![])),
+            Arc::new(Insn {
+                clobbers: BTreeSet::from([Register::AX, Register::CX, Register::DX]),
+                ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+            }),
+        ];
+        let input = body("word-lea", 0, vec![block(0, insns, vec![])]);
+
+        let result = addresses(&input, "486").unwrap();
+
+        assert_eq!(names(&result.blocks[0].insns), expected, "{label}");
+        if let Some(Loc::Address(address)) = result.blocks[0].insns[0].what.as_ref().unwrap().sources.first() {
+            assert_eq!((address.through, address.index, address.offset), (through, index, offset), "{label}");
+        }
+    }
+}
+
+/// The word LEA keeps no flags: `mov ax,di; sub ax,4; adc ...` reads the borrow, so stays.
+#[test]
+fn test_affine_address_word_lea_keeps_a_flag_still_read() {
+    let (ax, di) = (rl(Register::AX, 2), rl(Register::DI, 2));
+    let insns = vec![
+        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![di])), vec![], vec![])),
+        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "sub", vec![ax.clone()], vec![ax.clone(), im(4, 2)])), vec![], vec![])),
+        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "adc", vec![ax.clone()], vec![ax, im(0, 2)])), vec![], vec![])),
+    ];
+    let input = body("word-lea-flags", 0, vec![block(0, insns, vec![])]);
+
+    let result = addresses(&input, "486").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["mov", "sub", "adc"]);
+}
+
 #[test]
 fn test_lea_of_a_frame_cell_is_decoded() {
     // `lea ax,[bp-18]` read as touching every lane kept all upper halves live

@@ -1628,7 +1628,7 @@ define void @f(ptr %p, i16 %i) addrspace(1) {
 ";
     assert_eq!(
         inner(text),
-        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add ax, ax", "add bx, ax", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
+        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "lea bx, [ebx+eax*2]", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
     );
 }
 
@@ -3201,7 +3201,7 @@ define i16 @f() addrspace(1) {
 ";
     assert!(text.contains("call {i16, i16} @llrm.ia16.asm."), "the shape that was refused");
     let got = listing(text, "f");
-    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "db 0fah", "mov ax, 0", "db 0cdh,01ah", "mov ax, cx", "add ax, dx", "pop bp", "retf"]);
+    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "db 0fah", "xor ax, ax", "db 0cdh,01ah", "mov ax, cx", "add ax, dx", "pop bp", "retf"]);
 }
 
 /// The same address as a phi's input, made in the predecessor before
