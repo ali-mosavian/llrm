@@ -96,15 +96,7 @@ fn narrowable(unit: &passes::Unit, analyses: &Analyses) -> Vec<Narrow> {
                 }
             }
             let (a, b) = (interval(taken[0])?, interval(taken[1])?);
-            let (low, high) = if taken[0] == taken[1] {
-                // The corners of a square are not independent: its least is 0 across zero.
-                let (low, high) = (&a.low * &a.low, &a.high * &a.high);
-                let spans_zero = a.low <= BigInt::from(0) && BigInt::from(0) <= a.high;
-                (if spans_zero { BigInt::from(0) } else { low.clone().min(high.clone()) }, low.max(high))
-            } else {
-                let products = [&a.low, &a.high].into_iter().flat_map(|left| [&b.low, &b.high].into_iter().map(move |right| left * right)).collect::<Vec<_>>();
-                (products.iter().min()?.clone(), products.iter().max()?.clone())
-            };
+            let (low, high) = ranges::product(&a, &b, taken[0] == taken[1]);
             fits(&low, &high).then_some(Narrow { inst, a: taken[0], b: taken[1], scale })
         })
         .collect()

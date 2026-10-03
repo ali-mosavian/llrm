@@ -392,14 +392,7 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
         match kind {
             Some(BinaryOp::Add) => (low, high) = (&first.low + &second.low, &first.high + &second.high),
             Some(BinaryOp::Sub) => (low, high) = (&first.low - &second.high, &first.high - &second.low),
-            _ if op.operands[0] == op.operands[1] => (low, high) = _square(first),
-            _ => {
-                let products = [&first.low, &first.high]
-                    .into_iter()
-                    .flat_map(|left| [&second.low, &second.high].into_iter().map(move |right| left * right))
-                    .collect::<Vec<_>>();
-                (low, high) = (products.iter().min().expect("four products").clone(), products.iter().max().expect("four products").clone());
-            }
+            _ => (low, high) = product(first, second, op.operands[0] == op.operands[1]),
         }
     } else {
         return None;
@@ -407,12 +400,17 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
     fits(&low, &high, width).then_some(Interval { low, high, width })
 }
 
-/// The values `interval` squares to: never negative, though its corners' products are.
-fn _square(interval: &Interval) -> (BigInt, BigInt) {
-    let zero = BigInt::from(0_u8);
-    let (low, high) = (&interval.low * &interval.low, &interval.high * &interval.high);
-    let spans_zero = interval.low <= zero && zero <= interval.high;
-    (if spans_zero { zero } else { low.clone().min(high.clone()) }, low.max(high))
+/// The values `a * b` takes, before any wrap. `same` is that both are one value, a square:
+/// never negative, though its corners' products are.
+pub fn product(a: &Interval, b: &Interval, same: bool) -> (BigInt, BigInt) {
+    if same {
+        let zero = BigInt::from(0_u8);
+        let (low, high) = (&a.low * &a.low, &a.high * &a.high);
+        let spans_zero = a.low <= zero && zero <= a.high;
+        return (if spans_zero { zero } else { low.clone().min(high.clone()) }, low.max(high));
+    }
+    let corners = [&a.low, &a.high].into_iter().flat_map(|left| [&b.low, &b.high].into_iter().map(move |right| left * right)).collect::<Vec<_>>();
+    (corners.iter().min().expect("four products").clone(), corners.iter().max().expect("four products").clone())
 }
 
 /// `llvm.smul.fix` of two integers: the wide product floored by the scale, where it
@@ -422,12 +420,7 @@ fn _fixed_product(unit: &Unit, inst: InstId, width: u32, known: &IndexMap<ValueI
     let scale = usize::try_from(unit.int_constant(operands[2])?).ok().filter(|&scale| (0..width as usize).contains(&scale))?;
     let operand = |one: Operand| _operand(unit, one, known, facts).filter(|interval| interval.width == width);
     let (a, b) = (operand(operands[0])?, operand(operands[1])?);
-    let (low, high) = if operands[0] == operands[1] {
-        _square(&a)
-    } else {
-        let products = [&a.low, &a.high].into_iter().flat_map(|left| [&b.low, &b.high].into_iter().map(move |right| left * right)).collect::<Vec<_>>();
-        (products.iter().min()?.clone(), products.iter().max()?.clone())
-    };
+    let (low, high) = product(&a, &b, operands[0] == operands[1]);
     // `>>` on a BigInt floors, as the arithmetic shift of the wide product does.
     let (low, high) = (low >> scale, high >> scale);
     let sign = BigInt::from(1_u8) << (width - 1);
