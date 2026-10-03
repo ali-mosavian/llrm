@@ -75,3 +75,14 @@ fn test_recursive_is_the_components_answer_and_agrees_with_walking() {
     let ring = edges(&[(0, 1), (1, 2), (2, 0), (3, 3)]);
     assert!(ring.together(0, 2) && !ring.together(0, 3) && ring.recursive(3));
 }
+
+/// A function a call's `!callees` lists may be entered by an indirect call, so its address is
+/// taken though every direct call of it names it as a callee: `@leaf` is called by `@direct` and
+/// listed, `@listed` is neither.
+#[test]
+fn a_function_a_callees_list_names_has_its_address_taken() {
+    let module = parse::module(CALLS).expect("parses");
+    let named = crate::callgraph::addressed(&module);
+    assert!(named.contains(&id(&module, "leaf")) && named.contains(&id(&module, "direct")));
+    assert!(!named.contains(&id(&module, "listed")) && !named.contains(&id(&module, "unlisted")));
+}

@@ -1,26 +1,32 @@
 //! LLVM's GlobalOpt gives an internal function whose every caller it sees a calling convention
-//! of its own (`fastcc`). Here that is the callee popping its arguments: `ret N` (3 bytes
-//! against `ret`'s 1) once, and no `add sp,N` (3 bytes, `pop cx` for one word) at each call.
-//! It is faster too, a clock per call. The convention is assigned here and nowhere else: isel
-//! takes both sides' cleanup from it (`passing`), so a call and the function it names agree.
+//! of its own (`fastcc`). Here that is the callee popping its arguments: `ret N` once, and no
+//! cleanup of the arguments at each call. The convention is assigned here and nowhere else:
+//! isel takes both sides' cleanup from it (`passing`), so a call and the function it names
+//! agree. Priced by the target for the level being built, in clocks or in bytes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::globalsaa::embedded;
+use llrm_mir::callgraph::addressed;
 use llrm_mir::context::{ConstantKind, GlobalId};
-use llrm_mir::module::{GlobalKind, InstId, Linkage, MetadataOperand, Module, Operand};
+use llrm_mir::module::{GlobalKind, InstId, Linkage, Module, Operand};
 use llrm_mir::opcode::{FAST, Opcode};
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
+use llrm_mir::target::OperationCosts;
 
-pub struct CalleePop;
+pub struct CalleePop {
+    /// Code size outranks speed: the target's byte costs, not its clocks.
+    pub size: bool,
+}
 
 impl ModulePass for CalleePop {
     fn name(&self) -> &'static str {
         "calleepop"
     }
 
-    fn run(&mut self, module: &mut Module, _: &mut ModuleAnalyses) -> Vec<GlobalId> {
-        let (chosen, sites) = decided(module);
+    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
+        let target = &analyses.program().target;
+        let costs = if self.size { target.size_costs() } else { target.costs() };
+        let (chosen, sites) = decided(module, &costs);
         let mut changed = BTreeSet::new();
         for &id in &chosen {
             if let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind {
@@ -38,67 +44,24 @@ impl ModulePass for CalleePop {
     }
 }
 
-/// The bytes a call saves of its cleanup, from at least `words` words of arguments: `pop cx`
-/// for one, two pops for two, `add sp,N` otherwise.
-fn cleanup_bytes(words: usize) -> usize {
-    match words {
-        1 => 1,
-        2 => 2,
-        _ => 3,
-    }
-}
-
 /// The functions to give the convention, and the calls of them (caller, instruction) that
-/// take it: internal, not variadic, with arguments, called directly and never otherwise named
-/// (stored, passed, listed in a table or in a call's `callees`), and called often enough that
-/// the `ret N` it costs each return is paid for.
-fn decided(module: &Module) -> (BTreeSet<GlobalId>, Vec<(GlobalId, InstId)>) {
-    let candidate = |id: GlobalId| {
-        let global = module.global(id);
-        let Some(function) = global.function() else { return false };
-        let (_, parameters, variadic) = module.signature(function.ty);
-        !function.is_declaration()
-            && matches!(global.linkage, Linkage::Internal | Linkage::Private)
-            && function.calling_convention == 0
-            && !variadic
-            && !parameters.is_empty()
-    };
-    let mut escaped: BTreeSet<GlobalId> = BTreeSet::new();
+/// take it: internal, not variadic, with arguments, never named but as a callee, called only
+/// with C's convention, and called often enough that what each return costs is paid for by
+/// what each call saves, a word of arguments at least.
+fn decided(module: &Module, costs: &OperationCosts) -> (BTreeSet<GlobalId>, Vec<(GlobalId, InstId)>) {
+    let named = addressed(module);
     let mut calls: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>> = BTreeMap::new();
-    for global in &module.globals {
-        if let GlobalKind::Variable(variable) = &global.kind {
-            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut escaped));
-        }
-    }
-    for node in &module.metadata {
-        for operand in &node.operands {
-            if let MetadataOperand::Constant(one) = operand {
-                embedded(&module.context, *one, &mut escaped);
-            }
-        }
-    }
+    let mut other: BTreeSet<GlobalId> = BTreeSet::new();
     for (caller, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
-        function.personality.iter().for_each(|&one| embedded(&module.context, one, &mut escaped));
         for (_, inst) in function.walk() {
             let instruction = function.instruction(inst);
-            let direct = match &instruction.opcode {
-                Opcode::Call(info) | Opcode::Invoke(info) => match instruction.operands.last() {
-                    Some(Operand::Constant(id)) => match module.context.get(*id).kind {
-                        ConstantKind::Global(callee) if info.calling_convention == 0 => Some(callee),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-                _ => None,
-            };
-            let named = instruction.operands.len() - usize::from(direct.is_some());
-            for operand in &instruction.operands[..named] {
-                if let Operand::Constant(one) = operand {
-                    embedded(&module.context, *one, &mut escaped);
-                }
-            }
-            if let Some(callee) = direct {
+            let (Opcode::Call(info) | Opcode::Invoke(info)) = &instruction.opcode else { continue };
+            let Some(Operand::Constant(id)) = instruction.operands.last() else { continue };
+            let ConstantKind::Global(callee) = module.context.get(*id).kind else { continue };
+            if info.calling_convention == 0 {
                 calls.entry(callee).or_default().push((caller, inst));
+            } else {
+                other.insert(callee);
             }
         }
     }
@@ -106,10 +69,18 @@ fn decided(module: &Module) -> (BTreeSet<GlobalId>, Vec<(GlobalId, InstId)>) {
         .iter()
         .filter(|(callee, sites)| {
             let callee = **callee;
-            let function = module.global(callee).function().expect("a candidate is a function");
-            let (_, parameters, _) = module.signature(function.ty);
-            let returns = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Ret)).count();
-            candidate(callee) && !escaped.contains(&callee) && sites.len() * cleanup_bytes(parameters.len()) > 2 * returns
+            let global = module.global(callee);
+            let Some(function) = global.function() else { return false };
+            let (_, parameters, variadic) = module.signature(function.ty);
+            let returns = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Ret)).count() as i64;
+            !function.is_declaration()
+                && matches!(global.linkage, Linkage::Internal | Linkage::Private)
+                && function.calling_convention == 0
+                && !variadic
+                && !parameters.is_empty()
+                && !named.contains(&callee)
+                && !other.contains(&callee)
+                && sites.len() as i64 * costs.cleanup(parameters.len() as i64) > returns * costs.return_pops
         })
         .map(|(&callee, _)| callee)
         .collect();

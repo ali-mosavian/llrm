@@ -10,17 +10,17 @@ instructions = 11167809
 memory_operands = 3586023
 
 [c.O2]
-instructions = 4592091
+instructions = 4562091
 memory_operands = 420099
 
 [c.Os]
-instructions = 4351991
+instructions = 4291991
 memory_operands = 420099
 
 [nib.O2]
-instructions = 6202233
+instructions = 5947159
 memory_operands = 570147
 
 [nib.Os]
-instructions = 5812084
+instructions = 5677059
 memory_operands = 570147

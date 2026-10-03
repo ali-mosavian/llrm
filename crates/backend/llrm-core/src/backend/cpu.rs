@@ -152,6 +152,7 @@ impl<'a> From<&'a Profile> for ProfileOrName<'a> {
 static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
     IndexMap::from_iter([
         ("alu_rr", 2),
+        ("alu_ri", 2),
         ("alu_rm", 6),
         ("alu_mr", 8),
         ("mov_rr", 2),
@@ -186,6 +187,7 @@ static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
         ("jcc_not_taken", 3),
         ("call_far", 37),
         ("ret_far", 18),
+        ("ret_pop", 18),
         ("lahf", 2),
         ("sahf", 3),
         ("lea", 2),
@@ -228,6 +230,9 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
         r#move: costs["mov_rr"],
         call: costs["call_far"],
         return_: costs["ret_far"],
+        pop: costs["pop_r"],
+        adjust: costs["alu_ri"],
+        return_pops: costs["ret_pop"] - costs["ret_far"],
         float_add: costs["x87_add"],
         float_multiply: costs["x87_mul"],
         float_divide: costs["x87_div"],

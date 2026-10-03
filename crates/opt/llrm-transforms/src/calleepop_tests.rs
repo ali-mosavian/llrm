@@ -5,9 +5,14 @@ use crate::testing::{parsed, printed};
 
 /// `text` after the pass.
 fn run(text: &str) -> String {
+    run_for(text, true)
+}
+
+/// `text` after the pass, priced in bytes (`size`) or in clocks, on the real-mode target.
+fn run_for(text: &str, size: bool) -> String {
     let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
-    CalleePop.run(&mut module, &mut analyses);
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_code16::Dos::default()));
+    CalleePop { size }.run(&mut module, &mut analyses);
     printed(&module)
 }
 
@@ -58,10 +63,11 @@ b0:
 }
 
 /// `ret 6` costs 2 bytes more than `ret` at each return, and a call saves 3: one call of a
-/// function that returns twice loses a byte, so it keeps the caller's cleanup.
+/// function that returns twice loses a byte, so it keeps the caller's cleanup in bytes; in
+/// clocks `ret N` costs nothing and the call saves its `add sp`, so -O2 takes it.
 #[test]
-fn a_function_the_convention_would_cost_bytes_keeps_the_caller_cleaning() {
-    let after = run("define internal i16 @work(i16 %a, i16 %b, i16 %c) {
+fn a_function_the_convention_would_cost_bytes_keeps_the_caller_cleaning_only_for_size() {
+    let text = "define internal i16 @work(i16 %a, i16 %b, i16 %c) {
 b0:
   %t = icmp eq i16 %a, 0
   br i1 %t, label %one, label %two
@@ -76,6 +82,7 @@ b0:
   %p = call i16 @work(i16 %x, i16 2, i16 3)
   ret i16 %p
 }
-");
-    assert!(!after.contains("fastcc"), "{after}");
+";
+    assert!(!run_for(text, true).contains("fastcc"));
+    assert!(run_for(text, false).contains("define internal fastcc i16 @work"));
 }

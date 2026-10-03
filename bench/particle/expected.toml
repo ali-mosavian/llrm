@@ -10,11 +10,11 @@ instructions = 131489
 memory_operands = 94939
 
 [c.O2]
-instructions = 84539
+instructions = 84439
 memory_operands = 61509
 
 [c.Os]
-instructions = 84337
+instructions = 84237
 memory_operands = 61509
 
 [nib.O2]

@@ -18,9 +18,9 @@ instructions = 335
 memory_operands = 87
 
 [nib.O2]
-instructions = 354
+instructions = 349
 memory_operands = 128
 
 [nib.Os]
-instructions = 356
+instructions = 351
 memory_operands = 131
