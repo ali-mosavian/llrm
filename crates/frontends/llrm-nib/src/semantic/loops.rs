@@ -370,6 +370,32 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
         };
+        // An element reached by reference lies in what the loop walks, and
+        // is the reference type's value: a variant or a field may hold it.
+        let view_storage = match view_storage {
+            Storage::Reference(pointer) => {
+                let reference = self.types.reference(element, mode == IterationMode::Mutable);
+                let wanted = type_id(reference);
+                let found = self.type_of(pointer);
+                let typed = if found == wanted {
+                    pointer
+                } else {
+                    let typed = self.value_type(wanted);
+                    // A vec's element is reached by a near pointer: take its far address.
+                    if self.types.width(found) == self.types.width(wanted) {
+                        self.emit("copy", vec![typed], vec![hir::Operand::Value(pointer)], None);
+                    } else {
+                        let place = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: element.id(), inbounds: false, member: None };
+                        self.emit("address", vec![typed], vec![place], None);
+                    }
+                    typed
+                };
+                let walked = self.roots(iterable);
+                self.borrowed_from.insert(borrows::BorrowKey::Value(typed), walked);
+                Storage::Reference(typed)
+            }
+            other => other,
+        };
         self.scopes.push(BTreeMap::new());
         self.scopes.last_mut().expect("scope").insert(
             name.into(),
