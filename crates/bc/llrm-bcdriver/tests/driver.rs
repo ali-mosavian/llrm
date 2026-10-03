@@ -142,10 +142,10 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
     }
 }
 
-/// FPDEEP's main once the pipeline has run, linked against its runtime, as
-/// MIR text.
-fn fpdeep() -> String {
-    let found = llrm_omf::module::load(&fixture("fpdeep-q-o.obj")).expect("reads").expect("an object");
+/// FPDEEP's main from `name` once the pipeline has run, linked against its
+/// runtime, as MIR text.
+fn fpdeep(name: &str) -> String {
+    let found = llrm_omf::module::load(&fixture(name)).expect("reads").expect("an object");
     let raised = llrm_bc::raise(&found, &llrm_core::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
     let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_x86_code16::Dos::default())).and_then(|one| one.with_runtime(raised.runtime)).unwrap();
     llrm_transforms::pipeline::applied(&mut program, &llrm_transforms::pipeline::Applied::default()).unwrap();
@@ -154,27 +154,31 @@ fn fpdeep() -> String {
 }
 
 /// FPDEEP's `FOR i = 1 TO 3` around its PRINTs is copied out, each trip
-/// printing its own `i`; the old route's unroll test. Refused before as
-/// "contains call and code would grow".
+/// printing its own `i`; the old route's unroll test. QB's build was copied
+/// out, PDS's and VB's was not: their dead `ptrtoint` of `i`'s global made
+/// every PRINT a possible write of it, so `i` was reloaded after each and the
+/// loop stayed rolled with its float chains computed at run time.
 #[test]
 fn fpdeep_copies_out_its_print_loop() {
-    let main = fpdeep();
-    assert!(!main.contains(" phi "), "{main}");
-    for i in 1..=3 {
-        assert!(main.contains(&format!("@llrm.qb.B$PSI2(i16 {i})")), "{main}");
+    for name in ["fpdeep-q-o.obj", "fpdeep-p-g2.obj", "fpdeep-v-g3.obj"] {
+        let main = fpdeep(name);
+        assert!(!main.contains(" phi "), "{name}\n{main}");
+        for i in 1..=3 {
+            assert!(main.contains(&format!("@llrm.qb.B$PSI2(i16 {i})")), "{name} {i}\n{main}");
+        }
     }
 }
 
 /// Every FPDEEP number is exact, so it prints constants and computes no
 /// float arithmetic; the old route's floatbounds, floatfold and literal
-/// tests.
+/// tests. The prints are those of QB's build, in order, the array's
+/// elements and CLNG(q * 1024) among them.
 #[test]
 fn fpdeep_prints_constants_and_computes_no_float() {
-    let main = fpdeep();
-    for n in [144, 6, 512, 784, 14, 768, 3600, 30, 896] {
-        assert!(main.contains(&format!("@llrm.qb.B$PEI4(i16 0, i16 {n})")), "{n}\n{main}");
-    }
-    assert!(!["fmul", "fdiv", "fadd", "fsub"].iter().any(|op| main.contains(&format!(" {op} "))), "{main}");
+    let main = fpdeep("fpdeep-q-o.obj");
+    let printed: Vec<&str> = main.lines().filter_map(|line| line.split("@llrm.qb.B$PEI4(i16 0, i16 ").nth(1)).map(|rest| rest.trim_end_matches(')')).collect();
+    assert_eq!(printed, ["144", "6", "512", "784", "14", "768", "3600", "30", "896", "144", "6"], "{main}");
+    assert!(!["fmul", "fdiv", "fadd", "fsub", "load float", "load double"].iter().any(|op| main.contains(&format!(" {op} "))), "{main}");
 }
 
 /// ON ERROR's landing stub, its inline helper and ERR's word are the

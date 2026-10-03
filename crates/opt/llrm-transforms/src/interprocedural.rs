@@ -98,6 +98,8 @@ pub fn managers(program: &Program, analyses: &mut ProgramAnalyses) -> Vec<Module
         .map(|at| {
             let mut one = ModuleAnalyses::new(analyses.proxy(program, at));
             one.require::<Summaries>();
+            // As the first run's: a body sent back through reads what no code outside reaches.
+            one.require::<GlobalsAA>();
             one
         })
         .collect()
