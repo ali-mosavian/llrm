@@ -512,16 +512,13 @@ fn _duplicate_phi(function: &mut Function, inst: InstId) -> bool {
     if function.instruction(inst).opcode != Opcode::Phi {
         return false;
     }
-    let arms = |one: InstId| {
-        let mut pairs = function.instruction(one).operands.chunks(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>();
-        pairs.sort_by_key(|pair| format!("{pair:?}"));
-        pairs
-    };
     let block = function.parent(inst).expect("a placed phi");
-    let mine = arms(inst);
+    let mine = &function.instruction(inst).operands;
     let ty = function.instruction(inst).ty;
+    // One arm per predecessor: the same count, and each arm of this one among the other's.
     let earlier = function.block(block).instructions().iter().copied().take_while(|&one| one != inst).find(|&one| {
-        function.instruction(one).opcode == Opcode::Phi && function.instruction(one).ty == ty && arms(one) == mine
+        let other = function.instruction(one);
+        other.opcode == Opcode::Phi && other.ty == ty && other.operands.len() == mine.len() && mine.chunks(2).all(|arm| other.operands.chunks(2).any(|theirs| theirs == arm))
     });
     let Some(earlier) = earlier else { return false };
     let with = Operand::Value(function.instruction(earlier).result.expect("a phi's value"));

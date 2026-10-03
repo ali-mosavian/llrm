@@ -513,6 +513,18 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
     out
 }
 
+/// The cell a remade `value` is read from, where its one instruction is a plain load: a user that
+/// takes a memory operand reads it there, with no register made for it.
+fn remade_cell(one: &Insn, value: u32) -> Option<crate::model::ir::Mem> {
+    let what = one.what.as_ref()?;
+    match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
+        (Operation::Move, Some("mov"), [Loc::Held(dest)], [Loc::Mem(cell)]) if dest.value == value && dest.width == cell.width && one.uses.is_empty() && cell.addr.is_some() => {
+            Some(cell.clone())
+        }
+        _ => None,
+    }
+}
+
 /// `one` where it is read again: made once more beside `beside`, owning no bytes.
 fn remade(one: &Insn, beside: &Insn) -> Arc<Insn> {
     let mut made = one.clone();
@@ -626,7 +638,7 @@ fn simulated(
             for value in used.clone() {
                 if !held.contains(&value) {
                     stored.insert(value);
-                    if !remakes.contains_key(&value) && done.folded.get(&position).is_none_or(Vec::is_empty) && folds(one, value) {
+                    if remakes.get(&value).is_none_or(|made| remade_cell(made, value).is_some()) && done.folded.get(&position).is_none_or(Vec::is_empty) && folds(one, value) {
                         used.remove(&value);
                         done.folded.entry(position).or_default().push(value);
                     } else {
@@ -948,7 +960,11 @@ fn written(
             }
             let mut one = Arc::clone(one);
             for value in edit.folded.get(&position).into_iter().flatten() {
-                one = folded_into(&one, *value, &cells[value]).expect("a fold the simulation chose");
+                let cell = match remakes.get(value) {
+                    Some(made) => remade_cell(made, *value).expect("a remade load"),
+                    None => cells[value].clone(),
+                };
+                one = folded_into(&one, *value, &cell).expect("a fold the simulation chose");
             }
             if one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch)) {
                 if let Some(what) = &one.what {
