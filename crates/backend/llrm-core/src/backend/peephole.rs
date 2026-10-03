@@ -153,7 +153,7 @@ impl LIRTransform for Peephole {
         let body = secondary_bases(&body, &self.cpu)?;
         let body = borrows(&increments(&body));
         let body = doubled(&body, &self.cpu)?;
-        let body = sharedstores::shared(&body, &self.cpu);
+        let body = sharedstores::shared(&body, &self.cpu, &crate::backend::masm::SAVED.keys().copied().collect::<Vec<_>>());
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;

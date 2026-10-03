@@ -10,17 +10,11 @@ use iced_x86::Register;
 use crate::backend::cpu::Profile;
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{DeadAfter, _flags_dead_after, _flags_live_out, _lanes, _register_effects, id};
-use crate::backend::{liveness, regthrash, select};
+use crate::backend::{liveness, masm, regthrash, select, target};
+use llrm_x86_code16::GENERAL;
+
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
-
-/// Registers a function may write without saving them: the allocator's others are preserved.
-const SCRATCH: [(Register, Register, Register); 4] = [
-    (Register::EAX, Register::AX, Register::AL),
-    (Register::ECX, Register::CX, Register::CL),
-    (Register::EDX, Register::DX, Register::DL),
-    (Register::EBX, Register::BX, Register::BL),
-];
 
 /// The cell and literal of a plain store of an immediate that no relocation moves.
 fn literal(one: &Insn) -> Option<(u32, i64)> {
@@ -38,15 +32,16 @@ fn bytes(what: &Semantics) -> Option<usize> {
     select::emit(what, 0, None, false, false, None).map(|code| code.code.len())
 }
 
-fn named(width: u32, (full, word, byte): (Register, Register, Register)) -> Reg {
-    Reg { register: match width { 1 => byte, 2 => word, _ => full }, width }
-}
 
 /// `body` with each run of equal literal stores that a dead register makes shorter shared.
-pub fn shared(body: &LirBody, cpu: &Profile) -> LirBody {
+pub fn shared(body: &LirBody, cpu: &Profile, saved: &[Register]) -> LirBody {
     if !cpu.size {
         return body.clone();
     }
+    // What the epilogue saves is what its convention preserves of the registers the body names
+    // (`masm::_frame_parts`): one it does not name would be pushed and popped for the run.
+    let used = masm::_roots(body);
+    let scratch: Vec<Register> = GENERAL.iter().copied().filter(|one| !saved.contains(one) || used.contains(one)).collect();
     let exits = liveness::dead_at_exit(body);
     let flags_out = _flags_live_out(body);
     let blocks = body
@@ -67,7 +62,7 @@ pub fn shared(body: &LirBody, cpu: &Profile) -> LirBody {
                 };
                 // Zero is any width's; another literal is shared at its own.
                 let run = block.insns[at..].iter().take_while(|one| literal(one).is_some_and(|(wide, same)| same == value && (value == 0 || wide == width))).count();
-                match shared_run(&block.insns[at..at + run], value, &dead, &flags_dead) {
+                match shared_run(&block.insns[at..at + run], value, &scratch, &dead, &flags_dead) {
                     Some(made) => insns.extend(made),
                     None => insns.extend(block.insns[at..at + run].iter().cloned()),
                 }
@@ -82,6 +77,7 @@ pub fn shared(body: &LirBody, cpu: &Profile) -> LirBody {
 fn shared_run(
     run: &[Arc<Insn>],
     value: i64,
+    scratch: &[Register],
     dead: &DeadAfter,
     flags_dead: &crate::support::hash::HashSet<usize>,
 ) -> Option<Vec<Arc<Insn>>> {
@@ -89,10 +85,14 @@ fn shared_run(
     let widths: Vec<u32> = run.iter().map(|one| literal(one).expect("a literal store").0).collect();
     let width = *widths.iter().max()?;
     let reads = run.iter().filter_map(|one| _register_effects(one, false, true)).fold(Lanes::new(), |all, (reads, _)| all.or(&reads));
-    let register = SCRATCH
-        .into_iter()
-        .map(|names| named(width, names))
-        .find(|register| _lanes(register.register).is_subset(&dead[&id(last)]) && _lanes(register.register).is_disjoint(&reads))?;
+    let named = |width: u32, full: Register| -> Option<Reg> {
+        let register = target::named(full, i64::from(width));
+        (target::width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
+    };
+    let (full, register) = scratch.iter().find_map(|full| {
+        let register = named(width, *full)?;
+        (_lanes(register.register).is_subset(&dead[&id(last)]) && _lanes(register.register).is_disjoint(&reads)).then_some((*full, register))
+    })?;
     let destination = Loc::Reg(register);
     let zero = value == 0 && flags_dead.contains(&id(&run[0]));
     let load = Semantics {
@@ -101,12 +101,11 @@ fn shared_run(
         sources: if zero { vec![destination.clone(), destination.clone()] } else { vec![Loc::Imm(Imm { value, width, address: None })] },
         ..Semantics::new(if zero { Operation::Binary } else { Operation::Move })
     };
-    let names = SCRATCH.into_iter().find(|names| named(width, *names) == register)?;
     let stores: Vec<Semantics> = run
         .iter()
         .zip(&widths)
-        .map(|(one, width)| Semantics { sources: vec![Loc::Reg(named(*width, names))], ..one.what.clone().expect("a literal store") })
-        .collect();
+        .map(|(one, width)| Some(Semantics { sources: vec![Loc::Reg(named(*width, full)?)], ..one.what.clone().expect("a literal store") }))
+        .collect::<Option<_>>()?;
     let before: usize = run.iter().map(|one| bytes(one.what.as_ref().expect("a literal store"))).sum::<Option<usize>>()?;
     let after = bytes(&load)? + stores.iter().map(bytes).sum::<Option<usize>>()?;
     if after >= before {

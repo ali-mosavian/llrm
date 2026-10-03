@@ -1094,6 +1094,11 @@ fn test_affine_address_word_lea_keeps_a_flag_still_read() {
     assert_eq!(names(&result.blocks[0].insns), ["mov", "sub", "adc"]);
 }
 
+/// What the epilogue saves: the convention's preserved registers.
+fn saved() -> Vec<Register> {
+    crate::backend::masm::SAVED.keys().copied().collect()
+}
+
 /// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
 fn literal_store(at: i64, width: u32, disp: i64, value: i64) -> Arc<Insn> {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(disp), width) });
@@ -1112,7 +1117,7 @@ fn after_stores(reads_flags: bool, reads: &[Register]) -> Vec<Arc<Insn>> {
     // first is read: the four scratch registers are written last, except where `reads` first
     // reads them.
     for (at, register) in reads.iter().enumerate() {
-        let what = sem(Operation::Move, "mov", vec![rl(Register::DI, 4)], vec![rl(*register, 4)]);
+        let what = sem(Operation::Compare, "cmp", vec![], vec![rl(*register, 4), im(0, 4)]);
         insns.push(Arc::new(insn(11 + at as i64, Some((11 + at as i64, 12 + at as i64)), Some(what), vec![], vec![])));
     }
     for (at, register) in [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().enumerate() {
@@ -1142,11 +1147,40 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
         let next = after_stores(flags_read, &live);
         let input = body("stores", 0, vec![block(0, std::mem::take(&mut insns), vec![1]), block(1, next, vec![])]);
 
-        let result = sharedstores::shared(&input, size);
+        let result = sharedstores::shared(&input, size, &saved());
 
         let got = names(&result.blocks[0].insns);
         assert_eq!(got, expected, "{label}");
     }
+}
+
+/// Which scratch register a run may take is the convention's fact (`masm::SAVED`): where it
+/// preserves BX, a run takes BX only if the body already names it (so its epilogue saves it),
+/// else it would push and pop a register to save a byte.
+#[test]
+fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_body_names_it() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let input = |named: bool| {
+        // BX is dead after the stores (the call clobbers it, nothing reads it); the other
+        // scratch registers are read first. The body names BX only where it writes it first.
+        let mut insns = vec![literal_store(1, 4, -4, 0), literal_store(2, 4, -8, 0)];
+        if named {
+            let write = sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(5, 4)]);
+            insns.insert(0, Arc::new(insn(0, Some((0, 1)), Some(write), vec![], vec![])));
+        }
+        let mut next = after_stores(false, &[Register::EAX, Register::ECX, Register::EDX]);
+        next.truncate(4);
+        next.push(Arc::new(Insn {
+            clobbers: BTreeSet::from([Register::EAX, Register::EBX, Register::ECX, Register::EDX]),
+            ..insn(40, Some((40, 41)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+        }));
+        body("stores", 0, vec![block(0, insns, vec![1]), block(1, next, vec![])])
+    };
+    let preserving_bx = [Register::ESI, Register::EDI, Register::EBX];
+
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx).blocks[0].insns), ["mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved()).blocks[0].insns), ["xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
 }
 
 /// Two pushes of a clock are not a size choice: -O2 keeps the stores.
@@ -1155,7 +1189,7 @@ fn test_stores_of_one_literal_are_not_shared_at_o2() {
     let o2 = crate::backend::cpu::tuned("486", false).unwrap();
     let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
 
-    assert_eq!(sharedstores::shared(&input, o2), input);
+    assert_eq!(sharedstores::shared(&input, o2, &saved()), input);
 }
 
 #[test]
