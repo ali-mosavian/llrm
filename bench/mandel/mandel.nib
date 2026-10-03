@@ -5,15 +5,15 @@ fn bench_mandel() -> i32:
     let mut work: i32 = 0
     for py in -12..12:
         for px in -16..16:
-            let mut x = Q(0)
-            let mut y = Q(0)
-            let cx = Q(px) * Q(0.09375) - Q(0.5)
-            let cy = Q(py) * Q(0.09375)
+            let mut x: Q = 0
+            let mut y: Q = 0
+            let cx = Q(px) * 0.09375 - 0.5
+            let cy = Q(py) * 0.09375
             let mut iteration: i32 = 0
             while iteration < 32:
                 let xx = x * x
                 let yy = y * y
-                if xx + yy > Q(4):
+                if xx + yy > 4:
                     break
                 y = (x + x) * y + cy
                 x = xx - yy + cx
