@@ -3503,3 +3503,26 @@ fn a_scanner_holding_a_borrow_is_passed_down_and_back_and_cannot_outlive_its_sou
     let inner = source.replace("    let mut s = skip(scan(src), 4)\n", "    let mut s = skip(scan(src), 4)\n    if true:\n        let other = Source(text=\"x\")\n        s = scan(other)\n");
     assert!(refused(&inner).contains("\"s\" would outlive \"other\", which it borrows"));
 }
+
+#[test]
+fn a_void_function_value_is_called_and_returns_nothing() {
+    // #416: the dispatcher of a `fn() -> void` type was `return member()`,
+    // "void function cannot return a value" at 0:0; a lambda's body too.
+    let source = "\
+fn hi() -> void:
+    print(1)
+
+fn run(cb: fn() -> void) -> void:
+    cb()
+
+fn each(cb: fn(i16) -> void) -> void:
+    cb(2)
+
+fn main() -> i16:
+    run(hi)
+    each(|x| print(x))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "1\n2\n");
+    assert_eq!(refused("fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"), "void function cannot return a value");
+}

@@ -392,6 +392,7 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let walked = self.roots(iterable);
                 self.borrowed_from.insert(borrows::BorrowKey::Value(typed), walked);
+                self.walking.insert(borrows::BorrowKey::Value(typed));
                 Storage::Reference(typed)
             }
             other => other,
