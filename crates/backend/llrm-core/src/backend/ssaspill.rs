@@ -566,7 +566,7 @@ fn simulated(
     for at in order {
         let block = by_at[at];
         // What is stored where it is defined, as often as this block runs, costs a store each time it leaves: evicted last.
-        let hot = |value: &u32| made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
+        let hot = |value: &u32| !remakes.contains_key(value) && made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
         let mut done = Edits::default();
         let ends: Vec<&BTreeSet<u32>> = preds.get(at).into_iter().flatten().filter_map(|from| edits.get(from)).map(|one| &one.w_out).collect();
         let mut candidates: Vec<(usize, i64, u32)> = flow.live_in[at]
