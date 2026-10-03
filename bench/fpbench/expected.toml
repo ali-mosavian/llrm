@@ -1,14 +1,26 @@
-reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
+reason = "-Os stores a literal run through one dead register (xor r,r once, then register stores): fewer bytes, a load more per run; -O2 unchanged"
 blessed = "2026-10-03"
 
+[bas.O2]
+instructions = 20632
+memory_operands = 5790
+
 [bas.Os]
-instructions = 21747
+instructions = 21763
 memory_operands = 5104
+
+[c.O2]
+instructions = 21256
+memory_operands = 3489
 
 [c.Os]
 instructions = 20015
 memory_operands = 3004
 
+[nib.O2]
+instructions = 18741
+memory_operands = 4605
+
 [nib.Os]
-instructions = 20164
+instructions = 20176
 memory_operands = 3003

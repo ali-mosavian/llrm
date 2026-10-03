@@ -15,7 +15,7 @@ use crate::backend::frame::Frame;
 use crate::backend::peep::{self, walk::Facts};
 use llrm_x86_code16::instructions;
 use crate::backend::{
-    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, spillforward, storecombine,
+    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward, storecombine,
     target,
 };
 use crate::frontends::bc::declen;
@@ -145,7 +145,7 @@ impl LIRTransform for Peephole {
         let body = storecombine::combined(&body);
         let body = pushed_constants(&body);
         let body = far_loads(&fused(&overwritten(&shuttles(&restored_copies(&high_extracts(
-            &transferred(&commuted(&constants(&pushes(&body)))),
+            &transferred(&commuted(&constants(&pushes(&body, &self.cpu)))),
             &self.cpu,
         )?)))));
         let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
@@ -153,6 +153,7 @@ impl LIRTransform for Peephole {
         let body = secondary_bases(&body, &self.cpu)?;
         let body = borrows(&increments(&body));
         let body = doubled(&body, &self.cpu)?;
+        let body = sharedstores::shared(&body, &self.cpu, &crate::backend::masm::SAVED.keys().copied().collect::<Vec<_>>());
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
@@ -351,8 +352,8 @@ fn _code_windows<E>(
 }
 
 /// Two adjacent immediate word pushes have one dword's stack layout (`peephole.peep`).
-pub fn pushes(body: &LirBody) -> LirBody {
-    peep::pushes(body, &Facts::new(body, None))
+pub fn pushes(body: &LirBody, cpu: &Profile) -> LirBody {
+    peep::pushes(body, &Facts::new(body, Some(cpu)))
 }
 
 pub fn _lanes(register: Register) -> Lanes {
@@ -1185,7 +1186,7 @@ fn _loaded_addresses(block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu
 
 /// The instructions of `block` after which no arithmetic flag is read,
 /// given whether any is read after its end.
-fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
+pub(crate) fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
     let mut dead: HashSet<usize> = HashSet::default();
     let mut flags_dead = dead_out;
     for one in block.insns.iter().rev() {
@@ -1568,7 +1569,7 @@ fn _affine_address(
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
     let (mut terms, mut disp): (affine::Terms, i64) = (vec![(full32(source.register), 1)], 0);
-    let mut best: Option<(usize, Address, i64)> = None;
+    let mut best: Option<(usize, Address, i64, bool)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(one, cpu) else {
             break;
@@ -1598,17 +1599,21 @@ fn _affine_address(
         if !dead.contains(&id(one)) {
             continue;
         }
-        if let Some(address) = affine::form(&terms, disp, &wide.scales) {
-            best = Some((at, address, old));
+        if dest.width == 2 && let Some(address) = affine::word_form(&terms, disp) {
+            best = Some((at, address, old, true));
+        } else if let Some(address) = affine::form(&terms, disp, &wide.scales) {
+            best = Some((at, address, old, false));
         }
     }
-    let Some((last, address, old)) = best else {
+    let Some((last, address, old, word)) = best else {
         return Ok(None);
     };
     let replaced = &parts[..=last];
     let partial: HashSet<Register> = terms.iter().map(|term| term.0).collect();
     let stalls = if dest.width < 4 { partial.len() as i64 * cpu.partial_register_stall } else { 0 };
-    if cpu.operations.address + cpu.operations.prefix + stalls > old {
+    // A word address has no prefix and reads no dword register.
+    let price = if word { cpu.operations.address } else { cpu.operations.address + cpu.operations.prefix + stalls };
+    if price > old {
         return Ok(None);
     }
     let what = semantics(Operation::Address, "lea", vec![Loc::Reg(dest)], vec![Loc::Address(address)]);
@@ -1672,36 +1677,9 @@ pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
-    let Some(what) = &one.what else {
-        return false;
-    };
-    if !one.clobbers.is_empty() {
-        return false;
-    }
-    match (what.op, what.name.as_deref()) {
-        (Operation::Compare, Some("cmp" | "test")) => true,
-        (Operation::Binary, Some("add" | "sub" | "and" | "or" | "xor")) => true,
-        (Operation::Unary, Some("neg")) => true,
-        // INC/DEC preserve carry, but a carry which is dead afterwards
-        // is dead beforehand too.  Other arithmetic flags are replaced
-        // by the operation, so an all-dead state crosses it unchanged.
-        (Operation::Unary, Some("inc" | "dec")) => flags_dead,
-        (Operation::Move, Some("mov")) | (Operation::Address, Some("lea")) => flags_dead,
-        (Operation::Extend, Some("movsx" | "movzx" | "cwd" | "cdq")) => flags_dead,
-        (Operation::Push, Some("push")) | (Operation::Pop, Some("pop")) => flags_dead,
-        (Operation::Nothing, None | Some("")) | (Operation::Jump, _) | (Operation::Fill | Operation::Copy, _) => flags_dead,
-        _ => {
-            // Anything else by what it encodes: a far load writes no flag, and
-            // missing from the list above it kept `mov ax,0` from becoming `xor`.
-            let Some((reads, writes)) = _register_effects(one, false, true) else {
-                return false;
-            };
-            if !reads.is_disjoint(&_ARITHMETIC_LANES) {
-                return false;
-            }
-            flags_dead || _ARITHMETIC_LANES.is_subset(&writes)
-        }
-    }
+    let (reads, writes) = _flag_effect(one);
+    let dead = if flags_dead { _ARITHMETIC_LANES.clone() } else { Lanes::new() };
+    _ARITHMETIC_LANES.is_subset(&dead.or(&writes).minus(&reads))
 }
 
 /// What each conditional jump in the instruction description reads.
@@ -1862,6 +1840,44 @@ fn _flag_source(blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &R
     None
 }
 
+/// The flag lanes `one` reads and writes: the one answer flags liveness has, forwards and back.
+/// What a callee, a caller after a return, and whatever runs after the body leaves may read:
+/// no calling convention passes the adjust flag in or out, so only an instruction here
+/// that reads AF reads it.
+fn _exit_flags() -> Lanes {
+    _flag_lanes(_ARITHMETIC).minus(&_ADJUST)
+}
+
+pub fn _flag_effect(one: &Insn) -> (Lanes, Lanes) {
+    let every = _flag_lanes(_ARITHMETIC);
+    if _nothing(one) {
+        // One that clobbers is an opaque barrier, which may observe any flag.
+        return if one.clobbers.is_empty() { (Lanes::new(), Lanes::new()) } else { (every, Lanes::new()) };
+    }
+    if let Some(effect) = liveness::effect(one) {
+        let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
+        return (flags(&effect.reads), flags(&effect.writes));
+    }
+    if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
+        return (_exit_flags(), Lanes::new());
+    }
+    // Bytes this cannot encode -- a relocated operand, an x87 form --
+    // still name their instruction, and only a few instructions read
+    // a flag. Writes stay unknown, which only keeps flags live longer.
+    if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
+        if !name.is_empty() && !_reads_flags(name) {
+            let written = match name {
+                "add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "neg" => every,
+                // They keep the carry.
+                "inc" | "dec" => every.minus(&_flag_lanes(RflagsBits::CF)),
+                _ => Lanes::new(),
+            };
+            return (Lanes::new(), written);
+        }
+    }
+    (every, Lanes::new())
+}
+
 static _ADJUST: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::AF));
 /// Every mnemonic iced-x86 knows to read an arithmetic flag, and every
 /// interrupt: it hands the flags to the handler.
@@ -1968,34 +1984,8 @@ fn _sets_from(one: &Insn, register: &Reg) -> bool {
 
 /// Which flag lanes something may read after each block's last instruction.
 pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
-    let every = _flag_lanes(_ARITHMETIC);
-    // No calling convention passes the adjust flag in or out: a callee, a
-    // caller after a return, and whatever runs after the body leaves may read
-    // any other flag, but only an instruction here that reads AF reads it.
-    let exits: Lanes = every.minus(&_ADJUST);
-
-    // The flag lanes of each instruction's effect, as liveness reads it.
-    let effects = |one: &Insn| -> (Lanes, Lanes) {
-        if _nothing(one) {
-            return (Lanes::new(), Lanes::new());
-        }
-        if let Some(effect) = liveness::effect(one) {
-            let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
-            return (flags(&effect.reads), flags(&effect.writes));
-        }
-        if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
-            return (exits.clone(), Lanes::new());
-        }
-        // Bytes this cannot encode -- a relocated operand, an x87 form --
-        // still name their instruction, and only a few instructions read
-        // a flag. Writes stay unknown, which only keeps flags live longer.
-        if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
-            if !name.is_empty() && !_reads_flags(name) {
-                return (Lanes::new(), Lanes::new());
-            }
-        }
-        (every.clone(), Lanes::new())
-    };
+    let exits = _exit_flags();
+    let effects = |one: &Insn| _flag_effect(one);
 
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> = body
         .blocks

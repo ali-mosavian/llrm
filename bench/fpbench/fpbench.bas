@@ -1,4 +1,3 @@
-' known: #358
 ' Six-body SINGLE n-body; checksum = weighted sum of truncated (pos*64).
 DEFINT A-Z
 DECLARE FUNCTION BenchFpbench& (steps AS INTEGER)

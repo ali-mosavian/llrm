@@ -18,6 +18,7 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 use crate::backend::assemble::Abi;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
+use crate::backend::peep;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
 use crate::backend::callregs::{call_clobbered_high, call_clobbers};
@@ -800,7 +801,7 @@ impl Selector<'_, '_, '_> {
                 chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
             })
             .collect();
-        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks)))?;
+        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks), self.cpu))?;
         let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
         body.sealed_arguments = !self.unsealed;
@@ -2767,8 +2768,13 @@ impl Selector<'_, '_, '_> {
                 {
                     let bits = if size == 4 { u64::from(bits as u32) } else { bits };
                     for by in (0..i64::from(size) / 4).rev() {
-                        let dword = Loc::Imm(Imm { value: (bits >> (32 * by)) as u32 as i64, width: 4, address: None });
-                        out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![dword])));
+                        let value = (bits >> (32 * by)) as u32 as i64;
+                        // Tuned for size, the two words where they are fewer bytes.
+                        let words = if self.cpu.size && peep::guards::split_push_smaller(value) { vec![(value >> 16, 2), (value & 0xFFFF, 2)] } else { vec![(value, 4)] };
+                        for (value, width) in words {
+                            let push = Loc::Imm(Imm { value, width, address: None });
+                            out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![push])));
+                        }
                     }
                     pushed += i64::from(size);
                     continue;
@@ -3289,9 +3295,15 @@ impl Selector<'_, '_, '_> {
         if b.iter().all(|one| matches!(one, Loc::Imm(Imm { value: 0, .. }))) {
             word_op(self, "or", vec![low, a[1].clone()]);
         } else {
-            let low = word_op(self, "xor", vec![low, b[0].clone()]);
-            let high = word_op(self, "mov", vec![a[1].clone()]);
-            let high = word_op(self, "xor", vec![high, b[1].clone()]);
+            // A half the constant leaves zero is the word itself: xor with zero changes nothing.
+            let zero = |one: &Loc| matches!(one, Loc::Imm(Imm { value: 0, .. }));
+            let low = if zero(&b[0]) { low } else { word_op(self, "xor", vec![low, b[0].clone()]) };
+            let high = if zero(&b[1]) {
+                a[1].clone()
+            } else {
+                let high = word_op(self, "mov", vec![a[1].clone()]);
+                word_op(self, "xor", vec![high, b[1].clone()])
+            };
             word_op(self, "or", vec![low, high]);
         }
         Test::One(condition_code(predicate))

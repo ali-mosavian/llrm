@@ -11,7 +11,12 @@ use crate::model::ir::Operation;
 /// x87crowd.c's `_deep` through isel and the machine phases before
 /// FloatAssign, under Borland C's medium model; and its frame.
 fn before_float_assign() -> (LirBody, Frame) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/check/mir/x87crowd.ll");
+    before("x87crowd", "_deep")
+}
+
+/// `function` of tests/check/mir/`file`.ll, as `before_float_assign` takes it.
+fn before(file: &str, function: &str) -> (LirBody, Frame) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/check/mir/{file}.ll"));
     let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
     let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
     let abi = crate::abi::qb::HirAbi {
@@ -21,7 +26,7 @@ fn before_float_assign() -> (LirBody, Frame) {
     };
     let cpu = crate::backend::cpu::profile("486").unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));
-    let selected = isel::selected(&module, "_deep", &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
+    let selected = isel::selected(&module, function, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
     let mut made = frame::of(&selected.body, Some(&selected.calls), "", None).unwrap();
     made.floor = made.floor.min(-selected.depth);
     let shared = Rc::new(RefCell::new(made));
@@ -60,4 +65,29 @@ fn test_a_compare_crowded_before_its_branches_spills() {
 
     let assigned = assigned(&body, Some(&mut frame), None, false, cpu);
     assert!(assigned.is_ok(), "{:?}", assigned.err());
+}
+
+/// Nine floats copy at once into a loop's phis (fpbench, #358). Each spilled
+/// copy was stored after all nine were made, nine registers wide, and FloatAlloc refused the
+/// body with "floating instruction requires too many stack operands".
+#[test]
+fn test_spilled_phi_copies_are_not_all_held_at_once() {
+    refuses_nothing("x87phis", "_k");
+}
+
+/// Ten floats rotate through a loop: its phi copies are one cycle, each reading what the next
+/// writes. A step of such copies fell back to all-at-once and was refused; the order is one
+/// copy at a time, the cycle broken with one temporary.
+#[test]
+fn test_a_cycle_of_spilled_phi_copies_is_ordered_not_held_at_once() {
+    refuses_nothing("x87rotate", "_rot");
+}
+
+fn refuses_nothing(file: &str, function: &str) {
+    let (body, mut frame) = before(file, function);
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+    let assigned = assigned(&body, Some(&mut frame), None, false, cpu).expect("assigns");
+    let mut alloc = crate::backend::floatalloc::FloatAlloc { frame: Some(Rc::new(RefCell::new(frame))) };
+    let done = alloc.transform(assigned);
+    assert!(done.is_ok(), "{:?}", done.err());
 }

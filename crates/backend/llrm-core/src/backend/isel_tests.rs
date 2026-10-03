@@ -408,7 +408,7 @@ other:
             "cmp ax, 9",
             "je L0_1",
             "L0_4:",
-            "mov ax, 0",
+            "xor ax, ax",
             "pop bp",
             "retf",
             "L0_1:",
@@ -477,7 +477,7 @@ no:
             "and bl, dl",
             "jne L0_6",
             "L0_8:",
-            "mov ax, 0",
+            "xor ax, ax",
             "pop bp",
             "retf",
             "L0_6:",
@@ -1005,7 +1005,7 @@ small:
             "sahf",
             "ja L1_8",
             "L1_10:",
-            "mov ax, 0",
+            "xor ax, ax",
             "leave",
             "retf",
             "L1_8:",
@@ -1628,7 +1628,7 @@ define void @f(ptr %p, i16 %i) addrspace(1) {
 ";
     assert_eq!(
         inner(text),
-        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add ax, ax", "add bx, ax", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
+        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "lea bx, [ebx+eax*2]", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
     );
 }
 
@@ -1723,6 +1723,49 @@ fn test_a_multiply_by_a_constant_tuned_for_size_is_the_smaller_form() {
     };
     assert!(on(true).contains("imul eax, eax, 446") && !on(true).contains("shl eax"), "{}", on(true));
     assert!(on(false).contains("shl eax") && !on(false).contains("imul"), "{}", on(false));
+}
+
+/// Tuned for size, a dword constant argument is the two word pushes where they are fewer
+/// bytes: `pushd 7340144` is 6, `push 112; push 112` 4. QCport -Os had some 800 of them (the
+/// fixed-point and float arguments), and `dword_push` joined any two word pushes.
+#[test]
+fn test_a_dword_constant_argument_tuned_for_size_is_the_fewer_bytes_of_one_push_or_two() {
+    let text = "declare void @use(i32, float, i32, i32)
+define void @f() addrspace(1) {
+  call void @use(i32 7340144, float 1.0, i32 7, i32 -3)
+  ret void
+}
+";
+    let on = |size: bool| {
+        let cpu = crate::backend::cpu::tuned("486", size).expect("a target");
+        let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    let pushes = |listing: String| listing.lines().map(str::trim).filter(|line| line.starts_with("push")).map(str::to_owned).collect::<Vec<_>>();
+    // Last argument first: -3 and 7 are byte-immediate dword pushes; 1.0 is two words (5 bytes);
+    // 7340144 is two (4), the first's zero low word joining the next word as `pushd 112` (3 for 4).
+    assert_eq!(pushes(on(true)), ["pushd -3", "pushd 7", "pushw 16256", "pushd 112", "pushw 112"], "{}", on(true));
+    assert_eq!(pushes(on(false)), ["pushd -3", "pushd 7", "pushd 1065353216", "pushd 7340144"], "{}", on(false));
+}
+
+/// A dword compared for equality with a constant xors only the halves the constant sets: QCport
+/// -Os had `xor dx,0` (3 bytes, no effect) in 71 `got != 73`-style compares.
+#[test]
+fn test_a_dword_equality_xors_only_the_constant_halves_that_are_not_zero() {
+    let text = |constant: i64| {
+        format!("declare i32 @rd()
+define i16 @f() addrspace(1) {{
+  %v = call i32 @rd()
+  %c = icmp ne i32 %v, {constant}
+  %r = zext i1 %c to i16
+  ret i16 %r
+}}
+")
+    };
+    let xors = |constant: i64| listing(&text(constant), "f").into_iter().filter(|line| line.starts_with("xor")).collect::<Vec<_>>();
+    assert_eq!(xors(73), ["xor ax, 73"]);
+    assert_eq!(xors(0x20000), ["xor dx, 2"]);
+    assert_eq!(xors(0x20005), ["xor ax, 5", "xor dx, 2"]);
 }
 
 /// A dword load read only as its words is those words loaded, as the old
@@ -2067,7 +2110,7 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 ";
     let got = inner(text);
     let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
-    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "mov ebx, 0", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
+    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "xor ebx, ebx", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
 }
 
 /// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
@@ -2143,7 +2186,7 @@ define void @f(i16 %n) addrspace(1) {
             "mov di, offset g",
             "pushw seg g",
             "pop es",
-            "mov eax, 0",
+            "xor eax, eax",
             "rep stosd",
             "mov cx, bx",
             "rep stosb",
@@ -3201,7 +3244,7 @@ define i16 @f() addrspace(1) {
 ";
     assert!(text.contains("call {i16, i16} @llrm.ia16.asm."), "the shape that was refused");
     let got = listing(text, "f");
-    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "db 0fah", "mov ax, 0", "db 0cdh,01ah", "mov ax, cx", "add ax, dx", "pop bp", "retf"]);
+    assert_eq!(got, ["push bp", "mov bp, sp", "L0_0:", "db 0fah", "xor ax, ax", "db 0cdh,01ah", "mov ax, cx", "add ax, dx", "pop bp", "retf"]);
 }
 
 /// The same address as a phi's input, made in the predecessor before

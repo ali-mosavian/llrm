@@ -40,6 +40,8 @@ pub const CHUNK: usize = 1000;
 pub const ACBP: u8 = 0x48;
 /// relocatable, paragraph aligned, public, 16-bit
 pub const PARAGRAPH: u8 = 0x68;
+/// relocatable, paragraph aligned, stack, 16-bit
+pub const STACK_SEGMENT: u8 = 0x74;
 /// relocatable, dword aligned, public, 16-bit
 pub const DWORD: u8 = 0xA8;
 
@@ -195,6 +197,8 @@ pub struct Segment {
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The widest alignment a data item in it asks for.
     pub align: usize,
+    /// Combined as the linker's stack: concatenated with the others', SS:SP at the end.
+    pub stack: bool,
 }
 
 impl Segment {
@@ -209,6 +213,7 @@ impl Segment {
             lines: Vec::new(),
             bodies: Vec::new(),
             align: 1,
+            stack: false,
         }
     }
 
@@ -462,6 +467,12 @@ pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Re
         }
     }
     segments.extend(named.into_values());
+    if module.stack > 0 {
+        let mut stack = Segment::new("STACK", "STACK", true);
+        stack.image = vec![0; module.stack as usize];
+        stack.stack = true;
+        segments.push(stack);
+    }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments
@@ -751,6 +762,7 @@ pub fn _records(
         let (klass, name) = (lname(&segment.klass), lname(&segment.name));
         let size = segment.image.len();
         let alignment = if module.selector_addressed(&segment.name) { PARAGRAPH } else { alignment_for(segment.align) };
+        let alignment = if segment.stack { STACK_SEGMENT } else { alignment };
         let acbp = alignment | if size == 0x10000 { 2 } else { 0 };
         let mut body = vec![acbp];
         body.extend(((size & 0xFFFF) as u16).to_le_bytes());
@@ -1097,6 +1109,7 @@ mod tests {
             )],
             private: BTreeSet::new(),
             requests: BTreeSet::new(),
+            stack: 0,
             debug: None,
         };
         assert_eq!(
@@ -1131,6 +1144,7 @@ mod tests {
                 procedures: vec![],
                 private: BTreeSet::new(),
                 requests: BTreeSet::new(),
+            stack: 0,
                 debug: None,
             };
             let records = omf::parse(&written(&module, "m.c").unwrap()).unwrap();
@@ -1215,6 +1229,7 @@ mod tests {
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
             requests: BTreeSet::new(),
+            stack: 0,
             debug: None,
         };
         assert_eq!(

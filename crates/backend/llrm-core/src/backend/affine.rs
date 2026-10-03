@@ -86,3 +86,26 @@ pub fn form(terms: &[(Register, i64)], disp: i64, scales: &BTreeSet<i64>) -> Opt
         _ => None,
     }
 }
+
+/// The real-mode address naming `terms` plus `disp`, if one does: a lone base or index
+/// register, or one of BX/BP and one of SI/DI. No prefix, no scale.
+pub fn word_form(terms: &[(Register, i64)], disp: i64) -> Option<Address> {
+    let word = |one: Register| match one {
+        Register::EBX => Some(Register::BX),
+        Register::EBP => Some(Register::BP),
+        Register::ESI => Some(Register::SI),
+        Register::EDI => Some(Register::DI),
+        _ => None,
+    };
+    let is_base = |one: Register| matches!(one, Register::BX | Register::BP);
+    match *terms {
+        [(only, 1)] => Some(Address { through: word(only)?, offset: disp, ..Address::new(None) }),
+        [(first, 1), (second, 1)] => {
+            let (first, second) = (word(first)?, word(second)?);
+            let (base, index) = if is_base(first) { (first, second) } else { (second, first) };
+            (is_base(base) && !is_base(index))
+                .then_some(Address { through: base, index, scale: 1, offset: disp, ..Address::new(None) })
+        }
+        _ => None,
+    }
+}

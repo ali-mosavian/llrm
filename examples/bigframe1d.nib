@@ -1,0 +1,6 @@
+fn main() -> i16:
+    let mut t: i16[4096] = [0] * 4096
+    for i in 0..4096:
+        t[i] = 7
+    print(t[4095])
+    return 0

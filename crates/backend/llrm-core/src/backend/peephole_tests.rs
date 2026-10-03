@@ -362,6 +362,22 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
     }
 }
 
+/// `push 112; push 112` joined into `pushd 7340144` at -Os: 6 bytes for 4. Tuned for size two
+/// word pushes join only where the dword is no longer (`push 0; push 0` is `pushd 0`, 3 for 4).
+#[test]
+fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() {
+    for (high, low, joined, size) in [(0x70i64, 0x70i64, false, true), (0x70, 0x70, true, false), (0, 0, true, true), (0x3F80, 0, false, true)] {
+        let push = |at: i64, number: i64| {
+            Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
+        };
+        let input = body("arguments", 0, vec![block(0, vec![push(0, high), push(3, low)], vec![])]);
+
+        let result = pushes(&input, crate::backend::cpu::tuned("486", size).unwrap()).insns();
+
+        assert_eq!(result.len(), if joined { 1 } else { 2 }, "{high:#x}:{low:#x} size={size}");
+    }
+}
+
 #[test]
 fn test_constant_push_pair_preserves_stack_bytes() {
     for (high, low) in [(0x43F3i64, 0xC000i64), (-1, -2), (0, 0), (0x8000, 0x7FFF)] {
@@ -369,7 +385,7 @@ fn test_constant_push_pair_preserves_stack_bytes() {
             Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
         };
         let pair = vec![push(0, high), push(3, low)];
-        let result = pushes(&body("arguments", 0, vec![block(0, pair, vec![])])).insns();
+        let result = pushes(&body("arguments", 0, vec![block(0, pair, vec![])]), crate::backend::cpu::tuned("486", false).unwrap()).insns();
         assert!(result.len() == 1 && result[0].covers == Some((0, 6)));
         let Loc::Imm(operand) = &result[0].what.as_ref().unwrap().sources[0] else { unreachable!() };
         let expected: Vec<u8> = ((low & 0xFFFF) as u16)
@@ -413,7 +429,7 @@ fn test_constant_push_fusion_stops_at_boundaries() {
             vec![block(0, insns, vec![])]
         };
         let input = body("boundary", 0, blocks);
-        assert_eq!(pushes(&input), input, "{barrier}");
+        assert_eq!(pushes(&input, crate::backend::cpu::tuned("486", false).unwrap()), input, "{barrier}");
     }
 }
 
@@ -423,14 +439,14 @@ fn test_constant_push_fusion_stops_at_boundaries() {
 fn test_a_byte_gap_does_not_stop_push_fusion() {
     let first = insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
     let second = Insn { at: 4, covers: Some((4, 7)), ..first.clone() };
-    let fused = pushes(&body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]));
+    let fused = pushes(&body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
     let code: Vec<_> = fused.insns().into_iter().filter(|one| !one.is_meta()).collect();
     assert_eq!(code.len(), 1, "{code:?}");
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 4, 5, 6]);
 
     // Nor does a marker between them.
     let marker = insn(3, Some((3, 4)), Some(lir::inert()), vec![], vec![]);
-    let fused = pushes(&body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]));
+    let fused = pushes(&body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
     assert_eq!(fused.insns().iter().filter(|one| !one.is_meta()).count(), 1, "{:?}", fused.insns());
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 3, 4, 5, 6]);
 }
@@ -1029,6 +1045,151 @@ fn test_affine_address_sees_flags_dead_past_its_block() {
     let result = addresses(&input, "386").unwrap();
 
     assert_eq!(names(&result.blocks[0].insns), ["lea"]);
+}
+
+/// `mov ax,di; sub ax,4` stayed two instructions (5 bytes) at 486: the only LEA the pass
+/// built was the 67h dword form, priced at its prefix. The word form `lea ax,[di-4]` is 3 bytes
+/// and no prefix: QCport -Os had some 700 such pairs.
+#[test]
+fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
+    for (label, source, then, expected, through, index, offset) in [
+        ("base and offset", Register::DI, ("sub", im(4, 2)), vec!["lea", "call"], Register::DI, Register::None, -4),
+        ("base and index", Register::BX, ("add", rl(Register::SI, 2)), vec!["lea", "call"], Register::BX, Register::SI, 0),
+        ("not an address register", Register::CX, ("sub", im(4, 2)), vec!["mov", "sub", "call"], Register::None, Register::None, 0),
+        ("two indexes", Register::SI, ("add", rl(Register::DI, 2)), vec!["mov", "add", "call"], Register::None, Register::None, 0),
+    ] {
+        let ax = rl(Register::AX, 2);
+        let insns = vec![
+            Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![rl(source, 2)])), vec![], vec![])),
+            Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, then.0, vec![ax.clone()], vec![ax.clone(), then.1])), vec![], vec![])),
+            Arc::new(Insn {
+                clobbers: BTreeSet::from([Register::AX, Register::CX, Register::DX]),
+                ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+            }),
+        ];
+        let input = body("word-lea", 0, vec![block(0, insns, vec![])]);
+
+        let result = addresses(&input, "486").unwrap();
+
+        assert_eq!(names(&result.blocks[0].insns), expected, "{label}");
+        if let Some(Loc::Address(address)) = result.blocks[0].insns[0].what.as_ref().unwrap().sources.first() {
+            assert_eq!((address.through, address.index, address.offset), (through, index, offset), "{label}");
+        }
+    }
+}
+
+/// The word LEA keeps no flags: `mov ax,di; sub ax,4; adc ...` reads the borrow, so stays.
+#[test]
+fn test_affine_address_word_lea_keeps_a_flag_still_read() {
+    let (ax, di) = (rl(Register::AX, 2), rl(Register::DI, 2));
+    let insns = vec![
+        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![di])), vec![], vec![])),
+        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "sub", vec![ax.clone()], vec![ax.clone(), im(4, 2)])), vec![], vec![])),
+        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "adc", vec![ax.clone()], vec![ax, im(0, 2)])), vec![], vec![])),
+    ];
+    let input = body("word-lea-flags", 0, vec![block(0, insns, vec![])]);
+
+    let result = addresses(&input, "486").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["mov", "sub", "adc"]);
+}
+
+/// What the epilogue saves: the convention's preserved registers.
+fn saved() -> Vec<Register> {
+    crate::backend::masm::SAVED.keys().copied().collect()
+}
+
+/// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
+fn literal_store(at: i64, width: u32, disp: i64, value: i64) -> Arc<Insn> {
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(disp), width) });
+    Arc::new(insn(at, Some((at, at + 1)), Some(sem(Operation::Move, "mov", vec![cell], vec![im(value, width)])), vec![], vec![]))
+}
+
+/// The function's remaining block, which reads `reads` and writes the flags (`flags`) or reads them.
+fn after_stores(reads_flags: bool, reads: &[Register]) -> Vec<Arc<Insn>> {
+    let first = if reads_flags {
+        sem(Operation::Binary, "adc", vec![rl(Register::SI, 2)], vec![rl(Register::SI, 2), im(0, 2)])
+    } else {
+        sem(Operation::Compare, "cmp", vec![], vec![rl(Register::SI, 2), im(0, 2)])
+    };
+    let mut insns = vec![Arc::new(insn(10, Some((10, 11)), Some(first), vec![], vec![]))];
+    // Everything after the block is live (it has no successor), so what it does not write
+    // first is read: the four scratch registers are written last, except where `reads` first
+    // reads them.
+    for (at, register) in reads.iter().enumerate() {
+        let what = sem(Operation::Compare, "cmp", vec![], vec![rl(*register, 4), im(0, 4)]);
+        insns.push(Arc::new(insn(11 + at as i64, Some((11 + at as i64, 12 + at as i64)), Some(what), vec![], vec![])));
+    }
+    for (at, register) in [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().enumerate() {
+        let what = sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(1, 4)]);
+        insns.push(Arc::new(insn(20 + at as i64, Some((20 + at as i64, 21 + at as i64)), Some(what), vec![], vec![])));
+    }
+    insns
+}
+
+/// QCport -Os kept `mov dword ptr [bp-8],0` twice (16 bytes) where a zeroed register stores
+/// them in 3+4+4: some 270 runs. The literal's register must be dead, and the zero is `xor`
+/// only where the flags are, else `mov`; one that saves no byte (a lone word store) stays.
+#[test]
+fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let all = [Register::EAX, Register::EBX, Register::ECX, Register::EDX];
+    for (label, stores, flags_read, live, expected) in [
+        ("two dwords, flags dead", vec![(4, -4), (4, -8)], false, vec![], vec!["xor", "mov", "mov"]),
+        ("two dwords, flags read", vec![(4, -4), (4, -8)], true, vec![], vec!["mov", "mov", "mov"]),
+        ("a dword and a word", vec![(4, -4), (2, -8)], false, vec![], vec!["xor", "mov", "mov"]),
+        ("one dword", vec![(4, -4)], false, vec![], vec!["xor", "mov"]),
+        ("one word saves nothing", vec![(2, -2)], false, vec![], vec!["mov"]),
+        ("every scratch register read after", vec![(4, -4), (4, -8)], false, all.to_vec(), vec!["mov", "mov"]),
+    ] {
+        let mut insns: Vec<Arc<Insn>> =
+            stores.iter().enumerate().map(|(at, (width, disp))| literal_store(at as i64, *width, *disp, 0)).collect();
+        let next = after_stores(flags_read, &live);
+        let input = body("stores", 0, vec![block(0, std::mem::take(&mut insns), vec![1]), block(1, next, vec![])]);
+
+        let result = sharedstores::shared(&input, size, &saved());
+
+        let got = names(&result.blocks[0].insns);
+        assert_eq!(got, expected, "{label}");
+    }
+}
+
+/// Which scratch register a run may take is the convention's fact (`masm::SAVED`): where it
+/// preserves BX, a run takes BX only if the body already names it (so its epilogue saves it),
+/// else it would push and pop a register to save a byte.
+#[test]
+fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_body_names_it() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let input = |named: bool| {
+        // BX is dead after the stores (the call clobbers it, nothing reads it); the other
+        // scratch registers are read first. The body names BX only where it writes it first.
+        let mut insns = vec![literal_store(1, 4, -4, 0), literal_store(2, 4, -8, 0)];
+        if named {
+            let write = sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(5, 4)]);
+            insns.insert(0, Arc::new(insn(0, Some((0, 1)), Some(write), vec![], vec![])));
+        }
+        let mut next = after_stores(false, &[Register::EAX, Register::ECX, Register::EDX]);
+        next.truncate(4);
+        next.push(Arc::new(Insn {
+            clobbers: BTreeSet::from([Register::EAX, Register::EBX, Register::ECX, Register::EDX]),
+            ..insn(40, Some((40, 41)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+        }));
+        body("stores", 0, vec![block(0, insns, vec![1]), block(1, next, vec![])])
+    };
+    let preserving_bx = [Register::ESI, Register::EDI, Register::EBX];
+
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx).blocks[0].insns), ["mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved()).blocks[0].insns), ["xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
+}
+
+/// Two pushes of a clock are not a size choice: -O2 keeps the stores.
+#[test]
+fn test_stores_of_one_literal_are_not_shared_at_o2() {
+    let o2 = crate::backend::cpu::tuned("486", false).unwrap();
+    let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
+
+    assert_eq!(sharedstores::shared(&input, o2, &saved()), input);
 }
 
 #[test]
