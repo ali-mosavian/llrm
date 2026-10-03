@@ -132,11 +132,16 @@ impl FunctionCompiler<'_> {
         let mut seen: BTreeSet<(u32, BTreeSet<BorrowKey>)> = BTreeSet::new();
         while let Some((block, at, mut killed)) = pending.pop() {
             let builder = &self.blocks[(block - 1) as usize];
-            for instruction in &builder.instructions[at.min(builder.instructions.len())..] {
-                if instruction.operands.iter().flat_map(mentions).any(|one| held.contains(&one) && !killed.contains(&one)) {
+            let from = at.min(builder.instructions.len());
+            for (index, instruction) in builder.instructions.iter().enumerate().skip(from) {
+                let reseat = self.reseats.contains(&(block, index));
+                // A store writes its place without reading it.
+                let written = matches!((instruction.op, instruction.operands.first()), ("store", Some(hir::Operand::Place(_)))) || reseat;
+                let read = if written { &instruction.operands[1..] } else { &instruction.operands[..] };
+                if read.iter().flat_map(mentions).any(|one| held.contains(&one) && !killed.contains(&one)) {
                     return true;
                 }
-                killed.extend(redefined(instruction).into_iter().filter(|one| held.contains(one)));
+                killed.extend(redefined(instruction, reseat).into_iter().filter(|one| held.contains(one)));
             }
             let Some(terminator) = &builder.terminator else {
                 continue;
@@ -172,9 +177,11 @@ fn mentions(operand: &hir::Operand) -> Vec<BorrowKey> {
 
 /// What `instruction` gives a new value: its results, or the whole place
 /// it stores to.
-fn redefined(instruction: &hir::Instruction) -> Vec<BorrowKey> {
+fn redefined(instruction: &hir::Instruction, reseat: bool) -> Vec<BorrowKey> {
     let stored = match (instruction.op, instruction.operands.first()) {
         ("store", Some(hir::Operand::Place(place))) => Some(BorrowKey::Place(*place)),
+        // A reseated view's descriptor is written through its address.
+        ("store", Some(hir::Operand::IndirectPlace { base, .. })) if reseat => Some(BorrowKey::Value(*base)),
         _ => None,
     };
     instruction.results.iter().map(|one| BorrowKey::Value(*one)).chain(stored).collect()

@@ -42,7 +42,7 @@ struct Field {
 
 impl TypeRegistry {
     /// An owner no binding has: what a frame's field holds.
-    fn lent_root(&mut self) -> u32 {
+    pub(super) fn lent_root(&mut self) -> u32 {
         self.next_lent_root -= 1;
         self.next_lent_root
     }

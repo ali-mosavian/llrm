@@ -1055,3 +1055,296 @@ fn main() -> i16:
     let local = source.replace("fn longer(a: &string, b: &string) -> &string:\n    return a.len >= b.len ? a : b", "fn longer(a: &string, b: &string) -> &string:\n    let c = \"zz\"\n    return a.len >= b.len ? a : c");
     assert_eq!(refused_at(&local), "3: a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned");
 }
+
+#[test]
+fn a_let_mut_borrow_is_reseated_by_assigning_a_borrow() {
+    // #417: `last = &v[1]` of a `&i16` was "binding is immutable"; `&string`
+    // reseated. A reference now lives in a cell the assignment rewrites.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [5, 6]
+    let mut last = &v[0]
+    print(last)
+    last = &v[1]
+    print(last)
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "5\n6\n");
+    // Reseated in a branch and in a loop, read after each.
+    let flow = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [5, 6, 7]
+    let mut cur = &v[0]
+    let mut i: i16 = 0
+    while cur < 7:
+        print(cur)
+        i += 1
+        cur = &v[i]
+    if i == 2:
+        cur = &v[0]
+    print(cur)
+    return 0
+";
+    assert_eq!(output_without_leaks(flow), "5\n6\n5\n");
+    // Still a borrow of `v` until reseated (E0502).
+    let held = source.replace("    last = &v[1]\n    print(last)\n", "    v.push(9)\n    print(last)\n");
+    assert_eq!(refused_at(&held), "5: \"v\" is borrowed here, so it cannot be changed");
+    // A reseated borrow is of the new owner, which a return may not leak (E0515).
+    let leak = "\
+fn bad() -> &i16:
+    let v: vec[i16] = [1]
+    let mut r = &v[0]
+    r = &v[0]
+    return r
+
+fn main() -> i16:
+    print(bad())
+    return 0
+";
+    assert_eq!(refused_at(leak), "5: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned");
+}
+
+#[test]
+fn reseating_a_borrow_ends_its_old_borrow() {
+    // #418: a borrow lived to the binding's last use, not the value's, so a
+    // reseated binding kept its owner borrowed. Rust's NLL accepts these.
+    for (element, first, second, shown) in [("string", "\"a\"", "\"b\"", "a\nb\n"), ("i16", "1", "2", "1\n2\n")] {
+        let source = format!(
+            "\
+fn main() -> i16:
+    let mut v: vec[{element}] = [{first}]
+    let mut last = &v[0]
+    print(last)
+    v.push({second})
+    last = &v[1]
+    print(last)
+    return 0
+"
+        );
+        assert_eq!(output_without_leaks(&source), shown, "{element}");
+        // Without the reseat the second `print` reads a buffer `push` may move (E0502).
+        let held = source.replace("    last = &v[1]\n", "");
+        assert_eq!(refused_at(&held), "5: \"v\" is borrowed here, so it cannot be changed", "{element}");
+    }
+    // In a loop: print, push, reseat.
+    let looped = "\
+fn main() -> i16:
+    let mut words: vec[string] = [\"a\"]
+    let mut last = &words[0]
+    for i in 0..3:
+        print(last)
+        words.push(\"b\")
+        last = &words[i + 1]
+    print(last)
+    return 0
+";
+    assert_eq!(output_without_leaks(looped), "a\nb\nb\nb\n");
+    // A loop that pushes without reseating reads the stale borrow (E0502).
+    assert_eq!(refused_at(&looped.replace("        last = &words[i + 1]\n", "")), "6: \"words\" is borrowed here, so it cannot be changed");
+    // A branch that may leave the old borrow in place keeps it.
+    let branch = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let mut last = &v[0]
+    let c = v.len > 1
+    if c:
+        last = &v[1]
+    v.push(3)
+    print(last)
+    return 0
+";
+    assert_eq!(refused_at(branch), "7: \"v\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_string_behind_a_borrowed_struct_field_is_read_and_borrowed() {
+    // #423: `h.src.text.len` was "scalar or array field cannot be used as a
+    // struct", `&h.src.text` "only a place can be borrowed".
+    let source = "\
+struct Source:
+    text: string
+    count: u16
+
+struct Holder:
+    src: &Source
+
+fn first(h: &Holder) -> char:
+    return h.src.text[0]
+
+fn view(h: &Holder) -> &string:
+    return &h.src.text
+
+fn size(h: &Holder) -> u16:
+    let t = &h.src.text
+    return t.len + h.src.text.len + h.src.count
+
+fn main() -> i16:
+    let s = Source(text=\"move north\", count=3)
+    let h = Holder(src=s)
+    print(first(h))
+    print(view(h))
+    print(size(h))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "m\nmove north\n23\n");
+}
+
+#[test]
+fn a_borrow_copied_out_of_a_field_is_not_tied_to_the_struct_holding_it() {
+    // #424: `let src = self.src` rooted `src` in `self`, so `self.at += 1`
+    // was refused while it lived. The copy points at the caller's value.
+    let source = "\
+struct Source:
+    count: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn Scanner.size(self: &mut Scanner) -> u16:
+    let src = self.src
+    self.at += 1
+    return src.count + self.at
+
+fn bump(s: Scanner) -> u16:
+    let src = s.src
+    return src.count
+
+fn main() -> i16:
+    let src = Source(count=7)
+    let mut s = Scanner(src=src, at=0)
+    print(s.size())
+    print(bump(s))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "8\n7\n");
+    // The copy is still the caller's `src`: changing it while the copy lives is refused (E0506).
+    let caller = "\
+struct Source:
+    mut count: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn main() -> i16:
+    let mut src = Source(count=7)
+    let s = Scanner(src=src, at=0)
+    let r = s.src
+    src.count = 9
+    print(r.count)
+    return 0
+";
+    assert_eq!(refused_at(caller), "12: \"src\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_view_parameter_is_kept_in_a_view_field() {
+    // #425: a `&string` parameter, a slice or a returned view stored in a
+    // `&string` field was "borrow of \"src\" has the wrong type"; `&[T]` was
+    // "expected a type name". A view field is the 8-byte descriptor.
+    let source = "\
+struct Scanner:
+    src: &string
+    nums: &[i16]
+    mut at: u16
+
+fn scan(src: &string, nums: &[i16]) -> Scanner:
+    return Scanner(src=src, nums=nums, at=0)
+
+fn main() -> i16:
+    let line = \"move north\"
+    let v: vec[i16] = [4, 5, 6]
+    let s = scan(line, v)
+    print(s.src)
+    print(s.src.len)
+    print(s.nums[1])
+    print(s.nums.len)
+    let t = Scanner(src=&line[5:10], nums=&v[1:3], at=1)
+    print(t.src)
+    print(t.nums[0])
+    print(size_of[Scanner]())
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "move north\n10\n5\n3\nnorth\n5\n18\n");
+    // The field borrows what the view does: a local's is gone when the struct is returned (E0515)...
+    let local = "\
+struct Scanner:
+    src: &string
+    mut at: u16
+
+fn make() -> Scanner:
+    let line = \"move north\"
+    return Scanner(src=line, at=0)
+
+fn main() -> i16:
+    let s = make()
+    print(s.src)
+    return 0
+";
+    assert_eq!(refused_at(local), "7: a returned borrow of \"line\" would dangle; only a borrowed parameter's can be returned");
+    // ...and an owner changed while a slice of it is held is refused (E0506).
+    let changed = "\
+struct Scanner:
+    src: &string
+    mut at: u16
+
+fn main() -> i16:
+    let mut line = \"move north\"
+    let s = Scanner(src=&line[0:4], at=0)
+    line = \"other\"
+    print(s.src)
+    return 0
+";
+    assert_eq!(refused_at(changed), "8: \"line\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_method_is_called_on_a_borrowed_struct_field() {
+    // #426: `self.src.run(...)` was "a *far pointer is not a sequence".
+    let source = "\
+struct Source:
+    n: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn Source.run(self: &Source, at: u16) -> u16:
+    return at + self.n
+
+fn Scanner.word(self: &mut Scanner) -> u16:
+    let word = self.src.run(self.at)
+    self.at += 1
+    return word
+
+fn main() -> i16:
+    let src = Source(n=3)
+    let mut s = Scanner(src=src, at=0)
+    print(s.word())
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "3\n");
+    // A `&` field is read-only: a `&mut self` method is refused.
+    let writes = "\
+struct Source:
+    mut n: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn Source.bump(self: &mut Source) -> void:
+    self.n += 1
+
+fn Scanner.word(self: &mut Scanner) -> void:
+    self.src.bump()
+
+fn main() -> i16:
+    let src = Source(n=3)
+    let mut s = Scanner(src=src, at=0)
+    s.word()
+    return 0
+";
+    assert_eq!(refused_at(writes), "12: field \"src\" of Scanner is not declared 'mut'");
+}

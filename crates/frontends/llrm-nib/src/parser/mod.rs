@@ -1930,7 +1930,8 @@ impl Parser {
         // `&T[N]` refers to the array, as a parameter's does.
         if self.take(|kind| matches!(kind, TokenKind::Ampersand)).is_some() {
             let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
-            let target = self.type_annotation()?;
+            // `&[T]` is a view, which a field or a type argument keeps.
+            let target = self.borrowed_annotation()?;
             return Ok(TypeSpec::Applied {
                 name: if mutable { "&mut" } else { "&" }.into(),
                 args: vec![target],
