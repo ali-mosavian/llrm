@@ -1,6 +1,6 @@
 //! The borrow checker's soundness: each refused program once compiled.
 
-use crate::test_language::output;
+use crate::test_language::{output, output_without_leaks};
 
 /// `line: message` of the error that refuses `source`.
 fn refused_at(source: &str) -> String {
@@ -990,4 +990,68 @@ fn main() -> i16:
     // A generator expression over the local is the same state.
     let expression = source.replace("return evens(local)", "return (x for x in local if x % 2 == 0)");
     assert_eq!(refused_at(&expression), message);
+}
+
+#[test]
+fn a_loop_variable_over_a_borrowed_parameter_returns_as_a_borrow() {
+    // #422: `p` of `for p in v` rooted in the loop binding, so returning it
+    // was refused as dangling though the element lives in the caller's `v`.
+    let source = "\
+struct P:
+    n: i16
+
+fn hit(v: &[P], n: i16) -> &P:
+    for p in v:
+        if p.n == n:
+            return p
+    return v[0]
+
+fn main() -> i16:
+    let v: vec[P] = [P(n=1), P(n=2)]
+    print(hit(v, 2).n)
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "2\n");
+    let optional = source
+        .replace("-> &P:", "-> Option[&P]:")
+        .replace("return p", "return .some(p)")
+        .replace("return v[0]", "return .none")
+        .replace("print(hit(v, 2).n)", "match hit(v, 2):\n        .some(p):\n            print(p.n)\n        .none:\n            print(0)");
+    assert_eq!(output_without_leaks(&optional), "2\n");
+    assert_eq!(output_without_leaks(&source.replace("v: &[P]", "v: &vec[P]").replace("for p in v", "for p in &v")), "2\n");
+    // The element of a local's loop is the local's: it dangles.
+    let local = "\
+struct P:
+    n: i16
+
+fn first() -> &P:
+    let v: vec[P] = [P(n=1)]
+    for p in v:
+        return p
+    return v[0]
+
+fn main() -> i16:
+    print(first().n)
+    return 0
+";
+    assert_eq!(refused_at(local), "7: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned");
+}
+
+#[test]
+fn a_conditional_of_borrowed_strings_is_a_borrow() {
+    // #419: `?:` with `&string` arms was "the arms of '?:' need a known type".
+    let source = "\
+fn longer(a: &string, b: &string) -> &string:
+    return a.len >= b.len ? a : b
+
+fn main() -> i16:
+    let x = \"ab\"
+    let y = \"abc\"
+    print(longer(x, y))
+    print(longer(y, x))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "abc\nabc\n");
+    let local = source.replace("fn longer(a: &string, b: &string) -> &string:\n    return a.len >= b.len ? a : b", "fn longer(a: &string, b: &string) -> &string:\n    let c = \"zz\"\n    return a.len >= b.len ? a : c");
+    assert_eq!(refused_at(&local), "3: a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned");
 }

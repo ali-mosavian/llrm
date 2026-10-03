@@ -39,6 +39,24 @@ impl FunctionCompiler<'_> {
         })
     }
 
+    /// `pointer`, a binding's, as the reference pointer `pointer_type`: an
+    /// element of a vec is reached by a near pointer, so its far address
+    /// is taken.
+    fn as_reference_pointer(&mut self, pointer: u32, pointer_type: u32, target: ElementType) -> hir::Operand {
+        let found = self.type_of(pointer);
+        if found == pointer_type {
+            return hir::Operand::Value(pointer);
+        }
+        let typed = self.value_type(pointer_type);
+        if self.types.width(found) == self.types.width(pointer_type) {
+            self.emit("copy", vec![typed], vec![hir::Operand::Value(pointer)], None);
+        } else {
+            let place = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: target.id(), inbounds: false, member: None };
+            self.emit("address", vec![typed], vec![place], None);
+        }
+        hir::Operand::Value(typed)
+    }
+
     /// `expression` as the reference `reference`: a place, borrowed, or a
     /// name already bound to a reference.
     pub(super) fn reference_to(&mut self, expression: &Expr, reference: TypeName, span: Span) -> Result<TypedOperand, Diagnostic> {
@@ -55,7 +73,7 @@ impl FunctionCompiler<'_> {
                 Binding { storage: Storage::Reference(pointer), type_, mutable: writes }
                     if type_ == target_type && (writes || !mutable) =>
                 {
-                    hir::Operand::Value(pointer)
+                    self.as_reference_pointer(pointer, pointer_type, target)
                 }
                 // A place where a reference goes is lent, as an argument is.
                 _ => self.borrow_argument(expression, mutable, target_type, pointer_type)?.0,
