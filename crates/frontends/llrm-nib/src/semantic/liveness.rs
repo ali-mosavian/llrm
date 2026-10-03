@@ -44,7 +44,8 @@ impl FunctionCompiler<'_> {
     /// is used later. A sequence a loop walks is borrowed by the walk,
     /// for the whole loop.
     pub(super) fn change_borrowed(&mut self, owner: BorrowKey, path: &[String], via: Option<BorrowKey>, error: Diagnostic) -> Result<(), Diagnostic> {
-        if self.iterated.iter().any(|root| root.overlaps(owner, path)) {
+        let element = via.is_some_and(|key| self.walking.contains(&key));
+        if !element && self.iterated.iter().any(|root| root.overlaps(owner, path)) {
             return Err(error);
         }
         let holders = self.holders(owner, path, false, via);

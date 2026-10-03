@@ -1707,6 +1707,9 @@ struct FunctionCompiler<'a> {
     escapes: Vec<captures::Escape>,
     /// The named sequences `for` loops are walking, outermost first.
     iterated: Vec<borrows::Root>,
+    /// The elements a loop walks, as references: written through, they
+    /// change the elements, not the sequence the walk borrows.
+    walking: BTreeSet<borrows::BorrowKey>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -1786,6 +1789,7 @@ impl<'a> FunctionCompiler<'a> {
             borrowed_ordinals: BTreeMap::new(),
             escapes: Vec::new(),
             iterated: Vec::new(),
+            walking: BTreeSet::new(),
         };
         // Module variables are the outermost scope; parameters and the body
         // share the next, and hide them.
