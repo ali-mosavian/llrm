@@ -36,7 +36,7 @@ fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
 
 fn inline_with(module: &mut Module, caller: &str, call: i64, threshold: Threshold) -> bool {
     let layout = DataLayout::default();
-    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), threshold);
+    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), call, threshold);
     let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)) };
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
@@ -142,9 +142,9 @@ b1:
 "
     ));
     let (private, layout) = (private(&module), DataLayout::default());
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), Threshold::default()), IndexMap::default());
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), 0, Threshold::default()), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), Threshold::default()).len(), 1);
+    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), 2, Threshold::default()).len(), 1);
 }
 
 const HELPERS: &str = "define internal i16 @scale(i16 %x) {
@@ -395,7 +395,7 @@ b1:
     );
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &costs(2), Threshold::default());
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &costs(2), 2, Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[0]]);
 }
@@ -432,13 +432,13 @@ b1:
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
     // Two operations, under a call of 10 clocks by count; the multiply alone costs 30.
     let priced = OperationCosts { call: 10, multiply: 30, ..OperationCosts::default() };
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, Threshold::default());
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     // `squared(3)` folds away entirely; `scaled(1, p)` keeps its multiply.
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
     // Pushing and reading two arguments is overhead the copy saves as well.
-    let passed = OperationCosts { store: 10, load: 10, ..priced };
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &passed, Threshold::default());
+    let passed = OperationCosts { argument: 20, ..priced };
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &passed, passed.call, Threshold::default());
     assert_eq!(sites.len(), 2);
 }
 
@@ -530,7 +530,7 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     let text = |attr: &str| chain(8, attr, 2).replace("define i16 @big", "define internal i16 @big");
     let admits = |attr: &str, threshold: Threshold| {
         let module = parsed(&text(attr));
-        candidates(&module, &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), threshold).len()
+        candidates(&module, &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), 8, threshold).len()
     };
     let (speed, size) = (Threshold::default(), Threshold::default().for_size());
     assert_eq!((admits("", speed), admits("inlinehint", speed), admits("inlinehint", size)), (0, 1, 0));
@@ -577,11 +577,11 @@ b3:
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
     // A multiply is 20 clocks, a call 10: kept above the overhead, below its hot weight (23).
     let priced = OperationCosts { call: 10, multiply: 20, store: 0, load: 0, return_: 0, ..OperationCosts::default() };
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, Threshold::default());
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
     // Where size outranks speed a loop buys nothing.
-    assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, Threshold::default().for_size()).is_empty());
+    assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default().for_size()).is_empty());
 }
 
 /// Tuned for size, the last call of a private function inlines at any size: no copy is made, and
@@ -602,4 +602,39 @@ fn test_the_only_call_of_a_large_private_function_inlines_tuned_for_size() {
     assert!(!inline_with(&mut fast, "main", 8, Threshold::default()));
     let mut two = parsed(&text(2));
     assert!(!inline_with(&mut two, "main", 8, sized));
+}
+
+/// Tuned for size a pure body every actual of which is known folds whole, though `folded` follows
+/// no loop: `parity_loop(7, 5)` was refused beside a call of 10 bytes with 28 bytes "kept" and
+/// stayed a call (loop.nib +114 bytes). Tuned for speed it is weighed as before.
+#[test]
+fn test_a_pure_body_on_known_actuals_folds_whole_tuned_for_size() {
+    let module = parsed(
+        "define i16 @sum(i16 %n, i16 %k) memory(none) willreturn {
+b1:
+  br label %b2
+b2:
+  %i = phi i16 [ 0, %b1 ], [ %next, %b2 ]
+  %t = phi i16 [ 0, %b1 ], [ %add, %b2 ]
+  %m = mul i16 %i, %k
+  %add = add i16 %t, %m
+  %next = add i16 %i, 1
+  %c = icmp slt i16 %next, %n
+  br i1 %c, label %b2, label %b3
+b3:
+  ret i16 %add
+}
+
+define i16 @main() {
+b1:
+  %r = call i16 @sum(i16 7, i16 5)
+  ret i16 %r
+}
+",
+    );
+    let main = module.global(id(&module, "main")).function().unwrap();
+    let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
+    let priced = OperationCosts { call: 5, add: 2, multiply: 6, branch: 2, return_: 1, argument: 2, ..OperationCosts::default() };
+    let at = |threshold: Threshold| constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, 18, threshold).len();
+    assert_eq!((at(Threshold::default()), at(Threshold::default().for_size())), (0, 1));
 }

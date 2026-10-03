@@ -1,5 +1,5 @@
-reason = "an internal function whose callers are all direct takes fastcc: the callee pops its arguments (ret N) and no caller adds sp, so fewer instructions at -O2 and -Os"
-blessed = "2026-10-03"
+reason = "-Os is priced in bytes now (size_costs forwarded): ret N only where its calls save more than 2 bytes a return, and the inliner weighs bodies in bytes; -O2 unchanged"
+blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 131691
@@ -14,7 +14,7 @@ instructions = 84439
 memory_operands = 61509
 
 [c.Os]
-instructions = 84237
+instructions = 84337
 memory_operands = 61509
 
 [nib.O2]

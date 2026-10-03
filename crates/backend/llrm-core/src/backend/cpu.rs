@@ -230,6 +230,7 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
         r#move: costs["mov_rr"],
         call: costs["call_far"],
         return_: costs["ret_far"],
+        argument: costs["mov_mr"] + costs["mov_rm"],
         pop: costs["pop_r"],
         adjust: costs["alu_ri"],
         return_pops: costs["ret_pop"] - costs["ret_far"],
@@ -470,5 +471,16 @@ mod tests {
             .collect();
 
         assert_eq!(selected, BTreeSet::from(["386", "K5", "K6", "K7", "Core"]));
+    }
+
+    /// The target every frontend lowers to prices a call at its clocks and, tuned for size, at its
+    /// bytes: `size_costs` was not forwarded, so it was `costs`, and every MIR decision made "for
+    /// size" (the inliner, the callee-pop convention) weighed clocks.
+    #[test]
+    fn test_the_lowered_target_forwards_its_size_costs() {
+        use llrm_mir::target::Machine;
+        let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: Default::default() };
+        let target = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi);
+        assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
     }
 }

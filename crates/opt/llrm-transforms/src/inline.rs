@@ -38,7 +38,7 @@ use llrm_mir::callgraph::CallGraph;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::{Facts, Inlining};
-use llrm_mir::memory::{Callees, callee};
+use llrm_mir::memory::{Callees, Effects, callee};
 use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::splice::{carries, splice};
@@ -199,7 +199,7 @@ fn folded(module: &Module, layout: &DataLayout, body: &Function, known: &[Option
 /// What a call costs beyond its own instruction, which inlining saves: the
 /// return, and each argument pushed by the caller and read back by the callee.
 fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
-    costs.call + costs.return_ + arguments as i64 * (costs.store + costs.load)
+    costs.call + costs.return_ + arguments as i64 * costs.argument
 }
 
 /// Functions worth moving into their direct callers.
@@ -211,9 +211,9 @@ fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
 /// taken; a private one goes with the last site, so one site costs nothing.
 /// Each copy beyond that duplicates the body's priced work, which has to
 /// stay below the calls removed.
-pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
+pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, reach: i64, threshold: Threshold) -> IndexMap<GlobalId, Candidate> {
     let call_cost = costs.call;
-    let budget = threshold.budget(call_cost);
+    let budget = threshold.budget(reach);
     let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
     let mut lasts = IndexMap::default();
@@ -225,12 +225,14 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         let always = stated(body) == Some(Inlining::Always);
         // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
         let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
+        // What a call removes: it, and where code size is what counts, its arguments' pushes and cleanup.
+        let saved = call_cost + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
         // The last call of a function nothing else reaches moves its body: no copy, and the call,
         // its arguments and the return gone (LLVM's last-call-to-static bonus).
         let admitted = || {
             budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
-                && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies * std::env::var("WK").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(1) < scale(count * call_cost)))
+                && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * saved)))
         };
         // Only once nothing else is: a body that a call in it is about to be inlined into would
         // be copied with that call still in it, and the call's callee counted once too many.
@@ -272,10 +274,11 @@ pub fn constant_sites(
     caller: &Function,
     constants: &IndexMap<InstId, Vec<Option<ConstantId>>>,
     costs: &OperationCosts,
+    reach: i64,
     threshold: Threshold,
 ) -> IndexMap<InstId, Candidate> {
     let call_cost = costs.call;
-    let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
+    let Some(budget) = threshold.budget(reach) else { return IndexMap::default() };
     let callees = llrm_mir::memory::callees(module);
     let frequency = profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
     let mut out = IndexMap::default();
@@ -288,11 +291,15 @@ pub fn constant_sites(
         let Some(body) = body(module, name) else { continue };
         let semantic = semantic_count(body);
         // What stays of the copy, in clocks, against the call it replaces.
-        let kept = work(module, body, &callees, costs).map(|all| all - folded(module, layout, body, known, &callees, costs));
+        // Where code size is what counts, a body of arithmetic every actual of which is known is
+        // taken to fold whole: `folded` follows no branch past a decided one, so a loop on known
+        // bounds looked all kept.
+        let folds = threshold.single && known.iter().all(Option::is_some) && callees.get(&name).is_some_and(|summary| summary.effects == Effects::NONE);
+        let kept = if folds { Some(0) } else { work(module, body, &callees, costs).map(|all| all - folded(module, layout, body, known, &callees, costs)) };
         // A call in a loop saves its overhead on every trip, which LLVM's hot-site threshold weighs.
         let hot = frequency.get(&cfg::id(block)).is_some_and(|&one| one > profit::UNIT);
         let overhead = call_overhead(costs, known.len()) * if hot { threshold.hot.0 } else { 1 } / if hot { threshold.hot.1 } else { 1 };
-        let verdict = kept.is_some_and(|kept| kept < overhead) && semantic <= budget && cloneable(module, recursive, name, body);
+        let verdict = kept.is_some_and(|kept| kept <= overhead) && semantic <= budget && cloneable(module, recursive, name, body);
         llrm_support::debug!(
             "inline",
             "constant site of {}: {semantic} ops, {kept:?} clocks kept, budget {budget}, call {overhead}, {} of {} actuals known: {}",
