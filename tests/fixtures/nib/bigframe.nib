@@ -1,0 +1,7 @@
+fn main() -> i16:
+    let mut t: i16[64, 64] = [[0] * 64] * 64
+    for y in 0..64:
+        for x in 0..64:
+            t[y, x] = 7
+    print(t[63, 63])
+    return 0

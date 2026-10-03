@@ -138,6 +138,9 @@ pub struct Module {
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
     pub debug: Option<super::codeview::Debug>,
+    /// Bytes of the linker's stack this module adds to the others' (OMF stack
+    /// segments concatenate): where its call graph is the whole program's.
+    pub stack: i64,
 }
 
 impl Module {
@@ -157,6 +160,9 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
 pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>) -> Result<String, Unprintable> {
     let mut out: Vec<String> = vec![".model medium".into(), ".386".into(), String::new()];
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
+    if module.stack > 0 {
+        out.push(format!(".stack {}", module.stack));
+    }
     for (segment, items) in &module.data {
         let private = module.selector_addressed(segment);
         out.push(SEGMENTS.get(segment.as_str()).map_or_else(
