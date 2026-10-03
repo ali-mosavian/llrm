@@ -1,13 +1,13 @@
-reason = "a dword copy and add are priced with their operand-size prefixes, so the peephole makes the lea: mandel -3% instructions, nothing worse"
+reason = "#407: SsaSpill holds selectors in the segment registers as it holds words in the general ones; particle bas -800 instructions and -900 memory operands at -O2, qbsp bas -20 and -15"
 blessed = "2026-10-04"
 
 [bas.O2]
-instructions = 131691
-memory_operands = 94939
+instructions = 130892
+memory_operands = 94040
 
 [bas.Os]
-instructions = 131489
-memory_operands = 94939
+instructions = 130684
+memory_operands = 94031
 
 [c.O2]
 instructions = 84439
