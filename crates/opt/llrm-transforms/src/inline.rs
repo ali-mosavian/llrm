@@ -48,27 +48,31 @@ use llrm_support::hash::IndexMap;
 use llrm_analysis::consts;
 use llrm_analysis::memory::Unit;
 
-use crate::profit::{OperationCosts, operation};
+use llrm_analysis::cfg;
+
+use crate::profit::{self, OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
 /// for none. A callee's budget, in semantic operations, scales with it.
 /// `hint` is the ratio a routine the language marks worth inlining may grow
 /// by: LLVM's inline-hint threshold, 325 against 225; 1/1 where code size
-/// outranks speed.
+/// outranks speed. `hot` is the same for a call in a loop: LLVM's
+/// locally-hot call site threshold, 525 against 225.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Threshold {
     pub limit: i64,
     pub hint: (i64, i64),
+    pub hot: (i64, i64),
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225) }
+        Self { limit, hint: (325, 225), hot: (525, 225) }
     }
 
-    /// The same where code size outranks speed: a hint buys nothing.
+    /// The same where code size outranks speed: a hint or a loop buys nothing.
     pub fn for_size(self) -> Self {
-        Self { hint: (1, 1), ..self }
+        Self { hint: (1, 1), hot: (1, 1), ..self }
     }
 }
 
@@ -217,6 +221,12 @@ fn folded(module: &Module, layout: &DataLayout, body: &Function, known: &[Option
     saved
 }
 
+/// What a call costs beyond its own instruction, which inlining saves: the
+/// return, and each argument pushed by the caller and read back by the callee.
+fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
+    costs.call + costs.return_ + arguments as i64 * (costs.store + costs.load)
+}
+
 /// Functions worth moving into their direct callers.
 ///
 /// A candidate's size is bounded by the `Threshold`; a routine the language
@@ -281,8 +291,9 @@ pub fn constant_sites(
     let call_cost = costs.call;
     let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
     let callees = llrm_mir::memory::callees(module);
+    let frequency = profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
     let mut out = IndexMap::default();
-    for (_, at) in caller.walk() {
+    for (block, at) in caller.walk() {
         let Some(name) = callee(&module.context, caller, at) else { continue };
         let known = constants.get(&at).map_or(&[][..], Vec::as_slice);
         if !known.iter().any(Option::is_some) {
@@ -292,10 +303,13 @@ pub fn constant_sites(
         let semantic = semantic_count(body);
         // What stays of the copy, in clocks, against the call it replaces.
         let kept = work(module, body, &callees, costs).map(|all| all - folded(module, layout, body, known, &callees, costs));
-        let verdict = kept.is_some_and(|kept| kept < call_cost) && semantic <= budget && cloneable(module, recursive, name, body);
+        // A call in a loop saves its overhead on every trip, which LLVM's hot-site threshold weighs.
+        let hot = frequency.get(&cfg::id(block)).is_some_and(|&one| one > profit::UNIT);
+        let overhead = call_overhead(costs, known.len()) * if hot { threshold.hot.0 } else { 1 } / if hot { threshold.hot.1 } else { 1 };
+        let verdict = kept.is_some_and(|kept| kept < overhead) && semantic <= budget && cloneable(module, recursive, name, body);
         llrm_support::debug!(
             "inline",
-            "constant site of {}: {semantic} ops, {kept:?} clocks kept, budget {budget}, call {call_cost}, {} of {} actuals known: {}",
+            "constant site of {}: {semantic} ops, {kept:?} clocks kept, budget {budget}, call {overhead}, {} of {} actuals known: {}",
             module.global(name).name.as_deref().unwrap_or("?"),
             known.iter().flatten().count(),
             known.len(),

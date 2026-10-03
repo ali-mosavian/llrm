@@ -432,6 +432,10 @@ b1:
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     // `squared(3)` folds away entirely; `scaled(1, p)` keeps its multiply.
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
+    // Pushing and reading two arguments is overhead the copy saves as well.
+    let passed = OperationCosts { store: 10, load: 10, ..priced };
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &passed, Threshold::default());
+    assert_eq!(sites.len(), 2);
 }
 
 #[test]
@@ -531,4 +535,46 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
 fn test_a_callee_the_language_says_never_inline_stays_even_if_always_is_stated_too() {
     let mut module = parsed(&chain(2, "noinline alwaysinline", 1));
     assert!(!inline_into(&mut module, "main", 8));
+}
+
+/// QCport's glyph loops called `font_bit` once per pixel: refused beside
+/// the call's overhead, as a call out of a loop saves it on every trip, the
+/// frame was slower than the inlined build's.
+#[test]
+fn test_a_constant_site_in_a_loop_is_weighed_by_the_hot_site_threshold() {
+    let module = parsed(
+        "define i16 @sq(i16 %k, i16 %y) {
+b1:
+  %m = mul i16 %y, %y
+  ret i16 %m
+}
+
+define i16 @main(i16 %n) {
+b1:
+  %once = call i16 @sq(i16 1, i16 %n)
+  br label %b2
+
+b2:
+  %i = phi i16 [ 0, %b1 ], [ %next, %b2 ]
+  %acc = phi i16 [ %once, %b1 ], [ %sum, %b2 ]
+  %r = call i16 @sq(i16 2, i16 %i)
+  %sum = add i16 %acc, %r
+  %next = add i16 %i, 1
+  %go = icmp ult i16 %next, %n
+  br i1 %go, label %b2, label %b3
+
+b3:
+  ret i16 %sum
+}
+",
+    );
+    let main = module.global(id(&module, "main")).function().unwrap();
+    let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
+    // A multiply is 20 clocks, a call 10: kept above the overhead, below its hot weight (23).
+    let priced = OperationCosts { call: 10, multiply: 20, store: 0, load: 0, return_: 0, ..OperationCosts::default() };
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, Threshold::default());
+    let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
+    assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
+    // Where size outranks speed a loop buys nothing.
+    assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, Threshold::default().for_size()).is_empty());
 }
