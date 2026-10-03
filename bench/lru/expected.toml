@@ -1,4 +1,4 @@
-reason = "word LEA for mov+add/sub; a call no longer reads flags before it, so more pairs fold: fewer instructions everywhere, parity -O2 +1 memory operand (allocation moved a spill) for 6 fewer instructions"
+reason = "-Os stores a literal run through one dead register (xor r,r once, then register stores): fewer bytes, a load more per run; -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -6,7 +6,7 @@ instructions = 171
 memory_operands = 74
 
 [bas.Os]
-instructions = 197
+instructions = 205
 memory_operands = 83
 
 [c.O2]
@@ -18,5 +18,5 @@ instructions = 159
 memory_operands = 72
 
 [nib.Os]
-instructions = 305
+instructions = 312
 memory_operands = 147

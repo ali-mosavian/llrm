@@ -1,4 +1,4 @@
-reason = "nbody_single is overdamped (#360): /8 not /16 and a rounded checksum; same loops"
+reason = "-Os stores a literal run through one dead register (xor r,r once, then register stores): fewer bytes, a load more per run; -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -6,7 +6,7 @@ instructions = 978202
 memory_operands = 217153
 
 [bas.Os]
-instructions = 1187216
+instructions = 1187222
 memory_operands = 138118
 
 [c.O2]
@@ -22,5 +22,5 @@ instructions = 972148
 memory_operands = 199100
 
 [nib.Os]
-instructions = 1350406
+instructions = 1350442
 memory_operands = 230138

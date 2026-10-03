@@ -1094,6 +1094,70 @@ fn test_affine_address_word_lea_keeps_a_flag_still_read() {
     assert_eq!(names(&result.blocks[0].insns), ["mov", "sub", "adc"]);
 }
 
+/// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
+fn literal_store(at: i64, width: u32, disp: i64, value: i64) -> Arc<Insn> {
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(disp), width) });
+    Arc::new(insn(at, Some((at, at + 1)), Some(sem(Operation::Move, "mov", vec![cell], vec![im(value, width)])), vec![], vec![]))
+}
+
+/// The function's remaining block, which reads `reads` and writes the flags (`flags`) or reads them.
+fn after_stores(reads_flags: bool, reads: &[Register]) -> Vec<Arc<Insn>> {
+    let first = if reads_flags {
+        sem(Operation::Binary, "adc", vec![rl(Register::SI, 2)], vec![rl(Register::SI, 2), im(0, 2)])
+    } else {
+        sem(Operation::Compare, "cmp", vec![], vec![rl(Register::SI, 2), im(0, 2)])
+    };
+    let mut insns = vec![Arc::new(insn(10, Some((10, 11)), Some(first), vec![], vec![]))];
+    // Everything after the block is live (it has no successor), so what it does not write
+    // first is read: the four scratch registers are written last, except where `reads` first
+    // reads them.
+    for (at, register) in reads.iter().enumerate() {
+        let what = sem(Operation::Move, "mov", vec![rl(Register::DI, 4)], vec![rl(*register, 4)]);
+        insns.push(Arc::new(insn(11 + at as i64, Some((11 + at as i64, 12 + at as i64)), Some(what), vec![], vec![])));
+    }
+    for (at, register) in [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().enumerate() {
+        let what = sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(1, 4)]);
+        insns.push(Arc::new(insn(20 + at as i64, Some((20 + at as i64, 21 + at as i64)), Some(what), vec![], vec![])));
+    }
+    insns
+}
+
+/// QCport -Os kept `mov dword ptr [bp-8],0` twice (16 bytes) where a zeroed register stores
+/// them in 3+4+4: some 270 runs. The literal's register must be dead, and the zero is `xor`
+/// only where the flags are, else `mov`; one that saves no byte (a lone word store) stays.
+#[test]
+fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let all = [Register::EAX, Register::EBX, Register::ECX, Register::EDX];
+    for (label, stores, flags_read, live, expected) in [
+        ("two dwords, flags dead", vec![(4, -4), (4, -8)], false, vec![], vec!["xor", "mov", "mov"]),
+        ("two dwords, flags read", vec![(4, -4), (4, -8)], true, vec![], vec!["mov", "mov", "mov"]),
+        ("a dword and a word", vec![(4, -4), (2, -8)], false, vec![], vec!["xor", "mov", "mov"]),
+        ("one dword", vec![(4, -4)], false, vec![], vec!["xor", "mov"]),
+        ("one word saves nothing", vec![(2, -2)], false, vec![], vec!["mov"]),
+        ("every scratch register read after", vec![(4, -4), (4, -8)], false, all.to_vec(), vec!["mov", "mov"]),
+    ] {
+        let mut insns: Vec<Arc<Insn>> =
+            stores.iter().enumerate().map(|(at, (width, disp))| literal_store(at as i64, *width, *disp, 0)).collect();
+        let next = after_stores(flags_read, &live);
+        let input = body("stores", 0, vec![block(0, std::mem::take(&mut insns), vec![1]), block(1, next, vec![])]);
+
+        let result = sharedstores::shared(&input, size);
+
+        let got = names(&result.blocks[0].insns);
+        assert_eq!(got, expected, "{label}");
+    }
+}
+
+/// Two pushes of a clock are not a size choice: -O2 keeps the stores.
+#[test]
+fn test_stores_of_one_literal_are_not_shared_at_o2() {
+    let o2 = crate::backend::cpu::tuned("486", false).unwrap();
+    let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
+
+    assert_eq!(sharedstores::shared(&input, o2), input);
+}
+
 #[test]
 fn test_lea_of_a_frame_cell_is_decoded() {
     // `lea ax,[bp-18]` read as touching every lane kept all upper halves live

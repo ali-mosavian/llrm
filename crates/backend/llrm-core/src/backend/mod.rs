@@ -65,6 +65,7 @@ pub mod ssaspill;
 pub mod spillforward;
 pub mod spillplacement;
 pub mod splitkit;
+pub mod sharedstores;
 pub mod storecombine;
 pub mod target;
 pub mod timing;
