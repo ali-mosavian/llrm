@@ -51,6 +51,7 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
         return None;
     }
     let costs = &cpu.operations;
+    let width = i64::from(dest.width);
     let (step, cost) = match (what.op, what.name.as_deref(), what.sources.as_slice()) {
         (Operation::Move, Some("mov"), [Loc::Reg(source)]) if register(source) && source.register != dest.register => {
             (Step::Copy(*source), costs.r#move)
@@ -67,7 +68,7 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
         (Operation::Binary, Some("add"), [_, Loc::Reg(other)]) if register(other) => (Step::AddRegister(*other), costs.add),
         _ => return None,
     };
-    Some((*dest, step, cost))
+    Some((*dest, step, costs.sized(cost, width)))
 }
 
 /// The 67h address naming `terms` plus `disp`, if one does.

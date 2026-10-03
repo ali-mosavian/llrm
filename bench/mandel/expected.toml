@@ -1,26 +1,26 @@
-reason = "a duplicate phi is its earlier twin: fpbench bas -O2 -1.4%, qlight -5 instructions each; sum_three bas -O2/-Os +2/+1 instructions for -2/-3 memory operands (a different register assignment)"
+reason = "a dword copy and add are priced with their operand-size prefixes, so the peephole makes the lea: mandel -3% instructions, nothing worse"
 blessed = "2026-10-04"
 
 [bas.O2]
-instructions = 314661
+instructions = 305212
 memory_operands = 20143
 
 [bas.Os]
-instructions = 317753
+instructions = 308304
 memory_operands = 20883
 
 [c.O2]
-instructions = 182163
+instructions = 172714
 memory_operands = 20126
 
 [c.Os]
-instructions = 185253
+instructions = 175804
 memory_operands = 20866
 
 [nib.O2]
-instructions = 181395
+instructions = 171946
 memory_operands = 20126
 
 [nib.Os]
-instructions = 184485
+instructions = 175036
 memory_operands = 20866
