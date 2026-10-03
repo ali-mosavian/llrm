@@ -89,6 +89,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                     callees,
                     interrupt,
                     size: cpu.size,
+                    entry: 0,
                 };
                 let overhead = masm::return_overhead_bytes(&procedure).map_err(|error| error.to_string())? as i64;
                 let body = jumps::duplicated_returns(procedure.body.clone(), overhead);

@@ -84,6 +84,9 @@ pub struct Procedure {
     /// bp,sp; sub sp,N` as `enter N,0` (4 bytes for 6, 14 clocks for 3 on the 486), and the
     /// jumps `omfwrite` lays out.
     pub size: bool,
+    /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
+    /// procedure shows: its header and the locals `cx` names.
+    pub entry: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -954,7 +957,7 @@ mod tests {
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0 };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -1015,6 +1018,7 @@ mod tests {
             callees: IndexMap::default(),
             interrupt: None,
             size: false,
+            entry: 0,
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);

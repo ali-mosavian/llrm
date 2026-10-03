@@ -207,6 +207,7 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
         callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
         interrupt: None,
         size: false,
+        entry: 0,
     }
 }
 
