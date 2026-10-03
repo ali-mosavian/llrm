@@ -1,8 +1,8 @@
-reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
+reason = "fpbench and nbody_single compile (#358): first baselines. nbody -1 instruction: one fxch fewer where spilled phi copies are sequenced"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 64108
+instructions = 64107
 memory_operands = 30307
 
 [bas.Os]
@@ -10,7 +10,7 @@ instructions = 69456
 memory_operands = 26068
 
 [c.O2]
-instructions = 57280
+instructions = 57279
 memory_operands = 25450
 
 [c.Os]
@@ -18,7 +18,7 @@ instructions = 58261
 memory_operands = 20845
 
 [nib.O2]
-instructions = 57482
+instructions = 57481
 memory_operands = 25448
 
 [nib.Os]
