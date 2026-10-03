@@ -1829,6 +1829,14 @@ pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
 
+/// The runtime entries whose row says `captures = "NONE"`: they keep no
+/// pointer argument past their return.
+pub fn captures_nothing() -> Vec<&'static str> {
+    let rows: toml::Table = TABLE.parse().expect("runtime.toml parses");
+    let kept: BTreeSet<&str> = rows.iter().filter(|(_, row)| row.get("captures").and_then(|one| one.as_str()) == Some("NONE")).map(|(name, _)| name.as_str()).collect();
+    CONTRACTS.keys().map(String::as_str).filter(|name| kept.contains(name)).collect()
+}
+
 /// The runtime entries that never come back to their caller: the table's
 /// NEVER rows and the error funnel's.
 pub fn never_returning() -> Vec<&'static str> {
@@ -2051,6 +2059,13 @@ mod tests {
                 assert_eq!(direct_slots(&routine), Vec::new(), "{name} {family}");
             }
         }
+    }
+
+    /// ERASE of an array behind a descriptor made the array escape: the
+    /// runtime's declaration kept no `noretain` until the table said so.
+    #[test]
+    fn test_erase_keeps_no_pointer_it_is_handed() {
+        assert_eq!(captures_nothing(), ["B$ERAS"]);
     }
 
     #[test]

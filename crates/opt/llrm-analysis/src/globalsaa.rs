@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 use std::rc::Rc;
 
-use llrm_mir::module::{GlobalKind, GlobalValue, InstId, MetadataOperand, Module, Operand};
+use llrm_mir::module::{GlobalKind, GlobalValue, InstId, Linkage, MetadataOperand, Module, Operand};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::ModuleAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy, defines};
@@ -130,25 +130,36 @@ fn promised(module: &Module, runtime: &Module) -> (BTreeSet<GlobalId>, BTreeMap<
     (named, writes)
 }
 
-/// The globals an initializer or an instruction names other than as a
-/// call's callee.
-fn referenced(module: &Module) -> BTreeSet<GlobalId> {
+/// The globals an instruction names other than as a call's callee; with
+/// `retained`, not those it passes as an argument the callee `noretain`s.
+fn named_by_bodies(module: &Module, retained: bool) -> BTreeSet<GlobalId> {
     let mut out = BTreeSet::new();
     for global in &module.globals {
-        match &global.kind {
-            GlobalKind::Variable(variable) => variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut out)),
-            GlobalKind::Function(function) => {
-                for (_, inst) in function.walk() {
-                    let op = function.instruction(inst);
-                    let callee = matches!(op.opcode, Opcode::Call(_) | Opcode::Invoke(_)).then(|| op.operands.len() - 1);
-                    let named = op.operands.iter().enumerate().filter(|(at, _)| Some(*at) != callee);
-                    for (_, operand) in named {
-                        if let Operand::Constant(id) = operand {
-                            embedded(&module.context, *id, &mut out);
-                        }
+        if let GlobalKind::Function(function) = &global.kind {
+            for (_, inst) in function.walk() {
+                let op = function.instruction(inst);
+                let callee = matches!(op.opcode, Opcode::Call(_) | Opcode::Invoke(_)).then(|| op.operands.len() - 1);
+                let named = op.operands.iter().enumerate().filter(|(at, _)| Some(*at) != callee);
+                for (at, operand) in named {
+                    if let Operand::Constant(id) = operand
+                        && !(retained && llrm_mir::memory::noretain(&module.context, &module.globals, function, inst, at))
+                    {
+                        embedded(&module.context, *id, &mut out);
                     }
                 }
             }
+        }
+    }
+    out
+}
+
+/// The globals an initializer or an instruction names other than as a
+/// call's callee.
+fn referenced(module: &Module) -> BTreeSet<GlobalId> {
+    let mut out = named_by_bodies(module, false);
+    for global in &module.globals {
+        if let GlobalKind::Variable(variable) = &global.kind {
+            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut out));
         }
     }
     out
@@ -216,13 +227,21 @@ pub fn found(module: &Module, program: &ProgramProxy, elsewhere: &Elsewhere, sha
     Ok(Globals { tracked, named, writes, bodies, entries })
 }
 
-/// The globals `module`'s initializers hold the address of.
+/// The globals `module`'s initializers hold the address of. An initializer
+/// is read only through its own global, so a private one nothing names,
+/// directly or through another live initializer, holds nothing; naming it
+/// only as an argument its callee `noretain`s is not naming it.
 fn held(module: &Module) -> BTreeSet<GlobalId> {
+    let mut live = named_by_bodies(module, true);
+    live.extend(module.globals.iter().enumerate().filter(|(_, global)| !matches!(global.linkage, Linkage::Internal | Linkage::Private)).map(|(at, _)| GlobalId(at as u32)));
     let mut out = BTreeSet::new();
-    for global in &module.globals {
-        if let GlobalKind::Variable(variable) = &global.kind {
-            variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut out));
-        }
+    let mut pending = live.iter().copied().collect::<Vec<_>>();
+    while let Some(at) = pending.pop() {
+        let GlobalKind::Variable(variable) = &module.global(at).kind else { continue };
+        let mut inside = BTreeSet::new();
+        variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut inside));
+        pending.extend(inside.iter().copied().filter(|one| live.insert(*one)));
+        out.extend(inside);
     }
     out
 }

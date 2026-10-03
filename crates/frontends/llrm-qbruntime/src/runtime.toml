@@ -10,6 +10,9 @@
 # every register and every byte of memory, which is the only safe answer
 # to a routine nobody has read.
 #
+# `captures = "NONE"` (optional, default: may keep) says the routine keeps no
+# pointer argument past its return; it needs the source to show it.
+#
 # `cleanup = -1` is "not known", which is not the same as zero.
 
 ["B$HARY"]
@@ -185,10 +188,11 @@ writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 documented = ["ax", "bx", "cx", "dx"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
-rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption. VBDCL10E.LIB erase.asm B$ERAS 0020..00c4 is the same: PUSH BP/SI/DI, pAd from [bp+6], an empty array straight to the epilogue, the rest through B$EraseAllAFHDs, B$DeLink, B$DelStrBlock/B$FreePpv/B$CompactSB, B$FHDealloc or B$ADArraySize with B$STD1 or REP STOSW through ES; every path joins POP DI/SI/BP / RETF 2.
+rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption. VBDCL10E.LIB erase.asm B$ERAS 0020..00c4 is the same: PUSH BP/SI/DI, pAd from [bp+6], an empty array straight to the epilogue, the rest through B$EraseAllAFHDs, B$DeLink, B$DelStrBlock/B$FreePpv/B$CompactSB, B$FHDealloc or B$ADArraySize with B$STD1 or REP STOSW through ES; every path joins POP DI/SI/BP / RETF 2. Audit of what it keeps (`captures = "NONE"`, which the compiler reads as `noretain`): rt/dynamic.asm ERASE_COMMON reads pAd into BX once and never stores BX, pAd or any word it loads from the descriptor anywhere but back into the descriptor (hData/cPara cleared); the static path only REP STOSWs the array. The dynamic path's callees B$FHDealloc and B$LHDALC are not in rt/*.asm (ulib.inc declares them); rt/fhinit.asm shows the far heap keeps its entries by address in a list (FHD_pNext) that B$FHDDIM-style allocation links an array descriptor into, so deallocation is what unlinks it -- the part taken from that name and its callers, not read. B$DDIM, the allocator, links the descriptor in and keeps it, so it is not NONE.
 '''
 
 ["B$EVCK"]

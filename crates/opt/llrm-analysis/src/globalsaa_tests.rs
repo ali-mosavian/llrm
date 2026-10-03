@@ -87,6 +87,59 @@ fn a_private_global_whose_address_leaves_is_forgotten() {
     assert_eq!(kept(&elsewhere, "call void @outside(ptr null)"), None);
 }
 
+/// A global's far address stored through a pointer parameter, as a struct
+/// returned by value holds it, left `-O2` reading `@g` as it was before
+/// the call that wrote it through that struct: Nib printed 0, not 5.
+#[test]
+fn a_global_whose_far_address_is_stored_through_a_parameter_is_forgotten() {
+    let globals = format!(
+        "{PRIVATE}
+define internal void @mk(ptr addrspace(1) %out) addrspace(1) {{
+b0:
+  %far = addrspacecast ptr @g to ptr addrspace(1)
+  store ptr addrspace(1) %far, ptr addrspace(1) %out
+  ret void
+}}
+
+define internal void @set(ptr addrspace(1) nocapture %s) addrspace(1) {{
+b0:
+  %p = load ptr addrspace(1), ptr addrspace(1) %s
+  store i16 5, ptr addrspace(1) %p
+  ret void
+}}
+"
+    );
+    let call = "%a = alloca [4 x i8]\n  %s = addrspacecast ptr %a to ptr addrspace(1)\n  call addrspace(1) void @mk(ptr addrspace(1) %s)\n  call addrspace(1) void @set(ptr addrspace(1) %s)";
+    assert_eq!(kept(&globals, call), None);
+}
+
+/// QB's `REDIM` descriptor held every array's address in a private constant
+/// nothing read: the array was untracked, and a runtime call that writes
+/// through a pointer it loaded then reloaded it (deedlines, +128 memory operands).
+#[test]
+fn a_private_initializer_nothing_names_does_not_leak_the_address_it_holds() {
+    let dead = format!("{PRIVATE}@held = internal constant ptr @g\n");
+    assert_eq!(kept(&dead, "call void @outside(ptr null)"), seven());
+    let chained = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
+    assert_eq!(kept(&chained, "call void @outside(ptr null)"), seven());
+    let named = format!("{PRIVATE}@held = internal constant ptr @g\n");
+    assert_eq!(kept(&named, "%h = load ptr, ptr @held\n  call void @outside(ptr null)"), None);
+    let behind = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
+    assert_eq!(kept(&behind, "%h = load ptr, ptr @outer\n  call void @outside(ptr null)"), None);
+}
+
+/// A descriptor holding a global's address, handed only to a routine that
+/// `noretain`s it, leaves the global tracked; `nocapture` alone does not.
+#[test]
+fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
+    let held = |attrs: &str| {
+        let globals = format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr {attrs}) nocallback\n");
+        kept(&globals, "call void @erase(ptr @desc)\n  call void @outside(ptr null)")
+    };
+    assert_eq!(held("nocapture noretain"), seven());
+    assert_eq!(held("nocapture"), None);
+}
+
 #[test]
 fn an_external_global_is_forgotten() {
     assert_eq!(kept("@g = global i16 0\n\ndeclare void @outside(ptr) nocallback\n", "call void @outside(ptr null)"), None);

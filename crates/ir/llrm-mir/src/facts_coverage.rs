@@ -21,6 +21,7 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("readnone", By(&["a_readnone_or_memory_none_callee_touches_nothing"])),
     ("nonnull", By(&["a_frame_object_is_nonnull_and_a_parameter_is_not"])),
     ("nocapture", By(&["facts_of_a_call_argument_are_its_call_site_attributes", "test_known_capture_summary_controls_later_external_reach"])),
+    ("noretain", By(&["a_noretain_argument_publishes_nothing_it_points_to", "a_global_held_only_by_a_noretain_argument_stays_tracked", "noretain_is_a_parameter_attribute_that_round_trips"])),
     ("writeonly", By(&["facts_of_a_call_argument_are_its_call_site_attributes", "a_write_only_argument_publishes_nothing_it_will_hold"])),
     ("noreturn", By(&["test_a_stated_noreturn_callee_ends_the_path"])),
     ("nounwind", By(&["a_routine_that_raises_no_error_is_nounwind", "purity_refuses_nontermination_nonlocal_accesses_and_what_callees_do_not_state"])),
