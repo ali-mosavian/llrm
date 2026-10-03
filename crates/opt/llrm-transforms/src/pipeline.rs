@@ -243,7 +243,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far there.
     if applied.options.wanted("window") {
-        manager.add(window::Window);
+        manager.add(window::Window { size: applied.options.prefers_size() });
     }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.

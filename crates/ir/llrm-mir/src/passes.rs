@@ -41,12 +41,21 @@ pub struct Declared {
     ids: HashMap<String, GlobalId>,
     next: u32,
     pending: Vec<(String, crate::types::TypeId)>,
+    /// Metadata nodes made, numbered after the module's.
+    nodes: Vec<crate::module::MetadataNode>,
+    first_node: u32,
 }
 
 impl Declared {
     pub fn of(module: &Module) -> Self {
         let ids = module.globals.iter().enumerate().filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32)))).collect();
-        Self { ids, next: module.globals.len() as u32, pending: Vec::new() }
+        Self { ids, next: module.globals.len() as u32, pending: Vec::new(), nodes: Vec::new(), first_node: module.metadata.len() as u32 }
+    }
+
+    /// A metadata node, its id at once, added to the module after the pass.
+    pub fn node(&mut self, node: crate::module::MetadataNode) -> crate::module::MetadataId {
+        self.nodes.push(node);
+        crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
     }
 
     /// The function `name` of type `ty`, declared where the module has none.
@@ -67,6 +76,9 @@ impl Declared {
             let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
             assert_eq!(Some(&id), self.ids.get(&name), "declared in order");
         }
+        assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");
+        module.metadata.append(&mut self.nodes);
+        self.first_node = module.metadata.len() as u32;
         Ok(())
     }
 }

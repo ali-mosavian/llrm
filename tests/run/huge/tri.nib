@@ -1,0 +1,20 @@
+# 21843 triples of i16s (131058 bytes) in huge memory: 6-byte elements, a stride that does not divide 64K, over three windows.
+struct Tri:
+    mut a: i16
+    mut b: i16
+    mut c: i16
+
+huge var p: Tri[21843] = [Tri(a=0, b=0, c=0)] * 21843
+
+fn bench_tri() -> i32:
+    let mut t: i32 = 0
+    for i in 0..21843:
+        p[i].a = i16(i)
+        p[i].c = i16(i) & 255
+    for i in 0..21843:
+        t += i32(p[i].c - p[i].a)
+    return t
+
+fn main() -> i16:
+    print(bench_tri())
+    return 0

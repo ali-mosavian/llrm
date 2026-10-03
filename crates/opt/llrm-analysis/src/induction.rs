@@ -522,7 +522,9 @@ fn _proven(
         } else {
             entry_guarded = shape.posttested;
             let promised = _promised(function, update, &step, _unsigned(test), _signed(&start, facts, width).as_ref());
-            let found = _unit_maximum(unit, loop_, width, begin.as_ref(), limit.as_ref(), &step, test, inbounds, promised);
+            // A bound known only by its range still bounds the trips: by its end the counter walks toward.
+            let reached = limit.clone().or_else(|| _extent_toward(unit, &bound, facts, step > BigInt::from(0)));
+            let found = _unit_maximum(unit, loop_, width, begin.as_ref(), reached.as_ref(), &step, test, inbounds, promised);
             if found.is_none() && _inclusive(test) {
                 continue;
             }
@@ -999,6 +1001,19 @@ fn _signed_span(start: &AffineOperand, facts: &IndexMap<ValueId, Known>, width: 
     let sign = BigInt::from(1) << (width - 1);
     let after = &last + step;
     if -&sign <= last && last < sign && -&sign <= after && after < sign { (Some(begin), Some(last)) } else { (None, None) }
+}
+
+/// The end of `bound`'s range a counter walking up (`ascending`) or down
+/// meets, where the range is the same signed or not: `n & 3` bounds a walk
+/// up from zero by three trips.
+fn _extent_toward(unit: &Unit, bound: &AffineOperand, facts: &IndexMap<ValueId, Known>, ascending: bool) -> Option<BigInt> {
+    let AffineOperand::Value(value, width) = bound else { return None };
+    let range = match unit.function.value(*value).def {
+        ValueDef::Instruction(inst) => crate::ranges::_computed(unit, inst, &IndexMap::default(), facts),
+        _ => crate::ranges::_operand(unit, Operand::Value(*value), &IndexMap::default(), facts),
+    }?;
+    let half = BigInt::from(1) << (width - 1);
+    (range.width == *width && range.low >= BigInt::from(0) && range.high < half).then(|| if ascending { range.high } else { range.low })
 }
 
 /// Most trips of a symbolic unit-step loop, where proved; None for an inclusive test that may never end.

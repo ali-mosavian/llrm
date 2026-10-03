@@ -9,7 +9,7 @@ use std::sync::Arc;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::{CastOp, ConstantKind, Opcode, Type, TypeId};
 
-use super::{float_conditions, insn, insn_of, refuse, semantics, Convention, Selector, Test, Unselected, FLOAT};
+use super::{float_conditions, insn, insn_of, refuse, semantics, Convention, Pointer, Selector, Test, Unselected, FLOAT};
 use crate::backend::arithmetic;
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
@@ -438,8 +438,17 @@ impl Selector<'_, '_, '_> {
     fn hook_getelementptr(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let instruction = self.function.instruction(m.inst);
         let Opcode::GetElementPtr { source } = instruction.opcode else { unreachable!("a getelementptr") };
-        if self.folded(instruction.result.expect("an address"))?.is_none() {
-            self.indexed(m.inst, source, m.at, out)?;
+        let result = instruction.result.expect("an address");
+        match self.folded(result)? {
+            None => self.indexed(m.inst, source, m.at, out)?,
+            // A far address read in another block, or by a phi, is made once
+            // here: refolded there, it would hold its base past its own step.
+            Some(pointer @ Pointer::Far { selector, .. }) if self.read_elsewhere(result) => {
+                let moved = self.fresh_held(2);
+                out.push(insn(m.at, self.address(pointer, moved)));
+                self.fars.insert(result, (Some(moved), selector));
+            }
+            Some(_) => {}
         }
         Ok(())
     }
