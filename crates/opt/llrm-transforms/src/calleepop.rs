@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::addressed;
 use llrm_mir::context::{ConstantKind, GlobalId};
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{GlobalKind, InstId, Linkage, Module, Operand};
 use llrm_mir::opcode::{FAST, Opcode};
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
@@ -26,7 +27,7 @@ impl ModulePass for CalleePop {
     fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
         let target = &analyses.program().target;
         let costs = if self.size { target.size_costs() } else { target.costs() };
-        let (chosen, sites) = decided(module, &costs);
+        let (chosen, sites) = decided(module, &costs, &analyses.program().layout);
         let mut changed = BTreeSet::new();
         for &id in &chosen {
             if let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind {
@@ -48,7 +49,7 @@ impl ModulePass for CalleePop {
 /// take it: internal, not variadic, with arguments, never named but as a callee, called only
 /// with C's convention, and called often enough that what each return costs is paid for by
 /// what each call saves, a word of arguments at least.
-fn decided(module: &Module, costs: &OperationCosts) -> (BTreeSet<GlobalId>, Vec<(GlobalId, InstId)>) {
+fn decided(module: &Module, costs: &OperationCosts, layout: &DataLayout) -> (BTreeSet<GlobalId>, Vec<(GlobalId, InstId)>) {
     let named = addressed(module);
     let mut calls: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>> = BTreeMap::new();
     let mut other: BTreeSet<GlobalId> = BTreeSet::new();
@@ -72,6 +73,8 @@ fn decided(module: &Module, costs: &OperationCosts) -> (BTreeSet<GlobalId>, Vec<
             let global = module.global(callee);
             let Some(function) = global.function() else { return false };
             let (_, parameters, variadic) = module.signature(function.ty);
+            // The stack words its arguments take: each a word at least, a dword or a far pointer two.
+            let words: i64 = parameters.iter().map(|&ty| (layout.alloc_size(&module.context.types, ty).max(2) as i64 + 1) / 2).sum();
             let returns = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Ret)).count() as i64;
             !function.is_declaration()
                 && matches!(global.linkage, Linkage::Internal | Linkage::Private)
@@ -80,7 +83,7 @@ fn decided(module: &Module, costs: &OperationCosts) -> (BTreeSet<GlobalId>, Vec<
                 && !parameters.is_empty()
                 && !named.contains(&callee)
                 && !other.contains(&callee)
-                && sites.len() as i64 * costs.cleanup(parameters.len() as i64) > returns * costs.return_pops
+                && sites.len() as i64 * costs.cleanup(words) > returns * costs.return_pops
         })
         .map(|(&callee, _)| callee)
         .collect();

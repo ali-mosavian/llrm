@@ -69,9 +69,7 @@ impl ProgramPass for Interprocedural {
 
     fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let pipeline = &mut self.pipeline;
-        // A copy is weighed in the unit the level builds for; a call whose actuals fold in clocks.
-        let costs = program.target.costs();
-        let copy_costs = if self.size { program.target.size_costs() } else { program.target.costs() };
+        let costs = if self.size { program.target.size_costs() } else { program.target.costs() };
         let roots = roots(program);
         let mut modules = managers(program, analyses);
         let proved = optimized::<String>(
@@ -79,7 +77,6 @@ impl ProgramPass for Interprocedural {
             &mut modules,
             &roots,
             &costs,
-            &copy_costs,
             self.inline,
             &mut |module, analyses, id, stage| {
                 pipeline(module, analyses, id, stage);
@@ -153,7 +150,6 @@ pub fn optimized<E: From<String>>(
     modules: &mut [ModuleAnalyses],
     roots: &BTreeSet<Defined>,
     costs: &OperationCosts,
-    copy_costs: &OperationCosts,
     threshold: inline::Threshold,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
@@ -180,7 +176,7 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &program.layout, &counts, &private[at], copy_costs, threshold);
+            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold);
             let recursive = inline::recursive(module);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");
@@ -266,7 +262,7 @@ pub fn optimized<E: From<String>>(
         for at in 0..count {
             let module = &mut program.modules[at];
             let counts = inline::call_counts(module);
-            let available = inline::candidates(module, &program.layout, &counts, &private[at], copy_costs, threshold);
+            let available = inline::candidates(module, &program.layout, &counts, &private[at], costs, threshold);
             let recursive = inline::recursive(module);
             for &id in &procedures[at] {
                 let caller = module.global(id).function().expect("a procedure");

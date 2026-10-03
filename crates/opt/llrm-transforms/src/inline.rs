@@ -216,6 +216,7 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
     let budget = threshold.budget(call_cost);
     let (recursive, callees, addressed) = (recursive(module), llrm_mir::memory::callees(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
+    let mut lasts = IndexMap::default();
     for (&name, &count) in calls {
         let Some(body) = body(module, name) else { continue };
         if count == 0 || !cloneable(module, &recursive, name, body) {
@@ -228,9 +229,12 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         // The last call of a function nothing else reaches moves its body: no copy, and the call,
         // its arguments and the return gone (LLVM's last-call-to-static bonus).
         let admitted = || {
-            budget.is_some_and(|budget| (threshold.single && copies == 0) || semantic_count(body) <= scale(budget))
+            budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
                 && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * call_cost)))
         };
+        // Only once nothing else is: a body that a call in it is about to be inlined into would
+        // be copied with that call still in it, and the call's callee counted once too many.
+        let last = threshold.single && budget.is_some() && copies == 0 && !always && !admitted();
         let verdict = always || admitted();
         llrm_support::debug!(
             "inline",
@@ -242,7 +246,12 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         );
         if verdict {
             out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
+        } else if last {
+            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
+    }
+    if out.is_empty() {
+        out = lasts;
     }
     out
 }

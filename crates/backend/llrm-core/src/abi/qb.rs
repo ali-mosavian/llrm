@@ -822,10 +822,6 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.costs()
     }
 
-    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
-        self.machine.size_costs()
-    }
-
     fn registers(&self) -> i64 {
         self.machine.registers()
     }
