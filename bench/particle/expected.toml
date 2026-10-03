@@ -1,13 +1,13 @@
-reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
+reason = "#357: a call that writes through an unknown pointer reaches captured globals (NONLOCAL); lru.nib now correct, particle.bas 6 fewer instructions"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 131697
-memory_operands = 94943
+instructions = 131691
+memory_operands = 94939
 
 [bas.Os]
-instructions = 131495
-memory_operands = 94943
+instructions = 131489
+memory_operands = 94939
 
 [c.O2]
 instructions = 84539

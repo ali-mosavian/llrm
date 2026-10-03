@@ -675,6 +675,36 @@ b0:
     assert!(!writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4)));
 }
 
+/// A call that keeps no pointer it reads out of its argument (`noretain`) lends
+/// nothing: `nocapture` alone still lets it keep `inner`, whose address `slot`
+/// holds, so a later unknown call may write it. QB's `ERASE` of an array behind
+/// a descriptor made the array escape everywhere (deedlines).
+#[test]
+fn a_noretain_argument_publishes_nothing_it_points_to() {
+    let after = |attrs: &str| {
+        let parsed = Parsed::new(&format!(
+            "declare void @external()
+
+declare void @use(ptr {attrs})
+
+define void @f() {{
+b0:
+  %slot = alloca [4 x i8]
+  %inner = alloca [4 x i8]
+  store ptr %inner, ptr %slot
+  call void @use(ptr %slot)
+  call void @external()
+  ret void
+}}
+"
+        ));
+        let effects = parsed.effects(&IndexMap::default());
+        writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4))
+    };
+    assert!(after("nocapture"));
+    assert!(!after("nocapture noretain"));
+}
+
 /// A value nothing is known of is a multiple of 1, so `x << 1` and
 /// `0 - (x << 1)` are multiples of 2 and `x * 8` of 8: the fact a trip
 /// count's divisibility proof reads. Only operands with a fact gave one.

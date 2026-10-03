@@ -74,7 +74,9 @@ pub fn runtime(emitted: &[(&Emitted, &model::Module)], promises: &model::Runtime
 /// them reaches: `!llrm.named` lists them, and each routine a module
 /// declares that runs no program code is `nocallback` with an
 /// `!llrm.writes` node of the named cells it writes; one that raises no
-/// error is `nounwind`.
+/// error is `nounwind`. A routine in `reads_arguments` keeps none of
+/// its pointer arguments, one in `no_retain` nothing they reach either:
+/// `nocapture`, and `noretain`.
 pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model::RuntimePromises) -> Emit<Module> {
     let mut out = Module { datalayout: modules.first().and_then(|(module, _)| module.datalayout.clone()), ..Module::default() };
     let node = |out: &mut Module, globals: Vec<GlobalId>| {
@@ -131,7 +133,10 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     }
     for (module, global) in modules.iter().flat_map(|(module, _)| module.functions().filter(|(_, _, one)| one.is_declaration()).map(move |(id, _, _)| (*module, id))) {
         let Some(name) = module.global(global).name.as_deref() else { continue };
-        if !promises.reads_arguments.iter().any(|one| one == name.strip_prefix(RUNTIME).unwrap_or(name)) {
+        let routine = name.strip_prefix(RUNTIME).unwrap_or(name);
+        let reads = promises.reads_arguments.iter().any(|one| one == routine);
+        let retains_nothing = promises.no_retain.iter().any(|one| one == routine);
+        if !reads && !retains_nothing {
             continue;
         }
         let Some(one) = (match out.named(name) {
@@ -141,10 +146,15 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
             continue;
         };
         let llrm_mir::GlobalKind::Function(function) = &mut out.globals[one.0 as usize].kind else { unreachable!("a routine") };
-        function.attrs.push(Attribute::Memory(vec![(Some("argmem".to_owned()), "read".to_owned())]));
+        if reads {
+            function.attrs.push(Attribute::Memory(vec![(Some("argmem".to_owned()), "read".to_owned())]));
+        }
         for at in 0..function.parameters().len() {
             if matches!(out.context.types.get(function.value(function.parameters()[at]).ty), Type::Pointer(_)) {
                 function.parameter_attrs[at].push(Fact::NoCapture.carrier());
+                if retains_nothing {
+                    function.parameter_attrs[at].push(Fact::NoRetain.carrier());
+                }
             }
         }
     }
