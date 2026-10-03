@@ -73,7 +73,7 @@ impl LIRTransform for SsaSpill {
                 for one in &block.insns {
                     let name = one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default();
                     let tag = if one.spill_store { " store" } else if one.rematerialized { " remat" } else { "" };
-                    eprintln!("TL   {name} {:?} <- {:?}{tag}", one.defines, one.uses);
+                    eprintln!("TL   {name} {:?} <- {:?}{tag} {:?} dg {}", one.defines, one.uses, one.what.as_ref().map(|w| w.op), target::needs_data_group(one));
                 }
             }
         }
@@ -447,6 +447,9 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
             continue;
         }
         let machine = Machine::of(&confined, file, segments);
+        if std::env::var_os("TRACESEL").is_some() {
+            eprintln!("TS {} {:?} {:?} data {:?}", body.name, file, machine.general, segments.data);
+        }
         if machine.general.is_empty() {
             continue;
         }
@@ -497,19 +500,39 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
 
 /// `body` without the definitions of remade selectors that nothing reads any more: each read made its own.
 fn without_dead_remakes(body: LirBody, remade: &BTreeSet<u32>) -> LirBody {
-    let read: BTreeSet<u32> = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.insns.iter().flat_map(|one| one.uses.iter().copied()).chain(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value))))
-        .collect();
-    let dead = |one: &Arc<Insn>| match one.defines.as_slice() {
-        [value] => remade.contains(value) && !read.contains(value) && !one.rematerialized && one.uses.is_empty() && one.what.as_ref().is_some_and(|what| what.op == Operation::Move),
-        _ => false,
-    };
-    if !body.blocks.iter().any(|block| block.insns.iter().any(dead)) {
+    let mut gone: BTreeSet<*const Insn> = BTreeSet::new();
+    let mut targets = remade.clone();
+    loop {
+        let read: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .filter(|one| !gone.contains(&Arc::as_ptr(one)))
+                    .flat_map(|one| one.uses.iter().copied())
+                    .chain(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)))
+            })
+            .collect();
+        let mut more = false;
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            let [value] = one.defines.as_slice() else { continue };
+            let plain = one.what.as_ref().is_some_and(|what| what.op == Operation::Move && what.name.as_deref() == Some("mov")) && !one.rematerialized && one.uses.len() <= 1;
+            if plain && targets.contains(value) && !read.contains(value) && gone.insert(Arc::as_ptr(one)) {
+                // What it copied is read by it no more.
+                targets.extend(one.uses.iter().copied());
+                more = true;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    if gone.is_empty() {
         return body;
     }
-    let blocks = body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !dead(one)).cloned().collect())).collect();
+    let blocks = body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !gone.contains(&Arc::as_ptr(one))).cloned().collect())).collect();
     body.with_blocks(blocks)
 }
 
@@ -560,7 +583,35 @@ fn simulated_in(
         }
         result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers);
     }
+    // Dropping what a loop evicts leaves the loop's registers short of use: a value is let back in
+    // where the loop then moves less to and from memory.
+    if machine.file == File::Selector {
+        let mut best = traffic(&result, frequency);
+        let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
+        for (header, value) in letting {
+            let mut trial = dropped.clone();
+            trial.get_mut(&header).map(|values| values.remove(&value));
+            let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers);
+            let moved = traffic(&tried, frequency);
+            if moved < best {
+                best = moved;
+                result = tried;
+                dropped = trial;
+            }
+        }
+    }
     result
+}
+
+/// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
+fn traffic(result: &Simulated, frequency: &Frequency) -> f64 {
+    let blocks: f64 = result
+        .edits
+        .iter()
+        .map(|(at, edit)| frequency.block(*at) * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
+        .sum();
+    let edges: f64 = result.across.iter().map(|((from, to), values)| frequency.edge(*from, *to) * values.len() as f64).sum();
+    blocks + edges
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
@@ -594,6 +645,24 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
         if let Some([only]) = defining.get(value).map(Vec::as_slice) {
             out.insert(*value, Arc::clone(only));
         }
+    }
+    // A plain copy of a value made again is made again the same way: its own.
+    for one in body.insns() {
+        let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { continue };
+        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
+        if what.op != Operation::Move || what.name.as_deref() != Some("mov") || dest.value != *value || from.value != *source || dest.width != from.width || !values.contains(value) {
+            continue;
+        }
+        if defining.get(value).is_none_or(|found| found.len() != 1) || out.contains_key(value) {
+            continue;
+        }
+        let Some(made) = out.get(source) else { continue };
+        let mut copy = (**made).clone();
+        copy.defines = vec![*value];
+        if let Some(what) = &mut copy.what {
+            what.dests = vec![Loc::Held(crate::model::ir::Held { value: *value, width: dest.width })];
+        }
+        out.insert(*value, Arc::new(copy));
     }
     out
 }
@@ -723,7 +792,7 @@ fn simulated(
         for (tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
             let far = header && *near >= EXIT;
-            if (!far || spare > 0) && (*tier < 2 || block.arrives().contains(value)) {
+            if (!far || spare > 0) && (*tier < 2 || (header && machine.file == File::Selector) || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
                 if machine.fits(&next, &BTreeSet::new(), k) {
@@ -733,6 +802,9 @@ fn simulated(
                     }
                 }
             }
+        }
+        if header && std::env::var_os("TRACESEL").is_some() {
+            eprintln!("TS {} {:?} @{at:#x} candidates {:?} held {:?} spare {spare} dropped {:?}", body.name, machine.file, candidates, held, dropped.get(at));
         }
         done.w_in = held.clone();
         done.leaves_at_top = block.arrives().into_iter().filter(|value| wanted(*value) && !held.contains(value)).collect();
