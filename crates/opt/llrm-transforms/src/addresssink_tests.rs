@@ -109,3 +109,33 @@ b3:
 ";
     assert!(sunk(text, &[&[1, 1], &[2, -1]]).contains("phi"));
 }
+
+/// The arms' copies the phi alone read are dead once it is gone: left, each
+/// arm built the address again for nothing (`mov cx,bx; add cx,offset FSIN4%`
+/// before every store in RGBLIGHTS).
+#[test]
+fn test_the_arms_copies_of_the_address_go() {
+    let text = "define void @f(i16 %i, i16 %c) {
+b0:
+  %low = icmp slt i16 %c, 0
+  br i1 %low, label %b1, label %b2
+
+b1:
+  %k1 = sub i16 %i, -3
+  %p1 = getelementptr inbounds i16, ptr @g, i16 %k1
+  br label %b3
+
+b2:
+  %k2 = sub i16 %i, -3
+  %p2 = getelementptr inbounds i16, ptr @g, i16 %k2
+  br label %b3
+
+b3:
+  %p = phi ptr [ %p1, %b1 ], [ %p2, %b2 ]
+  store i16 %c, ptr %p
+  ret void
+}
+";
+    let after = sunk(text, &[&[1, 1], &[2, -1]]);
+    assert_eq!((after.matches("getelementptr").count(), after.matches("sub i16").count()), (1, 1), "{after}");
+}
