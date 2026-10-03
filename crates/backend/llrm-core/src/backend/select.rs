@@ -417,6 +417,22 @@ pub fn _immediate(value: i64, width: i64) -> i64 {
     ((value & (2 * sign - 1)) ^ sign) - sign
 }
 
+/// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low part of the
+/// destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes for 3, 3 and 4. None of them
+/// touches a flag.
+fn extended_in_place(name: &str, into: Register, outof: Register, at: u64) -> Option<Emitted> {
+    let bare = |code: &str| _assemble(&Instruction::with(_code(code)?), at, true);
+    match (name, into, outof) {
+        ("movzx", Register::AX, Register::AL) => load(Register::AH, 0, at),
+        ("movzx", Register::BX, Register::BL) => load(Register::BH, 0, at),
+        ("movzx", Register::CX, Register::CL) => load(Register::CH, 0, at),
+        ("movzx", Register::DX, Register::DL) => load(Register::DH, 0, at),
+        ("movsx", Register::AX, Register::AL) => bare("CBW"),
+        ("movsx", Register::EAX, Register::AX) => bare("CWDE"),
+        _ => None,
+    }
+}
+
 /// `mov into, imm`, at the width `into` names.
 pub fn load(into: Register, value: i64, at: u64) -> Option<Emitted> {
     let width = width_of(into)?;
@@ -1382,6 +1398,9 @@ pub fn emit(
         let wide = |register: Register| width_of(register).unwrap_or(0);
         match (&dests[0], &sources[0]) {
             (Loc::Reg(into), Loc::Reg(outof)) => {
+                if let Some(short) = extended_in_place(name, into.register, outof.register, at) {
+                    return Some(short);
+                }
                 let code = _code(&format!("{upper}_R{}_RM{}", wide(into.register) * 8, wide(outof.register) * 8));
                 if let Some(code) = code {
                     if target::WIDTHS[&into.register] > target::WIDTHS[&outof.register] {

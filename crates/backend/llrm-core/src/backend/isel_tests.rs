@@ -1748,6 +1748,26 @@ define void @f() addrspace(1) {
     assert_eq!(pushes(on(false)), ["pushd -3", "pushd 7", "pushd 1065353216", "pushd 7340144"], "{}", on(false));
 }
 
+/// A dword compared for equality with a constant xors only the halves the constant sets: QCport
+/// -Os had `xor dx,0` (3 bytes, no effect) in 71 `got != 73`-style compares.
+#[test]
+fn test_a_dword_equality_xors_only_the_constant_halves_that_are_not_zero() {
+    let text = |constant: i64| {
+        format!("declare i32 @rd()
+define i16 @f() addrspace(1) {{
+  %v = call i32 @rd()
+  %c = icmp ne i32 %v, {constant}
+  %r = zext i1 %c to i16
+  ret i16 %r
+}}
+")
+    };
+    let xors = |constant: i64| listing(&text(constant), "f").into_iter().filter(|line| line.starts_with("xor")).collect::<Vec<_>>();
+    assert_eq!(xors(73), ["xor ax, 73"]);
+    assert_eq!(xors(0x20000), ["xor dx, 2"]);
+    assert_eq!(xors(0x20005), ["xor ax, 5", "xor dx, 2"]);
+}
+
 /// A dword load read only as its words is those words loaded, as the old
 /// route's narrow selects: the high word cost a copy and a shift.
 #[test]

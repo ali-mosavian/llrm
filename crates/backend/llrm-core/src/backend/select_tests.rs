@@ -827,3 +827,24 @@ fn test_a_string_move_encodes_by_width_and_repeat() {
     assert_eq!(over, (Register::SS, 2));
     assert_eq!(decoded_over(Register::FS), (Register::FS, 2));
 }
+
+/// An extension of a register into its own wider register has a shorter form: `movzx ax,al`
+/// (0f b6 c0, 3 bytes) is `mov ah,0` (b4 00), `movsx ax,al` is `cbw` (98) and `movsx eax,ax`
+/// `cwde` (66 98, not 66 0f bf c0). QCport -Os had some 200; neither writes a flag.
+#[test]
+fn test_an_extension_in_place_takes_its_shortest_form() {
+    for (name, into, from, expected) in [
+        ("movzx", rg(Register::AX, 2), rg(Register::AL, 1), "b400"),
+        ("movzx", rg(Register::DX, 2), rg(Register::DL, 1), "b600"),
+        ("movsx", rg(Register::AX, 2), rg(Register::AL, 1), "98"),
+        ("movsx", rg(Register::EAX, 4), rg(Register::AX, 2), "6698"),
+        // Not in place: a different register, or one with no high byte.
+        ("movzx", rg(Register::AX, 2), rg(Register::BL, 1), "0fb6c3"),
+        ("movzx", rg(Register::SI, 2), rg(Register::AL, 1), "0fb6f0"),
+        ("movsx", rg(Register::EBX, 4), rg(Register::BX, 2), "660fbfdb"),
+        ("movzx", rg(Register::EAX, 4), rg(Register::AX, 2), "660fb7c0"),
+    ] {
+        let what = sem(Operation::Extend, Some(name), vec![into], vec![from], None, false);
+        assert_eq!(hex(&made(emitted(&what)).code), expected, "{name}");
+    }
+}
