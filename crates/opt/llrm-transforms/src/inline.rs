@@ -224,7 +224,7 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
         let admitted = || {
             budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
-                && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * call_cost)))
+                && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies * std::env::var("WK").ok().and_then(|v| v.parse::<i64>().ok()).unwrap_or(1) < scale(count * call_cost)))
         };
         let verdict = always || admitted();
         llrm_support::debug!(
