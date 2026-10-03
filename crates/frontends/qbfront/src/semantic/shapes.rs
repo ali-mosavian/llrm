@@ -3,8 +3,8 @@
 //! Every DIM, REDIM and static array's fixed bounds that can reach a
 //! descriptor is known here: its own procedure's, and through whole-array
 //! arguments, its callers' and callees'.
-//! Where all of them agree, the shape is a fact: constant dimension counts
-//! replace their descriptor reads, and a zero-based array's descriptor offset
+//! Where all of them agree, the shape is a fact: the rank and constant
+//! dimension counts and lower bounds replace their descriptor reads, and a zero-based array's descriptor offset
 //! is its first byte, which each element access records as its origin.
 //!
 //! B$DDIM puts a far array's data at offset 0 of its own segment and never
@@ -37,6 +37,7 @@ struct Known {
     unknown: bool,
     counts: Option<Vec<i64>>,
     lowers: Option<Vec<i64>>,
+    rank: Option<usize>,
     origin: Option<i64>,
     allocations: usize,
 }
@@ -55,8 +56,11 @@ impl Known {
             .collect();
         let lowers: Option<Vec<i64>> = records.iter().map(|(lower, _)| constant(lower)).collect();
         if self.allocations == 0 {
-            (self.counts, self.lowers, self.origin) = (counts, lowers, origin);
+            (self.counts, self.lowers, self.rank, self.origin) = (counts, lowers, Some(records.len()), origin);
         } else {
+            if self.rank != Some(records.len()) {
+                self.rank = None;
+            }
             if self.counts != counts {
                 self.counts = None;
             }
@@ -273,14 +277,29 @@ pub(super) fn applied(compiler: &mut Compiler) {
         for block in &mut function.blocks {
             for one in &mut block.instructions {
                 match one.tag {
-                    Some(Tag::DescriptorField { descriptor, field: field @ (Slot::Count(record) | Slot::Lower(record)) }) => {
-                        let fact = fact(descriptor);
-                        let bounds = if matches!(field, Slot::Count(_)) { fact.and_then(|fact| fact.counts) } else { fact.and_then(|fact| fact.lowers) };
-                        let Some(&bound) = bounds.as_ref().and_then(|bounds| bounds.get(record)) else {
+                    Some(Tag::DescriptorField {
+                        descriptor,
+                        field: field @ (Slot::Count(_) | Slot::Lower(_) | Slot::CountOf(_) | Slot::LowerOf(_)),
+                    }) => {
+                        let Some(fact) = fact(descriptor) else { continue };
+                        let record = match field {
+                            Slot::Count(record) | Slot::Lower(record) => Some(record),
+                            Slot::CountOf(dimension) | Slot::LowerOf(dimension) => fact.rank.and_then(|rank| rank.checked_sub(dimension)),
+                            _ => None,
+                        };
+                        let bounds = if matches!(field, Slot::Count(_) | Slot::CountOf(_)) { fact.counts } else { fact.lowers };
+                        let Some(&bound) = bounds.as_ref().zip(record).and_then(|(bounds, record)| bounds.get(record)) else {
                             continue;
                         };
                         one.op = "copy";
                         one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(bound))];
+                    }
+                    Some(Tag::DescriptorField { descriptor, field: Slot::Rank }) => {
+                        let Some(rank) = fact(descriptor).and_then(|fact| fact.rank) else {
+                            continue;
+                        };
+                        one.op = "copy";
+                        one.operands = vec![Operand::Constant(types[&one.results[0]], Number::Integer(rank as i64))];
                     }
                     Some(Tag::DescriptorField { descriptor, field: Slot::Origin }) if one.op == "load" => {
                         let Some(origin) = fact(descriptor).and_then(|fact| fact.origin) else {
@@ -531,6 +550,32 @@ mod tests {
         let compiler = applied_with(PASSED, &Options { whole_program: true, ..Options::default() });
         let t = function(&compiler, "t");
         assert_eq!((counts(t), originated(t)), (vec![2], 1));
+    }
+
+    /// The constants each descriptor read of `field`'s kind became.
+    fn folded(function: &Function, kind: fn(&Slot) -> bool) -> Vec<i64> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|one| matches!(&one.tag, Some(Tag::DescriptorField { field, .. }) if kind(field)))
+            .filter_map(|one| match (one.op, one.operands.as_slice()) {
+                ("copy", [Operand::Constant(_, Number::Integer(value))]) => Some(*value),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// An array parameter's LBOUND read its rank from the descriptor, and its
+    /// bound at an offset from it, though every argument has one rank and
+    /// lower bound.
+    #[test]
+    fn test_a_parameters_rank_and_bound_are_its_arguments() {
+        let source = "DEFINT A-Z\nDECLARE SUB t (q())\nREDIM a(3 TO n)\nCALL t(a())\nSUB t (q())\nx = LBOUND(q)\nEND SUB\n";
+        let compiler = applied_with(source, &Options { whole_program: true, ..Options::default() });
+        let t = function(&compiler, "t");
+        assert_eq!(folded(t, |field| matches!(field, Slot::Rank)), [1]);
+        assert_eq!(folded(t, |field| matches!(field, Slot::LowerOf(1))), [3]);
     }
 
     #[test]

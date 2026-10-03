@@ -109,7 +109,8 @@ fn indexed_from_descriptor(listing: &str) -> Vec<i64> {
 /// header moved the rest of the descriptor down (#80).
 #[test]
 fn indexed_frame_cells_move_with_the_runtime_frame() {
-    let source = "SUB arrs (n AS INTEGER)\nREDIM v(n) AS LONG\nv(n) = 7\nPRINT UBOUND(v); v(n)\nEND SUB\narrs 3\n";
+    // A dimension known only at run time keeps the bound's read indexed.
+    let source = "SUB arrs (n AS INTEGER, d AS INTEGER)\nREDIM v(n) AS LONG\nv(n) = 7\nPRINT UBOUND(v, d); v(n)\nEND SUB\narrs 3, 1\n";
     for (dialect, runtime) in DIALECTS {
         let framed = procedure(source, dialect, runtime, false, "ARRS");
         assert!(runtime_framed(&framed), "{dialect}");

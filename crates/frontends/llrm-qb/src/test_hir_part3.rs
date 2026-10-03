@@ -28,9 +28,9 @@ fn compat(path: &str) -> std::path::PathBuf {
     root().join("tests/differential/conformance").join(path)
 }
 
-/// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=..., huge_arrays=..., unchecked_bounds=...)`.
-fn parsed_with(source: &Path, dialect: &str, runtime: &str, array_order: &str, huge: bool, unchecked: bool) -> hir::Program {
-    qb_driver::parsed(source, &qb_driver::Frontend { array_order: array_order.into(), huge_arrays: huge, unchecked_bounds: unchecked, ..qb_driver::Frontend::new(dialect, runtime) }, None)
+/// `qb_driver.parsed(source, dialect=..., runtime=..., array_order=..., huge_arrays=..., checked_arrays=...)`.
+fn parsed_with(source: &Path, dialect: &str, runtime: &str, array_order: &str, huge: bool, checked: bool) -> hir::Program {
+    qb_driver::parsed(source, &qb_driver::Frontend { array_order: array_order.into(), huge_arrays: huge, checked_arrays: checked, ..qb_driver::Frontend::new(dialect, runtime) }, None)
         .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
 
@@ -145,9 +145,10 @@ fn bound_call_labels(text: &str) -> BTreeSet<String> {
     found
 }
 
-fn sum_three(unchecked: bool) -> String {
+/// sumThree's listing, `-fsanitize=bounds` where `checked`.
+fn sum_three(checked: bool) -> String {
     let source = root().join("tests/inputs/qb/sum_three.bas");
-    let program = parsed_with(&source, "vbdos", "vbdos", "column-major", false, unchecked);
+    let program = parsed_with(&source, "vbdos", "vbdos", "column-major", false, checked);
     let text = listing(&program);
     let start = text.find("SUMTHREE proc").expect("SUMTHREE proc");
     let end = text.find("SUMTHREE endp").expect("SUMTHREE endp");
@@ -915,7 +916,7 @@ fn test_static_locals_are_stored_once_after_the_loop() {
 /// block cold and layout places it after the return.
 #[test]
 fn test_the_bound_error_call_is_placed_after_the_hot_path() {
-    let procedure = sum_three(false);
+    let procedure = sum_three(true);
 
     let returned = procedure.find("retf").expect("retf");
     assert!(procedure.find("B$LBND").expect("B$LBND") > returned);
@@ -946,17 +947,17 @@ fn test_an_error_statement_is_placed_after_the_hot_path() {
 /// duplication may copy that test, which is no second condition.
 #[test]
 fn test_the_first_dimension_is_not_rank_checked() {
-    let procedure = sum_three(false);
+    let procedure = sum_three(true);
 
     let calls = bound_call_labels(&procedure);
     let branches: BTreeSet<&str> = jumps(&procedure, false).iter().filter(|(_, _, label)| calls.contains(label)).map(|(start, end, _)| procedure[*start..*end].trim()).collect();
     assert_eq!(branches.len(), 2, "{branches:?}");
 }
 
-/// --unchecked-bounds trusts the descriptor: no B$LBND/B$UBND fallback.
+/// Without -fsanitize=bounds LBOUND trusts the descriptor: no B$LBND/B$UBND fallback.
 #[test]
 fn test_unchecked_bounds_read_the_descriptor_without_runtime_calls() {
-    let procedure = sum_three(true);
+    let procedure = sum_three(false);
 
     assert!(!procedure.contains("B$LBND") && !procedure.contains("B$UBND"));
     assert!(has_indexed_field(&procedure, "12"), "{procedure}");
@@ -2087,7 +2088,8 @@ fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
     use llrm_analysis::noreturn;
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "bound.bas", b"N = 5\nREDIM A(N)\nPRINT UBOUND(A)\n");
-    let program = parsed(&source);
+    let checked = qb_driver::Frontend { checked_arrays: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    let program = qb_driver::parsed(&source, &checked, None).expect("parses");
     let expected: BTreeSet<String> = program.modules[0].functions.iter().flat_map(|function| &function.blocks).filter(|block| block.cold).map(|block| format!("b{}", block.id)).collect();
     assert!(!expected.is_empty(), "no cold HIR block");
     let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);

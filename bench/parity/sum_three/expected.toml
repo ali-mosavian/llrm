@@ -1,13 +1,13 @@
-reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+reason = "LBOUND/UBOUND carry no allocated or rank check without -fsanitize=bounds; rank is a compile-time fact"
 blessed = "2026-10-03"
 
 [bas.O2]
-instructions = 154
-memory_operands = 70
+instructions = 149
+memory_operands = 69
 
 [bas.Os]
-instructions = 154
-memory_operands = 70
+instructions = 149
+memory_operands = 69
 
 [c.O2]
 instructions = 96

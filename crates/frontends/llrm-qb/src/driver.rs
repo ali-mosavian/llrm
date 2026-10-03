@@ -45,7 +45,6 @@ pub struct Frontend {
     /// Integer arithmetic and narrowing raise error 6, Overflow:
     /// `-fsanitize=signed-integer-overflow`.
     pub checked_overflow: bool,
-    pub unchecked_bounds: bool,
     pub mbf: bool,
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
@@ -72,7 +71,6 @@ impl Frontend {
             checked_division: false,
             debug: false,
             checked_overflow: false,
-            unchecked_bounds: false,
             mbf: false,
             alternate_math: false,
             whole_program: false,
@@ -105,7 +103,6 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<qbfront::driver::Args,
             checked_arrays: frontend.checked_arrays,
             checked_division: frontend.checked_division,
             checked_overflow: frontend.checked_overflow,
-            unchecked_bounds: frontend.unchecked_bounds,
             mbf: frontend.mbf,
             alternate_math: frontend.alternate_math,
             whole_program: frontend.whole_program,

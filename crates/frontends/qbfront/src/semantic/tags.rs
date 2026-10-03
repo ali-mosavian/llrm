@@ -63,6 +63,10 @@ pub(super) enum Slot {
     Count(usize),
     /// Dimension record `k`'s lower bound.
     Lower(usize),
+    /// Source dimension `d`'s count or lower bound, read where the rank is
+    /// known only at run time: record rank - `d`.
+    CountOf(usize),
+    LowerOf(usize),
 }
 
 impl Slot {

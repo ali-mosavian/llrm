@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod bounds;
 mod debug;
 mod merging;
 mod assignment;
@@ -67,6 +68,9 @@ struct Variable {
     type_id: u32,
     element: Option<u32>,
     bounds: Vec<(i64, i64)>,
+    /// An array's dimension count, where its declaration states it: QB
+    /// fixes it at compile time.
+    rank: Option<usize>,
     indirect: Option<u32>,
     descriptor: Option<u32>,
     descriptor_place: Option<u32>,
@@ -288,6 +292,7 @@ struct Compiler {
     current_block: usize,
     descriptor_bases: BTreeMap<(u32, u32, &'static str), u32>,
     descriptor_fields: BTreeMap<(u32, usize, u32), u32>,
+    holdings: bounds::Holdings,
     labels: BTreeMap<String, u32>,
     data_labels: BTreeMap<String, usize>,
     next_read_data_row: usize,
@@ -392,9 +397,6 @@ pub struct Options {
     /// /D's overflow check: INTEGER + - * and negation, LONG + - and
     /// negation, and LONG to INTEGER raise error 6.
     pub checked_overflow: bool,
-    /// LBOUND/UBOUND read the descriptor without checking it is allocated
-    /// or the dimension in range, as unchecked subscripts do.
-    pub unchecked_bounds: bool,
     /// /MBF.
     pub mbf: bool,
     /// /FPa.
@@ -605,6 +607,7 @@ fn built_from(
                         type_id: parameter_type,
                         element: Some(parameter_type),
                         bounds: Vec::new(),
+                        rank: None,
                         indirect: None,
                         descriptor: Some(value),
                         descriptor_place: None,
@@ -645,6 +648,7 @@ fn built_from(
                         type_id: parameter_type,
                         element: None,
                         bounds: Vec::new(),
+                        rank: None,
                         indirect: Some(value),
                         descriptor: None,
                         descriptor_place: None,
@@ -1370,6 +1374,7 @@ impl Compiler {
             current_block: 0,
             descriptor_bases: BTreeMap::new(),
             descriptor_fields: BTreeMap::new(),
+            holdings: bounds::Holdings::default(),
             labels: BTreeMap::new(),
             data_labels: BTreeMap::new(),
             next_read_data_row: 0,
@@ -1441,6 +1446,7 @@ impl Compiler {
         self.current_block = 0;
         self.descriptor_bases.clear();
         self.descriptor_fields.clear();
+        self.holdings = bounds::Holdings::default();
         self.labels.clear();
         self.exits.clear();
         self.loops.clear();
@@ -1494,6 +1500,7 @@ impl Compiler {
         if id != 1 && self.own_frames() {
             self.zero_locals(&external_entries);
         }
+        self.place_holdings(&external_entries);
         let table = self
             .data
             .iter_mut()
@@ -2094,6 +2101,11 @@ impl Compiler {
                         let mut declaration = item.clone();
                         declaration.bounds.clear();
                         self.declare_as(&declaration, storage)?;
+                        // Its first REDIM fixes its rank, as BC's does.
+                        let key = self.declaration_key(item)?;
+                        if let Some(variable) = self.variables.get_mut(&key) {
+                            variable.rank = Some(item.bounds.len());
+                        }
                     }
                 }
                 Statement::Const { name, value, .. } => {
@@ -2243,8 +2255,10 @@ impl Compiler {
             vec![Operand::Place(descriptor_place)],
         );
         let bounds = self.bounds(declaration)?;
+        let stated = bounds.clone();
         let (operands, records) = self.dimensioned(bounds, element, descriptor);
         self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        self.holds(bounds::Held::Place(descriptor_place), Some(stated));
         self.tag_last(Tag::Allocate(Shape { descriptor, records, element }));
         Ok(())
     }
@@ -2416,6 +2430,7 @@ impl Compiler {
                     type_id: element,
                     element: Some(element),
                     bounds: Vec::new(),
+                    rank: Some(declaration.bounds.len()),
                     indirect: None,
                     descriptor: None,
                     descriptor_place: Some(descriptor_place),
@@ -2489,6 +2504,7 @@ impl Compiler {
                     type_id: element,
                     element: Some(element),
                     bounds,
+                    rank: None,
                     indirect: None,
                     descriptor: None,
                     descriptor_place: Some(descriptor_place),
@@ -2644,6 +2660,7 @@ impl Compiler {
                 place,
                 type_id,
                 element: array_element,
+                rank: array_element.map(|_| bounds.len()).filter(|&rank| rank > 0),
                 bounds,
                 indirect: None,
                 descriptor: None,
@@ -2943,6 +2960,9 @@ impl Compiler {
                             Vec::new(),
                             vec![Operand::Value(descriptor)],
                         );
+                        if let Some(held) = bounds::Held::of(&variable) {
+                            self.holds(held, None);
+                        }
                         self.tag_last(Tag::Release { descriptor });
                     }
                 }
@@ -5206,166 +5226,6 @@ impl Compiler {
         data
     }
 
-    /// LBOUND/UBOUND read from the descriptor, as dynamic.asm's ULbound does.
-    /// Where that routine would raise "subscript out of range" -- no data,
-    /// or a dimension outside 1..=AD_cDims -- the call itself runs instead,
-    /// so the error and any RESUME behave exactly as before.
-    fn array_bound(
-        &mut self,
-        descriptor: u32,
-        dimension: Operand,
-        upper: bool,
-    ) -> Result<Operand, SemanticError> {
-        let result = self.compiler_temporary("$bound", INTEGER)?;
-        let checked = !self.options.unchecked_bounds;
-        // Every allocated array has a first dimension.
-        let first = matches!(dimension, Operand::Constant(_, Number::Integer(1)));
-        let read = self.new_block();
-        let ranking = self.new_block();
-        // The runtime is called only to raise "Subscript out of range".
-        let call = checked.then(|| self.error_block());
-        let done = self.new_block();
-
-        if let Some(call) = call {
-            let data = self.descriptor_field(descriptor, 2, INTEGER);
-            let allocated = self.value(BOOLEAN);
-            let zero = Operand::Constant(INTEGER, Number::Integer(0));
-            self.emit("ne", vec![allocated], vec![Operand::Value(data), zero]);
-            self.terminate(
-                "branch",
-                vec![Operand::Value(allocated)],
-                vec![ranking, call],
-            )?;
-        } else {
-            self.terminate("jump", Vec::new(), vec![ranking])?;
-        }
-
-        self.select_block(ranking);
-        let rank = self.descriptor_field(descriptor, 8, BYTE);
-        let rank = self.convert(Operand::Value(rank), BYTE, INTEGER)?;
-        match call {
-            Some(call) if !first => {
-                let ranked = self.new_block();
-                let positive = self.value(BOOLEAN);
-                let one = Operand::Constant(INTEGER, Number::Integer(1));
-                self.emit("ge", vec![positive], vec![dimension.clone(), one]);
-                self.terminate("branch", vec![Operand::Value(positive)], vec![ranked, call])?;
-
-                self.select_block(ranked);
-                let within = self.value(BOOLEAN);
-                self.emit("le", vec![within], vec![dimension.clone(), rank.clone()]);
-                self.terminate("branch", vec![Operand::Value(within)], vec![read, call])?;
-            }
-            _ => self.terminate("jump", Vec::new(), vec![read])?,
-        }
-
-        // As B$LBND: dimension d reads record cDims - d, which under /R holds
-        // source dimension cDims + 1 - d, as in BC.
-        self.select_block(read);
-        let entry = self.value(INTEGER);
-        self.emit("sub", vec![entry], vec![rank, dimension.clone()]);
-        let bytes = self.value(INTEGER);
-        self.emit(
-            "mul",
-            vec![bytes],
-            vec![
-                Operand::Value(entry),
-                Operand::Constant(INTEGER, Number::Integer(4)),
-            ],
-        );
-        let (pointer_type, offset_type) = {
-            let pointer_type = self
-                .values
-                .iter()
-                .find_map(|(id, type_id)| (*id == descriptor).then_some(*type_id))
-                .expect("descriptor value");
-            let offset_type = if self.width(pointer_type) == 4 {
-                LONG
-            } else {
-                INTEGER
-            };
-            (pointer_type, offset_type)
-        };
-        let bytes = self.convert(Operand::Value(bytes), INTEGER, offset_type)?;
-        let at = self.value(pointer_type);
-        self.emit(
-            "ptr_offset",
-            vec![at],
-            vec![Operand::Value(descriptor), bytes],
-        );
-        let lower = self.value(INTEGER);
-        self.emit(
-            "load",
-            vec![lower],
-            vec![Operand::Indirect {
-                base: at,
-                offset: 16,
-                type_id: INTEGER,
-                volatile: false,
-                inbounds: false,
-            }],
-        );
-        let value = if upper {
-            let count = self.value(INTEGER);
-            self.emit(
-                "load",
-                vec![count],
-                vec![Operand::Indirect {
-                    base: at,
-                    offset: 14,
-                    type_id: INTEGER,
-                    volatile: false,
-                    inbounds: false,
-                }],
-            );
-            let end = self.value(INTEGER);
-            self.emit(
-                "add",
-                vec![end],
-                vec![Operand::Value(lower), Operand::Value(count)],
-            );
-            let last = self.value(INTEGER);
-            self.emit(
-                "sub",
-                vec![last],
-                vec![
-                    Operand::Value(end),
-                    Operand::Constant(INTEGER, Number::Integer(1)),
-                ],
-            );
-            last
-        } else {
-            lower
-        };
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![Operand::Place(result), Operand::Value(value)],
-        );
-        self.terminate("jump", Vec::new(), vec![done])?;
-
-        if let Some(call) = call {
-            self.select_block(call);
-            let called = self.value(INTEGER);
-            self.emit_runtime_call(
-                if upper { "B$UBND" } else { "B$LBND" },
-                vec![called],
-                vec![Operand::Value(descriptor), dimension],
-            );
-            self.emit(
-                "store",
-                Vec::new(),
-                vec![Operand::Place(result), Operand::Value(called)],
-            );
-            self.terminate("jump", Vec::new(), vec![done])?;
-        }
-
-        self.select_block(done);
-        let merged = self.value(INTEGER);
-        self.emit("load", vec![merged], vec![Operand::Place(result)]);
-        Ok(Operand::Value(merged))
-    }
-
     fn descriptor_field(&mut self, descriptor: u32, offset: usize, type_id: u32) -> u32 {
         let key = (descriptor, offset, type_id);
         if let Some(value) = self.descriptor_fields.get(&key) {
@@ -6083,6 +5943,9 @@ impl Compiler {
             return self.fail(format!("REDIM {} requires bounds", declaration.name));
         }
         let variable = self.array(&declaration.name)?;
+        if variable.rank.is_some_and(|rank| rank != declaration.bounds.len()) {
+            return self.fail(format!("{}: wrong number of dimensions", declaration.name));
+        }
         if variable.descriptor_place.is_some_and(|place| self.static_shapes.contains_key(&place)) {
             return self.fail(format!("{} is static: array already dimensioned", declaration.name));
         }
@@ -6107,9 +5970,13 @@ impl Compiler {
             ));
         }
         let bounds = self.bounds(declaration)?;
+        let stated = bounds.clone();
         let descriptor = self.descriptor_pointer(&variable)?;
         let (operands, records) = self.dimensioned(bounds, element, descriptor);
         self.emit_runtime_call("B$RDIM", Vec::new(), operands);
+        if let Some(held) = bounds::Held::of(&variable) {
+            self.holds(held, Some(stated));
+        }
         self.tag_last(Tag::Reallocate(Shape { descriptor, records, element }));
         Ok(())
     }
@@ -6857,6 +6724,7 @@ impl Compiler {
                 type_id,
                 element: None,
                 bounds: Vec::new(),
+                rank: None,
                 indirect: None,
                 descriptor: None,
                 descriptor_place: None,
@@ -6963,7 +6831,6 @@ impl Compiler {
             if intrinsic.lowering == Lowering::LowerBound && self.dialect.zero_based_arrays() {
                 return Ok(Some((Operand::Constant(INTEGER, Number::Integer(0)), INTEGER)));
             }
-            let descriptor = self.descriptor_pointer(&variable)?;
             let dimension = if let Some(dimension) = arguments.get(1) {
                 let (dimension, type_id) = self.expression(dimension)?;
                 self.convert(dimension, type_id, INTEGER)?
@@ -6971,7 +6838,7 @@ impl Compiler {
                 Operand::Constant(INTEGER, Number::Integer(1))
             };
             let upper = intrinsic.lowering == Lowering::UpperBound;
-            let result = self.array_bound(descriptor, dimension, upper)?;
+            let result = self.array_bound(&variable, dimension, upper)?;
             return Ok(Some((result, INTEGER)));
         }
         if let Lowering::RuntimeInteger(routine) = intrinsic.lowering {

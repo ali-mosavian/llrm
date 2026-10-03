@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
-//!         [--huge-arrays] [--unchecked-bounds] [--alternate-math]
+//!         [--huge-arrays] [--alternate-math]
 //!         [--mbf] [--whole-program] [--array-merging] [--own-frames] [--error-lines] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
@@ -22,7 +22,7 @@ use llrm_core::hir::codec;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--unchecked-bounds] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] [--error-lines] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] [--error-lines] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -75,7 +75,6 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             }
             "--dump-hir" => dump_hir = Some(PathBuf::from(value("--dump-hir")?)),
             "--huge-arrays" => frontend.huge_arrays = true,
-            "--unchecked-bounds" => frontend.unchecked_bounds = true,
             "--alternate-math" => frontend.alternate_math = true,
             "--mbf" => frontend.mbf = true,
             "--whole-program" => frontend.whole_program = true,
