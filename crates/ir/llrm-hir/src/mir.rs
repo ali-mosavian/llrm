@@ -1356,27 +1356,34 @@ fn operand_type(operand: &Operand, values: &HashMap<i64, i64>, places: &HashMap<
     }
 }
 
-/// `function`'s blocks, each after its dominators -- reverse postorder, the
-/// unreachable ones last -- so a value is emitted before its uses whatever
-/// the HIR's block order.
+/// `function`'s blocks, each after its dominators -- reverse postorder from
+/// the entry and every external entry, the unreachable ones last -- so a
+/// value is emitted before its uses whatever the HIR's block order.
 fn emission_order(function: &model::Function) -> Vec<&model::Block> {
     let blocks: HashMap<i64, &model::Block> = function.blocks.iter().map(|block| (block.id, block)).collect();
     let successors = |block: &model::Block| {
         let terminator = &block.terminator;
         terminator.targets.iter().chain(terminator.cases.iter().map(|(_, target)| target)).copied().collect::<Vec<_>>()
     };
-    let mut seen = std::collections::HashSet::from([function.entry]);
+    let mut seen = std::collections::HashSet::new();
     let mut postorder = Vec::new();
-    let mut stack = vec![(blocks[&function.entry], successors(blocks[&function.entry]).into_iter())];
-    while let Some((block, next)) = stack.last_mut() {
-        match next.find(|target| seen.insert(*target)) {
-            Some(target) => {
-                let target = blocks[&target];
-                stack.push((target, successors(target).into_iter()));
-            }
-            None => {
-                postorder.push(*block);
-                stack.pop();
+    // The entry walked last comes first.
+    let roots = function.external_entries.iter().rev().chain(std::iter::once(&function.entry));
+    for root in roots.filter_map(|one| blocks.get(one)) {
+        if !seen.insert(root.id) {
+            continue;
+        }
+        let mut stack = vec![(*root, successors(root).into_iter())];
+        while let Some((block, next)) = stack.last_mut() {
+            match next.find(|target| seen.insert(*target)) {
+                Some(target) => {
+                    let target = blocks[&target];
+                    stack.push((target, successors(target).into_iter()));
+                }
+                None => {
+                    postorder.push(*block);
+                    stack.pop();
+                }
             }
         }
     }
