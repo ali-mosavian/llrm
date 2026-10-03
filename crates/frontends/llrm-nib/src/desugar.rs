@@ -93,7 +93,7 @@ fn hand_over_returned(body: &mut Vec<Statement>) {
             let (iterable, span) = (value.take().expect("matched"), *span);
             let name = format!("$returned{}_{}", span.line, span.column);
             let each = Statement::Yield { value: Expr::Name(name.clone(), span), span };
-            let items = Statement::For { mode: IterationMode::Value, name, iterable, body: vec![each], span };
+            let items = Statement::For { mode: IterationMode::Value, name, iterable, body: vec![each], returned: true, span };
             body.insert(at, items);
             at += 1;
         }
