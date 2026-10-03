@@ -1,0 +1,83 @@
+# A settings loader: it allocates a Table, fills it line by line and returns
+# it, so the caller owns the result. A bad line returns an error, and the
+# half-built Table, its name and every entry so far, is dropped on that path.
+
+enum LoadError:
+    no_equals(line: u16)
+    bad_number(line: u16)
+    repeated(line: u16)
+
+struct Entry:
+    key: string
+    value: i16
+
+struct Table:
+    name: string
+    mut entries: vec[Entry]
+
+fn number(text: &string) -> Option[i16]:
+    if text.len == 0:
+        return .none
+    let mut value: i16 = 0
+    for c in text:
+        if c < '0' || c > '9':
+            return .none
+        value = value * 10 + i16(c) - i16('0')
+    return .some(value)
+
+fn Table.has(self: &Table, key: &string) -> bool:
+    for entry in &self.entries:
+        if entry.key == key:
+            return true
+    return false
+
+fn parse_line(text: &string, line: u16) -> Result[Entry, LoadError]:
+    for at in 0..text.len:
+        if text[at] == '=':
+            match number(&text[at + 1:text.len]):
+                .some(value):
+                    let key = &text[0:at]
+                    return .ok(Entry(key=key.copy(), value=value))
+                .none:
+                    return .err(.bad_number(line))
+    return .err(.no_equals(line))
+
+# Stops at a line reading `end`: what came before it is the table.
+fn load(name: &string, text: &string) -> Result[Table, LoadError]:
+    let mut table = Table(name=name.copy(), entries=[])
+    let mut start: u16 = 0
+    let mut line: u16 = 1
+    for at in 0..text.len + 1:
+        if at < text.len && text[at] != '\n':
+            continue
+        let row = &text[start:at]
+        if row == "end":
+            break
+        let entry = parse_line(row, line)?
+        if table.has(&entry.key):
+            return .err(.repeated(line))
+        table.entries.push(entry)
+        start = at + 1
+        line += 1
+    return .ok(table)
+
+fn report(name: &string, text: &string) -> void:
+    match load(name, text):
+        .ok(table):
+            print(f"{table.name}: {table.entries.len} entries")
+            for entry in &table.entries:
+                print(f"  {entry.key} = {entry.value}")
+        .err(.no_equals(line)):
+            print(f"{name}: line {line} has no '='")
+        .err(.bad_number(line)):
+            print(f"{name}: line {line} is not a number")
+        .err(.repeated(line)):
+            print(f"{name}: line {line} repeats a key")
+
+fn main() -> i16:
+    report("video", "width=320\nheight=200\ndepth=8")
+    report("early", "a=1\nb=2\nend\nc=3")
+    report("nonumber", "a=1\nb=2\nc=x")
+    report("noequals", "a=1\nb")
+    report("repeat", "a=1\nb=2\na=3")
+    return 0
