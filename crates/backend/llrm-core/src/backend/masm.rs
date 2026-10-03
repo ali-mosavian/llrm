@@ -80,9 +80,10 @@ pub struct Procedure {
     /// An interrupt handler's data group, whose selector it loads into DS
     /// and ES; `None` for a procedure entered by a call.
     pub interrupt: Option<Addr>,
-    /// The frame's `push bp; mov bp,sp; sub sp,N` as `enter N,0`: 4 bytes for 6, and 14 clocks
-    /// for 3 on the 486, so tuned for size.
-    pub enter: bool,
+    /// Tuned for size (-Os): fewer bytes at the price of clocks, as the frame's `push bp; mov
+    /// bp,sp; sub sp,N` as `enter N,0` (4 bytes for 6, 14 clocks for 3 on the 486), and the
+    /// jumps `omfwrite` lays out.
+    pub size: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -298,7 +299,7 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
     let mut enter: Vec<Semantics> = Vec::new();
-    if framed && reserve != 0 && procedure.enter {
+    if framed && reserve != 0 && procedure.size {
         let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
         enter.push(semantics(Operation::Nothing, "enter", vec![], vec![count(reserve, 2), count(0, 1)]));
     } else if framed {
@@ -307,7 +308,7 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
             semantics(Operation::Move, "mov", vec![bp], vec![sp.clone()]),
         ]);
     }
-    if reserve != 0 && !(framed && procedure.enter) {
+    if reserve != 0 && !(framed && procedure.size) {
         enter.push(semantics(
             Operation::Binary,
             "sub",
@@ -953,7 +954,7 @@ mod tests {
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, enter };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -1013,7 +1014,7 @@ mod tests {
             reserve,
             callees: IndexMap::default(),
             interrupt: None,
-            enter: false,
+            size: false,
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);
