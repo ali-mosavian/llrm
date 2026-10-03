@@ -63,16 +63,19 @@ pub struct Threshold {
     pub limit: i64,
     pub hint: (i64, i64),
     pub hot: (i64, i64),
+    /// The last call of a function nothing else reaches inlines at any size: where code size
+    /// outranks speed.
+    pub single: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225) }
+        Self { limit, hint: (325, 225), hot: (525, 225), single: false }
     }
 
     /// The same where code size outranks speed: a hint or a loop buys nothing.
     pub fn for_size(self) -> Self {
-        Self { hint: (1, 1), hot: (1, 1), ..self }
+        Self { hint: (1, 1), hot: (1, 1), single: true, ..self }
     }
 }
 
@@ -250,8 +253,10 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
         let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
+        // The last call of a function nothing else reaches moves its body: no copy, and the call,
+        // its arguments and the return gone (LLVM's last-call-to-static bonus).
         let admitted = || {
-            budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
+            budget.is_some_and(|budget| (threshold.single && copies == 0) || semantic_count(body) <= scale(budget))
                 && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * call_cost)))
         };
         let verdict = always || admitted();

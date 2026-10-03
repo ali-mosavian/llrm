@@ -31,6 +31,7 @@ fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold)
             &mut modules,
             &roots,
             &costs,
+            &costs,
             threshold,
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
@@ -196,7 +197,7 @@ fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
     let mut program = Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert_eq!(proved.noreturn, [(0, program.modules[0].named("spin").unwrap())].into());
     assert!(printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"), "{}", printed(&program.modules[1]));
 }
@@ -237,7 +238,7 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
     let mut program = Program::new(vec![seven, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
 }
 
@@ -251,7 +252,7 @@ fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
     program.exports.entries = ["entered".to_owned()].into();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[0]).contains("  %y0 = add i16 %x, 1\n"), "{}", printed(&program.modules[0]));
 }
 
