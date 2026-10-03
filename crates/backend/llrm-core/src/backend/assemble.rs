@@ -183,7 +183,11 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
 /// the allocator's pressure is elsewhere (segment registers, x87 and fixed-register glue) its
 /// spill code can be on top of what the allocator does anyway.
 fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<(Machined, frame::Frame), String> {
-    let candidates = CANDIDATES.with(std::cell::Cell::get);
+    let candidates = match std::env::var("LLRM_CANDIDATES").as_deref() {
+        Ok("spiller") => Candidates::SpillerOnly,
+        Ok("allocator") => Candidates::AllocatorOnly,
+        _ => CANDIDATES.with(std::cell::Cell::get),
+    };
     if candidates == Candidates::AllocatorOnly {
         return phased(module, name, abi, pool, target, hole, false);
     }

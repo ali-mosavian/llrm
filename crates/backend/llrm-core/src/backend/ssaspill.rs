@@ -64,11 +64,32 @@ impl LIRTransform for SsaSpill {
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
         let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments)?;
+        if crate::support::debug::enabled("lir") {
+            llrm_support::debug!("lir", "{} before SsaSpill\n{}", body.name, listed(&body));
+            llrm_support::debug!("lir", "{} after SsaSpill\n{}", body.name, listed(made.as_ref().unwrap_or(&body)));
+        }
         if made.is_some() {
             CHANGES.with(|count| count.set(count.get() + 1));
         }
         Ok(made.unwrap_or(body))
     }
+}
+
+/// `body` one line per instruction: for reading in a debug dump.
+fn listed(body: &LirBody) -> String {
+    let mut text = String::new();
+    for block in &body.blocks {
+        text += &format!("@{:#x} succ {:?}\n", block.at, block.succ);
+        for phi in &block.phis {
+            text += &format!("  v{} = phi {:?}\n", phi.result, phi.incoming);
+        }
+        for one in &block.insns {
+            let name = one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default();
+            let tag = if one.spill_store { " store" } else if one.rematerialized { " remat" } else { "" };
+            text += &format!("  {name} {:?} <- {:?}{tag}\n", one.defines, one.uses);
+        }
+    }
+    text
 }
 
 /// The widest each value of `values` is read or written, a phi's result and
@@ -342,8 +363,7 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
 pub(crate) fn folded_into(one: &Insn, value: u32, cell: &crate::model::ir::Mem) -> Option<Arc<Insn>> {
     let what = one.what.as_ref()?;
     let values = BTreeSet::from([value]);
-    let commutes = what.sources.len() == 2
-        && matches!((what.op, what.name.as_deref()), (Operation::Binary, Some("add" | "and" | "or" | "xor")) | (Operation::Multiply, Some("imul")));
+    let commutes = commutes(what);
     let turned = commutes && matches!(&what.sources[0], Loc::Held(left) if left.value == value) && matches!(&what.sources[1], Loc::Held(right) if right.value != value);
     let mut sources = what.sources.clone();
     if turned {
@@ -365,6 +385,11 @@ pub(crate) fn folded_into(one: &Insn, value: u32, cell: &crate::model::ir::Mem) 
     made.what = Some(Semantics { sources, ..what.clone() });
     made.uses = one.uses.iter().copied().filter(|each| *each != value).collect();
     Some(Arc::new(made))
+}
+
+/// Whether the two sources of `what` may swap places.
+fn commutes(what: &Semantics) -> bool {
+    what.sources.len() == 2 && matches!((what.op, what.name.as_deref()), (Operation::Binary, Some("add" | "and" | "or" | "xor")) | (Operation::Multiply, Some("imul")))
 }
 
 /// Whether `one` can read `value` from its slot.
@@ -418,7 +443,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
     let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
     // A loop header keeps a value its back edge must reload only while those
     // reloads run at most half as often as reloads at its first uses inside one trip.
-    for _ in 0..4 {
+    for _ in 0..32 {
         let mut more = false;
         for ((from, to), values) in &result.across {
             if place[from] < place[to] {
@@ -443,6 +468,23 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
             break;
         }
         result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
+    }
+    if crate::support::debug::enabled("ssaspill") {
+        for (at, edit) in &result.edits {
+            llrm_support::debug!(
+                "ssaspill",
+                "{} @{at:#x} freq {:.1}: in {:?} before {:?} folded {:?} leaves {:?} top {:?} out {:?}",
+                body.name,
+                frequency.block(*at),
+                edit.w_in,
+                edit.before,
+                edit.folded,
+                edit.leaves,
+                edit.leaves_at_top,
+                edit.w_out
+            );
+        }
+        llrm_support::debug!("ssaspill", "{} stored {:?} remakes {:?}", body.name, result.stored, remakes.keys().collect::<Vec<_>>());
     }
     if result.stored.is_empty() {
         return Ok(simple);
@@ -517,6 +559,18 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
     out
 }
 
+/// The cell a remade `value` is read from, where its one instruction is a plain load: a user that
+/// takes a memory operand reads it there, with no register made for it.
+fn remade_cell(one: &Insn, value: u32) -> Option<crate::model::ir::Mem> {
+    let what = one.what.as_ref()?;
+    match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
+        (Operation::Move, Some("mov"), [Loc::Held(dest)], [Loc::Mem(cell)]) if dest.value == value && dest.width == cell.width && one.uses.is_empty() && cell.addr.is_some() => {
+            Some(cell.clone())
+        }
+        _ => None,
+    }
+}
+
 /// `one` where it is read again: made once more beside `beside`, owning no bytes.
 fn remade(one: &Insn, beside: &Insn) -> Arc<Insn> {
     let mut made = one.clone();
@@ -542,13 +596,15 @@ fn simulated(
     remakes: &IndexMap<u32, Arc<Insn>>,
     order: &[i64],
     dropped: &IndexMap<i64, BTreeSet<u32>>,
-    room: &IndexMap<i64, usize>,
+    room: &IndexMap<i64, Room>,
     frequency: &Frequency,
     headers: &BTreeSet<i64>,
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
     let mut edits: IndexMap<i64, Edits> = IndexMap::default();
+    // The values each block's loops keep in registers through their trips, which its evictions leave for last.
+    let mut pins: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     let mut stored: BTreeSet<u32> = BTreeSet::new();
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
@@ -569,32 +625,66 @@ fn simulated(
         let hot = |value: &u32| !remakes.contains_key(value) && made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
         let mut done = Edits::default();
         let ends: Vec<&BTreeSet<u32>> = preds.get(at).into_iter().flatten().filter_map(|from| edits.get(from)).map(|one| &one.w_out).collect();
-        let mut candidates: Vec<(usize, i64, u32)> = flow.live_in[at]
+        let handed_in = |value: u32| -> Vec<(i64, u32)> {
+            block.phis.iter().filter(|phi| phi.result == value).flat_map(|phi| phi.incoming.iter().copied()).collect()
+        };
+        let mut candidates: Vec<(usize, usize, i64, u32)> = flow.live_in[at]
             .iter()
             .copied()
             .chain(block.arrives())
             .filter(|value| wanted(*value) && !dropped.get(at).is_some_and(|set| set.contains(value)))
             .map(|value| {
-                let seen = ends.iter().filter(|set| set.contains(&value)).count();
-                let tier = if ends.is_empty() || seen == ends.len() { 0 } else if seen > 0 { 1 } else { 2 };
+                // A phi result is in a register where the argument each processed predecessor hands it is.
+                let given = handed_in(value);
+                let (seen, total) = if given.is_empty() {
+                    (ends.iter().filter(|set| set.contains(&value)).count(), ends.len())
+                } else {
+                    let known: Vec<&(i64, u32)> = given.iter().filter(|(from, _)| edits.contains_key(from)).collect();
+                    (known.iter().filter(|(from, argument)| edits[from].w_out.contains(argument)).count(), known.len())
+                };
+                let tier = if total == 0 || seen == total { 0 } else if seen > 0 { 1 } else { 2 };
                 let near = flow.uses[at].get(&value).and_then(|list| list.first()).map_or(FAR, |first| *first as i64).min(flow.from_top[at].get(&value).copied().unwrap_or(FAR));
-                (tier, near, value)
+                // What is made again where it is read gives its register up first.
+                (usize::from(remakes.contains_key(&value)), tier, near, value)
             })
             .collect();
         candidates.sort_unstable();
         let mut held: BTreeSet<u32> = BTreeSet::new();
         // Entering a loop, what is read only after it does not wait in a register.
         let header = headers.contains(at);
+        // A loop that cannot hold everything keeps in registers, through every trip, as many of what it reads
+        // as its own values leave room for, from the classes with most registers to spare.
+        if let (true, Some(loop_room)) = (header, room.get(at)) {
+            if loop_room.peak > k {
+                let inherited = pins.get(at).cloned().unwrap_or_default();
+                let phis = block.arrives();
+                let mut picks: Vec<(std::cmp::Reverse<usize>, i64, u32)> = candidates
+                    .iter()
+                    .filter(|(_, _, near, value)| *near < EXIT && !phis.contains(value) && !inherited.contains(value))
+                    .map(|(_, _, near, value)| (std::cmp::Reverse(machine.class(*value).map_or(k, |class| class.len())), *near, *value))
+                    .collect();
+                picks.sort_unstable();
+                let spare = k.saturating_sub(loop_room.working).saturating_sub(inherited.len());
+                let chosen: Vec<u32> = picks.into_iter().take(spare).map(|(_, _, value)| value).collect();
+                for inside in &loop_room.body {
+                    pins.entry(*inside).or_default().extend(chosen.iter().copied());
+                }
+            }
+        }
+        let pinned_here = pins.get(at).cloned().unwrap_or_default();
+        let pinned = |value: &u32| pinned_here.contains(value);
+        candidates.sort_by_key(|(remade, tier, near, value)| (!pinned(value), *remade, *tier, *near, *value));
         // A loop that fits its registers with them keeps what it does not read; one that does not, makes room.
-        let through = candidates.iter().filter(|(_, near, _)| *near >= EXIT).count();
+        let through = candidates.iter().filter(|(_, _, near, _)| *near >= EXIT).count();
         let mut spare = match (header, room.get(at)) {
-            (true, Some(peak)) if *peak > k => k.saturating_sub(peak - through.min(*peak)),
+            (true, Some(room)) if room.peak > k => k.saturating_sub(room.peak - through.min(room.peak)),
             _ => usize::MAX,
         };
-        for (tier, near, value) in &candidates {
+        for (_, tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
             let far = header && *near >= EXIT;
-            if (!far || spare > 0) && (*tier < 2 || block.arrives().contains(value)) {
+            // A loop's entry edge runs once for a loop's every trip: what the loop reads is loaded there, not at each read.
+            if (!far || spare > 0) && (*tier < 2 || header || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
                 if machine.fits(&next, &BTreeSet::new(), k) {
@@ -604,6 +694,9 @@ fn simulated(
                     }
                 }
             }
+        }
+        if header && crate::support::debug::enabled("ssaspill") {
+            llrm_support::debug!("ssaspill", "{} @{at:#x} header candidates {:?} dropped {:?} spare {spare} held {:?}", body.name, candidates, dropped.get(at), held);
         }
         done.w_in = held.clone();
         done.leaves_at_top = block.arrives().into_iter().filter(|value| wanted(*value) && !held.contains(value)).collect();
@@ -617,7 +710,7 @@ fn simulated(
                     let victim = held
                         .iter()
                         .filter(|value| !keep.contains(*value))
-                        .max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value))
+                        .max_by_key(|value| (!pinned(value), !hot(value), flow.next_use(*at, position, **value), **value))
                         .copied();
                     let Some(victim) = victim else { break };
                     held.remove(&victim);
@@ -627,15 +720,17 @@ fn simulated(
                 }
             };
             let mut used = used;
+            let mut reloaded: BTreeSet<u32> = BTreeSet::new();
             for value in used.clone() {
                 if !held.contains(&value) {
                     stored.insert(value);
-                    if !remakes.contains_key(&value) && done.folded.get(&position).is_none_or(Vec::is_empty) && folds(one, value) {
+                    if remakes.get(&value).is_none_or(|made| remade_cell(made, value).is_some()) && done.folded.get(&position).is_none_or(Vec::is_empty) && folds(one, value) {
                         used.remove(&value);
                         done.folded.entry(position).or_default().push(value);
                     } else {
                         done.before.entry(position).or_default().push(value);
                         held.insert(value);
+                        reloaded.insert(value);
                     }
                 }
             }
@@ -658,7 +753,7 @@ fn simulated(
                 let mut across = held.clone();
                 let keep: BTreeSet<u32> = used.union(&made).copied().collect();
                 while across.len() > k - outside.min(k) {
-                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value)).copied();
+                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (!pinned(value), !hot(value), flow.next_use(*at, position, **value), **value)).copied();
                     let Some(victim) = victim else { break };
                     across.remove(&victim);
                     held.remove(&victim);
@@ -667,13 +762,17 @@ fn simulated(
             }
             // The first source of a tied instruction gives its register to the result.
             let tied = one.what.as_ref().is_some_and(twoaddr::ties);
-            let first = if tied { one.what.as_ref().and_then(|what| what.sources.first()).and_then(|source| if let Loc::Held(first) = source { Some(first.value) } else { None }) } else { None };
             let dying = |value: &u32| !flow.live_after(*at, position, *value);
+            let source = |index: usize| one.what.as_ref().and_then(|what| what.sources.get(index)).and_then(|source| if let Loc::Held(held) = source { Some(held.value) } else { None });
+            // A commutative one may tie its result to the second source instead, where only that one dies.
+            let swaps = one.what.as_ref().is_some_and(commutes) && source(0).is_some_and(|first| !dying(&first));
+            let first = if tied { source(if swaps && source(1).is_some_and(|second| dying(&second)) { 1 } else { 0 }) } else { None };
             let gone: Vec<u32> = used.iter().copied().filter(|value| dying(value) && (!tied || Some(*value) == first)).collect();
             for value in gone {
                 held.remove(&value);
             }
-            let keep: BTreeSet<u32> = used.iter().copied().filter(|value| held.contains(value)).collect();
+            // A value reloaded for this instruction alone leaves its register to the result, if it must.
+            let keep: BTreeSet<u32> = used.iter().copied().filter(|value| held.contains(value) && !reloaded.contains(value)).collect();
             for value in &made {
                 if !dying(value) || flow.live_out[at].contains(value) {
                     held.insert(*value);
@@ -681,6 +780,9 @@ fn simulated(
             }
             evict(&mut held, &mut leaving, &made.union(&keep).copied().collect(), k);
             held.retain(|value| flow.live_after(*at, position, *value));
+            if std::env::var_os("TRACEBLOCK").is_some_and(|only| only.to_str() == Some(&format!("{at:#x}"))) {
+                llrm_support::debug!("ssaspill", "  @{at:#x}+{position} uses {:?} defs {:?} held {:?} leaving {:?}", one.uses, one.defines, held, leaving);
+            }
             // A value made here leaves after the instruction, not before it.
             let (after, before): (Vec<u32>, Vec<u32>) = leaving.into_iter().partition(|value| made.contains(value));
             if !before.is_empty() {
@@ -709,7 +811,7 @@ fn simulated(
         {
             let end = block.insns.len();
             while !machine.fits(&held, &handed, k) {
-                let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, end, **value), **value)).copied();
+                let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (!pinned(value), !hot(value), flow.next_use(*at, end, **value), **value)).copied();
                 let Some(victim) = victim else { break };
                 held.remove(&victim);
                 if flow.live_out[at].contains(&victim) {
@@ -770,30 +872,50 @@ fn first_uses(flow: &Flow, frequency: &Frequency, within: &BTreeSet<i64>, header
 }
 
 /// For each loop header, the most values live at once inside the loop.
-fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet<u32>, loops: &[crate::analysis::loops::Loop]) -> IndexMap<i64, usize> {
+fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet<u32>, loops: &[crate::analysis::loops::Loop]) -> IndexMap<i64, Room> {
     let wanted = |value: &u32| machine.registered(*value) && !skip.contains(value);
-    let mut most: IndexMap<i64, usize> = IndexMap::default();
-    for block in &body.blocks {
-        let mut live: BTreeSet<u32> = flow.live_out[&block.at].iter().copied().filter(|value| wanted(value)).collect();
-        let mut peak = live.len();
-        for one in block.insns.iter().rev() {
-            peak = peak.max(live.len());
-            for value in &one.defines {
-                live.remove(value);
-            }
-            live.extend(one.uses.iter().copied().filter(|value| wanted(value)));
-            peak = peak.max(live.len());
-        }
-        most.insert(block.at, peak);
-    }
     loops
         .iter()
         .map(|found| {
-            let busiest = found.body.iter().filter_map(|at| most.get(at)).copied().max().unwrap_or(0);
-            llrm_support::debug!("ssaspill", "{}: loop at {:#x} peaks at {busiest}", body.name, found.header);
-            (found.header, busiest)
+            let inside: BTreeSet<u32> = found.body.iter().filter_map(|at| flow.defines.get(at)).flat_map(|made| made.keys().copied()).collect();
+            let (mut peak, mut working) = (0, 0);
+            for block in body.blocks.iter().filter(|block| found.body.contains(&block.at)) {
+                let mut live: BTreeSet<u32> = flow.live_out[&block.at].iter().copied().filter(|value| wanted(value)).collect();
+                let mut seen = |live: &BTreeSet<u32>, one: Option<&Insn>, before: bool| {
+                    peak = peak.max(live.len());
+                    // What is made in the loop is held through its trip; what it reads from outside, only while read.
+                    // A register an operand dies in is its result's; one it reads from memory takes none.
+                    let acting = one.filter(|_| before).map_or(0, |one| {
+                        let reads = one.uses.iter().filter(|value| !folds(one, **value));
+                        reads.chain(&one.defines).filter(|value| wanted(value) && !inside.contains(value)).collect::<BTreeSet<_>>().len()
+                    });
+                    let here = live.iter().filter(|value| inside.contains(value)).count() + acting;
+                    if here > working && crate::support::debug::enabled("ssaspill") {
+                        llrm_support::debug!("ssaspill", "{}: working {here} at {:#x}: live {:?} acting {acting} insn {:?}", body.name, found.header, live.iter().filter(|value| inside.contains(value)).collect::<Vec<_>>(), one.map(|one| (&one.defines, &one.uses)));
+                    }
+                    working = working.max(here);
+                };
+                seen(&live, None, false);
+                for one in block.insns.iter().rev() {
+                    seen(&live, Some(one), false);
+                    for value in &one.defines {
+                        live.remove(value);
+                    }
+                    live.extend(one.uses.iter().copied().filter(|value| wanted(value)));
+                    seen(&live, Some(one), true);
+                }
+            }
+            llrm_support::debug!("ssaspill", "{}: loop at {:#x} peaks at {peak}, {working} made in it", body.name, found.header);
+            (found.header, Room { peak, working, body: found.body.clone() })
         })
         .collect()
+}
+
+/// How many values a loop has live at once, and how many of them it makes itself.
+struct Room {
+    peak: usize,
+    working: usize,
+    body: BTreeSet<i64>,
 }
 
 fn reverse_postorder(body: &LirBody) -> Vec<i64> {
@@ -952,7 +1074,11 @@ fn written(
             }
             let mut one = Arc::clone(one);
             for value in edit.folded.get(&position).into_iter().flatten() {
-                one = folded_into(&one, *value, &cells[value]).expect("a fold the simulation chose");
+                let cell = match remakes.get(value) {
+                    Some(made) => remade_cell(made, *value).expect("a remade load"),
+                    None => cells[value].clone(),
+                };
+                one = folded_into(&one, *value, &cell).expect("a fold the simulation chose");
             }
             if one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch)) {
                 if let Some(what) = &one.what {
