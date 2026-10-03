@@ -1,19 +1,21 @@
-# The language has no integer conversions, so everything is i32.
+# Q8: the stored integer is the value times 256.
+type Q = fixed i32, fraction=8
+
 fn bench_mandel() -> i32:
     let mut work: i32 = 0
     for py in -12..12:
         for px in -16..16:
-            let mut x: i32 = 0
-            let mut y: i32 = 0
-            let cx: i32 = px * 24 - 128
-            let cy: i32 = py * 24
+            let mut x = Q(0)
+            let mut y = Q(0)
+            let cx = Q(px) * Q(0.09375) - Q(0.5)
+            let cy = Q(py) * Q(0.09375)
             let mut iteration: i32 = 0
             while iteration < 32:
-                let xx: i32 = (x * x) >> 8
-                let yy: i32 = (y * y) >> 8
-                if xx + yy > 1024:
+                let xx = x * x
+                let yy = y * y
+                if xx + yy > Q(4):
                     break
-                y = ((x * y) >> 7) + cy
+                y = (x + x) * y + cy
                 x = xx - yy + cx
                 iteration += 1
             work += iteration

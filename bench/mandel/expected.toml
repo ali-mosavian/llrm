@@ -1,4 +1,4 @@
-reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+reason = "nib uses fixed Q8: each product is a widening imul+shrd, not imul+sar, and the extra edx live range spills the iteration count (nib -O2 181395 -> 237664); the 64-bit product is what fixed means"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -18,9 +18,9 @@ instructions = 185255
 memory_operands = 20866
 
 [nib.O2]
-instructions = 181395
-memory_operands = 20126
+instructions = 237664
+memory_operands = 44784
 
 [nib.Os]
-instructions = 184487
-memory_operands = 20866
+instructions = 248864
+memory_operands = 43991
