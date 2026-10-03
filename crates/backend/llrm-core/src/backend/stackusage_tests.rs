@@ -21,7 +21,7 @@ fn procedure(name: &str, reserve: i64, pushes: usize, callees: &[&str]) -> Proce
     insns.push(insn(101, Operation::Return, "ret", vec![]));
     let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
     let callees = callees.iter().enumerate().map(|(at, one)| (100 + at as i64, Callee::new(*one, true))).collect();
-    Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None }
+    Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None, enter: false }
 }
 
 fn module(procedures: Vec<Procedure>) -> Module {
@@ -71,3 +71,13 @@ fn test_a_chain_of_diamonds_thirty_deep_is_settled_at_once() {
     // Each level: far return 4 + push bp 2 + 2 locals = 8; the end and the top, with no frame, 4.
     assert_eq!(usage.bound("top"), Bound::Bytes(4 + 30 * 8 + 4));
 }
+
+/// `enter N,0` pushes BP and takes the locals as the three instructions it replaces did: the
+/// bound must not lose them (a frame read only `push` and `sub` and counted none).
+#[test]
+fn test_a_frame_opened_with_enter_counts_its_bp_and_locals() {
+    let usage = |enter: bool| Usage::of(&[module(vec![Procedure { enter, ..procedure("main", 10, 3, &[]) }])]);
+    assert_eq!(usage(true).bound("main"), usage(false).bound("main"));
+    assert_eq!(usage(true).bound("main"), Bound::Bytes(4 + 2 + 10 + 6));
+}
+

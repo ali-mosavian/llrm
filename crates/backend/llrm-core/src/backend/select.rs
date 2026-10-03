@@ -1745,6 +1745,11 @@ pub fn emit(
     if op == Operation::Nothing && name.is_empty() {
         return Some(Emitted::new(Vec::new()));
     }
+    if op == Operation::Nothing && name == "enter" {
+        let [Loc::Imm(size), Loc::Imm(level)] = sources.as_slice() else { return None };
+        let code = _code("ENTERW_IMM16_IMM8")?;
+        return _assemble(&Instruction::with2(code, size.value as u32, level.value as u32).ok()?, at, true);
+    }
     if matches!(op, Operation::Extend | Operation::Nothing | Operation::Leave) {
         return bare(name, at);
     }

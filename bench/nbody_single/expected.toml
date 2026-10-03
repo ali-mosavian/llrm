@@ -1,4 +1,4 @@
-reason = "-Os stores a literal run through one dead register (xor r,r once, then register stores): fewer bytes, a load more per run; -O2 unchanged"
+reason = "-Os opens a frame with locals with enter N,0 (one instruction for three; 14 clocks for 3 on the 486, so -Os only); -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -14,7 +14,7 @@ instructions = 1116131
 memory_operands = 164102
 
 [c.Os]
-instructions = 1187196
+instructions = 1187194
 memory_operands = 138111
 
 [nib.O2]
@@ -22,5 +22,5 @@ instructions = 972148
 memory_operands = 199100
 
 [nib.Os]
-instructions = 1350442
+instructions = 1350440
 memory_operands = 230138

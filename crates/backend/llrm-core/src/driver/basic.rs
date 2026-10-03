@@ -780,6 +780,7 @@ fn procedure(
         reserve,
         callees,
         interrupt: None,
+        enter: false,
     };
     Ok((procedure, machined.landing, statics))
 }
