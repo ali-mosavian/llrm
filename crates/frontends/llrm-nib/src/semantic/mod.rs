@@ -1857,15 +1857,20 @@ impl<'a> FunctionCompiler<'a> {
                 if matches!(resolved, SignatureParameter::Borrowed { .. }) {
                     compiler.note_borrowed_parameter(owner, ordinal);
                 }
-                // A value passed in holds only what the caller lent.
+                // A value passed in, or one a borrow reaches, holds only what the
+                // caller lent: an owner of its own, below none of this parameter's.
                 let passed = match binding.type_ {
                     BindingType::Scalar(type_name) => Some(ElementType::Scalar(type_name)),
                     BindingType::Struct(id) => Some(ElementType::Struct(id)),
                     _ => None,
                 };
-                if life == borrows::Life::Frame && passed.is_some_and(|one| compiler.holds_reference(one)) {
-                    let root = borrows::Root { exact: false, ..borrows::Root::new(owner, &parameter.name, borrows::Life::Lent) };
+                if passed.is_some_and(|one| compiler.holds_reference(one)) {
+                    let held = borrows::BorrowKey::Place(compiler.types.lent_root());
+                    let root = borrows::Root { exact: false, ..borrows::Root::new(held, &parameter.name, borrows::Life::Lent) };
                     compiler.held.insert(owner, BTreeSet::from([root]));
+                    if matches!(resolved, SignatureParameter::Borrowed { .. }) {
+                        compiler.note_borrowed_parameter(held, ordinal);
+                    }
                 }
             }
             compiler.scopes.last_mut().expect("scope").insert(parameter.name.clone(), binding);
