@@ -1,4 +1,4 @@
-reason = "-Os pushes a dword constant as two word pushes where they are fewer bytes (pushd imm32 is 6): -Os only, a few more instructions in the kernels, -O2 unchanged"
+reason = "-Os stores a literal run through one dead register (xor r,r once, then register stores): fewer bytes, a load more per run; -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -6,7 +6,7 @@ instructions = 20632
 memory_operands = 5790
 
 [bas.Os]
-instructions = 21751
+instructions = 21763
 memory_operands = 5104
 
 [c.O2]
@@ -22,5 +22,5 @@ instructions = 18741
 memory_operands = 4605
 
 [nib.Os]
-instructions = 20164
+instructions = 20176
 memory_operands = 3003

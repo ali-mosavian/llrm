@@ -15,7 +15,7 @@ use crate::backend::frame::Frame;
 use crate::backend::peep::{self, walk::Facts};
 use llrm_x86_code16::instructions;
 use crate::backend::{
-    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, spillforward, storecombine,
+    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward, storecombine,
     target,
 };
 use crate::frontends::bc::declen;
@@ -153,6 +153,7 @@ impl LIRTransform for Peephole {
         let body = secondary_bases(&body, &self.cpu)?;
         let body = borrows(&increments(&body));
         let body = doubled(&body, &self.cpu)?;
+        let body = sharedstores::shared(&body, &self.cpu, &crate::backend::masm::SAVED.keys().copied().collect::<Vec<_>>());
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
@@ -1185,7 +1186,7 @@ fn _loaded_addresses(block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu
 
 /// The instructions of `block` after which no arithmetic flag is read,
 /// given whether any is read after its end.
-fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
+pub(crate) fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
     let mut dead: HashSet<usize> = HashSet::default();
     let mut flags_dead = dead_out;
     for one in block.insns.iter().rev() {
