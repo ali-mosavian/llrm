@@ -245,15 +245,17 @@ pub fn integer(context: &Context, function: &Function, value: ValueId) -> bool {
 /// addressing modes, it takes no register.
 pub fn folded(function: &Function, value: ValueId) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
-    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }) {
+    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. } | Opcode::Alloca { .. }) {
         return false;
     }
     let block = function.parent(def);
     let users = function.users(value);
+    // A constant offset into a frame object is a displacement wherever it is read.
+    let displacement = _frame_object(function, value) || _frame_offset(function, value);
     !users.is_empty()
         && users.iter().all(|one| {
             let op = function.instruction(one.user);
-            function.parent(one.user) == block
+            (displacement || function.parent(one.user) == block)
                 && match op.opcode {
                     Opcode::GetElementPtr { .. } => op.operands.first() == Some(&Operand::Value(value)) && folded(function, op.result.expect("a getelementptr's result")),
                     Opcode::Load { .. } => op.operands.first() == Some(&Operand::Value(value)),
@@ -261,6 +263,24 @@ pub fn folded(function: &Function, value: ValueId) -> bool {
                     _ => false,
                 }
         })
+}
+
+/// Whether `value` is a frame object's address: a displacement from BP in each access.
+fn _frame_object(function: &Function, value: ValueId) -> bool {
+    matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. }))
+}
+
+/// Whether `value` is a frame object's address plus constants.
+fn _frame_offset(function: &Function, value: ValueId) -> bool {
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    let op = function.instruction(def);
+    let Opcode::GetElementPtr { .. } = op.opcode else { return false };
+    let [Operand::Value(base), indexes @ ..] = op.operands.as_slice() else { return false };
+    indexes.iter().all(|one| matches!(one, Operand::Constant(_)))
+        && match function.value(*base).def {
+            ValueDef::Instruction(at) => matches!(function.instruction(at).opcode, Opcode::Alloca { .. }) || _frame_offset(function, *base),
+            _ => false,
+        }
 }
 
 fn _flags(function: &Function, value: ValueId) -> bool {
