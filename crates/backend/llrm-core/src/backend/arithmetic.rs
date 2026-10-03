@@ -39,21 +39,6 @@ pub fn immediate_multiply<'a>(
     cost(cpu, "imul_r32")
 }
 
-/// Bytes of `imul r, r, number` on `width` bytes in 16-bit code: the opcode and ModRM, a
-/// byte immediate where `number` fits one else the operand's width, and 66h for a dword.
-pub fn immediate_multiply_bytes(number: i64, width: i64) -> i64 {
-    let prefix = i64::from(width == 4);
-    prefix + 2 + if (-128..=127).contains(&number) { 1 } else { width }
-}
-
-/// Bytes of `chain`'s instructions on `width` bytes: each shift by a count (C1 ib, D1 for one)
-/// and each add or subtract. The copy that seeds it is not counted: the allocator drops it
-/// where the source dies, as `add si, si` shows.
-pub fn chain_bytes(chain: &[(&str, i64)], width: i64) -> i64 {
-    let prefix = i64::from(width == 4);
-    chain.iter().map(|&(name, count)| prefix + if name == "shl" && count != 1 { 3 } else { 2 }).sum::<i64>()
-}
-
 /// Binary and signed-digit chains, including destructive-operand copies,
 /// where the target prices them below `imul`.
 pub fn scale<'a>(

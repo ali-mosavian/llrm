@@ -152,12 +152,37 @@ pub fn costs(arch: &str) -> OperationCosts {
 /// far call is 5, and its pushes and cleanup 3 more.
 fn bytes(kind: &str) -> i64 {
     match kind {
-        "alu_rr" | "mov_rr" | "jcc" | "rep_stos" => 2,
+        "alu_rr" | "mov_rr" => register_bytes(2),
+        "shift_ri" => shift_bytes(2, 2),
+        "jcc" | "rep_stos" => 2,
         "ret_far" | "push_r" | "pop_seg" => 1,
         "call_far" => 8,
         "rep_stos_cell" => 0,
         _ => 3,
     }
+}
+
+/// Real mode runs a dword operation under the 66h operand-size prefix.
+fn prefix_bytes(width: i64) -> i64 {
+    i64::from(width == 4)
+}
+
+/// Bytes of `op r, r` on `width`-byte registers: `mov`, `add`, `sub` and the rest of the
+/// two-register forms are the opcode and ModRM.
+pub fn register_bytes(width: i64) -> i64 {
+    prefix_bytes(width) + 2
+}
+
+/// Bytes of a shift of a `width`-byte register by `count`: `D1` for one, `C1` with a byte
+/// count otherwise.
+pub fn shift_bytes(count: i64, width: i64) -> i64 {
+    prefix_bytes(width) + if count == 1 { 2 } else { 3 }
+}
+
+/// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate where `number`
+/// fits one, else the operand's width.
+pub fn imul_immediate_bytes(number: i64, width: i64) -> i64 {
+    prefix_bytes(width) + 2 + if (-128..=127).contains(&number) { 1 } else { width }
 }
 
 /// The price of each operation, as the instructions lowering picks for it
@@ -212,5 +237,24 @@ mod tests {
     fn dos_states_its_address_forms() {
         let forms: Vec<_> = Dos::default().address_forms().iter().map(|one| (one.index_width, one.scales.iter().copied().collect::<Vec<_>>(), one.use_cost, one.address_registers())).collect();
         assert_eq!(forms, [(2, vec![1], 0, Some(3)), (4, vec![1, 2, 4, 8], 1, None)]);
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::{bytes, imul_immediate_bytes, register_bytes, shift_bytes};
+
+    /// The coarse table and the exact helpers agree on a word, so `size_costs` read what isel's -Os pricing reads.
+    #[test]
+    fn the_size_table_and_the_encodings_agree_on_a_word() {
+        assert_eq!((bytes("alu_rr"), bytes("mov_rr"), bytes("shift_ri")), (register_bytes(2), register_bytes(2), shift_bytes(2, 2)));
+    }
+
+    /// A dword takes 66h, a shift by one is D1, and `imul` takes a byte immediate only where it fits.
+    #[test]
+    fn a_dword_form_has_the_operand_size_prefix() {
+        assert_eq!((register_bytes(2), register_bytes(4)), (2, 3));
+        assert_eq!((shift_bytes(1, 4), shift_bytes(3, 4), shift_bytes(1, 2)), (3, 4, 2));
+        assert_eq!((imul_immediate_bytes(6, 4), imul_immediate_bytes(446, 4), imul_immediate_bytes(446, 2)), (4, 7, 4));
     }
 }
