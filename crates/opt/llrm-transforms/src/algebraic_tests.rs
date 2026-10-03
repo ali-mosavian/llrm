@@ -527,3 +527,31 @@ fn inttoptr_of_a_constant_is_the_constant_address() {
     let after = bare(&simplified(text).1);
     assert!(after.contains("load i16, ptr inttoptr (i16 1132 to ptr)") && !after.contains("%p ="), "{after}");
 }
+
+/// Two phis of one block that take the same values from the same
+/// predecessors are one value. gvn's PRE made the second beside a phi that
+/// stood, and SPHEREMAPLASMA's loop carried both (+234k estimated
+/// instructions, #386).
+#[test]
+fn test_a_phi_that_repeats_an_earlier_one_of_its_block_is_that_phi() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+  %q = phi i16 [ %y, %b2 ], [ %x, %b1 ]
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let inputs: Vec<Vec<i128>> = vec![vec![3, 5, 0], vec![3, 5, 1], vec![-1, 7, 1]];
+    let out = checked(text, &inputs);
+    assert_eq!(out.matches("phi").count(), 1, "{out}");
+}
