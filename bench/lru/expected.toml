@@ -1,4 +1,4 @@
-reason = "#357/#402: lru.nib correct (baseline added); lru.bas -5 instructions/-5 memory operands from tracking arrays behind dead descriptors"
+reason = "-Os opens a frame with locals with enter N,0 (one instruction for three; 14 clocks for 3 on the 486, so -Os only); -O2 unchanged"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -14,7 +14,7 @@ instructions = 132
 memory_operands = 63
 
 [c.Os]
-instructions = 159
+instructions = 157
 memory_operands = 72
 
 [nib.O2]
@@ -22,5 +22,5 @@ instructions = 177
 memory_operands = 96
 
 [nib.Os]
-instructions = 312
+instructions = 308
 memory_operands = 147
