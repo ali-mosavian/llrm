@@ -1,4 +1,4 @@
-reason = "first baseline: counts of the region at -O2 and -Os, tools/bench"
+reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -6,7 +6,7 @@ instructions = 131697
 memory_operands = 94943
 
 [bas.Os]
-instructions = 131697
+instructions = 131495
 memory_operands = 94943
 
 [c.O2]
@@ -14,7 +14,7 @@ instructions = 84539
 memory_operands = 61509
 
 [c.Os]
-instructions = 84539
+instructions = 84337
 memory_operands = 61509
 
 [nib.O2]
@@ -22,5 +22,5 @@ instructions = 138396
 memory_operands = 113322
 
 [nib.Os]
-instructions = 139402
+instructions = 139200
 memory_operands = 114228

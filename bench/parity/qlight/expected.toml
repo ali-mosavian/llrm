@@ -1,4 +1,4 @@
-reason = "BASIC variants rewritten in QB 4.5 syntax so BC compiles them: FUNCTION name& (args), no BYVAL on a BASIC procedure, so arguments pass by reference"
+reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
 blessed = "2026-10-03"
 
 [bas.O2]
@@ -6,7 +6,7 @@ instructions = 294
 memory_operands = 93
 
 [bas.Os]
-instructions = 296
+instructions = 282
 memory_operands = 93
 
 [c.O2]
@@ -14,7 +14,7 @@ instructions = 113
 memory_operands = 12
 
 [c.Os]
-instructions = 117
+instructions = 103
 memory_operands = 12
 
 [nib.O2]
@@ -22,5 +22,5 @@ instructions = 149
 memory_operands = 12
 
 [nib.Os]
-instructions = 155
+instructions = 141
 memory_operands = 12

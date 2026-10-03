@@ -1710,6 +1710,21 @@ fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
     assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "imul ax, bx"]);
 }
 
+/// Tuned for size, a multiply by a constant is the imul unless the shifts and adds are fewer
+/// bytes: both selectors priced in clocks, so x * 446 was a 20-byte chain where `imul r, r, imm`
+/// is 7, and -Os grew examples/mandel.nib by 7 bytes.
+#[test]
+fn test_a_multiply_by_a_constant_tuned_for_size_is_the_smaller_form() {
+    let text = "define i32 @f(i32 %x) addrspace(1) {\n  %q = mul i32 %x, 446\n  ret i32 %q\n}\n";
+    let on = |size: bool| {
+        let cpu = crate::backend::cpu::tuned("486", size).expect("a target");
+        let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(cpu), &crate::backend::target::BASIC).expect("assembles");
+        masm::text(&module).expect("prints")
+    };
+    assert!(on(true).contains("imul eax, eax, 446") && !on(true).contains("shl eax"), "{}", on(true));
+    assert!(on(false).contains("shl eax") && !on(false).contains("imul"), "{}", on(false));
+}
+
 /// A dword load read only as its words is those words loaded, as the old
 /// route's narrow selects: the high word cost a copy and a shift.
 #[test]

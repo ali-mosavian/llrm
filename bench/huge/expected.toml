@@ -1,4 +1,4 @@
-reason = "huge pointers step by a borrow mask, and a row inside one 64K window runs far (window pass): bench/huge's loops are the same in C, BASIC and Nib"
+reason = "-Os prices a constant multiply in bytes (imul r,r,imm beats a shift chain), 33 measurements fewer instructions; qbsp -Os +3 instr/+12 mem is allocation after x*6 became one imul"
 blessed = "2026-10-03"
 
 [bas.O2]
