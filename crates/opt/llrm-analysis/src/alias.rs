@@ -240,7 +240,7 @@ pub struct Summary {
     pub unknown_read: bool,
     pub unknown_write: bool,
     /// The `!tbaa` access types of the writes `unknown_write` stands for, where
-    /// every one has a type: a store of one type cannot land on a load of a
+    /// every one is a pointer no fact follows and has a type: a store of one type cannot land on a load of a
     /// type apart from it, however unplaced its pointer. None: some has none.
     pub unknown_write_types: Option<BTreeSet<Access>>,
 }
@@ -514,6 +514,22 @@ fn outlives(slice: &Slice) -> bool {
     !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)
 }
 
+/// Whether the address `inst` accesses is an integer made a pointer, moved by
+/// GEPs and casts: LLVM's `inttoptr`, which `_lost` publishes the escape of.
+fn from_integer(unit: &Unit, inst: InstId) -> bool {
+    let op = unit.function.instruction(inst);
+    let address = if matches!(op.opcode, Opcode::Store { .. }) { op.operands.get(1) } else { op.operands.first() };
+    let mut at = address.copied();
+    while let Some((_, def)) = at.and_then(|one| unit.defining(one)) {
+        match &def.opcode {
+            Opcode::Cast(CastOp::IntToPtr) => return true,
+            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => at = def.operands.first().copied(),
+            _ => return false,
+        }
+    }
+    false
+}
+
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
@@ -537,7 +553,13 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
                 unknown_read = true;
             } else {
                 unknown_write = true;
-                unplaced(&mut types);
+                // An address built from an integer reaches only what escaped, as `Unknown`
+                // does; any other the analysis lost may be a tracked global's too.
+                if from_integer(unit, inst) {
+                    unplaced(&mut types);
+                } else {
+                    types = None;
+                }
             }
             continue;
         };
@@ -745,14 +767,17 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             let mut reached = if visible.is_empty() { UNKNOWN.slices.clone() } else { visible };
             reached.extend(NONLOCAL.slices.clone());
-            reached.extend(_tracked(&procedure.unit));
             match &effect.unknown_write_types {
+                // A pointer no fact follows reaches only what escaped, never a tracked global.
                 Some(types) if !types.is_empty() => {
                     for (name, lineage) in types {
                         typed.extend(reached.iter().map(|one| MemRef { typed: Some(name.clone()), lineage: lineage.clone(), ..reference(one) }));
                     }
                 }
-                _ => effect.writes.extend(reached),
+                _ => {
+                    effect.writes.extend(reached);
+                    effect.writes.extend(_tracked(&procedure.unit));
+                }
             }
         }
         let fills = _fills(&procedure.unit, &facts, at);
