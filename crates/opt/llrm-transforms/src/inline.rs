@@ -45,6 +45,9 @@ use llrm_mir::splice::{carries, splice};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
 
+use llrm_analysis::consts;
+use llrm_analysis::memory::Unit;
+
 use crate::profit::{OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
@@ -186,6 +189,34 @@ fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCo
     body.walk().filter(|&(_, inst)| semantic(body, inst)).map(|(_, inst)| operation(&module.context, &layout, body, callees, inst, costs)).sum()
 }
 
+/// The priced work of `body` that its known actuals fold away: what a copy at
+/// such a site no longer does. Instructions whose inputs are all known, and
+/// branches they decide; a lower bound, as control flow past a decided branch
+/// is not followed.
+fn folded(module: &Module, layout: &DataLayout, body: &Function, known: &[Option<ConstantId>], callees: &Callees, costs: &OperationCosts) -> i64 {
+    let unit = Unit::of(module, layout, body);
+    let mut values = IndexMap::default();
+    for (&parameter, constant) in body.parameters().iter().zip(known) {
+        if let Some(number) = constant.and_then(|id| consts::_operand(&unit, Operand::Constant(id), &values, None)) {
+            values.insert(parameter, number);
+        }
+    }
+    let mut saved = 0;
+    for (_, inst) in body.walk().filter(|&(_, inst)| semantic(body, inst)) {
+        let instruction = body.instruction(inst);
+        let decided = instruction.opcode == Opcode::Br && consts::_operand(&unit, instruction.operands[0], &values, None).is_some();
+        let result = consts::_result(&unit, inst, &values, None);
+        if !decided && result.is_none() {
+            continue;
+        }
+        if let (Some(value), Some(number)) = (consts::_defined(&unit, inst), result) {
+            values.insert(value, number);
+        }
+        saved += operation(&module.context, layout, body, callees, inst, costs).unwrap_or(0);
+    }
+    saved
+}
+
 /// Functions worth moving into their direct callers.
 ///
 /// A candidate's size is bounded by the `Threshold`; a routine the language
@@ -213,7 +244,16 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
             budget.is_some_and(|budget| semantic_count(body) <= scale(budget))
                 && (copies == 0 || work(module, body, &callees, costs).is_some_and(|work| work * copies < scale(count * call_cost)))
         };
-        if always || admitted() {
+        let verdict = always || admitted();
+        llrm_support::debug!(
+            "inline",
+            "{} x{count} ({copies} copies): {} ops, budget {budget:?}, work {:?}, call {call_cost}: {}",
+            module.global(name).name.as_deref().unwrap_or("?"),
+            semantic_count(body),
+            work(module, body, &callees, costs),
+            if verdict { "candidate" } else { "refused" }
+        );
+        if verdict {
             out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
     }
@@ -227,8 +267,8 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
 /// narrower policy instead admits a call whose known actual exposes local
 /// SCCP after the normal MIR clone.  The original body remains for dynamic
 /// callers, so no source-level calling convention or symbol changes.
-/// As with repeated inlining, the target profile must price the call
-/// above the cloned semantic work.
+/// The work a copy keeps, priced in the target's clocks after what the known
+/// actuals fold, must stay below the call it replaces.
 pub fn constant_sites(
     module: &Module,
     layout: &DataLayout,
@@ -240,6 +280,7 @@ pub fn constant_sites(
 ) -> IndexMap<InstId, Candidate> {
     let call_cost = costs.call;
     let Some(budget) = threshold.budget(call_cost) else { return IndexMap::default() };
+    let callees = llrm_mir::memory::callees(module);
     let mut out = IndexMap::default();
     for (_, at) in caller.walk() {
         let Some(name) = callee(&module.context, caller, at) else { continue };
@@ -249,7 +290,18 @@ pub fn constant_sites(
         }
         let Some(body) = body(module, name) else { continue };
         let semantic = semantic_count(body);
-        if semantic < call_cost && semantic <= budget && cloneable(module, recursive, name, body) {
+        // What stays of the copy, in clocks, against the call it replaces.
+        let kept = work(module, body, &callees, costs).map(|all| all - folded(module, layout, body, known, &callees, costs));
+        let verdict = kept.is_some_and(|kept| kept < call_cost) && semantic <= budget && cloneable(module, recursive, name, body);
+        llrm_support::debug!(
+            "inline",
+            "constant site of {}: {semantic} ops, {kept:?} clocks kept, budget {budget}, call {call_cost}, {} of {} actuals known: {}",
+            module.global(name).name.as_deref().unwrap_or("?"),
+            known.iter().flatten().count(),
+            known.len(),
+            if verdict { "candidate" } else { "refused" }
+        );
+        if verdict {
             out.insert(at, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
         }
     }

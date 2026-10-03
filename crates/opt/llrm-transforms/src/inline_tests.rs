@@ -394,8 +394,44 @@ b1:
     let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &costs(2), Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[0]]);
-    // Not priced above the work it clones: none.
-    assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &costs(1), Threshold::default()).is_empty());
+}
+
+/// QCport at -O2 grew by 8 KB where a callee of a few operations, which
+/// one known actual folds nothing of, was copied to every such site because
+/// its operation count was under the call's clocks, whatever the operations cost.
+#[test]
+fn test_a_constant_site_copies_only_the_work_its_actuals_leave_over_a_call() {
+    let module = parsed(
+        "define i16 @scaled(i16 %k, i16 %y) {
+b1:
+  %m = mul i16 %y, %y
+  %r = add i16 %m, %k
+  ret i16 %r
+}
+
+define i16 @squared(i16 %k) {
+b1:
+  %m = mul i16 %k, %k
+  ret i16 %m
+}
+
+define i16 @main(i16 %p) {
+b1:
+  %one = call i16 @scaled(i16 1, i16 %p)
+  %two = call i16 @squared(i16 3)
+  %sum = add i16 %one, %two
+  ret i16 %sum
+}
+",
+    );
+    let main = module.global(id(&module, "main")).function().unwrap();
+    let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
+    // Two operations, under a call of 10 clocks by count; the multiply alone costs 30.
+    let priced = OperationCosts { call: 10, multiply: 30, ..OperationCosts::default() };
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, Threshold::default());
+    let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
+    // `squared(3)` folds away entirely; `scaled(1, p)` keeps its multiply.
+    assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
 }
 
 #[test]
