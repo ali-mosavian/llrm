@@ -3295,9 +3295,15 @@ impl Selector<'_, '_, '_> {
         if b.iter().all(|one| matches!(one, Loc::Imm(Imm { value: 0, .. }))) {
             word_op(self, "or", vec![low, a[1].clone()]);
         } else {
-            let low = word_op(self, "xor", vec![low, b[0].clone()]);
-            let high = word_op(self, "mov", vec![a[1].clone()]);
-            let high = word_op(self, "xor", vec![high, b[1].clone()]);
+            // A half the constant leaves zero is the word itself: xor with zero changes nothing.
+            let zero = |one: &Loc| matches!(one, Loc::Imm(Imm { value: 0, .. }));
+            let low = if zero(&b[0]) { low } else { word_op(self, "xor", vec![low, b[0].clone()]) };
+            let high = if zero(&b[1]) {
+                a[1].clone()
+            } else {
+                let high = word_op(self, "mov", vec![a[1].clone()]);
+                word_op(self, "xor", vec![high, b[1].clone()])
+            };
             word_op(self, "or", vec![low, high]);
         }
         Test::One(condition_code(predicate))

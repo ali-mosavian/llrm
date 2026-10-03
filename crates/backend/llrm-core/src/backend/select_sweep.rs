@@ -6775,14 +6775,14 @@ fn sweep_16() {
     check(sem(Op::FloatUnary, Some("fchs"), vec![], vec![], None, false), 0, false, false, None, None, Some(("d9e0", None, None, vec![], true)));
     check(sem(Op::FloatUnary, Some("fabs"), vec![], vec![], None, false), 0, false, false, None, None, Some(("d9e1", None, None, vec![], true)));
     check(sem(Op::FloatUnary, Some("bogus"), vec![], vec![], None, false), 0, false, false, None, None, None);
-    check(sem(Op::Extend, Some("movsx"), vec![rg(R::AX, 2)], vec![rg(R::AL, 1)], None, false), 0, false, false, None, None, Some(("0fbec0", None, None, vec![], true)));
+    check(sem(Op::Extend, Some("movsx"), vec![rg(R::AX, 2)], vec![rg(R::AL, 1)], None, false), 0, false, false, None, None, Some(("98", None, None, vec![], true)));
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::AX, 2)], vec![rg(R::BH, 1)], None, false), 0, false, false, None, None, Some(("0fbec7", None, None, vec![], true)));
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::AX, 2)], vec![rg(R::AX, 2)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::AX, 2)], vec![rg(R::SI, 2)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::AX, 2)], vec![rg(R::EAX, 4)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::EAX, 4)], vec![rg(R::AL, 1)], None, false), 0, false, false, None, None, Some(("660fbec0", None, None, vec![], true)));
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::EAX, 4)], vec![rg(R::BH, 1)], None, false), 0, false, false, None, None, Some(("660fbec7", None, None, vec![], true)));
-    check(sem(Op::Extend, Some("movsx"), vec![rg(R::EAX, 4)], vec![rg(R::AX, 2)], None, false), 0, false, false, None, None, Some(("660fbfc0", None, None, vec![], true)));
+    check(sem(Op::Extend, Some("movsx"), vec![rg(R::EAX, 4)], vec![rg(R::AX, 2)], None, false), 0, false, false, None, None, Some(("6698", None, None, vec![], true)));
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::EAX, 4)], vec![rg(R::SI, 2)], None, false), 0, false, false, None, None, Some(("660fbfc6", None, None, vec![], true)));
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::EAX, 4)], vec![rg(R::EAX, 4)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::BX, 2)], vec![rg(R::AL, 1)], None, false), 0, false, false, None, None, Some(("0fbed8", None, None, vec![], true)));
@@ -6912,7 +6912,7 @@ fn sweep_17() {
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::AL, 1)], vec![m(None, 4, R::AX, 0, 0, None, None, 1, R::None)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::AL, 1)], vec![m(Some(a(Space::Literal, 64, 0, R::None, R::None)), 4, R::EBX, 0, 0, None, Some(h(3, 4)), 4, R::ECX)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Extend, Some("movsx"), vec![rg(R::AL, 1)], vec![m(Some(a(Space::Literal, 0, 0, R::None, R::None)), 4, R::BX, 0, 0, Some(h(4, 2)), None, 1, R::None)], None, false), 0, false, false, None, None, None);
-    check(sem(Op::Extend, Some("movzx"), vec![rg(R::AX, 2)], vec![rg(R::AL, 1)], None, false), 0, false, false, None, None, Some(("0fb6c0", None, None, vec![], true)));
+    check(sem(Op::Extend, Some("movzx"), vec![rg(R::AX, 2)], vec![rg(R::AL, 1)], None, false), 0, false, false, None, None, Some(("b400", None, Some(1), vec![1], true)));
     check(sem(Op::Extend, Some("movzx"), vec![rg(R::AX, 2)], vec![rg(R::BH, 1)], None, false), 0, false, false, None, None, Some(("0fb6c7", None, None, vec![], true)));
     check(sem(Op::Extend, Some("movzx"), vec![rg(R::AX, 2)], vec![rg(R::AX, 2)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Extend, Some("movzx"), vec![rg(R::AX, 2)], vec![rg(R::SI, 2)], None, false), 0, false, false, None, None, None);
