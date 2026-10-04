@@ -3,13 +3,25 @@
 
 use std::sync::LazyLock;
 
-use llrm_hir::meaning::{Arithmetic, Descriptor, Expr, Meaning, Parameter, Returns};
+use llrm_hir::meaning::{Arithmetic, Descriptor, Expr, Form, Meaning, Parameter, Returns};
 
 static TABLE: LazyLock<toml::Table> = LazyLock::new(|| super::TABLE.parse().expect("runtime.toml parses"));
 
-/// How `family`'s runtime reads a string descriptor; none where the table
-/// does not say, and its routines keep their calls.
+/// How `family`'s runtime keeps its strings.
+pub fn form(family: &str) -> Option<Form> {
+    match TABLE.get("layout")?.get(family)?.get("form")?.as_str()? {
+        "near" => Some(Form::Near),
+        "far" => Some(Form::Far),
+        other => panic!("layout.{family}.form is {other}"),
+    }
+}
+
+/// How `family`'s runtime reads a string descriptor; none where its strings are not near, and its
+/// routines keep their calls.
 pub fn descriptor(family: &str) -> Option<Descriptor> {
+    if form(family)? != Form::Near {
+        return None;
+    }
     let row = TABLE.get("layout")?.get(family)?;
     let at = |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
     Some(Descriptor { length: at("length"), data: at("data"), size: at("size") })
@@ -180,6 +192,7 @@ mod tests {
         assert_eq!(descriptor("qb45"), Some(Descriptor { length: 0, data: 2, size: 4 }));
         assert_eq!(descriptor("pds71"), descriptor("qb45"));
         assert_eq!(descriptor("vbdos"), None);
+        assert_eq!((form("qb45"), form("pds71"), form("vbdos")), (Some(Form::Near), Some(Form::Near), Some(Form::Far)));
     }
 
     #[test]

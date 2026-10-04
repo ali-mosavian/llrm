@@ -1,6 +1,15 @@
 //! What a runtime routine computes, as its description states it: the
 //! meaning MIR expands into a body a call can be replaced by.
 
+/// How a runtime keeps its strings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Form {
+    /// A descriptor in the data group, its length and data pointer at offsets.
+    Near,
+    /// Bytes in a far segment, behind a header.
+    Far,
+}
+
 /// Where a string descriptor keeps its length and its data pointer, and how
 /// large it is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

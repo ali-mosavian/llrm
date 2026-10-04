@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 buildprs = { path = "crates/buildprs" }
 llrm-hir = { path = "../../ir/llrm-hir" }
+llrm-qbruntime = { path = "../llrm-qbruntime" }
 
 [build-dependencies]
 buildprs = { path = "crates/buildprs" }
