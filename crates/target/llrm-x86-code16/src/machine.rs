@@ -72,6 +72,9 @@ pub struct Machine {
     /// Under protected addressing, the selector stride a huge pointer takes
     /// per 64K, as a shift: the system's, so the description states it.
     pub protected_huge_shift: Option<u32>,
+    /// The program's start-up zeroes the far uninitialised data (class FAR_BSS), as DOS leaves
+    /// memory past the image as it found it. Where it does not, zero far data is stored.
+    pub far_bss: bool,
 }
 
 impl Machine {
@@ -124,6 +127,7 @@ impl Machine {
             cpu: cpu.to_owned(),
             segment_end_faults,
             protected_huge_shift: table.get("huge_shift").and_then(toml::Value::as_integer).map(|shift| shift as u32),
+            far_bss: table.get("far_bss").and_then(toml::Value::as_bool).unwrap_or(false),
         })
     }
 

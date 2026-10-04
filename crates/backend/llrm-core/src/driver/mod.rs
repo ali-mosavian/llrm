@@ -61,7 +61,7 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
         let mut assembled = assemble::assembled(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
-        placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref())?;
+        placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref(), options.machine.far_bss)?;
         if let Some(directory) = &options.dump {
             let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
             let written = |name: &str, text: String| std::fs::write(directory.join(format!("{name}{suffix}")), text).map_err(|error| error.to_string());

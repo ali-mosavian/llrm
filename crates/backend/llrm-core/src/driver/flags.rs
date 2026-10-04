@@ -9,7 +9,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,6 +109,7 @@ pub struct Flags {
     machine: Option<PathBuf>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
+    far_bss: Option<bool>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
@@ -123,7 +124,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, far_bss: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -151,6 +152,8 @@ impl Flags {
             "-g0" => self.debug = false,
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
+            "-mfar-bss" => self.far_bss = Some(true),
+            "-mno-far-bss" => self.far_bss = Some(false),
             "--cpu" => self.cpu = Some(value("--cpu")?),
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
@@ -202,6 +205,9 @@ impl Flags {
         }
         if let Some(stack_is_data) = self.stack_is_data {
             machine.segments.stack_is_data = stack_is_data;
+        }
+        if let Some(far_bss) = self.far_bss {
+            machine.far_bss = far_bss;
         }
         Ok(machine)
     }

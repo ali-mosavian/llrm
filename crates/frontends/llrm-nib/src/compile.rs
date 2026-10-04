@@ -63,7 +63,8 @@ pub const CPU: &str = "486";
 
 /// The built-in machine, priced for `CPU`.
 pub fn machine() -> llrm_core::abi::machine::Machine {
-    llrm_core::abi::machine::Machine { cpu: CPU.to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }
+    // start.asm zeroes the far uninitialised data, as it does the near.
+    llrm_core::abi::machine::Machine { cpu: CPU.to_owned(), far_bss: true, ..llrm_core::abi::machine::BUILT_IN.clone() }
 }
 
 /// `module` as an OMF object, its code laid out as `layout` says.

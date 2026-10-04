@@ -1,23 +1,32 @@
 .model medium
 .386
-.dosseg
-; Nib keeps arrays in the frame: 4 KB, as Open Watcom gives a DOS program.
-.stack 4096
-
+; No .dosseg: its order puts every segment outside DGROUP before it, and a far one the image does
+; not store would then have its zeros stored. The order here is the linker's, by the first
+; appearance of each class: code, DGROUP (data, bss, stack), far data, far bss.
 extrn _main:far
 extrn N$EDIV:far
-; Under DOSSEG the linker defines these around the uninitialized data.
-extrn _edata:byte
-extrn _end:byte
+extrn BSS_LAST:byte
+extrn FBSS_LAST:byte
 extrn N$OTOP:word
 extrn N$OPSP:word
 extrn N$OSIV:far
 extrn N$OVEC:far
 
+.code
 .data
-; DOSSEG's _edata and _end mark this segment's class, so it must exist
-; even when no program object has uninitialized data.
 .data?
+; The near uninitialised data runs from here to dos.asm's BSS_LAST, linked last; the far, class
+; FAR_BSS, from FBSS_FIRST in this object to dos.asm's FBSS_LAST. The EXE stores neither.
+BSS_FIRST label byte
+; Nib keeps arrays in the frame: 4 KB, as Open Watcom gives a DOS program.
+.stack 4096
+FARDATA_ORDER segment para public 'FAR_DATA'
+FARDATA_ORDER ends
+FBSS_BEG segment para public 'FAR_BSS'
+public FBSS_FIRST
+FBSS_FIRST label byte
+    db 16 dup (?)
+FBSS_BEG ends
 
 .code
 start:
@@ -36,12 +45,43 @@ start:
     sti
     ; Statics without an initializer are in _BSS, which the EXE does not
     ; store: they hold whatever the last program left there until zeroed.
-    mov di, offset DGROUP:_edata
-    mov cx, offset DGROUP:_end
+    mov di, offset DGROUP:BSS_FIRST
+    mov cx, offset DGROUP:BSS_LAST
     sub cx, di
     xor al, al
     cld
     rep stosb
+    ; The far uninitialised data, a pass of at most 64K at a time. A label's segment is its frame,
+    ; which the linker shares among these segments: its paragraph is the frame's plus the
+    ; offset's sixteenths.
+    mov bp, bx                     ; the PSP, past the loop's registers
+    mov bx, offset FBSS_FIRST
+    shr bx, 4
+    add bx, seg FBSS_FIRST
+    mov dx, offset FBSS_LAST
+    shr dx, 4
+    add dx, seg FBSS_LAST
+far_clear:
+    cmp bx, dx
+    jae far_cleared
+    mov ax, dx
+    sub ax, bx
+    cmp ax, 1000h
+    jbe far_pass
+    mov ax, 1000h
+far_pass:
+    mov es, bx
+    add bx, ax
+    mov cx, ax
+    shl cx, 3                      ; words: eight to a paragraph
+    xor di, di
+    xor ax, ax
+    rep stosw
+    jmp far_clear
+far_cleared:
+    mov bx, bp
+    mov ax, DGROUP
+    mov es, ax
     mov N$OPSP, bx
     ; The near heap starts where the stack ends, the image's last byte in
     ; DGROUP. The program keeps only its image; the heap grows the block.

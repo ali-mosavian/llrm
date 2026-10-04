@@ -14,6 +14,17 @@ public N$OCHN
 public N$OVEC
 public N$OTOP
 public N$OPSP
+public BSS_LAST
+public FBSS_LAST
+
+; Where the uninitialised data ends, near and far, which start.asm zeroes: this object is linked last.
+_BSS segment word public 'BSS'
+BSS_LAST label byte
+_BSS ends
+FBSS_END segment para public 'FAR_BSS'
+FBSS_LAST label byte
+    db 16 dup (?)
+FBSS_END ends
 
 .data
 ; The near heap's end, a DGROUP offset, and the program's PSP, whose

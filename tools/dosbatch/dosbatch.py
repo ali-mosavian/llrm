@@ -90,13 +90,14 @@ def assemble(source: Path, obj: Path, *defines: str) -> None:
 
 def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline."""
-    crt, ext = work / "CRT.OBJ", work / "EXT.OBJ"
+    crt, ext, end = work / "CRT.OBJ", work / "EXT.OBJ", work / "ZEND.OBJ"
     with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
-        if not crt.exists() or not ext.exists():
+        if not crt.exists() or not ext.exists() or not end.exists():
             assemble(C_RUNTIME / "crt.asm", crt)
             assemble(C_RUNTIME / "ext.asm", ext)
+            assemble(C_RUNTIME / "zend.asm", end)
     mapping = ["option", f"map={listing}"] if listing else []
-    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext), *after])
+    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext), *after, "file", str(end)])
 
 
 @dataclass

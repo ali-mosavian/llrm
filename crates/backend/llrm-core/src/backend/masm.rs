@@ -141,6 +141,8 @@ pub struct Module {
     pub procedures: Vec<Procedure>,
     /// data segments outside DGROUP; only ever asked for membership
     pub private: BTreeSet<String>,
+    /// Of those, the segments of uninitialised data: class FAR_BSS, which an image does not store.
+    pub far_bss: BTreeSet<String>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
@@ -173,7 +175,7 @@ pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec
     for (segment, items) in &module.data {
         let private = module.selector_addressed(segment);
         out.push(SEGMENTS.get(segment.as_str()).map_or_else(
-            || format!("{segment} segment {} public '{}'", if private { "para" } else { "word" }, if private { "FAR_DATA" } else { "DATA" }),
+            || format!("{segment} segment {} public '{}'", if private { "para" } else { "word" }, if module.far_bss.contains(segment) { "FAR_BSS" } else if private { "FAR_DATA" } else { "DATA" }),
             |one| (*one).to_owned(),
         ));
         out.extend(

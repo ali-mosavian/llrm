@@ -4,6 +4,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
+use llrm_support::hash::IndexMap;
 
 use crate::backend::{globals, masm};
 use crate::hir::model;
@@ -36,7 +37,7 @@ impl Placed {
     /// one; the compiler's constants in `constants`, else the default. Each
     /// variable aligned as stated, public where external; each declared one
     /// an extern, near where it is in `data_space`.
-    pub fn lay_out(&self, built: &mut masm::Module, module: &Module, data_space: u32, constants: Option<&str>) -> Result<(), String> {
+    pub fn lay_out(&self, built: &mut masm::Module, module: &Module, data_space: u32, constants: Option<&str>, far_bss: bool) -> Result<(), String> {
         let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
         // What assembly adds after the globals' data: its constant pool.
         let pool: Vec<masm::Datum> = items.into_iter().skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K"))).collect();
@@ -56,7 +57,18 @@ impl Placed {
         for (segment, names) in &self.segments {
             segments.push((segment.clone(), names.iter().filter_map(|name| module.named(name)).collect()));
         }
+        let mut bss: Vec<(String, Vec<GlobalId>)> = Vec::new();
         for (segment, members) in segments {
+            // What the image need not store (`stored_zero`): an object of zeros in far data, where the
+            // start-up zeroes far uninitialised data, in a segment of its own beside its segment.
+            let (zero, members): (Vec<GlobalId>, Vec<GlobalId>) = if far_bss && self.private.contains(&segment) {
+                members.into_iter().partition(|&global| stored_zero(module, global, &built.names))
+            } else {
+                (Vec::new(), members)
+            };
+            if !zero.is_empty() {
+                bss.push((format!("{segment}_BSS"), zero));
+            }
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
@@ -85,6 +97,31 @@ impl Placed {
                     built.private.insert(name.clone());
                     built.data.push((name, part));
                 }
+            }
+        }
+        for (segment, objects) in bss {
+            let mut items = Vec::new();
+            for global in objects {
+                if let GlobalKind::Variable(variable) = &module.global(global).kind
+                    && let Some(to) = variable.align
+                {
+                    items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
+                }
+                let size = globals::datums(module, global, &built.names)?.iter().map(|one| match one {
+                    masm::Datum::Bytes(bytes) => bytes.len(),
+                    _ => 0,
+                }).sum::<usize>();
+                items.push(masm::Datum::Label(masm::Label { name: built.names[&(Space::Segment, i64::from(global.0))].clone() }));
+                items.push(masm::Datum::Fill(masm::Fill { size: size as i64, byte: None }));
+                if module.global(global).linkage == Linkage::External {
+                    built.publics.push(built.names[&(globals::space(module, global), i64::from(global.0))].clone());
+                }
+            }
+            for (at, part) in split(items, &segment)?.into_iter().enumerate() {
+                let name = if at == 0 { segment.clone() } else { format!("{segment}_{at}") };
+                built.private.insert(name.clone());
+                built.far_bss.insert(name.clone());
+                built.data.push((name, part));
             }
         }
         match constants {
@@ -169,6 +206,16 @@ fn split(items: Vec<masm::Datum>, segment: &str) -> Result<Vec<Vec<masm::Datum>>
         return Err(format!("{segment}: a huge object shares its segment with another"));
     }
     Ok(parts)
+}
+
+/// Whether `global`'s data is all zeros, with no address in it: what an image need not store. The one
+/// decision that zero data is uninitialised data, whatever shape its initializer has.
+fn stored_zero(module: &Module, global: GlobalId, names: &IndexMap<(Space, i64), String>) -> bool {
+    if !matches!(module.global(global).kind, GlobalKind::Variable(_)) {
+        return false;
+    }
+    globals::datums(module, global, names)
+        .is_ok_and(|datums| datums.iter().all(|one| matches!(one, masm::Datum::Label(_)) || matches!(one, masm::Datum::Bytes(bytes) if bytes.iter().all(|byte| *byte == 0))))
 }
 
 /// Whether the object format keeps no bytes for `segment`.
