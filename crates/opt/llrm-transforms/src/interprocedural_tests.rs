@@ -297,15 +297,17 @@ b:
   ret i16 %r
 }
 ";
-    let calls = |size: bool| {
+    let calls = |rate: Option<i64>| {
         let mut module = parsed(text);
         let mut manager = PassManager::default();
         let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, ..OperationCosts::default() }, ..Default::default() };
-        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate: size.then_some(0) });
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @mix").count()
     };
-    assert_eq!((calls(false), calls(true)), (0, 3));
+    // Weighing clocks alone inlines every site; weighing bytes puts them back, at -Os and at -O2 (QCport
+    // -O2 ran 11 KB past BCC's code, and out of memory), unless the clocks saved pay for the bytes.
+    assert_eq!((calls(None), calls(Some(0)), calls(Some(1))), (0, 3, 0));
 }
 
 const STAMPED: &str = "@slot = global ptr null
@@ -953,7 +955,7 @@ b:
     let runs = std::cell::Cell::new(0);
     let mut refused = BTreeSet::new();
     let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, "trial.", &mut |_, _, _, _| {
+        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
             runs.set(runs.get() + 1);
             Ok(())
         })
