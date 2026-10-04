@@ -717,6 +717,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         procedures,
         private: object.private.clone(),
         requests: object.requests.clone(),
+        far_bss: BTreeSet::new(),
         debug,
         stack: 0,
     })

@@ -79,6 +79,16 @@ fn stack_is_data_only_when_asked() {
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
 }
 
+/// Far zero data is stored unless -mfar-bss says the start-up zeroes it: a start-up that does not
+/// (Borland's, Open Watcom's) would otherwise read whatever DOS left there.
+#[test]
+fn far_zero_data_is_stored_unless_the_startup_zeroes_it() {
+    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(crate::abi::machine::BUILT_IN.clone()).unwrap().far_bss;
+    assert!(!machine(&[]));
+    assert!(machine(&["-mfar-bss"]));
+    assert!(!machine(&["-mfar-bss", "-mno-far-bss"]));
+}
+
 /// gcc's run-time check names: each sanitizer alone, `undefined` all of
 /// them, `-fno-sanitize` and `-ftrapv` as gcc reads them.
 #[test]

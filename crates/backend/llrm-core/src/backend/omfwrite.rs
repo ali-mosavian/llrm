@@ -462,7 +462,7 @@ pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Re
     for (name, _items) in &module.data {
         if !named.contains_key(name) {
             let private = module.selector_addressed(name);
-            let klass = CLASSES.get(name.as_str()).copied().unwrap_or(if private { "FAR_DATA" } else { "DATA" });
+            let klass = CLASSES.get(name.as_str()).copied().unwrap_or(if module.far_bss.contains(name) { "FAR_BSS" } else if private { "FAR_DATA" } else { "DATA" });
             named.insert(name.clone(), Segment::new(name, klass, !private));
         }
     }
@@ -1193,6 +1193,7 @@ mod tests {
                 vec![(2, masm::Callee::new("_f", true))],
             )],
             private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
             requests: BTreeSet::new(),
             stack: 0,
             debug: None,
@@ -1228,6 +1229,7 @@ mod tests {
                 data: vec![("_DATA".into(), items)],
                 procedures: vec![],
                 private: BTreeSet::new(),
+                far_bss: BTreeSet::new(),
                 requests: BTreeSet::new(),
             stack: 0,
                 debug: None,
@@ -1313,6 +1315,7 @@ mod tests {
                 ),
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
+            far_bss: BTreeSet::new(),
             requests: BTreeSet::new(),
             stack: 0,
             debug: None,
