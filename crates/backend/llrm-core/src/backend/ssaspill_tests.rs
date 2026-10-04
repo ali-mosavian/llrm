@@ -379,15 +379,16 @@ fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {
     assert!(wrong.is_empty(), "loads of another width than their register: {wrong:?}");
 }
 
-/// Six far pointers each read once per trip. Priced in clocks, a selector is loaded at the loop's entry
-/// (the trips repeat what it saves); priced in bytes, the entry load is a load more than the one read in
-/// the loop it replaces, and is left out: 42 instructions rather than 44 (the level's price, not the pass's).
+/// Six far pointers each read once per trip. Priced in bytes the entry load and the read it replaces tie, and
+/// the clocks then decide, as the trips repeat the read: the loop holds them as it does priced in clocks.
+/// Left to the tie, bytes made 42 instructions of it and clocks 44; particle bas -Os ran 300 instructions more.
 #[test]
-fn test_a_loop_entry_load_is_priced_by_the_level() {
-    let size = |by_frequency: bool| {
+fn test_a_tie_in_bytes_is_broken_by_the_loop_s_trips() {
+    let run = |by_frequency: bool| {
         let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
-        ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 3.0, by_frequency }).expect("spills").insns().len()
+        let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 3.0, by_frequency }).expect("spills");
+        (spilled.insns().len(), crate::backend::executed::executed(&spilled).expect("a reducible body").instructions)
     };
-    let (clocks, bytes) = (size(true), size(false));
-    assert!(bytes < clocks, "{bytes} instructions priced in bytes, {clocks} in clocks");
+    let (clocks, bytes) = (run(true), run(false));
+    assert_eq!(bytes, clocks, "priced in bytes {bytes:?}, in clocks {clocks:?}");
 }
