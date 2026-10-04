@@ -168,6 +168,26 @@ fn work(module: &Module, body: &Function, callees: &Callees, costs: &OperationCo
     body.walk().filter(|&(_, inst)| semantic(body, inst)).map(|(_, inst)| operation(&module.context, &layout, body, callees, inst, costs)).sum()
 }
 
+/// What `function` comes to, priced by `costs`: its work, and each call's arguments.
+pub fn size(module: &Module, function: GlobalId, costs: &OperationCosts) -> Option<i64> {
+    let body = module.global(function).function()?;
+    let callees = llrm_mir::memory::callees(module);
+    let calls: i64 = body.walk().filter(|&(_, inst)| matches!(body.instruction(inst).opcode, Opcode::Call(_))).map(|(_, inst)| (body.instruction(inst).operands.len() as i64 - 1).max(0) * costs.argument).sum();
+    // What a call keeps live across it is stored to the frame and read back: the callee may
+    // use every register but two, which a body with no call has for itself.
+    let found = llrm_analysis::liveness::live(body);
+    let kept: i64 = body
+        .layout()
+        .iter()
+        .flat_map(|&block| llrm_analysis::liveness::live_points(body, &found, block))
+        // An intrinsic, an inline block, is code in line: it keeps every register but those it names.
+        .filter(|(inst, _, _)| matches!(body.instruction(*inst).opcode, Opcode::Call(_)) && !callee(&module.context, body, *inst).is_some_and(|id| module.global(id).name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))))
+        .map(|(_, _, across)| across.len() as i64)
+        .sum::<i64>()
+        * costs.store;
+    work(module, body, &callees, costs).map(|work| work + calls + kept)
+}
+
 /// The priced work of `body` that its known actuals fold away: what a copy at
 /// such a site no longer does. Instructions whose inputs are all known, and
 /// branches they decide; a lower bound, as control flow past a decided branch

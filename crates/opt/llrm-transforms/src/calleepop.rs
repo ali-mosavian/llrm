@@ -83,7 +83,8 @@ fn decided(module: &Module, costs: &OperationCosts, layout: &DataLayout) -> (BTr
                 && !parameters.is_empty()
                 && !named.contains(&callee)
                 && !other.contains(&callee)
-                && sites.len() as i64 * costs.cleanup(words) > returns * costs.return_pops
+                // A pop's worth of bytes saved is not worth an instruction more at every call.
+                && sites.len() as i64 * costs.cleanup(words) + costs.pop >= returns * costs.return_pops
         })
         .map(|(&callee, _)| callee)
         .collect();
