@@ -13,6 +13,7 @@ PRINT "LEN="; LEN(p); LEN(e)
 PRINT "MID="; Edge%(p, 1, 3); Edge%(p, 13, 5); Edge%(p, 14, 1); Edge%(p, 15, 1); Edge%(p, 99, 1); Edge%(p, 5, 0)
 PRINT "TEMP="; ASC(LEFT$(p, 2)); ASC(p + "x"); LEN(p + "ab"); LEN(MID$(p + "ab", 3, 4))
 PRINT "ONE="; ASC(MID$(p, 2, 1)); ASC(MID$(p, 14, 9)); ASC(p)
+PRINT "CHR="; ASC(CHR$(65)); LEN(CHR$(66)); CHR$(67) + CHR$(68); LEN(CHR$(200) + "x"); ASC(CHR$(255)); ASC(CHR$(0))
 
 FUNCTION Edge% (s AS STRING, i AS INTEGER, n AS INTEGER)
     Edge% = LEN(MID$(s, i, n))

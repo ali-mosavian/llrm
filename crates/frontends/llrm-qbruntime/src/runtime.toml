@@ -1050,7 +1050,7 @@ form = "far"
 # parameters the routine frees if the runtime allocated them, which no copy
 # can: a copy stands in only where the actual is not a runtime temporary.
 # `$n` is parameter n; `len($n)` and `data($n)` read a string parameter;
-# `byte(p)` is the byte at p.
+# `byte(p)` is the byte at p; `slot(v)` the address of a frame byte holding v's low byte.
 
 [semantics."B$FLEN"]
 evidence = "rt/strfcn.asm B$FLEN: the length word of the descriptor."
@@ -1070,3 +1070,9 @@ parameters = ["string", "int", "int"]
 releases = [0]
 view = { length = "min($2, max(0, len($0) - $1 + 1))", data = "data($0) + ($1 - 1)" }
 check = { when = "$1 < 1 or $2 < 0", raise = 5 }
+
+[semantics."B$FCHR"]
+evidence = "rt/stcore.asm B$FCHR: OR AH,AH / JNZ ERRFC raises error 5 where the value is not a byte; otherwise a one-byte temporary string holds it."
+parameters = ["int"]
+view = { length = "1", data = "slot($0)" }
+check = { when = "$0 < 0 or 255 < $0", raise = 5 }

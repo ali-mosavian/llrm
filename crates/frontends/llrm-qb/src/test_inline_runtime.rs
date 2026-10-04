@@ -37,8 +37,12 @@ END FUNCTION
 ";
 
 fn mir(dialect: &str, checked: bool, optimized: bool) -> String {
+    mir_of(SOURCE, dialect, checked, optimized)
+}
+
+fn mir_of(source: &str, dialect: &str, checked: bool, optimized: bool) -> String {
     let directory = tempfile::tempdir().expect("creates a directory");
-    let path = written(&directory, "bytes.bas", SOURCE.as_bytes());
+    let path = written(&directory, "bytes.bas", source.as_bytes());
     let frontend = qb_driver::Frontend { checked_arrays: checked, ..qb_driver::Frontend::new(dialect, dialect) };
     let program = qb_driver::parsed(&path, &frontend, None).expect("compiles");
     if optimized { optimized_mir(&program) } else { emitted_mir(&program) }
@@ -113,4 +117,34 @@ fn body_of<'t>(mir: &'t str, routine: &str) -> &'t str {
     let start = mir.lines().scan(0, |at, line| { let here = *at; *at += line.len() + 1; Some((here, line)) }).find(|(_, line)| line.starts_with("define available_externally") && line.contains(&format!("@llrm.qb.{routine}("))).unwrap_or_else(|| panic!("no body of {routine}\n{mir}")).0;
     let rest = &mir[start..];
     &rest[..rest.find("\n}\n").expect("ends")]
+}
+
+/// A character made of a byte, as a loop makes one.
+const CHARACTERS: &str = "DEFINT A-Z
+DECLARE FUNCTION S& (n AS INTEGER)
+PRINT S&(5)
+
+FUNCTION S& (n AS INTEGER)
+    FOR i = 1 TO n: S& = S& + ASC(CHR$(i + 64)) + LEN(CHR$(i)): NEXT
+END FUNCTION
+";
+
+/// CHR$ allocated a runtime string temporary for every byte: each trip was `B$FCHR`, `B$FASC` and
+/// `B$FLEN`. A one-byte view over a frame byte leaves the loop with neither call nor descriptor, and
+/// raises error 5 for a value past a byte only where checks are asked for.
+#[test]
+fn a_chr_of_a_byte_has_no_temporary_or_call() {
+    for dialect in ["qb45", "pds71"] {
+        let text = mir_of(CHARACTERS, dialect, false, true);
+        let text = body(&text, "S&");
+        for routine in ["B$FCHR", "B$FASC", "B$FLEN", "B$SERR"] {
+            assert_eq!(calls(text, routine), 0, "{dialect}: {routine} stays\n{text}");
+        }
+        assert!(!text.contains("alloca"), "{dialect}: a descriptor stays\n{text}");
+    }
+    let text = mir_of(CHARACTERS, "vbdos", false, true);
+    assert_eq!(calls(body(&text, "S&"), "B$FCHR"), 2, "{text}");
+    let plain = body_of(&mir_of(CHARACTERS, "qb45", false, false), "B$FCHR").to_owned();
+    let checked = body_of(&mir_of(CHARACTERS, "qb45", true, false), "B$FCHR").to_owned();
+    assert!(!plain.contains("B$SERR") && checked.contains("@llrm.qb.B$SERR(i16 5) cold"), "{plain}\n{checked}");
 }
