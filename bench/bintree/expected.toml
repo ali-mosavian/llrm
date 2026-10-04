@@ -1,4 +1,4 @@
-reason = "bintree.bas: INSERT is a keyword in PDS 7.1 and VBDOS; the SUB is AddNode, so both BCs build it"
+reason = "llrm-qb --own-frames measured as language basown beside bas"
 blessed = "2026-10-04"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 111995
 code_bytes = 709
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.3076
+kernel_ms = 3.3069
 
 [bas.Os]
 instructions = 237391
@@ -15,7 +15,7 @@ memory_operands = 113650
 code_bytes = 647
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.2488
+kernel_ms = 3.2487
 
 [c.O2]
 instructions = 99760
@@ -23,7 +23,7 @@ memory_operands = 21104
 code_bytes = 359
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.3336
+kernel_ms = 1.3331
 
 [c.Os]
 instructions = 89133
@@ -31,7 +31,7 @@ memory_operands = 22458
 code_bytes = 302
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.1963
+kernel_ms = 1.1961
 
 [nib.O2]
 instructions = 135480
@@ -46,6 +46,22 @@ memory_operands = 35931
 code_bytes = 534
 data_bytes = 0
 bss_bytes = 0
+
+[basown.O2]
+instructions = 146295
+memory_operands = 62574
+code_bytes = 718
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 1.9713
+
+[basown.Os]
+instructions = 141580
+memory_operands = 64242
+code_bytes = 646
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 1.9134
 
 [ow.O2]
 instructions = 109307

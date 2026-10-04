@@ -1,4 +1,4 @@
-reason = "recursive programs (quicksort, fib, hanoi, queens, bintree); code/data/bss bytes of each program's own object; PDS 7.1 and VBDOS BC as references"
+reason = "llrm-qb --own-frames measured as language basown beside bas"
 blessed = "2026-10-04"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 385009
 code_bytes = 232
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 12.248
+kernel_ms = 12.2479
 
 [bas.Os]
 instructions = 950252
@@ -15,7 +15,7 @@ memory_operands = 401394
 code_bytes = 232
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 12.904
+kernel_ms = 12.9041
 
 [c.O2]
 instructions = 327664
@@ -31,7 +31,7 @@ memory_operands = 65530
 code_bytes = 100
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.3715
+kernel_ms = 4.3712
 
 [nib.O2]
 instructions = 278511
@@ -46,6 +46,22 @@ memory_operands = 122868
 code_bytes = 116
 data_bytes = 0
 bss_bytes = 0
+
+[basown.O2]
+instructions = 344048
+memory_operands = 139250
+code_bytes = 214
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 4.5983
+
+[basown.Os]
+instructions = 425963
+memory_operands = 155635
+code_bytes = 216
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 5.6914
 
 [ow.O2]
 instructions = 376809

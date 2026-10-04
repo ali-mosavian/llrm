@@ -240,3 +240,25 @@ class SizeTests(unittest.TestCase):
             with mock.patch.object(bench.maps, "locate", return_value=0), mock.patch.object(bench.icount, "run", return_value=run):
                 got = bench.measure(("p", exe, exe, "f", ["1"], obj))
         self.assertEqual((got["code_bytes"], got["data_bytes"], got["bss_bytes"]), (12, 0, 40))
+
+
+class OwnFramesTests(unittest.TestCase):
+    def test_a_basic_source_is_measured_with_and_without_own_frames(self):
+        """recursive BASIC pays the runtime's B$ENRA/B$EXSA per call (fib 14.9 ms against 5.0 with --own-frames): the bench only built the default."""
+        languages = [one.language for one in bench.variants(bench.BENCH / "fib")]
+        self.assertEqual(languages.count("bas"), 1)
+        self.assertEqual(languages.count("basown"), 1)
+
+    def test_only_the_own_frames_variant_passes_the_flag(self):
+        import tempfile
+        from unittest import mock
+
+        seen = {}
+        for variant in bench.variants(bench.BENCH / "fib"):
+            if variant.language in bench.BASIC_LANGUAGES:
+                with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run:
+                    run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
+                    bench.build(variant, "O2", Path(where), "V000")
+                    seen[variant.language] = run.call_args[0][0]
+        self.assertNotIn("--own-frames", seen["bas"])
+        self.assertIn("--own-frames", seen["basown"])

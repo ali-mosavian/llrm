@@ -42,6 +42,8 @@ OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/b
 OWLIB = Path(os.environ.get("OW_LIB", Path.home() / "dos/devtools/dev/c/watcom/lib286"))
 BENCH = ROOT / "bench"
 LANGUAGES = {"bas": ".bas", "c": ".c", "nib": ".nib"}
+# llrm-qb again with --own-frames (a plain frame for the runtime's B$ENRA/B$EXSA): a language of its own in expected.toml, from the .bas.
+BASIC_LANGUAGES = ("bas", "basown")
 COUNTERS = ("instructions", "memory_operands")
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
@@ -59,7 +61,7 @@ BORLAND = {
     "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
-REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
+REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "basown": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
 # BASIC references: the name in expected.toml -> the toolchain (run_tests.TOOLS) whose BC compiles and whose runtime links.
 BASIC_REFERENCES = {"bc": "qb45", "pds71": "pds71", "vbdos": "vbdos"}
 # Kernel time is a difference of two whole-program times, each a few cycles off from run to run: parity/loop's 139
@@ -100,7 +102,8 @@ def variants(directory: Path) -> list[Variant]:
         source = directory / f"{directory.name}{suffix}"
         if source.exists():
             head = run_tests.header(source)
-            out.append(Variant(name, language, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45")))
+            for one in ("bas", "basown") if language == "bas" else (language,):
+                out.append(Variant(name, one, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45")))
     return out
 
 
@@ -120,8 +123,9 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
             done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
                                   env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": "-fno-inline-functions"})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
-        tool = "llrm-qb" if variant.language == "bas" else "llrm-c"
-        arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language == "bas" else []
+        tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
+        arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
+        flags += ["--own-frames"] if variant.language == "basown" else []
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=300)
         if done.returncode != 0 or not obj.exists():
@@ -312,7 +316,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
         with ThreadPoolExecutor() as pool:
             built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)]), todo))
-        basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language == "bas" and not isinstance(b, str)}
+        basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
         failed = link_basic(basic, folder)
         jobs, plain = [], {}
         for (directory, variant), result in zip(todo, built):
@@ -322,7 +326,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
             if why:
                 out[key] = {"error": why}
                 continue
-            exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language == "bas" else result
+            exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language in BASIC_LANGUAGES else result
             if directory == STARTUP:
                 plain[key] = exe  # timed, not counted
             else:
@@ -394,7 +398,7 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> N
             new["kernel_ms"] = old["kernel_ms"]
         tables.setdefault(language, {})[opt] = new
     lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
-    for language in [*LANGUAGES, *(one for many in REFERENCES.values() for one in many)]:
+    for language in dict.fromkeys([*LANGUAGES, *BASIC_LANGUAGES, *(one for many in REFERENCES.values() for one in many)]):
         for opt in sorted(tables.get(language, {})):
             lines += [f"[{language}.{opt}]", *(f"{one} = {value}" for one, value in tables[language][opt].items()), ""]
     (directory / "expected.toml").write_text("\n".join(lines))
@@ -528,7 +532,7 @@ def main() -> int:
         names = {key[0] for key in measured}
         for directory in benchmarks(args.select):
             name = str(directory.relative_to(BENCH))
-            broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and key[1] in LANGUAGES and "error" in value and "known" not in value]
+            broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and key[1] in (*LANGUAGES, *BASIC_LANGUAGES) and "error" in value and "known" not in value]
             if broken:
                 print(f"not blessing {name}: {broken}")
                 return 1
