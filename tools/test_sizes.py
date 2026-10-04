@@ -48,3 +48,14 @@ def test_a_change_to_fixups_alone_reads_zero_bytes(tmp_path):
     fixed.write_bytes(object_with(100, record(0x9C, b"\xc4\x01\x01\x54\x01" * 20)))
     assert fixed.stat().st_size > plain.stat().st_size
     assert code_bytes(fixed) - code_bytes(plain) == 0
+
+
+def test_a_class_index_past_127_takes_two_bytes(tmp_path):
+    """OMF indices from 0x80 up are two bytes: with 130 names the class index read one byte and the
+    overlay index landed in its place."""
+    path = tmp_path / "w.obj"
+    lnames = b"".join(name(f"N{n}") for n in range(128)) + name("BC_CODE") + name("SEG")
+    # class BC_CODE is name 129 (0x81 0x00 | 1: high bit set, then the low byte), segment SEG name 130.
+    segment = bytes([0x48]) + (55).to_bytes(2, "little") + bytes([0x80, 130, 0x80, 129, 1])
+    path.write_bytes(record(0x80, name("x")) + record(0x96, lnames) + record(0x98, segment))
+    assert code_bytes(path) == 55
