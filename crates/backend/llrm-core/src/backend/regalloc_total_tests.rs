@@ -91,7 +91,8 @@ fn far_pointer_slot_also_read_as_words(body: &LirBody) -> bool {
 /// llrm-nib stopped, #107).
 #[test]
 fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_registers() {
-    let (body, phases) = before_regalloc_in(Calls::Everything, "conc9_les.ll", "f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum", "Core");
+    // Without the spiller: the selector class it now holds in registers no longer leaves this far pointer reloaded as words.
+    let (body, phases) = crate::backend::regalloc_input::before_phase_skipping(Calls::Everything, "conc9_les.ll", "f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum", "Core", "RegAlloc", &["SsaSpill"]);
     let mut body = body;
     let mut phases = phases.into_iter();
     for mut phase in phases.by_ref() {

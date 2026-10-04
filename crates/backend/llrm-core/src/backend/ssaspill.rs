@@ -46,6 +46,40 @@ pub fn changes() -> usize {
 pub struct SsaSpill {
     pub frame: Rc<RefCell<Frame>>,
     pub segments: Segments,
+    pub prices: Prices,
+}
+
+/// How much a block or an edge counts: by how often it runs, or once where the price is bytes.
+struct Weights<'a> {
+    frequency: &'a Frequency,
+    by_frequency: bool,
+}
+
+impl Weights<'_> {
+    fn block(&self, at: i64) -> f64 {
+        if self.by_frequency { self.frequency.block(at) } else { 1.0 }
+    }
+
+    fn edge(&self, from: i64, to: i64) -> f64 {
+        if self.by_frequency { self.frequency.edge(from, to) } else { 1.0 }
+    }
+}
+
+/// What a load from memory costs at the level being compiled, and whether it costs once per run or once per trip.
+#[derive(Clone, Copy, Debug)]
+pub struct Prices {
+    pub load: f64,
+    /// By block frequency (clocks); not where the price is code bytes, which a loop's trips do not multiply.
+    pub by_frequency: bool,
+}
+
+impl Prices {
+    /// The level `profile` compiles for: its machine's byte costs at -Os, its clocks otherwise.
+    pub fn of(profile: &crate::backend::cpu::Profile) -> Self {
+        let machine = profile.target();
+        let costs = if profile.size { machine.size_costs() } else { machine.costs() };
+        Self { load: costs.load as f64, by_frequency: !profile.size }
+    }
 }
 
 impl SsaSpill {
@@ -63,7 +97,7 @@ impl LIRTransform for SsaSpill {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
-        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments)?;
+        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, self.prices)?;
         if made.is_some() {
             CHANGES.with(|count| count.set(count.get() + 1));
         }
@@ -231,9 +265,20 @@ impl Flow {
     }
 }
 
-/// The registers a block's values may sit in: all of them, or one class's.
+/// A register file the spiller keeps within its size: the general registers, or the segment registers a selector value sits in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum File {
+    General,
+    Selector,
+}
+
+/// The registers one file's values may sit in: all of them, or one class's.
 struct Machine<'a> {
     confined: &'a Classes,
+    file: File,
+    /// The data segment register, which an instruction that needs the data group takes from the selectors.
+    data: Register,
+    /// The file's registers (whole, as the allocator names them).
     general: BTreeSet<Register>,
     classes: BTreeSet<BTreeSet<Register>>,
     /// The registers with byte halves.
@@ -241,19 +286,25 @@ struct Machine<'a> {
 }
 
 impl<'a> Machine<'a> {
-    fn of(confined: &'a Classes) -> Self {
-        let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
+    fn of(confined: &'a Classes, file: File, segments: &Segments) -> Self {
+        let general: BTreeSet<Register> = match file {
+            File::General => target::AVAILABLE.iter().map(|one| _whole(*one)).collect(),
+            File::Selector => segments.selectors.iter().copied().collect(),
+        };
         let classes = confined
             .values()
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>())
             .filter(|class| !class.is_empty() && class.len() < general.len())
             .collect();
-        Self { confined, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
+        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
     }
 
-    /// A value that lives in a general register at all.
+    /// A value that lives in a register of this file at all: a selector only where the program names it so.
     fn registered(&self, value: u32) -> bool {
-        self.confined.get(&value).is_none_or(|class| class.iter().any(|one| self.general.contains(&_whole(*one))))
+        match (self.file, self.confined.get(&value)) {
+            (File::General, class) => class.is_none_or(|class| class.iter().any(|one| self.general.contains(&_whole(*one)))),
+            (File::Selector, class) => class.is_some_and(|class| class.iter().any(|one| self.general.contains(&_whole(*one)))),
+        }
     }
 
     fn class(&self, value: u32) -> Option<BTreeSet<Register>> {
@@ -391,58 +442,42 @@ struct Edits {
     w_out: BTreeSet<u32>,
 }
 
-pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<LirBody, String> {
-    Ok(changed(body, frame, segments)?.unwrap_or_else(|| body.clone()))
+pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<LirBody, String> {
+    Ok(changed(body, frame, segments, prices)?.unwrap_or_else(|| body.clone()))
 }
 
 /// `body` spilled, or None where there was nothing to spill and nothing to simplify.
-fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<Option<LirBody>, String> {
+fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
     let confined = allocate::classes(body, &BTreeSet::new(), segments);
-    let machine = Machine::of(&confined);
     let skip = untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
-    // A value a loop's back edge must reload each trip is not worth holding at its header.
-    let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
-    // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
-    let room = loop_room(body, &flow, &machine, &skip, &loops);
     let all: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.defines.iter().copied()).collect();
     let remakes = remakable(body, &all);
     let frequency = Frequency::of(body);
     let headers: BTreeSet<i64> = loops.iter().map(|found| found.header).collect();
-    let mut result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
-    // A loop header keeps a value its back edge must reload only while those
-    // reloads run at most half as often as reloads at its first uses inside one trip.
-    for _ in 0..4 {
-        let mut more = false;
-        for ((from, to), values) in &result.across {
-            if place[from] < place[to] {
-                continue;
-            }
-            let Some(within) = loops.iter().find(|one| one.header == *to) else { continue };
-            for value in values {
-                let keep: f64 = body
-                    .blocks
-                    .iter()
-                    .filter(|block| block.succ.contains(to) && !result.edits[&block.at].w_out.contains(value))
-                    .map(|block| frequency.edge(block.at, *to))
-                    .sum();
-                let drop = first_uses(&flow, &frequency, &within.body, *to, *value);
-                // Holding the value costs its register through the trip as well: keep it only when the back edge reloads it rarely.
-                if 2.0 * keep >= drop {
-                    more |= dropped.entry(*to).or_default().insert(*value);
-                }
-            }
+    let mut result = Simulated::default();
+    let mut selectors: BTreeSet<u32> = BTreeSet::new();
+    for file in [File::General, File::Selector] {
+        let machine = Machine::of(&confined, file, segments);
+        if machine.general.is_empty() {
+            continue;
         }
-        if !more {
-            break;
+        // A selector is read from its cell or loaded into a register: never a constant it is made from.
+        let kept: IndexMap<u32, Arc<Insn>> = match file {
+            File::General => remakes.clone(),
+            File::Selector => remakes.iter().filter(|(value, one)| remade_cell(one, **value).is_some()).map(|(value, one)| (*value, Arc::clone(one))).collect(),
+        };
+        if file == File::Selector {
+            selectors.extend(kept.keys().copied().filter(|value| machine.registered(*value)));
         }
-        result = simulated(body, &flow, &machine, &skip, &remakes, &order, &dropped, &room, &frequency, &headers);
+        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices);
+        result.merge(one);
     }
     if result.stored.is_empty() {
         return Ok(simple);
@@ -475,7 +510,150 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         .collect();
     let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &at_leaves, &remakes, frame)?;
     let held: IndexMap<i64, BTreeSet<u32>> = result.edits.iter().map(|(at, edit)| (*at, edit.w_in.clone())).collect();
-    Ok(Some(ssarepair::repaired(&spilled, &result.stored, &held)))
+    Ok(Some(without_dead_remakes(ssarepair::repaired(&spilled, &result.stored, &held), &selectors)))
+}
+
+/// `body` without the definitions of remade selectors that nothing reads any more: each read made its own.
+fn without_dead_remakes(body: LirBody, remade: &BTreeSet<u32>) -> LirBody {
+    let mut gone: BTreeSet<*const Insn> = BTreeSet::new();
+    let mut targets = remade.clone();
+    loop {
+        let read: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .insns
+                    .iter()
+                    .filter(|one| !gone.contains(&Arc::as_ptr(one)))
+                    .flat_map(|one| one.uses.iter().copied())
+                    .chain(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)))
+            })
+            .collect();
+        let mut more = false;
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            let [value] = one.defines.as_slice() else { continue };
+            let plain = one.what.as_ref().is_some_and(|what| what.op == Operation::Move && what.name.as_deref() == Some("mov")) && !one.rematerialized && one.uses.len() <= 1;
+            if plain && targets.contains(value) && !read.contains(value) && gone.insert(Arc::as_ptr(one)) {
+                // What it copied is read by it no more.
+                targets.extend(one.uses.iter().copied());
+                more = true;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    if gone.is_empty() {
+        return body;
+    }
+    let blocks = body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !gone.contains(&Arc::as_ptr(one))).cloned().collect())).collect();
+    body.with_blocks(blocks)
+}
+
+/// The simulation of one register file's values over every block; for the selectors, the cheaper at this level's price of holding at a loop's entry what no predecessor ends with, or not.
+#[allow(clippy::too_many_arguments)]
+fn simulated_in(
+    body: &LirBody,
+    flow: &Flow,
+    machine: &Machine<'_>,
+    skip: &BTreeSet<u32>,
+    remakes: &IndexMap<u32, Arc<Insn>>,
+    order: &[i64],
+    place: &IndexMap<i64, usize>,
+    frequency: &Frequency,
+    headers: &BTreeSet<i64>,
+    loops: &[crate::analysis::loops::Loop],
+    prices: Prices,
+) -> Simulated {
+    let weights = Weights { frequency, by_frequency: prices.by_frequency };
+    let attempt = |admit: bool| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, admit);
+    if machine.file != File::Selector {
+        return attempt(false);
+    }
+    let (with, without) = (attempt(true), attempt(false));
+    if traffic(&with, &weights, prices) < traffic(&without, &weights, prices) { with } else { without }
+}
+
+/// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.
+#[allow(clippy::too_many_arguments)]
+fn simulated_with(
+    body: &LirBody,
+    flow: &Flow,
+    machine: &Machine<'_>,
+    skip: &BTreeSet<u32>,
+    remakes: &IndexMap<u32, Arc<Insn>>,
+    order: &[i64],
+    place: &IndexMap<i64, usize>,
+    frequency: &Frequency,
+    headers: &BTreeSet<i64>,
+    loops: &[crate::analysis::loops::Loop],
+    prices: Prices,
+    weights: &Weights<'_>,
+    admit: bool,
+) -> Simulated {
+    // A value a loop's back edge must reload each trip is not worth holding at its header.
+    let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
+    // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
+    let room = loop_room(body, flow, machine, skip, loops);
+    let mut result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit);
+    // A loop header keeps a value its back edge must reload only while those
+    // reloads run at most half as often as reloads at its first uses inside one trip.
+    for _ in 0..4 {
+        let mut more = false;
+        for ((from, to), values) in &result.across {
+            if place[from] < place[to] {
+                continue;
+            }
+            let Some(within) = loops.iter().find(|one| one.header == *to) else { continue };
+            for value in values {
+                let keep: f64 = body
+                    .blocks
+                    .iter()
+                    .filter(|block| block.succ.contains(to) && !result.edits[&block.at].w_out.contains(value))
+                    .map(|block| weights.edge(block.at, *to))
+                    .sum();
+                let drop = first_uses(flow, weights, &within.body, *to, *value);
+                // Holding the value costs its register through the trip as well: keep it only when the back edge reloads it rarely.
+                if 2.0 * keep >= drop {
+                    more |= dropped.entry(*to).or_default().insert(*value);
+                }
+            }
+        }
+        if !more {
+            break;
+        }
+        result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit);
+    }
+    // Dropping what a loop evicts leaves the loop's registers short of use: a value is let back in
+    // where the loop then moves less to and from memory.
+    if machine.file == File::Selector {
+        let mut best = traffic(&result, weights, prices);
+        let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
+        for (header, value) in letting {
+            let mut trial = dropped.clone();
+            trial.get_mut(&header).map(|values| values.remove(&value));
+            let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
+            let moved = traffic(&tried, weights, prices);
+            if moved < best {
+                best = moved;
+                result = tried;
+                dropped = trial;
+            }
+        }
+    }
+    result
+}
+
+/// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
+fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices) -> f64 {
+    let blocks: f64 = result
+        .edits
+        .iter()
+        .map(|(at, edit)| weights.block(*at) * prices.load * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
+        .sum();
+    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * prices.load * values.len() as f64).sum();
+    blocks + edges
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
@@ -510,6 +688,29 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             out.insert(*value, Arc::clone(only));
         }
     }
+    // A plain copy of a value made again is made again the same way: its own.
+    for one in body.insns() {
+        let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { continue };
+        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
+        if what.op != Operation::Move || what.name.as_deref() != Some("mov") || dest.value != *value || from.value != *source || dest.width != from.width || !values.contains(value) {
+            continue;
+        }
+        if defining.get(value).is_none_or(|found| found.len() != 1) || out.contains_key(value) {
+            continue;
+        }
+        let Some(made) = out.get(source) else { continue };
+        // Made as wide as the copy is: the low word of a dword load is not that load.
+        let made_width = made.what.as_ref().and_then(|what| match what.dests.as_slice() { [Loc::Held(held)] => Some(held.width), _ => None });
+        if made_width != Some(dest.width) {
+            continue;
+        }
+        let mut copy = (**made).clone();
+        copy.defines = vec![*value];
+        if let Some(what) = &mut copy.what {
+            what.dests = vec![Loc::Held(crate::model::ir::Held { value: *value, width: dest.width })];
+        }
+        out.insert(*value, Arc::new(copy));
+    }
     out
 }
 
@@ -535,11 +736,47 @@ fn remade(one: &Insn, beside: &Insn) -> Arc<Insn> {
     Arc::new(made)
 }
 
+#[derive(Default)]
 struct Simulated {
     edits: IndexMap<i64, Edits>,
     across: IndexMap<(i64, i64), Vec<u32>>,
     left: IndexMap<(i64, i64), Vec<u32>>,
     stored: BTreeSet<u32>,
+}
+
+impl Simulated {
+    /// This with the simulation of another file's values, which are other values.
+    fn merge(&mut self, other: Simulated) {
+        for (at, edit) in other.edits {
+            self.edits.entry(at).or_default().merge(edit);
+        }
+        for (edge, values) in other.across {
+            self.across.entry(edge).or_default().extend(values);
+        }
+        for (edge, values) in other.left {
+            self.left.entry(edge).or_default().extend(values);
+        }
+        self.stored.extend(other.stored);
+    }
+}
+
+impl Edits {
+    fn merge(&mut self, other: Edits) {
+        for (position, values) in other.before {
+            self.before.entry(position).or_default().extend(values);
+        }
+        self.at_end.extend(other.at_end);
+        for (position, values) in other.folded {
+            self.folded.entry(position).or_default().extend(values);
+        }
+        for (position, values) in other.leaves {
+            self.leaves.entry(position).or_default().extend(values);
+        }
+        self.leaves_at_end.extend(other.leaves_at_end);
+        self.leaves_at_top.extend(other.leaves_at_top);
+        self.w_in.extend(other.w_in);
+        self.w_out.extend(other.w_out);
+    }
 }
 
 fn simulated(
@@ -553,6 +790,7 @@ fn simulated(
     room: &IndexMap<i64, usize>,
     frequency: &Frequency,
     headers: &BTreeSet<i64>,
+    admit: bool,
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
@@ -602,7 +840,7 @@ fn simulated(
         for (tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
             let far = header && *near >= EXIT;
-            if (!far || spare > 0) && (*tier < 2 || block.arrives().contains(value)) {
+            if (!far || spare > 0) && (*tier < 2 || (header && admit) || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
                 if machine.fits(&next, &BTreeSet::new(), k) {
@@ -649,7 +887,10 @@ fn simulated(
             }
             evict(&mut held, &mut leaving, &used, k);
             // What the instruction states it takes leaves less for what lives through it.
-            let taken = stated(one, &machine.general);
+            let mut taken = stated(one, &machine.general);
+            if machine.file == File::Selector && machine.general.contains(&machine.data) && target::needs_data_group(one) {
+                taken.insert(machine.data);
+            }
             // A register a value of this instruction sits in is that value's, not one more.
             let mut covered: BTreeSet<Register> = one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)).collect();
             if let Some(what) = &one.what {
@@ -755,7 +996,7 @@ fn simulated(
 
 /// What reloading `value` at its first register uses costs, within one trip of the loop
 /// `within` entered at `header`: the frequency of each block on that frontier.
-fn first_uses(flow: &Flow, frequency: &Frequency, within: &BTreeSet<i64>, header: i64, value: u32) -> f64 {
+fn first_uses(flow: &Flow, weights: &Weights<'_>, within: &BTreeSet<i64>, header: i64, value: u32) -> f64 {
     let mut cost = 0.0;
     let mut seen: BTreeSet<i64> = BTreeSet::new();
     let mut todo: Vec<i64> = vec![header];
@@ -765,7 +1006,7 @@ fn first_uses(flow: &Flow, frequency: &Frequency, within: &BTreeSet<i64>, header
         }
         let length = flow.length[&at];
         if flow.uses[&at].get(&value).is_some_and(|list| list.iter().any(|position| *position < length)) {
-            cost += frequency.block(at);
+            cost += weights.block(at);
             continue;
         }
         for to in &flow.succ[&at] {
@@ -1021,7 +1262,7 @@ mod tests {
     fn test_two_base_only_values_fit_while_one_acts() {
         let bx = BTreeSet::from([Register::EBX]);
         let confined: Classes = [(1, bx.clone()), (2, bx), (3, BTreeSet::from([Register::ESI, Register::EDI]))].into_iter().collect();
-        let machine = Machine::of(&confined);
+        let machine = Machine::of(&confined, File::General, &target::BUILT_IN);
         let held: BTreeSet<u32> = [1, 2, 3].into_iter().collect();
         assert!(machine.fits(&held, &BTreeSet::from([1]), 6), "one acting BX value leaves the other waiting");
         assert!(!machine.fits(&held, &BTreeSet::from([1, 2]), 6), "premise: two acting BX values cannot both sit in BX");

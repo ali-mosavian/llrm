@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::backend::frame::Frame;
 use crate::backend::regalloc_input::{before_phase, Calls};
+use crate::backend::ssaspill::Prices;
 use crate::backend::{ssaspill, target};
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
@@ -45,7 +46,7 @@ fn joined_width(body: &LirBody, value: u32) -> u32 {
 fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
     let (body, _) = before_phase(Calls::C, "phiwidth.ll", "_f", "486", "SsaSpill");
     let mut frame = Frame::new(0);
-    let spilled = ssaspill::spilled(&body, &mut frame, &target::BUILT_IN).expect("spills");
+    let spilled = ssaspill::spilled(&body, &mut frame, &target::BUILT_IN, Prices { load: 1.0, by_frequency: true }).expect("spills");
     let stores: Vec<(u32, u32)> = spilled
         .insns()
         .iter()
@@ -217,7 +218,7 @@ fn test_spill_code_survives_empty_blocks() {
     for (fixture, name) in [("tilesum.ll", "_tile_sum"), ("matmul.ll", "_bench_matmul"), ("hotstore.ll", "_f"), ("trivialphi.ll", "_bench_shellsort")] {
         let (body, _) = before_phase(Calls::C, fixture, name, "486", "SsaSpill");
         let split = with_empty_edge_blocks(&body);
-        let spilled = ssaspill::spilled(&split, &mut Frame::new(0), &target::BUILT_IN).unwrap_or_else(|why| panic!("{fixture}: {why}"));
+        let spilled = ssaspill::spilled(&split, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 1.0, by_frequency: true }).unwrap_or_else(|why| panic!("{fixture}: {why}"));
         reloads += spilled.insns().iter().filter(|one| one.spill_reload).count();
         reloads_follow_stores(&spilled).unwrap_or_else(|why| panic!("{fixture}: {why}"));
     }
@@ -232,7 +233,7 @@ fn test_a_bridge_keeps_every_blocks_frequency() {
     let (mut body, _) = before_phase(Calls::C, "phiwidth.ll", "_f", "486", "SsaSpill");
     let had: BTreeSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     // Where the bridge goes, then that edge stated as the likely one.
-    let first = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN).expect("spills");
+    let first = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 1.0, by_frequency: true }).expect("spills");
     // phiwidth's loop-closing edge was bridged to reload a remade load; the add takes the load's cell now,
     // and the edge needs no code. Where a body does bridge an edge, the bridge's odds are stated too.
     if let Some(bridge) = first.blocks.iter().find(|block| !had.contains(&block.at)) {
@@ -241,7 +242,7 @@ fn test_a_bridge_keeps_every_blocks_frequency() {
         let to = bridge.succ[0];
         body.odds.taken.insert((from.at, to), (0.9 * crate::model::lir::BlockOdds::CERTAIN) as u32);
     }
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN).expect("spills");
+    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 1.0, by_frequency: true }).expect("spills");
     let (before, after) = (crate::analysis::frequency::Frequency::of(&body), crate::analysis::frequency::Frequency::of(&spilled));
     for at in had {
         let (was, is) = (before.block(at), after.block(at));
@@ -292,7 +293,7 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
         .collect();
     blocks.reverse();
     let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN).expect("spills");
+    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 1.0, by_frequency: true }).expect("spills");
     assert!(spilled.insns().iter().all(|one| !one.spill_store && !one.spill_reload), "one value in a six-register machine was spilled");
 }
 
@@ -323,4 +324,70 @@ fn test_an_invariant_load_is_read_in_place_not_remade_each_trip() {
     assert!(done.stores > 0.0, "premise: the body spills");
     assert!(done.remats <= 272.0, "{} remakes executed", done.remats);
     assert!(done.stores < 272.0, "{} stores executed", done.stores);
+}
+
+/// The most values of one register file live at once in `body`, where `member` picks the file's values.
+fn most_live(body: &LirBody, member: impl Fn(u32) -> bool) -> usize {
+    let (_, live_out) = crate::backend::allocate::live(body);
+    let mut most = 0;
+    for block in &body.blocks {
+        let mut live: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| member(*value)).collect();
+        most = most.max(live.len());
+        for one in block.insns.iter().rev() {
+            for value in &one.defines {
+                live.remove(value);
+            }
+            live.extend(one.uses.iter().copied().filter(|value| member(*value)));
+            most = most.max(live.len());
+        }
+    }
+    most
+}
+
+/// Six far pointers read in one loop, three selector registers to hold them (the built-in machine's es, fs, gs).
+/// The spiller left all six live at once for the allocator to juggle (`mov gs, [slot]` before most reads, and a
+/// selector kept in a general register); the pressure of each register file now fits its size.
+#[test]
+fn test_selectors_live_at_once_fit_the_segment_registers() {
+    let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
+    let selectors = |body: &LirBody| {
+        let classes = crate::backend::allocate::classes(body, &BTreeSet::new(), &target::BUILT_IN);
+        most_live(body, |value| classes.get(&value).is_some_and(|class| class.iter().all(|one| target::BUILT_IN.selectors.contains(one))))
+    };
+    assert!(selectors(&body) > target::BUILT_IN.selectors.len(), "premise: more selectors live than registers");
+    let spilled = phases[0].transform(body).expect("spills");
+    let live = selectors(&spilled);
+    assert!(live <= target::BUILT_IN.selectors.len(), "{live} selectors live at once");
+}
+
+/// QCport's `_draw_string` at --cpu 486: a word copied from the low half of a dword load was made again as
+/// that dword load into a word (`mov dx, dword [bp+20]`), which no encoding has; llrm-c refused four modules.
+#[test]
+fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {
+    let (body, mut phases) = before_phase(Calls::C, "lowword.ll", "_draw_string", "486", "SsaSpill");
+    let spilled = phases[0].transform(body).expect("spills");
+    let wrong: Vec<String> = spilled
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .filter(|what| what.op == crate::model::ir::Operation::Move)
+        .filter_map(|what| match (what.dests.as_slice(), what.sources.as_slice()) {
+            ([Loc::Held(dest)], [Loc::Mem(cell)]) if dest.width != cell.width => Some(format!("{what:?}")),
+            _ => None,
+        })
+        .collect();
+    assert!(wrong.is_empty(), "loads of another width than their register: {wrong:?}");
+}
+
+/// Six far pointers each read once per trip. Priced in clocks, a selector is loaded at the loop's entry
+/// (the trips repeat what it saves); priced in bytes, the entry load is a load more than the one read in
+/// the loop it replaces, and is left out: 42 instructions rather than 44 (the level's price, not the pass's).
+#[test]
+fn test_a_loop_entry_load_is_priced_by_the_level() {
+    let size = |by_frequency: bool| {
+        let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
+        ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 3.0, by_frequency }).expect("spills").insns().len()
+    };
+    let (clocks, bytes) = (size(true), size(false));
+    assert!(bytes < clocks, "{bytes} instructions priced in bytes, {clocks} in clocks");
 }
