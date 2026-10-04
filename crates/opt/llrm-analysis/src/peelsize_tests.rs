@@ -97,13 +97,13 @@ fn a_copy_no_larger_than_the_loop_is_admitted_even_under_os() {
 #[test]
 fn a_copy_that_folds_away_is_admitted_whatever_it_would_have_grown_to() {
     let os = Limits { grows: false, ..Limits::default() };
-    assert!(summing(16, "0", "").admitted(&os));
+    assert!(summing(10, "0", "").admitted(&os));
 }
 
 #[test]
 fn past_max_completely_peel_times_nothing_is_copied() {
-    assert!(summing(16, "0", "").admitted(&Limits::default()));
-    assert!(!summing(17, "0", "").admitted(&Limits::default()));
+    assert!(summing(10, "0", "").admitted(&Limits::default()));
+    assert!(!summing(11, "0", "").admitted(&Limits::default()));
     assert!(summing(17, "0", "").admitted(&Limits { max_unroll_iterations: 0, ..Limits::default() }));
 }
 
@@ -136,7 +136,7 @@ b0:
 b1:
   %i = phi i16 [ 0, %b0 ], [ %next, %b7 ]
   %acc = phi i16 [ 0, %b0 ], [ %out, %b7 ]
-  %go = icmp slt i16 %i, 12
+  %go = icmp slt i16 %i, 10
   br i1 %go, label %b2, label %b8
 
 b2:
@@ -232,7 +232,7 @@ fn a_cold_loop_is_not_copied_where_the_code_grows() {
     assert!(summing(8, "%x", "").entered(&limits, ENTRY / 20 + 1));
     assert!(!summing(8, "%x", "").entered(&limits, ENTRY / 256));
     assert!(summing(4, "%x", "").entered(&limits, 1));
-    assert!(summing(16, "0", "").entered(&limits, 1));
+    assert!(summing(10, "0", "").entered(&limits, 1));
 }
 
 /// QCport -O2 grew 1.8 KB past BCC's in loops copied for a third of their clocks: a copy that grows
@@ -246,5 +246,13 @@ fn a_copy_must_save_clocks_for_the_bytes_it_adds() {
     assert!(loop_.priced(&Limits::default(), ENTRY, &dear), "no rate asks nothing");
     assert!(!loop_.priced(&rated, ENTRY, &dear));
     assert!(loop_.priced(&rated, ENTRY, &cheap));
-    assert!(summing(16, "0", "").priced(&rated, ENTRY, &dear), "a copy that folds away adds no bytes");
+    assert!(summing(10, "0", "").priced(&rated, ENTRY, &dear), "a copy that folds away adds no bytes");
+}
+
+/// QCport's 16-trip clear and fill loops (console.c, mdl.c) were copied 16 times, +100 to +400 bytes
+/// each: LLVM analyses at most 10 iterations (`-unroll-max-iteration-count-to-analyze`).
+#[test]
+fn a_loop_of_more_than_ten_trips_is_not_copied() {
+    assert!(summing(10, "%x", "").admitted(&Limits::default()));
+    assert!(!summing(16, "%x", "").admitted(&Limits::default()));
 }

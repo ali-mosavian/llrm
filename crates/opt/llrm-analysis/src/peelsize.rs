@@ -71,7 +71,7 @@ const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 /// `UL_NO_GROWTH`: a copy is taken only when it is no larger.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Limits {
-    /// `--param max-completely-peel-times`; 0 is unbounded.
+    /// LLVM's `-unroll-max-iteration-count-to-analyze` (10), where GCC's `max-completely-peel-times` is 16; 0 is unbounded.
     pub max_unroll_iterations: i64,
     /// `--param max-completely-peeled-insns`; 0 is unbounded.
     pub max_unrolled_operations: i64,
@@ -82,7 +82,7 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 16, max_unrolled_operations: 200, grows: true, milliclocks_per_byte: 0 }
+        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, grows: true, milliclocks_per_byte: 0 }
     }
 }
 
