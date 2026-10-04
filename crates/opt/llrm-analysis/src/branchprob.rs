@@ -8,6 +8,9 @@
 //! - a successor every path of which ends in `unreachable`, a `noreturn`
 //!   or a `cold` call (`noreturn::cold`) is all but never taken;
 //! - in a loop, staying in it is taken 124 times to every 4 exits;
+//! - a branch decided by the counters of the loop around it, which induction
+//!   proves counts a known number of trips, is taken on the share of those
+//!   trips the compare holds on;
 //! - `p == q` on pointers fails (20:12), as do `x == 0`, `x == -1`,
 //!   `x < 0` and `x <= 0` on integers but truth values and one-bit
 //!   tests, and `x == y` on floats; `isnan` is all but never;
@@ -39,6 +42,8 @@ pub enum Heuristic {
     Invoke,
     Unreachable,
     Loop,
+    /// A compare of an enclosing counted loop's counters: the share of its trips it holds on.
+    Counted,
     Pointer,
     Zero,
     Float,
@@ -91,7 +96,7 @@ pub fn estimated(context: &Context, metadata: &[MetadataNode], declarations: &De
                 odds.taken.insert((id(block), *only), 1.0);
             }
             _ => {
-                let (heuristic, weights) = weighed(context, metadata, declarations, function, shape, &cold, block, &successors);
+                let (heuristic, weights) = weighed(context, metadata, declarations, function, shape, trips, &cold, block, &successors);
                 let total: f64 = weights.iter().sum();
                 for (to, weight) in successors.iter().zip(&weights) {
                     *odds.taken.entry((id(block), *to)).or_default() += weight / total;
@@ -139,7 +144,7 @@ fn declared(context: &Context, metadata: &[MetadataNode], function: &Function, b
 }
 
 /// The first heuristic that tells `block`'s successors apart, and their weights.
-fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
+fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarations, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>, cold: &BTreeSet<i64>, block: BlockId, successors: &[i64]) -> (Heuristic, Vec<f64>) {
     if let Some(weights) = declared(context, metadata, function, block, successors) {
         return (Heuristic::Declared, weights);
     }
@@ -167,6 +172,9 @@ fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarat
             return (Heuristic::Loop, weights);
         }
     }
+    if let Some(weights) = counted(context, function, shape, trips, block, successors) {
+        return (Heuristic::Counted, weights);
+    }
     if successors.len() == 2 {
         if let Some((heuristic, likely, nan)) = compared(context, declarations, function, block) {
             let weights = if nan { ORDERED } else { OPCODE };
@@ -183,6 +191,112 @@ fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarat
         return (Heuristic::Return, weights);
     }
     (Heuristic::Even, vec![1.0; successors.len()])
+}
+
+/// The weights of `block`'s two successors where an enclosing loop with
+/// `trips` proven decides its compare: the loop's counters (its header phis,
+/// from constant starts) are run trip by trip, and the branch is taken as
+/// often as the compare holds. Inner loops first; none that proves it, none.
+fn counted(context: &Context, function: &Function, shape: &Shape, trips: &BTreeMap<i64, i64>, block: BlockId, successors: &[i64]) -> Option<Vec<f64>> {
+    let branch = function.instruction(function.terminator(block)?);
+    let (Opcode::Br, [Operand::Value(condition), Operand::Block(yes), Operand::Block(_)]) = (&branch.opcode, branch.operands.as_slice()) else { return None };
+    let ValueDef::Instruction(compare) = function.value(*condition).def else { return None };
+    let Opcode::ICmp(predicate) = function.instruction(compare).opcode else { return None };
+    let [left, right] = function.instruction(compare).operands.as_slice() else { return None };
+    let mut around = shape.loops.iter().filter(|one| one.body.contains(&id(block))).collect::<Vec<_>>();
+    around.sort_by_key(|one| one.body.len());
+    let share = around.into_iter().filter(|one| one.header != id(block)).find_map(|one| {
+        let count = trips.get(&one.header).copied().filter(|count| (1..=COUNTED_TRIPS).contains(count))?;
+        let header = function.block(cfg::block(one.header));
+        let phis = header.instructions().iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>();
+        let outside = |at: &Operand| matches!(at, Operand::Block(from) if !one.body.contains(&id(*from)));
+        let incoming = |inst, inside: bool| {
+            let pairs = function.instruction(inst).operands.chunks(2).filter(|pair| outside(&pair[1]) != inside).map(|pair| pair[0]).collect::<Vec<_>>();
+            (!pairs.is_empty() && pairs.iter().all(|one| *one == pairs[0])).then(|| pairs[0])
+        };
+        let mut values = BTreeMap::new();
+        for &inst in &phis {
+            let result = function.instruction(inst).result?;
+            values.insert(result, incoming(inst, false).and_then(|start| evaluated(context, function, &BTreeMap::new(), start, 6)));
+        }
+        let mut held = 0;
+        for _ in 0..count {
+            let (a, b) = (evaluated(context, function, &values, *left, 6)?, evaluated(context, function, &values, *right, 6)?);
+            held += i64::from(compared_as(predicate, a, b));
+            let next = phis.iter().map(|&inst| Some((function.instruction(inst).result?, incoming(inst, true).and_then(|step| evaluated(context, function, &values, step, 6))))).collect::<Option<BTreeMap<_, _>>>()?;
+            values = next;
+        }
+        Some(held as f64 / count as f64)
+    })?;
+    // Never all but certain: a block must stay ordered, not unreachable.
+    let share = share.clamp(1.0 / COUNTED_TRIPS as f64, 1.0 - 1.0 / COUNTED_TRIPS as f64);
+    let [first, second] = successors else { return None };
+    let taken = if first == &id(*yes) { share } else { 1.0 - share };
+    (first != second).then(|| vec![taken, 1.0 - taken])
+}
+
+/// The most trips `counted` will run.
+const COUNTED_TRIPS: i64 = 4096;
+
+/// An integer operand's bits and width, from the loop counters `values`
+/// and constants, through the arithmetic a counter is stepped and offset by.
+fn evaluated(context: &Context, function: &Function, values: &BTreeMap<llrm_mir::module::ValueId, Option<(u128, u32)>>, operand: Operand, depth: u32) -> Option<(u128, u32)> {
+    let width = |one: &Operand| function.operand_type(context, *one).and_then(|ty| context.types.int_bits(ty)).filter(|bits| (1..=64).contains(bits));
+    let mask = |bits: u32| (1u128 << bits) - 1;
+    match operand {
+        Operand::Constant(at) => {
+            let ConstantKind::Int(bits) = context.get(at).kind else { return None };
+            let bits_wide = width(&operand)?;
+            Some((bits & mask(bits_wide), bits_wide))
+        }
+        Operand::Value(value) => {
+            if let Some(known) = values.get(&value) {
+                return known.as_ref().map(|&(bits, wide)| (bits, wide));
+            }
+            let ValueDef::Instruction(inst) = function.value(value).def else { return None };
+            let instruction = function.instruction(inst);
+            let bits_wide = width(&operand)?;
+            let operands = instruction.operands.as_slice();
+            if depth == 0 {
+                return None;
+            }
+            let signed = |(bits, wide): (u128, u32)| if bits >> (wide - 1) & 1 == 1 { bits as i128 - (1i128 << wide) } else { bits as i128 };
+            let result = match (&instruction.opcode, operands) {
+                (Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)), [a, b]) => {
+                    let (a, b) = (evaluated(context, function, values, *a, depth - 1)?, evaluated(context, function, values, *b, depth - 1)?);
+                    match op {
+                        BinaryOp::Add => a.0.wrapping_add(b.0),
+                        BinaryOp::Sub => a.0.wrapping_sub(b.0),
+                        BinaryOp::Mul => a.0.wrapping_mul(b.0),
+                        _ => a.0.checked_shl(u32::try_from(b.0).ok().filter(|&by| by < bits_wide)?)?,
+                    }
+                }
+                (Opcode::Cast(CastOp::ZExt), [a]) => evaluated(context, function, values, *a, depth - 1)?.0,
+                (Opcode::Cast(CastOp::Trunc), [a]) => evaluated(context, function, values, *a, depth - 1)?.0,
+                (Opcode::Cast(CastOp::SExt), [a]) => signed(evaluated(context, function, values, *a, depth - 1)?) as u128,
+                _ => return None,
+            };
+            Some((result & mask(bits_wide), bits_wide))
+        }
+        _ => None,
+    }
+}
+
+/// `predicate` of two integers of one width.
+fn compared_as(predicate: IntPredicate, (a, wide): (u128, u32), (b, _): (u128, u32)) -> bool {
+    let signed = |bits: u128| if bits >> (wide - 1) & 1 == 1 { bits as i128 - (1i128 << wide) } else { bits as i128 };
+    match predicate {
+        IntPredicate::Eq => a == b,
+        IntPredicate::Ne => a != b,
+        IntPredicate::Ugt => a > b,
+        IntPredicate::Uge => a >= b,
+        IntPredicate::Ult => a < b,
+        IntPredicate::Ule => a <= b,
+        IntPredicate::Sgt => signed(a) > signed(b),
+        IntPredicate::Sge => signed(a) >= signed(b),
+        IntPredicate::Slt => signed(a) < signed(b),
+        IntPredicate::Sle => signed(a) <= signed(b),
+    }
 }
 
 trait Swap {

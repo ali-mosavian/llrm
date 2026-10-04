@@ -347,3 +347,36 @@ fn test_an_arithmetic_result_copies_the_first_operand_that_stays_live() {
     assert_eq!(_peak(HALVED, room(false)), 0, "six values in six registers");
     assert_eq!(_peak(HALVED, room(true)), 1, "the copy is a seventh");
 }
+
+/// A frame object's address and a constant offset into it, made before a loop and
+/// read in its blocks, are displacements in each access (`[bp+si-188]`), not a value in a
+/// register. Counted as one, nbody's four arrays' sixteen element addresses
+/// forecast 23 residents on six registers, charged lsr 3000 for a counter
+/// the listing kept in a register, and sent its stride-8 counter away (#386).
+#[test]
+fn test_a_constant_offset_into_a_frame_object_takes_no_register() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [32 x i8]
+  %p = getelementptr inbounds i16, ptr %a, i16 3
+  %q = getelementptr inbounds i16, ptr %a, i16 5
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %latch ]
+  %v = load i16, ptr %p
+  %at = getelementptr i16, ptr %a, i16 %i
+  %u = load i16, ptr %at
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %latch, label %exit
+latch:
+  %t = add i16 %v, %u
+  %w = add i16 %t, %i
+  store i16 %w, ptr %q
+  %next = add i16 %i, 1
+  br label %loop
+exit:
+  ret i16 %n
+}
+";
+    assert_eq!(_peak(text, Room { registers: 4, across_call: 2, ..Room::default() }), 0, "%n, %i, %v and %u fit four registers; %a, %p and %q are [bp+disp]");
+}

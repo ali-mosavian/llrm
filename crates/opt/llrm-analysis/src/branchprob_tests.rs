@@ -575,3 +575,40 @@ other:
     assert!(close(odds.probability(at("entry"), at("rare")), 0.16), "{:?}", odds.taken);
     assert!(close(odds.probability(at("entry"), at("other")), 0.04), "{:?}", odds.taken);
 }
+
+/// An inner loop's guard compares the outer counter (`4 <= i`, i from 1 for 4
+/// trips) and holds on one trip in four. Given no odds by any heuristic, it
+/// split the trips even, so lsr weighed the arm that enters the inner loop at
+/// half its share and dropped nbody's stride-8 counter (#386).
+#[test]
+fn test_a_guard_on_an_enclosing_counter_is_taken_as_often_as_it_holds() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  br label %outer
+outer:
+  %i = phi i16 [ 1, %entry ], [ %next, %latch ]
+  %done = icmp ne i16 %i, 5
+  br i1 %done, label %guard, label %out
+guard:
+  %skip = icmp sle i16 4, %i
+  br i1 %skip, label %latch, label %enter
+enter:
+  %x = add i16 %i, %n
+  br label %latch
+latch:
+  %next = add i16 %i, 1
+  br label %outer
+out:
+  ret i16 %n
+}
+";
+    let module = parsed(&format!("{DOS}{text}"));
+    let function = function(&module, "f");
+    let names: Vec<(String, i64)> = function.layout().iter().map(|&one| (function.block(one).name.clone().unwrap_or_default(), id(one))).collect();
+    let at = move |name: &str| names.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no %{name}")).1;
+    let odds = estimated(&module.context, &module.metadata, &module.globals, function, &Shape::of(function), &BTreeMap::from([(at("outer"), 4)]));
+    assert_eq!(odds.by.get(&at("guard")), Some(&Heuristic::Counted), "{:?}", odds.by);
+    assert!(close(odds.probability(at("guard"), at("enter")), 0.75), "{:?}", odds.taken);
+    let (guessed, _) = estimate(text);
+    assert!(close(guessed.probability(at("guard"), at("enter")), 0.5), "premise: with no counted loop the guard is even");
+}
