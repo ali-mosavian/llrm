@@ -20,7 +20,7 @@ lands in the file.
 
 `expected.toml` also holds the reference compilers' counts, as `[bcc.O2]`, `[ow.O2]` and `[bc.O2]` beside
 `[c.O2]`: BCC 3.1 (`-Ox` for O2, `-O1` for Os, medium, `-3 -f87`, linked with its own C0M, CM, FP87 and
-MATHM), Open Watcom (`-ox`, `-os -ol`, `-4`), and QuickBASIC 4.5's BC (`/O`, one level: both BASIC levels
+MATHM), Turbo C 2.01 (`tc`: `-G -O -Z -r -1`, `-O -Z -r -1` for Os) and Turbo C++ 3.0 (`tcpp`: `-2 -G -O -Z -r`, no `-3` exists; its FP87.LIB does not link, BCC's is used), Open Watcom (`-ox -oe=0`, `-os -ol`, `-4 -fpi87`, linked with its own CLIBM, MATH87M, NOEMU87 and start-up from `OW_LIB`), and QuickBASIC 4.5's BC (`/O`, one level: both BASIC levels
 meet it). They are deterministic, so a normal run reads them and builds none of them. Every run gates
 llrm/reference per counter against the blessed ratio and prints the geomean per language and level.
 

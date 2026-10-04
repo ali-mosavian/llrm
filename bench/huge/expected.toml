@@ -1,10 +1,10 @@
-reason = "record BCC 3.1, Open Watcom and BC 4.5 beside llrm, with kernel times"
+reason = "add Turbo C 2.01 and C++ 3.0; Watcom linked with its own CLIBM, MATH87M and start-up"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 609598
 memory_operands = 163316
-kernel_ms = 8.3511
+kernel_ms = 8.3505
 
 [bas.Os]
 instructions = 690595
@@ -14,7 +14,7 @@ kernel_ms = 9.431
 [c.O2]
 instructions = 569021
 memory_operands = 82807
-kernel_ms = 7.5915
+kernel_ms = 7.5909
 
 [c.Os]
 instructions = 650015
@@ -29,12 +29,22 @@ memory_operands = 82807
 instructions = 650015
 memory_operands = 82800
 
+[ow.O2]
+instructions = 6756017
+memory_operands = 925604
+kernel_ms = 90.1179
+
+[ow.Os]
+instructions = 6714616
+memory_operands = 885005
+kernel_ms = 89.5657
+
 [bcc.O2]
 instructions = 4986414
 memory_operands = 120602
-kernel_ms = 66.5136
+kernel_ms = 66.5137
 
 [bcc.Os]
 instructions = 4986412
 memory_operands = 120602
-kernel_ms = 66.5136
+kernel_ms = 66.5137

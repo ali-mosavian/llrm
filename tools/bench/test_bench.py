@@ -136,7 +136,36 @@ class BccTests(unittest.TestCase):
 
         variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
         with tempfile.TemporaryDirectory(dir=bench.ROOT / "target") as where:
-            built = bench.build_bcc([(variant, "B000")], "O2", Path(where))["B000"]
+            built = bench.build_borland("bcc", [(variant, "B000")], "O2", Path(where))["B000"]
             self.assertNotIsInstance(built, str, built)
             got = bench.measure(("B000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "floats")))
         self.assertGreater(got.get("instructions", 0), 0, got)  # measure() fails on any other output than floats.out
+
+
+@unittest.skipUnless(bench.references_available(), "needs BCC, Open Watcom and BC")
+class ReferenceFloatTests(unittest.TestCase):
+    def _counts(self, build, name="floats"):
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / name) if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.ROOT / "target") as where:
+            built = build(variant, Path(where))
+            self.assertNotIsInstance(built, str, built)
+            return bench.measure(("F000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / name)))
+
+    def test_a_watcom_floating_point_program_links_and_prints_its_output(self):
+        """floats.c linked with -zl and a stub had no Watcom row: its FP and long helpers (__CHP, __I4M) lived in a C library nobody linked."""
+        self.assertGreater(self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000")).get("instructions", 0), 0)
+
+    def test_watcom_runs_a_4k_stack_array_and_keeps_the_kernel_a_call(self):
+        """ring (4K of locals) died in Watcom's default stack with an invalid instruction; textfill's kernel was inlined into main at -ox, so no row ('never entered')."""
+        for name in ("ring", "textfill"):
+            got = self._counts(lambda variant, where: bench.build_watcom(variant, "O2", where, "F000"), name)
+            self.assertGreater(got.get("instructions", 0), 0, got)
+
+    @unittest.skipUnless((bench.BORLAND["tc"][0] / "lib" / "MATHM.LIB").exists(), "needs Turbo C 2.01")
+    def test_a_turbo_c_program_with_a_define_and_a_float_links_and_prints_its_output(self):
+        """TC 2.01 read `#define` after a bare LF as an illegal character (no row for the 4 programs with one), and its MATHM.LIB was empty (no floats)."""
+        for name in ("nbody_single", "floats"):
+            got = self._counts(lambda variant, where: bench.build_borland("tc", [(variant, "F000")], "O2", where)["F000"], name)
+            self.assertGreater(got.get("instructions", 0), 0, got)
