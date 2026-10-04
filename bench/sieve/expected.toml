@@ -1,4 +1,4 @@
-reason = "lsr weighs a use behind a branch by its odds and prices the counters the loop has: sieve.nib no longer carries a 32-bit counter for a movzx on the primes (#386)"
+reason = "lsr weights, branchprob Counted odds, frame addresses off the register forecast (#386): sieve nib -6.7%, nbody nib/c -1.4%, nbody_fixed nib -1.4%/-1.7%; worse and blessed until #407 (forecast vs allocator): nbody bas +0.9%, nbody_fixed bas -Os memory operands +2%"
 blessed = "2026-10-04"
 
 [bas.O2]
