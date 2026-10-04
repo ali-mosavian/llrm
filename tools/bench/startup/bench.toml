@@ -3,3 +3,4 @@ description = "An empty kernel: its time is a toolchain's start-up and one print
 [region]
 bas = "main"
 c = "main"
+nib = "main"

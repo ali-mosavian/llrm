@@ -1,4 +1,4 @@
-reason = "llrm-qb --own-frames measured as language basown beside bas"
+reason = "Nib gets a start-up program, so kernel_ms"
 blessed = "2026-10-04"
 
 [bas.O2]
@@ -39,6 +39,7 @@ memory_operands = 96
 code_bytes = 705
 data_bytes = 32
 bss_bytes = 0
+kernel_ms = 0.0028
 
 [nib.Os]
 instructions = 305
@@ -46,6 +47,7 @@ memory_operands = 147
 code_bytes = 600
 data_bytes = 32
 bss_bytes = 0
+kernel_ms = 0.0047
 
 [basown.O2]
 instructions = 110
@@ -61,7 +63,7 @@ memory_operands = 55
 code_bytes = 439
 data_bytes = 77
 bss_bytes = 0
-kernel_ms = 0.0085
+kernel_ms = 0.0086
 
 [ow.O2]
 instructions = 300

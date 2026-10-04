@@ -1,0 +1,4 @@
+# An empty kernel: the whole-program time of this is the start-up and one print.
+fn main() -> i16:
+    print(0)
+    return 0

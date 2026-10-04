@@ -7,3 +7,6 @@ dependencies = ["iced-x86>=1.21.0", "unicorn>=2.0"]
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = ["pytest>=8"]

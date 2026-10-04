@@ -1,4 +1,4 @@
-reason = "llrm-qb --own-frames measured as language basown beside bas"
+reason = "Nib gets a start-up program, so kernel_ms"
 blessed = "2026-10-04"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 312103
 code_bytes = 2011
 data_bytes = 125
 bss_bytes = 0
-kernel_ms = 18.0885
+kernel_ms = 18.0888
 
 [bas.Os]
 instructions = 1418199
@@ -15,7 +15,7 @@ memory_operands = 333071
 code_bytes = 560
 data_bytes = 125
 bss_bytes = 0
-kernel_ms = 18.9292
+kernel_ms = 18.9294
 
 [c.O2]
 instructions = 1355132
@@ -23,7 +23,7 @@ memory_operands = 312055
 code_bytes = 1942
 data_bytes = 0
 bss_bytes = 96
-kernel_ms = 18.0774
+kernel_ms = 18.0777
 
 [c.Os]
 instructions = 1494160
@@ -31,7 +31,7 @@ memory_operands = 326049
 code_bytes = 486
 data_bytes = 0
 bss_bytes = 96
-kernel_ms = 19.9323
+kernel_ms = 19.9325
 
 [nib.O2]
 instructions = 3116356
@@ -39,6 +39,7 @@ memory_operands = 679062
 code_bytes = 2860
 data_bytes = 96
 bss_bytes = 0
+kernel_ms = 41.5695
 
 [nib.Os]
 instructions = 3557517
@@ -46,6 +47,7 @@ memory_operands = 789069
 code_bytes = 851
 data_bytes = 96
 bss_bytes = 0
+kernel_ms = 47.4549
 
 [basown.O2]
 instructions = 1355132
@@ -53,7 +55,7 @@ memory_operands = 312055
 code_bytes = 2006
 data_bytes = 125
 bss_bytes = 0
-kernel_ms = 18.0873
+kernel_ms = 18.0876
 
 [basown.Os]
 instructions = 1418162
@@ -61,7 +63,7 @@ memory_operands = 333049
 code_bytes = 555
 data_bytes = 125
 bss_bytes = 0
-kernel_ms = 18.9284
+kernel_ms = 18.9286
 
 [ow.O2]
 instructions = 8130433
