@@ -4,7 +4,7 @@
 
 Each directory holds llrm-qb, llrm-c and llrm-nib, each one whole compiler (NEW
 defaults to target/release). A program is tests/run/qb, bench and examples, plus the
-QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's;
+QuickBASIC demos in $QBDEMOS (~/work/qbdemos/orig). Bytes are the OMF object's code segments' (`code_bytes`);
 instructions and memory operands are the backend's `cost` estimate per call,
 summed (not a timing). With --frames, also the bytes each program reserves below BP
 (every `sub sp, N` of its -S listing). Prints the programs that changed and the totals.
@@ -42,6 +42,45 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     return out
 
 
+def omf_index(body: bytes, at: int) -> tuple[int, int]:
+    """An OMF index and where it ends: one byte, or two where the first has its high bit set."""
+    if body[at] & 0x80:
+        return ((body[at] & 0x7F) << 8) | body[at + 1], at + 2
+    return body[at], at + 1
+
+
+def code_bytes(obj: Path) -> int:
+    """Bytes of the object's code segments (a class named ...CODE): its SEGDEF lengths. The file's size counts
+    the fixup, symbol and debug records as well, which the linker consumes and the program lacks."""
+    data = Path(obj).read_bytes()
+    names: list[str] = []
+    total = 0
+    at = 0
+    while at + 3 <= len(data):
+        kind, length = data[at], int.from_bytes(data[at + 1 : at + 3], "little")
+        body = data[at + 3 : at + 2 + length]
+        at += 3 + length
+        if kind == 0x96:  # LNAMES
+            i = 0
+            while i < len(body):
+                names.append(body[i + 1 : i + 1 + body[i]].decode("latin-1"))
+                i += 1 + body[i]
+        elif kind in (0x98, 0x99):  # SEGDEF
+            wide = kind == 0x99
+            attributes, i = body[0], 1
+            if attributes >> 5 == 0:
+                i += 3  # frame number and offset
+            size = int.from_bytes(body[i : i + (4 if wide else 2)], "little")
+            i += 4 if wide else 2
+            if attributes & 2:
+                size = 1 << 16  # the 'big' bit: a full segment
+            _, i = omf_index(body, i)  # the segment's name
+            klass, i = omf_index(body, i)
+            if names[klass - 1].upper().endswith("CODE"):  # CODE, and the BASIC runtime's BC_CODE
+                total += size
+    return total
+
+
 def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
@@ -49,7 +88,7 @@ def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
         if not Path(obj).exists():
             return None
         found = [tuple(map(int, one)) for one in COST.findall(done.stderr)]
-        return Path(obj).stat().st_size, sum(i for i, _ in found), sum(m for _, m in found)
+        return code_bytes(Path(obj)), sum(i for i, _ in found), sum(m for _, m in found)
 
 
 SUB_SP = re.compile(r"^\s*sub sp, (\d+)\s*$", re.M)
