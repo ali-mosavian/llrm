@@ -62,24 +62,25 @@ b0:
     assert!(!passed.contains("fastcc"), "{passed}");
 }
 
-/// `ret 6` costs 2 bytes more than `ret` at each return, and a call saves 3: one call of a
-/// function that returns twice loses a byte, so it keeps the caller's cleanup in bytes; in
-/// clocks `ret N` costs nothing and the call saves its `add sp`, so -O2 takes it.
+/// `ret N` costs 2 bytes more than `ret` at each return, and a one-word call saves 1 (a pop's worth
+/// is not worth an instruction more, so a byte over breaks even): one call of a function that returns
+/// twice keeps the caller's cleanup in bytes; in clocks `ret N` costs nothing and the call saves its
+/// `add sp`, so -O2 takes it.
 #[test]
 fn a_function_the_convention_would_cost_bytes_keeps_the_caller_cleaning_only_for_size() {
-    let text = "define internal i16 @work(i16 %a, i16 %b, i16 %c) {
+    let text = "define internal i16 @work(i16 %a) {
 b0:
   %t = icmp eq i16 %a, 0
   br i1 %t, label %one, label %two
 one:
-  ret i16 %b
+  ret i16 1
 two:
-  ret i16 %c
+  ret i16 2
 }
 
 define i16 @f(i16 %x) {
 b0:
-  %p = call i16 @work(i16 %x, i16 2, i16 3)
+  %p = call i16 @work(i16 %x)
   ret i16 %p
 }
 ";
@@ -88,11 +89,11 @@ b0:
 }
 
 /// What a call saves is the words its arguments take, not how many there are: a dword argument is
-/// two words (two pops), so two calls of a function with one return pay for `ret 4` where two
+/// two words (two pops), so two calls of a function with two returns pay for `ret 4` where two
 /// calls of a one-word function do not.
 #[test]
 fn an_argument_of_two_words_counts_two_words_of_cleanup() {
-    let callee = |ty: &str| format!("define internal i16 @work({ty} %a) {{\nb0:\n  ret i16 0\n}}\n");
+    let callee = |ty: &str| format!("define internal i16 @work({ty} %a) {{\nb0:\n  %t = icmp eq {ty} %a, 0\n  br i1 %t, label %one, label %two\none:\n  ret i16 1\ntwo:\n  ret i16 2\n}}\n");
     let callers = |ty: &str, value: &str| format!("define void @f() {{\nb0:\n  %p = call i16 @work({ty} {value})\n  %q = call i16 @work({ty} {value})\n  ret void\n}}\n");
     assert!(run(&format!("{}{}", callee("i32"), callers("i32", "1"))).contains("fastcc"));
     assert!(!run(&format!("{}{}", callee("i16"), callers("i16", "1"))).contains("fastcc"));
