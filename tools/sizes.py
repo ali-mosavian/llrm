@@ -42,6 +42,13 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     return out
 
 
+def omf_index(body: bytes, at: int) -> tuple[int, int]:
+    """An OMF index and where it ends: one byte, or two where the first has its high bit set."""
+    if body[at] & 0x80:
+        return ((body[at] & 0x7F) << 8) | body[at + 1], at + 2
+    return body[at], at + 1
+
+
 def code_bytes(obj: Path) -> int:
     """Bytes of the object's code segments (a class named ...CODE): its SEGDEF lengths. The file's size counts
     the fixup, symbol and debug records as well, which the linker consumes and the program lacks."""
@@ -67,7 +74,9 @@ def code_bytes(obj: Path) -> int:
             i += 4 if wide else 2
             if attributes & 2:
                 size = 1 << 16  # the 'big' bit: a full segment
-            if names[body[i + 1] - 1].upper().endswith("CODE"):  # CODE, and the BASIC runtime's BC_CODE
+            _, i = omf_index(body, i)  # the segment's name
+            klass, i = omf_index(body, i)
+            if names[klass - 1].upper().endswith("CODE"):  # CODE, and the BASIC runtime's BC_CODE
                 total += size
     return total
 
