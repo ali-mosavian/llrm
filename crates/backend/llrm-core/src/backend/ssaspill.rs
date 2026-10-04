@@ -46,6 +46,40 @@ pub fn changes() -> usize {
 pub struct SsaSpill {
     pub frame: Rc<RefCell<Frame>>,
     pub segments: Segments,
+    pub prices: Prices,
+}
+
+/// How much a block or an edge counts: by how often it runs, or once where the price is bytes.
+struct Weights<'a> {
+    frequency: &'a Frequency,
+    by_frequency: bool,
+}
+
+impl Weights<'_> {
+    fn block(&self, at: i64) -> f64 {
+        if self.by_frequency { self.frequency.block(at) } else { 1.0 }
+    }
+
+    fn edge(&self, from: i64, to: i64) -> f64 {
+        if self.by_frequency { self.frequency.edge(from, to) } else { 1.0 }
+    }
+}
+
+/// What a load from memory costs at the level being compiled, and whether it costs once per run or once per trip.
+#[derive(Clone, Copy, Debug)]
+pub struct Prices {
+    pub load: f64,
+    /// By block frequency (clocks); not where the price is code bytes, which a loop's trips do not multiply.
+    pub by_frequency: bool,
+}
+
+impl Prices {
+    /// The level `profile` compiles for: its machine's byte costs at -Os, its clocks otherwise.
+    pub fn of(profile: &crate::backend::cpu::Profile) -> Self {
+        let machine = profile.target();
+        let costs = if profile.size { machine.size_costs() } else { machine.costs() };
+        Self { load: costs.load as f64, by_frequency: !profile.size }
+    }
 }
 
 impl SsaSpill {
@@ -63,7 +97,7 @@ impl LIRTransform for SsaSpill {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
-        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments)?;
+        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, self.prices)?;
         if made.is_some() {
             CHANGES.with(|count| count.set(count.get() + 1));
         }
@@ -408,12 +442,12 @@ struct Edits {
     w_out: BTreeSet<u32>,
 }
 
-pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<LirBody, String> {
-    Ok(changed(body, frame, segments)?.unwrap_or_else(|| body.clone()))
+pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<LirBody, String> {
+    Ok(changed(body, frame, segments, prices)?.unwrap_or_else(|| body.clone()))
 }
 
 /// `body` spilled, or None where there was nothing to spill and nothing to simplify.
-fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result<Option<LirBody>, String> {
+fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
@@ -442,7 +476,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments) -> Result
         if file == File::Selector {
             selectors.extend(kept.keys().copied().filter(|value| machine.registered(*value)));
         }
-        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops);
+        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices);
         result.merge(one);
     }
     if result.stored.is_empty() {
@@ -517,7 +551,7 @@ fn without_dead_remakes(body: LirBody, remade: &BTreeSet<u32>) -> LirBody {
     body.with_blocks(blocks)
 }
 
-/// The simulation of one register file's values over every block, to a fixed point of the values a loop header does not keep.
+/// The simulation of one register file's values over every block; for the selectors, the cheaper at this level's price of holding at a loop's entry what no predecessor ends with, or not.
 #[allow(clippy::too_many_arguments)]
 fn simulated_in(
     body: &LirBody,
@@ -530,12 +564,39 @@ fn simulated_in(
     frequency: &Frequency,
     headers: &BTreeSet<i64>,
     loops: &[crate::analysis::loops::Loop],
+    prices: Prices,
+) -> Simulated {
+    let weights = Weights { frequency, by_frequency: prices.by_frequency };
+    let attempt = |admit: bool| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, admit);
+    if machine.file != File::Selector {
+        return attempt(false);
+    }
+    let (with, without) = (attempt(true), attempt(false));
+    if traffic(&with, &weights, prices) < traffic(&without, &weights, prices) { with } else { without }
+}
+
+/// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.
+#[allow(clippy::too_many_arguments)]
+fn simulated_with(
+    body: &LirBody,
+    flow: &Flow,
+    machine: &Machine<'_>,
+    skip: &BTreeSet<u32>,
+    remakes: &IndexMap<u32, Arc<Insn>>,
+    order: &[i64],
+    place: &IndexMap<i64, usize>,
+    frequency: &Frequency,
+    headers: &BTreeSet<i64>,
+    loops: &[crate::analysis::loops::Loop],
+    prices: Prices,
+    weights: &Weights<'_>,
+    admit: bool,
 ) -> Simulated {
     // A value a loop's back edge must reload each trip is not worth holding at its header.
     let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     // The most values live at once in each loop, which decides whether what it does not read can wait in registers.
     let room = loop_room(body, flow, machine, skip, loops);
-    let mut result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers);
+    let mut result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit);
     // A loop header keeps a value its back edge must reload only while those
     // reloads run at most half as often as reloads at its first uses inside one trip.
     for _ in 0..4 {
@@ -550,9 +611,9 @@ fn simulated_in(
                     .blocks
                     .iter()
                     .filter(|block| block.succ.contains(to) && !result.edits[&block.at].w_out.contains(value))
-                    .map(|block| frequency.edge(block.at, *to))
+                    .map(|block| weights.edge(block.at, *to))
                     .sum();
-                let drop = first_uses(flow, frequency, &within.body, *to, *value);
+                let drop = first_uses(flow, weights, &within.body, *to, *value);
                 // Holding the value costs its register through the trip as well: keep it only when the back edge reloads it rarely.
                 if 2.0 * keep >= drop {
                     more |= dropped.entry(*to).or_default().insert(*value);
@@ -562,18 +623,18 @@ fn simulated_in(
         if !more {
             break;
         }
-        result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers);
+        result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit);
     }
     // Dropping what a loop evicts leaves the loop's registers short of use: a value is let back in
     // where the loop then moves less to and from memory.
     if machine.file == File::Selector {
-        let mut best = traffic(&result, frequency);
+        let mut best = traffic(&result, weights, prices);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
-            let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers);
-            let moved = traffic(&tried, frequency);
+            let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
+            let moved = traffic(&tried, weights, prices);
             if moved < best {
                 best = moved;
                 result = tried;
@@ -585,13 +646,13 @@ fn simulated_in(
 }
 
 /// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
-fn traffic(result: &Simulated, frequency: &Frequency) -> f64 {
+fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices) -> f64 {
     let blocks: f64 = result
         .edits
         .iter()
-        .map(|(at, edit)| frequency.block(*at) * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
+        .map(|(at, edit)| weights.block(*at) * prices.load * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
         .sum();
-    let edges: f64 = result.across.iter().map(|((from, to), values)| frequency.edge(*from, *to) * values.len() as f64).sum();
+    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * prices.load * values.len() as f64).sum();
     blocks + edges
 }
 
@@ -729,6 +790,7 @@ fn simulated(
     room: &IndexMap<i64, usize>,
     frequency: &Frequency,
     headers: &BTreeSet<i64>,
+    admit: bool,
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
@@ -778,7 +840,7 @@ fn simulated(
         for (tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
             let far = header && *near >= EXIT;
-            if (!far || spare > 0) && (*tier < 2 || (header && machine.file == File::Selector) || block.arrives().contains(value)) {
+            if (!far || spare > 0) && (*tier < 2 || (header && admit) || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
                 if machine.fits(&next, &BTreeSet::new(), k) {
@@ -934,7 +996,7 @@ fn simulated(
 
 /// What reloading `value` at its first register uses costs, within one trip of the loop
 /// `within` entered at `header`: the frequency of each block on that frontier.
-fn first_uses(flow: &Flow, frequency: &Frequency, within: &BTreeSet<i64>, header: i64, value: u32) -> f64 {
+fn first_uses(flow: &Flow, weights: &Weights<'_>, within: &BTreeSet<i64>, header: i64, value: u32) -> f64 {
     let mut cost = 0.0;
     let mut seen: BTreeSet<i64> = BTreeSet::new();
     let mut todo: Vec<i64> = vec![header];
@@ -944,7 +1006,7 @@ fn first_uses(flow: &Flow, frequency: &Frequency, within: &BTreeSet<i64>, header
         }
         let length = flow.length[&at];
         if flow.uses[&at].get(&value).is_some_and(|list| list.iter().any(|position| *position < length)) {
-            cost += frequency.block(at);
+            cost += weights.block(at);
             continue;
         }
         for to in &flow.succ[&at] {

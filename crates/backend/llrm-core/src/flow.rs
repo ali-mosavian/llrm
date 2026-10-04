@@ -43,7 +43,7 @@ pub fn machine<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone() }),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),

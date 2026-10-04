@@ -1,12 +1,12 @@
-reason = "#407: SsaSpill holds selectors in the segment registers as it holds words in the general ones; particle bas -800 instructions and -900 memory operands at -O2, qbsp bas -20 and -15"
+reason = "#407: SsaSpill prices a loop-entry selector load by the level (bytes at -Os); particle bas -O2 -200 instructions, -Os -204"
 blessed = "2026-10-04"
 
 [bas.O2]
-instructions = 130892
+instructions = 130692
 memory_operands = 94040
 
 [bas.Os]
-instructions = 130684
+instructions = 130480
 memory_operands = 94031
 
 [c.O2]

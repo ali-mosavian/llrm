@@ -652,7 +652,7 @@ fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), Stri
     let segments = &*target::BUILT_IN;
     let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
     let mut phases: Vec<Box<dyn LIRTransform>> = vec![
-        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone() }),
+        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), prices: crate::backend::ssaspill::Prices { load: 1.0, by_frequency: true } }),
         Box::new(PhiElimination),
         Box::new(TwoAddress),
         Box::new(Coalescer::new(None, segments)),
