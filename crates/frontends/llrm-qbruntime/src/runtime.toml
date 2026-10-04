@@ -1020,21 +1020,27 @@ rt/strfcn.asm: `cProc B$LEFT,<FAR,PUBLIC>` with parmW psd, parmW len, `Registers
 # against the call it replaces; a routine nothing here describes keeps its
 # call.
 #
-# A string descriptor is a `length` word and a `data` pointer at these
-# offsets, `size` bytes in all. QB 4.5 and PDS 7.1 keep their strings
-# near, in DGROUP. VBDOS's are far, the length in the payload's header
-# rather than at an offset in the descriptor: nothing states it here, and
-# every routine below keeps its call there.
+# A runtime keeps its strings in one `form`. A `near` string is a descriptor
+# in DGROUP: a `length` word and a `data` pointer at these offsets, `size`
+# bytes in all, and a literal is that descriptor with its bytes after it.
+# QB 4.5 and PDS 7.1 are near. VBDOS's strings are `far`: the length is in
+# the payload's header, not at an offset in the descriptor, so nothing here
+# reads one and every routine below keeps its call there.
 
 [layout.qb45]
+form = "near"
 length = 0
 data = 2
 size = 4
 
 [layout.pds71]
+form = "near"
 length = 0
 data = 2
 size = 4
+
+[layout.vbdos]
+form = "far"
 
 # `parameters`: `string` is a descriptor's address, `int` a word. `result`
 # is a word, or a `view`: a string made of a `length` and a `data` address,

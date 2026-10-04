@@ -8950,11 +8950,35 @@ impl Compiler {
         let payload_symbol = self.next_data;
         self.next_data += 1;
 
-        // QB 4.5 and PDS 7.1 keep one ordinary SD and its bytes together in
-        // BC_CN. VBDOS instead keeps immutable bytes in FSL_CONST: BC_CN then
+        // A near runtime keeps one ordinary SD and its bytes together in
+        // BC_CN. A far one keeps immutable bytes in FSL_CONST: BC_CN then
         // holds a near bridge to a far SD plus the shared selector-word
-        // address. These are different runtime profiles, not dialect syntax.
-        let (descriptor_symbol, payload_offset) = if self.runtime == "vbdos" {
+        // address. The runtime description says which, and where a near
+        // descriptor keeps what.
+        let (descriptor_symbol, payload_offset) = if let Some(near) = llrm_qbruntime::semantics::descriptor(&self.runtime) {
+            let mut literal = vec![0; near.size as usize];
+            literal[near.length as usize..near.length as usize + 2].copy_from_slice(&(encoded.len() as u16).to_le_bytes());
+            literal.extend_from_slice(&encoded);
+            if literal.len() % 2 != 0 {
+                literal.push(0);
+            }
+            self.data.push(DataObject {
+                align: 1,
+                id: payload_symbol,
+                name: format!("$string{payload_symbol}"),
+                bytes: literal,
+                readonly: true,
+                relocations: vec![DataRelocation {
+                    at: near.data as usize,
+                    target: payload_symbol,
+                    addend: near.size as isize,
+                    address: "near",
+                }],
+                linkage: "internal",
+                address: "near",
+            });
+            (payload_symbol, near.size as isize)
+        } else {
             let segment_symbol = if let Some(symbol) = self.far_string_segment_symbol {
                 symbol
             } else {
@@ -9027,29 +9051,6 @@ impl Compiler {
                 address: "near",
             });
             (descriptor_symbol, 6)
-        } else {
-            let mut literal = Vec::from((encoded.len() as u16).to_le_bytes());
-            literal.extend_from_slice(&[0, 0]);
-            literal.extend_from_slice(&encoded);
-            if literal.len() % 2 != 0 {
-                literal.push(0);
-            }
-            self.data.push(DataObject {
-                align: 1,
-                id: payload_symbol,
-                name: format!("$string{payload_symbol}"),
-                bytes: literal,
-                readonly: true,
-                relocations: vec![DataRelocation {
-                    at: 2,
-                    target: payload_symbol,
-                    addend: 4,
-                    address: "near",
-                }],
-                linkage: "internal",
-                address: "near",
-            });
-            (payload_symbol, 4)
         };
         let place = self.next_place;
         self.next_place += 1;

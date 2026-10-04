@@ -2365,3 +2365,20 @@ fn volatile_goes_after_as_and_byref_is_accepted() {
     assert_eq!(volatile, [true, true, true, false, false]);
     assert_eq!(sub.parameters.iter().map(|one| (one.by_value, one.segmented)).collect::<Vec<_>>(), [(false, false), (true, false), (false, true), (false, false), (false, false)]);
 }
+
+/// A near runtime's literal was laid out by a table of qbfront's own (length at 0, a data pointer at 2, bytes
+/// from 4) beside the runtime description's: two owners of one fact. The literal follows the description.
+#[test]
+fn a_near_string_literal_is_laid_out_as_the_runtime_description_says() {
+    for (dialect, runtime) in [(Dialect::QuickBasic45, "qb45"), (Dialect::Pds71, "pds71")] {
+        let layout = llrm_qbruntime::semantics::descriptor(runtime).expect("a near runtime states its descriptor");
+        let module = parse("x$ = \"ab\"\n", dialect).unwrap();
+        let hir = compile(&module, "lit", dialect, runtime).unwrap();
+        let mut bytes = vec![0u8; layout.size as usize];
+        bytes[layout.length as usize] = 2;
+        bytes.extend_from_slice(b"ab");
+        let text: Vec<String> = bytes.iter().map(u8::to_string).collect();
+        assert!(hir.contains(&format!("\"bytes\":[{}]", text.join(","))), "{runtime}: {hir}");
+        assert!(hir.contains(&format!("\"addend\":{}", layout.size)) && hir.contains(&format!("\"at\":{}", layout.data)), "{runtime}: {hir}");
+    }
+}
