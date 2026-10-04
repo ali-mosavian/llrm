@@ -110,7 +110,7 @@ pub struct Flags {
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
-    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds.
+    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds (default 16; 0 allows no growth).
     milliclocks_per_byte: Option<i64>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.

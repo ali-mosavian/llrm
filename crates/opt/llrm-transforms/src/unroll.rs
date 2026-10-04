@@ -108,7 +108,7 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
-        if count < BigInt::from(2) || !profit::worth(&unit, analyses.outer(), |worth| peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_), worth)) {
+        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_)) {
             continue;
         }
         if let Some(count) = count.to_i64() {

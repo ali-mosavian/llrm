@@ -39,12 +39,6 @@ const COLD_PERCENT: i64 = 5;
 /// What one entry of a function weighs in `entries`: `profit::UNIT`.
 pub const ENTRY: i64 = 256;
 
-/// What the target says an instruction costs, in clocks and in code bytes (`size_costs`).
-pub struct Worth<'a> {
-    pub clocks: &'a dyn Fn(InstId) -> i64,
-    pub bytes: &'a dyn Fn(InstId) -> i64,
-}
-
 /// What the loop's surroundings say, which the loop alone does not.
 #[derive(Clone, Copy, Debug)]
 pub struct Site {
@@ -82,7 +76,7 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, grows: true, milliclocks_per_byte: 0 }
+        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, grows: true, milliclocks_per_byte: 16_000 }
     }
 }
 
@@ -103,7 +97,7 @@ impl Default for Limits {
 /// GCC also refuses a call on the path, guessing little is left to fold; the
 /// simulation measures what folds, so a call is priced as LLVM's cost model prices
 /// one instead.
-pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits, site: Site, worth: &Worth) -> bool {
+pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits, site: Site) -> bool {
     // What the language says of copying this loop: never, or as many as it permits, which
     // at least the trip count is asked, and is then copied past the budget. Fewer than the
     // trip count is no partial unrolling, which does not exist here: it is a refusal.
@@ -134,12 +128,11 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
     };
     let budget = if limits.max_unrolled_operations == 0 { i64::MAX } else { limits.max_unrolled_operations };
     let limit = if asked { HINTED_OPERATIONS } else { budget.saturating_mul(MAX_PERCENT_THRESHOLD_BOOST) / 100 };
-    let Some(unrolled) = unrolled(unit, &blocks, &order, loop_, count, facts, limit.max(size), worth) else {
+    let Some(unrolled) = unrolled(unit, &blocks, &order, loop_, count, facts, limit.max(size)) else {
         llrm_support::debug!("unroll", "loop b{} x{count}: {size} ops, refused: over {} ops unrolled", loop_.header, limit.max(size));
         return false;
     };
     let boost = _boost(&unrolled);
-    let rolled_bytes: i64 = unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).map(|(_, inst)| inst).filter(|&inst| unit.function.instruction(inst).opcode != Opcode::Phi).map(|inst| (worth.bytes)(inst)).sum();
     // GCC's reasons, in its order.
     let refusal = if asked || unrolled.size <= size {
         None
@@ -147,8 +140,6 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
         Some("size would grow")
     } else if site.entries * 100 < COLD_PERCENT * ENTRY {
         Some("cold")
-    } else if limits.milliclocks_per_byte > 0 && unrolled.bytes > rolled_bytes && 1000 * (unrolled.rolled_clocks - unrolled.clocks) < limits.milliclocks_per_byte * (unrolled.bytes - rolled_bytes) {
-        Some("clocks saved do not pay for the bytes")
     } else if site.writes {
         Some("a call that touches memory")
     } else if unrolled.branches > MAX_PEEL_BRANCHES {
@@ -187,10 +178,6 @@ struct Unrolled {
     branches: i64,
     /// Instructions the rolled loop executes over every iteration: LLVM's `RolledDynamicCost`.
     rolled: i64,
-    /// What the copy's instructions cost in clocks and in bytes, and the rolled loop's clocks.
-    clocks: i64,
-    bytes: i64,
-    rolled_clocks: i64,
 }
 
 /// The value a phi takes from the block `from`.
@@ -202,11 +189,11 @@ fn _incoming(phi: &Instruction, from: impl Fn(i64) -> bool) -> Option<Operand> {
 /// knows and the memory it has written, count what does not fold, and follow only the
 /// successors a folded branch leaves. `None` once more than `limit` instructions
 /// remain, where LLVM bails out too.
-fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loop_: &Loop, count: i64, facts: &IndexMap<ValueId, Known>, limit: i64, worth: &Worth) -> Option<Unrolled> {
+fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loop_: &Loop, count: i64, facts: &IndexMap<ValueId, Known>, limit: i64) -> Option<Unrolled> {
     let latch = *loop_.latches.first()?;
     let function = unit.function;
     let calls = Calls::default();
-    let mut out = Unrolled { size: 0, branches: 0, rolled: 0, clocks: 0, bytes: 0, rolled_clocks: 0 };
+    let mut out = Unrolled { size: 0, branches: 0, rolled: 0 };
     let mut cells = Cells::default();
     let mut previous = facts.clone();
     for iteration in 0..count {
@@ -243,7 +230,6 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
                     continue;
                 }
                 out.rolled += _size(unit, inst);
-                out.rolled_clocks += (worth.clocks)(inst);
                 // A branch is counted below, where it is decided or not.
                 if matches!(op.opcode, Opcode::Br | Opcode::Switch) {
                     continue;
@@ -258,8 +244,6 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
                             values.shift_remove(&value);
                         }
                         out.size += _size(unit, inst);
-                        out.clocks += (worth.clocks)(inst);
-                        out.bytes += (worth.bytes)(inst);
                     }
                 }
                 if matches!(op.opcode, Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)) || memory::unmodeled_write(unit, inst) {
@@ -285,10 +269,6 @@ fn unrolled(unit: &Unit, blocks: &BTreeMap<i64, &cfg::Block>, order: &[i64], loo
             let successors = decided.unwrap_or_else(|| {
                 out.branches += 1;
                 out.size += 1;
-                if let Some(last) = function.terminator(block) {
-                    out.clocks += (worth.clocks)(last);
-                    out.bytes += (worth.bytes)(last);
-                }
                 blocks[&at].succ.clone()
             });
             for successor in successors {
