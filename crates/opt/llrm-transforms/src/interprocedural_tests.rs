@@ -912,3 +912,54 @@ b:
     };
     assert_eq!((calls(false), calls(true)), (0, 0));
 }
+
+/// A site put back is not tried again: it is the same call in the same body every round, and each try
+/// re-ran the caller's pipeline (mdl_ai.c: 59 s against 28 s for the same code).
+#[test]
+fn test_a_site_the_trial_put_back_is_not_tried_again() {
+    let text = "define internal i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
+    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
+    let (mix, f) = (module.named("mix").unwrap(), module.named("f").unwrap());
+    let counts = inline::call_counts(&module);
+    let candidates = inline::candidates(&module, &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let calls: Vec<_> = module.global(f).function().unwrap().walk().map(|(_, inst)| inst).filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some()).collect();
+    let sites: llrm_support::hash::IndexMap<_, _> = calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let runs = std::cell::Cell::new(0);
+    let mut refused = BTreeSet::new();
+    let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
+        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, "trial.", &mut |_, _, _, _| {
+            runs.set(runs.get() + 1);
+            Ok(())
+        })
+        .unwrap()
+    };
+    assert!(!again(&mut module, &mut analyses, &mut refused), "putting it back stays nothing");
+    let first = runs.get();
+    again(&mut module, &mut analyses, &mut refused);
+    assert_eq!((first > 0, runs.get()), (true, first), "the second round runs no pipeline: {refused:?}");
+}
