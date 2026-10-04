@@ -120,6 +120,16 @@ pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, cal
     function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
 }
 
+/// `run` with the target's price of each instruction of the unit's function, in clocks and in code bytes
+/// (`size_costs`); an instruction it cannot price costs nothing.
+pub fn worth<R>(unit: &memory::Unit, outer: &Outer, run: impl FnOnce(&llrm_analysis::peelsize::Worth) -> R) -> R {
+    let (context, layout, function) = (unit.context, unit.layout, unit.function);
+    let (clocks, bytes) = (outer.target().costs(), outer.target().size_costs());
+    let callees = outer.callees();
+    let price = |costs: &OperationCosts, inst: InstId| operation(context, layout, function, callees, inst, costs).unwrap_or(0);
+    run(&llrm_analysis::peelsize::Worth { clocks: &|inst| price(&clocks, inst), bytes: &|inst| price(&bytes, inst) })
+}
+
 /// Where `loop_` stands in the unit's function: how often it is entered for each entry of the function, in
 /// `UNIT`ths (what its outside predecessors weigh), and whether it calls a function that may touch memory.
 pub fn site(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop) -> llrm_analysis::peelsize::Site {

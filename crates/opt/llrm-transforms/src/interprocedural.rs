@@ -59,7 +59,7 @@ pub struct Interprocedural {
     pub proved: Option<Proved>,
     pub inline: inline::Threshold,
     /// Inlining weighs code bytes, and what only the clocks admit stays where it comes to no more bytes,
-    /// less what the clocks it saves buy at this many clocks a byte; None weighs the clocks alone.
+    /// less what the clocks it saves buy at this many thousandths of a clock a byte; None weighs the clocks alone.
     pub rate: Option<i64>,
 }
 
@@ -185,7 +185,7 @@ fn stays(after: i64, gone: i64, before: i64, moved: i64, allowance: i64) -> bool
 /// clocks a byte (`clocks` prices the calls), where 0 allows none.
 fn allowance(module: &Module, callee: GlobalId, sites: i64, clocks: &OperationCosts, rate: i64) -> i64 {
     let arguments = module.global(callee).function().map_or(0, |body| module.signature(body.ty).1.len());
-    if rate <= 0 { 0 } else { sites * inline::call_overhead(clocks, arguments) / rate }
+    if rate <= 0 { 0 } else { 1000 * sites * inline::call_overhead(clocks, arguments) / rate }
 }
 
 /// The constant `sites` of `caller` the clocks admit and the bytes do not, inlined, and put back

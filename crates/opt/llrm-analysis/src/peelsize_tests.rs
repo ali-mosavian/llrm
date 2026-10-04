@@ -7,7 +7,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 use num_bigint::BigInt;
 
-use super::{ENTRY, Limits, Site, admitted};
+use super::{ENTRY, Limits, Site, Worth, admitted};
 use crate::cfg;
 use crate::consts;
 use crate::induction;
@@ -44,11 +44,16 @@ impl Parsed {
 
     /// `admitted`, the loop entered `entries` 256ths of the times its function is.
     fn entered(&self, limits: &Limits, entries: i64) -> bool {
+        self.priced(limits, entries, &Worth { clocks: &|_| 1, bytes: &|_| 1 })
+    }
+
+    /// `entered`, each instruction at the clocks and bytes `worth` says.
+    fn priced(&self, limits: &Limits, entries: i64, worth: &Worth) -> bool {
         let unit = self.unit();
         let facts = consts::known(&unit, None, None, None);
         let loop_ = self.outer();
         let count = induction::trip_count(&unit, &loop_, &facts).expect("a proven count");
-        admitted(&unit, &loop_, &count, &facts, limits, Site { entries, ..Site::default() })
+        admitted(&unit, &loop_, &count, &facts, limits, Site { entries, ..Site::default() }, worth)
     }
 }
 
@@ -214,8 +219,8 @@ fn the_count_is_the_one_asked_about() {
     let parsed = summing(4, "%x", "");
     let unit = parsed.unit();
     let facts = consts::known(&unit, None, None, None);
-    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), Site::default()));
-    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), Site::default()));
+    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), Site::default(), &Worth { clocks: &|_| 1, bytes: &|_| 1 }));
+    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), Site::default(), &Worth { clocks: &|_| 1, bytes: &|_| 1 }));
 }
 
 /// QCport's savegame.c peeled loops its function enters once in 256 calls, 1 KB each, for clocks
@@ -228,4 +233,18 @@ fn a_cold_loop_is_not_copied_where_the_code_grows() {
     assert!(!summing(8, "%x", "").entered(&limits, ENTRY / 256));
     assert!(summing(4, "%x", "").entered(&limits, 1));
     assert!(summing(16, "0", "").entered(&limits, 1));
+}
+
+/// QCport -O2 grew 1.8 KB past BCC's in loops copied for a third of their clocks: a copy that grows
+/// must save `milliclocks_per_byte` clocks for each byte it adds, and one that adds none is taken.
+#[test]
+fn a_copy_must_save_clocks_for_the_bytes_it_adds() {
+    let dear = Worth { clocks: &|_| 1, bytes: &|_| 4 };
+    let cheap = Worth { clocks: &|_| 4, bytes: &|_| 1 };
+    let loop_ = summing(8, "%x", "  %w1 = add i16 %sum, %x\n  %w2 = add i16 %w1, %x\n  %w3 = add i16 %w2, %x\n  %w4 = add i16 %w3, %x\n");
+    let rated = Limits { milliclocks_per_byte: 1000, ..Limits::default() };
+    assert!(loop_.priced(&Limits::default(), ENTRY, &dear), "no rate asks nothing");
+    assert!(!loop_.priced(&rated, ENTRY, &dear));
+    assert!(loop_.priced(&rated, ENTRY, &cheap));
+    assert!(summing(16, "0", "").priced(&rated, ENTRY, &dear), "a copy that folds away adds no bytes");
 }

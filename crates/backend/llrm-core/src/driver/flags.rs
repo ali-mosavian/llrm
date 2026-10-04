@@ -111,7 +111,7 @@ pub struct Flags {
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
     /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds.
-    clocks_per_byte: Option<i64>,
+    milliclocks_per_byte: Option<i64>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
@@ -126,7 +126,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, far_bss: None, clocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -159,7 +159,8 @@ impl Flags {
             "--cpu" => self.cpu = Some(value("--cpu")?),
             "--clocks-per-byte" => {
                 let text = value("--clocks-per-byte")?;
-                self.clocks_per_byte = Some(text.parse().map_err(|_| format!("--clocks-per-byte {text}: expected a number of clocks"))?);
+                let clocks = text.parse::<f64>().ok().filter(|clocks| clocks.is_finite() && *clocks >= 0.0);
+                self.milliclocks_per_byte = Some((clocks.ok_or_else(|| format!("--clocks-per-byte {text}: expected a number of clocks"))? * 1000.0).round() as i64);
             }
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
@@ -197,8 +198,8 @@ impl Flags {
         for &(pass, on) in &self.passes {
             PASSES[pass].1(&mut options, on);
         }
-        if let Some(clocks) = self.clocks_per_byte {
-            options.limits.clocks_per_byte = clocks;
+        if let Some(clocks) = self.milliclocks_per_byte {
+            options.limits.milliclocks_per_byte = clocks;
         }
         options
     }
