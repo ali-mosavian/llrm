@@ -91,11 +91,14 @@ b2:
   %w = load i16, ptr @i
   %n = add i16 %w, 1
   store i16 %n, ptr @i
-  br label %b1
+  br label %b1, !llvm.loop !0
 
 b3:
   ret void
 }
+
+!0 = distinct !{!0, !1}
+!1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
@@ -132,11 +135,14 @@ b2:
   call void @print(i16 %v)
   %w = load i16, ptr @i
   %n = add i16 %w, 1
-  br label %b1
+  br label %b1, !llvm.loop !0
 
 b3:
   ret void
 }
+
+!0 = distinct !{!0, !1}
+!1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
