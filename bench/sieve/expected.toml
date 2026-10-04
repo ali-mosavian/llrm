@@ -1,4 +1,4 @@
-reason = "a dword copy and add are priced with their operand-size prefixes, so the peephole makes the lea: mandel -3% instructions, nothing worse"
+reason = "lsr weights, branchprob Counted odds, frame addresses off the register forecast (#386): sieve nib -6.7%, nbody nib/c -1.4%, nbody_fixed nib -1.4%/-1.7%; worse and blessed until #407 (forecast vs allocator): nbody bas +0.9%, nbody_fixed bas -Os memory operands +2%"
 blessed = "2026-10-04"
 
 [bas.O2]
@@ -18,9 +18,9 @@ instructions = 12883
 memory_operands = 3496
 
 [nib.O2]
-instructions = 12951
+instructions = 12089
 memory_operands = 2727
 
 [nib.Os]
-instructions = 13728
+instructions = 12877
 memory_operands = 3495

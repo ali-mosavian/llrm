@@ -257,8 +257,8 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         return None;
     }
     let facts = view.registers();
-    // lsr's prices were fitted to trips multiplied, ten where unproven: see #203.
-    let frequencies = profit::_loop_products(function, Some(&profit::proven_trips(view, &facts)))?;
+    // lsr's prices were fitted to trips multiplied, ten where unproven (#203), and a branch's cold arm less.
+    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(view, &facts)))?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).cloned().collect::<Vec<_>>();
@@ -351,7 +351,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         views: _views(view),
     };
     let current = problem.candidates.iter().enumerate().filter(|(_, one)| one.existing.is_some()).map(|(index, _)| index).collect::<BTreeSet<_>>();
-    let before = problem.total(&current);
+    let before = problem.total_of(&current, true);
     let chosen = problem.solved(&current);
     let after = chosen.as_ref().and_then(|chosen| problem.total(chosen));
     llrm_support::debug!(
@@ -1084,6 +1084,30 @@ impl Problem<'_> {
 
     /// The cost of `set`, where every use has a fit in it.
     fn total(&self, set: &BTreeSet<usize>) -> Option<i64> {
+        self.total_of(set, false)
+    }
+
+    /// What site `index` costs from a counter of `set` that is already
+    /// there, extended: the extension is paid by the use, the rest is what the
+    /// use needs of a counter of that value at its width.
+    fn widened(&self, set: &BTreeSet<usize>, index: usize) -> Option<i64> {
+        let site = &self.sites[index];
+        set.iter()
+            .filter(|&&one| self.candidates[one].existing.is_some() && self.candidates[one].of.pointer.is_none() && self.candidates[one].of.width() < site.one.of.width())
+            .flat_map(|&one| {
+                let have = &self.candidates[one].of;
+                (0..self.candidates.len()).filter(move |&wide| {
+                    let of = &self.candidates[wide].of;
+                    of.pointer.is_none() && of.width() == site.one.of.width() && of.start.known().is_some() && of.start.known() == have.start.known() && of.step.known().is_some() && of.step.known() == have.step.known()
+                })
+            })
+            .filter_map(|wide| self.fits[index][wide].as_ref().map(|(_, price)| price.cost))
+            .min()
+    }
+
+    /// `total`; with `standing`, a wider use no counter of `set` fits costs
+    /// what the loop pays for it now, `widened`: the loop as it stands.
+    fn total_of(&self, set: &BTreeSet<usize>, standing: bool) -> Option<i64> {
         if set.is_empty() {
             return None;
         }
@@ -1105,7 +1129,15 @@ impl Problem<'_> {
         let mut reads = BTreeMap::<Resident, i64>::new();
 
         for (index, site) in self.sites.iter().enumerate() {
-            match self.choice(set, index)? {
+            let choice = match self.choice(set, index) {
+                Some(choice) => choice,
+                None if standing && self.widened(set, index).is_some() => {
+                    cost += (costs.extend + self.widened(set, index)?) * site.frequency;
+                    continue;
+                }
+                None => return None,
+            };
+            match choice {
                 (_, Some((one, (exit, key)))) => {
                     cost += exit * site.frequency;
                     *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
