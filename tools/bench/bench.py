@@ -35,6 +35,9 @@ import run_tests  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
+# Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
+# needs its generated headers and 16-bit bootstrap, which this checkout lacks)
+OWLIB = Path(os.environ.get("OW_LIB", Path.home() / "dos/devtools/dev/c/watcom/lib286"))
 BENCH = ROOT / "bench"
 LANGUAGES = {"bas": ".bas", "c": ".c", "nib": ".nib"}
 COUNTERS = ("instructions", "memory_operands")
@@ -42,8 +45,17 @@ COUNTERS = ("instructions", "memory_operands")
 TIMING_CONF = dosbatch.CONF.replace("cycles=max", "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
 BCC = Path(os.environ.get("TOOLCHAINS", Path.home() / "work/other/d32x/toolchains")) / "bcpp31"
+TURBO = Path(os.environ.get("TURBO", Path.home() / "scratch/toolchains"))
+# Borland-family references: language -> (toolchain folder, compiler, switches per level). All medium model, 8087,
+# linked with the toolchain's own C0M, CM, FP87 and MATHM. BCC's switches (-3 -Ox, -O1) are added by bcc.sh.
+BORLAND = {
+    "bcc": (BCC, "bcc", {"O2": "", "Os": "-O1"}),
+    # TC 2.01: -G speed, -O jumps, -Z registers; `huge` is its spelling of __huge
+    "tc": (TURBO / "tc201", "tcc", {"O2": "-G -O -Z -r -1 -D__huge=huge", "Os": "-O -Z -r -1 -D__huge=huge"}),
+    "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
+}
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
-REFERENCES = {"c": ("ow", "bcc"), "bas": ("bc",)}  # the reference compilers per language; BC has one level, /O
+REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc",)}  # the reference compilers per language; BC has one level, /O
 # Kernel time is a difference of two whole-program times, each a few cycles off from run to run: parity/loop's 139
 # instructions (0.0029 ms) read 3.5% apart on two runs. A change must clear both the relative and the absolute slack.
 TIME_TOLERANCE = 0.01
@@ -150,36 +162,45 @@ def measure(job: tuple[str, Path, Path, str, list[str]]) -> dict:
 
 
 def references_available() -> bool:
-    return (OW / "bwcc").exists() and (dosbatch.QB45 / "BC.EXE").exists() and (BCC / "lib" / "C0M.OBJ").exists()
+    return (OW / "bwcc").exists() and (OWLIB / "dos" / "clibm.lib").exists() and (dosbatch.QB45 / "BC.EXE").exists() and (BCC / "lib" / "C0M.OBJ").exists()
 
 
 def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
-    """Open Watcom, medium model, cdecl as llrm-c calls, no stack checks: tools/loops' reference build."""
+    """Open Watcom, medium model, cdecl as llrm-c calls, no stack checks, inline 8087: tools/loops' reference build.
+    Linked with Watcom's own start-up, CLIBM and MATH87M (NOEMU87: no emulator, as BCC's FP87). Only `report` comes
+    from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
-    flags = ["-ox"] if opt == "O2" else ["-os", "-ol"]
-    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-zl", "-DOWREF", "-4", *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
+    flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
+    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
-    stub = work / "OWSTUB.OBJ"
+    ext = work / "EXT.OBJ"
     try:
-        if not stub.exists():
-            dosbatch.assemble(Path(__file__).with_name("owstub.asm"), stub)
-        # Watcom names main `main_`, and its objects ask for its own start-up code: crt.asm and the stub stand in
-        dosbatch.link_c(obj, exe, work, listing, ("file", str(stub)), ("alias", "_main=main_"))
+        if not ext.exists():
+            dosbatch.assemble(dosbatch.C_RUNTIME / "ext.asm", ext)
+        # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
+        dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", "stack=16k", "format", "dos", "name", str(exe),
+                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), "file", str(ext),
+                        "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
     except dosbatch.BuildError as error:
         return f"build: {error}"
     return exe, listing
 
 
-def build_bcc(variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
-    """BCC 3.1, medium model, -3 -f87, -Ox for O2 and -O1 for Os, every program in one DOSBox boot. Keyed by stem.
-    Linked with BCC's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM, which
-    ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm."""
-    folder = work / f"bcc{opt}"
+def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
+    """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
+    Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
+    which ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm."""
+    home, compiler, levels = BORLAND[language]
+    folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
     for variant, stem in variants_:
-        shutil.copy(variant.source, folder / f"{stem}.c")
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c" + (" -O1" if opt == "Os" else "") for _, stem in variants_]], capture_output=True, timeout=1800)
+        if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
+            (folder / f"{stem}.c").write_bytes(variant.source.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+        else:
+            shutil.copy(variant.source, folder / f"{stem}.c")
+    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]}".strip() for _, stem in variants_]],
+                   env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
     ext = folder / "EXT.OBJ"
     dosbatch.assemble(dosbatch.C_RUNTIME / "ext.asm", ext)
     out: dict[str, tuple[Path, Path] | str] = {}
@@ -187,12 +208,12 @@ def build_bcc(variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dic
         obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
         if not obj.exists():
             message = folder / f"{stem}.MSG"
-            out[stem] = "bcc: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else "no object")
+            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else "no object")
             continue
-        lib = BCC / "lib"
+        lib = home / "lib"
         try:
             dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "format", "dos", "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), "file", str(ext),
-                            "library", str(lib / "CM.LIB"), "library", str(lib / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
+                            "library", str(lib / "CM.LIB"), "library", str((BCC / "lib" if language == "tcpp" else lib) / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
         except dosbatch.BuildError as error:
             out[stem] = f"link: {error}"
             continue
@@ -228,10 +249,11 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
         for directory, variant, stem in c_todo:
             if (OW / "bwcc").exists():
                 own((variant.name, "ow", opt), stem, directory, variant, build_watcom(variant, opt, folder, f"{stem}{opt}"))
-        if (BCC / "lib" / "C0M.OBJ").exists():
-            built = build_bcc([(variant, stem) for _, variant, stem in c_todo], opt, folder)
-            for directory, variant, stem in c_todo:
-                own((variant.name, "bcc", opt), stem, directory, variant, built[stem])
+        for language, (home, _, _) in BORLAND.items():
+            if (home / "lib" / "C0M.OBJ").exists():
+                built = build_borland(language, [(variant, stem) for _, variant, stem in c_todo], opt, folder)
+                for directory, variant, stem in c_todo:
+                    own((variant.name, language, opt), stem, directory, variant, built[stem])
     bas = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "bas" and variant.dialect == "qb45"]
     if bas and (dosbatch.QB45 / "BC.EXE").exists():
         jobs = [Job(stem, "bas", variant.source, switches="/O /FPi", map=True) for _, variant, stem in bas]
