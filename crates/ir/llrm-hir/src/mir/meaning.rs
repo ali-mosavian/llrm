@@ -143,6 +143,15 @@ impl Body<'_, '_> {
                 let (pointer, address) = (self.b.context.types.ptr(0), self.field(self.b.parameter(*at), self.descriptor.data));
                 self.b.load(pointer, address, false, "data")
             }
+            Expr::Slot(value) => {
+                let value = self.expr(value);
+                let value = self.word(value);
+                let byte = self.b.context.types.int(8);
+                let low = self.b.cast(CastOp::Trunc, value, byte, "");
+                let slot = self.b.alloca(byte, "slot");
+                self.b.store(low, slot, false);
+                slot
+            }
             Expr::Byte(address) => {
                 let (address, byte) = (self.expr(address), self.b.context.types.int(8));
                 self.b.load(byte, address, false, "byte")

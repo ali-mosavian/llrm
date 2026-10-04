@@ -60,7 +60,7 @@ fn meaning(name: &str, row: &toml::Value) -> Result<Meaning, String> {
 }
 
 /// `text` as an expression: `or` over `==` and `<` over `+` and `-` over
-/// calls of `len`, `data`, `byte`, `min` and `max`, parameters `$n` and
+/// calls of `len`, `data`, `byte`, `slot`, `min` and `max`, parameters `$n` and
 /// integers.
 pub fn expression(text: &str) -> Result<Expr, String> {
     let tokens = tokens(text)?;
@@ -159,6 +159,7 @@ fn parse_atom(tokens: &[String], at: &mut usize) -> Result<Expr, String> {
         ("len", [one]) => Ok(Expr::Length(parameter(one)?)),
         ("data", [one]) => Ok(Expr::Data(parameter(one)?)),
         ("byte", [one]) => Ok(Expr::Byte(Box::new(one.clone()))),
+        ("slot", [one]) => Ok(Expr::Slot(Box::new(one.clone()))),
         ("min", [a, b]) => Ok(Expr::Binary(Arithmetic::Min, Box::new(a.clone()), Box::new(b.clone()))),
         ("max", [a, b]) => Ok(Expr::Binary(Arithmetic::Max, Box::new(a.clone()), Box::new(b.clone()))),
         _ => Err(format!("{token} of {} arguments", arguments.len())),
@@ -182,7 +183,7 @@ mod tests {
     #[test]
     fn every_described_routine_loads() {
         let names: Vec<_> = routines().into_iter().map(|one| one.routine).collect();
-        assert_eq!(names, ["B$FLEN", "B$FASC", "B$FMID"]);
+        assert_eq!(names, ["B$FLEN", "B$FASC", "B$FMID", "B$FCHR"]);
     }
 
     /// QB 4.5 and PDS 7.1 state their descriptor; VBDOS's far strings are not at an offset, so it
