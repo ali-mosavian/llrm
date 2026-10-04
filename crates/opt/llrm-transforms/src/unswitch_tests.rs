@@ -133,8 +133,9 @@ b0:
 
 define i16 @choose(i16 %n, i16 %k) {
 b0:
-  %c = icmp eq i16 %k, 0
-  %s = select i1 %c, i16 %n, i16 %k
+  %f = sitofp i16 %n to double
+  %g = frem double %f, 3.000000e+00
+  %s = fptosi double %g to i16
   ret i16 %s
 }
 ";

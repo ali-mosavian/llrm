@@ -39,7 +39,7 @@ use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalI
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, Effects, callee};
-use llrm_mir::module::{Function, GlobalKind, InstId, Module, Operand};
+use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::splice::{carries, splice};
 use llrm_mir::types::Type;
@@ -257,7 +257,9 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         // Only once nothing else is: a body that a call in it is about to be inlined into would
         // be copied with that call still in it, and the call's callee counted once too many.
         let last = threshold.single && budget.is_some() && copies == 0 && !always && !admitted();
-        let verdict = always || admitted();
+        // A body held only to inline from (`available_externally`) is priced by the trial of what
+        // it leaves, not by its size: any size is a candidate there, never in the plain round.
+        let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
         llrm_support::debug!(
             "inline",
             "{} x{count} ({copies} copies): {} ops, budget {budget:?}, work {:?}, call {call_cost}: {}",
@@ -389,6 +391,25 @@ fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, c
     info.function_type == callee.ty
         && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
         && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
+        && callee.parameters().iter().enumerate().all(|(at, _)| !Facts::of(&callee.parameter_attrs[at]).releases() || owned(context, function, function.instruction(call).operands[at], 0))
+}
+
+/// Whether `operand` is an object the program owns: a variable, a frame object, or a parameter, which
+/// the language passes owned. What a call returns, loads or joins may be a runtime temporary, which
+/// the runtime frees where a routine that `releases` it is called.
+fn owned(context: &Context, function: &Function, operand: Operand, depth: usize) -> bool {
+    match operand {
+        Operand::Constant(id) => matches!(context.get(id).kind, ConstantKind::Global(_)),
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Argument(_) => true,
+            ValueDef::Instruction(inst) => match function.instruction(inst).opcode {
+                Opcode::Alloca { .. } => true,
+                Opcode::GetElementPtr { .. } if depth < 8 => owned(context, function, function.instruction(inst).operands[0], depth + 1),
+                _ => false,
+            },
+        },
+        Operand::Block(_) => false,
+    }
 }
 
 #[cfg(test)]

@@ -284,7 +284,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 40] = [
+pub const FLAG_ATTRIBUTES: [&str; 41] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -316,6 +316,7 @@ pub const FLAG_ATTRIBUTES: [&str; 40] = [
     "optsize",
     "readnone",
     "readonly",
+    "releases",
     "returned",
     "returns_twice",
     "signext",

@@ -875,6 +875,14 @@ pub struct RuntimePromises {
     /// The routines that never come back to their caller: END, SYSTEM, the
     /// error funnel. Their calls end their block.
     pub no_return: Vec<String>,
+    /// How the runtime reads a string descriptor; none where it cannot be
+    /// said, and every routine of `routines` then keeps its call.
+    pub descriptor: Option<crate::meaning::Descriptor>,
+    /// What each routine of the runtime computes, as it states it.
+    pub routines: Vec<crate::meaning::Meaning>,
+    /// Whether a routine raises its error: the program asks for run-time
+    /// checks, or handles errors.
+    pub checked: bool,
 }
 
 impl RuntimePromises {
@@ -893,6 +901,9 @@ impl RuntimePromises {
             reads_arguments: Vec::new(),
             no_retain: Vec::new(),
             no_return: Vec::new(),
+            descriptor: None,
+            routines: Vec::new(),
+            checked: false,
         }
     }
 

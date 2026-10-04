@@ -189,9 +189,9 @@ b3:
     assert!(through(&pure, Peel::default()).0);
 }
 
-/// A `select` has no target price, so nothing in its function is copied.
+/// A `frem` has no target price, so nothing in its function is copied.
 #[test]
 fn an_unpriced_function_is_left_alone() {
-    let text = diamond("4").replace("  %m = mul i16 %acc, 3\n", "  %m0 = mul i16 %acc, 3\n  %m = select i1 %even, i16 %m0, i16 %acc\n");
+    let text = diamond("4").replace("  %m = mul i16 %acc, 3\n", "  %f = sitofp i16 %acc to double\n  %g = frem double %f, 3.000000e+00\n  %m = fptosi double %g to i16\n");
     assert!(!through(&text, Peel::default()).0);
 }

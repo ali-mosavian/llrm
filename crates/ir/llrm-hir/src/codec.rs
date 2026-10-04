@@ -1460,6 +1460,8 @@ static RUNTIME_PROMISES: _Record = _Record {
             reads_arguments: _default(args, "reads_arguments", Vec::new())?,
             no_retain: _default(args, "no_retain", Vec::new())?,
             no_return: _default(args, "no_return", Vec::new())?,
+            // Read from the runtime's description after decoding, not carried in a program's text.
+            ..Default::default()
         })
     },
 };

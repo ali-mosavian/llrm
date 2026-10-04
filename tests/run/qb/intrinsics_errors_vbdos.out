@@ -1,0 +1,6 @@
+EMPTY= 5  0 
+ZERO= 5  0 
+PAST= 5  0 
+LAST= 0  99 
+NEG= 5  0 
+DONE

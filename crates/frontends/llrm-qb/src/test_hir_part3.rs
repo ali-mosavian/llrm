@@ -2418,7 +2418,7 @@ fn module_body(program: &llrm_core::hir::model::Program) -> String {
 fn a_module_body_keeps_its_frame_in_static_data() {
     // `10 ON ERROR GOTO 100: 20 ERROR 5: 25 ERROR 6: 27 ON ERROR GOTO 0`
     // `28 ERROR 7: 30 END: 100 PRINT "h"; ERR: 110 RESUME NEXT`
-    let program = qb_driver::decoded(include_str!("fixtures/static_main_frame.json")).expect("decodes");
+    let program = qb_driver::decoded(include_str!("fixtures/static_main_frame.json"), false).expect("decodes");
     let body = module_body(&program);
     // Premise: the body stores into a frame, BP's or the static one.
     assert!(body.contains("[bp-") || body.contains("$QB$FRAME"), "{body}");
@@ -2584,7 +2584,7 @@ fn an_error_in_the_outlined_handler_reports_its_line() {
 /// The same, pinned at the backend's input.
 #[test]
 fn an_outlined_handler_takes_a_row_per_line() {
-    let program = qb_driver::decoded(include_str!("fixtures/outlined_handler_lines.json")).expect("decodes");
+    let program = qb_driver::decoded(include_str!("fixtures/outlined_handler_lines.json"), false).expect("decodes");
     // Premise: the frontend states each line's BASIC number.
     assert!(program.modules[0].line_numbers.contains(&(5, 110)));
     let found = handler_lines(&program);

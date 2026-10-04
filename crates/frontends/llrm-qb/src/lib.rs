@@ -29,6 +29,9 @@ mod test_frames;
 mod test_intrinsics;
 
 #[cfg(test)]
+mod test_inline_runtime;
+
+#[cfg(test)]
 mod test_debug;
 
 #[cfg(test)]

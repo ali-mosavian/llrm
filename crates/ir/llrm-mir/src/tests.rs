@@ -333,6 +333,15 @@ d:
     assert_eq!((counted("f"), counted("g")), (2, 1), "a counter and a walked pointer, then a counter and a pointer that stays");
 }
 
+/// `releases` read and written back, stated of a parameter: a copy of a routine that frees its
+/// argument has to know it.
+#[test]
+fn releases_is_a_parameter_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndeclare void @free(ptr releases)\n");
+    let once = crate::print::module(&crate::parse::module(&text).unwrap());
+    assert!(once.contains("declare void @free(ptr releases)"), "{once}");
+}
+
 /// `noretain` read and written back, stated of a parameter and of a call's
 /// argument; before it existed the parser refused the attribute.
 #[test]

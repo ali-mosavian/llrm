@@ -357,6 +357,7 @@ dependencies = [
 name = "llrm-qbruntime"
 version = "0.1.0"
 dependencies = [
+ "llrm-hir",
  "llrm-support",
  "toml",
 ]
