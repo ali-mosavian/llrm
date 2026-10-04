@@ -218,7 +218,7 @@ fn folded(module: &Module, layout: &DataLayout, body: &Function, known: &[Option
 
 /// What a call costs beyond its own instruction, which inlining saves: the
 /// return, and each argument pushed by the caller and read back by the callee.
-fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
+pub fn call_overhead(costs: &OperationCosts, arguments: usize) -> i64 {
     costs.call + costs.return_ + arguments as i64 * costs.argument
 }
 

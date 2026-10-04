@@ -233,7 +233,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
         pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
         inline: applied.options.inline,
-        size: applied.options.prefers_size(),
+        rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.clocks_per_byte }),
     });
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.

@@ -9,7 +9,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +110,8 @@ pub struct Flags {
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
+    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds.
+    clocks_per_byte: Option<i64>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
@@ -124,7 +126,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, far_bss: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, far_bss: None, clocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -155,6 +157,10 @@ impl Flags {
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
             "--cpu" => self.cpu = Some(value("--cpu")?),
+            "--clocks-per-byte" => {
+                let text = value("--clocks-per-byte")?;
+                self.clocks_per_byte = Some(text.parse().map_err(|_| format!("--clocks-per-byte {text}: expected a number of clocks"))?);
+            }
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if flag.starts_with("-march=") || flag.starts_with("-mtune=") => {
@@ -190,6 +196,9 @@ impl Flags {
         let mut options = self.level.options();
         for &(pass, on) in &self.passes {
             PASSES[pass].1(&mut options, on);
+        }
+        if let Some(clocks) = self.clocks_per_byte {
+            options.limits.clocks_per_byte = clocks;
         }
         options
     }

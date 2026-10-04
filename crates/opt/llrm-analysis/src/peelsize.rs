@@ -70,11 +70,13 @@ pub struct Limits {
     /// `--param max-completely-peeled-insns`; 0 is unbounded.
     pub max_unrolled_operations: i64,
     pub grows: bool,
+    /// Clocks an inline that grows the code must save for each byte it adds: `--clocks-per-byte`.
+    pub clocks_per_byte: i64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 16, max_unrolled_operations: 200, grows: true }
+        Self { max_unroll_iterations: 16, max_unrolled_operations: 200, grows: true, clocks_per_byte: 0 }
     }
 }
 
