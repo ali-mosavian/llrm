@@ -262,3 +262,10 @@ class OwnFramesTests(unittest.TestCase):
                     seen[variant.language] = run.call_args[0][0]
         self.assertNotIn("--own-frames", seen["bas"])
         self.assertIn("--own-frames", seen["basown"])
+
+
+class StartupTests(unittest.TestCase):
+    def test_every_language_has_a_startup_program(self):
+        """Nib had no startup/startup.nib: its whole-program time was never netted, so it had no kernel_ms."""
+        have = {one.language for one in bench.variants(bench.STARTUP)}
+        self.assertEqual(have, {"bas", "basown", "c", "nib"})
