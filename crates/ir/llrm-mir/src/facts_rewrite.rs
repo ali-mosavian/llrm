@@ -79,6 +79,7 @@ impl Fact {
             | Fact::NonNull
             | Fact::NoCapture
             | Fact::NoRetain
+            | Fact::Releases
             | Fact::WriteOnly
             | Fact::NoReturn
             | Fact::NoUnwind

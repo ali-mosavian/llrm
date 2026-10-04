@@ -27,7 +27,12 @@ COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "dosbatch"))
 
-from run_tests import compiler_arguments as settings  # noqa: E402
+from run_tests import compiler_arguments as settings, header  # noqa: E402
+
+
+def dialect(basic: bool, source: str) -> list[str]:
+    """BASIC without a `dialect:` header is built as QuickBASIC 4.5, as tests/run and bench build it; llrm-qb's own default is VBDOS."""
+    return ["--dialect", "qb45", "--runtime", "qb45"] if basic and "dialect" not in header(Path(source)) else []
 
 
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
@@ -39,7 +44,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for pattern, tool in (("tests/run/qb/*.bas", qb), ("bench/*/*.bas", qb), ("bench/parity/*/*.bas", qb), ("bench/*/*.c", cc), ("bench/parity/*/*.c", cc),
                           ("bench/*/*.nib", nib), ("bench/parity/*/*.nib", nib), ("examples/*.nib", nib)):
-        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, file, *settings(file)]) for file in sorted(glob.glob(str(ROOT / pattern)))]
+        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, file, *dialect(tool == qb, file), *settings(file)]) for file in sorted(glob.glob(str(ROOT / pattern)))]
     return out
 
 

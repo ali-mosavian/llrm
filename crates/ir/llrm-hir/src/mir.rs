@@ -20,6 +20,7 @@ use crate::onerror::{self, Handled};
 
 mod debug;
 mod handling;
+mod meaning;
 
 /// The layout BC's objects fix: 16-bit near pointers, 32-bit far ones
 /// indexing by 16 bits, 16-bit segments, huge ones as far but indexing by
@@ -54,7 +55,7 @@ pub fn emit(program: &model::Program) -> Vec<Emitted> {
     // A procedure that frames itself zeroes locals with its own stores; its
     // frame holds garbage.
     let zeroed = program.zeroed_locals && program.frames == model::Frames::Runtime;
-    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed, &program.promises.nounwind, program.runtime)).collect()
+    program.modules.iter().map(|one| emit_module(one, program.array_order, zeroed, &program.promises, program.runtime)).collect()
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the
@@ -107,7 +108,7 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
         out.named_metadata.push(("llrm.named".to_owned(), vec![listed]));
     }
     let routines = modules.iter().flat_map(|(module, _)| {
-        let declared = module.globals.iter().enumerate().filter(|(_, one)| one.function().is_some_and(llrm_mir::Function::is_declaration));
+        let declared = module.globals.iter().enumerate().filter(|(_, one)| one.function().is_some_and(|function| function.is_declaration() || one.linkage == Linkage::AvailableExternally));
         declared.filter_map(move |(at, one)| Some((*module, GlobalId(at as u32), one.name.as_deref()?, one.name.as_deref()?.strip_prefix(RUNTIME)?)))
     });
     let mut writes = Vec::new();
@@ -131,7 +132,7 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
     if !writes.is_empty() {
         out.named_metadata.push(("llrm.writes".to_owned(), writes));
     }
-    for (module, global) in modules.iter().flat_map(|(module, _)| module.functions().filter(|(_, _, one)| one.is_declaration()).map(move |(id, _, _)| (*module, id))) {
+    for (module, global) in modules.iter().flat_map(|(module, _)| module.functions().filter(|(_, global, one)| one.is_declaration() || global.linkage == Linkage::AvailableExternally).map(move |(id, _, _)| (*module, id))) {
         let Some(name) = module.global(global).name.as_deref() else { continue };
         let routine = name.strip_prefix(RUNTIME).unwrap_or(name);
         let reads = promises.reads_arguments.iter().any(|one| one == routine);
@@ -409,7 +410,8 @@ fn loop_node(module: &mut Module, copies: u32) -> MetadataId {
     this
 }
 
-fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, nounwind: &'h [String], runtime: model::RuntimeProfile) -> Emitted {
+fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, promises: &'h model::RuntimePromises, runtime: model::RuntimeProfile) -> Emitted {
+    let nounwind = promises.nounwind.as_slice();
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
     let mut instruction_flags: HashMap<(i64, i64), Flags> = HashMap::new();
@@ -628,6 +630,7 @@ fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroe
             refused.push((name, why));
         }
     }
+    meaning::defined(&mut module, promises);
     Emitted { module, refused, data }
 }
 

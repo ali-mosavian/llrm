@@ -163,10 +163,10 @@ out:
 
 #[test]
 fn an_unpriced_instruction_makes_the_body_unpriced() {
-    let text = "define i16 @f(i1 %c, i16 %x) {
+    let text = "define double @f(double %x) {
 b0:
-  %y = select i1 %c, i16 %x, i16 0
-  ret i16 %y
+  %y = frem double %x, 3.000000e+00
+  ret double %y
 }
 ";
     let module = module(text);
@@ -333,4 +333,16 @@ fn test_a_switch_costs_a_compare_and_a_jump_for_each_case() {
         f.walk().map(|(_, one)| operation(&module.context, &layout, f, &callees, one, &costs)).next().flatten()
     };
     assert_eq!((price(0), price(1), price(10)), (Some(3), Some(8), Some(53)));
+}
+
+/// A select had no price, so a body holding one was unpriced and never a candidate to inline:
+/// MID$'s length (a min and a max) kept its far call.
+#[test]
+fn a_select_is_priced() {
+    let module = crate::testing::parsed("define i16 @f(i16 %a, i16 %b) {\nb1:\n  %c = icmp slt i16 %a, %b\n  %s = select i1 %c, i16 %a, i16 %b\n  ret i16 %s\n}\n");
+    let (_, _, function) = module.functions().next().unwrap();
+    let costs = OperationCosts { branch: 3, r#move: 2, ..OperationCosts::default() };
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let select = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Select).unwrap();
+    assert_eq!(operation(&module.context, &layout, function, &Default::default(), select, &costs), Some(5));
 }

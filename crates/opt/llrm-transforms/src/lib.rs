@@ -26,6 +26,9 @@ mod calleepop_tests;
 pub mod globalopt;
 pub mod fold;
 pub mod splitcopy;
+pub mod availableexternally;
+#[cfg(test)]
+mod availableexternally_tests;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;

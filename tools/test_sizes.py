@@ -112,3 +112,14 @@ def test_a_linked_image_is_not_an_object(tmp_path):
     path.write_bytes(b"MZ" + bytes(500))
     with pytest.raises(ValueError):
         code_bytes(path)
+
+
+def test_a_basic_benchmark_without_a_dialect_is_built_as_qb45():
+    """bench/grep read 1133 code bytes before and after inlining ASC and MID$: sizes.py built it with llrm-qb's own default,
+    VBDOS, which keeps the calls, while tests/run and bench build it as QB 4.5."""
+    from sizes import programs
+
+    built = dict(programs(Path("/x"), demos=False))
+    arguments = built["grep/grep.bas"]
+    assert arguments[arguments.index("--dialect") + 1] == "qb45"
+    assert "--dialect" not in built["grep/grep.c"] and "--dialect" not in built["grep/grep.nib"]

@@ -1013,3 +1013,54 @@ inputs = []
 evidence = '''
 rt/strfcn.asm: `cProc B$LEFT,<FAR,PUBLIC>` with parmW psd, parmW len, `Registers: Per convention`; it jumps into B$RGHT's `CALL LEFRIG` and RETF 4. LEFRIG: a negative length is `JL ARGERR` -> B$ERR_FC; zero frees the argument temp and returns b$nuldes; otherwise B$STALCTMPSUB (rt/nhstutil.asm), which saves ES, AX, CX, SI and DI, copies the substring and frees the source temp. BCOM45.LIB strfcn 00b8..00d9 with LEFRIG 0114..0132, and BCL71ENR.LIB 0000..0024 with 005c..007d, are that code.
 '''
+
+
+# What an inline copy of a routine computes, where the program is told how
+# the runtime reads a string. The interprocedural inliner prices each copy
+# against the call it replaces; a routine nothing here describes keeps its
+# call.
+#
+# A string descriptor is a `length` word and a `data` pointer at these
+# offsets, `size` bytes in all. QB 4.5 and PDS 7.1 keep their strings
+# near, in DGROUP. VBDOS's are far, the length in the payload's header
+# rather than at an offset in the descriptor: nothing states it here, and
+# every routine below keeps its call there.
+
+[layout.qb45]
+length = 0
+data = 2
+size = 4
+
+[layout.pds71]
+length = 0
+data = 2
+size = 4
+
+# `parameters`: `string` is a descriptor's address, `int` a word. `result`
+# is a word, or a `view`: a string made of a `length` and a `data` address,
+# which the runtime allocates a temporary descriptor for. `check` raises
+# error `raise` where `when` holds; it is emitted only where the program
+# asks for run-time checks or handles errors. `releases` lists the string
+# parameters the routine frees if the runtime allocated them, which no copy
+# can: a copy stands in only where the actual is not a runtime temporary.
+# `$n` is parameter n; `len($n)` and `data($n)` read a string parameter;
+# `byte(p)` is the byte at p.
+
+[semantics."B$FLEN"]
+evidence = "rt/strfcn.asm B$FLEN: the length word of the descriptor."
+parameters = ["string"]
+result = "len($0)"
+
+[semantics."B$FASC"]
+evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5); otherwise the first byte, and B$STDALCTMP frees the argument if it is a temp."
+parameters = ["string"]
+result = "byte(data($0))"
+releases = [0]
+check = { when = "len($0) == 0", raise = 5 }
+
+[semantics."B$FMID"]
+evidence = "rt/mid.asm: MID$(s, i, n) is the n bytes of s from the i-th, fewer where s ends and none past it; a start below 1 or a negative count is error 5."
+parameters = ["string", "int", "int"]
+releases = [0]
+view = { length = "min($2, max(0, len($0) - $1 + 1))", data = "data($0) + ($1 - 1)" }
+check = { when = "$1 < 1 or $2 < 0", raise = 5 }

@@ -7,4 +7,5 @@ description = "The QuickBASIC-family runtime's B$ routine contracts"
 
 [dependencies]
 llrm-support = { workspace = true }
+llrm-hir = { workspace = true }
 toml = { workspace = true }

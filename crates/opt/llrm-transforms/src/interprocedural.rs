@@ -156,7 +156,9 @@ fn unexported(program: &Program) -> BTreeSet<Defined> {
 /// which `grew` then checks against what they leave: a body that folds on known addresses is
 /// nothing the byte price can see.
 fn candidates(module: &Module, layout: &llrm_mir::datalayout::DataLayout, counts: &inline::Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, loose: Option<&OperationCosts>, reach: i64, threshold: inline::Threshold) -> (llrm_support::hash::IndexMap<GlobalId, inline::Candidate>, llrm_support::hash::IndexMap<GlobalId, inline::Candidate>) {
-    let found = inline::candidates(module, layout, counts, private, costs, reach, threshold);
+    let mut found = inline::candidates(module, layout, counts, private, costs, reach, threshold);
+    // Held only to inline from, a body's price is what the trial finds, never its size.
+    found.retain(|id, _| module.global(*id).linkage != Linkage::AvailableExternally);
     let more = loose.map_or_else(Default::default, |loose| inline::candidates(module, layout, counts, private, loose, reach, threshold).into_iter().filter(|(id, _)| !found.contains_key(id)).collect());
     (found, more)
 }
@@ -248,14 +250,25 @@ fn tried_callees<E: From<String>>(
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
     let mut stayed = false;
+    let mut refused = llrm_support::hash::IndexMap::default();
     for (callee, candidate) in more {
-        stayed |= trial(module, modules, layout, private, recursive, *callee, candidate, costs, credit, reoptimised)?;
+        if trial(module, modules, layout, private, recursive, &[(*callee, candidate)], None, costs, credit, reoptimised)? {
+            stayed = true;
+        } else {
+            refused.insert(*callee, candidate);
+        }
+    }
+    // Callees that feed one another (a constructor and what reads its result) pay together, not
+    // alone: each alone leaves the other's call holding what the pair would fold.
+    if refused.len() > 1 {
+        let together: Vec<_> = refused.iter().map(|(callee, candidate)| (*callee, *candidate)).collect();
+        stayed |= trial(module, modules, layout, private, recursive, &together, None, costs, credit, reoptimised)?;
     }
     Ok(stayed)
 }
 
-/// `callee` inlined at every direct call of it in `module`, where the callers and what goes with
-/// it come to fewer bytes than before (priced by `costs`): the callers re-run through the
+/// `callees` inlined at every direct call of them in `module`, where the callers and what goes
+/// with them come to fewer bytes than before (priced by `costs`): the callers re-run through the
 /// pipeline, and put back as they were where they do not.
 fn trial<E: From<String>>(
     module: &mut Module,
@@ -263,51 +276,76 @@ fn trial<E: From<String>>(
     layout: &llrm_mir::datalayout::DataLayout,
     private: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
-    callee: GlobalId,
-    candidate: &inline::Candidate,
+    callees: &[(GlobalId, &inline::Candidate)],
+    only: Option<GlobalId>,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
+    let reaches = |function: &llrm_mir::module::Function, module: &Module| function.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, function, inst).is_some_and(|one| callees.iter().any(|(callee, _)| *callee == one)));
     let callers: Vec<GlobalId> = module
         .functions()
         .filter(|(_, _, function)| !function.is_declaration())
-        .filter(|(_, _, function)| function.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, function, inst) == Some(callee)))
+        .filter(|(_, _, function)| reaches(function, module))
         .map(|(id, _, _)| id)
-        .filter(|id| *id != callee)
+        .filter(|id| callees.iter().all(|(callee, _)| id != callee) && only.is_none_or(|one| one == *id))
         .collect();
     // Every call re-runs a caller's pipeline: a callee at many sites is not tried (savegame.c's took
     // 4x the compile time), and an estimate's noise over so many copies is no tolerance.
-    let sites = inline::call_counts(module).get(&callee).copied().unwrap_or(0);
-    if sites > TRIED_SITES {
+    let counts = inline::call_counts(module);
+    let sites: Vec<i64> = callees.iter().map(|(callee, _)| counts.get(callee).copied().unwrap_or(0)).collect();
+    // Bodies held only to inline from are small and meant to be copied everywhere: every site is
+    // spliced and a caller's pipeline runs once, not after each, so the sites do not cost compile time.
+    let held = callees.iter().all(|(callee, _)| module.global(*callee).linkage == Linkage::AvailableExternally);
+    if !held && sites.iter().any(|&count| count > TRIED_SITES) {
         return Ok(false);
     }
+    // Nothing of such a body goes with its last call, so each caller is judged on its own.
+    if held && only.is_none() {
+        let mut stayed = false;
+        for &caller in &callers {
+            stayed |= trial(module, modules, layout, private, recursive, callees, Some(caller), costs, credit, reoptimised)?;
+        }
+        return Ok(stayed);
+    }
     let sizes = |module: &Module| callers.iter().map(|&id| inline::size(module, id, costs)).sum::<Option<i64>>();
-    let (Some(before), Some(own)) = (sizes(module), inline::size(module, callee, costs)) else { return Ok(false) };
+    let owns: Option<Vec<i64>> = callees.iter().map(|(callee, _)| inline::size(module, *callee, costs)).collect();
+    let (Some(before), Some(owns)) = (sizes(module), owns) else { return Ok(false) };
     let kept: Vec<(GlobalId, llrm_mir::module::Function)> = callers.iter().map(|&id| (id, module.global(id).function().expect("a procedure").clone())).collect();
-    let available = llrm_support::hash::IndexMap::from_iter([(callee, candidate.clone())]);
+    let available: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> = callees.iter().map(|(callee, candidate)| (*callee, (*candidate).clone())).collect();
     let mut done = false;
     for &id in &callers {
         let (mut context, mut function) = function_mut(module, id);
         let by = inline::Caller { layout, recursive: recursive.contains(&id) };
         // One site a time, as the rounds do, the body through the pipeline after each.
+        let mut spliced = false;
         while inline::expanded(context, function, &by, &available, None).map_err(E::from)? {
-            modules.changed(id);
-            modules.invalidate(&PreservedAnalyses::none());
-            reoptimised(module, modules, id, "inline-trial.")?;
-            done = true;
+            spliced = true;
+            if !held {
+                modules.changed(id);
+                modules.invalidate(&PreservedAnalyses::none());
+                reoptimised(module, modules, id, "inline-trial.")?;
+            }
             let (next_context, next) = function_mut(module, id);
             context = next_context;
             function = next;
         }
+        if spliced && held {
+            modules.changed(id);
+            modules.invalidate(&PreservedAnalyses::none());
+            reoptimised(module, modules, id, "inline-trial.")?;
+        }
+        done |= spliced;
     }
     if !done {
         return Ok(false);
     }
-    let gone = if private.contains(&callee) && !inline::call_counts(module).contains_key(&callee) { own } else { 0 };
-    llrm_support::debug!("inline", "trial of {}: {before} bytes before, {:?} after, {gone} gone", module.global(callee).name.as_deref().unwrap_or("?"), sizes(module));
-    let removed = sites - inline::call_counts(module).get(&callee).copied().unwrap_or(0);
-    if sizes(module).is_some_and(|after| stays(after, gone, before, own, allowance(module, callee, removed, credit.0, credit.1))) {
+    let now = inline::call_counts(module);
+    let gone: i64 = callees.iter().zip(&owns).filter(|((callee, _), _)| private.contains(callee) && !now.contains_key(callee)).map(|(_, own)| own).sum();
+    let moved: i64 = owns.iter().sum();
+    let allowed: i64 = callees.iter().zip(&sites).map(|((callee, _), &count)| allowance(module, *callee, count - now.get(callee).copied().unwrap_or(0), credit.0, credit.1)).sum();
+    llrm_support::debug!("inline", "trial of {}: {before} bytes before, {:?} after, {gone} gone", callees.iter().map(|(callee, _)| module.global(*callee).name.as_deref().unwrap_or("?")).collect::<Vec<_>>().join(" + "), sizes(module));
+    if sizes(module).is_some_and(|after| stays(after, gone, before, moved, allowed)) {
         return Ok(true);
     }
     for (id, function) in kept {

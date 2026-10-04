@@ -255,8 +255,12 @@ fn promised(declaration: &mut Function, types: &mut Types, promise: &Function, f
 }
 
 /// Whether `global` is a definition: a function with a body, or a variable
-/// with an initializer or storage of its own.
+/// with an initializer or storage of its own. A body held only to inline from
+/// (`available_externally`) is not: the program resolves the name elsewhere.
 pub fn defines(global: &GlobalValue) -> bool {
+    if global.linkage == Linkage::AvailableExternally {
+        return false;
+    }
     match &global.kind {
         crate::module::GlobalKind::Function(function) => !function.is_declaration(),
         crate::module::GlobalKind::Variable(variable) => variable.initializer.is_some() || !matches!(global.linkage, Linkage::External | Linkage::ExternWeak),

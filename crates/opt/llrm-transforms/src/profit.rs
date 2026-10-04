@@ -88,6 +88,8 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
             advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs)
         }
         Opcode::Alloca { .. } => costs.address,
+        // Lowered as a jump around a move, the compare priced on its own.
+        Opcode::Select => costs.branch + costs.r#move,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
         Opcode::Binary(BinaryOp::FDiv) => costs.float_divide,

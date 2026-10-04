@@ -663,3 +663,43 @@ b1:
     let at = |threshold: Threshold| constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, 18, threshold).len();
     assert_eq!((at(Threshold::default()), at(Threshold::default().for_size())), (0, 1));
 }
+
+const RELEASING: &str = "define available_externally i16 @first(ptr releases %s) {
+b1:
+  %b = load i8, ptr %s
+  %w = zext i8 %b to i16
+  ret i16 %w
+}
+
+declare ptr @fresh()
+
+define i16 @temporary() {
+b1:
+  %t = call ptr @fresh()
+  %v = call i16 @first(ptr %t)
+  ret i16 %v
+}
+
+define i16 @owned() {
+b1:
+  %s = alloca [2 x i8]
+  store i8 7, ptr %s
+  %v = call i16 @first(ptr %s)
+  ret i16 %v
+}
+";
+
+/// A routine that frees its string argument where the runtime allocated it was copied in at a
+/// call of a runtime temporary: the copy never freed it, and the string space leaked once a call.
+#[test]
+fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
+    let mut module = parsed(RELEASING);
+    let layout = DataLayout::default();
+    let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &costs(5), 5, Threshold::default());
+    assert!(available.contains_key(&id(&module, "first")), "the premise: the body is a candidate");
+    for (caller, inlined) in [("temporary", false), ("owned", true)] {
+        let by = Caller { layout: &layout, recursive: false };
+        let (context, function) = module.function_mut(caller).unwrap();
+        assert_eq!(expanded(context, function, &by, &available, None).unwrap(), inlined, "{caller}\n{}", printed(&module));
+    }
+}
