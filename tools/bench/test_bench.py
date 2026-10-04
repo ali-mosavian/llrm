@@ -269,3 +269,81 @@ class StartupTests(unittest.TestCase):
         """Nib had no startup/startup.nib: its whole-program time was never netted, so it had no kernel_ms."""
         have = {one.language for one in bench.variants(bench.STARTUP)}
         self.assertEqual(have, {"bas", "basown", "c", "nib"})
+
+
+class TimedOnlyTests(unittest.TestCase):
+    """grep scans 10 MB: the emulator would step ~10^8 instructions, so it is sized and timed, not counted."""
+
+    def test_a_timed_only_program_is_sized_and_never_run_in_the_emulator(self):
+        import tempfile
+        from unittest import mock
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import test_sizes
+
+        with tempfile.TemporaryDirectory() as where:
+            obj = Path(where) / "p.obj"
+            obj.write_bytes(test_sizes.object_with(12))
+            with mock.patch.object(bench.icount, "run", side_effect=AssertionError("stepped it")):
+                got = bench.measure(("p", obj, obj, None, ["1"], obj))
+        self.assertEqual(got, {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40})
+
+    def test_a_baseline_without_counts_does_not_fail_a_run_without_them(self):
+        """against() read got['instructions'] for a measurement that has none: a KeyError, and the gate died."""
+        sized = {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40}
+        self.assertEqual(bench.against("grep c -O2", sized, sized | {"kernel_ms": 3.4}), [])
+
+    def test_the_time_of_a_timed_only_program_gates_both_ways(self):
+        want = {"kernel_ms": 100.0}
+        self.assertEqual(bench.time_against("g", {"kernel_ms": 100.5}, want), [])
+        self.assertIn("(worse)", bench.time_against("g", {"kernel_ms": 103.0}, want)[0])
+        self.assertIn("(better: --bless", bench.time_against("g", {"kernel_ms": 97.0}, want)[0])
+        self.assertEqual(bench.time_against("g", {}, want), [])  # not run with --time
+
+    def test_sizes_and_time_are_blessed_without_an_instruction_count(self):
+        """write_expected read new['instructions'] to decide whether to keep the old time: a KeyError for a timed-only program."""
+        import tempfile
+        import tomllib
+
+        counts = {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40, "kernel_ms": 3.4}
+        with tempfile.TemporaryDirectory() as where:
+            bench.write_expected(Path(where), {("g", "c", "O2"): counts}, "g", "t")
+            self.assertEqual(tomllib.loads((Path(where) / "expected.toml").read_text())["c"]["O2"], counts)
+
+    def run_timed(self, text: str, inputs: dict):
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as where:
+            exe = Path(where) / "p.exe"
+            exe.write_bytes(b"MZ")
+            with mock.patch.object(bench.dosbatch, "run", return_value={"W000": bench.dosbatch.Result("ok", text)}), mock.patch.object(bench.subprocess, "run", return_value=mock.Mock(returncode=0)):
+                return bench.time_programs({("g", "c", "O2"): exe}, Path(where) / "t", inputs)[("g", "c", "O2")]
+
+    def test_a_timed_only_program_that_prints_other_numbers_is_an_error_not_a_time(self):
+        """Nothing else checks its output: a scan over a short or wrong file would have been timed and blessed."""
+        got = self.run_timed("4745\r\n999\r\nTSC 75000\r\n", {("g", "c", "O2"): {"files": (), "want": ["4745", "200504993"]}})
+        self.assertIn("want", got["error"])
+        good = self.run_timed("4745\r\n200504993\r\nTSC 75000\r\n", {("g", "c", "O2"): {"files": (), "want": ["4745", "200504993"]}})
+        self.assertEqual(good["ms"], 1.0)
+
+    def test_an_unavailable_corpus_skips_the_timing_with_the_reason(self):
+        import io
+        from contextlib import redirect_stdout
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            got = self.run_timed("", {("g", "c", "O2"): {"skip": "dickens is not cached and could not be fetched (offline?)"}})
+        self.assertIn("skipped", got["error"])
+        self.assertIn("offline", out.getvalue())
+
+
+class CSourceTests(unittest.TestCase):
+    def test_header_lines_are_not_sent_to_the_reference_compilers(self):
+        """grep.c opens with `// data: @dickens`: Turbo C 2.01 stopped on it, so TC had no grep row."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as where:
+            source = Path(where) / "g.c"
+            source.write_bytes(b"// data: @dickens\n// flags: -O2\n// a comment\nint main(void) { return 0; }\n")
+            self.assertEqual(bench.c_source(source), b"// a comment\nint main(void) { return 0; }\n")

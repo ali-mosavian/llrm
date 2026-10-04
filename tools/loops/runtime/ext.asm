@@ -6,6 +6,8 @@
 .data
 ticks   dw 0
 digits  db 12 dup (?)
+inhandle dw 0FFFFh
+inname  db 'DICKENS', 0
 
 .code
 ; void report(long v)
@@ -50,6 +52,33 @@ unsigned:
     pop bp
     ret
 _report endp
+
+; int input_read(char *buffer, int count): up to count bytes of DICKENS (opened on the first call, in the
+; current directory), 0 at its end or on an error. The bench/grep program reads its input through this.
+public _input_read
+_input_read proc far
+    push bp
+    mov bp, sp
+    cmp inhandle, 0FFFFh
+    jne opened
+    mov ax, 3D00h
+    mov dx, offset inname
+    int 21h
+    jc failed
+    mov inhandle, ax
+opened:
+    mov bx, inhandle
+    mov cx, [bp+8]
+    mov dx, [bp+6]
+    mov ah, 3Fh
+    int 21h
+    jnc done
+failed:
+    xor ax, ax
+done:
+    pop bp
+    ret
+_input_read endp
 
 ; int keep(int x)
 public _keep

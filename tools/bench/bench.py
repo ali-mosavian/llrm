@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import maps  # noqa: E402
+import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
 import dosbatch  # noqa: E402
@@ -82,6 +83,8 @@ class Variant:
     region: str  # the kernel function's name
     known: str | None
     dialect: str = "qb45"
+    timed_only: bool = False  # no instruction count (the emulator would step ~10^8 of them): timed in DOSBox, sized, output-checked there
+    data: tuple[str, ...] = ()  # files it reads, as run_tests' `data:` header: `@name` is a cached corpus
 
 
 def directory_name(directory: Path) -> str:
@@ -103,7 +106,8 @@ def variants(directory: Path) -> list[Variant]:
         if source.exists():
             head = run_tests.header(source)
             for one in ("bas", "basown") if language == "bas" else (language,):
-                out.append(Variant(name, one, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45")))
+                out.append(Variant(name, one, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45"),
+                                   bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
     return out
 
 
@@ -160,6 +164,9 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
     stem, exe, listing, region, want, obj = job
+    if region is None:  # timed only: its output is checked where it is timed
+        data, bss = sizes.data_bytes(obj)
+        return {"code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
         return {"error": f"{region} is not in the map, and main does not call one function of its own"}
@@ -199,6 +206,16 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     return exe, listing
 
 
+def c_source(path: Path) -> bytes:
+    """A C program as the references compile it: without the `// key: value` header lines (run_tests.header), which
+    Turbo C 2.01 does not read as comments ("Declaration syntax error" on line 1 of grep.c)."""
+    lines = path.read_bytes().splitlines(keepends=True)
+    head = 0
+    while head < len(lines) and run_tests.HEADER.match(lines[head].decode("latin1")):
+        head += 1
+    return b"".join(lines[head:])
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
@@ -207,10 +224,10 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
     for variant, stem in variants_:
+        text = c_source(variant.source)
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
-            (folder / f"{stem}.c").write_bytes(variant.source.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
-        else:
-            shutil.copy(variant.source, folder / f"{stem}.c")
+            text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        (folder / f"{stem}.c").write_bytes(text)
     subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]}".strip() for _, stem in variants_]],
                    env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
     ext = folder / "EXT.OBJ"
@@ -248,14 +265,15 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     folder.mkdir(parents=True)
     todo = with_startup(selected, timing)
     stems = [f"R{at:03d}" for at in range(len(todo))]
-    jobs, owned, plain = [], [], {}
+    jobs, owned, plain, needs = [], [], {}, {}
     def own(key, stem, directory, variant, built, obj=None):
         if isinstance(built, str):
             out[key] = {"error": built}
         elif directory == STARTUP:
             plain[key] = built[0]
         else:
-            owned.append((key, (stem, built[0], built[1], variant.region, expected_output(directory), obj)))
+            owned.append((key, (stem, built[0], built[1], None if variant.timed_only else variant.region, expected_output(directory), obj)))
+            needs[key] = timing_input(variant, directory)
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
         for directory, variant, stem in c_todo:
@@ -288,7 +306,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             out[key] = counts
     if timing:
         exes = {key: job[1] for key, job in owned if "error" not in out[key]} | plain
-        for key, timed in time_programs(exes, folder / "time").items():
+        for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
             out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
     return net_times(out)
 
@@ -318,7 +336,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
             built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)]), todo))
         basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
         failed = link_basic(basic, folder)
-        jobs, plain = [], {}
+        jobs, plain, needs = [], {}, {}
         for (directory, variant), result in zip(todo, built):
             key = (variant.name, variant.language, opt)
             stem = stems[(variant.name, variant.language)]
@@ -330,13 +348,14 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
             if directory == STARTUP:
                 plain[key] = exe  # timed, not counted
             else:
-                jobs.append((key, (stem, exe, listing, variant.region, expected_output(directory), folder / f"{stem}.obj")))
+                jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
+                needs[key] = timing_input(variant, directory)
         with ProcessPoolExecutor() as pool:
             for (key, _), counts in zip(jobs, pool.map(measure, [job for _, job in jobs])):
                 out[key] = counts
         if timing:
             exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
-            for key, timed in time_programs(exes, folder / "time").items():
+            for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
                 out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
     return mark_known(net_times(out) if timing else out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
 
@@ -358,7 +377,19 @@ def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> 
     return measured
 
 
-def time_programs(exes: dict[tuple[str, str, str], Path], work: Path) -> dict[tuple[str, str, str], dict]:
+def timing_input(variant: Variant, directory: Path) -> dict | None:
+    """{files a timed-only program reads, want: the output it must print}, or {skip: why} when its corpus is unavailable, or None
+    for the programs the emulator counts."""
+    if not variant.timed_only:
+        return None
+    try:
+        files = tuple(corpus.path(one[1:]) if one.startswith("@") else variant.source.parent / one for one in variant.data)
+    except corpus.Unavailable as error:
+        return {"skip": str(error)}
+    return {"files": files, "want": expected_output(directory)}
+
+
+def time_programs(exes: dict[tuple[str, str, str], Path], work: Path, inputs: dict | None = None) -> dict[tuple[str, str, str], dict]:
     """Wall time of each whole program in DOSBox, from RDTSC around the run (tools/bench/timeit.asm): {"cycles", "ms"}.
     Whole-program: it includes the runtime's start-up and the print, which differ per toolchain. net_times takes the
     start-up out."""
@@ -369,14 +400,22 @@ def time_programs(exes: dict[tuple[str, str, str], Path], work: Path) -> dict[tu
     done = subprocess.run([str(BIN / "jwasm"), "-q", "-bin", f"-Fo{stub}", str(Path(__file__).with_name("timeit.asm"))], capture_output=True, text=True)
     if done.returncode != 0:
         return {key: {"error": "timeit.asm: " + done.stderr.strip()[-200:]} for key in exes}
-    keys = list(exes)
-    jobs = [Job(f"W{at:03d}", "exe", exes[key], runner="TIMEIT.COM", files=(stub,)) for at, key in enumerate(keys)]
-    ran = dosbatch.run(jobs, work / "run", conf=TIMING_CONF)
+    inputs = inputs or {}
     out = {}
+    for why in {one["skip"] for one in inputs.values() if "skip" in one}:
+        print(f"SKIP timing: {why}")
+    out |= {key: {"error": "skipped: " + one["skip"]} for key, one in inputs.items() if "skip" in one}
+    keys = [key for key in exes if key not in out]
+    jobs = [Job(f"W{at:03d}", "exe", exes[key], runner="TIMEIT.COM", files=(stub, *inputs.get(key, {}).get("files", ())), budget_ms=600_000 if key in inputs else None) for at, key in enumerate(keys)]
+    ran = dosbatch.run(jobs, work / "run", conf=TIMING_CONF)
     for key, job in zip(keys, jobs):
         text = ran[job.stem].text
         found = [line for line in text.splitlines() if line.startswith("TSC ")]
-        out[key] = {"cycles": int(found[-1][4:]), "ms": round(int(found[-1][4:]) / CYCLES_PER_MS, 3)} if found else {"error": f"no timing line: {text[-80:]!r}"}
+        printed = run_tests.lines("\n".join(line for line in text.splitlines() if not line.startswith("TSC ")))
+        if found and key in inputs and printed != inputs[key]["want"]:  # nothing else checks a timed-only program's output
+            out[key] = {"error": f"prints {printed}, want {inputs[key]['want']}"}
+        else:
+            out[key] = {"cycles": int(found[-1][4:]), "ms": round(int(found[-1][4:]) / CYCLES_PER_MS, 3)} if found else {"error": f"no timing line: {text[-80:]!r}"}
     return out
 
 
@@ -394,7 +433,7 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> N
             continue
         new = {one: counts[one] for one in (*COUNTERS, *SIZES, "kernel_ms") if one in counts}
         old = tables.get(language, {}).get(opt, {})
-        if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new["instructions"]:
+        if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new.get("instructions"):
             new["kernel_ms"] = old["kernel_ms"]
         tables.setdefault(language, {})[opt] = new
     lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
@@ -419,6 +458,20 @@ def against(label: str, got: dict, want: dict | None) -> list[str]:
         elif got[counter] < want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} < {want[counter]} (better: --bless --reason)")
     return problems
+
+
+def time_against(label: str, got: dict, want: dict | None) -> list[str]:
+    """A timed-only program has no count to ratchet: its own kernel time gates, with the time tolerance, up (worse) and down (bless)."""
+    if want is None or "kernel_ms" not in got:
+        return []
+    if "kernel_ms" not in want:
+        return [f"{label}: no baseline for kernel_ms; run --bless --time --reason"]
+    slack = max(TIME_TOLERANCE * want["kernel_ms"], TIME_SLACK_MS)
+    if got["kernel_ms"] > want["kernel_ms"] + slack:
+        return [f"{label}: kernel_ms {got['kernel_ms']} > {want['kernel_ms']} (worse)"]
+    if got["kernel_ms"] < want["kernel_ms"] - slack:
+        return [f"{label}: kernel_ms {got['kernel_ms']} < {want['kernel_ms']} (better: --bless --reason)"]
+    return []
 
 
 def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict) -> list[str]:
@@ -468,6 +521,8 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                 else:
                     want = baseline.get(variant.language, {}).get(opt)
                     problems += against(label, got, want)
+                    if variant.timed_only:
+                        problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
                         ref = baseline.get(reference, {}).get(reference_level(reference, opt))
                         if want and ref:
@@ -497,7 +552,7 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                     name = str(directory.relative_to(BENCH))
                     got = measured.get((name, language, opt), {})
                     ref = read_expected(directory).get(reference, {}).get(level)
-                    if ref and "error" not in got and "instructions" in got:
+                    if ref and "error" not in got and any(one in got for one in ("instructions", "kernel_ms", "code_bytes")):
                         rows.append((got, ref))
                 parts = []
                 for counter, title in (("instructions", "instructions"), ("memory_operands", "memory operands"), ("kernel_ms", "kernel time"),

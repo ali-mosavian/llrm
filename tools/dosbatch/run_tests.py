@@ -9,7 +9,7 @@ A header comment holds a program's settings:
     ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486)
     ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime
     ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib)
-    ' data: values.dat         a file the program reads, copied beside it
+    ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
 
@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import corpus  # noqa: E402
 import dosbatch  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 
@@ -132,7 +133,19 @@ def compile_one(program: Program, obj: Path) -> str | None:
 
 
 def data_files(program: Program) -> tuple[Path, ...]:
-    return tuple(program.source.parent / one for one in program.data)
+    """The files a program reads: beside its source, or `@name` for a cached corpus (tools/dosbatch/corpus.py)."""
+    return tuple(corpus.path(one[1:]) if one.startswith("@") else program.source.parent / one for one in program.data)
+
+
+def unavailable(program: Program) -> str | None:
+    """Why a program's corpus cannot be had, or None."""
+    for one in program.data:
+        if one.startswith("@"):
+            try:
+                corpus.path(one[1:])
+            except corpus.Unavailable as error:
+                return str(error)
+    return None
 
 
 def build(program: Program, work: Path, stem: str) -> Job | str:
@@ -176,6 +189,9 @@ def main() -> int:
     parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-run")
     args = parser.parse_args()
     programs = discover(args.select)
+    for program in [one for one in programs if unavailable(one)]:
+        print(f"SKIP  {program.name}: {unavailable(program)}")
+        programs.remove(program)
     if not programs:
         print("no programs selected")
         return 1
