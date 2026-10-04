@@ -1,75 +1,136 @@
-reason = "add Turbo C 2.01 and C++ 3.0; Watcom linked with its own CLIBM, MATH87M and start-up"
+reason = "recursive programs (quicksort, fib, hanoi, queens, bintree); code/data/bss bytes of each program's own object; PDS 7.1 and VBDOS BC as references"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 130692
 memory_operands = 94040
-kernel_ms = 1.7874
+code_bytes = 525
+data_bytes = 121
+bss_bytes = 0
+kernel_ms = 1.7876
 
 [bas.Os]
 instructions = 130480
 memory_operands = 94031
+code_bytes = 480
+data_bytes = 121
+bss_bytes = 0
 kernel_ms = 1.7852
 
 [c.O2]
 instructions = 84439
 memory_operands = 61509
-kernel_ms = 1.1475
+code_bytes = 185
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 1.1476
 
 [c.Os]
 instructions = 84237
 memory_operands = 61509
+code_bytes = 177
+data_bytes = 0
+bss_bytes = 1212
 kernel_ms = 1.1449
 
 [nib.O2]
 instructions = 138296
 memory_operands = 113322
+code_bytes = 407
+data_bytes = 0
+bss_bytes = 0
 
 [nib.Os]
 instructions = 138998
 memory_operands = 114228
+code_bytes = 383
+data_bytes = 0
+bss_bytes = 0
 
 [ow.O2]
 instructions = 151210
 memory_operands = 92313
+code_bytes = 278
+data_bytes = 0
+bss_bytes = 1212
 kernel_ms = 2.0383
 
 [ow.Os]
 instructions = 161207
 memory_operands = 92413
+code_bytes = 263
+data_bytes = 0
+bss_bytes = 1212
 kernel_ms = 2.1716
 
 [bcc.O2]
 instructions = 137252
 memory_operands = 92113
+code_bytes = 258
+data_bytes = 0
+bss_bytes = 1212
 kernel_ms = 1.8521
 
 [bcc.Os]
 instructions = 330372
 memory_operands = 92113
-kernel_ms = 4.4281
+code_bytes = 310
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.4275
 
 [tc.O2]
 instructions = 335232
 memory_operands = 215841
-kernel_ms = 4.4929
+code_bytes = 378
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.4923
 
 [tc.Os]
 instructions = 335132
 memory_operands = 215841
-kernel_ms = 4.4916
+code_bytes = 372
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.491
 
 [tcpp.O2]
 instructions = 336370
 memory_operands = 92519
-kernel_ms = 4.5081
+code_bytes = 364
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.5075
 
 [tcpp.Os]
 instructions = 336368
 memory_operands = 92519
-kernel_ms = 4.508
+code_bytes = 360
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.5075
 
 [bc.O2]
 instructions = 603771
 memory_operands = 310816
-kernel_ms = 8.0989
+code_bytes = 778
+data_bytes = 7
+bss_bytes = 118
+kernel_ms = 8.0983
+
+[pds71.O2]
+instructions = 543500
+memory_operands = 310917
+code_bytes = 766
+data_bytes = 7
+bss_bytes = 118
+kernel_ms = 7.2915
+
+[vbdos.O2]
+instructions = 545217
+memory_operands = 311422
+code_bytes = 772
+data_bytes = 7
+bss_bytes = 118
+kernel_ms = 7.3159

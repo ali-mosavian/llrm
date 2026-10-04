@@ -1,0 +1,13 @@
+# Same algorithm as fib.c.
+
+fn fib(n: i16) -> i16:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+fn bench_fib(n: i16) -> i32:
+    return i32(fib(n))
+
+fn main() -> i16:
+    print(bench_fib(20))
+    return 0

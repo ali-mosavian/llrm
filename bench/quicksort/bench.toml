@@ -1,0 +1,7 @@
+description = "Recursive quicksort of 2048 LCG values, weighted checksum"
+repetitions = 1
+
+[region]
+bas = "BenchQuicksort"
+c = "bench_quicksort"
+nib = "bench_quicksort"

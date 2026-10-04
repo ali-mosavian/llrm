@@ -1,0 +1,26 @@
+# Same algorithm as queens.c.
+
+fn safe(q: &[i16], row: i16, col: i16) -> bool:
+    for r in 0..row:
+        let d: i16 = q[r] - col
+        if d == 0 || d == row - r || d == r - row:
+            return false
+    return true
+
+fn place(q: &mut [i16], row: i16, n: i16) -> i16:
+    if row == n:
+        return 1
+    let mut found: i16 = 0
+    for col in 0..n:
+        if safe(q, row, col):
+            q[row] = col
+            found += place(q, row + 1, n)
+    return found
+
+fn bench_queens(n: i16) -> i32:
+    let mut q: i16[12] = [0] * 12
+    return i32(place(q, 0, n))
+
+fn main() -> i16:
+    print(bench_queens(7))
+    return 0

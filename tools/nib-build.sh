@@ -5,7 +5,7 @@
 # from. Those C files may include SOURCE's generated declarations as
 # "NAME.h". Running it is a separate, visible DOSBox step.
 #
-#   [NIB_FLAGS='-fno-inline-functions'] [NIB_MAP=LISTING.map] tools/nib-build.sh SOURCE.nib [OUTPUT.EXE] [-O2|-Os] [FOREIGN.c|.asm ...]
+#   [NIB_FLAGS='-fno-inline-functions'] [NIB_MAP=LISTING.map] [NIB_OBJ=PROGRAM.obj, the program's own object kept] tools/nib-build.sh SOURCE.nib [OUTPUT.EXE] [-O2|-Os] [FOREIGN.c|.asm ...]
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -47,4 +47,5 @@ objects="file $work/runtime.obj$objects"
     exit 1
 }
 cp "$work/program.exe" "$output"
+[ -z "${NIB_OBJ:-}" ] || cp "$work/program.obj" "$NIB_OBJ"
 echo "$output ($(wc -c <"$output" | tr -d ' ') bytes)"
