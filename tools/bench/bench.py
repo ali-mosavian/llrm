@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import math
 import shutil
 import argparse
 import subprocess
@@ -40,6 +41,17 @@ COUNTERS = ("instructions", "memory_operands")
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
 TIMING_CONF = dosbatch.CONF.replace("cycles=max", "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
+BCC = Path(os.environ.get("TOOLCHAINS", Path.home() / "work/other/d32x/toolchains")) / "bcpp31"
+STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
+REFERENCES = {"c": ("ow", "bcc"), "bas": ("bc",)}  # the reference compilers per language; BC has one level, /O
+# Kernel time is a difference of two whole-program times, each a few cycles off from run to run: parity/loop's 139
+# instructions (0.0029 ms) read 3.5% apart on two runs. A change must clear both the relative and the absolute slack.
+TIME_TOLERANCE = 0.01
+TIME_SLACK_MS = 0.001
+
+
+def reference_level(reference: str, opt: str) -> str:
+    return "O2" if reference == "bc" else opt
 
 
 @dataclass(frozen=True)
@@ -52,6 +64,10 @@ class Variant:
     dialect: str = "qb45"
 
 
+def directory_name(directory: Path) -> str:
+    return str(directory.relative_to(BENCH)) if directory.is_relative_to(BENCH) else directory.name
+
+
 def benchmarks(selected: list[str]) -> list[Path]:
     dirs = [one for one in sorted(BENCH.glob("*/bench.toml"))] + [one for one in sorted(BENCH.glob("parity/*/bench.toml"))]
     found = [one.parent for one in dirs]
@@ -60,7 +76,7 @@ def benchmarks(selected: list[str]) -> list[Path]:
 
 def variants(directory: Path) -> list[Variant]:
     settings = tomllib.loads((directory / "bench.toml").read_text())
-    name = str(directory.relative_to(BENCH))
+    name = directory_name(directory)
     out = []
     for language, suffix in LANGUAGES.items():
         source = directory / f"{directory.name}{suffix}"
@@ -134,7 +150,7 @@ def measure(job: tuple[str, Path, Path, str, list[str]]) -> dict:
 
 
 def references_available() -> bool:
-    return (OW / "bwcc").exists() and (dosbatch.QB45 / "BC.EXE").exists()
+    return (OW / "bwcc").exists() and (dosbatch.QB45 / "BC.EXE").exists() and (BCC / "lib" / "C0M.OBJ").exists()
 
 
 def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
@@ -155,42 +171,100 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     return exe, listing
 
 
-def measure_references(selected: list[str], opts: list[str], work: Path) -> dict[tuple[str, str, str], dict]:
-    """The reference compilers on the same programs: Open Watcom for C (language `ow`, at each level) and QuickBASIC 4.5's
-    BC for BASIC (language `bc`, one level: /O). Never gated; the history records them beside llrm's."""
+def build_bcc(variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
+    """BCC 3.1, medium model, -3 -f87, -Ox for O2 and -O1 for Os, every program in one DOSBox boot. Keyed by stem.
+    Linked with BCC's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM, which
+    ask C0M for `__version` and `_errno`. Only `report` comes from the corpus's ext.asm."""
+    folder = work / f"bcc{opt}"
+    folder.mkdir(parents=True)
+    for variant, stem in variants_:
+        shutil.copy(variant.source, folder / f"{stem}.c")
+    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c" + (" -O1" if opt == "Os" else "") for _, stem in variants_]], capture_output=True, timeout=1800)
+    ext = folder / "EXT.OBJ"
+    dosbatch.assemble(dosbatch.C_RUNTIME / "ext.asm", ext)
+    out: dict[str, tuple[Path, Path] | str] = {}
+    for _, stem in variants_:
+        obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
+        if not obj.exists():
+            message = folder / f"{stem}.MSG"
+            out[stem] = "bcc: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else "no object")
+            continue
+        lib = BCC / "lib"
+        try:
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "format", "dos", "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), "file", str(ext),
+                            "library", str(lib / "CM.LIB"), "library", str(lib / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
+        except dosbatch.BuildError as error:
+            out[stem] = f"link: {error}"
+            continue
+        out[stem] = (exe, listing)
+    return out
+
+
+def with_startup(selected: list[str], timing: bool) -> list[tuple[Path, Variant]]:
+    """Every (directory, variant) to build, plus under --time the empty-kernel programs that price each start-up."""
+    todo = [(directory, variant) for directory in benchmarks(selected) for variant in variants(directory)]
+    return todo + [(STARTUP, variant) for variant in variants(STARTUP)] if timing else todo
+
+
+def measure_references(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
+    """The reference compilers on the same programs: Open Watcom and BCC 3.1 for C (languages `ow`, `bcc`, at each level)
+    and QuickBASIC 4.5's BC for BASIC (language `bc`, one level: /O). With --time each also gets its kernel time."""
     out: dict[tuple[str, str, str], dict] = {}
     folder = work / "reference"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
-    todo = [(directory, variant) for directory in benchmarks(selected) for variant in variants(directory)]
-    jobs, owned = [], []
-    for at, (directory, variant) in enumerate(todo):
-        stem = f"R{at:03d}"
-        if variant.language == "c":
-            for opt in opts:
-                built = build_watcom(variant, opt, folder, f"{stem}{opt}")
-                key = (variant.name, "ow", opt)
-                if isinstance(built, str):
-                    out[key] = {"error": built}
-                else:
-                    owned.append((key, (stem, built[0], built[1], variant.region, expected_output(directory))))
-        elif variant.language == "bas" and variant.dialect == "qb45":
-            jobs.append((variant, Job(stem, "bas", variant.source, switches="/O /FPi", map=True)))
-    if jobs:
-        ran = dosbatch.run([job for _, job in jobs], folder / "bc")
-        for (variant, job), directory in zip(jobs, [d for d, v in todo if v.language == "bas" and v.dialect == "qb45"]):
+    todo = with_startup(selected, timing)
+    stems = [f"R{at:03d}" for at in range(len(todo))]
+    jobs, owned, plain = [], [], {}
+    def own(key, stem, directory, variant, built):
+        if isinstance(built, str):
+            out[key] = {"error": built}
+        elif directory == STARTUP:
+            plain[key] = built[0]
+        else:
+            owned.append((key, (stem, built[0], built[1], variant.region, expected_output(directory))))
+    for opt in opts:
+        c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
+        for directory, variant, stem in c_todo:
+            if (OW / "bwcc").exists():
+                own((variant.name, "ow", opt), stem, directory, variant, build_watcom(variant, opt, folder, f"{stem}{opt}"))
+        if (BCC / "lib" / "C0M.OBJ").exists():
+            built = build_bcc([(variant, stem) for _, variant, stem in c_todo], opt, folder)
+            for directory, variant, stem in c_todo:
+                own((variant.name, "bcc", opt), stem, directory, variant, built[stem])
+    bas = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "bas" and variant.dialect == "qb45"]
+    if bas and (dosbatch.QB45 / "BC.EXE").exists():
+        jobs = [Job(stem, "bas", variant.source, switches="/O /FPi", map=True) for _, variant, stem in bas]
+        ran = dosbatch.run(jobs, folder / "bc")
+        for (directory, variant, stem) in bas:
             key = (variant.name, "bc", "O2")
-            if ran[job.stem].status == "not built":
-                out[key] = {"error": "bc: " + ran[job.stem].detail}
+            if ran[stem].status == "not built":
+                out[key] = {"error": "bc: " + ran[stem].detail}
                 continue
-            exe, listing = folder / f"{job.stem}.exe", folder / f"{job.stem}.map"
-            shutil.copy(folder / "bc" / f"{job.stem}.EXE", exe)
-            shutil.copy(folder / "bc" / f"{job.stem}.MAP", listing)
-            owned.append((key, (job.stem, exe, listing, variant.region, expected_output(directory))))
+            exe, listing = folder / f"{stem}.exe", folder / f"{stem}.map"
+            shutil.copy(folder / "bc" / f"{stem}.EXE", exe)
+            shutil.copy(folder / "bc" / f"{stem}.MAP", listing)
+            own(key, stem, directory, variant, (exe, listing))
     with ProcessPoolExecutor() as pool:
         for (key, _), counts in zip(owned, pool.map(measure, [job for _, job in owned])):
             out[key] = counts
-    return out
+    if timing:
+        exes = {key: job[1] for key, job in owned if "error" not in out[key]} | plain
+        for key, timed in time_programs(exes, folder / "time").items():
+            out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+    return net_times(out)
+
+
+def net_times(measured: dict) -> dict:
+    """Each program's time less its toolchain's start-up (the same toolchain and level, built from startup/): kernel_ms.
+    The whole program's time prices C0M's or the BASIC runtime's initialisation against llrm's small crt, which the
+    kernel does not do. The start-up programs themselves leave the results."""
+    for key, value in measured.items():
+        if "cycles" in value and key[0] != "startup":
+            base = measured.get(("startup", key[1], key[2]), {})
+            if "cycles" in base:
+                value["kernel_ms"] = round((value["cycles"] - base["cycles"]) / CYCLES_PER_MS, 4)
+    return {key: value for key, value in measured.items() if key[0] != "startup"}
 
 
 def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool = False) -> dict[tuple[str, str, str], dict]:
@@ -200,13 +274,13 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         folder = work / opt
         shutil.rmtree(folder, ignore_errors=True)
         folder.mkdir(parents=True)
-        todo = [(directory, variant) for directory in benchmarks(selected) for variant in variants(directory)]
+        todo = with_startup(selected, timing)
         stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
         with ThreadPoolExecutor() as pool:
             built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)]), todo))
         basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language == "bas" and not isinstance(b, str)}
         failed = link_basic(basic, folder)
-        jobs = []
+        jobs, plain = [], {}
         for (directory, variant), result in zip(todo, built):
             key = (variant.name, variant.language, opt)
             stem = stems[(variant.name, variant.language)]
@@ -215,15 +289,18 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
                 out[key] = {"error": why}
                 continue
             exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language == "bas" else result
-            jobs.append((key, (stem, exe, listing, variant.region, expected_output(directory))))
+            if directory == STARTUP:
+                plain[key] = exe  # timed, not counted
+            else:
+                jobs.append((key, (stem, exe, listing, variant.region, expected_output(directory))))
         with ProcessPoolExecutor() as pool:
             for (key, _), counts in zip(jobs, pool.map(measure, [job for _, job in jobs])):
                 out[key] = counts
         if timing:
-            exes = {key: job[1] for key, job in jobs if "error" not in out[key]}
+            exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
             for key, timed in time_programs(exes, folder / "time").items():
-                out[key] |= {"time_error": timed["error"]} if "error" in timed else timed
-    return mark_known(out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
+                out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+    return mark_known(net_times(out) if timing else out, [v for directory in benchmarks(selected) for v in variants(directory)], opts)
 
 
 def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> dict:
@@ -245,7 +322,8 @@ def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> 
 
 def time_programs(exes: dict[tuple[str, str, str], Path], work: Path) -> dict[tuple[str, str, str], dict]:
     """Wall time of each whole program in DOSBox, from RDTSC around the run (tools/bench/timeit.asm): {"cycles", "ms"}.
-    It includes the runtime's start-up and the print, so it compares one program across commits, not across languages."""
+    Whole-program: it includes the runtime's start-up and the print, which differ per toolchain. net_times takes the
+    start-up out."""
     if not exes:
         return {}
     work.mkdir(parents=True, exist_ok=True)
@@ -270,12 +348,21 @@ def read_expected(directory: Path) -> dict:
 
 
 def write_expected(directory: Path, measured: dict, name: str, reason: str) -> None:
+    """Merge what was measured into expected.toml: a table not measured this run (another level, a reference left alone)
+    stays. The kernel time of a table whose instructions moved is dropped: it belongs to the old counts."""
+    tables = {one: dict(table) for one, table in read_expected(directory).items() if isinstance(table, dict)}
+    for (benchmark, language, opt), counts in measured.items():
+        if benchmark != name or "error" in counts:
+            continue
+        new = {one: counts[one] for one in (*COUNTERS, "kernel_ms") if one in counts}
+        old = tables.get(language, {}).get(opt, {})
+        if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new["instructions"]:
+            new["kernel_ms"] = old["kernel_ms"]
+        tables.setdefault(language, {})[opt] = new
     lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
-    for language in LANGUAGES:
-        for opt in sorted({key[2] for key in measured if key[0] == name}):
-            counts = measured.get((name, language, opt))
-            if counts and "error" not in counts:
-                lines += [f"[{language}.{opt}]", *(f"{one} = {counts[one]}" for one in COUNTERS), ""]
+    for language in [*LANGUAGES, *(one for many in REFERENCES.values() for one in many)]:
+        for opt in sorted(tables.get(language, {})):
+            lines += [f"[{language}.{opt}]", *(f"{one} = {value}" for one, value in tables[language][opt].items()), ""]
     (directory / "expected.toml").write_text("\n".join(lines))
 
 
@@ -289,6 +376,34 @@ def against(label: str, got: dict, want: dict | None) -> list[str]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
         elif got[counter] < want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} < {want[counter]} (better: --bless --reason)")
+    return problems
+
+
+def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict) -> list[str]:
+    """llrm/reference worse than it was blessed at. Against a stored reference this is the count gate seen from the
+    reference's side; it stays a gate of its own for the day the reference is re-blessed."""
+    problems = []
+    for counter in (*COUNTERS, "kernel_ms"):
+        if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
+            now, then = got[counter] / ref[counter], want[counter] / ref[counter]
+            time = counter == "kernel_ms"
+            if now > then * (1 + (TIME_TOLERANCE if time else 0)) and got[counter] - want[counter] > (TIME_SLACK_MS if time else 0):
+                problems.append(f"{label}: {counter} vs {reference} {now:.3f}x > blessed {then:.3f}x (worse)")
+    return problems
+
+
+def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
+    """A reference measured again against the one stored: the compiler or the harness changed."""
+    if "error" in got:
+        return [f"{label}: no longer builds: {got['error']}"] if stored else []
+    if stored is None:
+        return [f"{label}: not recorded; run --bless --references --reason"]
+    problems = []
+    for counter in (*COUNTERS, "kernel_ms"):
+        if counter in got and counter in stored:
+            slack = max(TIME_TOLERANCE * abs(stored[counter]), TIME_SLACK_MS) if counter == "kernel_ms" else 0
+            if abs(got[counter] - stored[counter]) > slack:
+                problems.append(f"{label}: {counter} {got[counter]} != stored {stored[counter]} (reference changed: --bless --references --reason)")
     return problems
 
 
@@ -309,16 +424,55 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                 elif "error" in got:
                     problems.append(f"{label}: {got['error']}")
                 else:
-                    problems += against(label, got, baseline.get(variant.language, {}).get(opt))
+                    want = baseline.get(variant.language, {}).get(opt)
+                    problems += against(label, got, want)
+                    for reference in REFERENCES.get(variant.language, ()):
+                        ref = baseline.get(reference, {}).get(reference_level(reference, opt))
+                        if want and ref:
+                            problems += ratio_problems(label, reference, got, want, ref)
+            for reference in REFERENCES.get(variant.language, ()):
+                for level in sorted({reference_level(reference, opt) for opt in opts}):
+                    if (name, reference, level) in measured:
+                        problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
     return problems
+
+
+def geomean(values: list[float]) -> float:
+    return math.exp(sum(map(math.log, values)) / len(values))
+
+
+def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
+    """llrm against each reference, as a geomean over the benchmarks both have, per language and level: llrm/reference
+    less one, so -25% is llrm's 25% below. Instructions and memory operands against the stored reference; time (the
+    kernel's, net of start-up) when --time measured it. BC has one level: both BASIC levels meet its /O."""
+    lines = []
+    for language, references in REFERENCES.items():
+        for reference in references:
+            for opt in opts:
+                level = reference_level(reference, opt)
+                rows = []
+                for directory in benchmarks(selected):
+                    name = str(directory.relative_to(BENCH))
+                    got = measured.get((name, language, opt), {})
+                    ref = read_expected(directory).get(reference, {}).get(level)
+                    if ref and "error" not in got and "instructions" in got:
+                        rows.append((got, ref))
+                parts = []
+                for counter, title in (("instructions", "instructions"), ("memory_operands", "memory operands"), ("kernel_ms", "kernel time")):
+                    ratios = [got[counter] / ref[counter] for got, ref in rows if counter in got and counter in ref and got[counter] > 0 and ref[counter] > 0]
+                    if ratios:
+                        parts.append(f"{title} {100 * (geomean(ratios) - 1):+.1f}% (n={len(ratios)})")
+                if parts:
+                    lines.append(f"llrm {language} -{opt} vs {reference} {'/O' if reference == 'bc' else '-' + level}: " + ", ".join(parts))
+    return lines
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
-    parser.add_argument("--time", action="store_true", help="also the whole program's time in DOSBox from RDTSC (advisory, never gated)")
-    parser.add_argument("--references", action="store_true", help="also measure Open Watcom (C) and BC 4.5 (BASIC); never gated")
+    parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
+    parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
     parser.add_argument("--bless", action="store_true")
     parser.add_argument("--reason", default="")
     parser.add_argument("--json", type=Path)
@@ -328,21 +482,23 @@ def main() -> int:
         parser.error("--bless needs --reason: every change to expected.toml says why")
     measured = measure_all(args.select, args.opt, args.work, args.time)
     if args.references:
-        measured |= measure_references(args.select, args.opt, args.work)
+        measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
     if args.bless:
         names = {key[0] for key in measured}
         for directory in benchmarks(args.select):
             name = str(directory.relative_to(BENCH))
-            broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and "error" in value and "known" not in value]
+            broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and key[1] in LANGUAGES and "error" in value and "known" not in value]
             if broken:
                 print(f"not blessing {name}: {broken}")
                 return 1
             write_expected(directory, measured, name, args.reason)
         print(f"blessed {len(names)} benchmarks")
+        print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
     problems = judge(measured, args.select, args.opt)
+    print(*standing(measured, args.select, args.opt), sep="\n")
     for one in problems:
         print("FAIL", one)
     print(f"{len(measured)} measurements: {len(problems)} problems")

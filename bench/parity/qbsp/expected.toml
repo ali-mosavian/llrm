@@ -1,21 +1,25 @@
-reason = "#407: SsaSpill holds selectors in the segment registers as it holds words in the general ones; particle bas -800 instructions and -900 memory operands at -O2, qbsp bas -20 and -15"
+reason = "record BCC 3.1, Open Watcom and BC 4.5 beside llrm, with kernel times"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 1372
 memory_operands = 633
+kernel_ms = 0.0276
 
 [bas.Os]
 instructions = 1372
 memory_operands = 633
+kernel_ms = 0.0276
 
 [c.O2]
 instructions = 337
 memory_operands = 87
+kernel_ms = 0.0049
 
 [c.Os]
 instructions = 335
 memory_operands = 87
+kernel_ms = 0.0049
 
 [nib.O2]
 instructions = 349
@@ -24,3 +28,18 @@ memory_operands = 128
 [nib.Os]
 instructions = 351
 memory_operands = 131
+
+[bcc.O2]
+instructions = 393
+memory_operands = 103
+kernel_ms = 0.0127
+
+[bcc.Os]
+instructions = 371
+memory_operands = 105
+kernel_ms = 0.0125
+
+[bc.O2]
+instructions = 3181
+memory_operands = 1162
+kernel_ms = 0.0625

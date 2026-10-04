@@ -1,21 +1,25 @@
-reason = "-Os is priced in bytes (size_costs forwarded): ret N where its calls save more than a pop's worth a return, a body that folds away inlines; -O2 unchanged"
+reason = "record BCC 3.1, Open Watcom and BC 4.5 beside llrm, with kernel times"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 150
 memory_operands = 45
+kernel_ms = 0.0151
 
 [bas.Os]
 instructions = 144
 memory_operands = 45
+kernel_ms = 0.015
 
 [c.O2]
 instructions = 57
 memory_operands = 8
+kernel_ms = 0.0018
 
 [c.Os]
 instructions = 49
 memory_operands = 8
+kernel_ms = 0.0017
 
 [nib.O2]
 instructions = 50
@@ -24,3 +28,18 @@ memory_operands = 4
 [nib.Os]
 instructions = 45
 memory_operands = 4
+
+[bcc.O2]
+instructions = 52
+memory_operands = 9
+kernel_ms = 0.0017
+
+[bcc.Os]
+instructions = 53
+memory_operands = 9
+kernel_ms = 0.0017
+
+[bc.O2]
+instructions = 229
+memory_operands = 90
+kernel_ms = 0.0162

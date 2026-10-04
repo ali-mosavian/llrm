@@ -1,21 +1,25 @@
-reason = "a dword copy and add are priced with their operand-size prefixes, so the peephole makes the lea: mandel -3% instructions, nothing worse"
+reason = "record BCC 3.1, Open Watcom and BC 4.5 beside llrm, with kernel times"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 289
 memory_operands = 93
+kernel_ms = 0.0224
 
 [bas.Os]
 instructions = 275
 memory_operands = 93
+kernel_ms = 0.0223
 
 [c.O2]
 instructions = 106
 memory_operands = 12
+kernel_ms = 0.0031
 
 [c.Os]
 instructions = 98
 memory_operands = 12
+kernel_ms = 0.003
 
 [nib.O2]
 instructions = 140
@@ -24,3 +28,18 @@ memory_operands = 12
 [nib.Os]
 instructions = 126
 memory_operands = 12
+
+[bcc.O2]
+instructions = 106
+memory_operands = 26
+kernel_ms = 0.0031
+
+[bcc.Os]
+instructions = 98
+memory_operands = 26
+kernel_ms = 0.003
+
+[bc.O2]
+instructions = 786
+memory_operands = 254
+kernel_ms = 0.0291

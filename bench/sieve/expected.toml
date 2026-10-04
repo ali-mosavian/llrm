@@ -1,21 +1,25 @@
-reason = "lsr weights, branchprob Counted odds, frame addresses off the register forecast (#386): sieve nib -6.7%, nbody nib/c -1.4%, nbody_fixed nib -1.4%/-1.7%; worse and blessed until #407 (forecast vs allocator): nbody bas +0.9%, nbody_fixed bas -Os memory operands +2%"
+reason = "record BCC 3.1, Open Watcom and BC 4.5 beside llrm, with kernel times"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 18692
 memory_operands = 7075
+kernel_ms = 0.2704
 
 [bas.Os]
 instructions = 18695
 memory_operands = 7075
+kernel_ms = 0.2704
 
 [c.O2]
 instructions = 12109
 memory_operands = 2728
+kernel_ms = 0.1638
 
 [c.Os]
 instructions = 12883
 memory_operands = 3496
+kernel_ms = 0.1767
 
 [nib.O2]
 instructions = 12089
@@ -24,3 +28,28 @@ memory_operands = 2727
 [nib.Os]
 instructions = 12877
 memory_operands = 3495
+
+[ow.O2]
+instructions = 19596
+memory_operands = 3670
+kernel_ms = 0.2628
+
+[ow.Os]
+instructions = 19590
+memory_operands = 7003
+kernel_ms = 0.2627
+
+[bcc.O2]
+instructions = 12361
+memory_operands = 5816
+kernel_ms = 0.168
+
+[bcc.Os]
+instructions = 12359
+memory_operands = 5816
+kernel_ms = 0.168
+
+[bc.O2]
+instructions = 47390
+memory_operands = 28721
+kernel_ms = 0.6533

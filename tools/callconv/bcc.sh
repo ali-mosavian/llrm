@@ -15,7 +15,8 @@ printf '[sdl]\nautolock=false\n[dosbox]\nmemsize=16\nstartbanner=false\nquit war
         set -- $one
         file=$1; shift
         base=$(basename "$file" .c)
-        echo "bcc -c -mm -3 -f87 -Ox -IB:\\INCLUDE $* $base.c > $base.msg"
+        case " $* " in *" -O"*) opt="";; *) opt="-Ox";; esac  # -O1 for size replaces -Ox, it does not follow it
+        echo "bcc -c -mm -3 -f87 $opt -IB:\\INCLUDE $* $base.c > $base.msg"
     done
     printf '.\n'
 } | DOSRUN_FD=3 SDL_VIDEODRIVER=dummy "$DOSRUN" -nolog -conf "$OUT/job.conf" 3>"$OUT/events.txt" >/dev/null 2>&1

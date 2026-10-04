@@ -61,3 +61,82 @@ class BlessTests(unittest.TestCase):
             read = tomllib.loads((Path(where) / "expected.toml").read_text())
         self.assertEqual(read["reason"], 'folded VAL("0") \\ away')
         self.assertEqual(read["c"]["O2"], BASE)
+
+
+class ReferenceTests(unittest.TestCase):
+    """llrm against the reference compilers, through the gate's own entry point."""
+
+    LLRM = {"instructions": 100, "memory_operands": 40, "kernel_ms": 1.0}
+    BCC = {"instructions": 120, "memory_operands": 50, "kernel_ms": 1.2}
+
+    def run_gate(self, measured: dict, extra: list[str] = ()) -> tuple[int, str]:
+        """bench.main on a one-benchmark tree whose expected.toml blesses LLRM and BCC; `measured` stands in for the emulator."""
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as where:
+            root = Path(where)
+            (root / "x").mkdir()
+            (root / "x" / "bench.toml").write_text('[region]\nc = "f"\n')
+            (root / "x" / "x.c").write_text("")
+            (root / "x" / "x.out").write_text("0\n")
+            bench.write_expected(root / "x", {("x", "c", "O2"): self.LLRM, ("x", "bcc", "O2"): self.BCC}, "x", "test")
+            out = io.StringIO()
+            with mock.patch.object(bench, "BENCH", root), mock.patch.object(bench, "measure_all", return_value=measured), mock.patch("sys.argv", ["bench", "--opt", "O2", *extra]), redirect_stdout(out):
+                return bench.main(), out.getvalue()
+
+    def test_the_gate_passes_on_the_blessed_numbers(self):
+        code, text = self.run_gate({("x", "c", "O2"): dict(self.LLRM)})
+        self.assertEqual(code, 0, text)
+
+    def test_a_worse_time_ratio_to_bcc_fails_with_the_counts_unchanged(self):
+        """llrm's kernel time rose 20% against BCC's with every count equal to the blessed one: the old gate, which saw no time, said 0 problems."""
+        code, text = self.run_gate({("x", "c", "O2"): self.LLRM | {"kernel_ms": 1.2}})
+        self.assertEqual(code, 1)
+        self.assertIn("kernel_ms vs bcc", text)
+
+    def test_the_standing_is_printed_every_run(self):
+        code, text = self.run_gate({("x", "c", "O2"): dict(self.LLRM)})
+        self.assertIn("llrm c -O2 vs bcc -O2: instructions -16.7% (n=1)", text)
+
+    def test_a_reference_that_measures_differently_from_the_stored_one_fails(self):
+        """--references re-measured BCC at 130 instructions where 120 is stored: the instrument moved, not llrm."""
+        code, text = self.run_gate({("x", "c", "O2"): dict(self.LLRM), ("x", "bcc", "O2"): self.BCC | {"instructions": 130}})
+        self.assertEqual(code, 1)
+        self.assertIn("reference changed", text)
+
+    def test_blessing_one_level_keeps_the_references_and_the_other_level(self):
+        """write_expected rebuilt the file from this run alone: `--bless --opt O2` erased every -Os and reference table."""
+        import tempfile
+        import tomllib
+
+        with tempfile.TemporaryDirectory() as where:
+            bench.write_expected(Path(where), {("x", "c", "Os"): dict(BASE), ("x", "bcc", "Os"): dict(BASE)}, "x", "first")
+            bench.write_expected(Path(where), {("x", "c", "O2"): dict(BASE)}, "x", "second")
+            read = tomllib.loads((Path(where) / "expected.toml").read_text())
+        self.assertEqual((read["c"]["Os"], read["bcc"]["Os"], read["c"]["O2"]), (BASE, BASE, BASE))
+
+
+class KernelTimeTests(unittest.TestCase):
+    def test_a_toolchains_start_up_is_taken_out_of_its_time(self):
+        """Whole-program time priced C0M's initialisation against llrm's small crt: sieve -O2 read BCC 15% slower than llrm (0.195 ms against 0.170) where the kernels differ by 2.4%: the rest was C0M's start-up."""
+        measured = {("s", "c", "O2"): {"cycles": 7500}, ("startup", "c", "O2"): {"cycles": 1500}, ("s", "bcc", "O2"): {"cycles": 9000}, ("startup", "bcc", "O2"): {"cycles": 3000}}
+        net = bench.net_times(measured)
+        self.assertEqual((net[("s", "c", "O2")]["kernel_ms"], net[("s", "bcc", "O2")]["kernel_ms"]), (0.08, 0.08))
+        self.assertFalse([key for key in net if key[0] == "startup"])
+
+
+@unittest.skipUnless(bench.references_available(), "needs BCC, Open Watcom and BC")
+class BccTests(unittest.TestCase):
+    def test_a_bcc_floating_point_program_links_and_prints_its_output(self):
+        """floats.c linked with crt.asm failed on `__version` and `_errno` (FP87, MATHM want BCC's own start-up): six programs had no BCC row."""
+        import tempfile
+
+        variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
+        with tempfile.TemporaryDirectory(dir=bench.ROOT / "target") as where:
+            built = bench.build_bcc([(variant, "B000")], "O2", Path(where))["B000"]
+            self.assertNotIsInstance(built, str, built)
+            got = bench.measure(("B000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "floats")))
+        self.assertGreater(got.get("instructions", 0), 0, got)  # measure() fails on any other output than floats.out
