@@ -78,7 +78,9 @@ impl Machine for Dos {
     }
 
     fn size_costs(&self) -> OperationCosts {
-        operations(bytes, 1)
+        // A word of argument is its push and its share of the cleanup: 2.1 bytes measured over
+        // QCport's calls (5.2 for none, 7.4 for one word, 9.0 for two, 11.1 for three).
+        OperationCosts { argument: 2, ..operations(|kind| bytes_in_code(kind), 1) }
     }
 
     fn registers(&self) -> i64 {
@@ -148,8 +150,7 @@ pub fn costs(arch: &str) -> OperationCosts {
 }
 
 /// Bytes of the instruction lowering picks for each kind of operation, as
-/// real mode encodes it: a register form is 2, one with a displacement 3. A
-/// far call is 5, and its pushes and cleanup 3 more.
+/// real mode encodes it: a register form is 2, one with a displacement 3, a far call 5.
 fn bytes(kind: &str) -> i64 {
     match kind {
         "alu_rr" | "mov_rr" => register_bytes(2),
@@ -158,9 +159,21 @@ fn bytes(kind: &str) -> i64 {
         "ret_far" | "push_r" | "pop_r" | "pop_seg" => 1,
         // `ret imm16`: the opcode and the word.
         "ret_pop" => 3,
-        "call_far" => 8,
+        "call_far" => 5,
         "rep_stos_cell" => 0,
         _ => 3,
+    }
+}
+
+/// What an operation of MIR comes to in code bytes: the instruction's, `bytes`, times the
+/// instructions an operation becomes (twice: the extensions, copies, address calculations and
+/// spill code around it; `-fno-inline-functions` QCport -Os measured against the functions it
+/// built, 2 puts the estimate within a few percent). A call, a return, a branch and a stack
+/// operation are the instruction itself.
+fn bytes_in_code(kind: &str) -> i64 {
+    match kind {
+        "jcc" | "call_far" | "ret_far" | "ret_pop" | "push_r" | "pop_r" | "pop_seg" | "alu_ri" | "rep_stos" | "rep_stos_cell" => bytes(kind),
+        _ => bytes(kind) * 2,
     }
 }
 
@@ -206,6 +219,7 @@ fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
         r#move: cost("mov_rr"),
         call: cost("call_far"),
         return_: cost("ret_far"),
+        argument: cost("mov_mr") + cost("mov_rm"),
         pop: cost("pop_r"),
         adjust: cost("alu_ri"),
         return_pops: cost("ret_pop") - cost("ret_far"),
@@ -248,11 +262,27 @@ mod tests {
 #[cfg(test)]
 mod encoding_tests {
     use super::{bytes, imul_immediate_bytes, register_bytes, shift_bytes};
+    use llrm_mir::target::Machine as _;
 
     /// The coarse table and the exact helpers agree on a word, so `size_costs` read what isel's -Os pricing reads.
     #[test]
     fn the_size_table_and_the_encodings_agree_on_a_word() {
         assert_eq!((bytes("alu_rr"), bytes("mov_rr"), bytes("shift_ri")), (register_bytes(2), register_bytes(2), shift_bytes(2, 2)));
+    }
+
+    /// The byte prices MIR decides inlining and the calling convention by: a call is its 5 bytes
+    /// and each argument word 2 more (push and cleanup), a cleanup by pop is 1 a word against
+    /// `add sp` 3, and `ret N` 2 over `ret`; any other operation is its instruction's bytes
+    /// twice, the instructions an operation becomes. In clocks an argument is its store and load.
+    #[test]
+    fn the_size_costs_are_the_bytes_of_the_code_an_operation_becomes() {
+        use llrm_mir::target::Machine;
+        let dos = super::Dos::default();
+        let sized = dos.size_costs();
+        assert_eq!((sized.call, sized.argument, sized.pop, sized.adjust, sized.return_pops), (5, 2, 1, 3, 2));
+        assert_eq!((sized.load, sized.store, sized.add, sized.branch), (2 * bytes("mov_rm"), 2 * bytes("mov_mr"), 2 * bytes("alu_rr"), bytes("jcc")));
+        let clocks = dos.costs();
+        assert_eq!(clocks.argument, clocks.load + clocks.store);
     }
 
     /// A dword takes 66h, a shift by one is D1, and `imul` takes a byte immediate only where it fits.

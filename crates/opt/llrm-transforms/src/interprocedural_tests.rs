@@ -31,6 +31,8 @@ fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold)
             &mut modules,
             &roots,
             &costs,
+            None,
+            costs.call,
             threshold,
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
@@ -196,7 +198,7 @@ fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
     let mut program = Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert_eq!(proved.noreturn, [(0, program.modules[0].named("spin").unwrap())].into());
     assert!(printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"), "{}", printed(&program.modules[1]));
 }
@@ -237,7 +239,7 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
     let mut program = Program::new(vec![seven, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
 }
 
@@ -251,7 +253,7 @@ fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
     program.exports.entries = ["entered".to_owned()].into();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[0]).contains("  %y0 = add i16 %x, 1\n"), "{}", printed(&program.modules[0]));
 }
 
@@ -269,8 +271,9 @@ fn test_the_step_runs_as_a_program_pass() {
 
 #[test]
 fn test_a_size_build_weighs_bytes_not_clocks() {
-    // A public six-operation body at three sites: cheaper than three calls
-    // in clocks, dearer in bytes. -Os copied it and grew the code.
+    // A nine-operation body at three sites: cheaper than three calls in clocks, dearer in bytes
+    // (the callers come to more with the body copied than with three calls, though the body goes).
+    // -Os copied it and grew the code.
     let text = "define i16 @mix(i16 %a, i16 %b) {
 b:
   %t0 = xor i16 %a, %b
@@ -279,7 +282,10 @@ b:
   %t3 = lshr i16 %b, 2
   %t4 = sub i16 %t2, %t3
   %t5 = and i16 %t4, 2047
-  ret i16 %t5
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
 }
 
 define i16 @f(i16 %x, i16 %y) {
@@ -873,4 +879,36 @@ done:
     let forever = "  %w = load i16, ptr %p\n  br label %second, !llvm.loop !2\n";
     assert_eq!(stamped_with(&function(conditional), "willreturn"), ["f"], "both loops marked, both leave");
     assert!(stamped_with(&function(forever), "willreturn").is_empty(), "an unconditional loop, even one something marked");
+}
+
+/// A call the byte price refuses and the clocks admit stays inlined where the callers and the
+/// callee that goes come to no more (speaker.nib: `now` at two sites, the loop then in registers,
+/// -30 bytes), and is put back where they do (the test above).
+#[test]
+fn test_what_only_the_clocks_admit_is_kept_where_the_callee_going_pays_for_it() {
+    let text = "define internal i16 @triple(i16 %a) {
+b:
+  %t0 = add i16 %a, %a
+  %t1 = add i16 %t0, %a
+  %t2 = xor i16 %t1, 7
+  ret i16 %t2
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @triple(i16 %x)
+  %q = call i16 @triple(i16 %y)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let calls = |size: bool| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, add: 4, ..OperationCosts::default() }, ..Default::default() };
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size });
+        manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
+        printed(&module).matches("call i16 @triple").count()
+    };
+    assert_eq!((calls(false), calls(true)), (0, 0));
 }

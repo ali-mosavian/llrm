@@ -125,6 +125,8 @@ pub struct OperationCosts {
     pub r#move: i64,
     pub call: i64,
     pub return_: i64,
+    /// What one argument word costs around a call: pushed by the caller, read by the callee.
+    pub argument: i64,
     /// What a caller pays to take `n` words of arguments off the stack: the cheaper of `n` pops
     /// (`pop` each) and one `adjust` of the stack pointer.
     pub pop: i64,
@@ -185,6 +187,7 @@ impl Default for OperationCosts {
             r#move: 1,
             call: 1,
             return_: 1,
+            argument: 2,
             pop: 1,
             adjust: 1,
             return_pops: 0,
