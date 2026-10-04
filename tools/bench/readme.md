@@ -16,22 +16,34 @@ The counts are deterministic: no clock, no DOSBox cycle setting. A count above i
 below fails too, until it is blessed, so the baseline only ratchets. `--bless` needs `--reason`, which
 lands in the file.
 
-## Beyond the gate
+## References
 
-    bench.py --references    # Open Watcom (C) and BC 4.5 (BASIC) on the same programs; never gated
-    bench.py --time          # the whole program's RDTSC time in DOSBox, never gated
+`expected.toml` also holds the reference compilers' counts, as `[bcc.O2]`, `[ow.O2]` and `[bc.O2]` beside
+`[c.O2]`: BCC 3.1 (`-Ox` for O2, `-O1` for Os, medium, `-3 -f87`, linked with its own C0M, CM, FP87 and
+MATHM), Open Watcom (`-ox`, `-os -ol`, `-4`), and QuickBASIC 4.5's BC (`/O`, one level: both BASIC levels
+meet it). They are deterministic, so a normal run reads them and builds none of them. Every run gates
+llrm/reference per counter against the blessed ratio and prints the geomean per language and level.
+
+    bench.py --references --time --bless --reason "why"   # measure the references again and record them
+    bench.py --references                                  # they must equal the stored ones: the compiler or harness moved
+
+Open Watcom builds only the programs without long arithmetic or floating point (its 16-bit libraries are not
+built here), and BC refuses the VBDOS-style `FUNCTION f (a AS INTEGER) AS LONG` the parity programs use; a
+program a reference cannot build has no row, and the geomean covers the programs both sides have (`n=`).
+BCC runs at `-3`, llrm and Open Watcom at 486.
+
+## Time
+
+    bench.py --time          # kernel time in DOSBox from RDTSC; recorded as kernel_ms, gated as a ratio to each reference
     history.py record        # append this commit's measurements to results.jsonl on the bench-history branch
     dashboard.py             # target/bench/dashboard.html from that file
 
-References that cannot be built say why in the history: Open Watcom needs its 16-bit libraries for the
-long arithmetic and floating-point helpers (only its compiler is built here), and BC 4.5 refuses the
-VBDOS-style `FUNCTION f (a AS INTEGER) AS LONG` the parity programs use.
-
 `--time` runs `timeit.asm`, a .COM that reads RDTSC around the program, in a DOSBox with a fixed 75000
-cycles per millisecond, so cycles / 75000 is milliseconds on any host. DOSBox charges about one cycle per
-instruction and models no latency: the time follows the whole program's executed instructions, runtime
-start-up and printing included, and says nothing the counts do not. It is for comparing one program
-across commits.
+cycles per millisecond. The whole program includes its toolchain's start-up (C0M, BC's runtime, llrm's small
+crt), which costs differently, so `startup/` (an empty kernel and one print) is built and timed with each
+toolchain and level and taken out: `kernel_ms`. sieve -O2 read BCC 15% slower than llrm whole-program, and
+2.4% slower by kernel. DOSBox charges about one cycle per instruction, so kernel time follows the counts; it
+adds little: 1.6 points on the C -O2 geomean (-37.5% time, -35.9% instructions). A kernel under ~100 cycles is noise: a change must exceed 1% and 0.001 ms.
 
 `history.py` installs nothing and schedules nothing. It builds a commit in a scratch worktree, runs that
 commit's own tools/bench, and appends one JSON line per commit x benchmark x language x level to

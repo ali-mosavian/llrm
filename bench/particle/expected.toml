@@ -1,21 +1,25 @@
-reason = "#407: SsaSpill prices a loop-entry selector load by the level (bytes at -Os); particle bas -O2 -200 instructions, -Os -204"
+reason = "record BCC 3.1, Open Watcom and BC 4.5 beside llrm, with kernel times"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 130692
 memory_operands = 94040
+kernel_ms = 1.7879
 
 [bas.Os]
 instructions = 130480
 memory_operands = 94031
+kernel_ms = 1.7852
 
 [c.O2]
 instructions = 84439
 memory_operands = 61509
+kernel_ms = 1.1476
 
 [c.Os]
 instructions = 84237
 memory_operands = 61509
+kernel_ms = 1.1449
 
 [nib.O2]
 instructions = 138296
@@ -24,3 +28,18 @@ memory_operands = 113322
 [nib.Os]
 instructions = 138998
 memory_operands = 114228
+
+[bcc.O2]
+instructions = 137252
+memory_operands = 92113
+kernel_ms = 1.8521
+
+[bcc.Os]
+instructions = 330372
+memory_operands = 92113
+kernel_ms = 4.4281
+
+[bc.O2]
+instructions = 603771
+memory_operands = 310816
+kernel_ms = 8.0986
