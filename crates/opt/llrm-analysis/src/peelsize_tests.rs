@@ -7,7 +7,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 use num_bigint::BigInt;
 
-use super::{Limits, admitted};
+use super::{ENTRY, Limits, admitted};
 use crate::cfg;
 use crate::consts;
 use crate::induction;
@@ -39,11 +39,16 @@ impl Parsed {
 
     /// Whether the outermost loop, at the count induction proves, is admitted.
     fn admitted(&self, limits: &Limits) -> bool {
+        self.entered(limits, ENTRY)
+    }
+
+    /// `admitted`, the loop entered `entries` 256ths of the times its function is.
+    fn entered(&self, limits: &Limits, entries: i64) -> bool {
         let unit = self.unit();
         let facts = consts::known(&unit, None, None, None);
         let loop_ = self.outer();
         let count = induction::trip_count(&unit, &loop_, &facts).expect("a proven count");
-        admitted(&unit, &loop_, &count, &facts, limits)
+        admitted(&unit, &loop_, &count, &facts, limits, entries)
     }
 }
 
@@ -209,6 +214,18 @@ fn the_count_is_the_one_asked_about() {
     let parsed = summing(4, "%x", "");
     let unit = parsed.unit();
     let facts = consts::known(&unit, None, None, None);
-    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default()));
-    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default()));
+    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), ENTRY));
+    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), ENTRY));
+}
+
+/// QCport's savegame.c peeled loops its function enters once in 256 calls, 1 KB each, for clocks
+/// nobody spends. A loop entered under one function entry in 20 is cold: a copy that grows is refused,
+/// one that does not is still taken.
+#[test]
+fn a_cold_loop_is_not_copied_where_the_code_grows() {
+    let limits = Limits::default();
+    assert!(summing(8, "%x", "").entered(&limits, ENTRY / 20 + 1));
+    assert!(!summing(8, "%x", "").entered(&limits, ENTRY / 256));
+    assert!(summing(4, "%x", "").entered(&limits, 1));
+    assert!(summing(16, "0", "").entered(&limits, 1));
 }

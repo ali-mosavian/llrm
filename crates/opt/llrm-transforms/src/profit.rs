@@ -120,6 +120,14 @@ pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, cal
     function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
 }
 
+/// How often `loop_` is entered for each entry of the unit's function, in `UNIT`ths: what its outside
+/// predecessors weigh.
+pub fn entries(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop) -> i64 {
+    let trips = proven_trips(unit, &unit.registers());
+    let Some(frequency) = _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips)) else { return UNIT };
+    cfg::graph(unit.function).iter().filter(|block| !loop_.body.contains(&block.at) && block.succ.contains(&loop_.header)).map(|block| frequency.get(&block.at).copied().unwrap_or(UNIT)).sum::<i64>().max(1)
+}
+
 /// Whether the target prices every instruction here, which a copy's cost needs.
 pub fn priced(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
     r#static(context, layout, function, callees, costs).is_some()

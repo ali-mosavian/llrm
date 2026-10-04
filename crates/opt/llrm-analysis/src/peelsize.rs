@@ -32,6 +32,13 @@ use crate::memory::{self, Unit};
 /// GCC's `--param max-peel-branches`: undecided branches a copied sequence may hold.
 const MAX_PEEL_BRANCHES: i64 = 16;
 
+/// GCC's `optimize_loop_nest_for_speed_p`: a loop entered less often than this, in percent of its
+/// function's entries, is cold, and no copy of it grows the code.
+const COLD_PERCENT: i64 = 5;
+
+/// What one entry of a function weighs in `entries`: `profit::UNIT`.
+pub const ENTRY: i64 = 256;
+
 /// LLVM's `-unroll-threshold` for a loop the language marks (`#pragma unroll`): operations a
 /// copy the language asked for may hold, past the size budget.
 const HINTED_OPERATIONS: i64 = 16384;
@@ -67,10 +74,12 @@ impl Default for Limits {
 /// does (`getFullUnrollBoostingFactor`). A loop holding another is copied only when
 /// that shrinks it, as GCC does for outer loops.
 ///
+/// `entries` is how often the loop is entered for each entry of its function, in 256ths.
+///
 /// GCC also refuses a call on the path, guessing little is left to fold; the
 /// simulation measures what folds, so a call is priced as LLVM's cost model prices
 /// one instead.
-pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits) -> bool {
+pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits, entries: i64) -> bool {
     // What the language says of copying this loop: never, or as many as it permits, which
     // at least the trip count is asked, and is then copied past the budget. Fewer than the
     // trip count is no partial unrolling, which does not exist here: it is a refusal.
@@ -111,6 +120,8 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
         None
     } else if !limits.grows {
         Some("size would grow")
+    } else if entries * 100 < COLD_PERCENT * ENTRY {
+        Some("cold")
     } else if unrolled.branches > MAX_PEEL_BRANCHES {
         Some("max-peel-branches")
     } else if unrolled.size > budget.saturating_mul(boost) / 100 {
