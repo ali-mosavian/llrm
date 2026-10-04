@@ -638,6 +638,11 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             continue;
         }
         let Some(made) = out.get(source) else { continue };
+        // Made as wide as the copy is: the low word of a dword load is not that load.
+        let made_width = made.what.as_ref().and_then(|what| match what.dests.as_slice() { [Loc::Held(held)] => Some(held.width), _ => None });
+        if made_width != Some(dest.width) {
+            continue;
+        }
         let mut copy = (**made).clone();
         copy.defines = vec![*value];
         if let Some(what) = &mut copy.what {
