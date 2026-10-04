@@ -315,11 +315,14 @@ pub fn constant_sites(
         // taken to fold whole: `folded` follows no branch past a decided one, so a loop on known
         // bounds looked all kept.
         let folds = threshold.single && known.iter().all(Option::is_some) && callees.get(&name).is_some_and(|summary| summary.effects == Effects::NONE);
-        let kept = if folds { Some(0) } else { work(module, body, &callees, costs).map(|all| all - folded(module, layout, body, known, &callees, costs)) };
+        let saved = if folds { None } else { Some(folded(module, layout, body, known, &callees, costs)) };
+        let kept = if folds { Some(0) } else { work(module, body, &callees, costs).map(|all| all - saved.unwrap_or(0)) };
         // A call in a loop saves its overhead on every trip, which LLVM's hot-site threshold weighs.
         let hot = frequency.get(&cfg::id(block)).is_some_and(|&one| one > profit::UNIT);
         let overhead = call_overhead(costs, known.len()) * if hot { threshold.hot.0 } else { 1 } / if hot { threshold.hot.1 } else { 1 };
-        let verdict = kept.is_some_and(|kept| kept <= overhead) && semantic <= budget && cloneable(module, recursive, name, body);
+        // A copy that folds nothing buys the call's overhead once, which `candidates` prices by its copies,
+        // unless the site is in a loop and buys it every trip.
+        let verdict = (folds || hot || saved.is_some_and(|saved| saved > 0)) && kept.is_some_and(|kept| kept <= overhead) && semantic <= budget && cloneable(module, recursive, name, body);
         llrm_support::debug!(
             "inline",
             "constant site of {}: {semantic} ops, {kept:?} clocks kept, budget {budget}, call {overhead}, {} of {} actuals known: {}",
