@@ -7,7 +7,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 use num_bigint::BigInt;
 
-use super::{ENTRY, Limits, admitted};
+use super::{ENTRY, Limits, Site, admitted};
 use crate::cfg;
 use crate::consts;
 use crate::induction;
@@ -48,7 +48,7 @@ impl Parsed {
         let facts = consts::known(&unit, None, None, None);
         let loop_ = self.outer();
         let count = induction::trip_count(&unit, &loop_, &facts).expect("a proven count");
-        admitted(&unit, &loop_, &count, &facts, limits, entries)
+        admitted(&unit, &loop_, &count, &facts, limits, Site { entries, ..Site::default() })
     }
 }
 
@@ -214,8 +214,8 @@ fn the_count_is_the_one_asked_about() {
     let parsed = summing(4, "%x", "");
     let unit = parsed.unit();
     let facts = consts::known(&unit, None, None, None);
-    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), ENTRY));
-    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), ENTRY));
+    assert!(admitted(&unit, &parsed.outer(), &BigInt::from(4), &facts, &Limits::default(), Site::default()));
+    assert!(!admitted(&unit, &parsed.outer(), &BigInt::from(17), &facts, &Limits::default(), Site::default()));
 }
 
 /// QCport's savegame.c peeled loops its function enters once in 256 calls, 1 KB each, for clocks

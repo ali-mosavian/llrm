@@ -224,6 +224,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     if applied.options.wanted("ports") {
         manager.add(ports::Ports);
     }
+    manager.add_program(crate::interprocedural::Stamp);
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.

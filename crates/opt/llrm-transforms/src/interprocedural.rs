@@ -96,6 +96,24 @@ impl ProgramPass for Interprocedural {
     }
 }
 
+/// What each body does to memory, stated on it before any body's pipeline runs, as LLVM's
+/// PostOrderFunctionAttrs runs before the loop passes: a loop that calls a function is judged on what it
+/// does, not on a declaration nothing yet describes.
+pub struct Stamp;
+
+impl ProgramPass for Stamp {
+    fn name(&self) -> &'static str {
+        "stamp"
+    }
+
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+        let mut modules = managers(program, analyses);
+        stamped_all(program, &mut modules)?;
+        analyses.invalidate();
+        Ok(())
+    }
+}
+
 /// Each module's analyses under `analyses`' program results, summaries
 /// kept for the function passes to read.
 pub fn managers(program: &Program, analyses: &mut ProgramAnalyses) -> Vec<ModuleAnalyses> {

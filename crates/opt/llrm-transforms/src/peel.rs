@@ -84,7 +84,7 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
-        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::entries(&unit, analyses.outer(), &loop_)) {
+        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_)) {
             continue;
         }
         let Some(count) = count.to_i64() else {

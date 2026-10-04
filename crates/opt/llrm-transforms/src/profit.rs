@@ -120,12 +120,20 @@ pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, cal
     function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
 }
 
-/// How often `loop_` is entered for each entry of the unit's function, in `UNIT`ths: what its outside
-/// predecessors weigh.
-pub fn entries(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop) -> i64 {
+/// Where `loop_` stands in the unit's function: how often it is entered for each entry of the function, in
+/// `UNIT`ths (what its outside predecessors weigh), and whether it calls a function that may touch memory.
+pub fn site(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop) -> llrm_analysis::peelsize::Site {
     let trips = proven_trips(unit, &unit.registers());
-    let Some(frequency) = _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips)) else { return UNIT };
-    cfg::graph(unit.function).iter().filter(|block| !loop_.body.contains(&block.at) && block.succ.contains(&loop_.header)).map(|block| frequency.get(&block.at).copied().unwrap_or(UNIT)).sum::<i64>().max(1)
+    let entries = match _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips)) {
+        Some(frequency) => cfg::graph(unit.function).iter().filter(|block| !loop_.body.contains(&block.at) && block.succ.contains(&loop_.header)).map(|block| frequency.get(&block.at).copied().unwrap_or(UNIT)).sum::<i64>().max(1),
+        None => UNIT,
+    };
+    let callees = outer.callees();
+    let writes = unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).any(|(_, inst)| {
+        unit.calls_out(inst) && !callee(unit.context, unit.function, inst).and_then(|id| callees.get(&id)).is_some_and(|summary| summary.effects == llrm_mir::memory::Effects::NONE)
+    });
+    llrm_support::debug!("peelsite", "callees of the loop at b{}: {:?}", loop_.header, unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).filter(|(_, inst)| unit.calls_out(*inst)).map(|(_, inst)| callee(unit.context, unit.function, inst).map(|id| (id, callees.get(&id).map(|one| one.effects)))).collect::<Vec<_>>());
+    llrm_analysis::peelsize::Site { entries, writes }
 }
 
 /// Whether the target prices every instruction here, which a copy's cost needs.

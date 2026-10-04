@@ -39,6 +39,21 @@ const COLD_PERCENT: i64 = 5;
 /// What one entry of a function weighs in `entries`: `profit::UNIT`.
 pub const ENTRY: i64 = 256;
 
+/// What the loop's surroundings say, which the loop alone does not.
+#[derive(Clone, Copy, Debug)]
+pub struct Site {
+    /// How often the loop is entered for each entry of its function, in 256ths.
+    pub entries: i64,
+    /// The loop calls a function that may touch memory.
+    pub writes: bool,
+}
+
+impl Default for Site {
+    fn default() -> Self {
+        Self { entries: ENTRY, writes: false }
+    }
+}
+
 /// LLVM's `-unroll-threshold` for a loop the language marks (`#pragma unroll`): operations a
 /// copy the language asked for may hold, past the size budget.
 const HINTED_OPERATIONS: i64 = 16384;
@@ -74,12 +89,13 @@ impl Default for Limits {
 /// does (`getFullUnrollBoostingFactor`). A loop holding another is copied only when
 /// that shrinks it, as GCC does for outer loops.
 ///
-/// `entries` is how often the loop is entered for each entry of its function, in 256ths.
+/// `site` is where the loop stands: GCC refuses a growing copy of a loop with a call that touches memory,
+/// too, as little is left to fold.
 ///
 /// GCC also refuses a call on the path, guessing little is left to fold; the
 /// simulation measures what folds, so a call is priced as LLVM's cost model prices
 /// one instead.
-pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits, entries: i64) -> bool {
+pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits, site: Site) -> bool {
     // What the language says of copying this loop: never, or as many as it permits, which
     // at least the trip count is asked, and is then copied past the budget. Fewer than the
     // trip count is no partial unrolling, which does not exist here: it is a refusal.
@@ -120,8 +136,10 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
         None
     } else if !limits.grows {
         Some("size would grow")
-    } else if entries * 100 < COLD_PERCENT * ENTRY {
+    } else if site.entries * 100 < COLD_PERCENT * ENTRY {
         Some("cold")
+    } else if site.writes {
+        Some("a call that touches memory")
     } else if unrolled.branches > MAX_PEEL_BRANCHES {
         Some("max-peel-branches")
     } else if unrolled.size > budget.saturating_mul(boost) / 100 {
