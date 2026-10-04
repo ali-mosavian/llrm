@@ -32,6 +32,7 @@ fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold)
             &roots,
             &costs,
             None,
+            0,
             costs.call,
             threshold,
             &mut |module, _, id, stage| {
@@ -198,7 +199,7 @@ fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
     let mut program = Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert_eq!(proved.noreturn, [(0, program.modules[0].named("spin").unwrap())].into());
     assert!(printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"), "{}", printed(&program.modules[1]));
 }
@@ -239,7 +240,7 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
     let mut program = Program::new(vec![seven, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
 }
 
@@ -253,7 +254,7 @@ fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
     program.exports.entries = ["entered".to_owned()].into();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[0]).contains("  %y0 = add i16 %x, 1\n"), "{}", printed(&program.modules[0]));
 }
 
@@ -263,7 +264,7 @@ fn test_the_step_runs_as_a_program_pass() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size: false });
+    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate: None });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
@@ -296,15 +297,17 @@ b:
   ret i16 %r
 }
 ";
-    let calls = |size: bool| {
+    let calls = |rate: Option<i64>| {
         let mut module = parsed(text);
         let mut manager = PassManager::default();
         let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, ..OperationCosts::default() }, ..Default::default() };
-        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size });
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @mix").count()
     };
-    assert_eq!((calls(false), calls(true)), (0, 3));
+    // Weighing clocks alone inlines every site; weighing bytes puts them back, at -Os and at -O2 (QCport
+    // -O2 ran 11 KB past BCC's code, and out of memory), unless the clocks saved pay for the bytes.
+    assert_eq!((calls(None), calls(Some(0)), calls(Some(1))), (0, 3, 0));
 }
 
 const STAMPED: &str = "@slot = global ptr null
@@ -906,7 +909,7 @@ b:
         let mut module = parsed(text);
         let mut manager = PassManager::default();
         let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, add: 4, ..OperationCosts::default() }, ..Default::default() };
-        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size });
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate: size.then_some(0) });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @triple").count()
     };
@@ -952,7 +955,7 @@ b:
     let runs = std::cell::Cell::new(0);
     let mut refused = BTreeSet::new();
     let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, "trial.", &mut |_, _, _, _| {
+        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
             runs.set(runs.get() + 1);
             Ok(())
         })

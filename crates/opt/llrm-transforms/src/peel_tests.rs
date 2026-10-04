@@ -143,10 +143,10 @@ b3:
     assert!(through(growing, Peel::default()).0);
 }
 
-/// A call is priced, not refused: the loop is peeled, and @tick still
-/// counts every trip.
+/// A call that touches memory leaves little to fold: GCC refuses a copy that grows (QCport -O2 ran 4.8 KB
+/// past BCC's code on such copies). A call that touches none is priced, and the loop peeled.
 #[test]
-fn a_loop_with_a_call_is_peeled_at_its_price() {
+fn a_loop_with_a_call_is_peeled_only_where_the_call_touches_no_memory() {
     let text = "@count = global i16 0
 
 define void @tick() {
@@ -181,9 +181,12 @@ b3:
   ret i16 %r
 }
 ";
-    let tight = Peel { limits: Limits { max_unrolled_operations: 1, ..Limits::default() }, ..Peel::default() };
-    assert!(!through(text, tight).0);
-    assert!(through(text, Peel::default()).0);
+    let tight = || Peel { limits: Limits { max_unrolled_operations: 1, ..Limits::default() }, ..Peel::default() };
+    assert!(!through(text, tight()).0);
+    assert!(!through(text, Peel::default()).0, "@tick writes @count");
+    let pure = text.replace("define void @tick() {", "define void @tick() memory(none) {").replace("  %c = load i16, ptr @count\n  %d = add i16 %c, 1\n  store i16 %d, ptr @count\n", "");
+    assert!(!through(&pure, tight()).0);
+    assert!(through(&pure, Peel::default()).0);
 }
 
 /// A `select` has no target price, so nothing in its function is copied.

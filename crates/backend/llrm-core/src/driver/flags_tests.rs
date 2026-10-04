@@ -117,3 +117,12 @@ fn test_stack_usage_options_reach_the_driver() {
     assert_eq!(options.stack_limit, Some(512));
     assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());
 }
+
+#[test]
+fn clocks_per_byte_limits_the_growth_an_inline_may_buy() {
+    assert_eq!(pipeline(&[]).limits.milliclocks_per_byte, 16_000);
+    assert_eq!(pipeline(&["--clocks-per-byte", "2"]).limits.milliclocks_per_byte, 2000);
+    assert_eq!(pipeline(&["--clocks-per-byte=0.25"]).limits.milliclocks_per_byte, 250);
+    assert!(parsed(&["--clocks-per-byte", "-1"]).is_err());
+    assert!(parsed(&["--clocks-per-byte", "lots"]).is_err());
+}

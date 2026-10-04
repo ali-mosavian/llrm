@@ -58,8 +58,9 @@ pub struct Interprocedural {
     /// What the last run proved.
     pub proved: Option<Proved>,
     pub inline: inline::Threshold,
-    /// Inlining weighs code bytes, not clocks.
-    pub size: bool,
+    /// Inlining weighs code bytes, and what only the clocks admit stays where it comes to no more bytes,
+    /// less what the clocks it saves buy at this many thousandths of a clock a byte; None weighs the clocks alone.
+    pub rate: Option<i64>,
 }
 
 impl ProgramPass for Interprocedural {
@@ -69,9 +70,10 @@ impl ProgramPass for Interprocedural {
 
     fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
         let pipeline = &mut self.pipeline;
-        let costs = if self.size { program.target.size_costs() } else { program.target.costs() };
+        let costs = if self.rate.is_some() { program.target.size_costs() } else { program.target.costs() };
         let clocks = program.target.costs();
-        let loose = self.size.then_some(&clocks);
+        let loose = self.rate.map(|_| &clocks);
+        let rate = self.rate.unwrap_or(0);
         // The op budget stays the clocks': what it bounds is the body, not its price.
         let reach = program.target.costs().call;
         let roots = roots(program);
@@ -82,6 +84,7 @@ impl ProgramPass for Interprocedural {
             &roots,
             &costs,
             loose,
+            rate,
             reach,
             self.inline,
             &mut |module, analyses, id, stage| {
@@ -91,6 +94,24 @@ impl ProgramPass for Interprocedural {
             &mut |_, _, _| Ok(()),
         )?;
         self.proved = Some(proved);
+        analyses.invalidate();
+        Ok(())
+    }
+}
+
+/// What each body does to memory, stated on it before any body's pipeline runs, as LLVM's
+/// PostOrderFunctionAttrs runs before the loop passes: a loop that calls a function is judged on what it
+/// does, not on a declaration nothing yet describes.
+pub struct Stamp;
+
+impl ProgramPass for Stamp {
+    fn name(&self) -> &'static str {
+        "stamp"
+    }
+
+    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+        let mut modules = managers(program, analyses);
+        stamped_all(program, &mut modules)?;
         analyses.invalidate();
         Ok(())
     }
@@ -156,8 +177,15 @@ const ESTIMATE_ERROR: (i64, i64) = (1, 4);
 
 /// Whether callers coming to `after` bytes, less `gone` for the callee that goes, come to no more than
 /// `before`, within the estimate's error of the body (`moved` bytes) that was copied.
-fn stays(after: i64, gone: i64, before: i64, moved: i64) -> bool {
-    after - gone <= before + moved * ESTIMATE_ERROR.0 / ESTIMATE_ERROR.1
+fn stays(after: i64, gone: i64, before: i64, moved: i64, allowance: i64) -> bool {
+    after - gone <= before + moved * ESTIMATE_ERROR.0 / ESTIMATE_ERROR.1 + allowance
+}
+
+/// The bytes `sites` calls of `callee` removed may add: what their overhead saves in clocks, at `rate`
+/// clocks a byte (`clocks` prices the calls), where 0 allows none.
+fn allowance(module: &Module, callee: GlobalId, sites: i64, clocks: &OperationCosts, rate: i64) -> i64 {
+    let arguments = module.global(callee).function().map_or(0, |body| module.signature(body.ty).1.len());
+    if rate <= 0 { 0 } else { 1000 * sites * inline::call_overhead(clocks, arguments) / rate }
 }
 
 /// The constant `sites` of `caller` the clocks admit and the bytes do not, inlined, and put back
@@ -172,6 +200,7 @@ fn tried_sites<E: From<String>>(
     sites: &llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate>,
     refused: &mut BTreeSet<(GlobalId, llrm_mir::module::InstId)>,
     costs: &OperationCosts,
+    credit: (&OperationCosts, i64),
     stage: &str,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
@@ -183,6 +212,7 @@ fn tried_sites<E: From<String>>(
         let counts = inline::call_counts(module);
         let kept = module.global(caller).function().expect("a procedure").clone();
         let before = inline::size(module, caller, costs);
+        let bought = llrm_mir::memory::callee(&module.context, &kept, site).map_or(0, |callee| allowance(module, callee, 1, credit.0, credit.1));
         let (context, function) = function_mut(module, caller);
         let by = inline::Caller { layout, recursive: recursive.contains(&caller) };
         let one = llrm_support::hash::IndexMap::from_iter([(site, candidate.clone())]);
@@ -193,7 +223,7 @@ fn tried_sites<E: From<String>>(
         modules.changed(caller);
         modules.invalidate(&PreservedAnalyses::none());
         reoptimised(module, modules, caller, stage)?;
-        if before.is_some_and(|before| grew(module, caller, &counts, private, costs, before)) {
+        if before.is_some_and(|before| grew(module, caller, &counts, private, costs, before, bought)) {
             *function_mut(module, caller).1 = kept;
             modules.changed(caller);
             modules.invalidate(&PreservedAnalyses::none());
@@ -214,11 +244,12 @@ fn tried_callees<E: From<String>>(
     recursive: &BTreeSet<GlobalId>,
     more: &llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
     costs: &OperationCosts,
+    credit: (&OperationCosts, i64),
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
     let mut stayed = false;
     for (callee, candidate) in more {
-        stayed |= trial(module, modules, layout, private, recursive, *callee, candidate, costs, reoptimised)?;
+        stayed |= trial(module, modules, layout, private, recursive, *callee, candidate, costs, credit, reoptimised)?;
     }
     Ok(stayed)
 }
@@ -235,6 +266,7 @@ fn trial<E: From<String>>(
     callee: GlobalId,
     candidate: &inline::Candidate,
     costs: &OperationCosts,
+    credit: (&OperationCosts, i64),
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
     let callers: Vec<GlobalId> = module
@@ -246,7 +278,8 @@ fn trial<E: From<String>>(
         .collect();
     // Every call re-runs a caller's pipeline: a callee at many sites is not tried (savegame.c's took
     // 4x the compile time), and an estimate's noise over so many copies is no tolerance.
-    if inline::call_counts(module).get(&callee).copied().unwrap_or(0) > TRIED_SITES {
+    let sites = inline::call_counts(module).get(&callee).copied().unwrap_or(0);
+    if sites > TRIED_SITES {
         return Ok(false);
     }
     let sizes = |module: &Module| callers.iter().map(|&id| inline::size(module, id, costs)).sum::<Option<i64>>();
@@ -273,7 +306,8 @@ fn trial<E: From<String>>(
     }
     let gone = if private.contains(&callee) && !inline::call_counts(module).contains_key(&callee) { own } else { 0 };
     llrm_support::debug!("inline", "trial of {}: {before} bytes before, {:?} after, {gone} gone", module.global(callee).name.as_deref().unwrap_or("?"), sizes(module));
-    if sizes(module).is_some_and(|after| stays(after, gone, before, own)) {
+    let removed = sites - inline::call_counts(module).get(&callee).copied().unwrap_or(0);
+    if sizes(module).is_some_and(|after| stays(after, gone, before, own, allowance(module, callee, removed, credit.0, credit.1))) {
         return Ok(true);
     }
     for (id, function) in kept {
@@ -286,11 +320,11 @@ fn trial<E: From<String>>(
 
 /// Whether `id`, after inlining and the pipeline, comes to more than it did (`before`), less the
 /// callees nothing calls now and nothing outside reaches, which go.
-fn grew(module: &Module, id: GlobalId, counts: &inline::Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, before: i64) -> bool {
+fn grew(module: &Module, id: GlobalId, counts: &inline::Counter, private: &BTreeSet<GlobalId>, costs: &OperationCosts, before: i64, allowance: i64) -> bool {
     let Some(after) = inline::size(module, id, costs) else { return false };
     let now = inline::call_counts(module);
     let gone: i64 = counts.iter().filter(|(callee, was)| **was > 0 && private.contains(*callee) && now.get(*callee).copied().unwrap_or(0) == 0 && **callee != id).filter_map(|(&callee, _)| inline::size(module, callee, costs)).sum();
-    after - gone > before
+    after - gone > before + allowance
 }
 
 /// Module `at`'s procedures every caller of which is in the module: no
@@ -319,6 +353,7 @@ pub fn optimized<E: From<String>>(
     roots: &BTreeSet<Defined>,
     costs: &OperationCosts,
     loose: Option<&OperationCosts>,
+    rate: i64,
     reach: i64,
     threshold: inline::Threshold,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
@@ -364,11 +399,11 @@ pub fn optimized<E: From<String>>(
                     inline_round += 1;
                 }
                 // What only the clocks admit stays only where it comes to no more.
-                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, "inline-trial.", reoptimised)? {
+                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, (loose.unwrap_or(costs), rate), "inline-trial.", reoptimised)? {
                     changed = true;
                 }
             }
-            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &more, costs, reoptimised)? {
+            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
                 changed = true;
             }
         }
@@ -453,11 +488,11 @@ pub fn optimized<E: From<String>>(
                     inlined = true;
                 }
                 // What only the clocks admit stays only where it comes to no more.
-                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, "ipa-inline-trial.", reoptimised)? {
+                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, (loose.unwrap_or(costs), rate), "ipa-inline-trial.", reoptimised)? {
                     inlined = true;
                 }
             }
-            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &more, costs, reoptimised)? {
+            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
                 inlined = true;
             }
         }
@@ -746,9 +781,9 @@ mod stays_tests {
     /// quarter of the 40 over, and not 111.
     #[test]
     fn a_change_within_a_quarter_of_the_copied_body_is_the_estimates_noise() {
-        assert!(stays(140, 40, 100, 40), "no more");
-        assert!(stays(150, 40, 100, 40), "10 over is within");
-        assert!(!stays(151, 40, 100, 40), "11 over is not");
-        assert!(stays(90, 0, 100, 40), "smaller always stays");
+        assert!(stays(140, 40, 100, 40, 0), "no more");
+        assert!(stays(150, 40, 100, 40, 0), "10 over is within");
+        assert!(!stays(151, 40, 100, 40, 0), "11 over is not");
+        assert!(stays(90, 0, 100, 40, 0), "smaller always stays");
     }
 }

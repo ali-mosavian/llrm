@@ -439,7 +439,32 @@ b1:
     // Pushing and reading two arguments is overhead the copy saves as well.
     let passed = OperationCosts { argument: 20, ..priced };
     let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &passed, passed.call, Threshold::default());
-    assert_eq!(sites.len(), 2);
+    assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
+}
+
+/// QCport's screen.c grew 1.5 KB: peeling made 16 calls of `font_bit(.., gx, gy)` with known
+/// coordinates, none of which folds anything, and each was copied as a constant site.
+#[test]
+fn test_a_constant_site_whose_known_actual_folds_nothing_is_not_copied() {
+    let module = parsed(
+        "define internal i16 @shifted(i16 %k, i16 %y) {
+b1:
+  %r = add i16 %y, %k
+  ret i16 %r
+}
+
+define i16 @main(i16 %p) {
+b1:
+  %one = call i16 @shifted(i16 1, i16 %p)
+  ret i16 %one
+}
+",
+    );
+    let main = module.global(id(&module, "main")).function().unwrap();
+    let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
+    let priced = OperationCosts { call: 10, argument: 20, ..OperationCosts::default() };
+    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
+    assert!(sites.is_empty(), "{} sites", sites.len());
 }
 
 #[test]

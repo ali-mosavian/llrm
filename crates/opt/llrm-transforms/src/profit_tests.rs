@@ -317,3 +317,20 @@ b2:
     assert!(at("cold") < super::UNIT / 100, "the cold arm: {}", at("cold"));
     assert!(at("cold") >= 1, "never below one unit");
 }
+
+/// A switch was priced as one branch whatever its cases, so inlining a 10-case `pl_view_of` into
+/// QCport's viewmdl.c looked free and grew it by 192 bytes.
+#[test]
+fn test_a_switch_costs_a_compare_and_a_jump_for_each_case() {
+    let price = |cases: usize| {
+        let arms = (0..cases).map(|case| format!("i16 {case}, label %b2 ")).collect::<String>();
+        let text = format!("define void @f(i16 %x) {{\nb1:\n  switch i16 %x, label %b2 [{arms}]\nb2:\n  ret void\n}}\n");
+        let module = module(&text);
+        let f = function(&module);
+        let costs = OperationCosts { branch: 3, add: 2, ..OperationCosts::default() };
+        let callees = llrm_mir::memory::callees(&module);
+        let layout = llrm_mir::datalayout::DataLayout::default();
+        f.walk().map(|(_, one)| operation(&module.context, &layout, f, &callees, one, &costs)).next().flatten()
+    };
+    assert_eq!((price(0), price(1), price(10)), (Some(3), Some(8), Some(53)));
+}

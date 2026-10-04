@@ -1018,15 +1018,15 @@ fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
 #[test]
 fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     // Copies were built for any trip count the simulation priced as folding: deedlines'
-    // 16384-trip loops became 360K operations. GCC refuses past 16 before looking.
+    // 16384-trip loops became 360K operations. LLVM analyses at most 10 iterations; past that nothing is copied.
     let directory = tempfile::tempdir().expect("a directory");
     let rolled = |trips: i16| {
         // `total * 3 + i` has no closed form, so only peeling removes the loop.
         let text = format!("@export(\"cdecl16\")\nfn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total * 3 + i\n    return total\n");
         optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O2()).contains(" = phi ")
     };
-    assert!(!rolled(16), "within the cap the loop is copied out");
-    assert!(rolled(17));
+    assert!(!rolled(10), "within the cap the loop is copied out");
+    assert!(rolled(11));
 }
 
 /// `_sum_three proc far` .. `endp` for the 486.
