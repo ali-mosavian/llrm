@@ -1,75 +1,152 @@
-reason = "add Turbo C 2.01 and C++ 3.0; Watcom linked with its own CLIBM, MATH87M and start-up"
+reason = "llrm-qb --own-frames measured as language basown beside bas"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 305212
 memory_operands = 20143
+code_bytes = 315
+data_bytes = 13
+bss_bytes = 0
 kernel_ms = 4.0805
 
 [bas.Os]
 instructions = 308304
 memory_operands = 20883
-kernel_ms = 4.1223
+code_bytes = 306
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 4.1221
 
 [c.O2]
 instructions = 172714
 memory_operands = 20126
+code_bytes = 185
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 2.3039
 
 [c.Os]
 instructions = 175804
 memory_operands = 20866
-kernel_ms = 2.3457
+code_bytes = 175
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 2.3455
 
 [nib.O2]
 instructions = 171946
 memory_operands = 20126
+code_bytes = 190
+data_bytes = 0
+bss_bytes = 0
 
 [nib.Os]
 instructions = 175036
 memory_operands = 20866
+code_bytes = 181
+data_bytes = 0
+bss_bytes = 0
+
+[basown.O2]
+instructions = 305180
+memory_operands = 20126
+code_bytes = 310
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 4.0798
+
+[basown.Os]
+instructions = 308272
+memory_operands = 20866
+code_bytes = 301
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 4.1215
 
 [ow.O2]
 instructions = 1588281
 memory_operands = 419863
-kernel_ms = 21.1863
+code_bytes = 345
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 21.1857
 
 [ow.Os]
 instructions = 1584031
 memory_operands = 418329
-kernel_ms = 21.1296
+code_bytes = 336
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 21.129
 
 [bcc.O2]
 instructions = 231560
 memory_operands = 151210
-kernel_ms = 3.0895
+code_bytes = 221
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.0892
 
 [bcc.Os]
 instructions = 232254
 memory_operands = 150418
-kernel_ms = 3.0987
+code_bytes = 211
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.0985
 
 [tc.O2]
 instructions = 1272244
 memory_operands = 286260
-kernel_ms = 16.9707
+code_bytes = 316
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 16.9705
 
 [tc.Os]
 instructions = 1272242
 memory_operands = 286260
-kernel_ms = 16.9706
+code_bytes = 313
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 16.9705
 
 [tcpp.O2]
 instructions = 1240899
 memory_operands = 301654
+code_bytes = 324
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 16.5525
 
 [tcpp.Os]
 instructions = 1240129
 memory_operands = 320886
+code_bytes = 323
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 16.5422
 
 [bc.O2]
 instructions = 2489434
 memory_operands = 760732
-kernel_ms = 33.2155
+code_bytes = 505
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 33.2149
+
+[pds71.O2]
+instructions = 2443610
+memory_operands = 724089
+code_bytes = 492
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 32.6026
+
+[vbdos.O2]
+instructions = 2443627
+memory_operands = 724094
+code_bytes = 496
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 32.6003

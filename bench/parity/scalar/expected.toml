@@ -1,75 +1,152 @@
-reason = "add Turbo C 2.01 and C++ 3.0; Watcom linked with its own CLIBM, MATH87M and start-up"
+reason = "llrm-qb --own-frames measured as language basown beside bas"
 blessed = "2026-10-04"
 
 [bas.O2]
 instructions = 92
 memory_operands = 13
+code_bytes = 317
+data_bytes = 21
+bss_bytes = 0
 kernel_ms = 0.035
 
 [bas.Os]
 instructions = 121
 memory_operands = 13
+code_bytes = 170
+data_bytes = 21
+bss_bytes = 0
 kernel_ms = 0.0354
 
 [c.O2]
 instructions = 60
 memory_operands = 1
+code_bytes = 232
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0016
 
 [c.Os]
 instructions = 91
 memory_operands = 1
+code_bytes = 82
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0021
 
 [nib.O2]
 instructions = 60
 memory_operands = 1
+code_bytes = 236
+data_bytes = 0
+bss_bytes = 0
 
 [nib.Os]
 instructions = 91
 memory_operands = 1
+code_bytes = 88
+data_bytes = 0
+bss_bytes = 0
+
+[basown.O2]
+instructions = 61
+memory_operands = 2
+code_bytes = 305
+data_bytes = 21
+bss_bytes = 0
+kernel_ms = 0.0346
+
+[basown.Os]
+instructions = 92
+memory_operands = 2
+code_bytes = 160
+data_bytes = 21
+bss_bytes = 0
+kernel_ms = 0.0351
 
 [ow.O2]
 instructions = 288
 memory_operands = 66
+code_bytes = 124
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0047
 
 [ow.Os]
 instructions = 279
 memory_operands = 60
+code_bytes = 115
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0045
 
 [bcc.O2]
 instructions = 87
 memory_operands = 11
+code_bytes = 98
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.002
 
 [bcc.Os]
 instructions = 127
 memory_operands = 18
+code_bytes = 92
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0025
 
 [tc.O2]
 instructions = 285
 memory_operands = 62
+code_bytes = 106
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0046
 
 [tc.Os]
 instructions = 283
 memory_operands = 62
+code_bytes = 101
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0046
 
 [tcpp.O2]
 instructions = 282
 memory_operands = 21
+code_bytes = 111
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0045
 
 [tcpp.Os]
 instructions = 269
 memory_operands = 28
+code_bytes = 100
+data_bytes = 0
+bss_bytes = 0
 kernel_ms = 0.0044
 
 [bc.O2]
 instructions = 348
 memory_operands = 129
+code_bytes = 227
+data_bytes = 13
+bss_bytes = 12
 kernel_ms = 0.0397
+
+[pds71.O2]
+instructions = 345
+memory_operands = 130
+code_bytes = 227
+data_bytes = 13
+bss_bytes = 12
+kernel_ms = 0.0397
+
+[vbdos.O2]
+instructions = 362
+memory_operands = 135
+code_bytes = 231
+data_bytes = 21
+bss_bytes = 12
+kernel_ms = 0.0357

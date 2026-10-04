@@ -1,0 +1,152 @@
+reason = "llrm-qb --own-frames measured as language basown beside bas"
+blessed = "2026-10-04"
+
+[bas.O2]
+instructions = 269638
+memory_operands = 136880
+code_bytes = 553
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 3.6554
+
+[bas.Os]
+instructions = 259058
+memory_operands = 136880
+code_bytes = 504
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 3.5146
+
+[c.O2]
+instructions = 163105
+memory_operands = 60242
+code_bytes = 324
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 2.1768
+
+[c.Os]
+instructions = 149115
+memory_operands = 60242
+code_bytes = 283
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 1.9905
+
+[nib.O2]
+instructions = 245433
+memory_operands = 118387
+code_bytes = 565
+data_bytes = 0
+bss_bytes = 0
+
+[nib.Os]
+instructions = 337670
+memory_operands = 90922
+code_bytes = 478
+data_bytes = 0
+bss_bytes = 0
+
+[basown.O2]
+instructions = 225989
+memory_operands = 113692
+code_bytes = 563
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 3.0368
+
+[basown.Os]
+instructions = 215430
+memory_operands = 113705
+code_bytes = 506
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 2.8964
+
+[ow.O2]
+instructions = 239036
+memory_operands = 73044
+code_bytes = 330
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.1899
+
+[ow.Os]
+instructions = 239766
+memory_operands = 71679
+code_bytes = 300
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.1996
+
+[bcc.O2]
+instructions = 202763
+memory_operands = 86739
+code_bytes = 376
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 2.7062
+
+[bcc.Os]
+instructions = 242525
+memory_operands = 81849
+code_bytes = 342
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.2364
+
+[tc.O2]
+instructions = 270175
+memory_operands = 101577
+code_bytes = 366
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.6051
+
+[tc.Os]
+instructions = 278399
+memory_operands = 128776
+code_bytes = 359
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.7147
+
+[tcpp.O2]
+instructions = 269153
+memory_operands = 100209
+code_bytes = 372
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.5914
+
+[tcpp.Os]
+instructions = 277377
+memory_operands = 127408
+code_bytes = 364
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.7011
+
+[bc.O2]
+instructions = 472323
+memory_operands = 269606
+code_bytes = 734
+data_bytes = 7
+bss_bytes = 14
+kernel_ms = 6.3773
+
+[pds71.O2]
+instructions = 458641
+memory_operands = 270627
+code_bytes = 710
+data_bytes = 7
+bss_bytes = 14
+kernel_ms = 6.1899
+
+[vbdos.O2]
+instructions = 481890
+memory_operands = 277468
+code_bytes = 718
+data_bytes = 7
+bss_bytes = 14
+kernel_ms = 6.4966

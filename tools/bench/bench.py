@@ -26,9 +26,11 @@ from dataclasses import dataclass
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dosbatch"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import maps  # noqa: E402
+import sizes  # noqa: E402
 import icount  # noqa: E402
 import dosbatch  # noqa: E402
 import run_tests  # noqa: E402
@@ -40,7 +42,11 @@ OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/b
 OWLIB = Path(os.environ.get("OW_LIB", Path.home() / "dos/devtools/dev/c/watcom/lib286"))
 BENCH = ROOT / "bench"
 LANGUAGES = {"bas": ".bas", "c": ".c", "nib": ".nib"}
+# llrm-qb again with --own-frames (a plain frame for the runtime's B$ENRA/B$EXSA): a language of its own in expected.toml, from the .bas.
+BASIC_LANGUAGES = ("bas", "basown")
 COUNTERS = ("instructions", "memory_operands")
+# Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
+SIZES = ("code_bytes", "data_bytes", "bss_bytes")
 # DOSBox at a fixed 75000 cycles per millisecond: RDTSC cycles / 75000 is milliseconds, the same on any host.
 TIMING_CONF = dosbatch.CONF.replace("cycles=max", "cycles=fixed 75000")
 CYCLES_PER_MS = 75_000
@@ -55,7 +61,9 @@ BORLAND = {
     "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
-REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc",)}  # the reference compilers per language; BC has one level, /O
+REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "basown": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
+# BASIC references: the name in expected.toml -> the toolchain (run_tests.TOOLS) whose BC compiles and whose runtime links.
+BASIC_REFERENCES = {"bc": "qb45", "pds71": "pds71", "vbdos": "vbdos"}
 # Kernel time is a difference of two whole-program times, each a few cycles off from run to run: parity/loop's 139
 # instructions (0.0029 ms) read 3.5% apart on two runs. A change must clear both the relative and the absolute slack.
 TIME_TOLERANCE = 0.01
@@ -63,7 +71,7 @@ TIME_SLACK_MS = 0.001
 
 
 def reference_level(reference: str, opt: str) -> str:
-    return "O2" if reference == "bc" else opt
+    return "O2" if reference in BASIC_REFERENCES else opt
 
 
 @dataclass(frozen=True)
@@ -94,7 +102,8 @@ def variants(directory: Path) -> list[Variant]:
         source = directory / f"{directory.name}{suffix}"
         if source.exists():
             head = run_tests.header(source)
-            out.append(Variant(name, language, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45")))
+            for one in ("bas", "basown") if language == "bas" else (language,):
+                out.append(Variant(name, one, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45")))
     return out
 
 
@@ -112,10 +121,11 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
             exe = work / f"{stem}.exe"
             extras = [str(variant.source.parent / one) for one in run_tests.header(variant.source).get("link", "").split()]
             done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
-                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_FLAGS": "-fno-inline-functions"})
+                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": "-fno-inline-functions"})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
-        tool = "llrm-qb" if variant.language == "bas" else "llrm-c"
-        arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language == "bas" else []
+        tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
+        arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
+        flags += ["--own-frames"] if variant.language == "basown" else []
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=300)
         if done.returncode != 0 or not obj.exists():
@@ -146,9 +156,10 @@ def link_basic(objs: dict[str, tuple[Path, str]], work: Path) -> dict[str, str]:
     return failed
 
 
-def measure(job: tuple[str, Path, Path, str, list[str]]) -> dict:
-    """Counts of one built variant: the entry address from its map, the emulated run, the output check."""
-    stem, exe, listing, region, want = job
+def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
+    """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
+    of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
+    stem, exe, listing, region, want, obj = job
     entry = maps.locate(exe, listing, region)
     if entry is None:
         return {"error": f"{region} is not in the map, and main does not call one function of its own"}
@@ -158,7 +169,8 @@ def measure(job: tuple[str, Path, Path, str, list[str]]) -> dict:
     got = run_tests.lines(result.output.decode("latin1"))
     if got != want:
         return {"error": f"prints {got}, want {want}"}
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands}
+    data, bss = sizes.data_bytes(obj)
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:
@@ -237,36 +249,40 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
     todo = with_startup(selected, timing)
     stems = [f"R{at:03d}" for at in range(len(todo))]
     jobs, owned, plain = [], [], {}
-    def own(key, stem, directory, variant, built):
+    def own(key, stem, directory, variant, built, obj=None):
         if isinstance(built, str):
             out[key] = {"error": built}
         elif directory == STARTUP:
             plain[key] = built[0]
         else:
-            owned.append((key, (stem, built[0], built[1], variant.region, expected_output(directory))))
+            owned.append((key, (stem, built[0], built[1], variant.region, expected_output(directory), obj)))
     for opt in opts:
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
         for directory, variant, stem in c_todo:
             if (OW / "bwcc").exists():
-                own((variant.name, "ow", opt), stem, directory, variant, build_watcom(variant, opt, folder, f"{stem}{opt}"))
+                own((variant.name, "ow", opt), stem, directory, variant, build_watcom(variant, opt, folder, f"{stem}{opt}"), folder / f"{stem}{opt}.obj")
         for language, (home, _, _) in BORLAND.items():
             if (home / "lib" / "C0M.OBJ").exists():
                 built = build_borland(language, [(variant, stem) for _, variant, stem in c_todo], opt, folder)
                 for directory, variant, stem in c_todo:
-                    own((variant.name, language, opt), stem, directory, variant, built[stem])
-    bas = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "bas" and variant.dialect == "qb45"]
-    if bas and (dosbatch.QB45 / "BC.EXE").exists():
-        jobs = [Job(stem, "bas", variant.source, switches="/O /FPi", map=True) for _, variant, stem in bas]
-        ran = dosbatch.run(jobs, folder / "bc")
+                    own((variant.name, language, opt), stem, directory, variant, built[stem], folder / f"{language}{opt}" / f"{stem}.OBJ")
+    bas = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "bas"]
+    for reference, dialect in BASIC_REFERENCES.items():
+        tools = run_tests.TOOLS[dialect]
+        if not bas or not tools.mount.is_dir():
+            continue
+        # /AH where the program asks for huge arrays; the dialect of a program is llrm's, every BC is given every program
+        jobs = [Job(stem, "bas", variant.source, switches="/O /FPi" + (" /AH" if "--huge-arrays" in run_tests.compiler_arguments(variant.source) else ""), map=True) for _, variant, stem in bas]
+        ran = dosbatch.run(jobs, folder / reference, tools=tools)
         for (directory, variant, stem) in bas:
-            key = (variant.name, "bc", "O2")
+            key = (variant.name, reference, "O2")
             if ran[stem].status == "not built":
-                out[key] = {"error": "bc: " + ran[stem].detail}
+                out[key] = {"error": f"{reference}: " + ran[stem].detail}
                 continue
-            exe, listing = folder / f"{stem}.exe", folder / f"{stem}.map"
-            shutil.copy(folder / "bc" / f"{stem}.EXE", exe)
-            shutil.copy(folder / "bc" / f"{stem}.MAP", listing)
-            own(key, stem, directory, variant, (exe, listing))
+            exe, listing, obj = folder / f"{reference}-{stem}.exe", folder / f"{reference}-{stem}.map", folder / f"{reference}-{stem}.obj"
+            for source, target in ((f"{stem}.EXE", exe), (f"{stem}.MAP", listing), (f"{stem}.OBJ", obj)):
+                shutil.copy(folder / reference / source, target)
+            own(key, stem, directory, variant, (exe, listing), obj)
     with ProcessPoolExecutor() as pool:
         for (key, _), counts in zip(owned, pool.map(measure, [job for _, job in owned])):
             out[key] = counts
@@ -300,7 +316,7 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
         stems = {(v.name, v.language): f"V{at:03d}" for at, (_, v) in enumerate(todo)}
         with ThreadPoolExecutor() as pool:
             built = list(pool.map(lambda one: build(one[1], opt, folder, stems[(one[1].name, one[1].language)]), todo))
-        basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language == "bas" and not isinstance(b, str)}
+        basic = {stems[(v.name, v.language)]: (b[0], v.dialect) for (_, v), b in zip(todo, built) if v.language in BASIC_LANGUAGES and not isinstance(b, str)}
         failed = link_basic(basic, folder)
         jobs, plain = [], {}
         for (directory, variant), result in zip(todo, built):
@@ -310,11 +326,11 @@ def measure_all(selected: list[str], opts: list[str], work: Path, timing: bool =
             if why:
                 out[key] = {"error": why}
                 continue
-            exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language == "bas" else result
+            exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language in BASIC_LANGUAGES else result
             if directory == STARTUP:
                 plain[key] = exe  # timed, not counted
             else:
-                jobs.append((key, (stem, exe, listing, variant.region, expected_output(directory))))
+                jobs.append((key, (stem, exe, listing, variant.region, expected_output(directory), folder / f"{stem}.obj")))
         with ProcessPoolExecutor() as pool:
             for (key, _), counts in zip(jobs, pool.map(measure, [job for _, job in jobs])):
                 out[key] = counts
@@ -376,13 +392,13 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> N
     for (benchmark, language, opt), counts in measured.items():
         if benchmark != name or "error" in counts:
             continue
-        new = {one: counts[one] for one in (*COUNTERS, "kernel_ms") if one in counts}
+        new = {one: counts[one] for one in (*COUNTERS, *SIZES, "kernel_ms") if one in counts}
         old = tables.get(language, {}).get(opt, {})
         if "kernel_ms" not in new and "kernel_ms" in old and old.get("instructions") == new["instructions"]:
             new["kernel_ms"] = old["kernel_ms"]
         tables.setdefault(language, {})[opt] = new
     lines = [f"reason = {json.dumps(reason)}", f'blessed = "{date.today()}"', ""]  # JSON escapes are TOML's
-    for language in [*LANGUAGES, *(one for many in REFERENCES.values() for one in many)]:
+    for language in dict.fromkeys([*LANGUAGES, *BASIC_LANGUAGES, *(one for many in REFERENCES.values() for one in many)]):
         for opt in sorted(tables.get(language, {})):
             lines += [f"[{language}.{opt}]", *(f"{one} = {value}" for one, value in tables[language][opt].items()), ""]
     (directory / "expected.toml").write_text("\n".join(lines))
@@ -393,8 +409,12 @@ def against(label: str, got: dict, want: dict | None) -> list[str]:
     if want is None:
         return [f"{label}: no baseline; run --bless --reason"]
     problems = []
-    for counter in COUNTERS:
-        if got[counter] > want[counter]:
+    for counter in (*COUNTERS, *SIZES):
+        if counter not in got:
+            continue
+        if counter not in want:
+            problems.append(f"{label}: no baseline for {counter}; run --bless --reason")
+        elif got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
         elif got[counter] < want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} < {want[counter]} (better: --bless --reason)")
@@ -405,7 +425,7 @@ def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict)
     """llrm/reference worse than it was blessed at. Against a stored reference this is the count gate seen from the
     reference's side; it stays a gate of its own for the day the reference is re-blessed."""
     problems = []
-    for counter in (*COUNTERS, "kernel_ms"):
+    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
             now, then = got[counter] / ref[counter], want[counter] / ref[counter]
             time = counter == "kernel_ms"
@@ -421,7 +441,7 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
     if stored is None:
         return [f"{label}: not recorded; run --bless --references --reason"]
     problems = []
-    for counter in (*COUNTERS, "kernel_ms"):
+    for counter in (*COUNTERS, *SIZES, "kernel_ms"):
         if counter in got and counter in stored:
             slack = max(TIME_TOLERANCE * abs(stored[counter]), TIME_SLACK_MS) if counter == "kernel_ms" else 0
             if abs(got[counter] - stored[counter]) > slack:
@@ -480,12 +500,13 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                     if ref and "error" not in got and "instructions" in got:
                         rows.append((got, ref))
                 parts = []
-                for counter, title in (("instructions", "instructions"), ("memory_operands", "memory operands"), ("kernel_ms", "kernel time")):
+                for counter, title in (("instructions", "instructions"), ("memory_operands", "memory operands"), ("kernel_ms", "kernel time"),
+                                       ("code_bytes", "code bytes"), ("data_bytes", "data bytes"), ("bss_bytes", "bss bytes")):
                     ratios = [got[counter] / ref[counter] for got, ref in rows if counter in got and counter in ref and got[counter] > 0 and ref[counter] > 0]
                     if ratios:
                         parts.append(f"{title} {100 * (geomean(ratios) - 1):+.1f}% (n={len(ratios)})")
                 if parts:
-                    lines.append(f"llrm {language} -{opt} vs {reference} {'/O' if reference == 'bc' else '-' + level}: " + ", ".join(parts))
+                    lines.append(f"llrm {language} -{opt} vs {reference} {'/O' if reference in BASIC_REFERENCES else '-' + level}: " + ", ".join(parts))
     return lines
 
 
@@ -511,7 +532,7 @@ def main() -> int:
         names = {key[0] for key in measured}
         for directory in benchmarks(args.select):
             name = str(directory.relative_to(BENCH))
-            broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and key[1] in LANGUAGES and "error" in value and "known" not in value]
+            broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and key[1] in (*LANGUAGES, *BASIC_LANGUAGES) and "error" in value and "known" not in value]
             if broken:
                 print(f"not blessing {name}: {broken}")
                 return 1

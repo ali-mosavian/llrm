@@ -15,6 +15,7 @@ import sys
 import glob
 import tempfile
 import subprocess
+from dataclasses import dataclass
 from os import environ
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -49,16 +50,54 @@ def omf_index(body: bytes, at: int) -> tuple[int, int]:
     return body[at], at + 1
 
 
-def code_bytes(obj: Path) -> int:
-    """Bytes of the object's code segments (a class named ...CODE): its SEGDEF lengths. The file's size counts
-    the fixup, symbol and debug records as well, which the linker consumes and the program lacks."""
-    data = Path(obj).read_bytes()
-    names: list[str] = []
+@dataclass(frozen=True)
+class Segment:
+    name: str
+    klass: str
+    size: int
+    loaded: int  # bytes an LEDATA or LIDATA record carries; the rest of the segment is uninitialised
+
+
+# Classes the program does not contribute: the linker's stack, and the debugger's symbol and type records.
+NOT_THE_PROGRAMS = {"STACK", "DEBSYM", "DEBTYP"}
+
+
+def iterated(body: bytes, at: int, wide: bool) -> tuple[int, int]:
+    """Bytes an LIDATA block expands to, and where it ends: a repeat count, a block count, then nested blocks or content."""
+    repeat = int.from_bytes(body[at : at + (4 if wide else 2)], "little")
+    at += 4 if wide else 2
+    blocks = int.from_bytes(body[at : at + 2], "little")
+    at += 2
+    if blocks == 0:
+        return repeat * body[at], at + 1 + body[at]
+    inner = 0
+    for _ in range(blocks):
+        size, at = iterated(body, at, wide)
+        inner += size
+    return repeat * inner, at
+
+
+def expanded(body: bytes, at: int, wide: bool) -> int:
+    """Bytes the data blocks of an LIDATA record expand to."""
     total = 0
+    while at < len(body):
+        size, at = iterated(body, at, wide)
+        total += size
+    return total
+
+
+def segments(obj: Path) -> list[Segment]:
+    """The OMF object's segments, with the bytes its data records carry. Only an object: a linked image or a
+    library has other records, and COMDAT, which this reader does not follow, is refused rather than missed."""
+    data = Path(obj).read_bytes()
+    if not data or data[0] != 0x80:
+        raise ValueError(f"{obj} is not an OMF object: it does not start with a THEADR record")
+    names: list[str] = []
+    found: list[list] = []
     at = 0
     while at + 3 <= len(data):
         kind, length = data[at], int.from_bytes(data[at + 1 : at + 3], "little")
-        body = data[at + 3 : at + 2 + length]
+        body = data[at + 3 : at + 2 + length]  # without the checksum
         at += 3 + length
         if kind == 0x96:  # LNAMES
             i = 0
@@ -74,11 +113,34 @@ def code_bytes(obj: Path) -> int:
             i += 4 if wide else 2
             if attributes & 2:
                 size = 1 << 16  # the 'big' bit: a full segment
-            _, i = omf_index(body, i)  # the segment's name
+            name, i = omf_index(body, i)
             klass, i = omf_index(body, i)
-            if names[klass - 1].upper().endswith("CODE"):  # CODE, and the BASIC runtime's BC_CODE
-                total += size
-    return total
+            found.append([names[name - 1], names[klass - 1], size, 0])
+        elif kind in (0xA0, 0xA1, 0xA2, 0xA3):  # LEDATA, LIDATA
+            wide = kind & 1 == 1
+            segment, i = omf_index(body, 0)
+            i += 4 if wide else 2  # the offset
+            found[segment - 1][3] += len(body) - i if kind < 0xA2 else expanded(body, i, wide)
+        elif kind in (0xC2, 0xC3):
+            raise ValueError(f"{obj} has COMDAT records, which segments() does not read")
+    return [Segment(name, klass, size, min(loaded, size)) for name, klass, size, loaded in found]
+
+
+def is_code(segment: Segment) -> bool:
+    return segment.klass.upper().endswith("CODE")  # CODE, and the BASIC runtime's BC_CODE
+
+
+def code_bytes(obj: Path) -> int:
+    """Bytes of the object's code segments (a class named ...CODE): its SEGDEF lengths. The file's size counts
+    the fixup, symbol and debug records as well, which the linker consumes and the program lacks."""
+    return sum(one.size for one in segments(obj) if is_code(one))
+
+
+def data_bytes(obj: Path) -> tuple[int, int]:
+    """(initialised, uninitialised) bytes of the object's data segments, whatever their class (DATA, CONST, FAR_BSS, BC_VARS,
+    BC_SEGS): the bytes its LEDATA and LIDATA records carry, and the rest of each SEGDEF. Not the stack, nor debug records."""
+    kept = [one for one in segments(obj) if not is_code(one) and one.klass.upper() not in NOT_THE_PROGRAMS]
+    return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
 
 
 def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
