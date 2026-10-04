@@ -170,28 +170,39 @@ fn tried_sites<E: From<String>>(
     recursive: &BTreeSet<GlobalId>,
     caller: GlobalId,
     sites: &llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate>,
+    refused: &mut BTreeSet<(GlobalId, llrm_mir::module::InstId)>,
     costs: &OperationCosts,
     stage: &str,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
 ) -> Result<bool, E> {
-    let counts = inline::call_counts(module);
-    let kept = module.global(caller).function().expect("a procedure").clone();
-    let before = inline::size(module, caller, costs);
-    let (context, function) = function_mut(module, caller);
-    let by = inline::Caller { layout, recursive: recursive.contains(&caller) };
-    if !inline::expanded(context, function, &by, &Default::default(), Some(sites)).map_err(E::from)? {
-        return Ok(false);
-    }
-    modules.changed(caller);
-    modules.invalidate(&PreservedAnalyses::none());
-    reoptimised(module, modules, caller, stage)?;
-    if before.is_some_and(|before| grew(module, caller, &counts, private, costs, before)) {
-        *function_mut(module, caller).1 = kept;
+    let mut stayed = false;
+    // One site at a time, and one that was put back is not tried again: it is the same call in the
+    // same body every round (mdl_ai.c re-ran its pipeline some 600 times for 20 sites).
+    let untried: Vec<_> = sites.iter().filter(|(site, _)| !refused.contains(&(caller, **site))).collect();
+    for (&site, candidate) in untried {
+        let counts = inline::call_counts(module);
+        let kept = module.global(caller).function().expect("a procedure").clone();
+        let before = inline::size(module, caller, costs);
+        let (context, function) = function_mut(module, caller);
+        let by = inline::Caller { layout, recursive: recursive.contains(&caller) };
+        let one = llrm_support::hash::IndexMap::from_iter([(site, candidate.clone())]);
+        if !inline::expanded(context, function, &by, &Default::default(), Some(&one)).map_err(E::from)? {
+            refused.insert((caller, site));
+            continue;
+        }
         modules.changed(caller);
         modules.invalidate(&PreservedAnalyses::none());
-        return Ok(false);
+        reoptimised(module, modules, caller, stage)?;
+        if before.is_some_and(|before| grew(module, caller, &counts, private, costs, before)) {
+            *function_mut(module, caller).1 = kept;
+            modules.changed(caller);
+            modules.invalidate(&PreservedAnalyses::none());
+            refused.insert((caller, site));
+        } else {
+            stayed = true;
+        }
     }
-    Ok(true)
+    Ok(stayed)
 }
 
 /// Each of `more`, the callees the clocks admit and the bytes do not, tried (`trial`). Whether any stayed.
@@ -329,6 +340,7 @@ pub fn optimized<E: From<String>>(
     // What each body does, stated on it, is what inlining and the dead-call
     // removal below read.
     stamped_all(program, modules).map_err(E::from)?;
+    let mut refused: BTreeSet<(GlobalId, llrm_mir::module::InstId)> = BTreeSet::new();
     let mut inline_round = 0;
     loop {
         let mut changed = false;
@@ -352,7 +364,7 @@ pub fn optimized<E: From<String>>(
                     inline_round += 1;
                 }
                 // What only the clocks admit stays only where it comes to no more.
-                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, costs, "inline-trial.", reoptimised)? {
+                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, "inline-trial.", reoptimised)? {
                     changed = true;
                 }
             }
@@ -441,7 +453,7 @@ pub fn optimized<E: From<String>>(
                     inlined = true;
                 }
                 // What only the clocks admit stays only where it comes to no more.
-                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, costs, "ipa-inline-trial.", reoptimised)? {
+                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, "ipa-inline-trial.", reoptimised)? {
                     inlined = true;
                 }
             }
