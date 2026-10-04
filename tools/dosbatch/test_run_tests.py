@@ -50,3 +50,32 @@ class DiffTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CorpusTests(unittest.TestCase):
+    def test_a_program_whose_corpus_is_unavailable_is_skipped_with_the_reason(self):
+        """tests/run would have failed grep on every machine without the 10 MB file and a network."""
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as where:
+            source = Path(where) / "g.c"
+            source.write_text("// data: @dickens\nint main(void){return 0;}\n")
+            program = run_tests.Program(source, [], None, data=("@dickens",))
+            with mock.patch.object(run_tests.corpus, "path", side_effect=run_tests.corpus.Unavailable("dickens could not be fetched (offline?)")):
+                self.assertIn("offline", run_tests.unavailable(program))
+            with mock.patch.object(run_tests.corpus, "path", return_value=Path(where) / "dickens"):
+                self.assertIsNone(run_tests.unavailable(program))
+                self.assertEqual(run_tests.data_files(program), (Path(where) / "dickens",))
+
+
+class PlaceTests(unittest.TestCase):
+    def test_a_data_file_is_placed_once_and_linked_where_it_can_be(self):
+        with tempfile.TemporaryDirectory() as where:
+            source, a = Path(where) / "big", Path(where) / "A"
+            source.write_bytes(b"x" * 100)
+            run_tests.dosbatch.place(source, a)
+            self.assertEqual(a.stat().st_ino, source.stat().st_ino)
+            source.write_bytes(b"y" * 100)
+            a2 = Path(where) / "A"
+            run_tests.dosbatch.place(Path(where) / "other", a2)  # exists: nothing to do, not even a read of `other`
+            self.assertTrue(a2.exists())

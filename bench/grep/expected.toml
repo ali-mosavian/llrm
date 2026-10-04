@@ -1,0 +1,116 @@
+reason = "grep: Aho-Corasick over the 10 MB dickens text, timed only"
+blessed = "2026-10-05"
+
+[bas.O2]
+code_bytes = 1116
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 27949.7979
+
+[bas.Os]
+code_bytes = 1070
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 27949.9339
+
+[c.O2]
+code_bytes = 564
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3413.0037
+
+[c.Os]
+code_bytes = 534
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3412.8727
+
+[nib.O2]
+code_bytes = 1736
+data_bytes = 3157
+bss_bytes = 0
+kernel_ms = 4512.1705
+
+[nib.Os]
+code_bytes = 1628
+data_bytes = 3157
+bss_bytes = 0
+kernel_ms = 4511.1186
+
+[basown.O2]
+code_bytes = 1116
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 27949.7979
+
+[basown.Os]
+code_bytes = 1070
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 27949.9339
+
+[ow.O2]
+code_bytes = 544
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3828.4924
+
+[ow.Os]
+code_bytes = 517
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3553.7487
+
+[bcc.O2]
+code_bytes = 593
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3956.1316
+
+[bcc.Os]
+code_bytes = 613
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 3956.2157
+
+[tc.O2]
+code_bytes = 682
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 5050.0691
+
+[tc.Os]
+code_bytes = 673
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 5050.3344
+
+[tcpp.O2]
+code_bytes = 668
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 4914.1665
+
+[tcpp.Os]
+code_bytes = 661
+data_bytes = 81
+bss_bytes = 3056
+kernel_ms = 4914.0368
+
+[bc.O2]
+code_bytes = 1593
+data_bytes = 103
+bss_bytes = 14
+kernel_ms = 31359.9558
+
+[pds71.O2]
+code_bytes = 1565
+data_bytes = 103
+bss_bytes = 14
+kernel_ms = 30910.098
+
+[vbdos.O2]
+code_bytes = 1559
+data_bytes = 115
+bss_bytes = 14
+kernel_ms = 44656.392

@@ -35,6 +35,17 @@ BCC runs at `-3`, llrm and Open Watcom at 486.
 Every BASIC program is also built with `llrm-qb --own-frames` (a plain frame for the runtime's `B$ENRA`/`B$EXSA`) and recorded as
 `[basown.O2]` beside `[bas.O2]`, against the same BC references. Recursion pays for the runtime frame on every call: fib 14.9 ms against 5.0.
 
+## Timed-only: grep
+
+`bench/grep` (`timed_only = true` in its bench.toml) is Aho-Corasick over the 10 MB Silesia `dickens` text, read in 1K chunks
+through DOS (`input_read` in ext.asm for C, `OPEN`/`GET` for BASIC, `std.io` for Nib). The emulator would step ~10^8 instructions,
+so it has no counts: it is sized, and timed in DOSBox under `--time` over the whole file (28 s of emulated time in BASIC; the
+`--time` gate takes 2 minutes). Its output is checked there, since nothing else does. Its kernel time gates on its own, both ways,
+and as a ratio to each reference.
+
+The file is `tools/dosbatch/corpus.py`'s: fetched once from the Silesia site (the GitHub mirror is the fallback), cached in
+`~/.cache/llrm-bench`, and checked against its pinned SHA-256 on every use. Missing and offline, grep is skipped with a message.
+
 ## Size
 
 `code_bytes`, `data_bytes` and `bss_bytes` of each program's own object, from `tools/sizes.py`: the OMF object

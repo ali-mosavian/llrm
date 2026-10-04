@@ -51,6 +51,17 @@ nosound=true
 LOAD_LIMIT = 560_000
 
 
+def place(source: Path, target: Path) -> None:
+    """`source` as `target` in a job's directory: once for the whole launch, and a hard link where the volume allows
+    (a 10 MB corpus per job was 250 MB copied per run)."""
+    if target.exists():
+        return
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy(source, target)
+
+
 @dataclass(frozen=True)
 class Toolchain:
     """A Microsoft BASIC install, mounted as V:, and the runtime library its programs link."""
@@ -168,7 +179,7 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
         more = "".join(f"+{u}X{at}.OBJ" for at in range(len(job.objects)))
         link = f"{tools.link} /NOE{' /MAP' if job.map else ''} {u}.OBJ{more},{u}.EXE,,{libraries}; > {u}.LNK"
         for data in job.files:
-            shutil.copy(data, work / data.name.upper())
+            place(data, work / data.name.upper())
         if job.kind == "exe":
             shutil.copy(job.path, work / f"{u}.EXE")
         elif job.kind == "obj":
