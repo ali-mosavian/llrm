@@ -103,7 +103,9 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
         }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,
         Opcode::Ret | Opcode::Resume | Opcode::Unreachable => costs.return_,
-        Opcode::Br | Opcode::Switch => costs.branch,
+        Opcode::Br => costs.branch,
+        // Lowered as a compare and a jump for each case, then the jump for the rest.
+        Opcode::Switch => costs.branch + (instruction.operands.len() as i64 - 2) / 2 * (costs.add + costs.branch),
         _ => return None,
     };
     Some(price)
