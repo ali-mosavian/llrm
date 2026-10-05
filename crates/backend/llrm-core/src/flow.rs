@@ -7,6 +7,7 @@ use crate::support::hash::IndexMap;
 use iced_x86::Register;
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
+use crate::backend::narrowsplit;
 use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
@@ -43,6 +44,7 @@ pub fn machine<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        Box::new(narrowsplit::NarrowSplit { segments: segments.clone() }),
         Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.

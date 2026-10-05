@@ -40,6 +40,7 @@ pub mod isel;
 #[cfg(test)]
 mod isel_tests;
 pub mod loopslots;
+pub mod narrowsplit;
 pub mod lower_int64;
 pub mod machinecse;
 pub mod machinedce;
