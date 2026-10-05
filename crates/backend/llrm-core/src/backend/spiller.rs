@@ -76,11 +76,21 @@ impl Plan {
 
 /// `values` of `body` decided: how each is spilled, and the slots of those stored.
 pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Plan, Error> {
-    let constants = _constants(body, values);
-    let addresses = _addresses(body, values);
+    // A plain copy of a value made again is made again the same way.
+    let copies = _copies(body, values);
+    let wide: BTreeSet<u32> = values.iter().chain(copies.values()).copied().collect();
+    let constants = _through_copies(_constants(body, &wide), values, &copies);
+    let addresses = _through_copies(_addresses(body, &wide), values, &copies);
     let extensions = _extensions(body, values);
     let mut frame_loads = _stable_loads(body, values);
     frame_loads.extend(_frame_loads(body, values));
+    // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
+    let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
+    let homed = _frame_homes(body, &apart);
+    let copied = _through_copies(_stable_loads(body, &wide), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
+    for (value, cell) in copied {
+        frame_loads.entry(value).or_insert(cell);
+    }
     let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
     let frame_homes = _frame_homes(body, &unloaded);
     let mut rebuilt = frame_loads.clone();
@@ -855,6 +865,43 @@ pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
         && one.clobbers.is_empty()
         && one.group.is_none();
     alone.then(|| Arc::clone(one))
+}
+
+/// Each of `values` that one plain same-width `mov` copies from another value, and that value: made once, so the
+/// copy is made again as its source is (the one answer SsaSpill and the allocator both read).
+pub fn _copies(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+    let mut defined: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.insns() {
+        for value in &one.defines {
+            *defined.entry(*value).or_default() += 1;
+        }
+    }
+    let mut out = IndexMap::default();
+    for one in body.insns() {
+        let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { continue };
+        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
+        if what.op == Operation::Move
+            && one.group.is_none()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && one.clobbers.is_empty()
+            && what.name.as_deref() == Some("mov")
+            && dest.value == *value
+            && from.value == *source
+            && dest.width == from.width
+            && values.contains(value)
+            && defined.get(value) == Some(&1)
+            && defined.get(source) == Some(&1)
+        {
+            out.insert(*value, *source);
+        }
+    }
+    out
+}
+
+/// `found` (made for the values and their copies' sources) for `values`: a copy takes its source's.
+fn _through_copies<T: Clone>(found: IndexMap<u32, T>, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>) -> IndexMap<u32, T> {
+    values.iter().filter_map(|value| found.get(value).or_else(|| copies.get(value).and_then(|source| found.get(source))).map(|one| (*value, one.clone()))).collect()
 }
 
 /// Values loaded from a cell nothing changes before they are used again.
@@ -3028,6 +3075,18 @@ mod tests {
             assert_eq!(positions[1], positions[0] + 1);
             assert!(!insns.iter().any(|one| one.spill_reload));
         }
+    }
+
+    /// `mov v1, [global]` read back into `v2`, which is read once more: v2 is the load made again, not a slot.
+    #[test]
+    fn test_a_copy_of_a_global_load_is_made_again_not_stored() {
+        let cell = crate::model::ir::Mem { addr: Some(crate::model::ir::Addr::new(Space::Segment, 0)), ..crate::model::ir::Mem::new(None, 2) };
+        let load = insn(0, (0, 0), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), &[1], &[]);
+        let body = _body(vec![load, _move(2, 1, None, 0x10), _add(21, 2, 0x12), _add(22, 1, 0x14)]);
+        let mut frame = Frame::new(0);
+        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+        assert_eq!(frame.size(), 0, "a slot for a copy of a load");
+        assert!(!done.insns().iter().any(|one| one.spill_store || one.spill_reload));
     }
 
     #[test]

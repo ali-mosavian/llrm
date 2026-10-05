@@ -734,28 +734,20 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             out.insert(*value, Arc::clone(only));
         }
     }
-    // A plain copy of a value made again is made again the same way: its own.
-    for one in body.insns() {
-        let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { continue };
-        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
-        if what.op != Operation::Move || what.name.as_deref() != Some("mov") || dest.value != *value || from.value != *source || dest.width != from.width || !values.contains(value) {
-            continue;
-        }
-        if defining.get(value).is_none_or(|found| found.len() != 1) || out.contains_key(value) {
-            continue;
-        }
-        let Some(made) = out.get(source) else { continue };
-        // Made as wide as the copy is: the low word of a dword load is not that load.
-        let made_width = made.what.as_ref().and_then(|what| match what.dests.as_slice() { [Loc::Held(held)] => Some(held.width), _ => None });
-        if made_width != Some(dest.width) {
-            continue;
-        }
+    // A plain copy of a value made again is made again the same way: its own, as wide as it is.
+    for (value, source) in spiller::_copies(body, values) {
+        let Some(made) = out.get(&source) else { continue };
+        let width = made.what.as_ref().and_then(|what| match what.dests.as_slice() {
+            [Loc::Held(held)] => Some(held.width),
+            _ => None,
+        });
+        let Some(width) = width.filter(|_| !out.contains_key(&value)) else { continue };
         let mut copy = (**made).clone();
-        copy.defines = vec![*value];
+        copy.defines = vec![value];
         if let Some(what) = &mut copy.what {
-            what.dests = vec![Loc::Held(crate::model::ir::Held { value: *value, width: dest.width })];
+            what.dests = vec![Loc::Held(crate::model::ir::Held { value, width })];
         }
-        out.insert(*value, Arc::new(copy));
+        out.insert(value, Arc::new(copy));
     }
     out
 }
