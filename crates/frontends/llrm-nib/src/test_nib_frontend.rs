@@ -634,8 +634,8 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
     assert!(main.contains("call _bump"));
-    // `bump` is internal and called directly: it pops its own view, `ret 4`.
-    assert!(!main.contains("add sp, 4") && bump.contains("ret 4"), "{main}{bump}");
+    // `bump` is internal and called directly: it pops its own view, a stack pointer of one word, `ret 2`.
+    assert!(!main.contains("add sp, 2") && bump.contains("ret 2"), "{main}{bump}");
     assert!(bump.contains("es:["));
     assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }

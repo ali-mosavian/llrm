@@ -86,3 +86,12 @@ fn test_nib_passes_a_global_array_slice_as_its_offset() {
     let body = procedure(&asm, "_total");
     assert!(!body.contains("les ") && !body.contains("es:[") && body.contains("ret 4"), "{asm}");
 }
+
+/// Queens' `q` is a local array, so its far pointer is SS:offset: a callee given only that reads it
+/// through `ss:`, one word on the stack, where `les` loaded a segment for it at every call.
+#[test]
+fn test_nib_reads_a_local_array_slice_through_ss() {
+    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions"]);
+    let body = procedure(&asm, "_safe");
+    assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
+}

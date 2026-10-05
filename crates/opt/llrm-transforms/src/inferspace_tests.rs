@@ -25,9 +25,10 @@ b0:
     assert!(after.contains("load i16, ptr %") && !after.contains("load i16, ptr addrspace(1)"), "{after}");
 }
 
-/// A cast of a stack object makes SS:offset, which a near pointer, read through DS, is not.
+/// A cast of a stack object makes SS:offset: its near pointer is the stack segment's, which a DGROUP
+/// pointer, read through DS, is not unless SS is DS.
 #[test]
-fn a_cast_stack_object_stays_far() {
+fn a_cast_stack_object_is_read_as_a_stack_pointer() {
     let after = run("define i16 @f(i16 %i) {
 b0:
   %s = alloca [4 x i16]
@@ -37,7 +38,23 @@ b0:
   ret i16 %v
 }
 ");
-    assert!(after.contains("load i16, ptr addrspace(1) %a"), "{after}");
+    assert!(after.contains("load i16, ptr addrspace(5)") && !after.contains("load i16, ptr addrspace(1)") && !after.contains("load i16, ptr %"), "{after}");
+}
+
+/// A step of two objects is of neither space.
+#[test]
+fn a_pointer_that_may_be_a_stack_object_or_a_global_stays_far() {
+    let after = run("define i16 @f(i16 %i, i1 %c) {
+b0:
+  %s = alloca [4 x i16]
+  %x = addrspacecast ptr %s to ptr addrspace(1)
+  %y = addrspacecast ptr @g to ptr addrspace(1)
+  %w = select i1 %c, ptr addrspace(1) %x, ptr addrspace(1) %y
+  %v = load i16, ptr addrspace(1) %w
+  ret i16 %v
+}
+");
+    assert!(after.contains("load i16, ptr addrspace(1) %w"), "{after}");
 }
 
 /// A pointer a call reads needs its selector: it stays far, and the load beside it reads the near one.

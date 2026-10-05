@@ -44,15 +44,32 @@ b0:
     assert!(!after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
 }
 
-/// A stack object's selector is SS: no near pointer says so.
+/// A stack object's selector is SS, which no DGROUP pointer says: the parameter is the stack's.
 #[test]
-fn a_far_parameter_a_call_fills_from_the_stack_stays_far() {
+fn a_far_parameter_every_call_fills_from_the_stack_is_a_stack_pointer() {
     let after = run(&format!("{CALLEE}define i16 @top() {{
 b0:
   %s = alloca [16 x i16]
   %w = addrspacecast ptr %s to ptr addrspace(1)
   %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
   ret i16 %r
+}}
+"));
+    assert!(after.contains("@sum(ptr addrspace(5) %") && !after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
+}
+
+/// One call from the stack and one from a global: no one space holds both.
+#[test]
+fn a_parameter_filled_from_the_stack_and_from_a_global_stays_far() {
+    let after = run(&format!("{CALLEE}define i16 @top() {{
+b0:
+  %s = alloca [16 x i16]
+  %w = addrspacecast ptr %s to ptr addrspace(1)
+  %x = addrspacecast ptr @g to ptr addrspace(1)
+  %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
+  %q = call i16 @sum(ptr addrspace(1) %x, i16 3)
+  %t = add i16 %r, %q
+  ret i16 %t
 }}
 "));
     assert!(after.contains("@sum(ptr addrspace(1) %a"), "{after}");

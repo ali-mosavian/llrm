@@ -3884,3 +3884,37 @@ fn test_a_volatile_load_is_not_folded_past_another_volatile_access() {
         assert!(first("g") < first("h"), "{lines:?}");
     }
 }
+
+/// A pointer into the stack segment is a word read and written through `ss:`, whatever DS holds:
+/// the segment is the space's, not DGROUP's.
+#[test]
+fn a_near_stack_pointer_is_read_and_written_through_ss() {
+    let body = listing(
+        "define i16 @get(ptr addrspace(5) %p, i16 %i) {
+b0:
+  %a = getelementptr i16, ptr addrspace(5) %p, i16 %i
+  %v = load i16, ptr addrspace(5) %a
+  store i16 %i, ptr addrspace(5) %p
+  ret i16 %v
+}
+",
+        "get",
+    );
+    let text = body.join("\n");
+    assert!(text.contains("ss:[") && !text.contains("es:[") && !text.contains("ds:["), "{text}");
+}
+
+/// A stack pointer made far is SS and its offset.
+#[test]
+fn a_near_stack_pointer_made_far_has_ss_for_its_selector() {
+    let body = listing(
+        "define ptr addrspace(1) @far(ptr addrspace(5) %p) {
+b0:
+  %w = addrspacecast ptr addrspace(5) %p to ptr addrspace(1)
+  ret ptr addrspace(1) %w
+}
+",
+        "far",
+    );
+    assert!(body.iter().any(|line| line.contains(", ss")), "{body:?}");
+}
