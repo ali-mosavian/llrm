@@ -351,7 +351,7 @@ fn most_live(body: &LirBody, member: impl Fn(u32) -> bool) -> usize {
 fn test_selectors_live_at_once_fit_the_segment_registers() {
     let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
     let selectors = |body: &LirBody| {
-        let classes = crate::backend::allocate::classes(body, &BTreeSet::new(), &target::BUILT_IN);
+        let classes = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN);
         most_live(body, |value| classes.get(&value).is_some_and(|class| class.iter().all(|one| target::BUILT_IN.selectors.contains(one))))
     };
     assert!(selectors(&body) > target::BUILT_IN.selectors.len(), "premise: more selectors live than registers");

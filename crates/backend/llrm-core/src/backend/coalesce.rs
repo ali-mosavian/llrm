@@ -11,7 +11,7 @@ use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment};
-use crate::backend::allocate;
+use crate::backend::{allocate, regclass};
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody, Phi};
@@ -71,7 +71,7 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
     let mut live = ranges::intervals(body, Some(&index));
     let masks = allocate::_masks(body, &index, segments);
     let mut widths = allocate::_widest(body);
-    let where_of = allocate::classes(body, &BTreeSet::new(), segments);
+    let where_of = regclass::classes(body, &BTreeSet::new(), segments);
     let everything: BTreeSet<Register> = target::AVAILABLE.into_iter().collect();
     let mut may: IndexMap<u32, BTreeSet<Register>> = live
         .keys()

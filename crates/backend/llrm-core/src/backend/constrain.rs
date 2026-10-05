@@ -10,7 +10,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
-use crate::backend::{spiller, target};
+use crate::backend::{regclass, spiller, target};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 
@@ -959,7 +959,7 @@ mod tests {
         let insns = split.insns();
         let copies: Vec<_> =
             insns.iter().filter(|one| what(one).name.as_deref() == Some("mov") && one.uses == vec![1]).collect();
-        let confined = allocate::classes(&split, &BTreeSet::new(), &target::BUILT_IN);
+        let confined = crate::backend::regclass::classes(&split, &BTreeSet::new(), &target::BUILT_IN);
 
         assert_eq!(opened, BTreeSet::from([1]));
         assert_eq!(copies.len(), 2);
