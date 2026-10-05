@@ -729,13 +729,14 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             out.insert(*value, Arc::clone(one));
         }
     }
-    for value in spiller::_stable_loads(body, values).keys() {
+    let copies = spiller::_copies(body, values);
+    for value in spiller::_stable_loads_through(body, values, &copies).keys() {
         if let Some([only]) = defining.get(value).map(Vec::as_slice) {
             out.insert(*value, Arc::clone(only));
         }
     }
     // A plain copy of a value made again is made again the same way: its own, as wide as it is.
-    for (value, source) in spiller::_copies(body, values) {
+    for (value, source) in copies {
         let Some(made) = out.get(&source) else { continue };
         let width = made.what.as_ref().and_then(|what| match what.dests.as_slice() {
             [Loc::Held(held)] => Some(held.width),
