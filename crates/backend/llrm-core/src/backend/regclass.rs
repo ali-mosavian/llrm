@@ -27,6 +27,13 @@ fn _restrict(out: &mut Classes, value: u32, choices: &BTreeSet<Register>) {
 
 /// The register class each value is confined to, where it is confined.
 pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments) -> Classes {
+    classes_with(body, prefer_indexes, segments, false)
+}
+
+/// `classes`; `optimistic` is the checker's reading of a body the coalescer has not merged yet: the two sides of a phi
+/// edge's copy also join, and address classes are read through webs. An allocator cannot take that, the two sides being
+/// values of their own, and SsaSpill does not price it yet.
+pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool) -> Classes {
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
@@ -110,37 +117,14 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
         }
     }
     _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments);
+    _through_webs(body, &selecting, &numeric, &selectors, optimistic, &mut out);
     out
 }
 
-/// `classes`, with a phi's result and arguments, and the two sides of a phi edge's copy, taking one class: they are
-/// one value once the coalescer has merged them. A value that only a phi or such a copy reads, as one a loop reads
-/// through its header phi is, has no class of its own.
-pub fn classes_through_webs(body: &LirBody, segments: &Segments) -> Classes {
-    let mut out = classes(body, &BTreeSet::new(), segments);
-    let (mut selecting, mut numeric): (BTreeSet<u32>, BTreeSet<u32>) = (BTreeSet::new(), BTreeSet::new());
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        let Some(what) = &one.what else { continue };
-        for place in what.dests.iter().chain(&what.sources) {
-            match place {
-                Loc::Mem(cell) => {
-                    selecting.extend(cell.selector.map(|selector| selector.value));
-                    numeric.extend(cell.base.map(|base| base.value));
-                    numeric.extend(cell.index.map(|index| index.value));
-                }
-                Loc::Held(held) if held.width != 2 || !_SEGMENT_OPERANDS.contains(&what.op) => {
-                    numeric.insert(held.value);
-                }
-                _ => {}
-            }
-        }
-    }
-    let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
-    _through_webs(body, &selecting, &numeric, &selectors, &mut out);
-    out
-}
-
-fn _through_webs(body: &LirBody, selecting: &BTreeSet<u32>, numeric: &BTreeSet<u32>, selectors: &BTreeSet<Register>, out: &mut Classes) {
+/// A phi's result and arguments, and the two sides of a phi edge's copy, are one value once the coalescer has merged
+/// them: each takes the class of the web. A value that only a phi or such a copy reads, as one a loop reads through
+/// its header phi is, has no class of its own.
+fn _through_webs(body: &LirBody, selecting: &BTreeSet<u32>, numeric: &BTreeSet<u32>, selectors: &BTreeSet<Register>, optimistic: bool, out: &mut Classes) {
     let mut web: IndexMap<u32, u32> = IndexMap::default();
     fn find(web: &mut IndexMap<u32, u32>, value: u32) -> u32 {
         let up = *web.entry(value).or_insert(value);
@@ -157,7 +141,7 @@ fn _through_webs(body: &LirBody, selecting: &BTreeSet<u32>, numeric: &BTreeSet<u
             web.insert(one, other);
         }
     }
-    for one in body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.group.is_some()) {
+    for one in body.blocks.iter().flat_map(|block| &block.insns).filter(|one| optimistic && one.group.is_some()) {
         if let ([into], [from]) = (one.defines.as_slice(), one.uses.as_slice()) {
             let (a, b) = (find(&mut web, *into), find(&mut web, *from));
             web.insert(a, b);
@@ -169,24 +153,29 @@ fn _through_webs(body: &LirBody, selecting: &BTreeSet<u32>, numeric: &BTreeSet<u
         members.entry(top).or_default().push(value);
     }
     for list in members.values().filter(|list| list.len() > 1) {
-        let mut class: Option<BTreeSet<Register>> = None;
+        // The web has a class where its members agree; a member that has one of its own keeps it, as the allocator
+        // copies between members of different classes.
+        let mut agreed: Option<BTreeSet<Register>> = None;
+        let mut agree = true;
         for value in list {
             if let Some(mine) = out.get(value) {
-                class = Some(match class {
-                    Some(so_far) => so_far.intersection(mine).copied().collect(),
-                    None => mine.clone(),
-                });
+                match &agreed {
+                    Some(so_far) if so_far != mine => agree = false,
+                    Some(_) => {}
+                    None => agreed = Some(mine.clone()),
+                }
             }
         }
-        if list.iter().any(|value| selecting.contains(value)) && !list.iter().any(|value| numeric.contains(value)) {
-            class = Some(match class {
-                Some(so_far) => so_far.intersection(selectors).copied().collect(),
-                None => selectors.clone(),
-            });
+        if agree && agreed.is_none() && list.iter().any(|value| selecting.contains(value)) && !list.iter().any(|value| numeric.contains(value)) {
+            agreed = Some(selectors.clone());
         }
-        if let Some(class) = class {
-            for value in list {
-                out.insert(*value, class.clone());
+        // Address classes are the checker's reading only: SsaSpill holds fewer values where it sees them, which the
+        // allocator's own spills do not make up for (deedlines COPPER -Os: 112k reloads, 140k with them).
+        let wanted = optimistic || agreed.as_ref().is_some_and(|class| class.iter().all(|register| selectors.contains(register)));
+        if let (true, true, Some(class)) = (agree, wanted, agreed) {
+            let bare: Vec<u32> = list.iter().copied().filter(|value| !out.contains_key(value)).collect();
+            for value in bare {
+                out.insert(value, class.clone());
             }
         }
     }
@@ -344,7 +333,7 @@ fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
 /// waits in another class's register; one with some cannot, whatever the allocator does. `skip` names the values
 /// another pass places (x87, pinned, inputs).
 pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>) -> Vec<Violation> {
-    let confined = classes_through_webs(body, segments);
+    let confined = classes_with(body, &BTreeSet::new(), segments, true);
     let (_, live_out) = crate::backend::allocate::live(body);
     let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
     let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
@@ -456,8 +445,7 @@ mod tests {
         let exit = LirBlock { at: 2, insns: vec![make(6, vec![], vec![loaded], semantics(Operation::Return, "ret", vec![], vec![], None))], succ: vec![], phis: vec![], cold: false };
         let body = LirBody::new("f", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
         let segments = &target::BUILT_IN;
-        assert!(classes(&body, &BTreeSet::new(), segments).get(&entry_segment).is_none(), "premise: it has no class of its own");
-        let webs = classes_through_webs(&body, segments);
+        let webs = classes(&body, &BTreeSet::new(), segments);
         assert_eq!(webs.get(&entry_segment), webs.get(&segment));
         assert!(webs.get(&entry_segment).is_some());
     }
