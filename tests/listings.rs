@@ -140,7 +140,8 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
     let corpus = root.join("tests/run/huge");
     let mut stems: Vec<String> = std::fs::read_dir(&corpus).unwrap().flatten().filter_map(|one| {
         let path = one.path();
-        (path.extension()? == "nib").then(|| path.file_stem().unwrap().to_string_lossy().into_owned())
+        // A program with no BASIC variant (copyw, fillw) has nothing to compare against.
+        (path.extension()? == "nib" && path.with_extension("bas").exists()).then(|| path.file_stem().unwrap().to_string_lossy().into_owned())
     }).collect();
     stems.sort();
     assert!(stems.len() >= 5, "premise: the corpus is found: {stems:?}");
