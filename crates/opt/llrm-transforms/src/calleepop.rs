@@ -6,10 +6,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_mir::callgraph::addressed;
+use llrm_mir::callgraph::direct_only;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{GlobalKind, InstId, Linkage, Module, Operand};
+use llrm_mir::module::{GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::{FAST, Opcode};
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
 use llrm_mir::target::OperationCosts;
@@ -50,7 +50,7 @@ impl ModulePass for CalleePop {
 /// with C's convention, and called often enough that what each return costs is paid for by
 /// what each call saves, a word of arguments at least.
 fn decided(module: &Module, costs: &OperationCosts, layout: &DataLayout) -> (BTreeSet<GlobalId>, Vec<(GlobalId, InstId)>) {
-    let named = addressed(module);
+    let internal = direct_only(module);
     let mut calls: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>> = BTreeMap::new();
     let mut other: BTreeSet<GlobalId> = BTreeSet::new();
     for (caller, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
@@ -70,18 +70,16 @@ fn decided(module: &Module, costs: &OperationCosts, layout: &DataLayout) -> (BTr
         .iter()
         .filter(|(callee, sites)| {
             let callee = **callee;
-            let global = module.global(callee);
-            let Some(function) = global.function() else { return false };
+            let Some(function) = module.global(callee).function() else { return false };
             let (_, parameters, variadic) = module.signature(function.ty);
             // The stack words its arguments take: each a word at least, a dword or a far pointer two.
             let words: i64 = parameters.iter().map(|&ty| (layout.alloc_size(&module.context.types, ty).max(2) as i64 + 1) / 2).sum();
             let returns = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Ret)).count() as i64;
             !function.is_declaration()
-                && matches!(global.linkage, Linkage::Internal | Linkage::Private)
+                && internal.contains(&callee)
                 && function.calling_convention == 0
                 && !variadic
                 && !parameters.is_empty()
-                && !named.contains(&callee)
                 && !other.contains(&callee)
                 // A pop's worth of bytes saved is not worth an instruction more at every call.
                 && sites.len() as i64 * costs.cleanup(words) + costs.pop >= returns * costs.return_pops

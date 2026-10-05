@@ -449,7 +449,7 @@ fn test_nbody_native_loops_eliminate_redundant_index_arithmetic() {
 fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
     // -O2 unrolls the loop away.
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &os_calls_kept());
-    let function = between(&assembly, "_nbody proc far", "_nbody endp");
+    let function = between(&assembly, "_nbody proc near", "_nbody endp");
     // The innermost loop closing on `jne` that adds each velocity to its position.
     let loop_ = Regex::new(r"(?m)^(L\w+):\n")
         .unwrap()
@@ -472,7 +472,7 @@ fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
 #[test]
 fn test_nbody_velocity_fields_are_stored_once_per_update() {
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
-    let function = between(&assembly, "_nbody proc far", "_nbody endp");
+    let function = between(&assembly, "_nbody proc near", "_nbody endp");
     // The only stores through a body's index are its velocity's two fields.
     let stored: Vec<String> = Regex::new(r"mov dword ptr (\[bp\+[sd]i[-+]\d+\]), e(?:ax|bx|cx|dx|si|di)\n")
         .unwrap()
@@ -519,7 +519,7 @@ fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
 
     // -O2 unrolls the loop away.
     let assembly = listing_on(&parsed(&source), "main", &os_calls_kept(), "486");
-    let update = between(&assembly, "_update proc far", "_update endp");
+    let update = between(&assembly, "_update proc near", "_update endp");
 
     // -5 * sizeof(sample), with sizeof(sample) == 10.
     let offset = Regex::new(r"    mov ([sd]i), -50\n").unwrap().captures(update).unwrap_or_else(|| panic!("{update}"))[1].to_owned();
@@ -627,15 +627,15 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert_eq!(pointer_type.address, model::AddressKind::Far);
 
     let assembly = listing_on(&program, "main", &O2(), "486");
-    let bump = between(&assembly, "_bump proc far", "_bump endp");
+    let bump = between(&assembly, "_bump proc near", "_bump endp");
     let main = between(&assembly, "_main proc far", "_main endp");
     // The payload's address is the view's pointer, the view's address the argument.
     let payload = Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1].to_owned();
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
-    assert!(main.contains("call far ptr _bump"));
-    // `bump` is internal and called directly: it pops its own view, `retf 4`.
-    assert!(!main.contains("add sp, 4") && bump.contains("retf 4"), "{main}{bump}");
+    assert!(main.contains("call _bump"));
+    // `bump` is internal and called directly: it pops its own view, `ret 4`.
+    assert!(!main.contains("add sp, 4") && bump.contains("ret 4"), "{main}{bump}");
     assert!(bump.contains("es:["));
     assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
 }
@@ -660,7 +660,7 @@ fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
     let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2(), "486");
     let main = between(&assembly, "_main proc far", "_main endp");
 
-    assert!(main.contains("call far ptr _sum"), "premise: the call stays\n{main}");
+    assert!(main.contains("call _sum"), "premise: the call stays\n{main}");
 
     assert!((1..7).all(|value| main.contains(&format!(", {value}"))));
 }
@@ -699,7 +699,7 @@ fn test_array_parameter_is_one_unsized_view_pointer() {
 fn test_runtime_bounded_array_loop_advances_its_payload_address() {
     // sum rebuilt `payload + index * 2` on every trip despite its invariant runtime bound.
     let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2(), "486");
-    let function = between(&assembly, "_sum proc far", "_sum endp");
+    let function = between(&assembly, "_sum proc near", "_sum endp");
     let hot = closed_on_jne(function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
 
     assert!(!Regex::new(r"\b(?:imul|shl|lea)\b").unwrap().is_match(&hot), "{hot}");
@@ -1044,10 +1044,10 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     assert!(rolled(11));
 }
 
-/// `_sum_three proc far` .. `endp` for the 486.
+/// `_sum_three proc near` .. `endp` for the 486.
 fn sum_three_on_486() -> String {
     let assembly = listing_on(&parsed(&fixture("sum_three.nib")), "main", &O2(), "486");
-    between(&assembly, "_sum_three proc far", "_sum_three endp").to_owned()
+    between(&assembly, "_sum_three proc near", "_sum_three endp").to_owned()
 }
 
 /// Python's `re.search(r"(L\w+):\n(?:.*\n)*?\s*jne\s+\1\n", function)`: from the first
@@ -1092,7 +1092,7 @@ fn column_loop() -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "column.nib", COLUMN);
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
-    let function = between(&assembly, "_column proc far", "_column endp");
+    let function = between(&assembly, "_column proc near", "_column endp");
     closed_on_jne(function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"))
 }
 
@@ -1655,7 +1655,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n",
     );
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
-    let mix = between(&assembly, "_mix proc far", "_mix endp");
+    let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
     assert_eq!(found[1], found[2], "{mix}");
@@ -1737,7 +1737,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n";
     assert!(source.contains("asm("), "the shape that was refused");
     let assembly = rich(&directory, "blocks.nib", source);
-    let mix = between(&assembly, "_mix proc far", "_mix endp");
+    let mix = between(&assembly, "_mix proc near", "_mix endp");
     let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
     assert_eq!(found[1], found[2], "{mix}");
@@ -2042,7 +2042,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     // The memory operands of `bump`'s loop: from the label its backward
     // jump names to that jump.
     let looped = |assembly: &str| -> usize {
-        let body = between(assembly, "_bump proc far\n", "_bump endp");
+        let body = between(assembly, "_bump proc near\n", "_bump endp");
         let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
         let (head, end) = jump
             .captures_iter(body)
@@ -2112,7 +2112,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
     let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
-    let body = between(&assembly, "_total proc far\n", "_total endp");
+    let body = between(&assembly, "_total proc near\n", "_total endp");
     // The loop: from the label its backward jump names to that jump.
     let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
     let (head, end) = jump
@@ -2138,7 +2138,7 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
     let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
-    let body = between(&assembly, "_f proc far\n", "_f endp");
+    let body = between(&assembly, "_f proc near\n", "_f endp");
     assert!(!body.contains(", 0\n"), "{body}");
 }
 
@@ -2477,4 +2477,25 @@ fn test_a_huge_module_array_is_not_borrowed() {
     let directory = tempfile::tempdir().unwrap();
     let error = refused(&written(&directory, "view.nib", source));
     assert!(error.contains("only indexed"), "{error}");
+}
+
+const RECURSIVE: &str = "fn down(n: i16) -> i16:\n    if n == 0:\n        return 0\n    return down(n - 1) + n\n\n@export(\"cdecl16\")\nfn up(n: i16) -> i16:\n    return down(n)\n\nfn main() -> i16:\n    print(up(3))\n    return 0\n";
+
+#[test]
+fn test_an_internal_function_only_called_directly_is_entered_by_a_near_call() {
+    // Every Nib procedure was far: a 6-byte frame offset, retf, and a segment pushed per call.
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "near.nib", RECURSIVE);
+    let text = listing(&parsed(&source), "main", &level("O2"));
+    assert!(text.contains("_down proc near"), "{text}");
+    assert!(text.contains("_up proc far"), "{text}");
+    assert!(!between(&text, "_down proc near", "_down endp").contains("retf"), "{text}");
+}
+
+#[test]
+fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() {
+    // With a segment per procedure, a near call between them was refused: "a near call to _down in another code segment".
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "near.nib", RECURSIVE);
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
 }

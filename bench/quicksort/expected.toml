@@ -1,4 +1,4 @@
-reason = "Nib's loop bounds checks proved from the view length's range and the first-trip test (#453)"
+reason = "Nib: an unexported procedure only called directly is entered by a near call (call/ret, 4-byte frame offset), as C's static"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 136880
 code_bytes = 553
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.6559
+kernel_ms = 3.656
 
 [bas.Os]
 instructions = 259058
@@ -15,7 +15,7 @@ memory_operands = 136880
 code_bytes = 504
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.5148
+kernel_ms = 3.5144
 
 [c.O2]
 instructions = 163105
@@ -34,20 +34,20 @@ bss_bytes = 0
 kernel_ms = 1.9907
 
 [nib.O2]
-instructions = 187687
+instructions = 185643
 memory_operands = 78339
-code_bytes = 531
+code_bytes = 523
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.5085
+kernel_ms = 2.4812
 
 [nib.Os]
-instructions = 183840
+instructions = 181795
 memory_operands = 85199
-code_bytes = 465
+code_bytes = 457
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.4623
+kernel_ms = 2.435
 
 [basown.O2]
 instructions = 225989
@@ -63,7 +63,7 @@ memory_operands = 113705
 code_bytes = 506
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 2.8966
+kernel_ms = 2.8964
 
 [ow.O2]
 instructions = 239036

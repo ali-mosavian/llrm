@@ -2024,7 +2024,7 @@ impl<'a> FunctionCompiler<'a> {
             facts: self.stated.finish(),
             calls: self.calls,
             exported: self.signature.exported,
-            abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types)),
+            abi: hir::ProcedureAbi::of(self.signature.abi, self.signature.argument_bytes(&self.types), self.signature.exported),
             named_parameters: self.named_parameters,
         };
         Ok(Compiled { function, lends, references, borrowed, escapes })

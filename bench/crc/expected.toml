@@ -1,4 +1,4 @@
-reason = "ASC, LEN and MID$ inline from the runtime description (#456): crc BASIC 2599 -> 1055 instructions, grep BASIC kernel 27950 -> 3887 ms"
+reason = "Nib: an unexported procedure only called directly is entered by a near call (call/ret, 4-byte frame offset), as C's static"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -36,7 +36,7 @@ kernel_ms = 0.0103
 [nib.O2]
 instructions = 488
 memory_operands = 18
-code_bytes = 288
+code_bytes = 286
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0097
@@ -44,7 +44,7 @@ kernel_ms = 0.0097
 [nib.Os]
 instructions = 639
 memory_operands = 18
-code_bytes = 128
+code_bytes = 126
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0117

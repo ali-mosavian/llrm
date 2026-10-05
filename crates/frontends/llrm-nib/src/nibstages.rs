@@ -126,7 +126,7 @@ mod tests {
         let argv = [source.display().to_string(), "-O2".into(), "-fno-inline-functions".into(), "-fno-unroll-loops".into(), "-fno-peel-loops".into(), "--dump".into(), output.display().to_string()];
         assert_eq!(crate::cli::main(&argv), 0);
         let listing = dumped_listing(&output);
-        let body = listing.split("_bump proc far\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");
+        let body = listing.split("_bump proc near\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");
         // The loop: from the label its backward jump names to that jump.
         let jump = regex::Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
         let (head, end) = jump

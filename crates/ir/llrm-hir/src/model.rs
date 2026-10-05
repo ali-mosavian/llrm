@@ -157,6 +157,8 @@ str_enum!(FloatReturn {
 str_enum!(CallDistance {
     Near("NEAR") = "near",
     Far("FAR") = "far",
+    // No caller outside its module and no runtime enters it: near where every call of it is direct.
+    Any("ANY") = "any",
     // Entered by INT or an IRQ, left by `iret`.
     Interrupt("INTERRUPT") = "interrupt",
 });

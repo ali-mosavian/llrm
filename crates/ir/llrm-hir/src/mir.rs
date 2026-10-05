@@ -822,7 +822,7 @@ fn convention(cleanup: model::StackCleanup, distance: model::CallDistance) -> Em
     };
     let space = match distance {
         model::CallDistance::Near => 0,
-        model::CallDistance::Far => FAR,
+        model::CallDistance::Far | model::CallDistance::Any => FAR,
         // Entered with the flags pushed and left by iret, as LLVM's x86_intrcc.
         model::CallDistance::Interrupt => return Ok((llrm_mir::opcode::X86_INTR, FAR)),
     };
@@ -873,6 +873,11 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     };
     let global = module.add_function(&function.name, ty, linkage)?;
     place_function(module, global, abi);
+    if function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Any) {
+        if let llrm_mir::GlobalKind::Function(placed) = &mut module.globals[global.0 as usize].kind {
+            placed.attrs.push(Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+        }
+    }
     Ok((global, abi.0))
 }
 

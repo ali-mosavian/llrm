@@ -44,6 +44,7 @@ pub struct Registers {
 /// `module` as masm, its code in the segment `code`.
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
+    let module = &*crate::backend::nearcode::placed(module);
     let mut names = globals::names(module, &|name| abi.linked(name))?;
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();

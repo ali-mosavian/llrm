@@ -1,5 +1,5 @@
-reason = "Nib gets a start-up program, so kernel_ms"
-blessed = "2026-10-04"
+reason = "Nib: an unexported procedure only called directly is entered by a near call (call/ret, 4-byte frame offset), as C's static"
+blessed = "2026-10-05"
 
 [bas.O2]
 instructions = 158
@@ -34,20 +34,20 @@ bss_bytes = 4
 kernel_ms = 0.0019
 
 [nib.O2]
-instructions = 67
+instructions = 64
 memory_operands = 16
-code_bytes = 186
+code_bytes = 180
 data_bytes = 4
 bss_bytes = 0
 kernel_ms = 0.0029
 
 [nib.Os]
-instructions = 60
+instructions = 57
 memory_operands = 16
-code_bytes = 168
+code_bytes = 162
 data_bytes = 4
 bss_bytes = 0
-kernel_ms = 0.0029
+kernel_ms = 0.0028
 
 [basown.O2]
 instructions = 64
