@@ -635,27 +635,18 @@ fn simulated_with(
                 *preds.entry(*to).or_default() += 1;
             }
         }
-        let critical: BTreeSet<(i64, i64)> = body.blocks.iter().filter(|block| block.succ.len() > 1).flat_map(|block| block.succ.iter().filter(|to| preds.get(*to).is_some_and(|count| *count > 1)).map(move |to| (block.at, *to))).collect();
+        // Only where the edge is hot, as frequencies guess a cold one at a trip or so and a loop runs it for real.
+        let critical: BTreeSet<(i64, i64)> = body
+            .blocks
+            .iter()
+            .filter(|block| block.succ.len() > 1)
+            .flat_map(|block| block.succ.iter().filter(|to| preds.get(*to).is_some_and(|count| *count > 1) && frequency.edge(block.at, **to) >= 8.0).map(move |to| (block.at, *to)))
+            .collect();
         let mut best = traffic(&result, weights, prices, &critical);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
-            let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
-            let moved = traffic(&tried, weights, prices, &critical);
-            if moved < best {
-                best = moved;
-                result = tried;
-                dropped = trial;
-            }
-        }
-        // And a value a loop's back edge reloads on a bridge is read where it is used instead, if that moves less.
-        let bridged: Vec<(i64, u32)> = result.across.iter().filter(|(edge, _)| critical.contains(edge) && place[&edge.0] >= place[&edge.1]).flat_map(|((_, to), values)| values.iter().map(move |value| (*to, *value))).collect();
-        for (header, value) in bridged {
-            let mut trial = dropped.clone();
-            if !trial.entry(header).or_default().insert(value) {
-                continue;
-            }
             let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
             let moved = traffic(&tried, weights, prices, &critical);
             if moved < best {
