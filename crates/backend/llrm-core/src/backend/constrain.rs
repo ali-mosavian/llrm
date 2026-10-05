@@ -365,6 +365,12 @@ pub fn distinct_classes(body: &LirBody, floor: u32, segments: &target::Segments)
             peeled.insert((one.block, one.insn, *value, one.role as u8));
         }
     }
+    peeled_body(body, floor, &peeled)
+}
+
+/// `body` with each read in `peeled` (block, instruction, value, role) taking a copy of its own, made just before the
+/// instruction and live across it alone. A write is not moved.
+fn peeled_body(body: &LirBody, floor: u32, peeled: &BTreeSet<(usize, usize, u32, u8)>) -> LirBody {
     if peeled.is_empty() {
         return body.clone();
     }
@@ -1107,4 +1113,59 @@ mod tests {
         assert_eq!(insns.len(), 4, "one copy");
         assert!(insns[1].defines.len() == 1 && insns[1].uses == [1], "the copy reads the index");
     }
+}
+
+/// EXPERIMENT: the through values of an innermost loop that are word address registers, taking a copy for each read.
+pub fn peel_loop_pairs(body: &LirBody, floor: u32, threshold: usize) -> LirBody {
+    let found = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
+    let (live_in, live_out) = crate::backend::allocate::live(body);
+    let mut peeled: BTreeSet<(usize, usize, u32, u8)> = BTreeSet::new();
+    for one in &found {
+        if found.iter().any(|other| other.header != one.header && one.body.contains(&other.header)) {
+            continue;
+        }
+        let through: BTreeSet<u32> = live_in[&one.header].iter().copied().filter(|value| one.latches.iter().all(|latch| live_out[latch].contains(value))).collect();
+        let mut members: BTreeSet<u32> = BTreeSet::new();
+        for at in &one.body {
+            for insn in body.blocks.iter().find(|block| block.at == *at).into_iter().flat_map(|block| &block.insns) {
+                let Some(what) = &insn.what else { continue };
+                for place in what.dests.iter().chain(&what.sources) {
+                    if let Loc::Mem(cell) = place {
+                        if let (Some(base), Some(index)) = (cell.base, cell.index) {
+                            if base.width == 2 && index.width == 2 && cell.scale == 1 {
+                                for value in [base.value, index.value] {
+                                    if through.contains(&value) {
+                                        members.insert(value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if members.len() < threshold {
+            continue;
+        }
+        for (at, block) in body.blocks.iter().enumerate().filter(|(_, block)| one.body.contains(&block.at)) {
+            for (position, insn) in block.insns.iter().enumerate() {
+                let Some(what) = &insn.what else { continue };
+                for place in what.dests.iter().chain(&what.sources) {
+                    if let Loc::Mem(cell) = place {
+                        if let (Some(base), Some(index)) = (cell.base, cell.index) {
+                            if base.width == 2 && index.width == 2 && cell.scale == 1 {
+                                if members.contains(&base.value) {
+                                    peeled.insert((at, position, base.value, regclass::Role::Base as u8));
+                                }
+                                if members.contains(&index.value) {
+                                    peeled.insert((at, position, index.value, regclass::Role::Index as u8));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    peeled_body(body, floor, &peeled)
 }

@@ -506,6 +506,8 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
 fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
+    let peeled = std::env::var("PEELPAIRS").ok().and_then(|n| n.parse::<usize>().ok()).map(|n| crate::backend::constrain::peel_loop_pairs(body, spiller::_next_value(body), n));
+    let body = peeled.as_ref().unwrap_or(body);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
