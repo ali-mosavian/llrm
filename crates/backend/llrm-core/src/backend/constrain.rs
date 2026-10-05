@@ -979,3 +979,84 @@ mod tests {
         assert!(opened.is_empty());
     }
 }
+
+/// `body` with, where the values an instruction acts on cannot each take a register of their class, a copy of a
+/// value it reads only as a plain operand: that read takes any register, and the value's class (from its other
+/// reads, as a base) is the one another operand needs.
+pub fn split_unmatched(body: &LirBody, segments: &target::Segments, floor: u32) -> LirBody {
+    let confined = regclass::classes(body, &BTreeSet::new(), segments);
+    let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
+    let class_of = |value: u32, relaxed: &BTreeSet<u32>| -> BTreeSet<Register> {
+        match confined.get(&value) {
+            Some(class) if !relaxed.contains(&value) => class.iter().map(|one| crate::backend::allocate::_whole(*one)).filter(|one| general.contains(one)).collect(),
+            _ => general.clone(),
+        }
+    };
+    let mut fresh = _next_value(body).max(floor);
+    let mut changed = false;
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = Vec::new();
+        for one in &block.insns {
+            let Some(what) = one.what.as_ref().filter(|_| one.group.is_none()) else {
+                insns.push(Arc::clone(one));
+                continue;
+            };
+            let acting: BTreeSet<u32> = one.uses.iter().chain(&one.defines).copied().filter(|value| !class_of(*value, &BTreeSet::new()).is_empty()).collect();
+            let table = |relaxed: &BTreeSet<u32>| -> Vec<(u32, BTreeSet<Register>)> { acting.iter().map(|value| (*value, class_of(*value, relaxed))).collect() };
+            let mut relaxed: BTreeSet<u32> = BTreeSet::new();
+            if regclass::matched(&table(&relaxed)) {
+                insns.push(Arc::clone(one));
+                continue;
+            }
+            // Values this instruction reads only as a plain word operand, in no address.
+            let in_address: BTreeSet<u32> = what
+                .dests
+                .iter()
+                .chain(&what.sources)
+                .filter_map(|place| if let Loc::Mem(cell) = place { Some(cell) } else { None })
+                .flat_map(|cell| cell.base.iter().chain(cell.index.iter()).chain(cell.selector.iter()).map(|held| held.value))
+                .collect();
+            let plain: BTreeSet<u32> = what
+                .sources
+                .iter()
+                .filter_map(|place| if let Loc::Held(held) = place { Some(held) } else { None })
+                .filter(|held| held.width == 2 && !in_address.contains(&held.value) && confined.contains_key(&held.value) && !one.defines.contains(&held.value))
+                .map(|held| held.value)
+                .collect();
+            for value in plain {
+                relaxed.insert(value);
+                if regclass::matched(&table(&relaxed)) {
+                    break;
+                }
+            }
+            if relaxed.is_empty() || !regclass::matched(&table(&relaxed)) {
+                insns.push(Arc::clone(one));
+                continue;
+            }
+            let copies: IndexMap<u32, u32> = relaxed
+                .iter()
+                .map(|value| {
+                    fresh += 1;
+                    (*value, fresh - 1)
+                })
+                .collect();
+            let rename = |place: &Loc| -> Loc {
+                match place {
+                    Loc::Held(held) if copies.contains_key(&held.value) => Loc::Held(Held { value: copies[&held.value], width: held.width }),
+                    other => other.clone(),
+                }
+            };
+            for (value, copy) in &copies {
+                insns.push(_move(one, Held { value: *copy, width: 2 }, Loc::Held(Held { value: *value, width: 2 })));
+            }
+            let mut made = (**one).clone();
+            made.what = Some(Semantics { sources: what.sources.iter().map(rename).collect(), ..what.clone() });
+            made.uses = one.uses.iter().map(|value| copies.get(value).copied().unwrap_or(*value)).collect();
+            changed = true;
+            insns.push(Arc::new(made));
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    if changed { body.with_blocks(blocks) } else { body.clone() }
+}

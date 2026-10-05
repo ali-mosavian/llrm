@@ -345,12 +345,13 @@ impl<'a> Machine<'a> {
     /// which an instruction needs in it just now (a value waiting in another register
     /// costs a copy to act, not a place).
     fn fits(&self, held: &BTreeSet<u32>, acting: &BTreeSet<u32>, room: usize) -> bool {
+        let strict = std::env::var_os("STRICT").is_some();
         if held.len() > room {
             return false;
         }
         self.classes.iter().all(|class| {
             let counted = |value: &u32| {
-                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes))))
+                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (strict || acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes))))
             };
             held.iter().filter(|value| counted(value)).count() <= class.len()
         })
@@ -478,6 +479,8 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
 fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
+    let split = if std::env::var_os("SPLITU").is_some() { Some(crate::backend::constrain::split_unmatched(body, segments, 0)) } else { None };
+    let body = split.as_ref().unwrap_or(body);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);

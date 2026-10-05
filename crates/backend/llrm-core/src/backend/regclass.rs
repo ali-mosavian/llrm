@@ -310,7 +310,7 @@ pub enum Why {
 }
 
 /// Whether every value of `wanted` can take a distinct register of its own set: a bipartite matching.
-fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
+pub(crate) fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
     fn place(at: usize, wanted: &[(u32, BTreeSet<Register>)], taken: &mut IndexMap<Register, usize>, seen: &mut BTreeSet<Register>) -> bool {
         for register in &wanted[at].1 {
             if !seen.insert(*register) {
