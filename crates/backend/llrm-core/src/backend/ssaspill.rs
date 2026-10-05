@@ -90,6 +90,9 @@ impl Weights<'_> {
 #[derive(Clone, Copy, Debug)]
 pub struct Prices {
     pub load: f64,
+    /// A store to a slot, and a copy between registers.
+    pub store: f64,
+    pub copy: f64,
     /// A jump: a branch's price on the machine, as the bridge block's last instruction takes it.
     pub jump: f64,
     /// By block frequency (clocks); not where the price is code bytes, which a loop's trips do not multiply.
@@ -99,14 +102,14 @@ pub struct Prices {
 impl Prices {
     /// One clock a load and a jump, by block frequency: for a test that prices nothing in particular.
     pub fn clocks() -> Self {
-        Self { load: 1.0, jump: 1.0, by_frequency: true }
+        Self { load: 1.0, store: 1.0, copy: 1.0, jump: 1.0, by_frequency: true }
     }
 
     /// The level `profile` compiles for: its machine's byte costs at -Os, its clocks otherwise.
     pub fn of(profile: &crate::backend::cpu::Profile) -> Self {
         let machine = profile.target();
         let costs = if profile.size { machine.size_costs() } else { machine.costs() };
-        Self { load: costs.load as f64, jump: costs.branch as f64, by_frequency: !profile.size }
+        Self { load: costs.load as f64, store: costs.store as f64, copy: costs.r#move as f64, jump: costs.branch as f64, by_frequency: !profile.size }
     }
 }
 
@@ -311,10 +314,14 @@ struct Machine<'a> {
     classes: BTreeSet<BTreeSet<Register>>,
     /// The registers with byte halves.
     bytes: BTreeSet<Register>,
+    prices: Prices,
+    /// Where each value is defined, by that block's frequency, and the frequency of the block being simulated.
+    home: IndexMap<u32, f64>,
+    here: std::cell::Cell<f64>,
 }
 
 impl<'a> Machine<'a> {
-    fn of(confined: &'a Classes, file: File, segments: &Segments) -> Self {
+    fn of(confined: &'a Classes, file: File, segments: &Segments, prices: Prices, home: IndexMap<u32, f64>) -> Self {
         let general: BTreeSet<Register> = match file {
             File::General => target::AVAILABLE.iter().map(|one| _whole(*one)).collect(),
             File::Selector => segments.selectors.iter().copied().collect(),
@@ -324,7 +331,14 @@ impl<'a> Machine<'a> {
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>())
             .filter(|class| !class.is_empty() && class.len() < general.len())
             .collect();
-        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
+        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect(), prices, home, here: std::cell::Cell::new(1.0) }
+    }
+
+    /// Whether a value that waits across an instruction where its class is contested is better evicted than moved aside:
+    /// a reload at its next use, and a store where it is made if that runs as often as this block, against two copies.
+    fn cheaper_to_evict(&self, value: u32) -> bool {
+        let stored = self.home.get(&value).is_some_and(|home| *home >= 0.5 * self.here.get());
+        self.prices.load + if stored { self.prices.store } else { 0.0 } < 2.0 * self.prices.copy
     }
 
     /// A value that lives in a register of this file at all: a selector only where the program names it so.
@@ -345,13 +359,12 @@ impl<'a> Machine<'a> {
     /// which an instruction needs in it just now (a value waiting in another register
     /// costs a copy to act, not a place).
     fn fits(&self, held: &BTreeSet<u32>, acting: &BTreeSet<u32>, room: usize) -> bool {
-        let strict = std::env::var_os("STRICT").is_some();
         if held.len() > room {
             return false;
         }
         self.classes.iter().all(|class| {
             let counted = |value: &u32| {
-                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (strict || acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes))))
+                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes)) || self.cheaper_to_evict(*value)))
             };
             held.iter().filter(|value| counted(value)).count() <= class.len()
         })
@@ -495,7 +508,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
     let mut result = Simulated::default();
     let mut selectors: BTreeSet<u32> = BTreeSet::new();
     for file in [File::General, File::Selector] {
-        let machine = Machine::of(&confined, file, segments);
+        let machine = Machine::of(&confined, file, segments, prices, home_of(&flow, &frequency));
         if machine.general.is_empty() {
             continue;
         }
@@ -541,6 +554,17 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
         .filter(|value| leaving.get(value).copied().unwrap_or(0.0) < home.get(value).map_or(f64::INFINITY, |at| frequency.block(*at)))
         .collect();
     let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &result.memory, &result.shared, &result.moves, &at_leaves, &remakes, frame)?;
+    if std::env::var("TRACEMP").is_ok_and(|name| name == body.name) {
+        for (at, edit) in &result.edits {
+            eprintln!("EDIT @{at} before {:?} folded {:?} at_end {:?} leaves {:?} w_in {:?}", edit.before, edit.folded, edit.at_end, edit.leaves, edit.w_in);
+        }
+        for block in &body.blocks {
+            eprintln!("IN @{} succ {:?}", block.at, block.succ);
+            for (position, one) in block.insns.iter().enumerate() {
+                eprintln!("IN   {position}: {:?} <- {:?} {:?} class {:?}", one.defines, one.uses, one.what.as_ref().and_then(|w| w.name.clone()), one.defines.iter().chain(&one.uses).map(|v| (*v, confined.get(v).map(|c| c.iter().map(|r| format!("{r:?}")).collect::<Vec<_>>().join("/")))).collect::<Vec<_>>());
+            }
+        }
+    }
     let held: IndexMap<i64, BTreeSet<u32>> = result.edits.iter().map(|(at, edit)| (*at, edit.w_in.clone())).collect();
     Ok(Some(without_dead_remakes(ssarepair::repaired(&spilled, &result.stored, &held), &selectors)))
 }
@@ -581,6 +605,11 @@ fn without_dead_remakes(body: LirBody, remade: &BTreeSet<u32>) -> LirBody {
     }
     let blocks = body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !gone.contains(&Arc::as_ptr(one))).cloned().collect())).collect();
     body.with_blocks(blocks)
+}
+
+/// Where each value is made, by that block's frequency.
+fn home_of(flow: &Flow, frequency: &Frequency) -> IndexMap<u32, f64> {
+    flow.defines.iter().flat_map(|(at, made)| made.keys().map(move |value| (*value, frequency.block(*at)))).collect()
 }
 
 /// The simulation of one register file's values over every block; for the selectors, the cheaper at this level's price of holding at a loop's entry what no predecessor ends with, or not.
@@ -874,6 +903,7 @@ fn simulated(
         let block = by_at[at];
         // What is stored where it is defined, as often as this block runs, costs a store each time it leaves: evicted last.
         let hot = |value: &u32| made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
+        machine.here.set(frequency.block(*at));
         let mut done = Edits::default();
         let ends: Vec<&BTreeSet<u32>> = preds.get(at).into_iter().flatten().filter_map(|from| edits.get(from)).map(|one| &one.w_out).collect();
         let mut candidates: Vec<(usize, i64, u32)> = flow.live_in[at]
@@ -1500,7 +1530,7 @@ mod tests {
     fn test_two_base_only_values_fit_while_one_acts() {
         let bx = BTreeSet::from([Register::EBX]);
         let confined: Classes = [(1, bx.clone()), (2, bx), (3, BTreeSet::from([Register::ESI, Register::EDI]))].into_iter().collect();
-        let machine = Machine::of(&confined, File::General, &target::BUILT_IN);
+        let machine = Machine::of(&confined, File::General, &target::BUILT_IN, Prices::clocks(), IndexMap::default());
         let held: BTreeSet<u32> = [1, 2, 3].into_iter().collect();
         assert!(machine.fits(&held, &BTreeSet::from([1]), 6), "one acting BX value leaves the other waiting");
         assert!(!machine.fits(&held, &BTreeSet::from([1, 2]), 6), "premise: two acting BX values cannot both sit in BX");
