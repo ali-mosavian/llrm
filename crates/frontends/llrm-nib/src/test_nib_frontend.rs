@@ -56,6 +56,21 @@ fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
     assert!(tag_loads.iter().all(|one| one.contains("!range")), "{text}");
 }
 
+/// A view lies within one segment, so a dimension of 2-byte elements is at most 32767: stated of its
+/// load, or `lo <u len` leaves a negative `lo` possible and no pass can hoist an index check out
+/// of a loop (quicksort's `sort` tested `j <u len` on every trip). A byte view says nothing: 65535 is its type's whole range.
+#[test]
+fn a_views_dimension_load_states_what_its_segment_holds() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let program = |element: &str| {
+        let source = written(&directory, &format!("view_{element}.nib"), &format!("fn at(a: &[{element}], i: i16) -> {element}:\n    return a[i]\n\nfn main() -> i16:\n    let a: {element}[4] = [1] * 4\n    return i16(at(a, 2))\n"));
+        let text: String = hir::mir::emit(&parsed(&source)).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+        text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count()
+    };
+    assert_eq!(program("i16"), 1, "the length of a view of i16 is stated at most 32767");
+    assert_eq!(program("u8"), 0, "a byte view's length may be any u16");
+}
+
 /// A fact stated once of any member, not only a tag, reaches every load and store of it,
 /// through a reference and through a local: each field access names its member.
 #[test]

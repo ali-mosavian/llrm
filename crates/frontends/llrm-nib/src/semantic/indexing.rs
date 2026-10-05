@@ -64,7 +64,7 @@ impl<'a> FunctionCompiler<'a> {
                 ElementAt::Pointer(self.indexed_pointer(pointer, flat, element_width, span)?)
             }
             Storage::Slice(descriptor) => {
-                self.check_view_bounds(descriptor, &indices, span)?;
+                self.check_view_bounds(descriptor, &indices, element_width, span)?;
                 ElementAt::Pointer(self.view_element(descriptor, element, rank, indices, span)?)
             }
             Storage::Parameter(_) | Storage::ArrayView { .. } => {

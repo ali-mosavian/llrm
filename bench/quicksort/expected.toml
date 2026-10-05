@@ -1,5 +1,5 @@
-reason = "Nib gets a start-up program, so kernel_ms"
-blessed = "2026-10-04"
+reason = "Nib's loop bounds checks proved from the view length's range and the first-trip test (#453)"
+blessed = "2026-10-05"
 
 [bas.O2]
 instructions = 269638
@@ -7,7 +7,7 @@ memory_operands = 136880
 code_bytes = 553
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.6557
+kernel_ms = 3.6559
 
 [bas.Os]
 instructions = 259058
@@ -23,7 +23,7 @@ memory_operands = 60242
 code_bytes = 324
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.177
+kernel_ms = 2.1774
 
 [c.Os]
 instructions = 149115
@@ -34,20 +34,20 @@ bss_bytes = 0
 kernel_ms = 1.9907
 
 [nib.O2]
-instructions = 245433
-memory_operands = 118387
-code_bytes = 565
+instructions = 187687
+memory_operands = 78339
+code_bytes = 531
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.2784
+kernel_ms = 2.5085
 
 [nib.Os]
-instructions = 337670
-memory_operands = 90922
-code_bytes = 478
+instructions = 183840
+memory_operands = 85199
+code_bytes = 465
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.5143
+kernel_ms = 2.4623
 
 [basown.O2]
 instructions = 225989
@@ -55,7 +55,7 @@ memory_operands = 113692
 code_bytes = 563
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.0371
+kernel_ms = 3.0373
 
 [basown.Os]
 instructions = 215430
