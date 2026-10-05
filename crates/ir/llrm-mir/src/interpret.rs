@@ -395,7 +395,7 @@ impl<'m> Machine<'m> {
                 }
                 void
             }
-            Intrinsic::MemCpy => {
+            Intrinsic::MemCpy | Intrinsic::MemMove => {
                 let (Val::Ptr(to), Val::Ptr(from), Val::Int { bits: length, .. }) = (argument(0), argument(1), argument(2)) else { return undefined("a memcpy of a poison address or length") };
                 let length = length as u64;
                 if length > 0 {

@@ -141,6 +141,11 @@ pub struct OperationCosts {
     pub extend: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
+    /// what each cell costs it; `direction` is `std` and `cld` around a backward one.
+    pub copy: i64,
+    pub copy_cell: i64,
+    pub direction: i64,
 }
 
 impl OperationCosts {
@@ -199,6 +204,9 @@ impl Default for OperationCosts {
             extend: 1,
             fill: 1,
             fill_cell: 1,
+            copy: 1,
+            copy_cell: 1,
+            direction: 1,
         }
     }
 }

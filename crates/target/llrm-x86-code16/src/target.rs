@@ -155,12 +155,12 @@ fn bytes(kind: &str) -> i64 {
     match kind {
         "alu_rr" | "mov_rr" => register_bytes(2),
         "shift_ri" => shift_bytes(2, 2),
-        "jcc" | "rep_stos" => 2,
+        "jcc" | "rep_stos" | "rep_movs" => 2,
         "ret_far" | "push_r" | "pop_r" | "pop_seg" => 1,
         // `ret imm16`: the opcode and the word.
         "ret_pop" => 3,
         "call_far" => 5,
-        "rep_stos_cell" => 0,
+        "rep_stos_cell" | "rep_movs_cell" => 0,
         _ => 3,
     }
 }
@@ -172,7 +172,7 @@ fn bytes(kind: &str) -> i64 {
 /// operation are the instruction itself.
 fn bytes_in_code(kind: &str) -> i64 {
     match kind {
-        "jcc" | "call_far" | "ret_far" | "ret_pop" | "push_r" | "pop_r" | "pop_seg" | "alu_ri" | "rep_stos" | "rep_stos_cell" => bytes(kind),
+        "jcc" | "call_far" | "ret_far" | "ret_pop" | "push_r" | "pop_r" | "pop_seg" | "alu_ri" | "rep_stos" | "rep_stos_cell" | "rep_movs" | "rep_movs_cell" => bytes(kind),
         _ => bytes(kind) * 2,
     }
 }
@@ -233,6 +233,10 @@ fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
         // value and count before `rep stos`; then restoring ES.
         fill: cost("rep_stos") + 2 * cost("push_r") + 2 * cost("pop_seg") + 2 * cost("mov_ri"),
         fill_cell: cost("rep_stos_cell"),
+        // The same, with both addresses and the count set: si, di and cx.
+        copy: cost("rep_movs") + 2 * cost("push_r") + 2 * cost("pop_seg") + 3 * cost("mov_ri"),
+        copy_cell: cost("rep_movs_cell"),
+        direction: 2 * cost("alu_rr"),
     }
 }
 

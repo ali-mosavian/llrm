@@ -1,4 +1,4 @@
-reason = "Nib/C: a far pointer parameter every call fills from a global is passed as its offset (address-space narrowing). lru c -Os +7 instructions, -23 bytes: -Os now shares -1 and 0 in a register (the freed es/fs)"
+reason = "grep.nib -O2 1692 -> 1687: a 16-byte copy loop is rep movs"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -26,7 +26,7 @@ bss_bytes = 3056
 kernel_ms = 3412.8726
 
 [nib.O2]
-code_bytes = 1692
+code_bytes = 1687
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4511.4995

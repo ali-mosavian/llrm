@@ -31,6 +31,9 @@ pub enum Intrinsic {
     /// its third says, byte for byte. A byte the source never wrote stays
     /// only that byte undefined; the two do not overlap.
     MemCpy,
+    /// `llvm.memmove`: as `memcpy`, where the two may overlap: every byte
+    /// read is as it was before the call.
+    MemMove,
     LifetimeStart,
     LifetimeEnd,
     /// `llvm.assume`: its condition holds here, which a pass may use and no
@@ -65,6 +68,12 @@ pub enum Intrinsic {
     /// It has side effects, and its bytes jump nowhere outside themselves.
     Asm,
 }
+
+/// Metadata on a `llvm.memmove` call saying which way its copy may run, as the
+/// pass that made it proved: ascending addresses, or descending. Without either,
+/// lowering compares the two pointers itself.
+pub const FORWARD: &str = "llrm.forward";
+pub const BACKWARD: &str = "llrm.backward";
 
 /// What names inline code: `llrm.ia16.code.<hex bytes>` and, per argument,
 /// `.<offset>` of the word that takes its displacement, `p<n>` or `m<n>`
@@ -222,7 +231,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 34] = [
+const TABLE: [Spec; 35] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -283,6 +292,15 @@ const TABLE: [Spec; 34] = [
     Spec {
         name: "llvm.memcpy",
         intrinsic: Intrinsic::MemCpy,
+        overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llvm.memmove",
+        intrinsic: Intrinsic::MemMove,
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
         parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
