@@ -1,4 +1,4 @@
-reason = "Nib: a far pointer to a local array is a stack pointer read through ss: (address-space narrowing, second space). queens -O2 +2,521 instructions: place's indexed ss:[bx+si] saves SI at every call; -3,701 memory operands, -15 bytes"
+reason = "Shrink-wrapped callee-saved registers: SI/DI saved where first needed, not at every entry"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -23,7 +23,7 @@ memory_operands = 82807
 code_bytes = 213
 data_bytes = 80400
 bss_bytes = 0
-kernel_ms = 7.5909
+kernel_ms = 7.5911
 
 [c.Os]
 instructions = 650015

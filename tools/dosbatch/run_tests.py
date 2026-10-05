@@ -6,8 +6,8 @@ diff stdout with NAME.out.
 
 A header comment holds a program's settings:
 
-    ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486)
-    ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime
+    ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486); `a | b` builds and runs the program once for each
+    ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime; several, blank apart, run once each
     ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib)
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
@@ -52,10 +52,11 @@ class Program:
     link: tuple[str, ...] = ()
     data: tuple[str, ...] = ()
     mask: str = ""
+    label: str = ""
 
     @property
     def name(self) -> str:
-        return f"{self.source.parent.name}/{self.source.name}"
+        return f"{self.source.parent.name}/{self.source.name}{self.label}"
 
     @property
     def stem(self) -> str:
@@ -80,14 +81,33 @@ def header(source: Path) -> dict[str, str]:
     return found
 
 
-def compiler_arguments(source: Path) -> list[str]:
+def configurations(settings: dict[str, str]) -> list[tuple[str, list[str], str]]:
+    """Each way a header asks for a program to be built: its label, its `flags:` and its `dialect:`.
+
+    `flags: -O2 | -Os --cpu P5` is two, `dialect: qb45 pds71 vbdos` three, and both make their product; the
+    label names what differs. One of each is one configuration with no label."""
+    alternatives = [one.split() for one in settings["flags"].split("|")] if "flags" in settings else [DEFAULT_FLAGS]
+    dialects = settings.get("dialect", "qb45").split()
+    out = []
+    for flags in alternatives:
+        for dialect in dialects:
+            shown = [" ".join(flags)] * (len(alternatives) > 1) + [dialect] * (len(dialects) > 1)
+            out.append((f" [{', '.join(shown)}]" if shown else "", flags, dialect))
+    return out
+
+
+def kept_flags(flags: list[str]) -> list[str]:
+    """`flags` less the optimization level and cpu, which the caller sets."""
+    return [one for at, one in enumerate(flags) if not one.startswith("-O") and one != "--cpu" and flags[at - 1 : at] != ["--cpu"]]
+
+
+def compiler_arguments(source: Path, flags: list[str] | None = None, dialect: str | None = None) -> list[str]:
     """What a program's header asks of its compiler apart from the optimization level and cpu, which the caller sets:
-    `dialect:` and the rest of `flags:`."""
+    `dialect:` and the rest of `flags:`; for the configuration given, else the first."""
     settings = header(Path(source))
-    flags = settings.get("flags", "").split()
-    kept = [one for at, one in enumerate(flags) if not one.startswith("-O") and one != "--cpu" and flags[at - 1 : at] != ["--cpu"]]
-    dialect = ["--dialect", settings["dialect"], "--runtime", settings["dialect"]] if "dialect" in settings else []
-    return [*dialect, *kept]
+    _, first, named = configurations(settings)[0]
+    chosen = dialect or named
+    return [*(["--dialect", chosen, "--runtime", chosen] if "dialect" in settings else []), *kept_flags(flags or first)]
 
 
 def discover(selected: list[str]) -> list[Program]:
@@ -95,10 +115,10 @@ def discover(selected: list[str]) -> list[Program]:
     for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*")), *sorted(BENCH.glob("*/*")), *sorted(BENCH.glob("parity/*/*"))]:
         if source.suffix in COMPILERS:
             settings = header(source)
-            program = Program(source, settings["flags"].split() if "flags" in settings else DEFAULT_FLAGS, settings.get("known"),
-                              settings.get("dialect", "qb45"), tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", ""))
-            if program.out.exists():
-                programs.append(program)
+            for label, flags, dialect in configurations(settings):
+                program = Program(source, flags, settings.get("known"), dialect, tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", ""), label)
+                if program.out.exists():
+                    programs.append(program)
     if selected:
         programs = [p for p in programs if p.source.parent.name in selected or p.source.stem in selected or p.name in selected]
     return programs
@@ -153,7 +173,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     if program.source.suffix == ".nib":
         exe = work / f"{stem}.exe"
         extras = [str(program.source.parent / one) for one in program.link]
-        nib_flags = " ".join(compiler_arguments(program.source))
+        nib_flags = " ".join(compiler_arguments(program.source, program.flags))
         done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(program.source), str(exe), *program.flags[:1], *extras],
                               capture_output=True, text=True, timeout=300, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_FLAGS": nib_flags})
         if done.returncode != 0 or not exe.exists():

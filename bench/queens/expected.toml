@@ -1,4 +1,4 @@
-reason = "Nib: a far pointer to a local array is a stack pointer read through ss: (address-space narrowing, second space). queens -O2 +2,521 instructions: place's indexed ss:[bx+si] saves SI at every call; -3,701 memory operands, -15 bytes"
+reason = "Shrink-wrapped callee-saved registers: SI/DI saved where first needed, not at every entry"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 105996
 code_bytes = 437
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.4362
+kernel_ms = 4.4364
 
 [bas.Os]
 instructions = 336158
@@ -15,7 +15,7 @@ memory_operands = 106009
 code_bytes = 416
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.4907
+kernel_ms = 4.491
 
 [c.O2]
 instructions = 230365
@@ -23,7 +23,7 @@ memory_operands = 40926
 code_bytes = 215
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.073
+kernel_ms = 3.0731
 
 [c.Os]
 instructions = 233348
@@ -31,23 +31,23 @@ memory_operands = 40926
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.1122
+kernel_ms = 3.1128
 
 [nib.O2]
-instructions = 240491
-memory_operands = 51603
-code_bytes = 244
+instructions = 237970
+memory_operands = 55304
+code_bytes = 259
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.2084
+kernel_ms = 3.1747
 
 [nib.Os]
-instructions = 272537
-memory_operands = 75888
-code_bytes = 305
+instructions = 276593
+memory_operands = 80023
+code_bytes = 311
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.6353
+kernel_ms = 3.69
 
 [ow.O2]
 instructions = 217955

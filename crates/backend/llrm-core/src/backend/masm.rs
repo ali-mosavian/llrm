@@ -318,15 +318,24 @@ fn sp_reg() -> Loc {
     reg(Register::SP)
 }
 
+/// The registers `procedure` keeps for its caller: each one it names that the convention leaves to the
+/// callee, by its low half.
+fn saved_of(procedure: &Procedure) -> Vec<Register> {
+    let roots = _roots(&procedure.body);
+    // An interrupt handler has saved everything before its frame.
+    SAVED.iter().filter(|(whole, _)| procedure.interrupt.is_none() && roots.contains(whole)).map(|(_, low)| *low).collect()
+}
+
+/// Where `procedure` saves them, where that is not its entry (`shrinkwrap`).
+fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
+    let kept: BTreeSet<Register> = SAVED.iter().filter(|(_, low)| saved_of(procedure).contains(low)).map(|(whole, _)| *whole).collect();
+    crate::backend::shrinkwrap::wrapped(&procedure.body, &kept)
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     let roots = _roots(&procedure.body);
-    // An interrupt handler has saved everything before its frame.
-    let saved: Vec<Register> = SAVED
-        .iter()
-        .filter(|(whole, _)| procedure.interrupt.is_none() && roots.contains(whole))
-        .map(|(_, low)| *low)
-        .collect();
+    let saved = saved_of(procedure);
     let reserve = procedure.reserve + (procedure.reserve & 1);
     // Inline code is bytes this printer cannot read, so it may address the frame.
     let framed = reserve != 0
@@ -446,7 +455,18 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// The procedure as emitted, frame included: what this prints and omfwrite
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
-    let (enter, leave) = _frame_parts(procedure);
+    let (mut enter, mut leave) = _frame_parts(procedure);
+    // Saved where first needed, restored where that path returns: not at the entry and every return.
+    let wrap = wrap_of(procedure);
+    let (saves, restores): (Vec<Semantics>, Vec<Semantics>) = match &wrap {
+        Some(_) => {
+            let count = saved_of(procedure).len();
+            enter.truncate(enter.len() - count);
+            let pops: Vec<Semantics> = leave.drain(..count).collect();
+            (saved_of(procedure).iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])).collect(), pops)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
     let blocks = &procedure.body.blocks;
     let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
     let first = lined().next();
@@ -458,6 +478,9 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
     let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
+        if wrap.as_ref().is_some_and(|wrap| wrap.at == block.at) {
+            out.extend(saves.iter().cloned().map(Item::Semantics));
+        }
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
         for one in &block.insns {
@@ -502,6 +525,9 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
                     }
                 }
                 Operation::Return => {
+                    if wrap.as_ref().is_some_and(|wrap| wrap.restored.contains(&block.at)) {
+                        out.extend(restores.iter().cloned().map(Item::Semantics));
+                    }
                     out.extend(leave.iter().cloned().map(Item::Semantics));
                     let name = match what.name.as_deref() {
                         _ if procedure.interrupt.is_some() => "iret".to_owned(),
@@ -1115,6 +1141,45 @@ mod tests {
         let lines = _printed(vec![Loc::Reg(ir::Reg { register: Register::ESI, width: 4 })], 0);
         assert!(has(&lines, "push si") && has(&lines, "pop si"));
         assert!(!has(&lines, "push esi") && !has(&lines, "pop esi"));
+    }
+
+    /// `place` saved SI on every call, entered or not, though only its loop names it: the early
+    /// `return 1` pushed and popped it for nothing. The save is where the loop starts.
+    #[test]
+    fn test_a_register_only_a_later_block_names_is_saved_there() {
+        let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
+        let si = || Loc::Reg(ir::Reg { register: Register::SI, width: 2 });
+        let blocks = vec![
+            lir::LirBlock { succ: vec![3, 2], ..lir::LirBlock::new(1, vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()])), insn(2, branch)]) },
+            lir::LirBlock::new(2, vec![insn(3, semantics(Operation::Move, "mov", vec![si()], vec![through_bp()])), insn(4, semantics(Operation::Return, "ret", vec![], vec![]))]),
+            lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
+        ];
+        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None };
+        let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        let at = |text: &str| lines.iter().position(|one| one == text).unwrap_or_else(|| panic!("{text} in {lines:?}"));
+        assert_eq!(lines.iter().filter(|one| *one == "push si").count(), 1, "{lines:?}");
+        assert!(at("push si") > at("L0_2:") && at("push si") < at("L0_3:"), "{lines:?}");
+        // The return that path makes pops it; the early one has nothing to pop.
+        assert_eq!(lines.iter().filter(|one| *one == "pop si").count(), 1, "{lines:?}");
+        assert!(at("pop si") < at("L0_3:"), "{lines:?}");
+    }
+
+    /// Reached around the block that names it as well, a return cannot pop what was not pushed: the
+    /// entry saves, as before.
+    #[test]
+    fn test_a_return_reached_around_the_save_keeps_the_save_at_the_entry() {
+        let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
+        let si = || Loc::Reg(ir::Reg { register: Register::SI, width: 2 });
+        let blocks = vec![
+            lir::LirBlock { succ: vec![3, 2], ..lir::LirBlock::new(1, vec![insn(1, branch)]) },
+            lir::LirBlock { succ: vec![3], ..lir::LirBlock::new(2, vec![insn(3, semantics(Operation::Move, "mov", vec![si()], vec![through_bp()]))]) },
+            lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
+        ];
+        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None };
+        let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(lines.iter().position(|one| one == "push si").unwrap() < lines.iter().position(|one| one == "L0_1:").unwrap(), "{lines:?}");
     }
 
     /// peephole's multiply by three has no address, only base, index and scale.

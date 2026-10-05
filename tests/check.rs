@@ -10,6 +10,11 @@
 //!   CHECK-NOT: text        no line between the last match and the next one contains it
 //!
 //! `{{regex}}` inside a pattern is a regular expression; runs of blanks match each other.
+//!
+//! A `RUN:` line may name several configurations: each `{a | b | c}` in it is every alternative,
+//! and the product of its groups is run, each against the same directives. Equal groups choose
+//! together (`--dialect {qb45 | pds71} --runtime {qb45 | pds71}` is two runs). A directive may be
+//! tagged `CHECK[-Os]:` to hold only of the runs whose line contains `-Os`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +30,8 @@ enum Kind {
 
 #[derive(Debug)]
 struct Directive {
+    /// The text a run's line must contain for this to hold of it; none, of every run.
+    only: Option<String>,
     kind: Kind,
     pattern: String,
     at: usize,
@@ -36,21 +43,40 @@ fn comment(line: &str) -> Option<&str> {
 }
 
 fn directives(source: &str) -> Vec<Directive> {
+    let tagged = Regex::new(r"^CHECK(-LABEL|-NEXT|-NOT)?(?:\[([^\]]*)\])?:(.*)$").expect("a regex");
     let mut found = Vec::new();
     for (at, line) in source.lines().enumerate() {
         let Some(text) = comment(line) else { continue };
-        for (name, kind) in [("CHECK-LABEL:", Kind::Check), ("CHECK-NEXT:", Kind::Next), ("CHECK-NOT:", Kind::Not), ("CHECK:", Kind::Check)] {
-            if let Some(pattern) = text.strip_prefix(name) {
-                found.push(Directive { kind, pattern: pattern.trim().to_owned(), at: at + 1 });
-                break;
-            }
+        if let Some(parts) = tagged.captures(text) {
+            let kind = match parts.get(1).map(|one| one.as_str()) {
+                Some("-NEXT") => Kind::Next,
+                Some("-NOT") => Kind::Not,
+                _ => Kind::Check,
+            };
+            found.push(Directive { only: parts.get(2).map(|one| one.as_str().to_owned()), kind, pattern: parts[3].trim().to_owned(), at: at + 1 });
         }
     }
     found
 }
 
 fn run_lines(source: &str) -> Vec<String> {
-    source.lines().filter_map(comment).filter_map(|text| text.strip_prefix("RUN:")).map(|rest| rest.trim().to_owned()).collect()
+    source.lines().filter_map(comment).filter_map(|text| text.strip_prefix("RUN:")).flat_map(|rest| expanded(rest.trim())).collect()
+}
+
+/// `line` once for each choice among its `{a | b}` groups; equal groups choose alike.
+fn expanded(line: &str) -> Vec<String> {
+    let group = Regex::new(r"\{([^{}|]*(?:\|[^{}|]*)+)\}").expect("a regex");
+    let mut distinct: Vec<(String, Vec<String>)> = Vec::new();
+    for found in group.captures_iter(line) {
+        if !distinct.iter().any(|(text, _)| *text == found[0]) {
+            distinct.push((found[0].to_owned(), found[1].split('|').map(|one| one.trim().to_owned()).collect()));
+        }
+    }
+    let mut lines = vec![line.to_owned()];
+    for (text, choices) in distinct {
+        lines = lines.iter().flat_map(|one| choices.iter().map(|choice| one.replace(&text, choice)).collect::<Vec<_>>()).collect();
+    }
+    lines
 }
 
 /// The pattern as a regex: literal text escaped, `{{..}}` kept, blanks any run of blanks.
@@ -151,7 +177,7 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
             let name = path.strip_prefix(&root).unwrap().display();
             if done.status.success() == must_fail {
                 failures.push(format!("{name}: `{line}` {}", if must_fail { "succeeded" } else { "failed" }));
-            } else if let Err(why) = filecheck(&output, &directives(&source)) {
+            } else if let Err(why) = filecheck(&output, &for_run(directives(&source), &line)) {
                 failures.push(format!("{name}: {why}\n{output}"));
             }
             ran += 1;
@@ -160,6 +186,11 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
     println!("{ran} RUN lines");
     assert!(ran > 0, "premise: some file under tests/check has a RUN line");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The directives that hold of the run `line`.
+fn for_run(wanted: Vec<Directive>, line: &str) -> Vec<Directive> {
+    wanted.into_iter().filter(|one| one.only.as_ref().is_none_or(|only| line.contains(only.as_str()))).collect()
 }
 
 fn check(output: &str, source: &str) -> Result<(), String> {
@@ -193,4 +224,26 @@ fn test_patterns_take_regexes_in_braces_and_ignore_blank_runs() {
     assert!(check("  %1 =   add i16 %0, 1\n", "; CHECK: %1 = add i16 {{%[0-9]+}}, 1").is_ok());
     assert!(check("a.b\n", "; CHECK: a.b").is_ok());
     assert!(check("axb\n", "; CHECK: a.b").is_err(), "outside braces a dot is a dot");
+}
+
+#[test]
+fn test_a_run_line_is_each_choice_of_its_groups() {
+    assert_eq!(expanded("t %s -O2"), ["t %s -O2"]);
+    assert_eq!(expanded("t {-O2 | -Os} %s"), ["t -O2 %s", "t -Os %s"]);
+    assert_eq!(expanded("t --dialect {a | b} --runtime {a | b} {-O2 | -Os}"), ["t --dialect a --runtime a -O2", "t --dialect a --runtime a -Os", "t --dialect b --runtime b -O2", "t --dialect b --runtime b -Os"]);
+}
+
+/// A second configuration that breaks must fail the file, and a directive tagged for
+/// the first must not be asked of it.
+#[test]
+fn test_a_second_configuration_that_breaks_fails_the_file() {
+    let source = "// RUN: t {-O2 | -Os}\n// CHECK: rep movsd\n// CHECK[-Os]: pop es\n";
+    let runs = run_lines(source);
+    assert_eq!(runs.len(), 2);
+    let outputs = ["rep movsd\n", "mov ax, 1\n"];
+    let results: Vec<_> = runs.iter().zip(outputs).map(|(line, out)| filecheck(out, &for_run(directives(source), line))).collect();
+    assert!(results[0].is_ok(), "{:?}", results[0]);
+    assert!(results[1].is_err(), "the second configuration's output has no rep movsd");
+    let tagged = "// CHECK[-Os]: pop es\n";
+    assert!(for_run(directives(tagged), &runs[0]).is_empty() && for_run(directives(tagged), &runs[1]).len() == 1);
 }
