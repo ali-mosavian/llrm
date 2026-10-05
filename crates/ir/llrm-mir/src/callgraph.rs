@@ -340,3 +340,30 @@ pub fn direct_only(module: &Module) -> BTreeSet<GlobalId> {
         .map(|(id, _, _)| id)
         .collect()
 }
+
+/// Every plain direct call of each function, and the functions some call of which is not one: an
+/// `invoke`, or a call with more or fewer arguments than parameters.
+pub struct DirectCalls {
+    pub sites: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>>,
+    pub refused: BTreeSet<GlobalId>,
+}
+
+pub fn direct_calls(module: &Module) -> DirectCalls {
+    let mut found = DirectCalls { sites: BTreeMap::new(), refused: BTreeSet::new() };
+    for (caller, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+        for (_, inst) in function.walk() {
+            let instruction = function.instruction(inst);
+            let Some(callee) = memory::callee(&module.context, function, inst) else { continue };
+            match &instruction.opcode {
+                Opcode::Call(_) if instruction.operands.len() == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1 => {
+                    found.sites.entry(callee).or_default().push((caller, inst));
+                }
+                Opcode::Call(_) | Opcode::Invoke(_) => {
+                    found.refused.insert(callee);
+                }
+                _ => {}
+            }
+        }
+    }
+    found
+}

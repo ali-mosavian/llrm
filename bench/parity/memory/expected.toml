@@ -1,4 +1,4 @@
-reason = "Nib: argument promotion, dead arguments gone, parameter ranges to a fixed point (queens' bounds checks fold); dead frame-slot loads removed. sieve bas -Os +8 instructions: one outer-loop reload where the allocator no longer uses bp (inner loops identical)"
+reason = "Nib/C: a far pointer parameter every call fills from a global is passed as its offset (address-space narrowing). lru c -Os +7 instructions, -23 bytes: -Os now shares -1 and 0 in a register (the freed es/fs)"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -34,20 +34,20 @@ bss_bytes = 4
 kernel_ms = 0.0019
 
 [nib.O2]
-instructions = 57
+instructions = 55
 memory_operands = 13
-code_bytes = 164
+code_bytes = 156
 data_bytes = 4
 bss_bytes = 0
-kernel_ms = 0.0028
+kernel_ms = 0.0027
 
 [nib.Os]
-instructions = 57
+instructions = 53
 memory_operands = 16
-code_bytes = 162
+code_bytes = 146
 data_bytes = 4
 bss_bytes = 0
-kernel_ms = 0.0028
+kernel_ms = 0.0027
 
 [ow.O2]
 instructions = 103
