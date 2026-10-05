@@ -23,6 +23,7 @@ fn before(file: &str, function: &str) -> (LirBody, Frame) {
         runtime: crate::hir::model::RuntimeProfile::Freestanding,
         objects: Default::default(),
         preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
+        stack_check: None,
     };
     let cpu = crate::backend::cpu::profile("486").unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));

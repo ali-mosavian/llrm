@@ -3,6 +3,7 @@
 
 use std::sync::LazyLock;
 
+use llrm_hir::model::StackCheck;
 use llrm_hir::meaning::{Arithmetic, Descriptor, Expr, Form, Meaning, Parameter, Returns};
 
 static TABLE: LazyLock<toml::Table> = LazyLock::new(|| super::TABLE.parse().expect("runtime.toml parses"));
@@ -25,6 +26,19 @@ pub fn descriptor(family: &str) -> Option<Descriptor> {
     let row = TABLE.get("layout")?.get(family)?;
     let at = |key: &str| row.get(key).and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("layout.{family}.{key}"));
     Some(Descriptor { length: at("length"), data: at("data"), size: at("size") })
+}
+
+/// What `family`'s runtime says of its stack, where it checks one.
+pub fn stack(family: &str) -> Option<StackCheck> {
+    let row = TABLE.get("stack")?.get(family)?;
+    let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
+    let need = |key: &str| text(key).unwrap_or_else(|| panic!("stack.{family}.{key}"));
+    Some(StackCheck {
+        limit: need("limit"),
+        handler: need("handler"),
+        red_zone: row.get("red_zone").and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("stack.{family}.red_zone")),
+        entry: text("entry"),
+    })
 }
 
 /// Each routine the table describes.
@@ -194,6 +208,17 @@ mod tests {
         assert_eq!(descriptor("pds71"), descriptor("qb45"));
         assert_eq!(descriptor("vbdos"), None);
         assert_eq!((form("qb45"), form("pds71"), form("vbdos")), (Some(Form::Near), Some(Form::Near), Some(Form::Far)));
+    }
+
+    /// Every BASIC runtime states its limit word and handler; a pass naming `b$pendchk` itself
+    /// would not notice a runtime that keeps it elsewhere.
+    #[test]
+    fn each_basic_runtime_states_its_stack_limit() {
+        for family in ["qb45", "pds71", "vbdos"] {
+            let check = stack(family).unwrap_or_else(|| panic!("{family} states no stack"));
+            assert_eq!((check.limit.as_str(), check.handler.as_str(), check.entry.as_deref()), ("b$pendchk", "B$ERR_OSS", Some("B$ENRD")), "{family}");
+        }
+        assert_eq!(stack("freestanding"), None);
     }
 
     #[test]

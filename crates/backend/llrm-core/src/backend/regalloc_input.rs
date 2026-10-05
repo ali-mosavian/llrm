@@ -63,6 +63,7 @@ pub fn before_phase_skipping<'a>(
             Calls::C => EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
             Calls::Everything => Default::default(),
         },
+        stack_check: None,
     };
     let cpu = cpu::profile(cpu_name).unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));

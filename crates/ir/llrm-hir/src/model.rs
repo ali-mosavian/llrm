@@ -917,6 +917,23 @@ impl RuntimePromises {
     }
 }
 
+/// What a runtime says of its stack, for code that checks it on entry
+/// (`-fsanitize=stack`): where its lower limit is, what to call when SP falls
+/// below it, and the bytes below the limit an unchecked leaf may use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StackCheck {
+    /// The data-group word holding the lowest SP the runtime allows.
+    pub limit: String,
+    /// The far routine entered on overflow; it does not return.
+    pub handler: String,
+    /// Bytes below `limit` that the handler, interrupts and an unchecked
+    /// leaf's frame share.
+    pub red_zone: i64,
+    /// The runtime's own frame entry that checks, where it frames a
+    /// procedure: BC's /D calls it in place of the plain one.
+    pub entry: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
     pub dialect: Dialect,
@@ -941,6 +958,9 @@ pub struct Program {
     /// The segment of the constants the compiler makes; None: the default
     /// data segment.
     pub constant_segment: Option<String>,
+    /// Each procedure compares SP with the runtime's limit on entry: where
+    /// `-fsanitize=stack` asks, never otherwise.
+    pub stack_check: Option<StackCheck>,
 }
 
 impl Program {
@@ -960,6 +980,7 @@ impl Program {
             entries: Vec::new(),
             preserved: Vec::new(),
             constant_segment: None,
+            stack_check: None,
         }
     }
 }
