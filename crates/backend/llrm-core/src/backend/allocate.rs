@@ -1453,6 +1453,12 @@ impl RegAlloc {
         // find it holding one of its values.
         let segments = self.segments.clone();
         let data_free = !datagroup::names_data_segment(&body, &segments);
+        if crate::support::debug::enabled("regclass") {
+            let skip: BTreeSet<u32> = self.pinned.keys().copied().collect();
+            let found = crate::backend::regclass::violations(&body, &segments, &skip);
+            let crowded = found.iter().filter(|one| matches!(one.why, crate::backend::regclass::Why::Crowded { .. })).count();
+            llrm_support::debug!("regclass", "{}: {} points do not fit entering RegAlloc ({} crowded, {} unmatched)", body.name, found.len(), crowded, found.len() - crowded);
+        }
         let mut body = constrain::distinct_roles(&body, self.pinned.keys().copied().max().map_or(0, |one| one + 1));
         body = explicit_selectors(&body, Some(&self.pinned), &segments);
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);

@@ -109,12 +109,6 @@ impl LIRTransform for SsaSpill {
         if made.is_some() {
             CHANGES.with(|count| count.set(count.get() + 1));
         }
-        if crate::support::debug::enabled("regclass") {
-            let after = made.as_ref().unwrap_or(&body);
-            let (before, now) = (regclass::violations(&body, &self.segments, &untouchable(&body)), regclass::violations(after, &self.segments, &untouchable(after)));
-            let crowded = now.iter().filter(|one| matches!(one.why, regclass::Why::Crowded { .. })).count();
-            llrm_support::debug!("regclass", "{}: {} points do not fit before SsaSpill, {} after ({} crowded, {} unmatched)", body.name, before.len(), now.len(), crowded, now.len() - crowded);
-        }
         Ok(made.unwrap_or(body))
     }
 }
