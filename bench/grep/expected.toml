@@ -1,5 +1,17 @@
-reason = "own frames are the default in every dialect: bas is the old basown"
+reason = "grep.nib -O2 1733 -> 1724 code bytes: a 16-byte copy loop is rep movs"
 blessed = "2026-10-05"
+
+[bas.O2]
+code_bytes = 1011
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3887.202
+
+[bas.Os]
+code_bytes = 992
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3887.2022
 
 [c.O2]
 code_bytes = 564
@@ -14,7 +26,7 @@ bss_bytes = 3056
 kernel_ms = 3412.8717
 
 [nib.O2]
-code_bytes = 1733
+code_bytes = 1724
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4512.1713
@@ -24,18 +36,6 @@ code_bytes = 1628
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4511.1184
-
-[bas.O2]
-code_bytes = 1011
-data_bytes = 113
-bss_bytes = 0
-kernel_ms = 3887.202
-
-[bas.Os]
-code_bytes = 992
-data_bytes = 113
-bss_bytes = 0
-kernel_ms = 3887.2022
 
 [ow.O2]
 code_bytes = 544
