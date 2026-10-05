@@ -1459,7 +1459,8 @@ impl RegAlloc {
             let crowded = found.iter().filter(|one| matches!(one.why, crate::backend::regclass::Why::Crowded { .. })).count();
             llrm_support::debug!("regclass", "{}: {} points do not fit entering RegAlloc ({} crowded, {} unmatched)", body.name, found.len(), crowded, found.len() - crowded);
         }
-        let mut body = constrain::distinct_roles(&body, self.pinned.keys().copied().max().map_or(0, |one| one + 1));
+        let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
+        let mut body = constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments);
         body = explicit_selectors(&body, Some(&self.pinned), &segments);
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
         body = narrowed_body;
