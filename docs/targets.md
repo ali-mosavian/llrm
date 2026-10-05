@@ -260,19 +260,43 @@ move to the target crate.
 into tables. Capabilities are not a bag of flags: "has segments" is an address
 space of pair kind, "has far calls" is far forms in the table.
 
-Where generic ends. MIR, `Target`, address spaces, `CallingConv`, `ObjectWriter`
-and allocation over an id, classes and lane masks are generic. The LIR,
-selector runtime, peephole, two-address folding, memory-operand folding,
-`rmw`, `storecombine`, `masm` and lanes are x86 family today. **Decision for
-the coordinator:** arm64 either gets its own lowering below the allocator
-interface, or LIR becomes a generic machine instruction (opcode id, operands,
-ties, implicits). This task does not decide it and claims no more than the
-x86 family; do not leave LIR looking generic.
+## End state: a generic machine instruction
 
-Register id: an opaque id (`llrm_support::PhysicalRegister`) at the allocator
-interface, a typed family register in the x86 crates. `BTreeSet<Register>` order
-follows iced's discriminants, so a renumbered id changes allocation and spill
-order; the id keeps iced order, with a test.
+Decided: LIR becomes a generic machine instruction, designed now and built in
+stages. No arm64 code in this task. Today's `Semantics { op, name, dests,
+sources }` is already close; what is x86-shaped is its operands.
+
+```
+MachineInstr
+  opcode     OpcodeId: a row of the target's form table (today `name: String`)
+  operands   defs first, then uses
+             Reg(RegId, width)   a register of the target's description
+             Imm(value, kind)    kind from the form: imm8, imm12, ...
+             Mem(AddressRef)     slots by role (base, index, scale, disp,
+                                 symbol, space); the roles a form allows come
+                                 from the target's address-form table
+             Block, Symbol, Held(value, width)   SSA value not yet placed
+  ties       operand i is operand j (two-address); from the form
+  implicit   defs and uses from the form (fixed registers, flags)
+```
+
+- The register id is the target's id from its register description. Subregisters
+  are ids with a super register and a lane, so `al` is a view of `eax`; width stays
+  the operand's. x87's stack and any other target-specific file are register
+  classes with an operand kind the description names; `Loc::St` becomes one.
+- x86's memory operand (`through`, `selector`, `index_through`, `disp_width`,
+  `exact`) becomes slots of `AddressRef` the form table declares; `selector` is a
+  slot only code16's address spaces declare. A load/store ISA's forms have no
+  `Mem` on ALU rows.
+- `Operation` stays: it is what an instruction computes, not a mnemonic. The
+  mnemonic is the opcode.
+- Queries about a register (`size`, super register, class, is-address-base) take
+  a `&RegisterInfo`; there is no process-wide target.
+- code16 numbers its ids in iced order, so every `Ord`, `BTreeSet` and `IndexMap`
+  iteration, and so allocation and spill order, is unchanged. A test pins the
+  order.
+- Done once: the crate inversion, the register id and the operand model are one
+  line of PRs (2 to 11 below), not three rewrites.
 
 Facts a later ISA will need and nothing asks for yet, added when it does: return
 address in a register, explicit flag-setting forms, immediate encodability,
@@ -291,20 +315,21 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 |---|---|---|
 | 0 | this document and the reviews | none |
 | 1 | MIR crates take code16 as a dev-dependency | manifests |
-| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine` | no code16 or iced in the BC lifter's model |
-| 3 | `llrm-driver` and `trait Target`; `--target` flag, default code16; `Profile::target()` builds through it; `llrm-core` reads `GENERAL`, `PRESERVED`, `FRAME`, bases, indexes, bitness from it | production uses to ~0 in `llrm-core` |
+| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged | no code16 or iced in the BC lifter's model crate |
+| 3 | `llrm-driver` and `trait Target`; `--target` flag, default code16; `Profile::target()` builds through it; `llrm-core` reads `GENERAL`, `PRESERVED`, `FRAME`, bases, indexes, bitness from it; metric baseline | production uses to ~0 in `llrm-core` |
 | 4 | generated code per target: `llrm-iselgen`, hooks resolved at generation, `CONSTRUCTORS` into the `.isel` header, generators run from the target's `build.rs` | `build.rs`, `matcher.rs`, `peephole.rs` |
-| 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes come from the encoder | `parse.rs`, `isel/matcher.rs:366` |
-| 6 | the form table is the only list of fixed registers and flags; string-op rows; `requirements()` reads it | `target.rs:67-162` (~100 lines) |
-| 7 | calling-convention description and generic call/ret lowering | `isel.rs:68-180`, `callregs.rs` |
-| 8 | register description: classes, kind letters, byte registers, lanes | `target.rs` tables, `regclass` reads after cost-spill |
-| 9 | datalayout and address spaces: string and space map out of `hir/mir.rs`; literals 0/1/2/4/5 become queries; the address-form table; `foreign_span` linear; `Machine`'s code16 notions behind space kinds | HIR, analysis, transforms, `select.rs`, `affine.rs` |
-| 10 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, `pointers`, far arms of `isel.rs` |
-| 11 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
-| 12 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
-| 13 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
-| 14 | register id: family newtype with the same `Ord`, then the opaque id at the allocator interface | ~850 sites |
-| 15 | `llrm-x86-code32` skeleton: descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
+| 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes from the encoder | `parse.rs`, `isel/matcher.rs:366` |
+| 6 | the form table is the only list of fixed registers, flags, ties and implicit defs/uses; string-op rows; `requirements()` and `Effects` read it | `target.rs:67-162` (~100 lines) |
+| 7 | register description and `RegId`: newtype in iced order with a pinning test, constants generated from the description (`x86::EAX`), `RegisterInfo` queries replace iced methods | no iced in `llrm-lir` |
+| 8 | `RegId` migration in slices by area, one PR each (isel, select, peephole, bcmachine, the rest); `regclass`, `allocate`, `ssaspill`, `constrain` wait for PR 15 | ~830 sites |
+| 9 | calling-convention description and generic call/ret lowering | `isel.rs:68-180`, `callregs.rs` |
+| 10 | datalayout and address spaces: string and space map out of `hir/mir.rs`; literals 0/1/2/4/5 become queries; the address-form table; `foreign_span` linear; `CostModel`'s code16 notions behind space kinds | HIR, analysis, transforms, `select.rs`, `affine.rs` |
+| 11 | operand model: `Mem` becomes `AddressRef` with form-declared slots; `Loc::St` and subregister views target-described; `name: String` becomes `OpcodeId` | `llrm-lir`, every `Semantics` consumer |
+| 12 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, `pointers`, far arms of `isel.rs` |
+| 13 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
+| 14 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
+| 15 | `RegId` and class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
+| 16 | `llrm-x86-code32` skeleton: descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
 depends on them. Not in this task: running or linking code32, a 32-bit object
@@ -328,6 +353,7 @@ lines in its crate and 837 description lines (`x86.instr` 88, `patterns.isel`
 
 ## Open questions
 
-- LIR generic or x86 family (Interface, Decision).
 - Whether `llrm-lir` is the family crate or its own: proposed its own, so the BC
   lifter and the backend both depend on it.
+- Whether code16-pinned BC raise keeps iced `Register` in its decoder and
+  converts at the `llrm-lir` boundary: proposed yes.
