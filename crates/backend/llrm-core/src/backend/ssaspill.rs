@@ -69,16 +69,23 @@ impl Weights<'_> {
 #[derive(Clone, Copy, Debug)]
 pub struct Prices {
     pub load: f64,
+    /// A jump: a branch's price on the machine, as the bridge block's last instruction takes it.
+    pub jump: f64,
     /// By block frequency (clocks); not where the price is code bytes, which a loop's trips do not multiply.
     pub by_frequency: bool,
 }
 
 impl Prices {
+    /// One clock a load and a jump, by block frequency: for a test that prices nothing in particular.
+    pub fn clocks() -> Self {
+        Self { load: 1.0, jump: 1.0, by_frequency: true }
+    }
+
     /// The level `profile` compiles for: its machine's byte costs at -Os, its clocks otherwise.
     pub fn of(profile: &crate::backend::cpu::Profile) -> Self {
         let machine = profile.target();
         let costs = if profile.size { machine.size_costs() } else { machine.costs() };
-        Self { load: costs.load as f64, by_frequency: !profile.size }
+        Self { load: costs.load as f64, jump: costs.branch as f64, by_frequency: !profile.size }
     }
 }
 
@@ -476,7 +483,8 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
         if file == File::Selector {
             selectors.extend(kept.keys().copied().filter(|value| machine.registered(*value)));
         }
-        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices);
+        let bridged: BTreeSet<(i64, i64)> = result.across.keys().copied().collect();
+        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices, &bridged);
         result.merge(one);
     }
     if result.stored.is_empty() {
@@ -565,14 +573,15 @@ fn simulated_in(
     headers: &BTreeSet<i64>,
     loops: &[crate::analysis::loops::Loop],
     prices: Prices,
+    bridged: &BTreeSet<(i64, i64)>,
 ) -> Simulated {
     let weights = Weights { frequency, by_frequency: prices.by_frequency };
-    let attempt = |admit: bool| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, admit);
+    let attempt = |admit: bool| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged, admit);
     if machine.file != File::Selector {
         return attempt(false);
     }
     let (with, without) = (attempt(true), attempt(false));
-    if traffic(&with, &weights, prices) < traffic(&without, &weights, prices) { with } else { without }
+    if traffic(&with, &weights, prices, &BTreeSet::new()) < traffic(&without, &weights, prices, &BTreeSet::new()) { with } else { without }
 }
 
 /// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.
@@ -590,6 +599,7 @@ fn simulated_with(
     loops: &[crate::analysis::loops::Loop],
     prices: Prices,
     weights: &Weights<'_>,
+    bridged: &BTreeSet<(i64, i64)>,
     admit: bool,
 ) -> Simulated {
     // A value a loop's back edge must reload each trip is not worth holding at its header.
@@ -628,13 +638,16 @@ fn simulated_with(
     // Dropping what a loop evicts leaves the loop's registers short of use: a value is let back in
     // where the loop then moves less to and from memory.
     if machine.file == File::Selector {
-        let mut best = traffic(&result, weights, prices);
+        // The jump a bridge on a loop's back edge takes runs every trip, unless another file's values already bring the bridge;
+        // and what a loop that fits its registers does not hold, it need not bridge to hold.
+        let critical: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().filter(|edge| place[&edge.0] >= place[&edge.1] && !bridged.contains(edge) && room.get(&edge.1).is_some_and(|peak| *peak > machine.general.len())).collect();
+        let mut best = traffic(&result, weights, prices, &critical);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
             let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
-            let moved = traffic(&tried, weights, prices);
+            let moved = traffic(&tried, weights, prices, &critical);
             if moved < best {
                 best = moved;
                 result = tried;
@@ -646,13 +659,14 @@ fn simulated_with(
 }
 
 /// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
-fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices) -> f64 {
+fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>) -> f64 {
     let blocks: f64 = result
         .edits
         .iter()
         .map(|(at, edit)| weights.block(*at) * prices.load * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
         .sum();
-    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * prices.load * values.len() as f64).sum();
+    // A bridged edge takes its jump as well.
+    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * (prices.load * values.len() as f64 + if critical.contains(&(*from, *to)) { prices.jump } else { 0.0 })).sum();
     blocks + edges
 }
 
@@ -1103,12 +1117,7 @@ fn written(
     for (edge, values) in left {
         crossing.entry(*edge).or_default().stores.extend(values.iter().copied().filter(|value| in_memory(value) && at_leaves.contains(value)));
     }
-    let mut preds: IndexMap<i64, usize> = IndexMap::default();
-    for block in &body.blocks {
-        for to in &block.succ {
-            *preds.entry(*to).or_default() += 1;
-        }
-    }
+    let critical = body.critical_edges();
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     // What code put in a block sits beside: its last instruction, or the block's own address when it has none.
     let anchor = |block: &LirBlock| -> Arc<Insn> {
@@ -1129,7 +1138,7 @@ fn written(
         let listed: Vec<(bool, u32)> = code.stores.iter().map(|value| (true, *value)).chain(code.reloads.iter().map(|value| (false, *value))).collect();
         if source.succ.len() == 1 {
             at_end.entry(*from).or_default().extend(listed);
-        } else if preds.get(to) == Some(&1) {
+        } else if !critical.contains(&(*from, *to)) {
             at_top.entry(*to).or_default().extend(listed);
         } else {
             let at = next_at;
