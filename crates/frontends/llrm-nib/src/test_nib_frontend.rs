@@ -711,8 +711,11 @@ fn test_runtime_bounded_array_loop_advances_its_payload_address() {
 #[test]
 fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     // sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP.
-    let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &O2());
-    let main = between(&assembly, "_main proc far", "call far ptr _sum_three");
+    // The call kept: inlined, the sums fold to 1110 and no element is stored.
+    let mut kept = O2();
+    kept.pipeline.inline = llrm_transforms::inline::Threshold::new(0);
+    let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &kept);
+    let main = between(&assembly, "_main proc far", "call _sum_three");
     let stored: BTreeSet<i64> = Regex::new(r"mov word ptr \[bp-\d+\], (\d+)\n")
         .unwrap()
         .captures_iter(main)
