@@ -220,7 +220,7 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 
 | Assumption | Today | Read from |
 |---|---|---|
-| Register id is `iced_x86::Register` | LIR | opaque id at the allocator interface (PR 14) |
+| Register id is `iced_x86::Register` | LIR | opaque id at the allocator interface (PRs 10, 11) |
 | Two-address forms | `Machine::two_address`, `twoaddr.rs` | form table ties (`^0`) |
 | ALU ops with a memory operand, and the fold and peephole machinery built on them | `rmw.rs`, `storecombine.rs`, `peephole.rs` | form table operand kinds; a load/store ISA has no `m` on ALU rows |
 | 8/16-bit subregisters and lanes | `lanes.rs`, `upperzero.rs`, `target.rs:327-392` | register description |
