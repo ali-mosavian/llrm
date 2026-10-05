@@ -1,4 +1,4 @@
-reason = "own frames are the default in every dialect: bas is the old basown; the stack check is gated by -fsanitize=stack"
+reason = "own frames are the default in every dialect: bas is the old basown"
 blessed = "2026-10-05"
 
 [c.O2]

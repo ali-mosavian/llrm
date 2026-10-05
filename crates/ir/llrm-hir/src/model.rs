@@ -846,6 +846,8 @@ impl Module {
     /// handler or RESUME target through its frame chain), and no local
     /// STRING asks B$ENRA for a handle. The runtime frame zeroes its locals;
     /// a frame of its own does not.
+    // Event handlers (ON TIMER/KEY, not parsed today) will need the runtime frame:
+    // B$EXSA polls events on exit.
     pub fn frames_itself(&self, frames: Frames, function: &Function) -> bool {
         frames == Frames::Own && !self.lands_errors(function) && function.external_entries.is_empty() && self.local_strings(function) == 0
     }
