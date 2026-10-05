@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     let mut alternate_math = false;
     let mut whole_program = false;
     let mut array_merging = false;
-    let mut own_frames = false;
+    let mut runtime_frames = false;
     let mut error_lines = false;
     let mut syntax = false;
     let mut include_dirs = Vec::new();
@@ -66,7 +66,9 @@ fn main() -> ExitCode {
         } else if argument == "--array-merging" {
             array_merging = true;
         } else if argument == "--own-frames" {
-            own_frames = true;
+            // Accepted: own frames are the default.
+        } else if argument == "--runtime-frames" {
+            runtime_frames = true;
         } else if argument == "--error-lines" {
             error_lines = true;
         } else if argument == "--array-order" {
@@ -101,7 +103,7 @@ fn main() -> ExitCode {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--whole-program] [--array-merging] [--own-frames] [--error-lines] [-g] [--include DIR] [--syntax] FILE"
+            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [-g] [--include DIR] [--syntax] FILE"
         );
         return ExitCode::from(2);
     };
@@ -118,7 +120,7 @@ fn main() -> ExitCode {
             alternate_math,
             whole_program,
             array_merging,
-            own_frames,
+            runtime_frames,
             error_lines,
         },
         debug,

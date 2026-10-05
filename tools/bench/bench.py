@@ -43,8 +43,7 @@ OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/b
 OWLIB = Path(os.environ.get("OW_LIB", Path.home() / "dos/devtools/dev/c/watcom/lib286"))
 BENCH = ROOT / "bench"
 LANGUAGES = {"bas": ".bas", "c": ".c", "nib": ".nib"}
-# llrm-qb again with --own-frames (a plain frame for the runtime's B$ENRA/B$EXSA): a language of its own in expected.toml, from the .bas.
-BASIC_LANGUAGES = ("bas", "basown")
+BASIC_LANGUAGES = ("bas",)
 COUNTERS = ("instructions", "memory_operands")
 # Bytes of the program's own object (tools/sizes.py): code, initialised data, uninitialised data. Gated like the counters.
 SIZES = ("code_bytes", "data_bytes", "bss_bytes")
@@ -62,7 +61,7 @@ BORLAND = {
     "tcpp": (TURBO / "tcpp30", "tcc", {"O2": "-2 -G -O -Z -r", "Os": "-2 -O -Z -r"}),  # no -3 in TC++ 3.0; TC 2.01's optimiser switches
 }
 STARTUP = Path(__file__).with_name("startup")  # an empty kernel per language: what a toolchain's start-up costs
-REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos"), "basown": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
+REFERENCES = {"c": ("ow", "bcc", "tc", "tcpp"), "bas": ("bc", "pds71", "vbdos")}  # the reference compilers per language; the BCs have one level, /O
 # BASIC references: the name in expected.toml -> the toolchain (run_tests.TOOLS) whose BC compiles and whose runtime links.
 BASIC_REFERENCES = {"bc": "qb45", "pds71": "pds71", "vbdos": "vbdos"}
 # Kernel time is a difference of two whole-program times, each a few cycles off from run to run: parity/loop's 139
@@ -105,9 +104,8 @@ def variants(directory: Path) -> list[Variant]:
         source = directory / f"{directory.name}{suffix}"
         if source.exists():
             head = run_tests.header(source)
-            for one in ("bas", "basown") if language == "bas" else (language,):
-                out.append(Variant(name, one, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45"),
-                                   bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
+            out.append(Variant(name, language, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45"),
+                              bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
     return out
 
 
@@ -129,7 +127,6 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
-        flags += ["--own-frames"] if variant.language == "basown" else []
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=300)
         if done.returncode != 0 or not obj.exists():

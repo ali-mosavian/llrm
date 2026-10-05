@@ -32,12 +32,6 @@ impl Dialect {
         self == Self::Quickr
     }
 
-    /// A procedure frames itself where the runtime needs no frame, by
-    /// default: its locals start at zero through explicit stores.
-    pub fn own_frames(self) -> bool {
-        self == Self::Quickr
-    }
-
     /// `PRIVATE SUB` and `PRIVATE FUNCTION`.
     pub fn private_procedures(self) -> bool {
         self == Self::Quickr

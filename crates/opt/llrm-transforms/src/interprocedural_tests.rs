@@ -966,3 +966,111 @@ b:
     again(&mut module, &mut analyses, &mut refused);
     assert_eq!((first > 0, runs.get()), (true, first), "the second round runs no pipeline: {refused:?}");
 }
+
+/// A body whose address is taken is also called through it, with actuals no
+/// site names: its one direct call passed 5, and the call through the
+/// pointer stored 5 as well.
+#[test]
+fn test_a_body_whose_address_is_taken_keeps_its_parameters() {
+    let text = STORES.replace("@g = global i16 0\n", "@g = global i16 0\n@slot = global ptr @set\n").replace("  call void @set(i16 5)\n  call void @set(i16 5)\n", "  call void @set(i16 5)\n  %p = load ptr, ptr @slot\n  call void %p(i16 %a)\n");
+    let mut module = parsed(&text);
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let after = printed(&module);
+    assert!(after.contains("  store i16 %x, ptr @g\n"), "{after}");
+}
+
+/// queens' `place(q, row, n)` recurses with `row + 1` and its own `n`: the
+/// one outside call passes 7, so every call does, and `n` is 7 inside.
+/// The recursive call named `%n` as a second value for it, so none was found.
+fn recursive(first: &str, second: &str) -> String {
+    format!(
+        "define internal i16 @place(i16 %row, i16 %n) {{
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %more
+more:
+  %next = add i16 %row, 1
+  %r = call i16 @place({first})
+  %s = add i16 %r, %row
+  ret i16 %s
+leaf:
+  ret i16 1
+}}
+
+define i16 @f(i16 %a) {{
+b:
+  %x = call i16 @place(i16 0, i16 7)
+{second}  ret i16 %x
+}}
+"
+    )
+}
+
+#[test]
+fn test_a_recursive_call_passing_a_parameter_on_leaves_the_others_actuals_agreed() {
+    let mut module = parsed(&recursive("i16 %next, i16 %n", ""));
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let text = printed(&module);
+    assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
+}
+
+/// A second outside call with another value, or the recursion passing the
+/// parameters swapped, keeps `n` unknown.
+#[test]
+fn test_another_actual_for_the_parameter_keeps_it_unknown() {
+    for text in [recursive("i16 %next, i16 %n", "  %y = call i16 @place(i16 0, i16 %a)\n"), recursive("i16 %n, i16 %next", "")] {
+        let mut module = parsed(&text);
+        stepped(&mut module, &["f"], 40, Threshold::new(0));
+        let after = printed(&module);
+        assert!(after.contains("icmp eq i16 %row, %n"), "{after}");
+    }
+}
+
+/// queens' `place`: `row` from 0 and from `row + 1` below `n`, the calls
+/// known to be those of the program: `row` is in 0 to 7, which `row <u 12`, the length's
+/// check, then leaves nothing to decide (`decide` reads the stamp).
+fn bounded_recursion(extra: &str) -> String {
+    format!(
+        "define internal i16 @place(i16 %row, i16 %n) {{
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %more
+more:
+  %fits = icmp ult i16 %row, 12
+  br i1 %fits, label %next, label %crash
+next:
+  %up = add nsw i16 %row, 1
+  %r = call i16 @place(i16 %up, i16 %n)
+  ret i16 %r
+leaf:
+  ret i16 1
+crash:
+  ret i16 99
+}}
+
+define i16 @f(i16 %a) {{
+b:
+  %x = call i16 @place(i16 0, i16 7)
+{extra}  ret i16 %x
+}}
+"
+    )
+}
+
+#[test]
+fn test_what_the_callers_pass_bounds_a_parameter_the_body_checks() {
+    let mut module = parsed(&bounded_recursion(""));
+    assert!(printed(&module).contains("icmp ult i16 %row, 12"), "premise");
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let text = printed(&module);
+    assert!(text.contains("range(i16 0, 8) %row"), "{text}");
+}
+
+/// A call from elsewhere with a value of its own, or through a pointer, leaves the parameter unbounded.
+#[test]
+fn test_another_caller_leaves_the_parameter_unbounded() {
+    let mut module = parsed(&bounded_recursion("  %y = call i16 @place(i16 %a, i16 7)\n"));
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let text = printed(&module);
+    assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
+}

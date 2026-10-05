@@ -835,6 +835,24 @@ impl Module {
     pub fn lands_errors(&self, function: &Function) -> bool {
         function.error_handler.is_some() || self.functions.iter().any(|one| one.error_handler.is_some() && !one.error_handler_local)
     }
+
+    /// The local STRING descriptors `function` owns, each of which asks
+    /// B$ENRA for a handle. Runtime-produced temporaries are not counted.
+    pub fn local_strings(&self, function: &Function) -> i64 {
+        let string = |place: &&Place| self.types.iter().any(|one| one.id == place.r#type && one.name == "string");
+        function.places.iter().filter(|place| place.storage == Storage::Local).filter(string).count() as i64
+    }
+
+    /// Whether `function` frames itself under `frames`: the runtime needs no
+    /// frame of its own for it. No error lands in it (the runtime reaches a
+    /// handler or RESUME target through its frame chain), and no local
+    /// STRING asks B$ENRA for a handle. The runtime frame zeroes its locals;
+    /// a frame of its own does not.
+    // Event handlers (ON TIMER/KEY, not parsed today) will need the runtime frame:
+    // B$EXSA polls events on exit.
+    pub fn frames_itself(&self, frames: Frames, function: &Function) -> bool {
+        frames == Frames::Own && !self.lands_errors(function) && function.external_entries.is_empty() && self.local_strings(function) == 0
+    }
 }
 
 /// The internal data object whose rows are where RESUME may continue.

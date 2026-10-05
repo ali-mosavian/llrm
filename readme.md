@@ -83,8 +83,9 @@ target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 486
 | `-S` | Writes the assembly listing instead of an object |
 | `--dump DIR` | Writes every stage to `DIR`, for diffing |
 
-`llrm-qb` also takes `--own-frames`, which frames procedures without the runtime's
-`B$ENRA`/`B$EXSA` wherever the runtime needs no frame of its own.
+`llrm-qb` frames each procedure itself, without the runtime's `B$ENRA`/`B$EXSA`,
+wherever the runtime needs no frame of its own. `--runtime-frames` ([Debug](#debug))
+keeps the runtime's in every procedure.
 
 `llrm-omf` takes every object and library in LINK order when a program spans
 modules, and writes nothing unless all of them succeed:
@@ -230,7 +231,7 @@ A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
 elements until the shorter slice ends, so there is no `n`, and no index to check.
 Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
-BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 --own-frames -O3 --whole-program -S`:
+BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 -O3 --whole-program -S`:
 
 ```basic
 DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
@@ -255,7 +256,7 @@ END FUNCTION
 
 ```asm
 DOT proc near
-    push bp                         ; --own-frames: a plain frame, not B$ENRA; near, as --whole-program
+    push bp                         ; a plain frame, not B$ENRA; near, as --whole-program
     mov bp, sp                      ; sees every caller. a() is [bp+6], b() [bp+4]
     push si
     push di
@@ -309,7 +310,7 @@ slot is fixed, and nothing tests that the array is allocated, as BC does not wit
 `/D`. `-fsanitize=bounds` brings the test and the cold `B$UBND` call back, except
 where every caller passes an array a `DIM` or `REDIM` dominates, as here. Where a
 procedure's own `DIM` or `REDIM` states a bound, `UBOUND` is that value and reads nothing.
-`--own-frames` replaces the runtime's `B$ENRA` and `B$EXSA` frame with a plain one.
+The frame is a plain one, not the runtime's `B$ENRA` and `B$EXSA`.
 `Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
 lets the inliner take it; by reference it stays a call
 ([#114](https://github.com/ali-mosavian/llrm/issues/114)).
@@ -326,6 +327,11 @@ loop. The product is a 32-bit `imul` in `eax`, without a runtime call.
 and CVPACK accept it, and CodeView shows the source, locals, parameters and
 `TYPE`s. [debugging.md](docs/debugging.md) finds a miscompile in a running DOS
 program with dosrun: break on write, stack traces and map-file symbols.
+
+`llrm-qb --runtime-frames` calls the runtime's frame entry and exit in every
+procedure, so its frame chain, stack check and event poll are there to debug
+against. `-g` does not imply it: CodeView's local offsets match either frame.
+`--own-frames` is accepted and does nothing.
 
 ## Validate
 
