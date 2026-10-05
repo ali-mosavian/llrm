@@ -844,3 +844,16 @@ fn test_threading_a_split_loop_back_keeps_its_odds() {
     let runs = crate::analysis::frequency::Frequency::of(&back).block(42);
     assert!((runs - 32.0).abs() < 1e-3, "{runs}");
 }
+
+/// A loop whose trips are proven is tested once a trip. Its test copied into the loop nested in it ran once a visit
+/// and the estimate lost the proven count: sieve's bench_sieve read 45046 before ControlFlow and 5834 after, for the
+/// same code.
+#[test]
+fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
+    use crate::backend::regalloc_input::{before_phase, Calls};
+    let work = |body: &LirBody| crate::backend::executed::executed(body).map(|done| done.instructions + done.memory).expect("finite");
+    let (body, mut phases) = before_phase(Calls::Everything, "sievejumps.ll", "bench_sieve", "486", "ControlFlow");
+    let before = work(&body);
+    let after = work(&phases[0].transform(body).expect("places"));
+    assert!(after >= 0.75 * before, "{before} before ControlFlow, {after} after");
+}

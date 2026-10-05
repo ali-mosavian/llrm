@@ -490,6 +490,9 @@ fn frequencies(function: &Function, shape: &Shape, odds: &Odds, trips: &BTreeMap
 /// out, `tested` being 1 when the test follows a trip and 0 when it precedes
 /// one. Only here, so that MIR and LIR estimates agree.
 pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, successors: &dyn Fn(i64) -> Vec<i64>, cycles: &[Cycle], given: &dyn Fn(i64, i64) -> f64) -> BTreeMap<i64, f64> {
+    // How often a trip of each loop reaches its exiting blocks together, which its exit test runs: more than once where
+    // one is in a loop nested in it, and each visit then takes that much less of the exit, so that the trips stay.
+    let visits: std::cell::RefCell<BTreeMap<i64, f64>> = std::cell::RefCell::new(BTreeMap::new());
     let counted = |from: i64, to: i64| -> Option<f64> {
         let next = successors(from);
         for one in cycles.iter().filter(|one| one.body.contains(&from)) {
@@ -498,13 +501,15 @@ pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, success
             if inside == 0 || outside == 0 {
                 continue;
             }
-            let trips = one.trips?;
+            // A loop without proven trips leaves the edge to the loops around it, which may state them.
+            let Some(trips) = one.trips else { continue };
             let exiting = one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count();
             if exiting != 1 && from != one.header && !one.latches.contains(&from) {
                 return None;
             }
             let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
-            let stay = (trips as f64 - tested) / (trips as f64 + 1.0 - tested);
+            let visited = visits.borrow().get(&one.header).copied().unwrap_or(1.0).max(1.0);
+            let stay = 1.0 - (1.0 - (trips as f64 - tested) / (trips as f64 + 1.0 - tested)) / visited;
             // The trips fix how often the loop is left, not which way: each
             // edge takes its side's mass by its own odds.
             let side: BTreeSet<i64> = next.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
@@ -520,22 +525,43 @@ pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, success
     // Innermost first: an inner header's scale is known when its outer loop is weighed.
     let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
     for found in cycles {
-        let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
-        for &at in order.iter().filter(|at| found.body.contains(at)) {
-            let entering: f64 = if at == found.header {
-                1.0
-            } else {
-                predecessors(at)
-                    .into_iter()
-                    .filter(|from| found.body.contains(from) && !backward(*from, at))
-                    .map(|from| mass.get(&from).copied().unwrap_or(0.0) * edge(from, at))
-                    .sum()
-            };
-            let inner = if at == found.header { 1.0 } else { scale.get(&at).copied().unwrap_or(1.0) };
-            mass.insert(at, entering * inner);
+        let weighed = |edge: &dyn Fn(i64, i64) -> f64, scale: &BTreeMap<i64, f64>| -> BTreeMap<i64, f64> {
+            let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
+            for &at in order.iter().filter(|at| found.body.contains(at)) {
+                let entering: f64 = if at == found.header {
+                    1.0
+                } else {
+                    predecessors(at)
+                        .into_iter()
+                        .filter(|from| found.body.contains(from) && !backward(*from, at))
+                        .map(|from| mass.get(&from).copied().unwrap_or(0.0) * edge(from, at))
+                        .sum()
+                };
+                let inner = if at == found.header { 1.0 } else { scale.get(&at).copied().unwrap_or(1.0) };
+                mass.insert(at, entering * inner);
+            }
+            mass
+        };
+        if found.trips.is_some() {
+            // By the odds alone: where the exits are visited, and how often.
+            let rough = weighed(&|from, to| given(from, to), &scale);
+            let total: f64 = found.body.iter().filter(|at| successors(**at).iter().any(|to| !found.body.contains(to))).map(|at| rough.get(at).copied().unwrap_or(0.0)).sum();
+            visits.borrow_mut().insert(found.header, total);
         }
+        let mass = weighed(&edge, &scale);
         let back: f64 = found.latches.iter().map(|latch| mass.get(latch).copied().unwrap_or(0.0) * edge(*latch, found.header)).sum();
-        scale.insert(found.header, (1.0 / (1.0 - back.min(1.0 - 1.0 / LOOP_SCALE))).min(LOOP_SCALE));
+        let mut weighed_scale = (1.0 / (1.0 - back.min(1.0 - 1.0 / LOOP_SCALE))).min(LOOP_SCALE);
+        // The proven trips are the scale, not what the odds around them add up to: a sum within a hair of 1 is
+        // where a leak of a tenth of a percent in a loop nested in this one reads as a sixth of the trips.
+        if let Some(trips) = found.trips {
+            let exiting: Vec<i64> = found.body.iter().copied().filter(|at| successors(*at).iter().any(|to| !found.body.contains(to))).collect();
+            if !exiting.is_empty() && exiting.iter().all(|at| found.latches.contains(at)) {
+                weighed_scale = trips as f64;
+            } else if exiting == [found.header] && !found.latches.contains(&found.header) {
+                weighed_scale = trips as f64 + 1.0;
+            }
+        }
+        scale.insert(found.header, weighed_scale);
     }
     let mut frequency: BTreeMap<i64, f64> = BTreeMap::new();
     for (index, &at) in order.iter().enumerate() {
