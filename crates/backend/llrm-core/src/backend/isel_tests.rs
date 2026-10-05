@@ -741,7 +741,7 @@ define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {{
     // Past them the tail's two bytes, one dword step down, then the dwords.
     let many = listing(&text(", !llrm.backward !0", "70"), "f");
     assert_eq!(many.iter().filter(|one| one.as_str() == "movsb").count(), 2, "{many:?}");
-    assert!(many.contains(&"rep movsd".to_owned()) && many.iter().any(|one| one.starts_with("sub si, 3")) || many.iter().any(|one| one.starts_with("sub ")), "{many:?}");
+    assert!(many.contains(&"rep movsd".to_owned()) && many.iter().any(|one| one == "sub si, 3") && many.iter().any(|one| one == "sub di, 3"), "{many:?}");
     let refused = std::panic::catch_unwind(|| listing(&text("", "%n"), "f"));
     assert!(refused.is_err(), "a memmove of no proved direction was selected");
 }
