@@ -2625,6 +2625,7 @@ impl Selector<'_, '_, '_> {
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
+                Some(Intrinsic::MemSetPattern) => self.memset_pattern(arguments, at, out),
                 Some(Intrinsic::MemCpy) => self.memcpy(arguments, at, out),
                 Some(Intrinsic::Unary(function)) => {
                     let Some(&(_, name)) = FLOAT_FUNCTIONS.iter().find(|(one, _)| *one == function) else { return refuse(format!("{function:?}")) };
@@ -3145,6 +3146,45 @@ impl Selector<'_, '_, '_> {
                 parts.push((stored, Some(Loc::Held(counted)), 1));
             }
         }
+        self.string_fill(pointer, parts, volatile, at, out);
+        Ok(())
+    }
+
+    /// A pattern fill: a word or dword in as many cells as its count says, in
+    /// at most `MEMSET_STORES` stores, else one `rep stosw` or `stosd`.
+    fn memset_pattern(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let &[destination, value, count, volatile] = arguments else { return refuse("a pattern fill of other than four operands") };
+        let volatile = self.constant(volatile, 1) != Some(0);
+        let ty = self.function.operand_type(&self.module.context, value).expect("a typed cell");
+        let width = match self.module.context.types.int_bits(ty) {
+            Some(width @ (16 | 32)) => width / 8,
+            _ => return refuse("a pattern fill of a cell other than a word or dword"),
+        };
+        let pointer = self.pointer(destination)?;
+        let stored = self.held(value, ty, at, out)?;
+        let counted = self.function.operand_type(&self.module.context, count).expect("a typed count");
+        if self.module.context.types.int_bits(counted).is_some_and(|bits| bits > 16) {
+            return refuse("a pattern fill counted past 16 bits");
+        }
+        if let Some(count) = self.constant(count, 2).filter(|&count| count <= MEMSET_STORES) {
+            for cell in 0..count {
+                let memory = Self::memory(pointer.moved(cell * i64::from(width)), width);
+                out.push(Arc::new(Insn { volatile, ..insn_of(at, semantics(Operation::Move, "mov", vec![Loc::Mem(memory)], vec![Loc::Held(stored)])) }));
+            }
+            return Ok(());
+        }
+        let count = match self.constant(count, 2) {
+            Some(count) => Loc::Imm(Imm { value: count, width: 2, address: None }),
+            None => Loc::Held(self.held(count, counted, at, out)?),
+        };
+        self.string_fill(pointer, vec![(stored, Some(count), width)], volatile, at, out);
+        Ok(())
+    }
+
+    /// `parts` of a fill, each a `rep stos` of its width through `pointer`'s
+    /// cell in es:di; a near destination's segment is set in ES around them.
+    fn string_fill(&mut self, pointer: Pointer, parts: Vec<(Held, Option<Loc>, u32)>, volatile: bool, at: i64, out: &mut Vec<Arc<Insn>>) {
+        let put = |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
         let mut through = match pointer {
             Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } => base,
             _ => {
@@ -3198,7 +3238,6 @@ impl Selector<'_, '_, '_> {
         if !matches!(pointer, Pointer::Far { .. }) {
             put(semantics(Operation::Pop, "pop", vec![Loc::Reg(Reg { register: Register::ES, width: 2 })], vec![]), out);
         }
-        Ok(())
     }
 
     /// `cmp` of a comparison's operands, a constant second; the predicate

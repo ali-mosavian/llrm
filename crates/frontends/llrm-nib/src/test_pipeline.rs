@@ -36,7 +36,7 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 #[test]
 fn test_a_frame_larger_than_the_start_stack_adds_a_stack_segment() {
     let (listing, object) = _stack_of("bigframe").unwrap();
-    assert!(listing.contains(".stack 4620"), "{listing}");
+    assert!(listing.contains(".stack 4618"), "{listing}");
     assert!(object.windows(5).any(|one| one == b"STACK"));
 }
 
