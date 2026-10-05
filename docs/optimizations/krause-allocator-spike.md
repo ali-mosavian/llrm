@@ -95,15 +95,22 @@ most crowded points the values needing a general register must come down to
 the registers there are. The first mattered most: the bodies greedy spills
 are mostly not crowded, they are clobbered.
 
-Same suite: 28 of the 82 bodies have nonzero greedy cost. On 25 the search
-finished, and **greedy is optimal on 24 of them**. The exception is
-`SUMTHREE` (QB, 42 values): greedy 0.250, optimum 0.218, 13% dearer, proved.
-Three bodies (`BLIT&`, and two `__main` of 37 and 208 values) still exhaust
-2M nodes with nothing cheaper found.
+After merging main (the suite is now 255 bodies, run by
+`LLRM_DEBUG=exact` over `find bench -name '*.c' -o -name '*.bas'`): 85 have
+nonzero greedy cost. On 66 the search finished and greedy is optimal on 65.
+On the 19 it could not finish it found nothing cheaper on 14 and a slightly
+cheaper allocation on 5 (`SUMTHREE%`, `_bench_grep`, `_bench_huge`,
+`nbody_fixed` twice), each under 12%.
 
-Under whole-value spilling, then, greedy's eviction is near-optimal on this
-suite. The spill-only model cannot see what splitting would win, and
-`SUMTHREE` is the one body worth reading to learn what eviction missed.
+The proved gap is `LRUUSE` (QB, 15 values): greedy spills #7 and #19 for
+0.0445, the optimum spills #8 alone for 0.0324. #7 and #19 do not overlap;
+each overlaps #8. Each loses to #8 on its own (0.0193 and 0.0252 against
+0.0324) so neither evicts it, but together they cost more than #8. Greedy
+compares a victim against one value at a time, never against the sum.
+
+That is a general rule, not a body: an eviction should weigh the victim against
+everything that would otherwise be spilled because of it. It is LLVM's
+last-chance recoloring (`codegen-improvements.md` section 6), unported here.
 
 ## Recommendation
 
@@ -122,7 +129,9 @@ its complexity.
 ## Next steps
 
 1. Read the paper; settle gap 2 (can the DP express splitting).
-2. Read `SUMTHREE`: dump greedy's and the optimum's spill sets and say what
-   eviction missed; fix that if it is a general rule (rule 6).
-3. Greedy holds on the rest, so put the effort in splitting and spill placement
-   (`codegen-improvements.md` section 6), not in a new allocator.
+2. Try the rule above in `_evict`/the spill decision: when a value would
+   spill, price the values it blocks. Test with `LRUUSE`'s shape (two
+   disjoint values each overlapping a heavier third) and the oracle as
+   judge: the gap on the suite must shrink and nothing may get dearer.
+3. Otherwise greedy holds; put the effort in splitting and spill placement,
+   not in a new allocator.

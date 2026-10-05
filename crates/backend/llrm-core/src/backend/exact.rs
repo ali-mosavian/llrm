@@ -196,6 +196,11 @@ pub fn report(body: &LirBody, pinned: &IndexMap<u32, Register>, unspillable: &BT
         better.cost,
         if better.optimal { "proved" } else { "unproved" }
     );
+    if better.cost + 1e-9 < greedy.cost {
+        let facts = Facts::of(body, profile, segments, unspillable, &protected);
+        let named = |set: &BTreeSet<u32>| set.iter().map(|one| format!("#{one}@{:.4}", facts.live[one].weight)).collect::<Vec<_>>().join(" ");
+        llrm_support::debug!("exact", "{}: greedy spills {} / exact spills {}", body.name, named(&greedy.spilled), named(&better.spilled));
+    }
 }
 
 fn choices_of(choices: &IndexMap<u32, Vec<Register>>, value: u32) -> &[Register] {
