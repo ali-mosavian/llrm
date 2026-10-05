@@ -581,7 +581,7 @@ fn simulated_in(
         return attempt(false);
     }
     let (with, without) = (attempt(true), attempt(false));
-    if traffic(&with, &weights, prices, &BTreeSet::new()) < traffic(&without, &weights, prices, &BTreeSet::new()) { with } else { without }
+    if cheaper(traffic(&with, &weights, prices, &BTreeSet::new(), frequency), traffic(&without, &weights, prices, &BTreeSet::new(), frequency)) { with } else { without }
 }
 
 /// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.
@@ -641,14 +641,14 @@ fn simulated_with(
         // The jump a bridge on a loop's back edge takes runs every trip, unless another file's values already bring the bridge;
         // and what a loop that fits its registers does not hold, it need not bridge to hold.
         let critical: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().filter(|edge| place[&edge.0] >= place[&edge.1] && !bridged.contains(edge) && room.get(&edge.1).is_some_and(|peak| *peak > machine.general.len())).collect();
-        let mut best = traffic(&result, weights, prices, &critical);
+        let mut best = traffic(&result, weights, prices, &critical, frequency);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
             let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
-            let moved = traffic(&tried, weights, prices, &critical);
-            if moved < best {
+            let moved = traffic(&tried, weights, prices, &critical, frequency);
+            if cheaper(moved, best) {
                 best = moved;
                 result = tried;
                 dropped = trial;
@@ -659,15 +659,24 @@ fn simulated_with(
 }
 
 /// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
-fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>) -> f64 {
-    let blocks: f64 = result
-        .edits
-        .iter()
-        .map(|(at, edit)| weights.block(*at) * prices.load * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
-        .sum();
-    // A bridged edge takes its jump as well.
-    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * (prices.load * values.len() as f64 + if critical.contains(&(*from, *to)) { prices.jump } else { 0.0 })).sum();
-    blocks + edges
+fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>, frequency: &Frequency) -> (f64, f64) {
+    let count = |weigh: &dyn Fn(i64) -> f64, edge: &dyn Fn(i64, i64) -> f64, load: f64, jump: f64| -> f64 {
+        let blocks: f64 = result
+            .edits
+            .iter()
+            .map(|(at, edit)| weigh(*at) * load * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
+            .sum();
+        // A bridged edge takes its jump as well.
+        let edges: f64 = result.across.iter().map(|((from, to), values)| edge(*from, *to) * (load * values.len() as f64 + if critical.contains(&(*from, *to)) { jump } else { 0.0 })).sum();
+        blocks + edges
+    };
+    // At the level's price, then in clocks where that ties: code bytes tie often, and the trips repeat what a read costs.
+    (count(&|at| weights.block(at), &|from, to| weights.edge(from, to), prices.load, prices.jump), count(&|at| frequency.block(at), &|from, to| frequency.edge(from, to), 1.0, 1.0))
+}
+
+/// Whether `a` is cheaper than `b`: by the first price, then by the second.
+fn cheaper(a: (f64, f64), b: (f64, f64)) -> bool {
+    a.0 < b.0 || (a.0 == b.0 && a.1 < b.1)
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
