@@ -45,6 +45,7 @@ pub mod machinecse;
 pub mod machinedce;
 pub mod masm;
 pub mod nativeframe;
+pub mod nearcode;
 pub mod omfwrite;
 pub mod overlap;
 pub mod parcopy;

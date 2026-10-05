@@ -1,5 +1,21 @@
-reason = "own frames are the default in every dialect: bas is the old basown, bas -O2 vs bc instructions -66.9% to -75.9%"
+reason = "Nib: an unexported procedure only called directly is entered by a near call (call/ret, 4-byte frame offset), as C's static"
 blessed = "2026-10-05"
+
+[bas.O2]
+instructions = 978124
+memory_operands = 217092
+code_bytes = 1217
+data_bytes = 189
+bss_bytes = 0
+kernel_ms = 13.0589
+
+[bas.Os]
+instructions = 1187194
+memory_operands = 138105
+code_bytes = 397
+data_bytes = 145
+bss_bytes = 0
+kernel_ms = 15.8477
 
 [c.O2]
 instructions = 1116131
@@ -7,7 +23,7 @@ memory_operands = 164102
 code_bytes = 1251
 data_bytes = 68
 bss_bytes = 96
-kernel_ms = 14.8897
+kernel_ms = 14.89
 
 [c.Os]
 instructions = 1187194
@@ -20,34 +36,18 @@ kernel_ms = 15.8379
 [nib.O2]
 instructions = 972148
 memory_operands = 199100
-code_bytes = 1205
+code_bytes = 1203
 data_bytes = 76
 bss_bytes = 0
-kernel_ms = 12.9688
+kernel_ms = 12.9686
 
 [nib.Os]
 instructions = 1350434
 memory_operands = 230138
-code_bytes = 564
+code_bytes = 562
 data_bytes = 32
 bss_bytes = 0
 kernel_ms = 18.0146
-
-[bas.O2]
-instructions = 978124
-memory_operands = 217092
-code_bytes = 1217
-data_bytes = 189
-bss_bytes = 0
-kernel_ms = 13.0593
-
-[bas.Os]
-instructions = 1187194
-memory_operands = 138105
-code_bytes = 397
-data_bytes = 145
-bss_bytes = 0
-kernel_ms = 15.8477
 
 [ow.O2]
 instructions = 1088249

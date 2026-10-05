@@ -11,7 +11,7 @@ use crate::context::{ConstantExpr, ConstantKind, GlobalId};
 use crate::facts::Facts;
 use crate::intrinsics::Intrinsic;
 use crate::memory;
-use crate::module::{Function, GlobalKind, InstId, MetadataOperand, Module, Operand};
+use crate::module::{Function, GlobalKind, InstId, Linkage, MetadataOperand, Module, Operand};
 use crate::opcode::Opcode;
 use crate::passes::{ModuleAnalyses, ModuleAnalysis};
 use crate::program::{Program, ProgramAnalyses, ProgramAnalysis};
@@ -318,4 +318,25 @@ pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
         }
     }
     out
+}
+
+/// A function attribute a frontend states: nothing outside the module's code enters this
+/// function by a far call, so where every call of it is direct, it may be entered near.
+pub const NEAR_CODE: &str = "nearcode";
+
+/// Defined functions only their own module's calls reach: internal or private, not interrupt
+/// handlers, and never named but as a callee. What a call to one may assume of its callers
+/// (where they are, what they pass) holds for every call there is.
+pub fn direct_only(module: &Module) -> BTreeSet<GlobalId> {
+    let named = addressed(module);
+    module
+        .functions()
+        .filter(|(id, global, function)| {
+            !function.is_declaration()
+                && matches!(global.linkage, Linkage::Internal | Linkage::Private)
+                && function.calling_convention != crate::opcode::X86_INTR
+                && !named.contains(id)
+        })
+        .map(|(id, _, _)| id)
+        .collect()
 }
