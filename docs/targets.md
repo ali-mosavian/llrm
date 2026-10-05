@@ -298,80 +298,108 @@ description.
 ### Where today's code sits
 
 There is no generic LIR. `isel::selected()` emits x86 machine LIR directly
-(`Semantics` named `mov`, `adc`, `shld`, `idiv`) over virtual registers, and its
-module doc says it is as SelectionDAG makes MachineInstrs. It is IRTranslator,
-Legalizer and InstructionSelect fused in one per-function pass that walks blocks
-in reverse post-order and selects per MIR instruction. Legalization is inline:
-i64 is two dwords in `wides`, a far pointer two words in `fars`, a dword joined
-from two words in `joins`, an aggregate call result in `fields`. RegBankSelect
-does not exist: banks are implicit (x87 values have width 10; GPR and selector
-classes come from `regclass.rs` per operand). `select.rs` is the encoder after
-selection, not a selector.
+(`Semantics` named `mov`, `adc`, `shld`, `idiv`) over virtual registers. It is
+not four phases but three stages: a whole-function MIR analysis, a per-instruction
+selection in reverse post-order, and four whole-function post-passes. Legalization
+is inline: i64 is two dwords in `wides`, a far pointer two words in `fars`, a
+dword joined from two words in `joins`, an aggregate call result in `fields`.
+RegBankSelect does not exist: banks are implicit (x87 values have width 10; GPR
+versus selector is decided late, in `regclass`/`allocate`, from the intersection
+of a value's uses). `select.rs` is the encoder after selection, not a selector.
 
-| Region (`backend/`) | Phase | Becomes |
+| Region (`backend/`) | Stage | Becomes |
 |---|---|---|
-| `isel.rs` `convention`, `passing`, `slot`, `returned` (:65-179), `call`, `called`, `ret` (:2539-2973, ~470) | IRTranslator (call lowering) | generic lowering reading the calling-convention description; `Abi` trait stays for QB's per-callee contracts |
-| `body`, phis, `switch`, merged conditions (:577-1338) | IRTranslator | generic; `fuse`/`narrowed`/`pair` pre-passes are combiner steps |
-| `width_of`, `size_of` (:202,:282) | IRTranslator (type to low-level type) | datalayout |
-| `wide.rs` i64 expansion, `far_cast`, `float_cast`, `far_loaded`, `memcpy`/`memset` expansion (:2974-3339), `divide`, `compare`, `division.rs`, `arithmetic.rs` | Legalizer | rules in the table; helpers in the x86 family or code16 crate |
-| `Pointer`, `indexed`, `widened`, `carried`, `window`, `memory`, `folded` (:1487-2272, ~800) | InstructionSelect (complex patterns) | address-form table plus generic folding; far and huge folds stay code16 hooks |
+| `isel.rs` `fuse`, `narrowed`, `pair`, `covered_by_pattern`, `merged_condition`, `prezeroed`, `phis_from`, `alloca_groups` | MIR analysis before translation (LLVM's CodeGenPrepare and builder decisions): they read MIR users and types | stays on MIR until generic LIR exists |
+| `convention`, `passing`, `slot`, `returned` (:65-179), `call`, `called`, `ret` (:2539-2973) | IRTranslator (call lowering) | generic lowering reading the calling-convention description; `Abi` stays for QB's per-callee contracts |
+| `body`, phis, `switch`, frame layout with `hole`, `variadic`, interrupt `unsealed`, `lined`, `odds`, `pins`, `inputs` | IRTranslator | generic |
+| `width_of`, `size_of` | IRTranslator (type to low-level type) | datalayout |
+| `wide.rs` i64, `far_cast`, `float_cast`, `far_loaded`, `memcpy`/`memset` (:2974-3339), `divide`, `compare`, `division.rs`, `arithmetic.rs` | Legalizer | rules; helpers in the x86 family or code16 crate |
+| `Pointer`, `indexed`, `widened`, `carried`, `window`, `memory`, `folded` (:1487-2272) | address-mode selection; decided at the GEP from MIR analyses (`facts`, `exact`, `typed`) and edited afterwards by `promote` | for code16 an address-mode analysis on MIR feeding translation; complex patterns on generic LIR are for code32 and arm64 |
 | `matcher.rs`, `patterns.isel`, generator | InstructionSelect | stays; gains the hooks' replacements |
-| `combined.rs` (`farload`, `comparefold`, `rmw`, peephole argument rules), `farcall.rs` | combiner after select | stays x86 family; far parts code16 |
+| post-passes in order: `unread_halves_dropped`, `combined` (`farload`, `comparefold`, `rmw`, peephole arguments, `dword_pairs`), `widen` (`exact_sums`, `addressforms::promote`, which allocates ids after `next`), `rooted` | after selection | stay x86 family; far parts code16 |
+| `farcall.rs` | first machine phase | code16 |
 | `selects.rs`, `ehprepare.rs`, `nearcode.rs` | MIR pre-passes | stay MIR |
 | `unwind.rs`, `masm`, `frame`, `prologue`, `omfwrite` | other | unchanged |
 | `lower_int64.rs` | data (helper blobs), name is stale | per-target helper table |
 | `pointers.rs` | dead (only its own tests use it) | left as is: nothing is dropped from code16 |
 
-### The legalizer, exactly as `wide.rs` does it
+### The legalizer, as `wide.rs` does it
 
 On code16 with a 386+ profile i8, i16 and i32 are legal and i64 narrows to two
-dwords, low first (`wides`). The rule table has to reproduce, per op:
+dwords, low first. The key of a legality rule is the full type tuple (source and
+destination of a cast, shift amount, address space), with type ranges; decisions
+made on values (`sign_bits`, a constant count, a power of two) stay inside the
+named action. For code16 the table is mostly `custom(helper)`: the action emits
+target instructions directly, never generic ops that selection would re-select
+(`wide()` puts constant halves in registers; a generic `G_ADD` would select
+`add r, imm`). What it does today:
 
-- casts to i64: `movsx`/`movzx` for a narrow source, high = `cdq` (sext) or
+- casts to i64: `movsx`/`movzx` for a narrow source, high is `cdq` (sext) or
   `mov 0` (zext); from i64: the low half, `and 1` for i1; `sitofp` stores the pair
-  to an 8-byte temp and `fild`s it; other ops from i64 unsupported;
+  to an 8-byte temp and `fild`s it; other ops from i64 are unsupported;
 - add/sub `add`+`adc`, `sub`+`sbb`; and/or/xor pairwise;
-- shifts by a constant only, mod 64: 1..31 `shld`/`shrd` with the half shift,
-  32 and over move a half and fill the other; a variable count is unsupported;
-- mul: one `imul` when both are 32-bit values, else `mul` plus two `imul`s and
-  adds; compare: `xor`/`xor`/`or` for equality, `sub`+`sbb` for order;
-- div/rem: a power of two by bias and shifts; a narrow divisor by one or two
-  `div`s; everything else by the inline helper blobs (`__I8D`, `__U8D`, and the
-  32-bit-constant forms), clobbering AX BX CX DX;
-- `llvm.smul.fix`/`sdiv.fix` by `imul`+`shrd`, `cdq`/`shld`/`idiv`.
+- shifts by a constant only, mod 64: 1..31 `shld`/`shrd` with the half shift, 32
+  and over move a half and fill the other; a variable count is unsupported;
+- mul: one `imul` when both operands are sign-extended i32s, else `mul` plus two
+  `imul`s and adds; compare: constant halves are immediates, `xor`/`xor`/`or` for
+  equality, `sub`+`sbb` for order;
+- division: signed by a power of two by bias and shifts; signed by a narrow divisor
+  by one `idiv` or two `div`s with a sign fix; everything else, all unsigned
+  included, by the inline helper blobs (`__I8D`, `__U8D` and the 32-bit-constant
+  forms), clobbering AX BX CX DX.
 
-On a future 8086/286 profile i32 narrows to i16 pairs by the same rule kinds with
-a different table; that is the profile's rule set, not code16's.
+`llvm.smul.fix`/`sdiv.fix` are i32 intrinsics (`imul`+`shrd`, `cdq`/`shld`/`idiv`),
+not i64 legalization. The prose is a summary: the oracle below is the spec.
+
+A future pre-386 profile narrows i32 to i16 pairs by the same rule kinds with a
+different table.
 
 ### The 26 hooks by phase
 
 | Phase | Hook steps | Form |
 |---|---|---|
-| IRTranslator | `call`, `ret`, `invoke`, `br`, `extractvalue` (5) | generic lowering from the calling-convention description; intrinsics inside `call` split as: memset/memcpy are legalizer rules, port in/out and float unary are patterns, ptrdiff/window are code16, va_start is the convention |
-| Legalizer | `wide_cast` (2), `wide_binary`, `float_cast` (2), `float_bits`, `far_load`, `far_store`, `far_cast` (2), `unselected_cast`, `divide`, `words` (13) | rules: narrow, lower, unsupported. `far_*` are code16 rules (pair pointers); `float_bits` is a generic lowering of a float-constant store; `words` is a load-narrowing combine |
-| InstructionSelect | `getelementptr`, `scaled`, `setcc` (5), | complex pattern (address forms), pattern in a cost `group` with a chain generator hook, patterns over a condition-code table |
+| IRTranslator | `call`, `ret`, `invoke`, `br`, `extractvalue` | generic lowering from the calling-convention description; inside `call`: memset/memcpy are legalizer rules, port in/out and float unary are patterns, ptrdiff/window are code16, va_start is the convention |
+| Legalizer | `wide_cast` (2), `wide_binary`, `float_cast` (2), `float_bits`, `far_load`, `far_store`, `far_cast` (2), `unselected_cast`, `divide`, `words` | rules. `far_*` are code16 rules; `float_bits` a generic lowering of a float-constant store; `words` a load-narrowing combine |
+| InstructionSelect | `getelementptr`, `scaled`, `setcc` (5) | `getelementptr` per the address-mode row above; `scaled` a pattern in a cost `group` with a chain-generator hook; `setcc` patterns over a condition-code table |
 | other | `landing_pad` | runtime hook |
-
-Not all 26 steps are listed by name above; the totals are 5 + 13 + 7 + 1.
 
 ### Staging, byte-identical
 
-1. A legality table in the description, with a differential test: every (op,
-   type) the selector accepts or refuses today is `legal`, a named action, or
-   `unsupported` in the table. The actions are still the existing functions.
-2. The legalizer's state (`wides`, `fars`, `joins`, `fields`, `halves`) out of
-   `Selector` into its own value map; selector state (`fused`, `covered`,
-   `consumed`, `paired`) and address state (`pointers`, `materialized`,
-   `far_globals`) stay apart.
-3. Rules replace the hooks, `wide.rs` first, each rule reproducing today's emitted
-   sequence; `far_*` and float casts next.
-4. Generic opcodes: the IRTranslator emits them, the legalizer rewrites them in
-   place, selection maps them to forms. **Hazard:** virtual register numbers come
-   from `fresh` in emission order and decide allocation and spill order. Until a
-   canonical numbering is proved identical, the three phases run pipelined per MIR
-   instruction in today's order, not as three whole-function sweeps.
-5. RegBankSelect: banks declared in the register description; `regclass` reads
-   them (after cost-spill).
+0. **A shadow oracle first.** Run the old and the new selector on every function
+   of the corpus and compare the isel LIR after the "isel" stage, ids included,
+   plus a snapshot of the constant pool. Equal isel LIR and pool mean equal bytes,
+   since everything after isel is deterministic. Compare with a dump that prints
+   every field, not `==`: `Mem`'s hand-written `Eq` skips `exact`, `through` and
+   `disp_width`. It names the function and instruction, which `.obj` comparison
+   does not.
+1. A legality table in the description. Derive the "today" column statically from
+   the generator's opcode x type walk to candidates plus the `refuse(` sites in
+   each hook as `unsupported`; a unit test checks the table equals it, and the
+   corpus count of `Unselected` messages must not change.
+2. Out of `Selector`: the legalizer's state (`wides`, `fars`, `joins`, `fields`,
+   `halves`). Three sets stay shared: `paired` (`wide_binary` reads it),
+   `consumed` (four analyses write it, patterns read it) and the dead-half
+   elimination, which reads `halves` and `folded`.
+3. Rules replace the hooks one opcode family per PR, each behind the oracle,
+   `wide.rs` first.
+4. Generic opcodes for code32 first (below); code16 stays on the fused selector
+   behind the same interface and moves over family by family under the oracle.
+5. RegBankSelect: for code16 it declares GPR and x87 only and leaves GPR versus
+   segment to the allocator (assigning segments early changes code). Its real use
+   is code32 and arm64.
+
+Hazards the oracle must cover: value ids are numbered lazily on first reference,
+in this order today: parameters in the prologue, `phis_from` in layout order
+(before any selection), reverse post-order selection, then `promote`; ids order
+iteration in the spiller and coalescer, so one counter is threaded through and the
+order kept. The constant pool is module-wide and interns in first-asked order; a
+function is selected up to four times (`hole` x spiller/allocator) and rejected
+runs still intern. `materialized` and `far_globals` cache per block and are spliced
+before the current instruction; `current` is `None` during `phis_from`, so a
+far-global phi input is refused today and must stay refused. `scratch` lives for one
+MIR instruction; calls and inline helpers are keyed by `at`, and a legalized
+result inherits its instruction's `at`. A canonical numbering would itself change
+code16's output, so the three stages never run as whole-function sweeps there.
 
 ## End state: a generic machine instruction
 
@@ -466,24 +494,27 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 4 | generated code per target: `llrm-iselgen`, hooks resolved at generation, `CONSTRUCTORS` into the `.isel` header, generators run from the target's `build.rs` | `build.rs`, `matcher.rs`, `peephole.rs` |
 | 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes from the encoder | `parse.rs`, `isel/matcher.rs:366` |
 | 6 | the form table is the only list of fixed registers, flags, ties and implicit defs/uses; string-op rows | `target.rs:67-162` (~100 lines) |
-| 7 | legality table in the description, with the differential test (staging 1) | `width_of`, `is_wide`, `is_far` read it |
-| 8 | the legalizer's state out of `Selector` (staging 2) | `isel.rs`, `wide.rs` |
-| 9 | register description; `RegId` as an alias of iced's `Register`, `RegisterInfo` queries, generated constants, the parity test | no behaviour change |
-| 10 | `RegId` migration in slices by area, one PR each; `regclass`, `allocate`, `ssaspill`, `constrain` get only the mechanical rename after cost-spill; then the alias becomes a newtype | ~830 sites |
-| 11 | legalizer rules replace the hooks: `wide.rs` first, then `far_*`, then float casts | 13 hooks |
-| 12 | calling-convention description and generic call/ret lowering | `isel.rs:65-179`, `callregs.rs` |
-| 13 | datalayout, address spaces, the address-form table per (mode, address size); address-mode complex patterns; space numbers become queries; `foreign_span` linear; `CostModel`'s code16 notions behind space kinds | HIR, analysis, transforms, `select.rs`, `affine.rs`, `Pointer` |
-| 14 | operand model, one PR each: `name` to `OpcodeId` (351 sites); `Mem` to `AddressRef` + `MemInfo` (487); `Loc::St` to a `Reg` (47); `Loc::Address` reuses `AddressRef` | `llrm-lir`, every `Semantics` consumer |
-| 15 | generic opcodes: IRTranslator emits them, legalizer in place, selection per MIR instruction (staging 4) | `isel.rs` |
+| 7 | shadow oracle: old and new selector compared per function (isel LIR dump with every field, pool snapshot) | test tool only |
+| 8 | legality table in the description, with the derived-table test | `width_of`, `is_wide`, `is_far` read it |
+| 9 | the legalizer's state out of `Selector`; three shared sets stay | `isel.rs`, `wide.rs` |
+| 10 | register description; `RegId` as an alias of iced's `Register`, `RegisterInfo` queries, generated constants, the parity test | no behaviour change |
+| 11 | `RegId` migration in slices by area, one PR each; `regclass`, `allocate`, `ssaspill`, `constrain` get only the mechanical rename after cost-spill; then the alias becomes a newtype | ~830 sites |
+| 12 | legalizer rules replace the hooks, one opcode family per PR under the oracle: `wide.rs` first, then `far_*`, then float casts | 13 hooks |
+| 13 | calling-convention description and generic call/ret lowering | `isel.rs:65-179`, `callregs.rs` |
+| 14a | address-space kinds replace the literals 0/1/2/4/5 in MIR and HIR; `foreign_span` linear | HIR, analysis, transforms |
+| 14b | the address-form table per (mode, address size) read by `Pointer`, `indexed`, `select.rs`, `affine.rs` | `isel.rs`, `select.rs` |
+| 14c | `CostModel`'s code16 notions behind space kinds | `llrm-mir` |
+| 15 | operand model, one PR each (own track, with 10 and 11): `name` to `OpcodeId` (351 sites); `Mem` to `AddressRef` + `MemInfo` (487); `Loc::St` to a `Reg` (47); `Loc::Address` reuses `AddressRef` | `llrm-lir`, every `Semantics` consumer |
 | 16 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, far arms of `isel.rs` |
 | 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
-| 19 | RegBankSelect: banks in the register description; class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
-| 20 | `llrm-x86-code32` skeleton: descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
+| 19 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
+| 20 | `llrm-x86-code32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
-depends on them. code32 (20) needs none of 7 to 15 except the data it reads; they
-move code16 onto the same machinery, so the skeleton adds descriptions, not code. Not in this task: running or linking code32, a 32-bit object
+depends on them. code32 (20) has no baseline to match, so the generic pipeline is designed there;
+7 to 15 move code16 onto the same machinery under the oracle, and the skeleton adds
+descriptions, not code. Not in this task: running or linking code32, a 32-bit object
 writer, code64, arm64.
 
 ## Metric
@@ -506,5 +537,3 @@ lines in its crate and 837 description lines (`x86.instr` 88, `patterns.isel`
 
 - Whether `llrm-lir` is the family crate or its own: proposed its own, so the BC
   lifter and the backend both depend on it.
-- Whether the three GlobalISel phases may ever run as whole-function sweeps:
-  only if a canonical value numbering gives byte-identical allocation.
