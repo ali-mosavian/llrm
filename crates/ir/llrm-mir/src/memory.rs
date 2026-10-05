@@ -39,6 +39,9 @@ pub struct Summary {
     /// It is `llvm.experimental.memset.pattern`: as `memset`, of cells
     /// of the second argument's width, counted by the third.
     pub pattern: bool,
+    /// It is `llvm.memcpy` or `llvm.memmove`: its second argument's bytes, as
+    /// many as the third says, go to its first.
+    pub copy: bool,
     /// It is `llvm.lifetime.start` or `.end`: the object its second argument
     /// points to has its bytes live, or not, from here.
     pub lifetime: bool,
@@ -54,7 +57,7 @@ pub fn callees(module: &Module) -> Callees {
         .filter_map(|(at, global)| match &global.kind {
             GlobalKind::Function(function) => {
                 let named = |prefix: &str| global.name.as_deref().is_some_and(|name| name.starts_with(prefix));
-                Some((GlobalId(at as u32), Summary { memset: named("llvm.memset."), pattern: named("llvm.experimental.memset.pattern."), lifetime: named("llvm.lifetime."), ..summary(function) }))
+                Some((GlobalId(at as u32), Summary { memset: named("llvm.memset."), pattern: named("llvm.experimental.memset.pattern."), copy: named("llvm.memcpy.") || named("llvm.memmove."), lifetime: named("llvm.lifetime."), ..summary(function) }))
             }
             GlobalKind::Variable(_) => None,
         })
@@ -71,8 +74,16 @@ pub fn summary(function: &Function) -> Summary {
         nocapture: function.parameter_attrs.iter().map(|one| Facts::of(one).no_capture()).collect(),
         memset: false,
         pattern: false,
+        copy: false,
         lifetime: false,
     }
+}
+
+/// A call to `llvm.memcpy` or `llvm.memmove`: where to, from where, and how many bytes.
+pub fn copy(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> Option<(Operand, Operand, Operand)> {
+    let summary = callees.get(&callee(context, function, inst)?)?;
+    let operands = &function.instruction(inst).operands;
+    (summary.copy && operands.len() == 5).then(|| (operands[0], operands[1], operands[2]))
 }
 
 /// A call to `llvm.experimental.memset.pattern`: where, the cell, and how many cells.

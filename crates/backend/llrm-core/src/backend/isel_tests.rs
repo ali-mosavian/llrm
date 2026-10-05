@@ -713,6 +713,39 @@ define i16 @f() addrspace(1) {{
     assert!(!few.iter().any(|one| one.starts_with("rep")) && few.iter().filter(|one| one.starts_with("mov word ptr [bp")).count() == 2, "{few:?}");
 }
 
+/// A memmove whose direction a pass proved is a forward or a backward copy:
+/// downward it is `std`, the tail's bytes from the last byte, then the dwords
+/// from the last dword, and `cld`. One no pass proved is refused.
+#[test]
+fn test_a_memmove_is_a_forward_or_a_backward_string_move() {
+    let text = |way: &str, length: &str| {
+        format!(
+            "declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {{
+  call void @llvm.memmove.p0.p0.i16(ptr %a, ptr %b, i16 {length}, i1 false){way}
+  ret i16 0
+}}
+!0 = !{{}}
+"
+        )
+    };
+    let forward = listing(&text(", !llrm.forward !0", "%n"), "f");
+    assert!(forward.contains(&"rep movsd".to_owned()) && !forward.contains(&"std".to_owned()), "{forward:?}");
+    let backward = listing(&text(", !llrm.backward !0", "%n"), "f");
+    let at = |what: &str| backward.iter().position(|one| one == what).unwrap_or_else(|| panic!("{what}: {backward:?}"));
+    assert!(at("std") < at("rep movsb") && at("rep movsb") < at("rep movsd") && at("rep movsd") < at("cld"), "{backward:?}");
+    // A few bytes are loads and stores, the highest first.
+    let few = listing(&text(", !llrm.backward !0", "18"), "f");
+    let first = |what: &str| few.iter().position(|one| one.contains(what)).unwrap_or_else(|| panic!("{what}: {few:?}"));
+    assert!(first("[si+16]") < first("[si+12]") && first("[si+4]") < first("[si]") && !few.contains(&"std".to_owned()), "{few:?}");
+    // Past them the tail's two bytes, one dword step down, then the dwords.
+    let many = listing(&text(", !llrm.backward !0", "70"), "f");
+    assert_eq!(many.iter().filter(|one| one.as_str() == "movsb").count(), 2, "{many:?}");
+    assert!(many.contains(&"rep movsd".to_owned()) && many.iter().any(|one| one.starts_with("sub si, 3")) || many.iter().any(|one| one.starts_with("sub ")), "{many:?}");
+    let refused = std::panic::catch_unwind(|| listing(&text("", "%n"), "f"));
+    assert!(refused.is_err(), "a memmove of no proved direction was selected");
+}
+
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest
 /// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
 /// `stosb`, as the old route's `_fill`.

@@ -180,6 +180,14 @@ static _MODULE: LazyLock<(
     latency.insert("rep_stos", cost["rep_stos"]);
     latency.insert("rep_stos_cell", cost["rep_stos_cell"]);
 
+    // REP MOVS: Intel's 486 is 12+3n and the P5's 13+n; the rest are small-count
+    // rankings like REP STOS', where fast strings have not paid for their startup.
+    //                              486  P5  P6  K5  K6  K7 Core
+    cost.insert("rep_movs", [12, 13, 30, 12, 12, 15, 30]);
+    cost.insert("rep_movs_cell", [3, 1, 1, 1, 1, 1, 1]);
+    latency.insert("rep_movs", cost["rep_movs"]);
+    latency.insert("rep_movs_cell", cost["rep_movs_cell"]);
+
     // 32-bit multiply, for telling it from the 16-bit one
     cost.insert("mul_r32", [26, 10, 4, 4, 3, 5, 3]);
     latency.insert("mul_r32", [26, 10, 4, 4, 3, 5, 3]);
@@ -282,6 +290,8 @@ mod tests {
                 "lea",
                 "rep_stos",
                 "rep_stos_cell",
+                "rep_movs",
+                "rep_movs_cell",
                 "mul_r32",
                 "leave",
                 "x87_load",
@@ -341,6 +351,8 @@ mod tests {
                 "lea",
                 "rep_stos",
                 "rep_stos_cell",
+                "rep_movs",
+                "rep_movs_cell",
                 "mul_r32",
                 "leave",
                 "x87_load",

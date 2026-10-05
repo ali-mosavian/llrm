@@ -39,7 +39,7 @@ use llrm_mir::context::{Constant, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::{Type, TypeId};
@@ -245,13 +245,40 @@ struct _Found {
     /// The store or memset each trip makes.
     effect: InstId,
     pointer: Operand,
-    byte: Byte,
+    stored: Stored,
     /// Bytes each trip fills.
     bytes: BigInt,
     /// Counters the exit reads from the header, with their steps.
     left: Vec<(ValueId, BigInt)>,
     /// The memset's pointer space and length width.
     memset: (u32, u32),
+}
+
+/// What a loop's trips make of the bytes they reach.
+enum Stored {
+    Fill(Byte),
+    Copy(Copy),
+}
+
+/// A load and a store of one cell each trip, the stored value the loaded:
+/// where it reads, how it may overlap what it writes, and whether it runs down.
+struct Copy {
+    load: InstId,
+    source: Operand,
+    how: How,
+    descending: bool,
+    /// The source's pointer space.
+    space: u32,
+}
+
+/// What lets one copy stand for the loop's trips in order.
+#[derive(Clone, Copy, PartialEq)]
+enum How {
+    /// The two ranges are apart: `llvm.memcpy`.
+    Apart,
+    /// They overlap, but what each trip reads is as the trips before it left it
+    /// untouched: `llvm.memmove`, running the loop's way.
+    Overlapping,
 }
 
 /// What a fill sets each byte to.
@@ -290,12 +317,18 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
     let work = chain.iter().flat_map(|&block| operations(function, block).into_iter().filter(move |&inst| function.terminator(block) != Some(inst))).collect::<Vec<_>>();
     let effects = work.iter().copied().filter(|&inst| !pure(inst)).collect::<Vec<_>>();
     let steps = work.iter().copied().filter_map(|inst| _stepped(unit, &phis, latch, inst)).collect::<BTreeSet<_>>();
-    let [effect] = effects[..] else { return None };
     if steps.len() != phis.len() {
         return None;
     }
     let still = induction::invariant(function, &loop_.body);
-    let (pointer, byte, bytes) = _stored(unit, callees, effect, &still)?;
+    let (effect, pointer, mut stored, bytes) = match effects[..] {
+        [effect] => {
+            let (pointer, byte, bytes) = _stored(unit, callees, effect, &still)?;
+            (effect, pointer, Stored::Fill(byte), bytes)
+        }
+        [one, other] => _copied(unit, one, other)?,
+        _ => return None,
+    };
 
     let facts = unit.registers();
     let Operand::Value(address) = pointer else { return None };
@@ -307,11 +340,30 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
         return None;
     }
     let stride = formula.step.known()?;
-    if stride != bytes || proof.width() != width || unit.layout.pointer(unit.space(pointer)?).index_bits != width {
+    let descending = matches!(stored, Stored::Copy(_)) && stride == -bytes.clone();
+    if (stride != bytes && !descending) || proof.width() != width || unit.layout.pointer(unit.space(pointer)?).index_bits != width {
         return None;
     }
+    let pattern = match &stored {
+        Stored::Fill(byte) => matches!(byte, Byte::Pattern(..)),
+        Stored::Copy(_) => false,
+    };
+    if let Stored::Copy(copy) = &mut stored {
+        copy.descending = descending;
+        let Operand::Value(source) = copy.source else { return None };
+        let from = walk.values.get(&source).filter(|one| one.pointer.is_some())?;
+        let (bits, to) = (unit.layout.pointer(unit.space(copy.source)?).index_bits, formula);
+        if from.step != to.step || from.width() != width || bits != width || unit.layout.carries(unit.space(copy.source)?) {
+            return None;
+        }
+        copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
+    }
     // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its setup.
-    if matches!(byte, Byte::Pattern(..)) && !_pays(unit, callees, &chain, header, &proof, costs, size) {
+    let moved = match &stored {
+        Stored::Copy(copy) => Some((bytes.to_i64()?, copy.descending && copy.how == How::Overlapping)),
+        Stored::Fill(_) => None,
+    };
+    if (pattern || moved.is_some()) && !_pays(unit, callees, &chain, header, &proof, costs, size, moved) {
         return None;
     }
     // Trips of a byte never wrap the index; wider cells need a promise.
@@ -343,14 +395,14 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
     }
     left.dedup();
     let memset = (unit.space(pointer)?, width);
-    Some(_Found { proof, header, first: chain[0], latch, exit, effect, pointer, byte, bytes, left, memset })
+    Some(_Found { proof, header, first: chain[0], latch, exit, effect, pointer, stored, bytes, left, memset })
 }
 
 /// Whether the one fill is cheaper than the loop for its trips, the proven
 /// count or the profit model's estimate: `rep stos` pays its setup and each
 /// cell, and a count of few cells is stores. Under `size` it is the code bytes
 /// of the loop against the fill's.
-fn _pays(unit: &Unit, callees: &Callees, chain: &[BlockId], header: BlockId, proof: &CountedLoop, costs: &OperationCosts, size: bool) -> bool {
+fn _pays(unit: &Unit, callees: &Callees, chain: &[BlockId], header: BlockId, proof: &CountedLoop, costs: &OperationCosts, size: bool, moved: Option<(i64, bool)>) -> bool {
     let function = unit.function;
     let each: i64 = std::iter::once(&header)
         .chain(chain)
@@ -361,19 +413,31 @@ fn _pays(unit: &Unit, callees: &Callees, chain: &[BlockId], header: BlockId, pro
         .sum();
     let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
     let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
-    _cheaper(each, known, most, costs, size)
+    _cheaper(each, known, most, costs, size, moved)
 }
 
 /// Whether a fill beats a loop of `each` per trip, over `known` trips or, where
-/// there are none, up to `most` of them.
-fn _cheaper(each: i64, known: Option<i64>, most: Option<i64>, costs: &OperationCosts, size: bool) -> bool {
+/// there are none, up to `most` of them. A copy of `moved` bytes a trip, `rep
+/// movs` in dwords, `.1` where it runs down, beats one a few loads and stores.
+fn _cheaper(each: i64, known: Option<i64>, most: Option<i64>, costs: &OperationCosts, size: bool, moved: Option<(i64, bool)>) -> bool {
     let trips = if size { 1 } else { known.unwrap_or_else(|| most.unwrap_or(i64::MAX).min(profit::UNKNOWN_TRIPS)) };
-    let string = costs.fill + trips * costs.fill_cell;
-    let fill = match known {
-        Some(count) if count <= 16 => string.min(count * costs.store),
+    let Some((bytes, backward)) = moved else {
+        let string = costs.fill + trips * costs.fill_cell;
+        let fill = match known {
+            Some(count) if count <= 16 => string.min(count * costs.store),
+            _ => string,
+        };
+        return trips * each > fill;
+    };
+    let length = trips * bytes;
+    let string = costs.copy + (length + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 };
+    // Few bytes are loads and stores through registers, as isel expands a memcpy.
+    let pairs = length / 4 + i64::from((length % 4).count_ones());
+    let copy = match known {
+        Some(_) if !size && pairs <= 8 => string.min(pairs * (costs.load + costs.store)),
         _ => string,
     };
-    trips * each > fill
+    trips * each > copy
 }
 
 /// `llvm.memset` for pointers of `space` and lengths `width` bits wide,
@@ -395,12 +459,23 @@ fn _pattern(context: &mut Context, declared: &mut Declared, space: u32, cell: Ty
     (declared.declare(&format!("llvm.experimental.memset.pattern.p{space}.i{bits}.i{width}"), ty), ty)
 }
 
+/// `llvm.memcpy`, or `llvm.memmove` where the ranges overlap, from pointers of
+/// space `from` to ones of `to`, in lengths `width` bits wide, declared where
+/// the module has none.
+fn _copy(context: &mut Context, declared: &mut Declared, how: How, to: u32, from: u32, width: u32) -> (GlobalId, TypeId) {
+    let types = &mut context.types;
+    let (void, destination, source, length, flag) = (types.void(), types.ptr(to), types.ptr(from), types.int(width), types.int(1));
+    let ty = types.intern(Type::Function { returns: void, parameters: vec![destination, source, length, flag], variadic: false });
+    let name = if how == How::Apart { "memcpy" } else { "memmove" };
+    (declared.declare(&format!("llvm.{name}.p{to}.p{from}.i{width}"), ty), ty)
+}
+
 /// The loop made one trip that fills.
 fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Function, found: &_Found) {
     let width = found.proof.width();
     let mut seeds = Seeds { context, function, at: found.effect, width };
     let trips = induction::trips(&found.proof, &mut |kind, args| seeds.computed(kind, args)).expect("a pre-tested proof");
-    let cells = matches!(found.byte, Byte::Pattern(..));
+    let cells = matches!(found.stored, Stored::Fill(Byte::Pattern(..)));
     let count = if found.bytes == BigInt::from(1) || cells { trips.clone() } else { seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(found.bytes.clone(), width)]) };
     let finals = found
         .left
@@ -412,25 +487,58 @@ fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Functi
         .collect::<IndexMap<_, _>>();
     let count = seeds.operand(&count);
     let finals = finals.into_iter().map(|(value, sum)| (value, seeds.operand(&sum))).collect::<IndexMap<_, _>>();
-    let (callee, function_type) = match found.byte {
-        Byte::Pattern(value, _) => {
-            let cell = seeds.function.operand_type(seeds.context, value).expect("a typed cell");
-            _pattern(seeds.context, declared, found.memset.0, cell, found.memset.1)
-        }
-        _ => _memset(seeds.context, declared, found.memset.0, found.memset.1),
-    };
-    let ty = seeds.context.types.ptr(0);
-    let callee = Operand::Constant(seeds.context.constant(Constant { ty, kind: ConstantKind::Global(callee) }));
-    let off = counting::constant(seeds.context, &BigInt::from(0), 1);
-    let byte = match found.byte {
-        Byte::Operand(byte) => byte,
-        Byte::Number(byte) => counting::constant(seeds.context, &BigInt::from(byte), 8),
-        Byte::Pattern(value, _) => value,
-    };
     let void = seeds.context.types.void();
+    let off = counting::constant(seeds.context, &BigInt::from(0), 1);
+    let (callee, function_type, mut operands, direction) = match &found.stored {
+        Stored::Fill(byte) => {
+            let (callee, function_type) = match byte {
+                Byte::Pattern(value, _) => {
+                    let cell = seeds.function.operand_type(seeds.context, *value).expect("a typed cell");
+                    _pattern(seeds.context, declared, found.memset.0, cell, found.memset.1)
+                }
+                _ => _memset(seeds.context, declared, found.memset.0, found.memset.1),
+            };
+            let byte = match *byte {
+                Byte::Operand(byte) => byte,
+                Byte::Number(byte) => counting::constant(seeds.context, &BigInt::from(byte), 8),
+                Byte::Pattern(value, _) => value,
+            };
+            (callee, function_type, vec![found.pointer, byte, count], None)
+        }
+        Stored::Copy(copy) => {
+            let (callee, function_type) = _copy(seeds.context, declared, copy.how, found.memset.0, copy.space, found.memset.1);
+            // A loop that runs down starts at its last cell: the copy starts at its first.
+            let (to, from) = if copy.descending {
+                let last = seeds.computed(BinaryOp::Sub, vec![trips.clone(), AffineOperand::constant(1, width)]);
+                let back = seeds.computed(BinaryOp::Mul, vec![last, AffineOperand::constant(-found.bytes.clone(), width)]);
+                let back = seeds.operand(&back);
+                let i8 = seeds.context.types.int(8);
+                let mut lowered = |pointer: Operand| {
+                    let ty = seeds.function.operand_type(seeds.context, pointer).expect("a typed pointer");
+                    let gep = seeds.function.create_instruction(Opcode::GetElementPtr { source: i8 }, ty, vec![pointer, back], Flags::default(), None);
+                    seeds.function.insert(gep, Position::Before(found.effect)).expect("a placed effect");
+                    Operand::Value(seeds.function.instruction(gep).result.expect("a pointer"))
+                };
+                (lowered(found.pointer), lowered(copy.source))
+            } else {
+                (found.pointer, copy.source)
+            };
+            let direction = (copy.how == How::Overlapping).then_some(if copy.descending { llrm_mir::intrinsics::BACKWARD } else { llrm_mir::intrinsics::FORWARD });
+            (callee, function_type, vec![to, from, count], direction)
+        }
+    };
+    let pointer = seeds.context.types.ptr(0);
+    operands.extend([off, Operand::Constant(seeds.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }))]);
     let info = CallInfo { function_type, calling_convention: 0, return_attrs: Vec::new(), argument_attrs: vec![Vec::new(); 4], attrs: Vec::new(), tail: Default::default() };
-    let call = function.create_instruction(Opcode::Call(Box::new(info)), void, vec![found.pointer, byte, count, off, callee], Flags::default(), None);
+    let call = function.create_instruction(Opcode::Call(Box::new(info)), void, operands, Flags::default(), None);
     function.insert(call, Position::Before(found.effect)).expect("a placed effect");
+    if let Some(kind) = direction {
+        let node = declared.node(MetadataNode { distinct: false, operands: Vec::new() });
+        function.annotate(call, kind, node);
+    }
+    if let Stored::Copy(copy) = &found.stored {
+        function.erase(copy.load).expect("its only user is the store");
+    }
     function.erase(found.effect).expect("an effect has no result");
 
     // The exit's phis take each counter's exit value from the one trip.
@@ -504,6 +612,51 @@ fn _stored(unit: &Unit, callees: &Callees, effect: InstId, still: &induction::In
     }
     // LLVM's memset_pattern16: the cell is a word or dword; the stored value need not be a constant.
     matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value, width / 8), bytes))
+}
+
+/// The store and load of `one` and `other`, where the store writes the loaded
+/// cell and the load has no other user: its pointer, the copy, and the bytes of a cell.
+fn _copied(unit: &Unit, one: InstId, other: InstId) -> Option<(InstId, Operand, Stored, BigInt)> {
+    let function = unit.function;
+    let (load, store) = if matches!(function.instruction(one).opcode, Opcode::Load { .. }) { (one, other) } else { (other, one) };
+    let (Opcode::Load { volatile: false, .. }, Opcode::Store { volatile: false, .. }) = (&function.instruction(load).opcode, &function.instruction(store).opcode) else { return None };
+    let loaded = function.instruction(load).result?;
+    if function.instruction(store).operands[0] != Operand::Value(loaded) || function.users(loaded).len() != 1 {
+        return None;
+    }
+    let bits = unit.int_bits(Operand::Value(loaded))?;
+    if bits % 8 != 0 || bits == 0 {
+        return None;
+    }
+    let (source, pointer) = (function.instruction(load).operands[0], function.instruction(store).operands[1]);
+    let copy = Copy { load, source, how: How::Apart, descending: false, space: unit.space(source)? };
+    Some((store, pointer, Stored::Copy(copy), BigInt::from(bits / 8)))
+}
+
+/// How a loop's two walks, `from` read and `to` written, `bytes` a trip, let
+/// one copy stand for the trips in order; none where they do not.
+///
+/// The alias analysis owns what is apart: two objects, or a `restrict`. Of
+/// one object, two walks of one stride a constant `d` apart bytes (to less
+/// from) are apart past the trips' span, and else run in order only when the
+/// writes trail the reads: `d <= 0` going up, `d >= 0` going down. Any other
+/// overlap makes each trip read what an earlier one wrote: a smear, no copy.
+fn _overlap(unit: &Unit, load: InstId, store: InstId, from: &induction::Recurrence, to: &induction::Recurrence, proof: &CountedLoop, bytes: &BigInt, descending: bool) -> Option<How> {
+    if let (Some(read), Some(written)) = (MemRef::of(unit, load), MemRef::of(unit, store))
+        && !llrm_analysis::regions::overlapping(&read, &written, None, None, unit.program).unwrap_or(true)
+    {
+        return Some(How::Apart);
+    }
+    if from.pointer != to.pointer {
+        return None;
+    }
+    let apart = to.start.minus(&from.start).known()?;
+    let trips = proof.count.as_ref().or(proof.maximum.as_ref());
+    if trips.is_some_and(|trips| apart.magnitude() >= (trips * bytes).magnitude()) {
+        return Some(How::Apart);
+    }
+    let zero = BigInt::from(0);
+    ((!descending && apart <= zero) || (descending && apart >= zero)).then_some(How::Overlapping)
 }
 
 /// The header phi `inst` steps, if it is one's step: a constant added, the
