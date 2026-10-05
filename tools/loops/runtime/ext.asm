@@ -9,7 +9,24 @@ digits  db 12 dup (?)
 inhandle dw 0FFFFh
 inname  db 'DICKENS', 0
 
+stkmsg  db 'Stack Overflow!', 13, 10
+
 .code
+; Open Watcom's stack overflow (clib stk086.asm `__STKOVERFLOW`): the message and exit status 1,
+; which a checked function enters (-fsanitize=stack). Here on stdout, which a test captures.
+public __STKOVERFLOW
+__STKOVERFLOW proc far
+    mov ax, @data
+    mov ds, ax
+    mov dx, offset stkmsg
+    mov cx, 17
+    mov bx, 1
+    mov ah, 40h
+    int 21h
+    mov ax, 4c01h
+    int 21h
+__STKOVERFLOW endp
+
 ; void report(long v)
 public _report
 _report proc far

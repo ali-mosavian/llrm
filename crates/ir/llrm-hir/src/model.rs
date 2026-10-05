@@ -157,6 +157,8 @@ str_enum!(FloatReturn {
 str_enum!(CallDistance {
     Near("NEAR") = "near",
     Far("FAR") = "far",
+    // No caller outside its module and no runtime enters it: near where every call of it is direct.
+    Any("ANY") = "any",
     // Entered by INT or an IRQ, left by `iret`.
     Interrupt("INTERRUPT") = "interrupt",
 });
@@ -935,6 +937,34 @@ impl RuntimePromises {
     }
 }
 
+/// What a runtime says of its stack, for code that checks it on entry
+/// (`-fsanitize=stack`): where its lower limit is, what to call when SP falls
+/// below it, and the bytes below the limit an unchecked leaf may use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StackCheck {
+    /// The data-group word holding the lowest SP the runtime allows.
+    pub limit: String,
+    /// The far routine entered on overflow; it does not return.
+    pub handler: String,
+    /// Bytes below `limit` that the handler, interrupts and an unchecked
+    /// leaf's frame share.
+    pub red_zone: i64,
+    /// The runtime's own frame entry that checks, where it frames a
+    /// procedure: BC's /D calls it in place of the plain one.
+    pub entry: Option<String>,
+}
+
+impl StackCheck {
+    /// The check a runtime's description row states: `limit`, `handler`, `red_zone` and, where
+    /// its frame entry checks, `entry`.
+    pub fn from_toml(row: &toml::Value) -> Result<Self, String> {
+        let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
+        let need = |key: &str| text(key).ok_or_else(|| format!("stack {key} is not a string"));
+        let red_zone = row.get("red_zone").and_then(toml::Value::as_integer).ok_or("stack red_zone is not an integer")?;
+        Ok(Self { limit: need("limit")?, handler: need("handler")?, red_zone, entry: text("entry") })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
     pub dialect: Dialect,
@@ -959,6 +989,9 @@ pub struct Program {
     /// The segment of the constants the compiler makes; None: the default
     /// data segment.
     pub constant_segment: Option<String>,
+    /// Each procedure compares SP with the runtime's limit on entry: where
+    /// `-fsanitize=stack` asks, never otherwise.
+    pub stack_check: Option<StackCheck>,
 }
 
 impl Program {
@@ -978,6 +1011,7 @@ impl Program {
             entries: Vec::new(),
             preserved: Vec::new(),
             constant_segment: None,
+            stack_check: None,
         }
     }
 }

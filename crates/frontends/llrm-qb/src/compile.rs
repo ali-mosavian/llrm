@@ -437,6 +437,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         requests: graphics,
         frames,
         line_numbers: module.line_numbers.iter().copied().collect(),
+        stack_check: program.stack_check.clone(),
     };
     let mut compiled = basic::compiled(program, &object, codegen)?;
     compiled.stack = stack_to_add(&compiled, STACK_BASE)?;

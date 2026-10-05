@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 
 use crate::abi::runtime::Contract;
@@ -26,6 +27,11 @@ pub trait Abi {
     /// arguments, and how many bytes were pushed.
     fn contract(&self, callee: &str, pops: bool, pushed: i64) -> Result<Contract, String>;
     fn linked(&self, name: &str) -> String;
+    /// Where the runtime keeps its stack's lower limit and what overflowing it calls, where the
+    /// program checks its stack.
+    fn stack_check(&self) -> Option<&masm::StackCheck> {
+        None
+    }
     /// What a call to `callee` passes and answers in registers rather than
     /// on the stack, where its ABI names them.
     fn registers(&self, _callee: &str) -> Option<Registers> {
@@ -44,6 +50,7 @@ pub struct Registers {
 /// `module` as masm, its code in the segment `code`.
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
+    let module = &*crate::backend::nearcode::placed(module);
     let mut names = globals::names(module, &|name| abi.linked(name))?;
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
@@ -90,6 +97,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                     interrupt,
                     size: cpu.size,
                     entry: 0,
+                    stack_check: function.attrs.iter().any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck)).then(|| abi.stack_check().cloned()).flatten(),
                 };
                 let overhead = masm::return_overhead_bytes(&procedure).map_err(|error| error.to_string())? as i64;
                 let body = jumps::duplicated_returns(procedure.body.clone(), overhead);
@@ -103,13 +111,16 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
         names.insert((Space::Segment, id), name.clone());
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
+    crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
         .filter(|(name, _)| !defined.contains(name.as_str()))
         .map(|(name, &far)| (name.clone(), if far { "far" } else { "near" }.to_owned()))
         .collect();
+    externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
+    externs.dedup();
     let debug = crate::backend::codeview::described(module, &names, llrm_omf::cvwrite::Flavor::default())?;
     Ok(masm::Module {
         code: code.to_owned(),

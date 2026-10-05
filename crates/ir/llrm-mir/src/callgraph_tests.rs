@@ -86,3 +86,33 @@ fn a_function_a_callees_list_names_has_its_address_taken() {
     assert!(named.contains(&id(&module, "leaf")) && named.contains(&id(&module, "direct")));
     assert!(!named.contains(&id(&module, "listed")) && !named.contains(&id(&module, "unlisted")));
 }
+
+/// Only an internal function never named but as a callee is reached by direct calls alone: an
+/// external one is called from other modules, an addressed one through its pointer.
+#[test]
+fn direct_only_is_internal_and_never_addressed() {
+    let module = parse::module(
+        "define internal void @only() {
+b0:
+  ret void
+}
+
+define void @exported() {
+b0:
+  call void @only()
+  ret void
+}
+
+define internal void @taken() {
+b0:
+  ret void
+}
+
+@table = global ptr @taken
+",
+    )
+    .expect("parses");
+    let found = crate::callgraph::direct_only(&module);
+    assert!(found.contains(&id(&module, "only")));
+    assert!(!found.contains(&id(&module, "exported")) && !found.contains(&id(&module, "taken")));
+}

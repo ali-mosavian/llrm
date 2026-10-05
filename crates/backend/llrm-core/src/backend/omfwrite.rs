@@ -442,8 +442,9 @@ pub enum CodeLayout {
     /// All of it in one segment, where a near call may reach any procedure.
     OneSegment,
     /// A segment of its own for each procedure, all of one name, so that the
-    /// linker's `option eliminate` drops each one nothing calls. Every call
-    /// between procedures must then be far.
+    /// linker's `option eliminate` drops each one nothing calls. A near call
+    /// between them is a relative fixup to the other segment, which the linker
+    /// merges.
     PerProcedure,
 }
 
@@ -575,9 +576,6 @@ pub fn _code_by(
                     return Err(Unencodable(format!("a near call to {name} {distance} bytes away")).into());
                 };
                 segment.put(&[&[0xE8][..], &distance.to_le_bytes()].concat(), &[]);
-            }
-            Encoded::Near(Near { name }) if module.procedures.iter().any(|one| &one.name == name) => {
-                return Err(Unencodable(format!("a near call to {name} in another code segment")).into());
             }
             Encoded::Near(Near { name }) => {
                 segment.put(&[0; 3], &[Fixup { relative: true, ..Fixup::new(1, OFFSET, name.clone()) }]);
@@ -1058,7 +1056,7 @@ mod tests {
     }
 
     fn procedure(name: &str, far: bool, body: lir::LirBody, reserve: i64, callees: Vec<(i64, masm::Callee)>) -> masm::Procedure {
-        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None, size: false, entry: 0 }
+        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None, size: false, entry: 0, stack_check: None }
     }
 
     fn reg(register: Register) -> Loc {

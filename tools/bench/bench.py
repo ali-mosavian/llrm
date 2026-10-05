@@ -117,13 +117,15 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
     # The kernel stays a call: inlined into main it has no entry to count from.
-    flags = [f"-{opt}", "--cpu", "486", "-fno-inline-functions"]
+    # LLRM_BENCH_FLAGS: more compiler flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
+    more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
+    flags = [f"-{opt}", "--cpu", "486", "-fno-inline-functions", *more]
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
             extras = [str(variant.source.parent / one) for one in run_tests.header(variant.source).get("link", "").split()]
             done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
-                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": "-fno-inline-functions"})
+                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []

@@ -65,7 +65,7 @@ fn nib_symbols_read_with_their_types() {
             "PARAM scale.factor: INTEGER",
             "PARAM scale.p: BYREF TYPE point",
             "PROC main flags 4 () -> INTEGER",
-            "PROC scale flags 4 (BYREF TYPE point, INTEGER) -> LONG",
+            "PROC scale flags 0 (BYREF TYPE point, INTEGER) -> LONG",
         ]
     );
 }

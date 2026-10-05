@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 use llrm_mir::program::SegmentLayout;
+use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Module};
 
 use super::Options;
@@ -121,6 +122,7 @@ pub fn _runtime_frame(
     size: i64,
     runtime: model::RuntimeProfile,
     temporary_strings: i64,
+    enter_by: &str,
 ) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), String> {
     let size = size + (size & 1);
     let header = _RUNTIME_FRAME_HEADER(runtime)?;
@@ -207,7 +209,7 @@ pub fn _runtime_frame(
         .collect();
     Ok((
         lir::LirBody { variables, ..body.with_blocks(framed) },
-        IndexMap::from_iter([(serial + 2, masm::Callee::new("B$ENRA", true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
+        IndexMap::from_iter([(serial + 2, masm::Callee::new(enter_by, true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
     ))
 }
 
@@ -299,14 +301,15 @@ fn _basic_segment_classes(data: &[u8], code: &str) -> Result<Vec<u8>, String> {
     Ok(rewritten.iter().flat_map(omf::Record::emit).collect())
 }
 
-/// Remove the native shell when B$ENRA/B$EXSA own the whole frame.
+/// Remove the native shell when the runtime's entry and B$EXSA own the whole frame.
 ///
 /// The shared MASM model supplies a C-shaped BP shell whenever a body
 /// addresses BP or calls anything. B$ENRA itself saves BP, SI and DI, and
 /// B$EXSA restores them, so this source-ABI exception stays in the frontend.
 pub fn _basic_listing(procedure: &masm::Procedure, number: usize) -> Result<Vec<masm::Item>, String> {
     let listing = masm::listing(procedure, number).map_err(|error| error.0)?;
-    let runtime_frame = procedure.callees.values().any(|callee| callee.name == "B$ENRA");
+    // Whichever entry the runtime states: B$ENRA, or the checking B$ENRD, which builds the same frame.
+    let runtime_frame = procedure.entry != 0;
     let module_body = procedure.name == "$QB$MAIN";
     if !runtime_frame && !module_body {
         return Ok(listing);
@@ -526,6 +529,8 @@ pub struct Object {
     pub frames: BTreeMap<String, Frame>,
     /// Each source line's BASIC line number, for the statement table.
     pub line_numbers: BTreeMap<i64, i64>,
+    /// The runtime's stack limit and overflow handler, where the program checks its stack.
+    pub stack_check: Option<model::StackCheck>,
 }
 
 /// How a function is framed.
@@ -563,7 +568,7 @@ pub fn compiled(program: &model::Program, object: &Object, options: &Options) ->
     let (mut mir, data) = super::emitted(program, options)?;
     let [(module, data)] = [(&mir.modules[0], &data[0])];
     let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.clone());
-    let mut resolved = Object { segments: Vec::new(), symbols: object.symbols.clone(), data: BTreeMap::new(), private: object.private.clone(), requests: object.requests.clone(), frames: object.frames.clone(), line_numbers: object.line_numbers.clone(), code: object.code.clone(), header: object.header.clone(), main: object.main.clone(), constants: object.constants.clone() };
+    let mut resolved = Object { segments: Vec::new(), symbols: object.symbols.clone(), data: BTreeMap::new(), private: object.private.clone(), requests: object.requests.clone(), frames: object.frames.clone(), line_numbers: object.line_numbers.clone(), code: object.code.clone(), header: object.header.clone(), main: object.main.clone(), constants: object.constants.clone(), stack_check: program.stack_check.clone() };
     resolved.symbols.extend(object.data.iter().filter_map(|(id, symbol)| Some((global(id)?, symbol.clone()))));
     for segment in &object.segments {
         let items = segment.items.iter().filter_map(|item| match item {
@@ -603,7 +608,7 @@ pub fn object(module: &Module, object: &Object, runtime: model::RuntimeProfile, 
 /// The calls of the BASIC module object `object` lays out: its runtime's,
 /// and its own by their symbols.
 fn object_abi(object: &Object, runtime: model::RuntimeProfile) -> HirAbi {
-    HirAbi { runtime, objects: object.symbols.clone(), preserved: BTreeSet::new() }
+    HirAbi { runtime, objects: object.symbols.clone(), preserved: BTreeSet::new(), stack_check: object.stack_check.clone() }
 }
 
 /// `module` selected and assembled as a BASIC module: the main body first,
@@ -692,6 +697,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             None => data.push((object.constants.clone(), pooled)),
         }
     }
+    crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -704,6 +710,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         }
     }
     externs.extend(object.requests.iter().map(|name| (name.clone(), "near".to_owned())));
+    externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
     let flavor = llrm_omf::cvwrite::Flavor { qb45: runtime == model::RuntimeProfile::Qb45 };
@@ -747,6 +754,9 @@ fn procedure(
     let mut reserve = 0;
     let mut entry = 0;
     let mut statics = 0;
+    // The runtime's checking entry where it frames a checked procedure; the procedure's own check where it frames itself.
+    let check = global.function().is_some_and(|one| one.attrs.iter().any(|attr| Fact::of_attribute(attr) == Some(Fact::StackCheck))).then(|| abi.stack_check()).flatten().filter(|_| !main);
+    let mut stack_check = None;
     let (body, framed) = if !super::framed(module, id) {
         (finalized.body, IndexMap::default())
     } else if main {
@@ -756,10 +766,12 @@ fn procedure(
         match frame {
             Frame::Runtime { strings } => {
                 entry = machined.reserve + (machined.reserve & 1) + _RUNTIME_FRAME_HEADER(runtime)?;
-                _runtime_frame(&finalized.body, machined.reserve, runtime, strings)?
+                let by = check.and_then(|one| one.entry.as_deref()).unwrap_or("B$ENRA");
+                _runtime_frame(&finalized.body, machined.reserve, runtime, strings, by)?
             }
             Frame::Own => {
                 reserve = machined.reserve;
+                stack_check = check.cloned();
                 (finalized.body, IndexMap::default())
             }
         }
@@ -793,6 +805,7 @@ fn procedure(
         interrupt: None,
         size: false,
         entry,
+        stack_check,
     };
     Ok((procedure, machined.landing, statics))
 }

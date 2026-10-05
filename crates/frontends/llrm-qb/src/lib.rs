@@ -26,6 +26,9 @@ mod test_quickr;
 mod test_frames;
 
 #[cfg(test)]
+mod test_stack_check;
+
+#[cfg(test)]
 mod test_intrinsics;
 
 #[cfg(test)]

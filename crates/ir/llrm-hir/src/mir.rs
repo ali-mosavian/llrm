@@ -52,7 +52,32 @@ pub struct Emitted {
 }
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
-    program.modules.iter().map(|one| emit_module(one, program, &program.promises)).collect()
+    program
+        .modules
+        .iter()
+        .map(|one| {
+            let mut emitted = emit_module(one, program, &program.promises);
+            if program.stack_check.is_some() {
+                check_stack(&mut emitted.module);
+            }
+            emitted
+        })
+        .collect()
+}
+
+/// Every function the module defines checks the stack on entry, but one that runs on a stack of its
+/// own making: an interrupt handler's, a naked one's.
+fn check_stack(module: &mut Module) {
+    for global in &mut module.globals {
+        if global.linkage == Linkage::AvailableExternally {
+            continue;
+        }
+        let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
+        let naked = function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "naked"));
+        if !function.is_declaration() && !naked && function.calling_convention != llrm_mir::opcode::X86_INTR {
+            function.attrs.push(Fact::StackCheck.carrier());
+        }
+    }
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the
@@ -824,7 +849,7 @@ fn convention(cleanup: model::StackCleanup, distance: model::CallDistance) -> Em
     };
     let space = match distance {
         model::CallDistance::Near => 0,
-        model::CallDistance::Far => FAR,
+        model::CallDistance::Far | model::CallDistance::Any => FAR,
         // Entered with the flags pushed and left by iret, as LLVM's x86_intrcc.
         model::CallDistance::Interrupt => return Ok((llrm_mir::opcode::X86_INTR, FAR)),
     };
@@ -875,6 +900,11 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     };
     let global = module.add_function(&function.name, ty, linkage)?;
     place_function(module, global, abi);
+    if function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Any) {
+        if let llrm_mir::GlobalKind::Function(placed) = &mut module.globals[global.0 as usize].kind {
+            placed.attrs.push(Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+        }
+    }
     Ok((global, abi.0))
 }
 

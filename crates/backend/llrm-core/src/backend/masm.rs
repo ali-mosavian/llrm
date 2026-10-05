@@ -68,6 +68,11 @@ impl Callee {
     }
 }
 
+pub use crate::hir::model::StackCheck;
+
+/// The data object `StackCheck::limit` names, which no global takes.
+pub const STACK_LIMIT_ID: i64 = i64::MAX - 1;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procedure {
     pub name: String,
@@ -87,6 +92,8 @@ pub struct Procedure {
     /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
     /// procedure shows: its header and the locals `cx` names.
     pub entry: i64,
+    /// Compare SP with the runtime's limit once the frame is allocated.
+    pub stack_check: Option<StackCheck>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -281,6 +288,36 @@ pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, 
     Ok(body.with_blocks(blocks))
 }
 
+/// Names the limit each procedure's stack check compares with, and the externs those checks
+/// need: the limit a data object, the handler a far routine, unless a procedure here is it.
+pub fn stack_externs(procedures: &[Procedure], names: &mut IndexMap<(Space, i64), String>) -> Vec<(String, String)> {
+    let mut externs = Vec::new();
+    for check in procedures.iter().filter_map(|one| one.stack_check.as_ref()) {
+        names.insert((Space::External, STACK_LIMIT_ID), check.limit.clone());
+        externs.push((check.limit.clone(), "byte".to_owned()));
+        if !procedures.iter().any(|one| one.name == check.handler) {
+            externs.push((check.handler.clone(), "far".to_owned()));
+        }
+    }
+    externs
+}
+
+/// Whether a procedure, by its symbol, is entered only by the direct calls `module`'s own
+/// functions make: its address is taken nowhere (`callgraph::addressed`).
+pub fn entered_directly<'a>(module: &'a llrm_mir::Module, names: &'a IndexMap<(Space, i64), String>) -> impl Fn(&str) -> bool + 'a {
+    let addressed: BTreeSet<&String> = llrm_mir::callgraph::addressed(module).iter().filter_map(|id| names.get(&(Space::Segment, i64::from(id.0)))).collect();
+    move |name| !addressed.contains(&name.to_owned())
+}
+
+/// The block number the overflow call takes: past every instruction's.
+pub fn cold_at(body: &lir::LirBody) -> i64 {
+    body.blocks.iter().map(|block| block.at).chain(body.insns().into_iter().map(|one| one.at)).max().unwrap_or(0) + 1
+}
+
+fn sp_reg() -> Loc {
+    reg(Register::SP)
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     let roots = _roots(&procedure.body);
@@ -304,7 +341,7 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
     let mut enter: Vec<Semantics> = Vec::new();
-    if framed && reserve != 0 && procedure.size {
+    if framed && reserve != 0 && procedure.size && procedure.stack_check.is_none() {
         let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
         enter.push(semantics(Operation::Nothing, "enter", vec![], vec![count(reserve, 2), count(0, 1)]));
     } else if framed {
@@ -313,13 +350,26 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
             semantics(Operation::Move, "mov", vec![bp], vec![sp.clone()]),
         ]);
     }
-    if reserve != 0 && !(framed && procedure.size) {
+    if reserve != 0 && !(framed && procedure.size && procedure.stack_check.is_none()) {
         enter.push(semantics(
             Operation::Binary,
             "sub",
             vec![sp.clone()],
             vec![sp, Loc::Imm(ir::Imm { value: reserve, width: 2, address: None })],
         ));
+    }
+    if procedure.stack_check.is_some() {
+        let cold = Some(cold_at(&procedure.body));
+        let overflow = |name: &str| Semantics { target: cold, ..semantics(Operation::Branch, name, vec![], vec![]) };
+        let limit = Addr { index: STACK_LIMIT_ID, ..Addr::new(Space::External, 0) };
+                // `sub` carries where SP wrapped past zero.
+        if reserve != 0 {
+            enter.push(overflow("jb"));
+        }
+        enter.extend([
+            semantics(Operation::Compare, "cmp", vec![], vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), 2))]),
+            overflow("jb"),
+        ]);
     }
     enter.extend(saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])));
     if let Some(group) = procedure.interrupt {
@@ -475,6 +525,11 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
                 }));
             }
         }
+    }
+    // Last, where nothing falls into it: the call that does not return.
+    if let Some(check) = &procedure.stack_check {
+        out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
+        out.push(Item::Callee(Callee::new(check.handler.clone(), true)));
     }
     Ok(out)
 }
@@ -959,7 +1014,7 @@ mod tests {
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0 };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0, stack_check: None };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -1004,6 +1059,31 @@ mod tests {
         assert_eq!(bare[1..3], ["push bp", "mov bp, sp"]);
     }
 
+    fn _checked(check: Option<StackCheck>, reserve: i64) -> (Vec<String>, Vec<(String, String)>) {
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
+        let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
+        let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
+        let procedure = Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: true, entry: 0, stack_check: check };
+        let mut names = no_names();
+        let externs = stack_externs(std::slice::from_ref(&procedure), &mut names);
+        (_procedure(&procedure, &names, 0).unwrap().iter().map(|line| line.trim().to_owned()).collect(), externs)
+    }
+
+    /// `-fsanitize=stack` compares SP with the word and calls the routine the runtime's description
+    /// names, here made-up ones: a pass that wrote `b$pendchk` itself would not follow them. The
+    /// call is last, where no block falls into it, and the default has neither.
+    #[test]
+    fn test_a_stack_check_names_what_the_runtime_states() {
+        let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), red_zone: 0, entry: None };
+        let (lines, externs) = _checked(Some(check), 4);
+        assert_eq!(lines[1..7], ["push bp", "mov bp, sp", "sub sp, 4", "jb L0_2", "cmp sp, word ptr FOO", "jb L0_2"], "{lines:?}");
+        assert_eq!(lines[lines.len() - 3..], ["L0_2:", "call far ptr BAR", "_get endp"]);
+        assert_eq!(externs, [("FOO".to_owned(), "byte".to_owned()), ("BAR".to_owned(), "far".to_owned())]);
+        let (plain, none) = _checked(None, 4);
+        assert!(plain.iter().all(|one| !one.contains("cmp sp") && !one.contains("BAR")) && none.is_empty(), "{plain:?}");
+        assert_eq!(plain[1], "enter 4, 0", "the check turns -Os's `enter` into push/mov/sub, whose carry it tests");
+    }
+
     /// Return-tail layout must count the pop/leave absent from allocated LIR.
     #[test]
     fn test_return_overhead_prices_the_implicit_frame_teardown() {
@@ -1021,6 +1101,7 @@ mod tests {
             interrupt: None,
             size: false,
             entry: 0,
+            stack_check: None,
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);

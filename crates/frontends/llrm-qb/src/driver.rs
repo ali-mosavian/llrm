@@ -45,6 +45,9 @@ pub struct Frontend {
     /// Integer arithmetic and narrowing raise error 6, Overflow:
     /// `-fsanitize=signed-integer-overflow`.
     pub checked_overflow: bool,
+    /// Each procedure compares SP with the runtime's limit on entry:
+    /// `-fsanitize=stack`.
+    pub checked_stack: bool,
     pub mbf: bool,
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
@@ -70,6 +73,7 @@ impl Frontend {
             checked_division: false,
             debug: false,
             checked_overflow: false,
+            checked_stack: false,
             mbf: false,
             alternate_math: false,
             whole_program: false,
@@ -140,7 +144,12 @@ pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result
         }
         std::fs::write(dump, &stdout).map_err(|error| FrontendError(error.to_string()))?;
     }
-    decoded(&stdout, frontend.checked_arrays)
+    let mut program = decoded(&stdout, frontend.checked_arrays)?;
+    if frontend.checked_stack {
+        let family = program.runtime.value();
+        program.stack_check = Some(llrm_core::abi::runtime::semantics::stack(family).ok_or_else(|| FrontendError(format!("the {family} runtime states no stack limit")))?);
+    }
+    Ok(program)
 }
 
 /// The program qbfront's HIR text `text` states, with what the runtime
