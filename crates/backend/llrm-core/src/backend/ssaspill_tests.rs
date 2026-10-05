@@ -404,15 +404,43 @@ fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
 /// points into 87 on PLASMABLOBS with no new pressure. A copy group is one parallel point.
 #[test]
 fn test_a_copy_group_is_one_point_not_one_per_copy() {
-    let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
-    let mut spilled = phases[0].transform(body).expect("spills");
+    let (body, _) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
+    let eliminated = crate::backend::phielim::eliminated(&body).expect("eliminates");
     let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &ssaspill::untouchable(body)).len();
-    let separate = found(&spilled);
-    let first = crate::backend::regclass::violations(&spilled, &target::BUILT_IN, &ssaspill::untouchable(&spilled)).remove(0);
-    let block = spilled.blocks.iter_mut().find(|block| block.at == first.block).expect("its block");
-    for one in block.insns.iter_mut().skip(first.position.saturating_sub(3)).take(8) {
-        std::sync::Arc::make_mut(one).group = Some(1);
+    let grouped = found(&eliminated);
+    let mut apart = eliminated.clone();
+    for block in &mut apart.blocks {
+        for one in block.insns.iter_mut().filter(|one| one.group.is_some()) {
+            std::sync::Arc::make_mut(one).group = None;
+        }
     }
-    let grouped = found(&spilled);
-    assert!(grouped < separate, "{grouped} points with eight instructions in one group, {separate} apart");
+    assert!(grouped < found(&apart), "{grouped} points with the copies grouped, {} apart", found(&apart));
+}
+
+/// Sixteen loop-carried values on six registers: every phi stayed a register phi and the loop's header held twelve
+/// values live (PLASMABLOBS: 39 points that fit no register, #441). A phi the registers cannot hold lives in its slot;
+/// what remains is the one register an edge's stores borrow to load an argument.
+#[test]
+fn test_phis_that_do_not_fit_live_in_memory() {
+    let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
+    let spilled = phases[0].transform(body).expect("spills");
+    let eliminated = crate::backend::phielim::eliminated(&spilled).expect("eliminates");
+    let found = crate::backend::regclass::violations(&eliminated, &target::BUILT_IN, &ssaspill::untouchable(&eliminated));
+    let most = found.iter().map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { live - registers } else { usize::MAX }).max().unwrap_or(0);
+    assert!(most <= 1, "{most} values over the registers at the worst point");
+}
+
+/// A memory phi's argument that is dead where its web is defined shares the result's slot: it is stored where it is
+/// made and the back edge carries no store. Without sharing every argument was stored on its edge, a store for each
+/// of sixteen carried values each trip.
+#[test]
+fn test_memory_phi_arguments_share_their_results_slot() {
+    let stores = |share: bool| {
+        let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
+        let spilled = if share { phases[0].transform(body) } else { ssaspill::without_shared_slots(|| phases[0].transform(body)) }.expect("spills");
+        let eliminated = crate::backend::phielim::eliminated(&spilled).expect("eliminates");
+        crate::backend::executed::executed(&eliminated).map(|done| done.memory).expect("estimates")
+    };
+    let (shared, apart) = (stores(true), stores(false));
+    assert!(shared < apart, "{shared} memory operands with shared slots, {apart} without");
 }

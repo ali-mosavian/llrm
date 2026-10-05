@@ -3951,3 +3951,13 @@ b0:
     );
     assert!(body.iter().any(|line| line.contains(", ss")), "{body:?}");
 }
+
+/// catalog.nib's `find` at -Os: a loop with one phi too many for the registers. Against a register phi stored once at
+/// the top, a memory phi stores on both in-edges: the object grew by 6 bytes (#491). The price keeps the register phi.
+#[test]
+fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/findloop.ll")).unwrap();
+    let with = sized_with(assemble::Candidates::SpillerOnly, &text);
+    let without = crate::backend::ssaspill::without_memory_phis(|| sized_with(assemble::Candidates::SpillerOnly, &text));
+    assert_eq!(with, without);
+}

@@ -115,7 +115,8 @@ fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_r
 /// by the loop corpus after the products moved before the copy).
 #[test]
 fn test_the_addresses_a_parallel_copy_reads_do_not_all_live_across_it() {
-    let (body, phases) = before_regalloc("walks7_s24.ll", "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end", "Core");
+    // Without the spiller: a phi it moves to memory leaves a copy of six, and the allocator must still take seven.
+    let (body, phases) = crate::backend::regalloc_input::before_regalloc_unspilled("walks7_s24.ll", "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end", "Core");
     let longest = longest_copy(&body);
     assert!(longest >= 7, "premise: a parallel copy of {longest} moves");
     let done = through(body, phases);

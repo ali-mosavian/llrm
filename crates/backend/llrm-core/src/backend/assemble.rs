@@ -212,11 +212,10 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         return Ok(spilled);
     }
     let allocator_alone = phased(module, name, abi, pool, target, hole, false)?;
-    let (kept, rejected) = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
-        (Some(with), Some(without)) if without < with => (allocator_alone, spilled),
-        _ => (spilled, allocator_alone),
+    let kept = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
+        (Some(with), Some(without)) if without < with => allocator_alone,
+        _ => spilled,
     };
-    let _ = rejected;
     Ok(kept)
 }
 
