@@ -1,4 +1,4 @@
-reason = "new: scroll, a text screen scrolled both ways by rep movs, blanked by rep stosw and copied"
+reason = "grep.nib -O2 1692 -> 1687: a 16-byte copy loop is rep movs; scroll.nib 174 -> 172, 162 -> 160 with main's argument promotion"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -36,7 +36,7 @@ kernel_ms = 3.112
 [nib.O2]
 instructions = 171661
 memory_operands = 298000
-code_bytes = 174
+code_bytes = 172
 data_bytes = 8000
 bss_bytes = 0
 kernel_ms = 2.9803
@@ -44,7 +44,7 @@ kernel_ms = 2.9803
 [nib.Os]
 instructions = 1200308
 memory_operands = 590000
-code_bytes = 162
+code_bytes = 160
 data_bytes = 8000
 bss_bytes = 0
 kernel_ms = 16.2
