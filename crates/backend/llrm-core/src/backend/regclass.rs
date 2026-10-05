@@ -25,27 +25,29 @@ fn _restrict(out: &mut Classes, value: u32, choices: &BTreeSet<Register>) {
     out.insert(value, now);
 }
 
-/// The register class each value is confined to, where it is confined.
-pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments) -> Classes {
-    classes_with(body, prefer_indexes, segments, false)
+/// The register class each value is confined to, where it is confined: a word address pair's base is confined to the
+/// base registers and its index to the index registers, as the operand spells them (`AddressRoles` has chosen).
+pub fn classes(body: &LirBody, segments: &Segments) -> Classes {
+    collected(body, segments, false, Pairs::Positional, &mut Vec::new())
 }
 
-/// `classes`; `optimistic` is the checker's reading of a body the coalescer has not merged yet: the two sides of a phi
-/// edge's copy also join, and address classes are read through webs. An allocator cannot take that, the two sides being
-/// values of their own, and SsaSpill does not price it yet.
-pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool) -> Classes {
-    collected(body, prefer_indexes, segments, optimistic, Pairs::Positional, &mut Vec::new())
+/// `classes` for a body whose word address pairs have not been given roles yet: both registers of a pair may be in
+/// either the base or the index registers, which of the two is open.
+pub fn open_classes(body: &LirBody, segments: &Segments) -> Classes {
+    collected(body, segments, false, Pairs::Open, &mut Vec::new())
 }
 
-/// The classes with each word address pair's roles chosen, not read from how the operand is spelled: what
-/// `AddressRoles` writes into the operands.
-pub fn decided_roles(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments) -> Classes {
-    collected(body, prefer_indexes, segments, false, Pairs::Decide, &mut Vec::new())
+/// `classes` or `open_classes`; `optimistic` is the checker's reading of a body the coalescer has not merged yet: the
+/// two sides of a phi edge's copy also join, and address classes are read through webs. An allocator cannot take
+/// that, the two sides being values of their own, and SsaSpill does not price it yet.
+pub fn classes_with(body: &LirBody, segments: &Segments, optimistic: bool, open: bool) -> Classes {
+    collected(body, segments, optimistic, if open { Pairs::Open } else { Pairs::Positional }, &mut Vec::new())
 }
 
-/// The classes the operands force, with every word address pair's roles left open.
-pub fn unpaired_classes(body: &LirBody, segments: &Segments) -> Classes {
-    collected(body, &BTreeSet::new(), segments, false, Pairs::Skip, &mut Vec::new())
+/// The classes the operands force, with every word address pair's registers left unconfined: what `AddressRoles` may
+/// choose among.
+pub fn forced_classes(body: &LirBody, segments: &Segments) -> Classes {
+    collected(body, segments, false, Pairs::Free, &mut Vec::new())
 }
 
 /// What `collected` does with a word address pair.
@@ -53,10 +55,10 @@ pub fn unpaired_classes(body: &LirBody, segments: &Segments) -> Classes {
 enum Pairs {
     /// The operand's own base and index.
     Positional,
-    /// Choose the roles per component.
-    Decide,
-    /// Leave both open.
-    Skip,
+    /// Either register may be the base or the index.
+    Open,
+    /// No restriction from the pair.
+    Free,
 }
 
 /// How an instruction names a value that confines it.
@@ -83,15 +85,15 @@ pub struct Use {
 /// share no register is one the classes leave with none.
 pub fn confining_uses(body: &LirBody, segments: &Segments) -> Vec<Use> {
     let mut uses = Vec::new();
-    collected(body, &BTreeSet::new(), segments, false, Pairs::Positional, &mut uses);
+    collected(body, segments, false, Pairs::Positional, &mut uses);
     uses
 }
 
-fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool, pairs: Pairs, uses: &mut Vec<Use>) -> Classes {
+fn collected(body: &LirBody, segments: &Segments, optimistic: bool, pairs: Pairs, uses: &mut Vec<Use>) -> Classes {
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
-    let mut word_pairs: Vec<(u32, u32)> = Vec::new();
+    let either: BTreeSet<Register> = target::WORD_BASES.union(&target::WORD_INDEXES).copied().collect();
     let bytes: BTreeSet<Register> = BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]);
 
     for (at, block) in body.blocks.iter().enumerate() {
@@ -142,12 +144,18 @@ fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments
                     if let Some(index) = cell.index {
                         numeric.insert(index.value);
                         if index.width == 2 {
-                            if pairs != Pairs::Positional && cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
-                                word_pairs.push((cell.base.expect("checked").value, index.value));
-                            } else {
-                                restrict(&mut out, index.value, &target::WORD_INDEXES, Role::Index, false);
-                                if let Some(base) = cell.base {
-                                    restrict(&mut out, base.value, &target::WORD_BASES, Role::Base, false);
+                            let pair = cell.base.filter(|base| base.width == 2 && cell.scale == 1);
+                            match (pair, pairs) {
+                                (Some(_), Pairs::Free) => {}
+                                (Some(base), Pairs::Open) => {
+                                    restrict(&mut out, index.value, &either, Role::Index, false);
+                                    restrict(&mut out, base.value, &either, Role::Base, false);
+                                }
+                                _ => {
+                                    restrict(&mut out, index.value, &target::WORD_INDEXES, Role::Index, false);
+                                    if let Some(base) = cell.base {
+                                        restrict(&mut out, base.value, &target::WORD_BASES, Role::Base, false);
+                                    }
                                 }
                             }
                         }
@@ -173,9 +181,6 @@ fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments
                 }
             }
         }
-    }
-    if pairs == Pairs::Decide {
-        _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments);
     }
     _through_webs(body, &selecting, &numeric, &selectors, optimistic, &mut out);
     out
@@ -241,113 +246,6 @@ fn _through_webs(body: &LirBody, selecting: &BTreeSet<u32>, numeric: &BTreeSet<u
     }
 }
 
-/// Choose BX versus SI/DI for commutative `[word+word]` graphs.
-fn _word_address_roles(
-    pairs: &[(u32, u32)],
-    confined: &mut Classes,
-    body: &LirBody,
-    prefer_indexes: &BTreeSet<u32>,
-    segments: &Segments,
-) {
-    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
-    for (base, index) in pairs {
-        adjacent.entry(*base).or_default().insert(*index);
-        adjacent.entry(*index).or_default().insert(*base);
-    }
-    let mut unseen: BTreeSet<u32> = adjacent.keys().copied().collect();
-    let numbered = ranges::indexed(body);
-    let live = ranges::intervals(body, Some(&numbered));
-    let masks = _masks(body, &numbered, segments);
-    let word_base = *target::WORD_BASES.iter().next().expect("one word base");
-
-    let base_penalty = |values: &BTreeSet<u32>| -> i64 {
-        values
-            .iter()
-            .filter_map(|value| live.get(value))
-            .map(|interval| i64::from(_clobbered(interval, word_base, &masks, 2)))
-            .sum()
-    };
-
-    let allowed = |confined: &Classes, values: &BTreeSet<u32>, choices: &BTreeSet<Register>| -> bool {
-        values.iter().all(|value| match confined.get(value) {
-            Some(had) => had.intersection(choices).next().is_some(),
-            None => !choices.is_empty(),
-        })
-    };
-
-    let restrict = |confined: &mut Classes, values: &BTreeSet<u32>, choices: &BTreeSet<Register>| {
-        for value in values {
-            _restrict(confined, *value, choices);
-        }
-    };
-
-    while let Some(&seed) = unseen.iter().next() {
-        let mut colors: IndexMap<u32, u8> = IndexMap::from_iter([(seed, 0)]);
-        let mut work = vec![seed];
-        let mut bipartite = true;
-        while let Some(value) = work.pop() {
-            for other in &adjacent[&value] {
-                match colors.get(other) {
-                    None => {
-                        let color = 1 - colors[&value];
-                        colors.insert(*other, color);
-                        work.push(*other);
-                    }
-                    Some(color) if *color == colors[&value] => bipartite = false,
-                    Some(_) => {}
-                }
-            }
-        }
-        let component: BTreeSet<u32> = colors.keys().copied().collect();
-        for value in &component {
-            unseen.remove(value);
-        }
-        let source_spelling = |confined: &mut Classes| {
-            for (base, index) in pairs {
-                if component.contains(base) {
-                    restrict(confined, &BTreeSet::from([*base]), &target::WORD_BASES);
-                    restrict(confined, &BTreeSet::from([*index]), &target::WORD_INDEXES);
-                }
-            }
-        };
-        if !bipartite {
-            source_spelling(confined);
-            continue;
-        }
-        let sides: (BTreeSet<u32>, BTreeSet<u32>) = (
-            colors.iter().filter(|(_value, color)| **color == 0).map(|(value, _)| *value).collect(),
-            colors.iter().filter(|(_value, color)| **color != 0).map(|(value, _)| *value).collect(),
-        );
-        let options: Vec<(&BTreeSet<u32>, &BTreeSet<u32>)> = [(&sides.0, &sides.1), (&sides.1, &sides.0)]
-            .into_iter()
-            .filter(|(left, right)| {
-                allowed(confined, left, &target::WORD_BASES) && allowed(confined, right, &target::WORD_INDEXES)
-            })
-            .collect();
-        if options.is_empty() {
-            source_spelling(confined);
-            continue;
-        }
-        let key = |option: &(&BTreeSet<u32>, &BTreeSet<u32>)| {
-            (
-                base_penalty(option.0),
-                option.0.intersection(prefer_indexes).count(),
-                option.0.len(),
-                option.0.iter().copied().collect::<Vec<u32>>(),
-            )
-        };
-        // `min` keeps the first of equal keys.
-        let mut best = options[0];
-        for option in &options[1..] {
-            if key(option) < key(&best) {
-                best = *option;
-            }
-        }
-        let (bases, indexes) = (best.0.clone(), best.1.clone());
-        restrict(confined, &bases, &target::WORD_BASES);
-        restrict(confined, &indexes, &target::WORD_INDEXES);
-    }
-}
 
 pub(crate) const _SEGMENT_OPERANDS: [Operation; 3] = [Operation::Move, Operation::Push, Operation::Pop];
 
@@ -392,8 +290,8 @@ fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
 /// the general registers and the segment registers. A body with none can be coloured, with copies where a value
 /// waits in another class's register; one with some cannot, whatever the allocator does. `skip` names the values
 /// another pass places (x87, pinned, inputs).
-pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>) -> Vec<Violation> {
-    let confined = classes_with(body, &BTreeSet::new(), segments, true);
+pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>, open: bool) -> Vec<Violation> {
+    let confined = classes_with(body, segments, true, open);
     let (_, live_out) = crate::backend::allocate::live(body);
     let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
     let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
@@ -505,7 +403,7 @@ mod tests {
         let exit = LirBlock { at: 2, insns: vec![make(6, vec![], vec![loaded], semantics(Operation::Return, "ret", vec![], vec![], None))], succ: vec![], phis: vec![], cold: false };
         let body = LirBody::new("f", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
         let segments = &target::BUILT_IN;
-        let webs = classes(&body, &BTreeSet::new(), segments);
+        let webs = classes(&body, segments);
         assert_eq!(webs.get(&entry_segment), webs.get(&segment));
         assert!(webs.get(&entry_segment).is_some());
     }

@@ -43,7 +43,6 @@ pub fn machine<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(crate::backend::addressroles::AddressRoles { segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
@@ -97,7 +96,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
     let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
     if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
-        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body));
+        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body), !matches!(stage.as_str(), "AddressRoles" | "RegAlloc"));
         let peak = found.iter().filter_map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { Some(live - registers) } else { None }).max().unwrap_or(0);
         let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
         llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());

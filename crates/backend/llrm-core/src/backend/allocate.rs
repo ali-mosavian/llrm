@@ -339,7 +339,7 @@ pub fn _unread_move(one: &Insn) -> bool {
 /// Each far cell whose selector is also read as a number, or pinned to a
 /// general register, reached through ES.
 pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments: &Segments) -> LirBody {
-    let confined = classes(body, &BTreeSet::new(), segments);
+    let confined = classes(body, segments);
     let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
     let empty = IndexMap::default();
     let pinned = pinned.unwrap_or(&empty);
@@ -549,7 +549,7 @@ impl Facts {
             }
         }
         let masks = _masks(body, &index, segments);
-        Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments), hints: _copy_hints(body) }
+        Self { index, live, masks, widths: _widest(body), confined: classes(body, segments), hints: _copy_hints(body) }
     }
 }
 
@@ -1455,17 +1455,17 @@ impl RegAlloc {
         let data_free = !datagroup::names_data_segment(&body, &segments);
         if crate::support::debug::enabled("regclass") {
             let skip = crate::backend::ssaspill::untouchable(&body);
-            let found = crate::backend::regclass::violations(&body, &segments, &skip);
+            let found = crate::backend::regclass::violations(&body, &segments, &skip, false);
             let crowded = found.iter().filter(|one| matches!(one.why, crate::backend::regclass::Why::Crowded { .. })).count();
             llrm_support::debug!("regclass", "{}: {} points do not fit entering RegAlloc ({} crowded, {} unmatched)", body.name, found.len(), crowded, found.len() - crowded);
         }
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
-        let mut body = if std::env::var_os("NODC").is_some() { constrain::distinct_roles(&body, floor) } else { constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments) };
+        let mut body = constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments);
         body = explicit_selectors(&body, Some(&self.pinned), &segments);
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
         body = narrowed_body;
         self.pinned = narrower;
-        let confined = classes(&body, &BTreeSet::new(), &segments);
+        let confined = classes(&body, &segments);
         let incompatible: BTreeSet<u32> = self
             .pinned
             .iter()
@@ -2867,6 +2867,7 @@ mod tests {
             vec![2, 3, 4],
         );
         let body = body_of("shared-index", 0, vec![_frame_load(1, 1, 4), _frame_load(2, 2, 6), index, read, write]);
+        let body = crate::backend::addressroles::oriented(&body, &target::BUILT_IN, crate::backend::ssaspill::Prices::clocks());
 
         let assignment = allocated(&body, None).expect("allocates");
         assert!(assignment.spilled.is_empty(), "{assignment:?}");
@@ -2897,8 +2898,9 @@ mod tests {
         };
         let read = _load(4, 3, cell, vec![1, 2]);
         let body = body_of("call-crossing-base", 0, vec![_frame_load(1, 1, 4), call, index, read]);
+        let body = crate::backend::addressroles::oriented(&body, &target::BUILT_IN, crate::backend::ssaspill::Prices::clocks());
 
-        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN);
+        let found = classes(&body, &target::BUILT_IN);
 
         assert_eq!(found[&1], *target::WORD_INDEXES);
         assert_eq!(found[&2], *target::WORD_BASES);
@@ -2920,27 +2922,11 @@ mod tests {
     }
 
     #[test]
-    fn test_retained_owner_influences_commutative_address_roles_before_allocation() {
-        let cell = Mem {
-            base: Some(Held { value: 1, width: 2 }),
-            index: Some(Held { value: 2, width: 2 }),
-            ..Mem::new(Some(Addr::new(Space::Far, 0)), 2)
-        };
-        let read = _load(3, 3, cell, vec![1, 2]);
-        let body = body_of("retained-address-role", 0, vec![_frame_load(1, 1, 6), _frame_load(2, 2, 8), read]);
-
-        let confined = classes(&body, &values(&[1]), &target::BUILT_IN);
-
-        assert_eq!(confined[&1], *target::WORD_INDEXES);
-        assert_eq!(confined[&2], *target::WORD_BASES);
-    }
-
-    #[test]
     fn test_32_bit_secondary_base_is_not_confined_to_16_bit_address_registers() {
         let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(Some(Addr::new(Space::Far, 0)), 2) };
         let body = body_of("secondary-base-class", 0, vec![_load(2, 2, cell, vec![1])]);
 
-        assert!(!classes(&body, &BTreeSet::new(), &target::BUILT_IN).contains_key(&1));
+        assert!(!classes(&body, &target::BUILT_IN).contains_key(&1));
     }
 
     // ------------------------------------------------------ tests/test_lir.py
@@ -2957,14 +2943,14 @@ mod tests {
     #[test]
     fn test_an_address_value_takes_the_class_a_base_register_must_be_in() {
         for through in [Register::BX, Register::SI] {
-            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &BTreeSet::new(), &target::BUILT_IN);
+            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &target::BUILT_IN);
             assert_eq!(got.get(&21), Some(&*target::ADDRESSING), "through={through:?}: {:?}", got.get(&21));
         }
     }
 
     #[test]
     fn test_an_unbased_cell_confines_no_value() {
-        assert!(!classes(&_celled(None, Register::BX), &BTreeSet::new(), &target::BUILT_IN).contains_key(&21));
+        assert!(!classes(&_celled(None, Register::BX), &target::BUILT_IN).contains_key(&21));
     }
 
     // ------------------------------------- tests/test_dead_call_deliveries.py
@@ -3079,7 +3065,7 @@ mod tests {
         let what = semantics(Operation::Move, "mov", vec![held(1, 1)], vec![imm(12, 1)]);
         let body = body_of("byte", 0, vec![Insn::new(0, Some((0, 0)), Some(what), vec![1], vec![])]);
         assert_eq!(
-            classes(&body, &BTreeSet::new(), &target::BUILT_IN)[&1],
+            classes(&body, &target::BUILT_IN)[&1],
             BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX])
         );
     }

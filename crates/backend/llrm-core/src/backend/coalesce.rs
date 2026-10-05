@@ -71,7 +71,7 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
     let mut live = ranges::intervals(body, Some(&index));
     let masks = allocate::_masks(body, &index, segments);
     let mut widths = allocate::_widest(body);
-    let where_of = regclass::classes(body, &BTreeSet::new(), segments);
+    let where_of = regclass::open_classes(body, segments);
     let everything: BTreeSet<Register> = target::AVAILABLE.into_iter().collect();
     let mut may: IndexMap<u32, BTreeSet<Register>> = live
         .keys()

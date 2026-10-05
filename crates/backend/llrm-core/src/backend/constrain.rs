@@ -1065,7 +1065,7 @@ mod tests {
         let insns = split.insns();
         let copies: Vec<_> =
             insns.iter().filter(|one| what(one).name.as_deref() == Some("mov") && one.uses == vec![1]).collect();
-        let confined = crate::backend::regclass::classes(&split, &BTreeSet::new(), &target::BUILT_IN);
+        let confined = crate::backend::regclass::classes(&split, &target::BUILT_IN);
 
         assert_eq!(opened, BTreeSet::from([1]));
         assert_eq!(copies.len(), 2);
@@ -1097,7 +1097,7 @@ mod tests {
             Insn::new(0x14, Some((0x14, 0x17)), Some(semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(2, 1)])), vec![], vec![1, 2]),
         ]);
         let stuck = |body: &LirBody| {
-            let found = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN);
+            let found = crate::backend::regclass::classes(body, &target::BUILT_IN);
             found.values().filter(|class| target::order(Some(*class), &target::BUILT_IN).is_empty()).count()
         };
         assert_eq!(stuck(&body), 1, "premise: the value has no register");

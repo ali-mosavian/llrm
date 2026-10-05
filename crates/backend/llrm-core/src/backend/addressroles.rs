@@ -6,6 +6,8 @@
 
 use std::collections::BTreeSet;
 
+use iced_x86::Register;
+
 use crate::analysis::intervals as ranges;
 use crate::analysis::frequency::Frequency;
 use crate::backend::allocate;
@@ -129,23 +131,30 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
             ));
         }
     }
-    // The choice today's per-component key makes, to start from; and what else is confined to the base register.
-    let decided = regclass::decided_roles(body, &BTreeSet::new(), segments);
-    let forced = regclass::unpaired_classes(body, segments);
+    // What else is confined to the base register, and where the operands as isel spelled them put each side.
+    let forced = regclass::forced_classes(body, segments);
     let numbered = ranges::indexed(body);
     let live = ranges::intervals(body, Some(&numbered));
     let masks = allocate::_masks(body, &numbered, segments);
     let word_base = *target::WORD_BASES.iter().next().expect("one word base");
+    let word_index = *target::WORD_INDEXES.iter().next().expect("an index register");
     let in_pair: BTreeSet<u32> = adjacent.keys().copied().collect();
-    let fixed: Vec<u32> = decided.iter().filter(|(value, class)| !in_pair.contains(value) && class.is_subset(&target::WORD_BASES)).map(|(value, _)| *value).collect();
+    let fixed: Vec<u32> = forced.iter().filter(|(value, class)| !in_pair.contains(value) && class.is_subset(&target::WORD_BASES)).map(|(value, _)| *value).collect();
     // Whether the first side is the base side.
     // A side can take a role only where every value of it may sit in that role's registers.
     let may = |values: &BTreeSet<u32>, choices: &BTreeSet<iced_x86::Register>| values.iter().all(|value| forced.get(value).is_none_or(|class| class.intersection(choices).next().is_some()));
     let mut first_is_base: Vec<bool> = sides
         .iter()
         .map(|(left, right)| {
-            let votes = |values: &BTreeSet<u32>| values.iter().filter(|value| decided.get(*value).is_some_and(|class| class.is_subset(&target::WORD_BASES))).count();
-            votes(left) >= votes(right)
+            let (mut as_written, mut reversed) = (0usize, 0usize);
+            for (base, index) in &pairs {
+                if left.contains(base) {
+                    as_written += 1;
+                } else if right.contains(base) && left.contains(index) {
+                    reversed += 1;
+                }
+            }
+            as_written >= reversed
         })
         .collect();
     // What one set of base values costs, in clocks or bytes at this level: a value BX does not survive a call with is
@@ -171,17 +180,17 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
             }
         }
     }
-    let across = |interval: &ranges::Interval| -> f64 {
-        if crossings.iter().any(|(_, mask)| allocate::_clobbered(interval, word_base, mask, 2)) {
+    let across = |interval: &ranges::Interval, register: Register| -> f64 {
+        if crossings.iter().any(|(_, mask)| allocate::_clobbered(interval, register, mask, 2)) {
             prices.store * made.get(&interval.value).copied().unwrap_or(0.0) + prices.load * read.get(&interval.value).copied().unwrap_or(0.0)
         } else {
             0.0
         }
     };
-    let crowd = |values: &[u32]| -> f64 {
-        let mut total: f64 = values.iter().filter_map(|value| live.get(value)).map(&across).sum();
-        // Each time another value becomes live while one the base register holds is, one of them goes elsewhere:
-        // a copy out and one back.
+    // What a set of values that only `register_count` registers hold costs: those a call clobbers, and each time one more
+    // is live than the registers hold, a copy out and one back.
+    let pressure = |values: &[u32], register: Register, capacity: i32| -> f64 {
+        let mut total: f64 = values.iter().filter_map(|value| live.get(value)).map(|interval| across(interval, register)).sum();
         let mut events: Vec<(i64, i32)> = Vec::new();
         for interval in values.iter().filter_map(|value| live.get(value)) {
             for segment in &interval.segments {
@@ -189,62 +198,60 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
                 events.push((segment.end, -1));
             }
         }
-        if std::env::var_os("TRACEAR2").is_some() {
-            eprintln!("AR2 values {:?} across {:?} total_across {total}", values, values.iter().filter_map(|v| live.get(v).map(|i| (*v, across(i), i.weight))).collect::<Vec<_>>());
-        }
         events.sort_unstable_by_key(|(slot, step)| (*slot, *step));
         let mut held = 0;
         for (slot, step) in events {
             held += step;
-            if step > 0 && held >= 2 {
+            if step > 0 && held > capacity {
                 total += 2.0 * prices.copy * at_slot(slot);
             }
         }
         total
     };
+    let crowd = |bases: &[u32], indexes: &[u32]| -> f64 { pressure(bases, word_base, 1) + pressure(indexes, word_index, 2) };
     let possible = |at: usize, first: bool| -> bool {
         let (left, right) = &sides[at];
         let (bases, indexes) = if first { (left, right) } else { (right, left) };
         may(bases, &target::WORD_BASES) && may(indexes, &target::WORD_INDEXES)
     };
-    let bases = |first_is_base: &[bool]| -> Vec<u32> {
-        let mut out: Vec<u32> = fixed.clone();
+    let fixed_indexes: Vec<u32> = forced.iter().filter(|(value, class)| !in_pair.contains(value) && class.is_subset(&target::WORD_INDEXES)).map(|(value, _)| *value).collect();
+    let sets = |first_is_base: &[bool]| -> (Vec<u32>, Vec<u32>) {
+        let (mut bases, mut indexes): (Vec<u32>, Vec<u32>) = (fixed.clone(), fixed_indexes.clone());
         for ((left, right), first) in sides.iter().zip(first_is_base) {
-            out.extend(if *first { left } else { right }.iter().copied());
+            let (base_side, index_side) = if *first { (left, right) } else { (right, left) };
+            bases.extend(base_side.iter().copied());
+            indexes.extend(index_side.iter().copied());
         }
-        out
+        (bases, indexes)
     };
-    // What one component's base side adds to the cost of the rest.
-    let adds = |at: usize, first: bool, all: &[bool]| -> f64 {
-        let mut with = all.to_vec();
-        with[at] = first;
-        let mut without: Vec<u32> = fixed.clone();
-        for (other, ((left, right), side)) in sides.iter().zip(&with).enumerate() {
-            if other != at {
-                without.extend(if *side { left } else { right }.iter().copied());
-            }
-        }
-        crowd(&bases(&with)) - crowd(&without)
+    let priced = |first_is_base: &[bool]| -> f64 {
+        let (bases, indexes) = sets(first_is_base);
+        crowd(&bases, &indexes)
     };
-    // A component turns over only to roles that cost the rest nothing, where its present ones do: the cost is an
-    // estimate, and one it cannot tell apart from the other is left as isel spelled it.
-    for _ in 0..4 {
+    // A component turns over where the other roles cost less, by the price: one that does not is left as isel spelled it.
+    let mut best = priced(&first_is_base);
+    let seeded = first_is_base.clone();
+    for _ in 0..if std::env::var_os("NOSEARCH").is_some() { 0 } else { 4 } {
         let mut turned = false;
         for at in 0..sides.len() {
             if !possible(at, !first_is_base[at]) {
                 continue;
             }
-            if std::env::var_os("NOFLIP").is_none() && adds(at, first_is_base[at], &first_is_base) > 0.0 && adds(at, !first_is_base[at], &first_is_base) <= 0.0 {
-                if std::env::var_os("TRACEAR").is_some() {
-                    eprintln!("AR {} turns comp {at} sides {:?} to base-first {}", body.name, sides[at], !first_is_base[at]);
-                }
-                first_is_base[at] = !first_is_base[at];
+            first_is_base[at] = !first_is_base[at];
+            let tried = priced(&first_is_base);
+            if tried < best {
+                best = tried;
                 turned = true;
+            } else {
+                first_is_base[at] = !first_is_base[at];
             }
         }
         if !turned {
             break;
         }
+    }
+    if std::env::var_os("TRACEAR").is_some() {
+        eprintln!("AR {} sides {:?} seeded {:?} final {:?} cost {best}", body.name, sides, seeded, first_is_base);
     }
     let mut roles: IndexMap<u32, bool> = IndexMap::default();
     for ((left, right), first) in sides.iter().zip(&first_is_base) {

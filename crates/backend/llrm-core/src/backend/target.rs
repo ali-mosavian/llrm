@@ -772,7 +772,7 @@ mod tests {
 
         assert!(!requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
-            crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN)[&2],
+            crate::backend::regclass::classes(&body, &BUILT_IN)[&2],
             BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()
         );
     }
@@ -790,7 +790,7 @@ mod tests {
         let held = |value| Loc::Held(ir::Held { value, width: 2 });
         let copy = semantics(Operation::Copy, "movsd", vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)], vec![held(1), held(2), Loc::Reg(ir::Reg { register: Register::DS, width: 2 }), held(3)]);
         let body = LirBody::new("string", 0x10, vec![LirBlock::new(0x10, vec![Arc::new(Insn::new(0x10, Some((0x10, 0x11)), Some(copy), vec![5, 6], vec![1, 2, 3]))])], IndexMap::default(), IndexMap::default());
-        let classes = crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN);
+        let classes = crate::backend::regclass::classes(&body, &BUILT_IN);
         assert_eq!(classes.get(&3), Some(&BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()));
         assert!(!classes.contains_key(&1), "premise: the offsets stay general");
     }
