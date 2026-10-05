@@ -31,14 +31,7 @@ pub fn descriptor(family: &str) -> Option<Descriptor> {
 /// What `family`'s runtime says of its stack, where it checks one.
 pub fn stack(family: &str) -> Option<StackCheck> {
     let row = TABLE.get("stack")?.get(family)?;
-    let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
-    let need = |key: &str| text(key).unwrap_or_else(|| panic!("stack.{family}.{key}"));
-    Some(StackCheck {
-        limit: need("limit"),
-        handler: need("handler"),
-        red_zone: row.get("red_zone").and_then(toml::Value::as_integer).unwrap_or_else(|| panic!("stack.{family}.red_zone")),
-        entry: text("entry"),
-    })
+    Some(StackCheck::from_toml(row).unwrap_or_else(|why| panic!("stack.{family}: {why}")))
 }
 
 /// Each routine the table describes.

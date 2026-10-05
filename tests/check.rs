@@ -32,7 +32,7 @@ struct Directive {
 
 fn comment(line: &str) -> Option<&str> {
     let line = line.trim_start();
-    [";", "'", "//"].iter().find_map(|mark| line.strip_prefix(mark)).map(str::trim)
+    [";", "'", "//", "#"].iter().find_map(|mark| line.strip_prefix(mark)).map(str::trim)
 }
 
 fn directives(source: &str) -> Vec<Directive> {

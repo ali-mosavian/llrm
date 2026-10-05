@@ -96,7 +96,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
                     interrupt,
                     size: cpu.size,
                     entry: 0,
-                    stack_check: None,
+                    stack_check: function.attrs.iter().any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck)).then(|| abi.stack_check().cloned()).flatten(),
                 };
                 let overhead = masm::return_overhead_bytes(&procedure).map_err(|error| error.to_string())? as i64;
                 let body = jumps::duplicated_returns(procedure.body.clone(), overhead);

@@ -934,6 +934,17 @@ pub struct StackCheck {
     pub entry: Option<String>,
 }
 
+impl StackCheck {
+    /// The check a runtime's description row states: `limit`, `handler`, `red_zone` and, where
+    /// its frame entry checks, `entry`.
+    pub fn from_toml(row: &toml::Value) -> Result<Self, String> {
+        let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
+        let need = |key: &str| text(key).ok_or_else(|| format!("stack {key} is not a string"));
+        let red_zone = row.get("red_zone").and_then(toml::Value::as_integer).ok_or("stack red_zone is not an integer")?;
+        Ok(Self { limit: need("limit")?, handler: need("handler")?, red_zone, entry: text("entry") })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Program {
     pub dialect: Dialect,

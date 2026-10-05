@@ -153,8 +153,9 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     if program.source.suffix == ".nib":
         exe = work / f"{stem}.exe"
         extras = [str(program.source.parent / one) for one in program.link]
+        nib_flags = " ".join(compiler_arguments(program.source))
         done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(program.source), str(exe), *program.flags[:1], *extras],
-                              capture_output=True, text=True, timeout=300, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN)})
+                              capture_output=True, text=True, timeout=300, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_FLAGS": nib_flags})
         if done.returncode != 0 or not exe.exists():
             return "build: " + (done.stderr or done.stdout).strip()[-600:]
         try:
