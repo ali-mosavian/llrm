@@ -4030,3 +4030,38 @@ fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
     let without = crate::backend::ssaspill::without_memory_phis(|| sized_with(assemble::Candidates::SpillerOnly, &text));
     assert_eq!(with, without);
 }
+
+/// code16 is 386+ code under 66h/67h prefixes, not 8086 code: i32 is
+/// arithmetic in EAX..EDI, extends are `movsx`/`movzx` into 32-bit
+/// registers, a constant multiply is a 32-bit `lea`, a long copy is
+/// `rep movsd`, and on a 386 a scaled index is `[ebx+eax*2]` (the 486 prices
+/// that form above a spill). A selector rewrite that keeps today's bytes
+/// but narrows these to word pairs would lose what every program is priced on.
+/// There is no 286 profile yet: when there is, it asserts none of these.
+#[test]
+fn test_code16_emits_386_forms() {
+    let arithmetic = listing("define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n", "f");
+    assert!(arithmetic.contains(&"add eax, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"lea ebx, [eax+eax*2]".to_owned()), "{arithmetic:?}");
+
+    let extends = listing("define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n", "f");
+    for want in ["movsx eax, byte ptr [bp+6]", "movzx ebx, word ptr [bp+8]", "add eax, ebx"] {
+        assert!(extends.contains(&want.to_owned()), "{want}: {extends:?}");
+    }
+
+    let copy = listing(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\ndefine i16 @f() addrspace(1) {\n  %a = alloca [70 x i8]\n  %b = alloca [70 x i8]\n  store i16 3, ptr %a\n  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 70, i1 false)\n  %v = load i16, ptr %b\n  ret i16 %v\n}\n",
+        "f",
+    );
+    assert!(copy.iter().any(|one| one.starts_with("rep movs dword ptr")), "{copy:?}");
+
+    let scaled = |cpu: &str| {
+        listing_on(
+            cpu,
+            "define i16 @f(ptr %p, ptr %q) addrspace(1) {\nentry:\n  %i = load i16, ptr %q\n  %b = load ptr, ptr %p\n  %c = icmp sge i16 %i, 0\n  br i1 %c, label %ok, label %no\nok:\n  %e = getelementptr inbounds i16, ptr %b, i16 %i\n  %v = load i16, ptr %e, !tbaa !1\n  ret i16 %v\nno:\n  ret i16 0\n}\n\n!0 = !{!\"int\"}\n!1 = !{!0, !0, i64 0}\n",
+            "f",
+        )
+    };
+    assert!(scaled("386").contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{:?}", scaled("386"));
+    assert!(!scaled("486").iter().any(|one| one.contains("*2")), "{:?}", scaled("486"));
+}
