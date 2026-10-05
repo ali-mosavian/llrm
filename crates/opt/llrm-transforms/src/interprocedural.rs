@@ -465,6 +465,14 @@ pub fn optimized<E: From<String>>(
         }
     }
 
+    // A far pointer every call fills from DGROUP is passed as its offset.
+    for at in 0..count {
+        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout) {
+            edited(&mut modules[at], &[id]);
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
+        }
+    }
+
     let mut return_round = 0;
 
     // Materialize every newly constant result.

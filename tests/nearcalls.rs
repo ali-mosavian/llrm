@@ -76,3 +76,13 @@ fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them()
     let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions"]);
     assert!(!asm.contains("N$EBND") && !asm.contains("pushw 12"), "{asm}");
 }
+
+/// A slice of a module array is a far pointer to DGROUP: pushed as segment and offset and read back
+/// with `les`. Every call fills it from one global, so the callee takes the offset and reads through DS.
+#[test]
+fn test_nib_passes_a_global_array_slice_as_its_offset() {
+    let source = "var table: i16[16] = [0] * 16\n\nfn total(a: &[i16], i: i16) -> i16:\n    if i == 0:\n        return a[0]\n    return total(a, i - 1) + a[i]\n\nfn main() -> i16:\n    table[3] = 5\n    print(total(table, 3))\n    return 0\n";
+    let asm = compiled("llrm-nib", "table.nib", source, &["-fno-inline-functions"]);
+    let body = procedure(&asm, "_total");
+    assert!(!body.contains("les ") && !body.contains("es:[") && body.contains("ret 4"), "{asm}");
+}
