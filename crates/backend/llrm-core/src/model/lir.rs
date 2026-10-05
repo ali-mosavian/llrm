@@ -356,6 +356,23 @@ impl BlockOdds {
 }
 
 impl LirBody {
+    /// The edges from a block with more than one successor into a block with more than one predecessor: code
+    /// that must run on one of them has no block of its own to go in until one is made.
+    #[must_use]
+    pub fn critical_edges(&self) -> BTreeSet<(i64, i64)> {
+        let mut preds: IndexMap<i64, usize> = IndexMap::default();
+        for block in &self.blocks {
+            for to in &block.succ {
+                *preds.entry(*to).or_default() += 1;
+            }
+        }
+        self.blocks
+            .iter()
+            .filter(|block| block.succ.len() > 1)
+            .flat_map(|block| block.succ.iter().filter(|to| preds.get(*to).is_some_and(|count| *count > 1)).map(move |to| (block.at, *to)))
+            .collect()
+    }
+
     /// Constructs Python's five-required-field `LirBody` form.
     #[must_use]
     pub fn new(
