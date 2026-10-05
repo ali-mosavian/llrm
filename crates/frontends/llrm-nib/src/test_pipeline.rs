@@ -102,6 +102,8 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
     let runtime = |name: &str| std::fs::read_to_string(format!("{}/src/runtime/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
     assert!(runtime("dos.asm").contains(&format!("public {}", check.limit)) && runtime("start.asm").contains(&format!("mov {}, ax", check.limit)));
     assert!(runtime("errors.nib").contains(&format!("@export(name=\"{}\")", check.handler)));
+    // The limit sits the reserve `stack_to_add` leaves above the stack's bottom.
+    assert!(runtime("start.asm").contains(&format!("add ax, {}", llrm_core::backend::stackusage::STACK_RESERVE)));
     let mut program = nib::parsed(&nib::fixture("sum.nib"));
     program.stack_check = Some(llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check });
     let sum = _procedure(&nib::listing(&program, "sum", &nib::O2()), "_sum");
