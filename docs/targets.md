@@ -57,28 +57,50 @@ Not in the language: loops, arithmetic on constants, if/else beyond type
 matching, cost expressions, user functions. If the Rust body has a loop or a
 search, it is a hook. `peephole.peep` is at that edge: its syntax is frozen.
 
-### The 26 selection hooks (19 distinct)
+### The 26 selection hooks
 
-| Hook (steps) | Class | How |
-|---|---|---|
-| `getelementptr` (1) | generic | reads the address-form table; the far fold is a code16 hook |
-| `words` (1) | generic | load narrowing before selection |
-| `scaled` (1) | x86 family hook | shift/add chain search priced from timings |
-| `divide` (1) | pattern | `cwd` or zero, then `div`, with `partner` |
-| `wide_binary`, `wide_cast` (3) | pattern, x86 family | half constructors; shift by count and i64 div stay hooks |
-| `float_bits` (1) | generic MIR | a store of a float constant becomes a store of the same bits |
-| `float_cast` (2) | pattern, x86 | `temp(bytes)` and alias |
-| `extractvalue` (1) | generic | call-result fields come from the convention |
-| `setcc` (5), `br` (1) | pattern | condition-code table; the `cover` steps exist |
-| `ret` (1) | generic | convention; far and joined-word results are code16 hooks |
-| `call` (1) | split | intrinsics are patterns; memset/memcpy are x86 hooks; ptrdiff/window are code16; va_start is the convention; real calls are generic lowering |
-| `invoke` (1) | generic | call plus a jump to the normal successor |
-| `landing_pad` (1) | runtime hook | helper call that clobbers everything |
-| `far_load`, `far_store`, `far_cast` (4) | code16 hook | pair pointers only |
-| `unselected_cast` (1) | pattern | `refuse mnemonic` |
+Mapped to phases in "MIR to LIR" below: which become legalizer rules, which
+patterns or complex patterns, which stay named hooks. About half the steps are
+generic lowering or loops and stay Rust, behind the calling-convention and
+address-form descriptions.
 
-About half the steps are generic lowering or loops that stay Rust; they move
-behind the calling-convention and address-form descriptions, not into patterns.
+## Requirements on code16
+
+1. **Nothing is dropped from the 16-bit backend.** Far calls and returns,
+   selectors and the selector register file, huge pointers, DGROUP, the
+   interrupt frame, the 16-bit address forms, every CPU profile (386 to Core), every
+   peephole rule and pattern, the QB, Nib and BC runtimes stay. A stage moves code
+   to where a description or another crate owns it; it does not delete a
+   capability. Where a pass is keyed to "has segments", code16 has them.
+2. **It produces exactly the code it produces today.** Byte-identical `.obj`
+   and listings, not "equivalent": the gate on every PR.
+3. **code16 keeps its 386+ code generation** (next section).
+
+## Axes: mode and CPU profile
+
+Two axes, not one.
+
+- **Mode** (code16, code32, code64) sets the default operand and address size,
+  segmentation, pointer width, calling conventions and object format.
+- **CPU profile** (8086, 286, 386, 486, P5, ...) sets which instructions,
+  registers and address forms exist, and their timings. The register
+  description has EAX..EDI in code16 too, gated by profile. Encodings are
+  shared; the prefixes (66h, 67h) follow from mode.
+- Legality is per (mode, profile). Address forms are per (mode, address size):
+  the 16-bit forms (`{BX,BP}+{SI,DI}+disp16`) and the 32-bit forms (any GPR
+  base, any but ESP an index, scale 1/2/4/8, disp32; behind 67h in code16) are
+  both described, each with its cost.
+
+**Requirement: code16 keeps its 386+ code generation.** code16 is 386 code under
+prefixes today (32-bit registers and arithmetic, `[ebx+eax*2]`, `movsx`/`movzx`,
+`rep movsd`, `shld`; 486 is the default profile). `test_code16_emits_386_forms`
+(#502) pins it; no refactor may replace it with an "equivalent" narrowing.
+There is no 286 profile yet: `machine::CPUS` starts at 386 and the listing
+header is `.386`. A pre-386 profile would be legalizer rules (i32 narrowed to
+i16 pairs), not a refactor, and is not part of this task.
+
+`Target` is the mode; the CPU profile is its `CostModel` and register gating
+(LLVM's subtarget). `Profile::target()` today builds both as one.
 
 ## Target facts, in one line each
 
@@ -133,7 +155,7 @@ Out of scope and pinned to code16: the BASIC runtime, BC raise, Nib (~25k lines)
 | Assumption | Anchor | Class | Becomes |
 |---|---|---|---|
 | Allocatable set is `GENERAL` (six E-registers) | `backend/target.rs:299`, `loopslots.rs:69` | T | `registers().allocatable` |
-| Address bases `bx bp si di`; `[bx+si]` roles | `target.rs:19-26`, `regclass.rs:106-135`, `allocate.rs:653,2066`, `select.rs:231-327`, `affine.rs:78` | C | `address_class(role, width)`; code32: any GPR, ESP not an index, scale 1/2/4/8 |
+| Address bases `bx bp si di`; `[bx+si]` roles | `target.rs:19-26`, `regclass.rs:106-135`, `allocate.rs:653,2066`, `select.rs:231-327`, `affine.rs:78` | S (a 16-bit address size, per (mode, address size)) | per-operand register class from the form; the address-form table has the 16-bit and 32-bit forms |
 | `width == 2` held value means address or selector | `regclass.rs:111`, `allocate.rs:1810`, `constrain.rs:283` | C | `is_address_value(width)`, selector class empty |
 | Selector register file (ES/FS/GS/DS) as a second allocation file | `target.rs:410-475`, `ssaspill.rs`, `regclass.rs`, `constrain.rs`, `splitkit.rs`, `liveness.rs` | C | `selector_registers()`, empty when no segments |
 | Fixed registers: mul, div, shifts (cl), string ops, in/out, cwd, restated by hand | `target.rs:67-162` | S | the form table's `fixed` column is the only list; string ops get rows |
@@ -154,7 +176,7 @@ Out of scope and pinned to code16: the BASIC runtime, BC raise, Nib (~25k lines)
 | iced bitness literal 16 | `select.rs:164`, `declen.rs:15`, `peephole.rs:763`, `regthrash.rs:282`, `inline_asm.rs:449`, `cycles.rs:59` | `bitness()` |
 | 16-bit `Code::` names | `select.rs:339-1557` (~40) | `{w}` forms from the instruction table |
 | `int(16)` size, index and port types | `hir/mir.rs` (~60), `transforms/algebraic.rs:455`, `calleepop.rs:75`, `window.rs` | `DataLayout` index width, `largest_legal_integer` |
-| 66h/67h prefix rules, no single query | `division.rs:91`, `isel.rs:313-514`, `select.rs:905`, `peephole.rs:1048`, `guards.rs:114`, `cpu.rs:15` | `operand_prefix_bytes(width)`, `address_prefix_bytes(form)`; code32 inverts them |
+| 66h/67h prefix rules, no single query (mode decides them) | `division.rs:91`, `isel.rs:313-514`, `select.rs:905`, `peephole.rs:1048`, `guards.rs:114`, `cpu.rs:15` | `operand_prefix_bytes(width)`, `address_prefix_bytes(form)`; code32 inverts them |
 | Interrupt frame (pushad, segment pushes) | `masm.rs:380-445`, `mir/opcode.rs:357` | calling-convention entry |
 | `lower_int64` helper blobs encoded for 16-bit mode | `lower_int64.rs:41-96` | per-target helper table |
 
@@ -260,43 +282,166 @@ move to the target crate.
 into tables. Capabilities are not a bag of flags: "has segments" is an address
 space of pair kind, "has far calls" is far forms in the table.
 
+## MIR to LIR: the GlobalISel pipeline
+
+Adopted from LLVM: GlobalISel's pipeline, not SelectionDAG. Per function, on the
+generic machine instruction below, with legality declared in the target's
+description.
+
+| Phase | LLVM | llrm |
+|---|---|---|
+| 1 | IRTranslator | MIR to generic LIR (`G_ADD`, `G_LOAD`, `G_PTR_ADD`, ...), typed with low-level types and address spaces. Target-independent except call lowering, which reads the calling-convention description |
+| 2 | Legalizer | the target's legality table per (op, type): legal, widen, narrow, lower, libcall, unsupported. Per (mode, profile) |
+| 3 | RegBankSelect | banks from the register description: GPR, x87, segment |
+| 4 | InstructionSelect | `patterns.isel`, plus address-mode complex patterns (base + index*scale + disp, segment), declared per target |
+
+### Where today's code sits
+
+There is no generic LIR. `isel::selected()` emits x86 machine LIR directly
+(`Semantics` named `mov`, `adc`, `shld`, `idiv`) over virtual registers, and its
+module doc says it is as SelectionDAG makes MachineInstrs. It is IRTranslator,
+Legalizer and InstructionSelect fused in one per-function pass that walks blocks
+in reverse post-order and selects per MIR instruction. Legalization is inline:
+i64 is two dwords in `wides`, a far pointer two words in `fars`, a dword joined
+from two words in `joins`, an aggregate call result in `fields`. RegBankSelect
+does not exist: banks are implicit (x87 values have width 10; GPR and selector
+classes come from `regclass.rs` per operand). `select.rs` is the encoder after
+selection, not a selector.
+
+| Region (`backend/`) | Phase | Becomes |
+|---|---|---|
+| `isel.rs` `convention`, `passing`, `slot`, `returned` (:65-179), `call`, `called`, `ret` (:2539-2973, ~470) | IRTranslator (call lowering) | generic lowering reading the calling-convention description; `Abi` trait stays for QB's per-callee contracts |
+| `body`, phis, `switch`, merged conditions (:577-1338) | IRTranslator | generic; `fuse`/`narrowed`/`pair` pre-passes are combiner steps |
+| `width_of`, `size_of` (:202,:282) | IRTranslator (type to low-level type) | datalayout |
+| `wide.rs` i64 expansion, `far_cast`, `float_cast`, `far_loaded`, `memcpy`/`memset` expansion (:2974-3339), `divide`, `compare`, `division.rs`, `arithmetic.rs` | Legalizer | rules in the table; helpers in the x86 family or code16 crate |
+| `Pointer`, `indexed`, `widened`, `carried`, `window`, `memory`, `folded` (:1487-2272, ~800) | InstructionSelect (complex patterns) | address-form table plus generic folding; far and huge folds stay code16 hooks |
+| `matcher.rs`, `patterns.isel`, generator | InstructionSelect | stays; gains the hooks' replacements |
+| `combined.rs` (`farload`, `comparefold`, `rmw`, peephole argument rules), `farcall.rs` | combiner after select | stays x86 family; far parts code16 |
+| `selects.rs`, `ehprepare.rs`, `nearcode.rs` | MIR pre-passes | stay MIR |
+| `unwind.rs`, `masm`, `frame`, `prologue`, `omfwrite` | other | unchanged |
+| `lower_int64.rs` | data (helper blobs), name is stale | per-target helper table |
+| `pointers.rs` | dead (only its own tests use it) | left as is: nothing is dropped from code16 |
+
+### The legalizer, exactly as `wide.rs` does it
+
+On code16 with a 386+ profile i8, i16 and i32 are legal and i64 narrows to two
+dwords, low first (`wides`). The rule table has to reproduce, per op:
+
+- casts to i64: `movsx`/`movzx` for a narrow source, high = `cdq` (sext) or
+  `mov 0` (zext); from i64: the low half, `and 1` for i1; `sitofp` stores the pair
+  to an 8-byte temp and `fild`s it; other ops from i64 unsupported;
+- add/sub `add`+`adc`, `sub`+`sbb`; and/or/xor pairwise;
+- shifts by a constant only, mod 64: 1..31 `shld`/`shrd` with the half shift,
+  32 and over move a half and fill the other; a variable count is unsupported;
+- mul: one `imul` when both are 32-bit values, else `mul` plus two `imul`s and
+  adds; compare: `xor`/`xor`/`or` for equality, `sub`+`sbb` for order;
+- div/rem: a power of two by bias and shifts; a narrow divisor by one or two
+  `div`s; everything else by the inline helper blobs (`__I8D`, `__U8D`, and the
+  32-bit-constant forms), clobbering AX BX CX DX;
+- `llvm.smul.fix`/`sdiv.fix` by `imul`+`shrd`, `cdq`/`shld`/`idiv`.
+
+On a future 8086/286 profile i32 narrows to i16 pairs by the same rule kinds with
+a different table; that is the profile's rule set, not code16's.
+
+### The 26 hooks by phase
+
+| Phase | Hook steps | Form |
+|---|---|---|
+| IRTranslator | `call`, `ret`, `invoke`, `br`, `extractvalue` (5) | generic lowering from the calling-convention description; intrinsics inside `call` split as: memset/memcpy are legalizer rules, port in/out and float unary are patterns, ptrdiff/window are code16, va_start is the convention |
+| Legalizer | `wide_cast` (2), `wide_binary`, `float_cast` (2), `float_bits`, `far_load`, `far_store`, `far_cast` (2), `unselected_cast`, `divide`, `words` (13) | rules: narrow, lower, unsupported. `far_*` are code16 rules (pair pointers); `float_bits` is a generic lowering of a float-constant store; `words` is a load-narrowing combine |
+| InstructionSelect | `getelementptr`, `scaled`, `setcc` (5), | complex pattern (address forms), pattern in a cost `group` with a chain generator hook, patterns over a condition-code table |
+| other | `landing_pad` | runtime hook |
+
+Not all 26 steps are listed by name above; the totals are 5 + 13 + 7 + 1.
+
+### Staging, byte-identical
+
+1. A legality table in the description, with a differential test: every (op,
+   type) the selector accepts or refuses today is `legal`, a named action, or
+   `unsupported` in the table. The actions are still the existing functions.
+2. The legalizer's state (`wides`, `fars`, `joins`, `fields`, `halves`) out of
+   `Selector` into its own value map; selector state (`fused`, `covered`,
+   `consumed`, `paired`) and address state (`pointers`, `materialized`,
+   `far_globals`) stay apart.
+3. Rules replace the hooks, `wide.rs` first, each rule reproducing today's emitted
+   sequence; `far_*` and float casts next.
+4. Generic opcodes: the IRTranslator emits them, the legalizer rewrites them in
+   place, selection maps them to forms. **Hazard:** virtual register numbers come
+   from `fresh` in emission order and decide allocation and spill order. Until a
+   canonical numbering is proved identical, the three phases run pipelined per MIR
+   instruction in today's order, not as three whole-function sweeps.
+5. RegBankSelect: banks declared in the register description; `regclass` reads
+   them (after cost-spill).
+
 ## End state: a generic machine instruction
 
 Decided: LIR becomes a generic machine instruction, designed now and built in
 stages. No arm64 code in this task. Today's `Semantics { op, name, dests,
-sources }` is already close; what is x86-shaped is its operands.
+sources }` is close; what is x86-shaped is its operands.
 
 ```
 MachineInstr
-  opcode     OpcodeId: a row of the target's form table (today `name: String`)
-  operands   defs first, then uses
-             Reg(RegId, width)   a register of the target's description
-             Imm(value, kind)    kind from the form: imm8, imm12, ...
-             Mem(AddressRef)     slots by role (base, index, scale, disp,
-                                 symbol, space); the roles a form allows come
-                                 from the target's address-form table
-             Block, Symbol, Held(value, width)   SSA value not yet placed
-  ties       operand i is operand j (two-address); from the form
-  implicit   defs and uses from the form (fixed registers, flags)
+  opcode     OpcodeId: an index into the target's mnemonic list (the forms
+             plus raise-only names such as fidiv, wait); the form is found from
+             (mnemonic, operand kinds), as the encoder picks the iced Code at emit
+             time. Option<OpcodeId>: None is a Barrier
+  dests, sources   as today. A tie is the same operand in dests[0] and
+             sources[0]; the form declares that it must hold
+  operands   Reg(RegId, width)  Imm(value)  Mem(AddressRef, MemInfo)
+             Address(AddressRef)  Held(value, width)
+  per operand: a register class from the form (LLVM's MCOperandInfo.RegClass)
+  implicit   defs, uses, fixed registers and flags stay on `Insn`
+             (requires, delivers, clobbers), filled from the form; flags stay a
+             bitset, an implicit def or use of one status resource
 ```
 
-- The register id is the target's id from its register description. Subregisters
-  are ids with a super register and a lane, so `al` is a view of `eax`; width stays
-  the operand's. x87's stack and any other target-specific file are register
-  classes with an operand kind the description names; `Loc::St` becomes one.
-- x86's memory operand (`through`, `selector`, `index_through`, `disp_width`,
-  `exact`) becomes slots of `AddressRef` the form table declares; `selector` is a
-  slot only code16's address spaces declare. A load/store ISA's forms have no
-  `Mem` on ALU rows.
-- `Operation` stays: it is what an instruction computes, not a mnemonic. The
-  mnemonic is the opcode.
-- Queries about a register (`size`, super register, class, is-address-base) take
-  a `&RegisterInfo`; there is no process-wide target.
-- code16 numbers its ids in iced order, so every `Ord`, `BTreeSet` and `IndexMap`
-  iteration, and so allocation and spill order, is unchanged. A test pins the
-  order.
-- Done once: the crate inversion, the register id and the operand model are one
-  line of PRs (2 to 11 below), not three rewrites.
+```rust
+pub struct RegId(u8);      // ordinal == iced discriminant; NONE = 0; Hash writes an isize as iced's does
+pub struct RegisterInfo { name, size, root, lane, classes }   // generated, &'static, held by the pass context
+pub struct Slot { value: Option<Held>, reg: RegId }           // reg is today's through/index_through: not in Eq
+pub struct AddressRef { base: Slot, index: Slot, scale: u8,
+                        segment: Slot,       // today `selector`; only pair-kind spaces declare it
+                        disp: i64, disp_bytes: u8 }
+pub struct MemInfo { addr: Option<Addr>, width: u32, stack_argument: bool, exact: bool }
+pub struct Mem { at: AddressRef, info: MemInfo }              // hand-written Eq/Hash as today
+```
+
+- The register id is the target's id from its register description, in iced
+  order for code16. Subregisters are ids with a root and a lane (`al` is a view of
+  `eax`). x87's stack is a register class with an operand kind the description
+  names; `Loc::St` becomes a `Reg` in it.
+- The form table declares which `AddressRef` slots are legal; it does not decide
+  the layout. A load/store ISA's ALU rows have no `Mem`.
+- `Mem` splits into the encoding (`AddressRef`) and the identity alias analysis
+  reads (`MemInfo`, LLVM's `MachineMemOperand`): the hand-written `Eq`/`Hash`
+  exclusions in `ir/mod.rs` are that split already. `Loc::Address` reuses
+  `AddressRef`; its index is a physical register today and a `Held` in `Mem`,
+  and they unify.
+- `Operation` stays: what an instruction computes, not a mnemonic.
+- Register queries (`size`, root, class, is-address-base) take a `&RegisterInfo`;
+  no process-wide target. About 55 iced method sites are the whole surface
+  (`size` 34, `full_register32` 11, `is_segment_register` 3, ...); build no more.
+- BC raise keeps iced in its decoder and converts at `semantics.rs`
+  (`_location`, `_register_effects`) with `x86::reg(Register) -> RegId`, the
+  identity on the ordinal.
+- `llrm_support::register::PhysicalRegister(u32)` exists and is unused: it
+  becomes `RegId` or is deleted; never both.
+
+Byte-identical hazards for these PRs, one parity test over `Register::values()`
+(iced against `RegisterInfo` on `Ord`, Fx hash, name, size, root, `as usize`):
+iced's `Register` hashes an isize, so a `RegId(u8)` derive reorders every
+`HashMap`/`HashSet` of registers (`regthrash`, `copysink`, `peephole`,
+`spillforward`); `BTreeSet<Register>` (89 sites) and allocation order need
+ordinal equal to iced's; dumps print registers by number (`pyrepr.rs`);
+`lanes.rs` and `verify.rs` index arrays by `register as usize`; a `derive` on the
+new structs silently adds `through`, `exact` and `disp_width` to `Eq`, so keep
+the hash field order and pin it with a golden fixture; `name: String` to
+`OpcodeId` changes `Semantics`' `Hash`, and its `Repr` must still print the
+string; `Register::None` is a sentinel.
+
+Cut as YAGNI: predication, bundles, kill/dead/undef operand flags, an
+MCInst/MachineInstr split, subregister-index operands, an explicit `Block`
+operand (keep `target` and `indirect`), writeback addressing, register pairs.
 
 Facts a later ISA will need and nothing asks for yet, added when it does: return
 address in a register, explicit flag-setting forms, immediate encodability,
@@ -313,26 +458,32 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 
 | # | PR | Moves |
 |---|---|---|
+| guard | #502 `test_code16_emits_386_forms` | none |
 | 0 | this document and the reviews | none |
 | 1 | withdrawn: the MIR crates already take code16 as a dev-dependency (manifests checked) | none |
-| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged | no code16 or iced in the BC lifter's model crate |
-| 3 | `llrm-driver` and `trait Target`; `--target` flag, default code16; `Profile::target()` builds through it; `llrm-core` reads `GENERAL`, `PRESERVED`, `FRAME`, bases, indexes, bitness from it; metric baseline | production uses to ~0 in `llrm-core` |
+| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no code16 or iced in the BC lifter's model crate |
+| 3 | `llrm-driver` and `trait Target` (mode); CPU profile as its own axis; `--target` flag, default code16; `llrm-core` reads `GENERAL`, `PRESERVED`, `FRAME`, bases, indexes, bitness from it; metric baseline | production uses to ~0 in `llrm-core` |
 | 4 | generated code per target: `llrm-iselgen`, hooks resolved at generation, `CONSTRUCTORS` into the `.isel` header, generators run from the target's `build.rs` | `build.rs`, `matcher.rs`, `peephole.rs` |
 | 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes from the encoder | `parse.rs`, `isel/matcher.rs:366` |
-| 6 | the form table is the only list of fixed registers, flags, ties and implicit defs/uses; string-op rows; `requirements()` and `Effects` read it | `target.rs:67-162` (~100 lines) |
-| 7 | register description and `RegId`: newtype in iced order with a pinning test, constants generated from the description (`x86::EAX`), `RegisterInfo` queries replace iced methods | no iced in `llrm-lir` |
-| 8 | `RegId` migration in slices by area, one PR each (isel, select, peephole, bcmachine, the rest); `regclass`, `allocate`, `ssaspill`, `constrain` wait for PR 15 | ~830 sites |
-| 9 | calling-convention description and generic call/ret lowering | `isel.rs:68-180`, `callregs.rs` |
-| 10 | datalayout and address spaces: string and space map out of `hir/mir.rs`; literals 0/1/2/4/5 become queries; the address-form table; `foreign_span` linear; `CostModel`'s code16 notions behind space kinds | HIR, analysis, transforms, `select.rs`, `affine.rs` |
-| 11 | operand model: `Mem` becomes `AddressRef` with form-declared slots; `Loc::St` and subregister views target-described; `name: String` becomes `OpcodeId` | `llrm-lir`, every `Semantics` consumer |
-| 12 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, `pointers`, far arms of `isel.rs` |
-| 13 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
-| 14 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
-| 15 | `RegId` and class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
-| 16 | `llrm-x86-code32` skeleton: descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
+| 6 | the form table is the only list of fixed registers, flags, ties and implicit defs/uses; string-op rows | `target.rs:67-162` (~100 lines) |
+| 7 | legality table in the description, with the differential test (staging 1) | `width_of`, `is_wide`, `is_far` read it |
+| 8 | the legalizer's state out of `Selector` (staging 2) | `isel.rs`, `wide.rs` |
+| 9 | register description; `RegId` as an alias of iced's `Register`, `RegisterInfo` queries, generated constants, the parity test | no behaviour change |
+| 10 | `RegId` migration in slices by area, one PR each; `regclass`, `allocate`, `ssaspill`, `constrain` get only the mechanical rename after cost-spill; then the alias becomes a newtype | ~830 sites |
+| 11 | legalizer rules replace the hooks: `wide.rs` first, then `far_*`, then float casts | 13 hooks |
+| 12 | calling-convention description and generic call/ret lowering | `isel.rs:65-179`, `callregs.rs` |
+| 13 | datalayout, address spaces, the address-form table per (mode, address size); address-mode complex patterns; space numbers become queries; `foreign_span` linear; `CostModel`'s code16 notions behind space kinds | HIR, analysis, transforms, `select.rs`, `affine.rs`, `Pointer` |
+| 14 | operand model, one PR each: `name` to `OpcodeId` (351 sites); `Mem` to `AddressRef` + `MemInfo` (487); `Loc::St` to a `Reg` (47); `Loc::Address` reuses `AddressRef` | `llrm-lir`, every `Semantics` consumer |
+| 15 | generic opcodes: IRTranslator emits them, legalizer in place, selection per MIR instruction (staging 4) | `isel.rs` |
+| 16 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, far arms of `isel.rs` |
+| 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
+| 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
+| 19 | RegBankSelect: banks in the register description; class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
+| 20 | `llrm-x86-code32` skeleton: descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
-depends on them. Not in this task: running or linking code32, a 32-bit object
+depends on them. code32 (20) needs none of 7 to 15 except the data it reads; they
+move code16 onto the same machinery, so the skeleton adds descriptions, not code. Not in this task: running or linking code32, a 32-bit object
 writer, code64, arm64.
 
 ## Metric
@@ -355,5 +506,5 @@ lines in its crate and 837 description lines (`x86.instr` 88, `patterns.isel`
 
 - Whether `llrm-lir` is the family crate or its own: proposed its own, so the BC
   lifter and the backend both depend on it.
-- Whether code16-pinned BC raise keeps iced `Register` in its decoder and
-  converts at the `llrm-lir` boundary: proposed yes.
+- Whether the three GlobalISel phases may ever run as whole-function sweeps:
+  only if a canonical value numbering gives byte-identical allocation.
