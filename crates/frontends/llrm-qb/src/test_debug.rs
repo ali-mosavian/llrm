@@ -88,10 +88,10 @@ fn debug_symbols_read_as_bc_writes_them() {
 #[test]
 fn a_local_is_where_its_code_keeps_it() {
     let source = "SUB s\nDIM k AS INTEGER\nk = 12345\nPRINT k\nEND SUB\n";
-    for own_frames in [false, true] {
+    for runtime_frames in [true, false] {
         let directory = tempfile::tempdir().expect("creates a directory");
         let path = written(&directory, "local.bas", source.as_bytes());
-        let frontend = qb_driver::Frontend { debug: true, own_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+        let frontend = qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
         let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
         let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
@@ -99,7 +99,7 @@ fn a_local_is_where_its_code_keeps_it() {
         let local = info.procedures.iter().flat_map(|one| &one.locals).find(|one| one.name == "k").expect("k is described");
         let listing = super::test_hir::listing(&program);
         let store = format!("mov word ptr [bp{:+}], 12345", local.bp_offset);
-        assert!(listing.contains(&store), "own frames {own_frames}: no {store:?} in\n{listing}");
+        assert!(listing.contains(&store), "runtime frames {runtime_frames}: no {store:?} in\n{listing}");
     }
 }
 

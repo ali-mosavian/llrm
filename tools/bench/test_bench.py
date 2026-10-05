@@ -243,32 +243,30 @@ class SizeTests(unittest.TestCase):
 
 
 class OwnFramesTests(unittest.TestCase):
-    def test_a_basic_source_is_measured_with_and_without_own_frames(self):
-        """recursive BASIC pays the runtime's B$ENRA/B$EXSA per call (fib 14.9 ms against 5.0 with --own-frames): the bench only built the default."""
+    def test_a_basic_source_is_measured_once_on_own_frames(self):
+        """own frames are the default (fib 14.9 ms on the runtime's B$ENRA/B$EXSA against 5.0): `bas` is that build, with no second language for it."""
         languages = [one.language for one in bench.variants(bench.BENCH / "fib")]
         self.assertEqual(languages.count("bas"), 1)
-        self.assertEqual(languages.count("basown"), 1)
+        self.assertNotIn("basown", languages)
 
-    def test_only_the_own_frames_variant_passes_the_flag(self):
+    def test_the_basic_build_asks_for_neither_frame_switch(self):
         import tempfile
         from unittest import mock
 
-        seen = {}
-        for variant in bench.variants(bench.BENCH / "fib"):
-            if variant.language in bench.BASIC_LANGUAGES:
-                with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run:
-                    run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
-                    bench.build(variant, "O2", Path(where), "V000")
-                    seen[variant.language] = run.call_args[0][0]
-        self.assertNotIn("--own-frames", seen["bas"])
-        self.assertIn("--own-frames", seen["basown"])
+        variant = next(one for one in bench.variants(bench.BENCH / "fib") if one.language == "bas")
+        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
+            bench.build(variant, "O2", Path(where), "V000")
+        command = run.call_args[0][0]
+        self.assertNotIn("--runtime-frames", command)
+        self.assertNotIn("--own-frames", command)
 
 
 class StartupTests(unittest.TestCase):
     def test_every_language_has_a_startup_program(self):
         """Nib had no startup/startup.nib: its whole-program time was never netted, so it had no kernel_ms."""
         have = {one.language for one in bench.variants(bench.STARTUP)}
-        self.assertEqual(have, {"bas", "basown", "c", "nib"})
+        self.assertEqual(have, {"bas", "c", "nib"})
 
 
 class TimedOnlyTests(unittest.TestCase):
