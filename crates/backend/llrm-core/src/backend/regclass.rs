@@ -34,7 +34,13 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
 /// edge's copy also join, and address classes are read through webs. An allocator cannot take that, the two sides being
 /// values of their own, and SsaSpill does not price it yet.
 pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool) -> Classes {
-    collected(body, prefer_indexes, segments, optimistic, &mut Vec::new())
+    collected(body, prefer_indexes, segments, optimistic, false, &mut Vec::new())
+}
+
+/// `classes` for a body whose word address pairs have not been given their roles: both registers of a pair may be in
+/// either the base or the index registers, which is which being open. What SsaSpill knows when it runs.
+pub fn open_classes(body: &LirBody, segments: &Segments) -> Classes {
+    collected(body, &BTreeSet::new(), segments, false, true, &mut Vec::new())
 }
 
 /// How an instruction names a value that confines it.
@@ -61,15 +67,16 @@ pub struct Use {
 /// share no register is one the classes leave with none.
 pub fn confining_uses(body: &LirBody, segments: &Segments) -> Vec<Use> {
     let mut uses = Vec::new();
-    collected(body, &BTreeSet::new(), segments, false, &mut uses);
+    collected(body, &BTreeSet::new(), segments, false, false, &mut uses);
     uses
 }
 
-fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool, uses: &mut Vec<Use>) -> Classes {
+fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool, open: bool, uses: &mut Vec<Use>) -> Classes {
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
+    let either: BTreeSet<Register> = target::WORD_BASES.union(&target::WORD_INDEXES).copied().collect();
     let bytes: BTreeSet<Register> = BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]);
 
     for (at, block) in body.blocks.iter().enumerate() {
@@ -120,7 +127,10 @@ fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments
                     if let Some(index) = cell.index {
                         numeric.insert(index.value);
                         if index.width == 2 {
-                            if cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
+                            if open && cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
+                                restrict(&mut out, index.value, &either, Role::Index, false);
+                                restrict(&mut out, cell.base.expect("checked").value, &either, Role::Base, false);
+                            } else if cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
                                 word_pairs.push((cell.base.expect("checked").value, index.value));
                             } else {
                                 restrict(&mut out, index.value, &target::WORD_INDEXES, Role::Index, false);

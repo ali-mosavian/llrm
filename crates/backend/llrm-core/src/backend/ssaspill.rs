@@ -90,6 +90,9 @@ impl Weights<'_> {
 #[derive(Clone, Copy, Debug)]
 pub struct Prices {
     pub load: f64,
+    /// A store to a slot, and a copy between registers.
+    pub store: f64,
+    pub copy: f64,
     /// A jump: a branch's price on the machine, as the bridge block's last instruction takes it.
     pub jump: f64,
     /// By block frequency (clocks); not where the price is code bytes, which a loop's trips do not multiply.
@@ -99,14 +102,14 @@ pub struct Prices {
 impl Prices {
     /// One clock a load and a jump, by block frequency: for a test that prices nothing in particular.
     pub fn clocks() -> Self {
-        Self { load: 1.0, jump: 1.0, by_frequency: true }
+        Self { load: 1.0, store: 1.0, copy: 1.0, jump: 1.0, by_frequency: true }
     }
 
     /// The level `profile` compiles for: its machine's byte costs at -Os, its clocks otherwise.
     pub fn of(profile: &crate::backend::cpu::Profile) -> Self {
         let machine = profile.target();
         let costs = if profile.size { machine.size_costs() } else { machine.costs() };
-        Self { load: costs.load as f64, jump: costs.branch as f64, by_frequency: !profile.size }
+        Self { load: costs.load as f64, store: costs.store as f64, copy: costs.r#move as f64, jump: costs.branch as f64, by_frequency: !profile.size }
     }
 }
 
@@ -311,6 +314,9 @@ struct Machine<'a> {
     classes: BTreeSet<BTreeSet<Register>>,
     /// The registers with byte halves.
     bytes: BTreeSet<Register>,
+    /// The base registers and the index registers of a word address.
+    bases: BTreeSet<Register>,
+    indexes: BTreeSet<Register>,
 }
 
 impl<'a> Machine<'a> {
@@ -323,8 +329,9 @@ impl<'a> Machine<'a> {
             .values()
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>())
             .filter(|class| !class.is_empty() && class.len() < general.len())
+            .chain([target::WORD_BASES.iter().copied().collect::<BTreeSet<Register>>(), target::WORD_INDEXES.iter().copied().collect()].into_iter().filter(|class: &BTreeSet<Register>| class.iter().all(|one| general.contains(one))))
             .collect();
-        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
+        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect(), bases: target::WORD_BASES.iter().copied().collect(), indexes: target::WORD_INDEXES.iter().copied().collect() }
     }
 
     /// A value that lives in a register of this file at all: a selector only where the program names it so.
@@ -345,15 +352,36 @@ impl<'a> Machine<'a> {
     /// which an instruction needs in it just now (a value waiting in another register
     /// costs a copy to act, not a place).
     fn fits(&self, held: &BTreeSet<u32>, acting: &BTreeSet<u32>, room: usize) -> bool {
+        self.fits_with(held, acting, room, &[])
+    }
+
+    /// `fits`, with the word address pairs the instruction reads or writes: each needs one of its two registers in a
+    /// base register and the other in an index register, which is which being open until `AddressRoles` decides.
+    fn fits_with(&self, held: &BTreeSet<u32>, acting: &BTreeSet<u32>, room: usize, pairs: &[(u32, u32)]) -> bool {
         if held.len() > room {
             return false;
         }
-        self.classes.iter().all(|class| {
-            let counted = |value: &u32| {
-                self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes))))
-            };
-            held.iter().filter(|value| counted(value)).count() <= class.len()
-        })
+        let pairs: Vec<&(u32, u32)> = pairs.iter().filter(|(one, other)| self.class(*one).is_some() && self.class(*other).is_some()).collect();
+        // Every way to orient the pairs, the base side first.
+        for choice in 0..(1usize << pairs.len().min(4)) {
+            let mut roles: IndexMap<u32, BTreeSet<Register>> = IndexMap::default();
+            for (at, (one, other)) in pairs.iter().enumerate().take(4) {
+                let (base, index) = if choice >> at & 1 == 0 { (*one, *other) } else { (*other, *one) };
+                roles.insert(base, self.bases.clone());
+                roles.insert(index, self.indexes.clone());
+            }
+            let fits = self.classes.iter().all(|class| {
+                let counted = |value: &u32| {
+                    let mine = roles.get(value).cloned().or_else(|| self.class(*value));
+                    mine.is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes))))
+                };
+                held.iter().filter(|value| counted(value)).count() <= class.len()
+            });
+            if fits {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -481,7 +509,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
-    let confined = regclass::classes(body, &BTreeSet::new(), segments);
+    let confined = regclass::open_classes(body, segments);
     let skip = untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();
@@ -917,9 +945,10 @@ fn simulated(
             let used: BTreeSet<u32> = one.uses.iter().copied().filter(|value| wanted(*value)).collect();
             let made: BTreeSet<u32> = one.defines.iter().copied().filter(|value| wanted(*value)).collect();
             let acting: BTreeSet<u32> = used.union(&made).copied().collect();
+            let pairs = word_pairs(one);
             let mut leaving: Vec<u32> = Vec::new();
             let evict = |held: &mut BTreeSet<u32>, leaving: &mut Vec<u32>, keep: &BTreeSet<u32>, room: usize| {
-                while !machine.fits(held, &acting, room) {
+                while !machine.fits_with(held, &acting, room, &pairs) {
                     let victim = held
                         .iter()
                         .filter(|value| !keep.contains(*value))
@@ -1244,6 +1273,22 @@ fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet
             (found.header, busiest)
         })
         .collect()
+}
+
+/// The word address pairs an instruction names: the base and the index of each cell that has both.
+fn word_pairs(one: &Insn) -> Vec<(u32, u32)> {
+    let Some(what) = &one.what else { return Vec::new() };
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
+    for place in what.dests.iter().chain(&what.sources) {
+        if let crate::model::ir::Loc::Mem(cell) = place {
+            if let (Some(base), Some(index)) = (cell.base, cell.index) {
+                if base.width == 2 && index.width == 2 && cell.scale == 1 && !pairs.contains(&(base.value, index.value)) {
+                    pairs.push((base.value, index.value));
+                }
+            }
+        }
+    }
+    pairs
 }
 
 fn reverse_postorder(body: &LirBody) -> Vec<i64> {
