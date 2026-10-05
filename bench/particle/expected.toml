@@ -7,6 +7,7 @@ memory_operands = 92918
 code_bytes = 484
 data_bytes = 121
 bss_bytes = 0
+kernel_ms = 1.7442
 
 [bas.Os]
 instructions = 127348
