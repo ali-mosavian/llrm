@@ -1,5 +1,21 @@
-reason = "own frames are the default in every dialect: bas is the old basown, bas -O2 vs bc instructions -66.9% to -75.9%"
+reason = "Nib: argument promotion, dead arguments gone, parameter ranges to a fixed point (queens' bounds checks fold); dead frame-slot loads removed. sieve bas -Os +8 instructions: one outer-loop reload where the allocator no longer uses bp (inner loops identical)"
 blessed = "2026-10-05"
+
+[bas.O2]
+instructions = 9156
+memory_operands = 1000
+code_bytes = 178
+data_bytes = 8205
+bss_bytes = 0
+kernel_ms = 0.5364
+
+[bas.Os]
+instructions = 9156
+memory_operands = 1000
+code_bytes = 178
+data_bytes = 8205
+bss_bytes = 0
+kernel_ms = 0.5363
 
 [c.O2]
 instructions = 7156
@@ -7,7 +23,7 @@ memory_operands = 1000
 code_bytes = 115
 data_bytes = 0
 bss_bytes = 8192
-kernel_ms = 0.5658
+kernel_ms = 0.5661
 
 [c.Os]
 instructions = 7156
@@ -20,34 +36,18 @@ kernel_ms = 0.5661
 [nib.O2]
 instructions = 9156
 memory_operands = 1000
-code_bytes = 121
-data_bytes = 8192
-bss_bytes = 0
-kernel_ms = 0.457
-
-[nib.Os]
-instructions = 9156
-memory_operands = 1000
-code_bytes = 120
+code_bytes = 119
 data_bytes = 8192
 bss_bytes = 0
 kernel_ms = 0.4572
 
-[bas.O2]
+[nib.Os]
 instructions = 9156
 memory_operands = 1000
-code_bytes = 178
-data_bytes = 8205
+code_bytes = 118
+data_bytes = 8192
 bss_bytes = 0
-kernel_ms = 0.5362
-
-[bas.Os]
-instructions = 9156
-memory_operands = 1000
-code_bytes = 178
-data_bytes = 8205
-bss_bytes = 0
-kernel_ms = 0.5364
+kernel_ms = 0.4572
 
 [ow.O2]
 instructions = 11265

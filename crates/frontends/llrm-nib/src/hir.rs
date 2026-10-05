@@ -162,6 +162,7 @@ pub struct Function {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcedureAbi {
     pub distance: &'static str,
+    pub cleanup: &'static str,
     /// The argument bytes it removes on return.
     pub parameter_bytes: u32,
     pub float_return: &'static str,
@@ -170,11 +171,13 @@ pub struct ProcedureAbi {
 impl ProcedureAbi {
     /// A function of `abi`, taking `argument_bytes`, when it differs from a
     /// native one: it removes its arguments, or it returns with `iret`.
-    pub fn of(abi: Abi, argument_bytes: u32) -> Option<Self> {
+    /// An unexported one states no distance (`any`): only its own module calls it.
+    pub fn of(abi: Abi, argument_bytes: u32, exported: bool) -> Option<Self> {
+        let distance = if exported { "far" } else { "any" };
         match abi {
-            Abi::Cdecl16 => None,
-            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance: "far", parameter_bytes: argument_bytes, float_return: abi.float_return() }),
-            Abi::Interrupt16 => Some(Self { distance: "interrupt", parameter_bytes: 0, float_return: abi.float_return() }),
+            Abi::Cdecl16 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return() }),
+            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance, cleanup: "callee", parameter_bytes: argument_bytes, float_return: abi.float_return() }),
+            Abi::Interrupt16 => Some(Self { distance: "interrupt", cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return() }),
         }
     }
 }
@@ -326,9 +329,9 @@ impl Program {
 
 fn function_json(out: &mut String, function: &Function) {
     match &function.abi {
-        Some(ProcedureAbi { distance, parameter_bytes, float_return }) => write!(
+        Some(ProcedureAbi { distance, cleanup, parameter_bytes, float_return }) => write!(
             out,
-            "{{\"abi\":{{\"cleanup\":\"callee\",\"distance\":\"{distance}\",\"float_return\":\"{float_return}\",\"parameter_bytes\":{parameter_bytes}}},\"blocks\":["
+            "{{\"abi\":{{\"cleanup\":\"{cleanup}\",\"distance\":\"{distance}\",\"float_return\":\"{float_return}\",\"parameter_bytes\":{parameter_bytes}}},\"blocks\":["
         )
         .unwrap(),
         None => out.push_str("{\"abi\":null,\"blocks\":["),

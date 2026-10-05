@@ -1,41 +1,41 @@
-reason = "own frames are the default in every dialect: bas is the old basown"
+reason = "Nib: argument promotion, dead arguments gone, parameter ranges to a fixed point (queens' bounds checks fold); dead frame-slot loads removed. sieve bas -Os +8 instructions: one outer-loop reload where the allocator no longer uses bp (inner loops identical)"
 blessed = "2026-10-05"
+
+[bas.O2]
+code_bytes = 1008
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3887.2013
+
+[bas.Os]
+code_bytes = 989
+data_bytes = 113
+bss_bytes = 0
+kernel_ms = 3887.2011
 
 [c.O2]
 code_bytes = 564
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3413.0045
+kernel_ms = 3413.0036
 
 [c.Os]
 code_bytes = 534
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3412.8717
+kernel_ms = 3412.8725
 
 [nib.O2]
-code_bytes = 1733
+code_bytes = 1692
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4512.1713
+kernel_ms = 4511.4995
 
 [nib.Os]
-code_bytes = 1628
+code_bytes = 1587
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4511.1184
-
-[bas.O2]
-code_bytes = 1011
-data_bytes = 113
-bss_bytes = 0
-kernel_ms = 3887.202
-
-[bas.Os]
-code_bytes = 992
-data_bytes = 113
-bss_bytes = 0
-kernel_ms = 3887.2022
+kernel_ms = 4510.4552
 
 [ow.O2]
 code_bytes = 544

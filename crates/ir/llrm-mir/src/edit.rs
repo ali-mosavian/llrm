@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::module::{Block, BlockId, Change, Function, InstId, Instruction, MetadataId, Operand, Use, ValueData, ValueDef, ValueId};
 use crate::opcode::{Flags, Opcode};
-use crate::types::TypeId;
+use crate::types::{Type, TypeId};
 
 /// Where an instruction goes: before another, or at a block's end.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,6 +267,65 @@ impl Function {
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.calling_convention = convention;
         self.changes.push(Change::Rewritten(inst));
+    }
+
+    /// New parameters of `types` stand before parameter `at`, bare of attributes; the function's
+    /// type follows.
+    pub fn insert_parameters(&mut self, context: &mut crate::context::Context, at: usize, types: &[TypeId]) -> Vec<ValueId> {
+        let made: Vec<ValueId> = types
+            .iter()
+            .map(|&ty| {
+                let value = ValueId(self.values.len() as u32);
+                self.values.push(ValueData { ty, name: None, def: ValueDef::Argument(0) });
+                self.value_uses.push(Vec::new());
+                value
+            })
+            .collect();
+        self.parameters.splice(at..at, made.iter().copied());
+        if self.parameter_attrs.len() > at {
+            self.parameter_attrs.splice(at..at, made.iter().map(|_| Vec::new()));
+        }
+        self.parameters_changed(context);
+        made
+    }
+
+    /// Parameter `at`, which nothing uses, is gone; the function's type follows.
+    pub fn remove_parameter(&mut self, context: &mut crate::context::Context, at: usize) {
+        assert!(self.users(self.parameters[at]).is_empty(), "a parameter removed is unused");
+        self.parameters.remove(at);
+        if self.parameter_attrs.len() > at {
+            self.parameter_attrs.remove(at);
+        }
+        self.parameters_changed(context);
+    }
+
+    fn parameters_changed(&mut self, context: &mut crate::context::Context) {
+        for (index, &parameter) in self.parameters.clone().iter().enumerate() {
+            self.values[parameter.0 as usize].def = ValueDef::Argument(index as u32);
+        }
+        let Type::Function { returns, variadic, .. } = context.types.get(self.ty).clone() else { panic!("a function type") };
+        let parameters = self.parameters.iter().map(|&one| self.values[one.0 as usize].ty).collect();
+        self.ty = context.types.intern(Type::Function { returns, parameters, variadic });
+    }
+
+    /// The call `inst` is made under `function_type`.
+    pub fn set_call_type(&mut self, inst: InstId, function_type: TypeId) {
+        let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+        info.function_type = function_type;
+        self.changes.push(Change::Rewritten(inst));
+    }
+
+    /// The call `inst`'s argument `at` becomes `with`, as the callee's parameter did, under `function_type`.
+    pub fn replace_argument(&mut self, inst: InstId, at: usize, with: &[Operand], function_type: TypeId) {
+        let mut operands = self.instructions[inst.0 as usize].operands.clone();
+        operands.splice(at..=at, with.iter().copied());
+        self.set_operands(inst, operands);
+        let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
+        info.function_type = function_type;
+        if info.argument_attrs.len() <= at {
+            info.argument_attrs.resize(at + 1, Vec::new());
+        }
+        info.argument_attrs.splice(at..=at, with.iter().map(|_| Vec::new()));
     }
 
     /// Says the access `inst` is aligned to `align` bytes; any other instruction is left as it is.
