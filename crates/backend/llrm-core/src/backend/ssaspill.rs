@@ -185,6 +185,8 @@ struct Flow {
     live_out: allocate::Live,
     depth: IndexMap<i64, u32>,
     from_top: IndexMap<i64, IndexMap<u32, i64>>,
+    /// The block where each live-in value's next use is, from every block's entry.
+    first_in: IndexMap<i64, IndexMap<u32, i64>>,
     length: IndexMap<i64, usize>,
     succ: IndexMap<i64, Vec<i64>>,
 }
@@ -233,6 +235,7 @@ impl Flow {
             live_out,
             depth: ranges::depths_in(body, loops),
             from_top: body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect(),
+            first_in: body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect(),
             length,
             succ: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
         };
@@ -264,6 +267,21 @@ impl Flow {
                         Some(at) => at as i64,
                         None => self.beyond(block.at, value).saturating_add(self.length[&block.at] as i64).min(FAR),
                     };
+                    let at_block = if first.is_some() {
+                        Some(block.at)
+                    } else {
+                        self.succ[&block.at]
+                            .iter()
+                            .filter_map(|to| self.from_top.get(to).and_then(|found| found.get(&value)).map(|got| (got + self.leaving(block.at, *to), *to)))
+                            .min()
+                            .and_then(|(_, to)| self.first_in.get(&to).and_then(|found| found.get(&value)).copied())
+                    };
+                    if let Some(found) = at_block {
+                        if self.first_in[&block.at].get(&value) != Some(&found) {
+                            self.first_in.get_mut(&block.at).expect("a block").insert(value, found);
+                            changed = true;
+                        }
+                    }
                     if self.from_top[&block.at].get(&value) != Some(&here) {
                         self.from_top.get_mut(&block.at).expect("a block").insert(value, here);
                         changed = true;
@@ -274,6 +292,18 @@ impl Flow {
                 break;
             }
         }
+    }
+
+    /// The block the next use of `value` after position `at` of `block` is in.
+    fn use_block(&self, block: i64, at: usize, value: u32) -> Option<i64> {
+        if self.uses[&block].get(&value).is_some_and(|list| list.iter().any(|next| *next > at)) {
+            return Some(block);
+        }
+        self.succ[&block]
+            .iter()
+            .filter_map(|to| self.from_top.get(to).and_then(|found| found.get(&value)).map(|got| (got + self.leaving(block, *to), *to)))
+            .min()
+            .and_then(|(_, to)| self.first_in.get(&to).and_then(|found| found.get(&value)).copied())
     }
 
     /// Whether `value` is read after position `at` of `block`, or lives out of it. Death is
@@ -337,6 +367,9 @@ impl<'a> Machine<'a> {
     /// Whether a value that waits across an instruction where its class is contested is better evicted than moved aside:
     /// a reload at its next use, and a store where it is made if that runs as often as this block, against two copies.
     fn cheaper_to_evict(&self, value: u32) -> bool {
+        if std::env::var_os("NOEVICT").is_some() {
+            return false;
+        }
         let stored = self.home.get(&value).is_some_and(|home| *home >= 0.5 * self.here.get());
         self.prices.load + if stored { self.prices.store } else { 0.0 } < 2.0 * self.prices.copy
     }
@@ -492,6 +525,8 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
 fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
+    let boundary = crate::backend::classsplit::split_at_loops(body, segments, prices, &Frequency::of(body));
+    let body = boundary.as_ref().unwrap_or(body);
     let split = if std::env::var_os("SPLITU").is_some() { Some(crate::backend::constrain::split_unmatched(body, segments, 0)) } else { None };
     let body = split.as_ref().unwrap_or(body);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
@@ -904,6 +939,12 @@ fn simulated(
         // What is stored where it is defined, as often as this block runs, costs a store each time it leaves: evicted last.
         let hot = |value: &u32| made_in.get(value).is_some_and(|home| frequency.block(*home) >= 0.5 * frequency.block(*at));
         machine.here.set(frequency.block(*at));
+        // What evicting a value costs: a reload as often as its next use runs, and a store each time it is made if that
+        // is as often as this block. The cheapest goes first; of equals, the one read last.
+        let dear = |value: &u32, position: usize| -> f64 {
+            let reload = flow.use_block(*at, position, *value).map_or(0.0, |found| frequency.block(found));
+            machine.prices.load * reload + if hot(value) { machine.prices.store * frequency.block(*at) } else { 0.0 }
+        };
         let mut done = Edits::default();
         let ends: Vec<&BTreeSet<u32>> = preds.get(at).into_iter().flatten().filter_map(|from| edits.get(from)).map(|one| &one.w_out).collect();
         let mut candidates: Vec<(usize, i64, u32)> = flow.live_in[at]
@@ -933,6 +974,9 @@ fn simulated(
         for (tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
             let far = header && *near >= EXIT;
+            if std::env::var("TRACEMP").is_ok_and(|name| name == body.name) {
+                eprintln!("CAND @{} value {value} tier {tier} near {near} far {far} spare {spare} held {:?} fits {}", at, held, { let mut next = held.clone(); next.insert(*value); machine.fits(&next, &BTreeSet::new(), top) });
+            }
             if (!far || spare > 0) && (*tier < 2 || (header && admit) || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
@@ -956,7 +1000,7 @@ fn simulated(
                     let victim = held
                         .iter()
                         .filter(|value| !keep.contains(*value))
-                        .max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value))
+                        .min_by(|a, b| dear(a, position).total_cmp(&dear(b, position)).then(flow.next_use(*at, position, **b).cmp(&flow.next_use(*at, position, **a))).then(b.cmp(a)))
                         .copied();
                     let Some(victim) = victim else { break };
                     held.remove(&victim);
@@ -1000,7 +1044,7 @@ fn simulated(
                 let mut across = held.clone();
                 let keep: BTreeSet<u32> = used.union(&made).copied().collect();
                 while across.len() > k - outside.min(k) {
-                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value)).copied();
+                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).min_by(|a, b| dear(a, position).total_cmp(&dear(b, position)).then(flow.next_use(*at, position, **b).cmp(&flow.next_use(*at, position, **a))).then(b.cmp(a))).copied();
                     let Some(victim) = victim else { break };
                     across.remove(&victim);
                     held.remove(&victim);
@@ -1062,7 +1106,7 @@ fn simulated(
                 .filter(|value| !shared.contains_key(value))
                 .collect();
             while !machine.fits(&held, &handed, if stored_through.iter().any(|value| !held.contains(value)) { k.saturating_sub(1) } else { k }) {
-                let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, end, **value), **value)).copied();
+                let victim = held.iter().filter(|value| !handed.contains(*value)).min_by(|a, b| dear(a, end).total_cmp(&dear(b, end)).then(flow.next_use(*at, end, **b).cmp(&flow.next_use(*at, end, **a))).then(b.cmp(a))).copied();
                 let Some(victim) = victim else { break };
                 held.remove(&victim);
                 if flow.live_out[at].contains(&victim) {

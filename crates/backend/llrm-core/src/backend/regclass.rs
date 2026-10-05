@@ -304,9 +304,19 @@ fn _word_address_roles(
             source_spelling(confined);
             continue;
         }
+        // Values another component already confined to the base registers: those live at once with these cannot share them.
+        let based: Vec<u32> = confined.iter().filter(|(_, class)| class.is_subset(&target::WORD_BASES)).map(|(value, _)| *value).collect();
+        let crowded = |values: &BTreeSet<u32>| -> usize {
+            values
+                .iter()
+                .filter_map(|value| live.get(value))
+                .map(|interval| based.iter().filter_map(|other| live.get(other)).filter(|other| other.overlaps(interval)).count())
+                .sum()
+        };
         let key = |option: &(&BTreeSet<u32>, &BTreeSet<u32>)| {
             (
                 base_penalty(option.0),
+                crowded(option.0),
                 option.0.intersection(prefer_indexes).count(),
                 option.0.len(),
                 option.0.iter().copied().collect::<Vec<u32>>(),

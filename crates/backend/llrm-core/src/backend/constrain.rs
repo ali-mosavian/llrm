@@ -630,7 +630,7 @@ fn _semantic_reads(what: &Semantics) -> Vec<u32> {
 }
 
 /// One copy, claiming none of the instruction's own bytes.
-fn _move(beside: &Insn, into: Held, out_of: Loc) -> Arc<Insn> {
+pub(crate) fn _move(beside: &Insn, into: Held, out_of: Loc) -> Arc<Insn> {
     let uses = match &out_of {
         Loc::Held(held) => vec![held.value],
         _ => Vec::new(),
