@@ -1594,20 +1594,24 @@ struct Outcome {
 }
 
 /// What a body costs to run: its instructions and memory operands, each
-/// weighted by its loop depth. Alternatives differ only in what the
+/// weighted by how often its block runs. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
 fn _emitted(body: &LirBody) -> f64 {
+    // The count the run makes: an anchor that prints nothing is not an instruction.
+    if let Some(work) = crate::backend::executed::work(body) {
+        return work;
+    }
     let busy = Frequency::of(body);
     body.blocks
         .iter()
         .map(|block| {
-            let memory: usize = block
-                .insns
-                .iter()
+            let printed = block.insns.iter().filter(|one| crate::backend::masm::prints(one));
+            let memory: usize = printed
+                .clone()
                 .filter_map(|one| one.what.as_ref())
                 .map(|what| what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count())
                 .sum();
-            busy.block(block.at) * (block.insns.len() + memory) as f64
+            busy.block(block.at) * (printed.count() + memory) as f64
         })
         .sum()
 }
@@ -2933,6 +2937,15 @@ mod tests {
 
         assert_eq!(confined[&1], *target::WORD_INDEXES);
         assert_eq!(confined[&2], *target::WORD_BASES);
+    }
+
+    /// The allocator ranked its candidate bodies counting every instruction, anchors that print nothing among them: a
+    /// body with more anchors cost more than one with more code, and the run, which counts what prints, said the reverse.
+    #[test]
+    fn test_anchors_that_print_nothing_do_not_cost_the_candidate() {
+        let anchor = |at| _instruction(at, semantics(Operation::Nothing, "", vec![], vec![]), vec![], vec![]);
+        let body = body_of("anchored", 0, vec![anchor(1), _mov(1, 1, 2), anchor(3), anchor(4), Insn { what: Some(semantics(Operation::Return, "ret", vec![], vec![])), ..anchor(5) }]);
+        assert_eq!(_emitted(&body), 2.0);
     }
 
     #[test]

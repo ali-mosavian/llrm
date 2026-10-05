@@ -246,7 +246,7 @@ fn cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
     if target.cpu.size {
         made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::emit(what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
     } else {
-        executed::executed(&made.body).map(|done| done.instructions + done.memory)
+        executed::work(&made.body)
     }
 }
 
