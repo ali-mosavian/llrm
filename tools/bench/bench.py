@@ -104,7 +104,7 @@ def variants(directory: Path) -> list[Variant]:
         source = directory / f"{directory.name}{suffix}"
         if source.exists():
             head = run_tests.header(source)
-            out.append(Variant(name, language, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45"),
+            out.append(Variant(name, language, source, settings["region"][language], head.get("known"), head.get("dialect", "qb45").split()[0],
                               bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
     return out
 

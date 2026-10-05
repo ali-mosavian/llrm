@@ -681,6 +681,7 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("pushad", "PUSHAD"),
         ("popad", "POPAD"),
         ("cld", "CLD"),
+        ("std", "STD"),
         // a call of one: its flags pushed first, as the interrupt does
         ("pushf", "PUSHFW"),
         ("iret", "IRETW"),
