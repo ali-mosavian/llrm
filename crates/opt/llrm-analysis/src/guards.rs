@@ -5,11 +5,15 @@
 //! guard proves a test of the same two sides that it is at least as
 //! strong as, either way round.
 
+use std::collections::BTreeMap;
+
 use llrm_mir::module::{Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 use num_bigint::BigInt;
 
 use crate::cfg;
+use crate::difference;
+use crate::ranges::declared;
 use crate::induction::{Scev, term};
 use crate::memory::Unit;
 
@@ -79,6 +83,37 @@ pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Scev, right: 
         return evaluated(predicate, &one, &other, left.width);
     }
     guards(unit, at).iter().any(|guard| implies(guard, predicate, left, right))
+}
+
+/// `holds`, given also `assumed` and what the program states of the
+/// values the guards test: their ranges, by difference bounds.
+pub fn holds_given(unit: &Unit, at: i64, assumed: &[Guard], predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
+    if holds(unit, at, predicate, left, right) {
+        return true;
+    }
+    let mut facts = guards(unit, at);
+    facts.extend(assumed.iter().cloned());
+    // What the loops holding the block prove of the phis that follow their counters.
+    let shape = unit.shape();
+    for loop_ in shape.loops.iter().filter(|one| one.body.contains(&at)) {
+        for (follower, counter, start) in crate::induction::followers(unit, loop_) {
+            let Some(width) = unit.int_bits(Operand::Value(follower)) else { continue };
+            let (follower, counter) = (Scev::unknown(follower, width), Scev::unknown(counter, width));
+            facts.push(Guard { predicate: IntPredicate::Sle, left: Scev::of(&start, width), right: follower.clone() });
+            facts.push(Guard { predicate: IntPredicate::Sle, left: follower, right: counter });
+        }
+    }
+    let mut ranges = BTreeMap::new();
+    for side in facts.iter().flat_map(|one| [&one.left, &one.right]).chain([left, right]) {
+        for monomial in side.terms.keys() {
+            if let Some(value) = monomial.single()
+                && let Some(interval) = declared(unit, value).filter(|one| one.width == left.width)
+            {
+                ranges.insert(monomial.clone(), (interval.low, interval.high));
+            }
+        }
+    }
+    difference::proves(left.width, &facts, &ranges, predicate, left, right)
 }
 
 /// Whether `guard` proves `left predicate right`.
