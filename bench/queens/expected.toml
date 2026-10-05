@@ -1,5 +1,5 @@
-reason = "Nib gets a start-up program, so kernel_ms"
-blessed = "2026-10-04"
+reason = "range stamps on parameters of internal bodies (#453): queens -O2 memory operands 85,834 -> 80,083, bytes 383 -> 377; instructions +2,480 are jwlink's trailing nop on one far-call (place executes fewer)"
+blessed = "2026-10-05"
 
 [bas.O2]
 instructions = 453678
@@ -34,20 +34,18 @@ bss_bytes = 0
 kernel_ms = 3.1128
 
 [nib.O2]
-instructions = 286620
-memory_operands = 85834
-code_bytes = 383
+instructions = 289100
+memory_operands = 80083
+code_bytes = 377
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.8234
 
 [nib.Os]
-instructions = 289633
-memory_operands = 88806
-code_bytes = 334
+instructions = 288530
+memory_operands = 83607
+code_bytes = 331
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.864
 
 [basown.O2]
 instructions = 332599

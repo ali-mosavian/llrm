@@ -557,3 +557,22 @@ fn test_an_index_from_an_unchecked_start_keeps_its_check() {
 }
 
 const INPUTS: &[&[i128]] = &[&[0, 5, 3], &[2, 9, 6], &[-1, 4, 2], &[3, 3, 1], &[5, 2, 0], &[0, 9, 20], &[1, 9, -3]];
+
+/// A parameter's stated range settles a compare against a number beyond it:
+/// queens' `row` is 0 to 7, its check against a length of 12 never fails.
+#[test]
+fn test_a_compare_a_parameters_range_settles_is_decided() {
+    let text = "define i16 @f(i16 range(i16 0, 8) %row) {
+b:
+  %fits = icmp ult i16 %row, 12
+  br i1 %fits, label %ok, label %crash
+ok:
+  ret i16 %row
+crash:
+  ret i16 99
+}
+";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    assert!(decide(&mut module));
+    assert!(!printed(&module).contains("br i1 %fits"), "{}", printed(&module));
+}
