@@ -207,16 +207,28 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         return phased(module, name, abi, pool, target, hole, false);
     }
     let before = ssaspill::changes();
+    let memory_before = ssaspill::memory_phis_made();
     let spilled = phased(module, name, abi, pool, target, hole, true)?;
     if ssaspill::changes() == before || candidates == Candidates::SpillerOnly {
         return Ok(spilled);
     }
     let allocator_alone = phased(module, name, abi, pool, target, hole, false)?;
-    let (kept, rejected) = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
-        (Some(with), Some(without)) if without < with => (allocator_alone, spilled),
-        _ => (spilled, allocator_alone),
+    let (mut kept, mut best) = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
+        (Some(with), Some(without)) if without < with => (allocator_alone, Some(without)),
+        (with, _) => (spilled, with),
     };
-    let _ = rejected;
+    // A phi taken into memory trades its copy and one store for a store on each in-edge: where the registers
+    // would have held it, the route that keeps it in one may be the cheaper.
+    if ssaspill::memory_phis_made() != memory_before {
+        let plain = ssaspill::without_memory_phis(|| phased(module, name, abi, pool, target, hole, true))?;
+        if let (Some(plain_cost), Some(best_cost)) = (cost(&plain.0, target), best) {
+            if plain_cost < best_cost {
+                kept = plain;
+                best = Some(plain_cost);
+            }
+        }
+    }
+    let _ = best;
     Ok(kept)
 }
 

@@ -1,0 +1,2999 @@
+Module {
+    imports: [],
+    public: {},
+    fixed_types: [],
+    consts: [],
+    statics: [],
+    structs: [
+        Struct {
+            name: "Part",
+            generics: [],
+            bits: None,
+            pack: None,
+            fields: [
+                StructField {
+                    name: "name",
+                    mutable: false,
+                    type_spec: Primitive(
+                        String,
+                    ),
+                    dims: [],
+                    span: Span {
+                        line: 7,
+                        column: 5,
+                        end_column: 9,
+                        module: 0,
+                    },
+                },
+                StructField {
+                    name: "price",
+                    mutable: false,
+                    type_spec: Primitive(
+                        U16,
+                    ),
+                    dims: [],
+                    span: Span {
+                        line: 8,
+                        column: 5,
+                        end_column: 10,
+                        module: 0,
+                    },
+                },
+                StructField {
+                    name: "stock",
+                    mutable: false,
+                    type_spec: Primitive(
+                        U16,
+                    ),
+                    dims: [],
+                    span: Span {
+                        line: 9,
+                        column: 5,
+                        end_column: 10,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 6,
+                column: 1,
+                end_column: 7,
+                module: 0,
+            },
+        },
+        Struct {
+            name: "Catalog",
+            generics: [],
+            bits: None,
+            pack: None,
+            fields: [
+                StructField {
+                    name: "parts",
+                    mutable: true,
+                    type_spec: Applied {
+                        name: "vec",
+                        args: [
+                            Value(
+                                Named(
+                                    "Part",
+                                ),
+                            ),
+                        ],
+                    },
+                    dims: [],
+                    span: Span {
+                        line: 12,
+                        column: 9,
+                        end_column: 14,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 11,
+                column: 1,
+                end_column: 7,
+                module: 0,
+            },
+        },
+    ],
+    enums: [],
+    protocols: [],
+    functions: [
+        Function {
+            name: "Catalog.add",
+            generics: [],
+            parameters: [
+                Parameter {
+                    name: "self",
+                    type_: Borrowed {
+                        mutable: true,
+                        target: Value(
+                            Named(
+                                "Catalog",
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 14,
+                        column: 16,
+                        end_column: 20,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "name",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Primitive(
+                                String,
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 14,
+                        column: 36,
+                        end_column: 40,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "price",
+                    type_: Owned(
+                        Value(
+                            Primitive(
+                                U16,
+                            ),
+                        ),
+                    ),
+                    default: None,
+                    span: Span {
+                        line: 14,
+                        column: 51,
+                        end_column: 56,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "stock",
+                    type_: Owned(
+                        Value(
+                            Primitive(
+                                U16,
+                            ),
+                        ),
+                    ),
+                    default: None,
+                    span: Span {
+                        line: 14,
+                        column: 63,
+                        end_column: 68,
+                        module: 0,
+                    },
+                },
+            ],
+            result: Value(
+                Primitive(
+                    Void,
+                ),
+            ),
+            body: [
+                Expr(
+                    MethodCall {
+                        receiver: Member {
+                            base: Name(
+                                "self",
+                                Span {
+                                    line: 15,
+                                    column: 5,
+                                    end_column: 9,
+                                    module: 0,
+                                },
+                            ),
+                            field: "parts",
+                            span: Span {
+                                line: 15,
+                                column: 5,
+                                end_column: 15,
+                                module: 0,
+                            },
+                        },
+                        name: "push",
+                        type_arguments: [],
+                        arguments: [
+                            Call {
+                                name: "Part",
+                                type_arguments: [],
+                                arguments: [
+                                    NamedArgument {
+                                        name: "name",
+                                        value: MethodCall {
+                                            receiver: Name(
+                                                "name",
+                                                Span {
+                                                    line: 15,
+                                                    column: 31,
+                                                    end_column: 35,
+                                                    module: 0,
+                                                },
+                                            ),
+                                            name: "copy",
+                                            type_arguments: [],
+                                            arguments: [],
+                                            span: Span {
+                                                line: 15,
+                                                column: 31,
+                                                end_column: 42,
+                                                module: 0,
+                                            },
+                                        },
+                                        span: Span {
+                                            line: 15,
+                                            column: 26,
+                                            end_column: 42,
+                                            module: 0,
+                                        },
+                                    },
+                                    NamedArgument {
+                                        name: "price",
+                                        value: Name(
+                                            "price",
+                                            Span {
+                                                line: 15,
+                                                column: 50,
+                                                end_column: 55,
+                                                module: 0,
+                                            },
+                                        ),
+                                        span: Span {
+                                            line: 15,
+                                            column: 44,
+                                            end_column: 55,
+                                            module: 0,
+                                        },
+                                    },
+                                    NamedArgument {
+                                        name: "stock",
+                                        value: Name(
+                                            "stock",
+                                            Span {
+                                                line: 15,
+                                                column: 63,
+                                                end_column: 68,
+                                                module: 0,
+                                            },
+                                        ),
+                                        span: Span {
+                                            line: 15,
+                                            column: 57,
+                                            end_column: 68,
+                                            module: 0,
+                                        },
+                                    },
+                                ],
+                                span: Span {
+                                    line: 15,
+                                    column: 21,
+                                    end_column: 69,
+                                    module: 0,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 15,
+                            column: 5,
+                            end_column: 70,
+                            module: 0,
+                        },
+                    },
+                ),
+            ],
+            span: Span {
+                line: 14,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "north",
+            generics: [],
+            parameters: [],
+            result: Value(
+                Named(
+                    "Catalog",
+                ),
+            ),
+            body: [
+                Bind {
+                    mutable: true,
+                    name: "c",
+                    annotation: None,
+                    value: Call {
+                        name: "Catalog",
+                        type_arguments: [],
+                        arguments: [
+                            NamedArgument {
+                                name: "parts",
+                                value: Array(
+                                    [],
+                                    Span {
+                                        line: 18,
+                                        column: 31,
+                                        end_column: 33,
+                                        module: 0,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 18,
+                                    column: 25,
+                                    end_column: 33,
+                                    module: 0,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 18,
+                            column: 17,
+                            end_column: 34,
+                            module: 0,
+                        },
+                    },
+                    span: Span {
+                        line: 18,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                Expr(
+                    MethodCall {
+                        receiver: Name(
+                            "c",
+                            Span {
+                                line: 19,
+                                column: 5,
+                                end_column: 6,
+                                module: 0,
+                            },
+                        ),
+                        name: "add",
+                        type_arguments: [],
+                        arguments: [
+                            String(
+                                [
+                                    98,
+                                    111,
+                                    108,
+                                    116,
+                                ],
+                                Span {
+                                    line: 19,
+                                    column: 11,
+                                    end_column: 17,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                5,
+                                Span {
+                                    line: 19,
+                                    column: 19,
+                                    end_column: 20,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                40,
+                                Span {
+                                    line: 19,
+                                    column: 22,
+                                    end_column: 24,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 19,
+                            column: 5,
+                            end_column: 25,
+                            module: 0,
+                        },
+                    },
+                ),
+                Expr(
+                    MethodCall {
+                        receiver: Name(
+                            "c",
+                            Span {
+                                line: 20,
+                                column: 5,
+                                end_column: 6,
+                                module: 0,
+                            },
+                        ),
+                        name: "add",
+                        type_arguments: [],
+                        arguments: [
+                            String(
+                                [
+                                    103,
+                                    101,
+                                    97,
+                                    114,
+                                ],
+                                Span {
+                                    line: 20,
+                                    column: 11,
+                                    end_column: 17,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                30,
+                                Span {
+                                    line: 20,
+                                    column: 19,
+                                    end_column: 21,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                3,
+                                Span {
+                                    line: 20,
+                                    column: 23,
+                                    end_column: 24,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 20,
+                            column: 5,
+                            end_column: 25,
+                            module: 0,
+                        },
+                    },
+                ),
+                Expr(
+                    MethodCall {
+                        receiver: Name(
+                            "c",
+                            Span {
+                                line: 21,
+                                column: 5,
+                                end_column: 6,
+                                module: 0,
+                            },
+                        ),
+                        name: "add",
+                        type_arguments: [],
+                        arguments: [
+                            String(
+                                [
+                                    99,
+                                    111,
+                                    103,
+                                ],
+                                Span {
+                                    line: 21,
+                                    column: 11,
+                                    end_column: 16,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                12,
+                                Span {
+                                    line: 21,
+                                    column: 18,
+                                    end_column: 20,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                0,
+                                Span {
+                                    line: 21,
+                                    column: 22,
+                                    end_column: 23,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 21,
+                            column: 5,
+                            end_column: 24,
+                            module: 0,
+                        },
+                    },
+                ),
+                Return {
+                    value: Some(
+                        Name(
+                            "c",
+                            Span {
+                                line: 22,
+                                column: 12,
+                                end_column: 13,
+                                module: 0,
+                            },
+                        ),
+                    ),
+                    span: Span {
+                        line: 22,
+                        column: 5,
+                        end_column: 11,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 17,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "south",
+            generics: [],
+            parameters: [],
+            result: Value(
+                Named(
+                    "Catalog",
+                ),
+            ),
+            body: [
+                Bind {
+                    mutable: true,
+                    name: "c",
+                    annotation: None,
+                    value: Call {
+                        name: "Catalog",
+                        type_arguments: [],
+                        arguments: [
+                            NamedArgument {
+                                name: "parts",
+                                value: Array(
+                                    [],
+                                    Span {
+                                        line: 25,
+                                        column: 31,
+                                        end_column: 33,
+                                        module: 0,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 25,
+                                    column: 25,
+                                    end_column: 33,
+                                    module: 0,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 25,
+                            column: 17,
+                            end_column: 34,
+                            module: 0,
+                        },
+                    },
+                    span: Span {
+                        line: 25,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                Expr(
+                    MethodCall {
+                        receiver: Name(
+                            "c",
+                            Span {
+                                line: 26,
+                                column: 5,
+                                end_column: 6,
+                                module: 0,
+                            },
+                        ),
+                        name: "add",
+                        type_arguments: [],
+                        arguments: [
+                            String(
+                                [
+                                    103,
+                                    101,
+                                    97,
+                                    114,
+                                ],
+                                Span {
+                                    line: 26,
+                                    column: 11,
+                                    end_column: 17,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                28,
+                                Span {
+                                    line: 26,
+                                    column: 19,
+                                    end_column: 21,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                9,
+                                Span {
+                                    line: 26,
+                                    column: 23,
+                                    end_column: 24,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 26,
+                            column: 5,
+                            end_column: 25,
+                            module: 0,
+                        },
+                    },
+                ),
+                Expr(
+                    MethodCall {
+                        receiver: Name(
+                            "c",
+                            Span {
+                                line: 27,
+                                column: 5,
+                                end_column: 6,
+                                module: 0,
+                            },
+                        ),
+                        name: "add",
+                        type_arguments: [],
+                        arguments: [
+                            String(
+                                [
+                                    112,
+                                    105,
+                                    110,
+                                ],
+                                Span {
+                                    line: 27,
+                                    column: 11,
+                                    end_column: 16,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                2,
+                                Span {
+                                    line: 27,
+                                    column: 18,
+                                    end_column: 19,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                100,
+                                Span {
+                                    line: 27,
+                                    column: 21,
+                                    end_column: 24,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 27,
+                            column: 5,
+                            end_column: 25,
+                            module: 0,
+                        },
+                    },
+                ),
+                Return {
+                    value: Some(
+                        Name(
+                            "c",
+                            Span {
+                                line: 28,
+                                column: 12,
+                                end_column: 13,
+                                module: 0,
+                            },
+                        ),
+                    ),
+                    span: Span {
+                        line: 28,
+                        column: 5,
+                        end_column: 11,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 24,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "find",
+            generics: [],
+            parameters: [
+                Parameter {
+                    name: "first",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Named(
+                                "Catalog",
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 32,
+                        column: 9,
+                        end_column: 14,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "second",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Named(
+                                "Catalog",
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 32,
+                        column: 26,
+                        end_column: 32,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "name",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Primitive(
+                                String,
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 32,
+                        column: 44,
+                        end_column: 48,
+                        module: 0,
+                    },
+                },
+            ],
+            result: Value(
+                Applied {
+                    name: "Option",
+                    args: [
+                        Value(
+                            Applied {
+                                name: "&",
+                                args: [
+                                    Value(
+                                        Named(
+                                            "Part",
+                                        ),
+                                    ),
+                                ],
+                            },
+                        ),
+                    ],
+                },
+            ),
+            body: [
+                ForRange {
+                    name: "i",
+                    start: Integer(
+                        0,
+                        Span {
+                            line: 33,
+                            column: 14,
+                            end_column: 15,
+                            module: 0,
+                        },
+                    ),
+                    end: Member {
+                        base: Member {
+                            base: Name(
+                                "first",
+                                Span {
+                                    line: 33,
+                                    column: 17,
+                                    end_column: 22,
+                                    module: 0,
+                                },
+                            ),
+                            field: "parts",
+                            span: Span {
+                                line: 33,
+                                column: 17,
+                                end_column: 28,
+                                module: 0,
+                            },
+                        },
+                        field: "len",
+                        span: Span {
+                            line: 33,
+                            column: 17,
+                            end_column: 32,
+                            module: 0,
+                        },
+                    },
+                    body: [
+                        If {
+                            condition: Binary {
+                                op: Equal,
+                                left: Member {
+                                    base: Index {
+                                        base: Member {
+                                            base: Name(
+                                                "first",
+                                                Span {
+                                                    line: 34,
+                                                    column: 12,
+                                                    end_column: 17,
+                                                    module: 0,
+                                                },
+                                            ),
+                                            field: "parts",
+                                            span: Span {
+                                                line: 34,
+                                                column: 12,
+                                                end_column: 23,
+                                                module: 0,
+                                            },
+                                        },
+                                        indices: [
+                                            Name(
+                                                "i",
+                                                Span {
+                                                    line: 34,
+                                                    column: 24,
+                                                    end_column: 25,
+                                                    module: 0,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 34,
+                                            column: 12,
+                                            end_column: 26,
+                                            module: 0,
+                                        },
+                                    },
+                                    field: "name",
+                                    span: Span {
+                                        line: 34,
+                                        column: 12,
+                                        end_column: 31,
+                                        module: 0,
+                                    },
+                                },
+                                right: Name(
+                                    "name",
+                                    Span {
+                                        line: 34,
+                                        column: 35,
+                                        end_column: 39,
+                                        module: 0,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 34,
+                                    column: 12,
+                                    end_column: 39,
+                                    module: 0,
+                                },
+                            },
+                            then_branch: [
+                                Return {
+                                    value: Some(
+                                        Variant {
+                                            enum_name: None,
+                                            name: "some",
+                                            arguments: [
+                                                Index {
+                                                    base: Member {
+                                                        base: Name(
+                                                            "first",
+                                                            Span {
+                                                                line: 35,
+                                                                column: 26,
+                                                                end_column: 31,
+                                                                module: 0,
+                                                            },
+                                                        ),
+                                                        field: "parts",
+                                                        span: Span {
+                                                            line: 35,
+                                                            column: 26,
+                                                            end_column: 37,
+                                                            module: 0,
+                                                        },
+                                                    },
+                                                    indices: [
+                                                        Name(
+                                                            "i",
+                                                            Span {
+                                                                line: 35,
+                                                                column: 38,
+                                                                end_column: 39,
+                                                                module: 0,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    span: Span {
+                                                        line: 35,
+                                                        column: 26,
+                                                        end_column: 40,
+                                                        module: 0,
+                                                    },
+                                                },
+                                            ],
+                                            span: Span {
+                                                line: 35,
+                                                column: 20,
+                                                end_column: 41,
+                                                module: 0,
+                                            },
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 35,
+                                        column: 13,
+                                        end_column: 19,
+                                        module: 0,
+                                    },
+                                },
+                            ],
+                            else_branch: [],
+                            span: Span {
+                                line: 34,
+                                column: 9,
+                                end_column: 11,
+                                module: 0,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 33,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                ForRange {
+                    name: "i",
+                    start: Integer(
+                        0,
+                        Span {
+                            line: 36,
+                            column: 14,
+                            end_column: 15,
+                            module: 0,
+                        },
+                    ),
+                    end: Member {
+                        base: Member {
+                            base: Name(
+                                "second",
+                                Span {
+                                    line: 36,
+                                    column: 17,
+                                    end_column: 23,
+                                    module: 0,
+                                },
+                            ),
+                            field: "parts",
+                            span: Span {
+                                line: 36,
+                                column: 17,
+                                end_column: 29,
+                                module: 0,
+                            },
+                        },
+                        field: "len",
+                        span: Span {
+                            line: 36,
+                            column: 17,
+                            end_column: 33,
+                            module: 0,
+                        },
+                    },
+                    body: [
+                        If {
+                            condition: Binary {
+                                op: Equal,
+                                left: Member {
+                                    base: Index {
+                                        base: Member {
+                                            base: Name(
+                                                "second",
+                                                Span {
+                                                    line: 37,
+                                                    column: 12,
+                                                    end_column: 18,
+                                                    module: 0,
+                                                },
+                                            ),
+                                            field: "parts",
+                                            span: Span {
+                                                line: 37,
+                                                column: 12,
+                                                end_column: 24,
+                                                module: 0,
+                                            },
+                                        },
+                                        indices: [
+                                            Name(
+                                                "i",
+                                                Span {
+                                                    line: 37,
+                                                    column: 25,
+                                                    end_column: 26,
+                                                    module: 0,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 37,
+                                            column: 12,
+                                            end_column: 27,
+                                            module: 0,
+                                        },
+                                    },
+                                    field: "name",
+                                    span: Span {
+                                        line: 37,
+                                        column: 12,
+                                        end_column: 32,
+                                        module: 0,
+                                    },
+                                },
+                                right: Name(
+                                    "name",
+                                    Span {
+                                        line: 37,
+                                        column: 36,
+                                        end_column: 40,
+                                        module: 0,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 37,
+                                    column: 12,
+                                    end_column: 40,
+                                    module: 0,
+                                },
+                            },
+                            then_branch: [
+                                Return {
+                                    value: Some(
+                                        Variant {
+                                            enum_name: None,
+                                            name: "some",
+                                            arguments: [
+                                                Index {
+                                                    base: Member {
+                                                        base: Name(
+                                                            "second",
+                                                            Span {
+                                                                line: 38,
+                                                                column: 26,
+                                                                end_column: 32,
+                                                                module: 0,
+                                                            },
+                                                        ),
+                                                        field: "parts",
+                                                        span: Span {
+                                                            line: 38,
+                                                            column: 26,
+                                                            end_column: 38,
+                                                            module: 0,
+                                                        },
+                                                    },
+                                                    indices: [
+                                                        Name(
+                                                            "i",
+                                                            Span {
+                                                                line: 38,
+                                                                column: 39,
+                                                                end_column: 40,
+                                                                module: 0,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    span: Span {
+                                                        line: 38,
+                                                        column: 26,
+                                                        end_column: 41,
+                                                        module: 0,
+                                                    },
+                                                },
+                                            ],
+                                            span: Span {
+                                                line: 38,
+                                                column: 20,
+                                                end_column: 42,
+                                                module: 0,
+                                            },
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 38,
+                                        column: 13,
+                                        end_column: 19,
+                                        module: 0,
+                                    },
+                                },
+                            ],
+                            else_branch: [],
+                            span: Span {
+                                line: 37,
+                                column: 9,
+                                end_column: 11,
+                                module: 0,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 36,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                Return {
+                    value: Some(
+                        Variant {
+                            enum_name: None,
+                            name: "none",
+                            arguments: [],
+                            span: Span {
+                                line: 39,
+                                column: 12,
+                                end_column: 17,
+                                module: 0,
+                            },
+                        },
+                    ),
+                    span: Span {
+                        line: 39,
+                        column: 5,
+                        end_column: 11,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 32,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "cheaper",
+            generics: [],
+            parameters: [
+                Parameter {
+                    name: "a",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Named(
+                                "Part",
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 42,
+                        column: 12,
+                        end_column: 13,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "b",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Named(
+                                "Part",
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 42,
+                        column: 22,
+                        end_column: 23,
+                        module: 0,
+                    },
+                },
+            ],
+            result: Value(
+                Applied {
+                    name: "&",
+                    args: [
+                        Value(
+                            Named(
+                                "Part",
+                            ),
+                        ),
+                    ],
+                },
+            ),
+            body: [
+                Return {
+                    value: Some(
+                        Conditional {
+                            condition: Binary {
+                                op: LessEqual,
+                                left: Member {
+                                    base: Name(
+                                        "a",
+                                        Span {
+                                            line: 43,
+                                            column: 12,
+                                            end_column: 13,
+                                            module: 0,
+                                        },
+                                    ),
+                                    field: "price",
+                                    span: Span {
+                                        line: 43,
+                                        column: 12,
+                                        end_column: 19,
+                                        module: 0,
+                                    },
+                                },
+                                right: Member {
+                                    base: Name(
+                                        "b",
+                                        Span {
+                                            line: 43,
+                                            column: 23,
+                                            end_column: 24,
+                                            module: 0,
+                                        },
+                                    ),
+                                    field: "price",
+                                    span: Span {
+                                        line: 43,
+                                        column: 23,
+                                        end_column: 30,
+                                        module: 0,
+                                    },
+                                },
+                                span: Span {
+                                    line: 43,
+                                    column: 12,
+                                    end_column: 30,
+                                    module: 0,
+                                },
+                            },
+                            then: Name(
+                                "a",
+                                Span {
+                                    line: 43,
+                                    column: 33,
+                                    end_column: 34,
+                                    module: 0,
+                                },
+                            ),
+                            otherwise: Name(
+                                "b",
+                                Span {
+                                    line: 43,
+                                    column: 37,
+                                    end_column: 38,
+                                    module: 0,
+                                },
+                            ),
+                            span: Span {
+                                line: 43,
+                                column: 12,
+                                end_column: 38,
+                                module: 0,
+                            },
+                        },
+                    ),
+                    span: Span {
+                        line: 43,
+                        column: 5,
+                        end_column: 11,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 42,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "affordable",
+            generics: [],
+            parameters: [
+                Parameter {
+                    name: "c",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Named(
+                                "Catalog",
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 46,
+                        column: 15,
+                        end_column: 16,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "limit",
+                    type_: Owned(
+                        Value(
+                            Primitive(
+                                U16,
+                            ),
+                        ),
+                    ),
+                    default: None,
+                    span: Span {
+                        line: 46,
+                        column: 28,
+                        end_column: 33,
+                        module: 0,
+                    },
+                },
+            ],
+            result: Slice {
+                element: Named(
+                    "Part",
+                ),
+                rank: 1,
+            },
+            body: [
+                Bind {
+                    mutable: true,
+                    name: "end",
+                    annotation: Some(
+                        Value(
+                            Primitive(
+                                U16,
+                            ),
+                        ),
+                    ),
+                    value: Integer(
+                        0,
+                        Span {
+                            line: 47,
+                            column: 24,
+                            end_column: 25,
+                            module: 0,
+                        },
+                    ),
+                    span: Span {
+                        line: 47,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                While {
+                    condition: Binary {
+                        op: And,
+                        left: Binary {
+                            op: Less,
+                            left: Name(
+                                "end",
+                                Span {
+                                    line: 48,
+                                    column: 11,
+                                    end_column: 14,
+                                    module: 0,
+                                },
+                            ),
+                            right: Member {
+                                base: Member {
+                                    base: Name(
+                                        "c",
+                                        Span {
+                                            line: 48,
+                                            column: 17,
+                                            end_column: 18,
+                                            module: 0,
+                                        },
+                                    ),
+                                    field: "parts",
+                                    span: Span {
+                                        line: 48,
+                                        column: 17,
+                                        end_column: 24,
+                                        module: 0,
+                                    },
+                                },
+                                field: "len",
+                                span: Span {
+                                    line: 48,
+                                    column: 17,
+                                    end_column: 28,
+                                    module: 0,
+                                },
+                            },
+                            span: Span {
+                                line: 48,
+                                column: 11,
+                                end_column: 28,
+                                module: 0,
+                            },
+                        },
+                        right: Binary {
+                            op: LessEqual,
+                            left: Member {
+                                base: Index {
+                                    base: Member {
+                                        base: Name(
+                                            "c",
+                                            Span {
+                                                line: 48,
+                                                column: 32,
+                                                end_column: 33,
+                                                module: 0,
+                                            },
+                                        ),
+                                        field: "parts",
+                                        span: Span {
+                                            line: 48,
+                                            column: 32,
+                                            end_column: 39,
+                                            module: 0,
+                                        },
+                                    },
+                                    indices: [
+                                        Name(
+                                            "end",
+                                            Span {
+                                                line: 48,
+                                                column: 40,
+                                                end_column: 43,
+                                                module: 0,
+                                            },
+                                        ),
+                                    ],
+                                    span: Span {
+                                        line: 48,
+                                        column: 32,
+                                        end_column: 44,
+                                        module: 0,
+                                    },
+                                },
+                                field: "price",
+                                span: Span {
+                                    line: 48,
+                                    column: 32,
+                                    end_column: 50,
+                                    module: 0,
+                                },
+                            },
+                            right: Name(
+                                "limit",
+                                Span {
+                                    line: 48,
+                                    column: 54,
+                                    end_column: 59,
+                                    module: 0,
+                                },
+                            ),
+                            span: Span {
+                                line: 48,
+                                column: 32,
+                                end_column: 59,
+                                module: 0,
+                            },
+                        },
+                        span: Span {
+                            line: 48,
+                            column: 11,
+                            end_column: 59,
+                            module: 0,
+                        },
+                    },
+                    body: [
+                        Assign {
+                            target: Name(
+                                "end",
+                            ),
+                            operation: Some(
+                                Add,
+                            ),
+                            value: Integer(
+                                1,
+                                Span {
+                                    line: 49,
+                                    column: 16,
+                                    end_column: 17,
+                                    module: 0,
+                                },
+                            ),
+                            span: Span {
+                                line: 49,
+                                column: 9,
+                                end_column: 12,
+                                module: 0,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 48,
+                        column: 5,
+                        end_column: 10,
+                        module: 0,
+                    },
+                },
+                Return {
+                    value: Some(
+                        Borrow {
+                            mutable: false,
+                            operand: Slice {
+                                base: Member {
+                                    base: Name(
+                                        "c",
+                                        Span {
+                                            line: 50,
+                                            column: 13,
+                                            end_column: 14,
+                                            module: 0,
+                                        },
+                                    ),
+                                    field: "parts",
+                                    span: Span {
+                                        line: 50,
+                                        column: 13,
+                                        end_column: 20,
+                                        module: 0,
+                                    },
+                                },
+                                start: Some(
+                                    Integer(
+                                        0,
+                                        Span {
+                                            line: 50,
+                                            column: 21,
+                                            end_column: 22,
+                                            module: 0,
+                                        },
+                                    ),
+                                ),
+                                end: Some(
+                                    Name(
+                                        "end",
+                                        Span {
+                                            line: 50,
+                                            column: 23,
+                                            end_column: 26,
+                                            module: 0,
+                                        },
+                                    ),
+                                ),
+                                span: Span {
+                                    line: 50,
+                                    column: 13,
+                                    end_column: 27,
+                                    module: 0,
+                                },
+                            },
+                            span: Span {
+                                line: 50,
+                                column: 12,
+                                end_column: 27,
+                                module: 0,
+                            },
+                        },
+                    ),
+                    span: Span {
+                        line: 50,
+                        column: 5,
+                        end_column: 11,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 46,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "initial",
+            generics: [],
+            parameters: [
+                Parameter {
+                    name: "part",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Value(
+                            Named(
+                                "Part",
+                            ),
+                        ),
+                    },
+                    default: None,
+                    span: Span {
+                        line: 52,
+                        column: 12,
+                        end_column: 16,
+                        module: 0,
+                    },
+                },
+            ],
+            result: Slice {
+                element: Primitive(
+                    Char,
+                ),
+                rank: 1,
+            },
+            body: [
+                Return {
+                    value: Some(
+                        Borrow {
+                            mutable: false,
+                            operand: Slice {
+                                base: Member {
+                                    base: Name(
+                                        "part",
+                                        Span {
+                                            line: 53,
+                                            column: 13,
+                                            end_column: 17,
+                                            module: 0,
+                                        },
+                                    ),
+                                    field: "name",
+                                    span: Span {
+                                        line: 53,
+                                        column: 13,
+                                        end_column: 22,
+                                        module: 0,
+                                    },
+                                },
+                                start: Some(
+                                    Integer(
+                                        0,
+                                        Span {
+                                            line: 53,
+                                            column: 23,
+                                            end_column: 24,
+                                            module: 0,
+                                        },
+                                    ),
+                                ),
+                                end: Some(
+                                    Integer(
+                                        1,
+                                        Span {
+                                            line: 53,
+                                            column: 25,
+                                            end_column: 26,
+                                            module: 0,
+                                        },
+                                    ),
+                                ),
+                                span: Span {
+                                    line: 53,
+                                    column: 13,
+                                    end_column: 27,
+                                    module: 0,
+                                },
+                            },
+                            span: Span {
+                                line: 53,
+                                column: 12,
+                                end_column: 27,
+                                module: 0,
+                            },
+                        },
+                    ),
+                    span: Span {
+                        line: 53,
+                        column: 5,
+                        end_column: 11,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 52,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "scarce",
+            generics: [],
+            parameters: [
+                Parameter {
+                    name: "parts",
+                    type_: Borrowed {
+                        mutable: false,
+                        target: Slice {
+                            element: Named(
+                                "Part",
+                            ),
+                            rank: 1,
+                        },
+                    },
+                    default: None,
+                    span: Span {
+                        line: 55,
+                        column: 11,
+                        end_column: 16,
+                        module: 0,
+                    },
+                },
+                Parameter {
+                    name: "below",
+                    type_: Owned(
+                        Value(
+                            Primitive(
+                                U16,
+                            ),
+                        ),
+                    ),
+                    default: None,
+                    span: Span {
+                        line: 55,
+                        column: 27,
+                        end_column: 32,
+                        module: 0,
+                    },
+                },
+            ],
+            result: Value(
+                Applied {
+                    name: "iter",
+                    args: [
+                        Value(
+                            Applied {
+                                name: "&",
+                                args: [
+                                    Value(
+                                        Named(
+                                            "Part",
+                                        ),
+                                    ),
+                                ],
+                            },
+                        ),
+                    ],
+                },
+            ),
+            body: [
+                For {
+                    mode: Value,
+                    name: "part",
+                    iterable: Name(
+                        "parts",
+                        Span {
+                            line: 56,
+                            column: 17,
+                            end_column: 22,
+                            module: 0,
+                        },
+                    ),
+                    body: [
+                        If {
+                            condition: Binary {
+                                op: Less,
+                                left: Member {
+                                    base: Name(
+                                        "part",
+                                        Span {
+                                            line: 57,
+                                            column: 12,
+                                            end_column: 16,
+                                            module: 0,
+                                        },
+                                    ),
+                                    field: "stock",
+                                    span: Span {
+                                        line: 57,
+                                        column: 12,
+                                        end_column: 22,
+                                        module: 0,
+                                    },
+                                },
+                                right: Name(
+                                    "below",
+                                    Span {
+                                        line: 57,
+                                        column: 25,
+                                        end_column: 30,
+                                        module: 0,
+                                    },
+                                ),
+                                span: Span {
+                                    line: 57,
+                                    column: 12,
+                                    end_column: 30,
+                                    module: 0,
+                                },
+                            },
+                            then_branch: [
+                                Yield {
+                                    value: Name(
+                                        "part",
+                                        Span {
+                                            line: 58,
+                                            column: 19,
+                                            end_column: 23,
+                                            module: 0,
+                                        },
+                                    ),
+                                    span: Span {
+                                        line: 58,
+                                        column: 13,
+                                        end_column: 18,
+                                        module: 0,
+                                    },
+                                },
+                            ],
+                            else_branch: [],
+                            span: Span {
+                                line: 57,
+                                column: 9,
+                                end_column: 11,
+                                module: 0,
+                            },
+                        },
+                    ],
+                    returned: false,
+                    span: Span {
+                        line: 56,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 55,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+        Function {
+            name: "main",
+            generics: [],
+            parameters: [],
+            result: Value(
+                Primitive(
+                    I16,
+                ),
+            ),
+            body: [
+                Bind {
+                    mutable: true,
+                    name: "a",
+                    annotation: None,
+                    value: Call {
+                        name: "north",
+                        type_arguments: [],
+                        arguments: [],
+                        span: Span {
+                            line: 61,
+                            column: 17,
+                            end_column: 24,
+                            module: 0,
+                        },
+                    },
+                    span: Span {
+                        line: 61,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                Bind {
+                    mutable: false,
+                    name: "b",
+                    annotation: None,
+                    value: Call {
+                        name: "south",
+                        type_arguments: [],
+                        arguments: [],
+                        span: Span {
+                            line: 62,
+                            column: 13,
+                            end_column: 20,
+                            module: 0,
+                        },
+                    },
+                    span: Span {
+                        line: 62,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                Match {
+                    subject: Call {
+                        name: "find",
+                        type_arguments: [],
+                        arguments: [
+                            Name(
+                                "a",
+                                Span {
+                                    line: 63,
+                                    column: 16,
+                                    end_column: 17,
+                                    module: 0,
+                                },
+                            ),
+                            Name(
+                                "b",
+                                Span {
+                                    line: 63,
+                                    column: 19,
+                                    end_column: 20,
+                                    module: 0,
+                                },
+                            ),
+                            String(
+                                [
+                                    112,
+                                    105,
+                                    110,
+                                ],
+                                Span {
+                                    line: 63,
+                                    column: 22,
+                                    end_column: 27,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 63,
+                            column: 11,
+                            end_column: 28,
+                            module: 0,
+                        },
+                    },
+                    arms: [
+                        MatchArm {
+                            pattern: Variant {
+                                enum_name: None,
+                                name: "some",
+                                fields: [
+                                    Binding(
+                                        "part",
+                                        Span {
+                                            line: 64,
+                                            column: 15,
+                                            end_column: 19,
+                                            module: 0,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 64,
+                                    column: 9,
+                                    end_column: 14,
+                                    module: 0,
+                                },
+                            },
+                            body: [
+                                Expr(
+                                    Call {
+                                        name: "print",
+                                        type_arguments: [],
+                                        arguments: [
+                                            FString {
+                                                parts: [
+                                                    Value(
+                                                        Member {
+                                                            base: Name(
+                                                                "part",
+                                                                Span {
+                                                                    line: 1,
+                                                                    column: 1,
+                                                                    end_column: 5,
+                                                                    module: 0,
+                                                                },
+                                                            ),
+                                                            field: "name",
+                                                            span: Span {
+                                                                line: 1,
+                                                                column: 1,
+                                                                end_column: 10,
+                                                                module: 0,
+                                                            },
+                                                        },
+                                                        Format {
+                                                            width: 0,
+                                                            radix: 10,
+                                                            zero: false,
+                                                            left: false,
+                                                        },
+                                                    ),
+                                                    Text(
+                                                        [
+                                                            58,
+                                                            32,
+                                                        ],
+                                                    ),
+                                                    Value(
+                                                        Member {
+                                                            base: Name(
+                                                                "part",
+                                                                Span {
+                                                                    line: 1,
+                                                                    column: 1,
+                                                                    end_column: 5,
+                                                                    module: 0,
+                                                                },
+                                                            ),
+                                                            field: "stock",
+                                                            span: Span {
+                                                                line: 1,
+                                                                column: 1,
+                                                                end_column: 11,
+                                                                module: 0,
+                                                            },
+                                                        },
+                                                        Format {
+                                                            width: 0,
+                                                            radix: 10,
+                                                            zero: false,
+                                                            left: false,
+                                                        },
+                                                    ),
+                                                    Text(
+                                                        [
+                                                            32,
+                                                            97,
+                                                            116,
+                                                            32,
+                                                        ],
+                                                    ),
+                                                    Value(
+                                                        Member {
+                                                            base: Name(
+                                                                "part",
+                                                                Span {
+                                                                    line: 1,
+                                                                    column: 1,
+                                                                    end_column: 5,
+                                                                    module: 0,
+                                                                },
+                                                            ),
+                                                            field: "price",
+                                                            span: Span {
+                                                                line: 1,
+                                                                column: 1,
+                                                                end_column: 11,
+                                                                module: 0,
+                                                            },
+                                                        },
+                                                        Format {
+                                                            width: 0,
+                                                            radix: 10,
+                                                            zero: false,
+                                                            left: false,
+                                                        },
+                                                    ),
+                                                ],
+                                                span: Span {
+                                                    line: 65,
+                                                    column: 19,
+                                                    end_column: 63,
+                                                    module: 0,
+                                                },
+                                            },
+                                        ],
+                                        span: Span {
+                                            line: 65,
+                                            column: 13,
+                                            end_column: 64,
+                                            module: 0,
+                                        },
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 64,
+                                column: 9,
+                                end_column: 14,
+                                module: 0,
+                            },
+                        },
+                        MatchArm {
+                            pattern: Variant {
+                                enum_name: None,
+                                name: "none",
+                                fields: [],
+                                span: Span {
+                                    line: 66,
+                                    column: 9,
+                                    end_column: 14,
+                                    module: 0,
+                                },
+                            },
+                            body: [
+                                Expr(
+                                    Call {
+                                        name: "print",
+                                        type_arguments: [],
+                                        arguments: [
+                                            String(
+                                                [
+                                                    110,
+                                                    111,
+                                                    32,
+                                                    112,
+                                                    105,
+                                                    110,
+                                                ],
+                                                Span {
+                                                    line: 67,
+                                                    column: 19,
+                                                    end_column: 27,
+                                                    module: 0,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 67,
+                                            column: 13,
+                                            end_column: 28,
+                                            module: 0,
+                                        },
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 66,
+                                column: 9,
+                                end_column: 14,
+                                module: 0,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 63,
+                        column: 5,
+                        end_column: 10,
+                        module: 0,
+                    },
+                },
+                Match {
+                    subject: Tuple(
+                        [
+                            Call {
+                                name: "find",
+                                type_arguments: [],
+                                arguments: [
+                                    Name(
+                                        "a",
+                                        Span {
+                                            line: 68,
+                                            column: 17,
+                                            end_column: 18,
+                                            module: 0,
+                                        },
+                                    ),
+                                    Name(
+                                        "b",
+                                        Span {
+                                            line: 68,
+                                            column: 20,
+                                            end_column: 21,
+                                            module: 0,
+                                        },
+                                    ),
+                                    String(
+                                        [
+                                            103,
+                                            101,
+                                            97,
+                                            114,
+                                        ],
+                                        Span {
+                                            line: 68,
+                                            column: 23,
+                                            end_column: 29,
+                                            module: 0,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 68,
+                                    column: 12,
+                                    end_column: 30,
+                                    module: 0,
+                                },
+                            },
+                            Call {
+                                name: "find",
+                                type_arguments: [],
+                                arguments: [
+                                    Name(
+                                        "b",
+                                        Span {
+                                            line: 68,
+                                            column: 37,
+                                            end_column: 38,
+                                            module: 0,
+                                        },
+                                    ),
+                                    Name(
+                                        "a",
+                                        Span {
+                                            line: 68,
+                                            column: 40,
+                                            end_column: 41,
+                                            module: 0,
+                                        },
+                                    ),
+                                    String(
+                                        [
+                                            103,
+                                            101,
+                                            97,
+                                            114,
+                                        ],
+                                        Span {
+                                            line: 68,
+                                            column: 43,
+                                            end_column: 49,
+                                            module: 0,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 68,
+                                    column: 32,
+                                    end_column: 50,
+                                    module: 0,
+                                },
+                            },
+                        ],
+                        Span {
+                            line: 68,
+                            column: 11,
+                            end_column: 51,
+                            module: 0,
+                        },
+                    ),
+                    arms: [
+                        MatchArm {
+                            pattern: Tuple(
+                                [
+                                    Variant {
+                                        enum_name: None,
+                                        name: "some",
+                                        fields: [
+                                            Binding(
+                                                "x",
+                                                Span {
+                                                    line: 69,
+                                                    column: 16,
+                                                    end_column: 17,
+                                                    module: 0,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 69,
+                                            column: 10,
+                                            end_column: 15,
+                                            module: 0,
+                                        },
+                                    },
+                                    Variant {
+                                        enum_name: None,
+                                        name: "some",
+                                        fields: [
+                                            Binding(
+                                                "y",
+                                                Span {
+                                                    line: 69,
+                                                    column: 26,
+                                                    end_column: 27,
+                                                    module: 0,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 69,
+                                            column: 20,
+                                            end_column: 25,
+                                            module: 0,
+                                        },
+                                    },
+                                ],
+                                Span {
+                                    line: 69,
+                                    column: 9,
+                                    end_column: 10,
+                                    module: 0,
+                                },
+                            ),
+                            body: [
+                                Bind {
+                                    mutable: false,
+                                    name: "best",
+                                    annotation: None,
+                                    value: Call {
+                                        name: "cheaper",
+                                        type_arguments: [],
+                                        arguments: [
+                                            Name(
+                                                "x",
+                                                Span {
+                                                    line: 70,
+                                                    column: 32,
+                                                    end_column: 33,
+                                                    module: 0,
+                                                },
+                                            ),
+                                            Name(
+                                                "y",
+                                                Span {
+                                                    line: 70,
+                                                    column: 35,
+                                                    end_column: 36,
+                                                    module: 0,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 70,
+                                            column: 24,
+                                            end_column: 37,
+                                            module: 0,
+                                        },
+                                    },
+                                    span: Span {
+                                        line: 70,
+                                        column: 13,
+                                        end_column: 16,
+                                        module: 0,
+                                    },
+                                },
+                                Expr(
+                                    Call {
+                                        name: "print",
+                                        type_arguments: [],
+                                        arguments: [
+                                            FString {
+                                                parts: [
+                                                    Text(
+                                                        [
+                                                            99,
+                                                            104,
+                                                            101,
+                                                            97,
+                                                            112,
+                                                            101,
+                                                            115,
+                                                            116,
+                                                            32,
+                                                            103,
+                                                            101,
+                                                            97,
+                                                            114,
+                                                            32,
+                                                        ],
+                                                    ),
+                                                    Value(
+                                                        Member {
+                                                            base: Name(
+                                                                "best",
+                                                                Span {
+                                                                    line: 1,
+                                                                    column: 1,
+                                                                    end_column: 5,
+                                                                    module: 0,
+                                                                },
+                                                            ),
+                                                            field: "price",
+                                                            span: Span {
+                                                                line: 1,
+                                                                column: 1,
+                                                                end_column: 11,
+                                                                module: 0,
+                                                            },
+                                                        },
+                                                        Format {
+                                                            width: 0,
+                                                            radix: 10,
+                                                            zero: false,
+                                                            left: false,
+                                                        },
+                                                    ),
+                                                ],
+                                                span: Span {
+                                                    line: 71,
+                                                    column: 19,
+                                                    end_column: 48,
+                                                    module: 0,
+                                                },
+                                            },
+                                        ],
+                                        span: Span {
+                                            line: 71,
+                                            column: 13,
+                                            end_column: 49,
+                                            module: 0,
+                                        },
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 69,
+                                column: 9,
+                                end_column: 10,
+                                module: 0,
+                            },
+                        },
+                        MatchArm {
+                            pattern: Wildcard(
+                                Span {
+                                    line: 72,
+                                    column: 9,
+                                    end_column: 10,
+                                    module: 0,
+                                },
+                            ),
+                            body: [
+                                Expr(
+                                    Call {
+                                        name: "print",
+                                        type_arguments: [],
+                                        arguments: [
+                                            String(
+                                                [
+                                                    110,
+                                                    111,
+                                                    32,
+                                                    103,
+                                                    101,
+                                                    97,
+                                                    114,
+                                                ],
+                                                Span {
+                                                    line: 73,
+                                                    column: 19,
+                                                    end_column: 28,
+                                                    module: 0,
+                                                },
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 73,
+                                            column: 13,
+                                            end_column: 29,
+                                            module: 0,
+                                        },
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                line: 72,
+                                column: 9,
+                                end_column: 10,
+                                module: 0,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        line: 68,
+                        column: 5,
+                        end_column: 10,
+                        module: 0,
+                    },
+                },
+                Bind {
+                    mutable: false,
+                    name: "few",
+                    annotation: None,
+                    value: Call {
+                        name: "affordable",
+                        type_arguments: [],
+                        arguments: [
+                            Name(
+                                "a",
+                                Span {
+                                    line: 74,
+                                    column: 26,
+                                    end_column: 27,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                20,
+                                Span {
+                                    line: 74,
+                                    column: 29,
+                                    end_column: 31,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 74,
+                            column: 15,
+                            end_column: 32,
+                            module: 0,
+                        },
+                    },
+                    span: Span {
+                        line: 74,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                Expr(
+                    Call {
+                        name: "print",
+                        type_arguments: [],
+                        arguments: [
+                            FString {
+                                parts: [
+                                    Value(
+                                        Member {
+                                            base: Name(
+                                                "few",
+                                                Span {
+                                                    line: 1,
+                                                    column: 1,
+                                                    end_column: 4,
+                                                    module: 0,
+                                                },
+                                            ),
+                                            field: "len",
+                                            span: Span {
+                                                line: 1,
+                                                column: 1,
+                                                end_column: 8,
+                                                module: 0,
+                                            },
+                                        },
+                                        Format {
+                                            width: 0,
+                                            radix: 10,
+                                            zero: false,
+                                            left: false,
+                                        },
+                                    ),
+                                    Text(
+                                        [
+                                            32,
+                                            117,
+                                            110,
+                                            100,
+                                            101,
+                                            114,
+                                            32,
+                                            50,
+                                            48,
+                                            44,
+                                            32,
+                                            102,
+                                            105,
+                                            114,
+                                            115,
+                                            116,
+                                            32,
+                                        ],
+                                    ),
+                                    Value(
+                                        Call {
+                                            name: "initial",
+                                            type_arguments: [],
+                                            arguments: [
+                                                Index {
+                                                    base: Name(
+                                                        "few",
+                                                        Span {
+                                                            line: 1,
+                                                            column: 9,
+                                                            end_column: 12,
+                                                            module: 0,
+                                                        },
+                                                    ),
+                                                    indices: [
+                                                        Integer(
+                                                            0,
+                                                            Span {
+                                                                line: 1,
+                                                                column: 13,
+                                                                end_column: 14,
+                                                                module: 0,
+                                                            },
+                                                        ),
+                                                    ],
+                                                    span: Span {
+                                                        line: 1,
+                                                        column: 9,
+                                                        end_column: 15,
+                                                        module: 0,
+                                                    },
+                                                },
+                                            ],
+                                            span: Span {
+                                                line: 1,
+                                                column: 1,
+                                                end_column: 16,
+                                                module: 0,
+                                            },
+                                        },
+                                        Format {
+                                            width: 0,
+                                            radix: 10,
+                                            zero: false,
+                                            left: false,
+                                        },
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 75,
+                                    column: 11,
+                                    end_column: 57,
+                                    module: 0,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 75,
+                            column: 5,
+                            end_column: 58,
+                            module: 0,
+                        },
+                    },
+                ),
+                For {
+                    mode: Value,
+                    name: "part",
+                    iterable: Call {
+                        name: "scarce",
+                        type_arguments: [],
+                        arguments: [
+                            Member {
+                                base: Name(
+                                    "a",
+                                    Span {
+                                        line: 76,
+                                        column: 24,
+                                        end_column: 25,
+                                        module: 0,
+                                    },
+                                ),
+                                field: "parts",
+                                span: Span {
+                                    line: 76,
+                                    column: 24,
+                                    end_column: 31,
+                                    module: 0,
+                                },
+                            },
+                            Integer(
+                                5,
+                                Span {
+                                    line: 76,
+                                    column: 33,
+                                    end_column: 34,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 76,
+                            column: 17,
+                            end_column: 35,
+                            module: 0,
+                        },
+                    },
+                    body: [
+                        Expr(
+                            Call {
+                                name: "print",
+                                type_arguments: [],
+                                arguments: [
+                                    FString {
+                                        parts: [
+                                            Text(
+                                                [
+                                                    108,
+                                                    111,
+                                                    119,
+                                                    58,
+                                                    32,
+                                                ],
+                                            ),
+                                            Value(
+                                                Member {
+                                                    base: Name(
+                                                        "part",
+                                                        Span {
+                                                            line: 1,
+                                                            column: 1,
+                                                            end_column: 5,
+                                                            module: 0,
+                                                        },
+                                                    ),
+                                                    field: "name",
+                                                    span: Span {
+                                                        line: 1,
+                                                        column: 1,
+                                                        end_column: 10,
+                                                        module: 0,
+                                                    },
+                                                },
+                                                Format {
+                                                    width: 0,
+                                                    radix: 10,
+                                                    zero: false,
+                                                    left: false,
+                                                },
+                                            ),
+                                            Text(
+                                                [
+                                                    32,
+                                                    40,
+                                                ],
+                                            ),
+                                            Value(
+                                                Member {
+                                                    base: Name(
+                                                        "part",
+                                                        Span {
+                                                            line: 1,
+                                                            column: 1,
+                                                            end_column: 5,
+                                                            module: 0,
+                                                        },
+                                                    ),
+                                                    field: "stock",
+                                                    span: Span {
+                                                        line: 1,
+                                                        column: 1,
+                                                        end_column: 11,
+                                                        module: 0,
+                                                    },
+                                                },
+                                                Format {
+                                                    width: 0,
+                                                    radix: 10,
+                                                    zero: false,
+                                                    left: false,
+                                                },
+                                            ),
+                                            Text(
+                                                [
+                                                    41,
+                                                ],
+                                            ),
+                                        ],
+                                        span: Span {
+                                            line: 77,
+                                            column: 15,
+                                            end_column: 49,
+                                            module: 0,
+                                        },
+                                    },
+                                ],
+                                span: Span {
+                                    line: 77,
+                                    column: 9,
+                                    end_column: 50,
+                                    module: 0,
+                                },
+                            },
+                        ),
+                    ],
+                    returned: false,
+                    span: Span {
+                        line: 76,
+                        column: 5,
+                        end_column: 8,
+                        module: 0,
+                    },
+                },
+                Expr(
+                    MethodCall {
+                        receiver: Name(
+                            "a",
+                            Span {
+                                line: 78,
+                                column: 5,
+                                end_column: 6,
+                                module: 0,
+                            },
+                        ),
+                        name: "add",
+                        type_arguments: [],
+                        arguments: [
+                            String(
+                                [
+                                    110,
+                                    117,
+                                    116,
+                                ],
+                                Span {
+                                    line: 78,
+                                    column: 11,
+                                    end_column: 16,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                1,
+                                Span {
+                                    line: 78,
+                                    column: 18,
+                                    end_column: 19,
+                                    module: 0,
+                                },
+                            ),
+                            Integer(
+                                500,
+                                Span {
+                                    line: 78,
+                                    column: 21,
+                                    end_column: 24,
+                                    module: 0,
+                                },
+                            ),
+                        ],
+                        span: Span {
+                            line: 78,
+                            column: 5,
+                            end_column: 25,
+                            module: 0,
+                        },
+                    },
+                ),
+                Expr(
+                    Call {
+                        name: "print",
+                        type_arguments: [],
+                        arguments: [
+                            FString {
+                                parts: [
+                                    Value(
+                                        Member {
+                                            base: Member {
+                                                base: Name(
+                                                    "a",
+                                                    Span {
+                                                        line: 1,
+                                                        column: 1,
+                                                        end_column: 2,
+                                                        module: 0,
+                                                    },
+                                                ),
+                                                field: "parts",
+                                                span: Span {
+                                                    line: 1,
+                                                    column: 1,
+                                                    end_column: 8,
+                                                    module: 0,
+                                                },
+                                            },
+                                            field: "len",
+                                            span: Span {
+                                                line: 1,
+                                                column: 1,
+                                                end_column: 12,
+                                                module: 0,
+                                            },
+                                        },
+                                        Format {
+                                            width: 0,
+                                            radix: 10,
+                                            zero: false,
+                                            left: false,
+                                        },
+                                    ),
+                                    Text(
+                                        [
+                                            32,
+                                            112,
+                                            97,
+                                            114,
+                                            116,
+                                            115,
+                                        ],
+                                    ),
+                                ],
+                                span: Span {
+                                    line: 79,
+                                    column: 11,
+                                    end_column: 33,
+                                    module: 0,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            line: 79,
+                            column: 5,
+                            end_column: 34,
+                            module: 0,
+                        },
+                    },
+                ),
+                Return {
+                    value: Some(
+                        Integer(
+                            0,
+                            Span {
+                                line: 80,
+                                column: 12,
+                                end_column: 13,
+                                module: 0,
+                            },
+                        ),
+                    ),
+                    span: Span {
+                        line: 80,
+                        column: 5,
+                        end_column: 11,
+                        module: 0,
+                    },
+                },
+            ],
+            span: Span {
+                line: 60,
+                column: 1,
+                end_column: 3,
+                module: 0,
+            },
+        },
+    ],
+    externs: [],
+    exports: {},
+    library: [],
+    sources: [],
+    private_methods: {},
+}

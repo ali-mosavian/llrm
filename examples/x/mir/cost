@@ -1,0 +1,7 @@
+Catalog.add executes 30 instructions, 20 memory operands; 5 reloads, 5 spill stores, 2 remats; 0 branches, 0 taken, 0 jumps, 0 jump cycles
+north executes 39 instructions, 17 memory operands; 0 reloads, 0 spill stores, 3 remats; 0 branches, 0 taken, 0 jumps, 0 jump cycles
+south executes 29 instructions, 13 memory operands; 0 reloads, 0 spill stores, 2 remats; 0 branches, 0 taken, 0 jumps, 0 jump cycles
+find executes 569 instructions, 370 memory operands; 145 reloads, 28 spill stores, 25 remats; 49 branches, 24 taken, 0 jumps, 98 jump cycles
+affordable executes 108 instructions, 23 memory operands; 0 reloads, 0 spill stores, 0 remats; 33 branches, 16 taken, 0 jumps, 66 jump cycles
+initial executes 10 instructions, 7 memory operands; 0 reloads, 0 spill stores, 0 remats; 1 branches, 0 taken, 0 jumps, 1 jump cycles
+main executes 576 instructions, 212 memory operands; 77 reloads, 41 spill stores, 5 remats; 71 branches, 58 taken, 1 jumps, 187 jump cycles

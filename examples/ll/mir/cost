@@ -1,0 +1,3 @@
+Catalog.add executes 31 instructions, 20 memory operands; 5 reloads, 5 spill stores, 2 remats; 0 branches, 0 taken, 0 jumps, 0 jump cycles
+find executes 665 instructions, 395 memory operands; 143 reloads, 53 spill stores, 25 remats; 73 branches, 24 taken, 2 jumps, 126 jump cycles
+main executes 748 instructions, 252 memory operands; 74 reloads, 40 spill stores, 10 remats; 105 branches, 74 taken, 2 jumps, 260 jump cycles
