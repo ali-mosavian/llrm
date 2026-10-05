@@ -1,13 +1,13 @@
-reason = "Shrink-wrapped callee-saved registers: SI/DI saved where first needed, not at every entry"
+reason = "Nib/C: a far pointer parameter every call fills from a global is passed as its offset (address-space narrowing). lru c -Os +7 instructions, -23 bytes: -Os now shares -1 and 0 in a register (the freed es/fs); #441: a bridge's jump is priced, particle bas -O2 -8 instructions, -7 memory operands, -20 code bytes"
 blessed = "2026-10-05"
 
 [bas.O2]
-instructions = 127558
-memory_operands = 92925
-code_bytes = 504
+instructions = 127550
+memory_operands = 92918
+code_bytes = 484
 data_bytes = 121
 bss_bytes = 0
-kernel_ms = 1.7447
+kernel_ms = 1.7448
 
 [bas.Os]
 instructions = 127348
@@ -23,7 +23,7 @@ memory_operands = 61509
 code_bytes = 181
 data_bytes = 0
 bss_bytes = 1212
-kernel_ms = 1.1463
+kernel_ms = 1.1462
 
 [c.Os]
 instructions = 84137
