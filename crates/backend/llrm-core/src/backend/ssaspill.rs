@@ -290,6 +290,8 @@ struct Machine<'a> {
     classes: BTreeSet<BTreeSet<Register>>,
     /// The registers with byte halves.
     bytes: BTreeSet<Register>,
+    /// The registers an address base or index may be in: the target's, among this file's.
+    addressing: BTreeSet<Register>,
 }
 
 impl<'a> Machine<'a> {
@@ -303,7 +305,8 @@ impl<'a> Machine<'a> {
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>())
             .filter(|class| !class.is_empty() && class.len() < general.len())
             .collect();
-        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
+        let addressing: BTreeSet<Register> = target::ADDRESSING.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect();
+        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect(), addressing }
     }
 
     /// A value that lives in a register of this file at all: a selector only where the program names it so.
@@ -423,6 +426,17 @@ pub(crate) fn folded_into(one: &Insn, value: u32, cell: &crate::model::ir::Mem) 
     made.what = Some(Semantics { sources, ..what.clone() });
     made.uses = one.uses.iter().copied().filter(|each| *each != value).collect();
     Some(Arc::new(made))
+}
+
+/// The values `one` reads as a base or index of an address.
+fn addressed(one: &Insn) -> BTreeSet<u32> {
+    one.what
+        .as_ref()
+        .into_iter()
+        .flat_map(|what| what.dests.iter().chain(&what.sources))
+        .filter_map(|place| if let Loc::Mem(cell) = place { Some(cell) } else { None })
+        .flat_map(|cell| [cell.base, cell.index].into_iter().flatten().map(|held| held.value))
+        .collect()
 }
 
 /// Whether `one` can read `value` from its slot.
@@ -630,6 +644,23 @@ fn simulated_with(
                 }
             }
         }
+        // What a loop's header meant to keep is no better held if the loop's pressure evicts it anyway, or evicts
+        // what the loop carries through every trip: then the least saving of them is let go.
+        for (header, values) in &result.pinned {
+            let Some(within) = loops.iter().find(|one| one.header == *header) else { continue };
+            let evicted = |value: &u32| {
+                within.body.iter().any(|at| {
+                    let edit = &result.edits[at];
+                    edit.leaves_at_end.contains(value) || edit.leaves.values().any(|gone| gone.contains(value))
+                })
+            };
+            let squeezed = body.blocks.iter().filter(|block| block.at == *header).flat_map(|block| block.phis.iter()).any(|phi| evicted(&phi.result));
+            // The values are in order of saving, the most first.
+            let victim = values.iter().rev().find(|value| evicted(value)).or_else(|| if squeezed { values.last() } else { None });
+            if let Some(value) = victim {
+                more |= dropped.entry(*header).or_default().insert(*value);
+            }
+        }
         if !more {
             break;
         }
@@ -640,7 +671,7 @@ fn simulated_with(
     if machine.file == File::Selector {
         // The jump a bridge on a loop's back edge takes runs every trip, unless another file's values already bring the bridge;
         // and what a loop that fits its registers does not hold, it need not bridge to hold.
-        let critical: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().filter(|edge| place[&edge.0] >= place[&edge.1] && !bridged.contains(edge) && room.get(&edge.1).is_some_and(|peak| *peak > machine.general.len())).collect();
+        let critical: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().filter(|edge| place[&edge.0] >= place[&edge.1] && !bridged.contains(edge) && room.get(&edge.1).is_some_and(|room| room.peak > machine.general.len())).collect();
         let mut best = traffic(&result, weights, prices, &critical);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
@@ -760,6 +791,8 @@ struct Simulated {
     across: IndexMap<(i64, i64), Vec<u32>>,
     left: IndexMap<(i64, i64), Vec<u32>>,
     stored: BTreeSet<u32>,
+    /// What each loop's header meant to keep in registers through the loop, by header.
+    pinned: IndexMap<i64, Vec<u32>>,
 }
 
 impl Simulated {
@@ -775,6 +808,9 @@ impl Simulated {
             self.left.entry(edge).or_default().extend(values);
         }
         self.stored.extend(other.stored);
+        for (header, values) in other.pinned {
+            self.pinned.entry(header).or_default().extend(values);
+        }
     }
 }
 
@@ -805,7 +841,7 @@ fn simulated(
     remakes: &IndexMap<u32, Arc<Insn>>,
     order: &[i64],
     dropped: &IndexMap<i64, BTreeSet<u32>>,
-    room: &IndexMap<i64, usize>,
+    room: &IndexMap<i64, Room>,
     frequency: &Frequency,
     headers: &BTreeSet<i64>,
     admit: bool,
@@ -813,6 +849,9 @@ fn simulated(
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
     let mut edits: IndexMap<i64, Edits> = IndexMap::default();
+    // The values each block's loops keep in registers through their trips, which its evictions leave for last.
+    let mut pins: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
+    let mut pinned: IndexMap<i64, Vec<u32>> = IndexMap::default();
     let mut stored: BTreeSet<u32> = BTreeSet::new();
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
@@ -849,10 +888,56 @@ fn simulated(
         let mut held: BTreeSet<u32> = BTreeSet::new();
         // Entering a loop, what is read only after it does not wait in a register.
         let header = headers.contains(at);
+        // A loop that cannot hold everything keeps in registers, through every trip, as many of what it reads
+        // as its own values leave room for, from the classes with most registers to spare.
+        if let (true, Some(loop_room)) = (header, room.get(at)) {
+            if loop_room.peak > k {
+                let inherited = pins.get(at).cloned().unwrap_or_default();
+                let phis = block.arrives();
+                // What holding a value through the loop saves per trip: a memory operand for each read, and for one read as an address the load into an address register too.
+                let wanted_here: BTreeSet<u32> = candidates.iter().filter(|(_, near, value)| *near < EXIT && !phis.contains(value) && !inherited.contains(value)).map(|(_, _, value)| *value).collect();
+                let mut saved: IndexMap<u32, f64> = IndexMap::default();
+                for inside in &loop_room.body {
+                    let weight = frequency.block(*inside);
+                    for one in &by_at[inside].insns {
+                        for value in one.uses.iter().filter(|value| wanted_here.contains(value)) {
+                            *saved.entry(*value).or_default() += weight * if addressed(one).contains(value) { 2.0 } else { 1.0 };
+                        }
+                    }
+                }
+                // Of equal saving, a value that any register may hold goes first: a confined one competes for its few.
+                let mut picks: Vec<(std::cmp::Reverse<u64>, std::cmp::Reverse<usize>, u32)> = wanted_here
+                    .iter()
+                    .map(|value| (std::cmp::Reverse(saved.get(value).copied().unwrap_or(0.0).to_bits()), std::cmp::Reverse(machine.class(*value).map_or(k, |class| class.len())), *value))
+                    .collect();
+                picks.sort_unstable();
+                // A value is kept where the loop's values, the others kept and it still fit at every instruction.
+                let mut chosen: Vec<u32> = Vec::new();
+                for (_, _, value) in picks {
+                    let mut keep: BTreeSet<u32> = inherited.iter().chain(&chosen).copied().collect();
+                    keep.insert(value);
+                    // One the loop reads as a base or index waits in a register of that kind, or each read copies it into one.
+                    let kept_addressed: BTreeSet<u32> = keep.iter().copied().filter(|each| loop_room.at_address.contains(each)).collect();
+                    let registers = machine.addressing.len();
+                    if loop_room.points.iter().all(|(held, acting, address)| {
+                        machine.fits(&held.union(&keep).copied().collect(), acting, k) && kept_addressed.union(address).count() <= registers
+                    }) {
+                        chosen.push(value);
+                    }
+                }
+                pinned.entry(*at).or_default().extend(chosen.iter().copied());
+                for inside in &loop_room.body {
+                    pins.entry(*inside).or_default().extend(chosen.iter().copied());
+                }
+            }
+        }
+        let pinned_here = pins.get(at).cloned().unwrap_or_default();
+        let pinned = |value: &u32| pinned_here.contains(value);
+        candidates.sort_by_key(|(tier, near, value)| (!pinned(value), *tier, *near, *value));
         // A loop that fits its registers with them keeps what it does not read; one that does not, makes room.
         let through = candidates.iter().filter(|(_, near, _)| *near >= EXIT).count();
         let mut spare = match (header, room.get(at)) {
-            (true, Some(peak)) if *peak > k => k.saturating_sub(peak - through.min(*peak)),
+            (true, Some(loop_room)) if loop_room.peak > k => k.saturating_sub(loop_room.peak - through.min(loop_room.peak)),
             _ => usize::MAX,
         };
         for (tier, near, value) in &candidates {
@@ -881,7 +966,7 @@ fn simulated(
                     let victim = held
                         .iter()
                         .filter(|value| !keep.contains(*value))
-                        .max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value))
+                        .max_by_key(|value| (!pinned(value), !hot(value), flow.next_use(*at, position, **value), **value))
                         .copied();
                     let Some(victim) = victim else { break };
                     held.remove(&victim);
@@ -925,7 +1010,7 @@ fn simulated(
                 let mut across = held.clone();
                 let keep: BTreeSet<u32> = used.union(&made).copied().collect();
                 while across.len() > k - outside.min(k) {
-                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value)).copied();
+                    let victim = through.iter().filter(|value| across.contains(*value) && !keep.contains(*value)).max_by_key(|value| (!pinned(value), !hot(value), flow.next_use(*at, position, **value), **value)).copied();
                     let Some(victim) = victim else { break };
                     across.remove(&victim);
                     held.remove(&victim);
@@ -976,7 +1061,7 @@ fn simulated(
         {
             let end = block.insns.len();
             while !machine.fits(&held, &handed, k) {
-                let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, end, **value), **value)).copied();
+                let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (!pinned(value), !hot(value), flow.next_use(*at, end, **value), **value)).copied();
                 let Some(victim) = victim else { break };
                 held.remove(&victim);
                 if flow.live_out[at].contains(&victim) {
@@ -1009,7 +1094,7 @@ fn simulated(
             }
         }
     }
-    Simulated { edits, across, left, stored }
+    Simulated { edits, across, left, stored, pinned }
 }
 
 /// What reloading `value` at its first register uses costs, within one trip of the loop
@@ -1037,30 +1122,52 @@ fn first_uses(flow: &Flow, weights: &Weights<'_>, within: &BTreeSet<i64>, header
 }
 
 /// For each loop header, the most values live at once inside the loop.
-fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet<u32>, loops: &[crate::analysis::loops::Loop]) -> IndexMap<i64, usize> {
+fn loop_room(body: &LirBody, flow: &Flow, machine: &Machine<'_>, skip: &BTreeSet<u32>, loops: &[crate::analysis::loops::Loop]) -> IndexMap<i64, Room> {
     let wanted = |value: &u32| machine.registered(*value) && !skip.contains(value);
-    let mut most: IndexMap<i64, usize> = IndexMap::default();
-    for block in &body.blocks {
-        let mut live: BTreeSet<u32> = flow.live_out[&block.at].iter().copied().filter(|value| wanted(value)).collect();
-        let mut peak = live.len();
-        for one in block.insns.iter().rev() {
-            peak = peak.max(live.len());
-            for value in &one.defines {
-                live.remove(value);
-            }
-            live.extend(one.uses.iter().copied().filter(|value| wanted(value)));
-            peak = peak.max(live.len());
-        }
-        most.insert(block.at, peak);
-    }
     loops
         .iter()
         .map(|found| {
-            let busiest = found.body.iter().filter_map(|at| most.get(at)).copied().max().unwrap_or(0);
-            llrm_support::debug!("ssaspill", "{}: loop at {:#x} peaks at {busiest}", body.name, found.header);
-            (found.header, busiest)
+            let inside: BTreeSet<u32> = found.body.iter().filter_map(|at| flow.defines.get(at)).flat_map(|made| made.keys().copied()).collect();
+            let mut peak = 0;
+            // At each instruction: what the loop's own values and its operands hold in registers, and what the instruction acts on.
+            let mut points: Vec<(BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
+            let mut at_address: BTreeSet<u32> = BTreeSet::new();
+            for block in body.blocks.iter().filter(|block| found.body.contains(&block.at)) {
+                let mut live: BTreeSet<u32> = flow.live_out[&block.at].iter().copied().filter(|value| wanted(value)).collect();
+                peak = peak.max(live.len());
+                for one in block.insns.iter().rev() {
+                    peak = peak.max(live.len());
+                    // After the instruction its result is there and the operands it read are not.
+                    let results: BTreeSet<u32> = one.defines.iter().copied().filter(|value| wanted(value)).collect();
+                    points.push((live.iter().copied().filter(|value| inside.contains(value)).collect(), results, BTreeSet::new()));
+                    for value in &one.defines {
+                        live.remove(value);
+                    }
+                    live.extend(one.uses.iter().copied().filter(|value| wanted(value)));
+                    peak = peak.max(live.len());
+                    // Before it, what it reads: an operand read from memory takes no register.
+                    let acting: BTreeSet<u32> = one.uses.iter().filter(|value| !folds(one, **value)).copied().filter(|value| wanted(value)).collect();
+                    let mut held: BTreeSet<u32> = live.iter().copied().filter(|value| inside.contains(value)).collect();
+                    held.extend(acting.iter().copied());
+                    let address: BTreeSet<u32> = addressed(one).into_iter().filter(|value| wanted(value)).collect();
+                    at_address.extend(address.iter().copied());
+                    points.push((held, acting, address));
+                }
+            }
+            llrm_support::debug!("ssaspill", "{}: loop at {:#x} peaks at {peak}", body.name, found.header);
+            (found.header, Room { peak, points, at_address, body: found.body.clone() })
         })
         .collect()
+}
+
+/// How many values a loop has live at once, and what its instructions need in registers.
+struct Room {
+    peak: usize,
+    /// For each instruction, the registers' worth the loop's own values and operands take there, and what it acts on.
+    points: Vec<(BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)>,
+    /// The values the loop reads as a base or index.
+    at_address: BTreeSet<u32>,
+    body: BTreeSet<i64>,
 }
 
 fn reverse_postorder(body: &LirBody) -> Vec<i64> {
