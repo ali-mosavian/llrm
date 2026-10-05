@@ -1,3 +1,5 @@
 # QuickBASIC reads only CRLF lines.
 docs/examples/basic/*.bas text eol=crlf
 docs/examples/basic/*.BI text eol=crlf
+# GitHub has no Nib grammar; Python's fits its comments and blocks.
+*.nib linguist-language=Python linguist-detectable=false

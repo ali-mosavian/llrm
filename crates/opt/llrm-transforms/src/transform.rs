@@ -66,8 +66,13 @@ use crate::lcssa::{arms, from_arms};
 
 /// Values something that stays reads, to a fixed point.
 pub fn live(context: &Context, callees: &Callees, function: &Function) -> BTreeSet<ValueId> {
+    live_except(context, callees, function, |_| false)
+}
+
+/// `live`, as if the instructions `skipped` picks did not stay.
+pub fn live_except(context: &Context, callees: &Callees, function: &Function, skipped: impl Fn(InstId) -> bool) -> BTreeSet<ValueId> {
     let mut alive = BTreeSet::new();
-    let mut pending = function.walk().map(|(_, inst)| inst).filter(|&inst| crate::dead::_kept(context, callees, function, inst)).collect::<Vec<_>>();
+    let mut pending = function.walk().map(|(_, inst)| inst).filter(|&inst| !skipped(inst) && crate::dead::_kept(context, callees, function, inst)).collect::<Vec<_>>();
     while let Some(inst) = pending.pop() {
         for &operand in &function.instruction(inst).operands {
             if let Operand::Value(value) = operand
@@ -320,26 +325,15 @@ pub fn _reaches(
 /// Whether the load `one` still reads what the load before it read, with
 /// `between` run in between: nothing there may write its bytes.
 ///
-/// `accesses` says what each writes, a volatile access anything; a call
-/// writes its footprint. `regions::overlapping` decides against each
-/// write, on `program`, and an answer it cannot give overlaps.
+/// `accesses` says what each writes; a call writes its footprint.
+/// `regions::overlapping` decides against each write, on `program`, and an
+/// answer it cannot give overlaps.
 pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, program: Option<&ProgramProxy>) -> bool {
-    _clear(one, between, accesses, program, |other| accesses.writes(other))
-}
-
-/// `_undisturbed`, a volatile access writing only its own bytes
-/// (`Accesses::stored`): the old hoist let a precise volatile store pass
-/// disjoint work.
-pub fn _unwritten(function: &Function, one: InstId, between: &[InstId], accesses: &Accesses, program: Option<&ProgramProxy>) -> bool {
-    _clear(one, between, accesses, program, |other| accesses.stored(function, other))
-}
-
-fn _clear<'a>(one: InstId, between: &[InstId], accesses: &'a Accesses, program: Option<&ProgramProxy>, writes: impl Fn(InstId) -> Option<&'a [MemRef]>) -> bool {
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };
     let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, program).unwrap_or(true);
-    between.iter().all(|&other| writes(other).is_some_and(|written| !written.iter().any(overlaps)))
+    between.iter().all(|&other| !llrm_analysis::memoryssa::changes(read, false, accesses.writes(other), overlaps))
 }
 
 /// Store-to-load forwarding: each load a known value serves becomes that
@@ -561,16 +555,18 @@ b0:
     /// declines to hold it across one.
     #[test]
     fn test_a_value_crosses_a_store_only_when_allowed() {
-        let text = CROSSING.replace("STORE", "store i16 %y, ptr %o");
-        assert!(forwarded_of(&text, false).contains("  ret i16 %x
-"));
-        assert_eq!(forwarded_of(&text, true), printed(&parsed(&text)));
+        for store in ["store i16 %y, ptr %o", "store volatile i16 %y, ptr %o"] {
+            let text = CROSSING.replace("STORE", store);
+            assert!(forwarded_of(&text, false).contains("  ret i16 %x
+"), "{store}");
+            assert_eq!(forwarded_of(&text, true), printed(&parsed(&text)), "{store}");
+        }
     }
 
     /// What may write the cell between stops the value.
     #[test]
     fn test_a_value_is_not_forwarded_past_what_may_write_its_cell() {
-        for between in ["%v = getelementptr i8, ptr @g, i16 %y\n  store i16 %y, ptr %v", "store i8 1, ptr @g", "call void @h()", "store volatile i16 %y, ptr %o"] {
+        for between in ["%v = getelementptr i8, ptr @g, i16 %y\n  store i16 %y, ptr %v", "store i8 1, ptr @g", "call void @h()", "store volatile i8 1, ptr @g"] {
             let text = format!("{}\ndefine void @h() {{\nb0:\n  store i16 3, ptr @g\n  ret void\n}}\n", CROSSING.replace("STORE", between));
             assert_eq!(forwarded_of(&text, false), printed(&parsed(&text)), "{between}");
         }
@@ -873,6 +869,14 @@ b0:
         reused(loads("", "", "  store i16 %y, ptr %q\n"));
     }
 
+    /// A volatile access touches only its own bytes: one of another alloca
+    /// leaves the first load's value. Both were a barrier (#257).
+    #[test]
+    fn test_a_load_is_reused_across_a_volatile_access_of_another_alloca() {
+        reused(loads("", "", "  store volatile i16 %y, ptr %q\n"));
+        reused(loads("", "", "  %v = load volatile i16, ptr %q\n"));
+    }
+
     /// Two noalias pointers' objects are apart; alias proves nothing of one
     /// noalias pointer against a plain one.
     #[test]
@@ -891,7 +895,7 @@ b0:
     #[test]
     fn test_a_load_is_refused_across_what_may_write_it() {
         let pointers = |between: &str| loads("declare void @g(ptr)\n", ", ptr %p, ptr %q", between);
-        for between in ["  store i16 %y, ptr %q\n", "  call void @g(ptr %q)\n", "  call void @g(ptr %p)\n", "  %v = load volatile i16, ptr %q\n"] {
+        for between in ["  store i16 %y, ptr %q\n", "  call void @g(ptr %q)\n", "  call void @g(ptr %p)\n", "  store volatile i16 %y, ptr %q\n"] {
             kept(&pointers(between));
         }
         kept(&pointers("").replace("%b = load i16", "%b = load volatile i16"));

@@ -1,0 +1,7 @@
+description = "Naive doubly recursive fib(20)"
+repetitions = 1
+
+[region]
+bas = "BenchFib"
+c = "bench_fib"
+nib = "bench_fib"

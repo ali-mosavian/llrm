@@ -12,7 +12,7 @@ use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 use iced_x86::Register;
 
 use super::{condition_code, insn, refuse, semantics, swapped, Selector, Test, Unselected};
-use crate::backend::lower::{call_clobbered_high, call_clobbers};
+use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::{Insn, LirBlock};
 
@@ -252,7 +252,7 @@ impl Selector<'_, '_, '_> {
                 (Loc::Held(low), Loc::Held(high))
             }
         };
-        let mut flags = |selector: &mut Self, name: &str, sources: [Loc; 2], out: &mut Vec<Arc<Insn>>| {
+        let flags = |selector: &mut Self, name: &str, sources: [Loc; 2], out: &mut Vec<Arc<Insn>>| {
             let into = selector.fresh_held(4);
             selector.put(semantics(Operation::Binary, name, vec![Loc::Held(into)], sources.to_vec()), at, out);
             into
@@ -330,7 +330,7 @@ impl Selector<'_, '_, '_> {
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
-            op: Some(self.listed(at, llrm_mir::memory::Effects::NONE)),
+            call: Some(self.listed(llrm_mir::memory::Effects::NONE)),
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());

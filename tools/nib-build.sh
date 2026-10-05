@@ -5,7 +5,7 @@
 # from. Those C files may include SOURCE's generated declarations as
 # "NAME.h". Running it is a separate, visible DOSBox step.
 #
-#   tools/nib-build.sh SOURCE.nib [OUTPUT.EXE] [-O2|-Os] [FOREIGN.c|.asm ...]
+#   [NIB_FLAGS='-fno-inline-functions'] [NIB_MAP=LISTING.map] [NIB_OBJ=PROGRAM.obj, the program's own object kept] tools/nib-build.sh SOURCE.nib [OUTPUT.EXE] [-O2|-Os] [FOREIGN.c|.asm ...]
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -13,13 +13,13 @@ source=$1
 output=${2:-${source%.*}.exe}
 level=${3:--O2}
 shift $(($# < 3 ? $# : 3))
+bin=${LLRM_BIN:-$root/target/release}
 toolchain=${TOOLCHAIN:-$HOME/work/other/d32x/toolchains/native/bin}
-bin=$root/target/release
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/nib-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-"$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments >/dev/null
+"$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
 "$bin/nibfront" --declare h "$source" >"$work/$(basename "$source" .nib).h"
 objects=""
 used="--used-by $work/program.obj"
@@ -40,11 +40,12 @@ done
 # runtime keeps only the routines the other objects name.
 "$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $used >/dev/null
 objects="file $work/runtime.obj$objects"
-"$toolchain/jwlink" option quiet option eliminate format dos name "$work/program.exe" \
+"$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} format dos name "$work/program.exe" \
     file "$work/start.obj" file "$work/program.obj" $objects \
     file "$work/dos.obj" >"$work/link.out" || {
     cat "$work/link.out" >&2
     exit 1
 }
 cp "$work/program.exe" "$output"
+[ -z "${NIB_OBJ:-}" ] || cp "$work/program.obj" "$NIB_OBJ"
 echo "$output ($(wc -c <"$output" | tr -d ' ') bytes)"

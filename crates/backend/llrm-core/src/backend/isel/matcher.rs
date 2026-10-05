@@ -9,7 +9,7 @@ use std::sync::Arc;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::{CastOp, ConstantKind, Opcode, Type, TypeId};
 
-use super::{float_conditions, insn, insn_of, refuse, semantics, Convention, Selector, Test, Unselected, FLOAT};
+use super::{float_conditions, insn, insn_of, refuse, semantics, Convention, Pointer, Selector, Test, Unselected, FLOAT};
 use crate::backend::arithmetic;
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
@@ -124,8 +124,8 @@ impl Selector<'_, '_, '_> {
             Type::Int(16) => "i16",
             Type::Int(32) => "i32",
             Type::Int(64) => "i64",
-            Type::Pointer(1) => "far",
-            Type::Pointer(0 | 2) => "ptr",
+            Type::Pointer(space) if self.layout.is_pair(*space) => "far",
+            Type::Pointer(_) => "ptr",
             Type::Float(_) => "float",
             _ => "other",
         }
@@ -360,14 +360,32 @@ impl Selector<'_, '_, '_> {
 
     // Costs.
 
+    /// Bytes of `chain`'s shifts, adds and subtracts. The copy that seeds it is not counted:
+    /// the allocator drops it where the source dies, as `add si, si` shows.
+    fn chain_bytes(chain: &[(&str, i64)], width: i64) -> i64 {
+        use llrm_x86_code16::target::{register_bytes, shift_bytes};
+        chain.iter().map(|&(name, count)| if name == "shl" { shift_bytes(count, width) } else { register_bytes(width) }).sum()
+    }
+
+    /// Bytes first, clocks to break a tie: both are under 100.
+    fn by_size(bytes: i64, clocks: i64) -> i64 {
+        bytes * 100 + clocks
+    }
+
     fn cost_immediate_multiply(&self, m: &Match, factor: Operand) -> Result<i64, Unselected> {
         let width = self.width(self.function.instruction(m.inst).ty)?;
         let n = self.constant(factor, width).expect("an integer factor");
+        if self.cpu.size {
+            return Ok(Self::by_size(llrm_x86_code16::target::imul_immediate_bytes(n, i64::from(width)), arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)?));
+        }
         arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)
     }
 
     fn cost_scaled(&self, m: &Match, factor: Operand) -> Result<i64, Unselected> {
-        Ok(self.chain(m, factor).expect("a scalable factor").1)
+        let (chain, clocks) = self.chain(m, factor).expect("a scalable factor");
+        // Tuned for size, the two compete in bytes, as they compete in clocks otherwise.
+        let width = self.width(self.function.instruction(m.inst).ty)?;
+        Ok(if self.cpu.size { Self::by_size(Self::chain_bytes(&chain, i64::from(width)), clocks) } else { clocks })
     }
 
     // Hooks: what is selected by hand.
@@ -438,8 +456,17 @@ impl Selector<'_, '_, '_> {
     fn hook_getelementptr(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let instruction = self.function.instruction(m.inst);
         let Opcode::GetElementPtr { source } = instruction.opcode else { unreachable!("a getelementptr") };
-        if self.folded(instruction.result.expect("an address"))?.is_none() {
-            self.indexed(m.inst, source, m.at, out)?;
+        let result = instruction.result.expect("an address");
+        match self.folded(result)? {
+            None => self.indexed(m.inst, source, m.at, out)?,
+            // A far address read in another block, or by a phi, is made once
+            // here: refolded there, it would hold its base past its own step.
+            Some(pointer @ Pointer::Far { selector, .. }) if self.read_elsewhere(result) => {
+                let moved = self.fresh_held(2);
+                out.push(insn(m.at, self.address(pointer, moved)));
+                self.fars.insert(result, (Some(moved), selector));
+            }
+            Some(_) => {}
         }
         Ok(())
     }

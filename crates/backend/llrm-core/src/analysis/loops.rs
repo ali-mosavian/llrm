@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::support::bits::Bits;
 use crate::support::hash::IndexMap;
 
-use crate::model::mir::MirBlock;
+use crate::model::lir::LirBlock;
 
 /// All these walks read of a block: where it is and where it goes.
 pub trait Node {
@@ -20,7 +20,7 @@ pub trait Node {
     fn succ(&self) -> &[i64];
 }
 
-impl Node for MirBlock {
+impl Node for LirBlock {
     fn at(&self) -> i64 {
         self.at
     }
@@ -38,32 +38,6 @@ impl<T: Node> Node for &T {
     fn succ(&self) -> &[i64] {
         (*self).succ()
     }
-}
-
-/// Who can reach each block, inverted from its own successors.
-/// Blocks in reverse postorder from `entry`, then those it cannot reach in body order:
-/// the order a forward dataflow worklist drains in, predecessors before successors
-/// but for back edges.
-pub fn reverse_postorder<N: Node>(blocks: &[N], entry: i64) -> Vec<i64> {
-    let known = blocks.iter().map(|block| (block.at(), block)).collect::<BTreeMap<_, _>>();
-    let mut seen = BTreeSet::from([entry]);
-    let mut post = Vec::with_capacity(blocks.len());
-    let mut stack = known.get(&entry).map(|block| vec![(*block, 0usize)]).unwrap_or_default();
-    while let Some((block, next)) = stack.last_mut() {
-        let block = *block;
-        if let Some(successor) = block.succ().get(*next) {
-            *next += 1;
-            if let Some(child) = known.get(successor).filter(|_| seen.insert(*successor)) {
-                stack.push((*child, 0));
-            }
-        } else {
-            post.push(block.at());
-            stack.pop();
-        }
-    }
-    post.reverse();
-    post.extend(blocks.iter().map(Node::at).filter(|at| !seen.contains(at)));
-    post
 }
 
 pub fn predecessors<N: Node>(blocks: &[N]) -> BTreeMap<i64, BTreeSet<i64>> {

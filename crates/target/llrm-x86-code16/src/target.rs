@@ -11,6 +11,19 @@ use crate::timings;
 /// The registers a value may be placed in.
 pub const GENERAL: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
 
+/// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
+/// BP and an index SI or DI.
+pub const ENCODABLE_BASES: [Register; 2] = [Register::BX, Register::BP];
+pub const WORD_INDEXES: [Register; 2] = [Register::SI, Register::DI];
+
+/// The frame register: no value is held in it.
+pub const FRAME: Register = Register::BP;
+
+/// The bases a value may be held in: the encodable ones but the frame's.
+pub fn word_bases() -> Vec<Register> {
+    ENCODABLE_BASES.into_iter().filter(|&one| one != FRAME).collect()
+}
+
 /// Those a C callee keeps, as their word halves.
 pub const PRESERVED: [(Register, Register); 2] = [(Register::ESI, Register::SI), (Register::EDI, Register::DI)];
 
@@ -65,7 +78,9 @@ impl Machine for Dos {
     }
 
     fn size_costs(&self) -> OperationCosts {
-        operations(bytes, 1)
+        // A word of argument is its push and its share of the cleanup: 2.1 bytes measured over
+        // QCport's calls (5.2 for none, 7.4 for one word, 9.0 for two, 11.1 for three).
+        OperationCosts { argument: 2, ..operations(|kind| bytes_in_code(kind), 1) }
     }
 
     fn registers(&self) -> i64 {
@@ -84,6 +99,14 @@ impl Machine for Dos {
         SEGMENT_REGISTERS
     }
 
+    fn two_address(&self) -> bool {
+        true
+    }
+
+    fn address_registers(&self) -> i64 {
+        (word_bases().len() + WORD_INDEXES.len()) as i64
+    }
+
     fn address_forms(&self) -> Vec<AddressForm> {
         self.address_forms.clone()
     }
@@ -91,6 +114,13 @@ impl Machine for Dos {
     /// The description's: `dos.toml` states when an access faults.
     fn load_may_trap(&self, width: u64, align: u64) -> bool {
         crate::machine::BUILT_IN.access_may_trap(width, align)
+    }
+
+    /// A far pointer (`p1`) whose offset is below one selector step: 64K
+    /// from it, less that step's last byte, never carries.
+    fn huge_window(&self) -> Option<(u32, i64)> {
+        let step = 1_i64 << (16 - crate::machine::BUILT_IN.huge_shift()?);
+        Some((1, (1 << 16) - (step - 1)))
     }
 
     /// The description's: `dos.toml` states each device's reach.
@@ -120,16 +150,54 @@ pub fn costs(arch: &str) -> OperationCosts {
 }
 
 /// Bytes of the instruction lowering picks for each kind of operation, as
-/// real mode encodes it: a register form is 2, one with a displacement 3. A
-/// far call is 5, and its pushes and cleanup 3 more.
+/// real mode encodes it: a register form is 2, one with a displacement 3, a far call 5.
 fn bytes(kind: &str) -> i64 {
     match kind {
-        "alu_rr" | "mov_rr" | "jcc" | "rep_stos" => 2,
-        "ret_far" | "push_r" | "pop_seg" => 1,
-        "call_far" => 8,
-        "rep_stos_cell" => 0,
+        "alu_rr" | "mov_rr" => register_bytes(2),
+        "shift_ri" => shift_bytes(2, 2),
+        "jcc" | "rep_stos" | "rep_movs" => 2,
+        "ret_far" | "push_r" | "pop_r" | "pop_seg" => 1,
+        // `ret imm16`: the opcode and the word.
+        "ret_pop" => 3,
+        "call_far" => 5,
+        "rep_stos_cell" | "rep_movs_cell" => 0,
         _ => 3,
     }
+}
+
+/// What an operation of MIR comes to in code bytes: the instruction's, `bytes`, times the
+/// instructions an operation becomes (twice: the extensions, copies, address calculations and
+/// spill code around it; `-fno-inline-functions` QCport -Os measured against the functions it
+/// built, 2 puts the estimate within a few percent). A call, a return, a branch and a stack
+/// operation are the instruction itself.
+fn bytes_in_code(kind: &str) -> i64 {
+    match kind {
+        "jcc" | "call_far" | "ret_far" | "ret_pop" | "push_r" | "pop_r" | "pop_seg" | "alu_ri" | "rep_stos" | "rep_stos_cell" | "rep_movs" | "rep_movs_cell" => bytes(kind),
+        _ => bytes(kind) * 2,
+    }
+}
+
+/// Real mode runs a dword operation under the 66h operand-size prefix.
+fn prefix_bytes(width: i64) -> i64 {
+    i64::from(width == 4)
+}
+
+/// Bytes of `op r, r` on `width`-byte registers: `mov`, `add`, `sub` and the rest of the
+/// two-register forms are the opcode and ModRM.
+pub fn register_bytes(width: i64) -> i64 {
+    prefix_bytes(width) + 2
+}
+
+/// Bytes of a shift of a `width`-byte register by `count`: `D1` for one, `C1` with a byte
+/// count otherwise.
+pub fn shift_bytes(count: i64, width: i64) -> i64 {
+    prefix_bytes(width) + if count == 1 { 2 } else { 3 }
+}
+
+/// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate where `number`
+/// fits one, else the operand's width.
+pub fn imul_immediate_bytes(number: i64, width: i64) -> i64 {
+    prefix_bytes(width) + 2 + if (-128..=127).contains(&number) { 1 } else { width }
 }
 
 /// The price of each operation, as the instructions lowering picks for it
@@ -141,6 +209,8 @@ fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
         divide: cost("div_r16"),
         shift: cost("shift_ri"),
         address: cost("lea"),
+        carry: llrm_mir::target::carry_cost(cost("movzx"), cost("alu_rr"), cost("shift_ri"), cost("mov_rr")),
+        carry_step: llrm_mir::target::step_cost(cost("alu_rr")),
         load: cost("mov_rm"),
         store: cost("mov_mr"),
         memory_update: cost("alu_mr"),
@@ -149,6 +219,10 @@ fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
         r#move: cost("mov_rr"),
         call: cost("call_far"),
         return_: cost("ret_far"),
+        argument: cost("mov_mr") + cost("mov_rm"),
+        pop: cost("pop_r"),
+        adjust: cost("alu_ri"),
+        return_pops: cost("ret_pop") - cost("ret_far"),
         float_add: cost("x87_add"),
         float_multiply: cost("x87_mul"),
         float_divide: cost("x87_div"),
@@ -159,6 +233,10 @@ fn operations(cost: impl Fn(&str) -> i64, prefix: i64) -> OperationCosts {
         // value and count before `rep stos`; then restoring ES.
         fill: cost("rep_stos") + 2 * cost("push_r") + 2 * cost("pop_seg") + 2 * cost("mov_ri"),
         fill_cell: cost("rep_stos_cell"),
+        // The same, with both addresses and the count set: si, di and cx.
+        copy: cost("rep_movs") + 2 * cost("push_r") + 2 * cost("pop_seg") + 3 * cost("mov_ri"),
+        copy_cell: cost("rep_movs_cell"),
+        direction: 2 * cost("alu_rr"),
     }
 }
 
@@ -182,5 +260,40 @@ mod tests {
     fn dos_states_its_address_forms() {
         let forms: Vec<_> = Dos::default().address_forms().iter().map(|one| (one.index_width, one.scales.iter().copied().collect::<Vec<_>>(), one.use_cost, one.address_registers())).collect();
         assert_eq!(forms, [(2, vec![1], 0, Some(3)), (4, vec![1, 2, 4, 8], 1, None)]);
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::{bytes, imul_immediate_bytes, register_bytes, shift_bytes};
+    use llrm_mir::target::Machine as _;
+
+    /// The coarse table and the exact helpers agree on a word, so `size_costs` read what isel's -Os pricing reads.
+    #[test]
+    fn the_size_table_and_the_encodings_agree_on_a_word() {
+        assert_eq!((bytes("alu_rr"), bytes("mov_rr"), bytes("shift_ri")), (register_bytes(2), register_bytes(2), shift_bytes(2, 2)));
+    }
+
+    /// The byte prices MIR decides inlining and the calling convention by: a call is its 5 bytes
+    /// and each argument word 2 more (push and cleanup), a cleanup by pop is 1 a word against
+    /// `add sp` 3, and `ret N` 2 over `ret`; any other operation is its instruction's bytes
+    /// twice, the instructions an operation becomes. In clocks an argument is its store and load.
+    #[test]
+    fn the_size_costs_are_the_bytes_of_the_code_an_operation_becomes() {
+        use llrm_mir::target::Machine;
+        let dos = super::Dos::default();
+        let sized = dos.size_costs();
+        assert_eq!((sized.call, sized.argument, sized.pop, sized.adjust, sized.return_pops), (5, 2, 1, 3, 2));
+        assert_eq!((sized.load, sized.store, sized.add, sized.branch), (2 * bytes("mov_rm"), 2 * bytes("mov_mr"), 2 * bytes("alu_rr"), bytes("jcc")));
+        let clocks = dos.costs();
+        assert_eq!(clocks.argument, clocks.load + clocks.store);
+    }
+
+    /// A dword takes 66h, a shift by one is D1, and `imul` takes a byte immediate only where it fits.
+    #[test]
+    fn a_dword_form_has_the_operand_size_prefix() {
+        assert_eq!((register_bytes(2), register_bytes(4)), (2, 3));
+        assert_eq!((shift_bytes(1, 4), shift_bytes(3, 4), shift_bytes(1, 2)), (3, 4, 2));
+        assert_eq!((imul_immediate_bytes(6, 4), imul_immediate_bytes(446, 4), imul_immediate_bytes(446, 2)), (4, 7, 4));
     }
 }

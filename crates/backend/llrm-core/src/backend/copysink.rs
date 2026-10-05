@@ -21,7 +21,6 @@ use crate::backend::liveness::{_backwards, _declared, _terminator, _universe};
 use crate::backend::peephole::{Lanes, _lanes, _register_effects, id};
 use crate::model::ir::{Loc, Operation, Reg};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::mir::MirBlock;
 
 fn _plain(one: &Insn) -> bool {
     one.what.is_some()
@@ -131,8 +130,7 @@ fn _round(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, universe: &L
 /// `body` with each such copy moved from inside its loop to the exit.
 pub fn sunk(body: &LirBody) -> LirBody {
     // `loops.loops` reads only `at` and `succ`.
-    let graph: Vec<MirBlock> =
-        body.blocks.iter().map(|block| MirBlock::new(block.at, Vec::new(), Vec::new(), block.succ.clone())).collect();
+    let graph = &body.blocks;
     let found = loopy::loops(&graph, Some(body.entry));
     if found.is_empty() {
         return body.clone();

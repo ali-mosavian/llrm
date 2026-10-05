@@ -8,24 +8,9 @@ object links to that compiler's runtime and produces the expected DOS output.
 The runtime result is the primary fact; a compiler `/A` listing is not raw code
 because VBDOS leaves back-patched frame operands displayed as zero.
 
-Each run of `tools/qbstages.py` writes:
-
-1. `00-input.bas`, the exact source;
-2. `01-hir.json`, resolved typed HIR;
-3. per-function semantic, optimized, and physical MIR;
-4. per-function Intel/MASM LIR after each existing machine phase;
-5. per-function inline-x87 LIR; and
-6. `99-emitted-asm.asm`, a readable, byte-equivalent MASM/Intel listing with
-   QB's effective source-global names, compact initialized storage, the
-   runtime ABI envelope, aligned operands, section separators, and the exact
-   `retf n` cleanup encoded in OMF. It elides only unreferenced non-entry
-   generated block labels; and
-7. `99-emitted-asm.raw.asm`, the same emitted model in ungrouped `db` form for
-   direct byte-layout audits.
-
-The final assembly pair exists because the ABI envelope is intentionally frontend-owned;
-stopping at ordinary LIR hides `B$ENRA`, `B$EXSA`, module initialization, and
-callee stack cleanup.
+`llrm-qb SOURCE --dump DIR` writes `00-input.bas`, the exact source, and
+`01-hir.json`, the resolved typed HIR. `LLRM_MIR_STAGES=DIR` writes the MIR
+after each pass, and `-S` the emitted assembly, ABI envelope included.
 
 ## FreeBASIC corpus as a source of cases
 

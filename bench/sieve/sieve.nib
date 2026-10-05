@@ -1,0 +1,20 @@
+# Prime count and sum below 1024 in one checkable word; mirrors sieve.c.
+fn bench_sieve(limit: u16) -> i32:
+    let mut composite: u8[1024] = [0] * 1024
+    let mut count: u16 = 0
+    let mut sum: i32 = 0
+    for i in 2..limit:
+        if composite[i] != 0:
+            continue
+        count += 1
+        sum += i32(i)
+        if i <= 31:
+            let mut multiple: u16 = i * i
+            while multiple < limit:
+                composite[multiple] = 1
+                multiple += i
+    return (i32(count) << 16) ^ sum
+
+fn main() -> i16:
+    print(bench_sieve(1024))
+    return 0

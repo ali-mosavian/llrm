@@ -1,6 +1,6 @@
 //! The borrow checker's soundness: each refused program once compiled.
 
-use crate::test_language::output;
+use crate::test_language::{output, output_without_leaks};
 
 /// `line: message` of the error that refuses `source`.
 fn refused_at(source: &str) -> String {
@@ -770,4 +770,581 @@ fn main() -> i16:
         crate::test_language::output_without_leaks(source),
         "1\ndrop 1\n2\ndrop 2\n3\ndrop 3\ndrop 4\ndrop 3\ndrop 4\n7\ndrop 7\ndrop 9\ndrop 8\n7\ndrop 7\n9\ndrop 9\ndrop 8\n5\ndrop 5\ndrop 6\ndrop 5\ndrop 6\n"
     );
+}
+
+#[test]
+fn a_native_enums_tag_is_stated_to_hold_only_its_variants() {
+    // The tag was loaded and compared against each variant in turn, the
+    // last arm's test as live as the first: nothing said the tag has no
+    // other value.
+    let source = "\
+enum Shape:
+    dot
+    line(i16)
+    box(i16, i16)
+
+fn area(s: &Shape) -> i16:
+    match s:
+        .dot:
+            return 0
+        .line(n):
+            return n
+        .box(w, h):
+            return w * h
+
+fn main() -> i16:
+    let s = Shape.box(2, 3)
+    print(area(s))
+    return 0
+";
+    let text = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let hir: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    let ranges: Vec<(i64, i64)> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "range" && one["subject"] == "field").map(|one| (one["value"].as_i64().unwrap(), one["second"].as_i64().unwrap())).collect();
+    // Stated once, of the tag member of the enum; each arm's test loads it as that member.
+    assert_eq!(ranges, [(0, 2)]);
+    assert!(text.matches("\"member\"").count() >= 2, "{text}");
+}
+
+/// The `nocapture` facts the program states, as `function.ordinal` of each
+/// parameter, by the parameter's index in the function's HIR.
+fn uncaptured(source: &str) -> Vec<String> {
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}: {}", error.span.line, error.message))).expect("JSON");
+    let facts = hir["modules"][0]["facts"].as_array().cloned().unwrap_or_default();
+    let name = |id: i64| hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["id"].as_i64() == Some(id)).map(|one| one["name"].as_str().unwrap().to_owned()).unwrap();
+    let mut found: Vec<String> = facts
+        .iter()
+        .filter(|one| one["fact"] == "nocapture" && one["subject"] == "param")
+        .map(|one| format!("{}.{}", name(one["function"].as_i64().unwrap()), one["id"]))
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn a_borrow_the_function_does_not_keep_is_nocapture() {
+    // `&T` and `&mut T` stated no `nocapture`: a function may return a
+    // borrowed parameter or store it where the caller keeps it. The checker
+    // knows where each borrow goes, so the facts follow from it.
+    let source = "\
+fn read(a: &i16) -> i16:
+    return a
+
+fn pick(a: &i16, b: &i16) -> &i16:
+    return a
+
+fn stash(out: &mut vec[&i16], x: &i16) -> void:
+    out.push(x)
+
+fn through(x: &i16) -> void:
+    let mut keep: vec[&i16] = []
+    stash(keep, x)
+
+fn reads_through(x: &i16) -> i16:
+    return read(x)
+
+fn main() -> i16:
+    let a: i16 = 1
+    let b: i16 = 2
+    let mut out: vec[&i16] = []
+    let p = pick(a, b)
+    print(read(a) + reads_through(a))
+    print(p)
+    stash(out, a)
+    through(a)
+    return 0
+";
+    // read.0, pick.1 (b), stash.0 (out is only pushed to), reads_through.0
+    assert_eq!(uncaptured(source), ["pick.1", "read.0", "reads_through.0", "stash.0"]);
+    // A view is a borrow too: returning a slice of it keeps it; summing it does not.
+    let views = "\
+fn tail(xs: &[i16]) -> &[i16]:
+    return &xs[1:]
+
+fn sum(xs: &[i16]) -> i16:
+    let mut s: i16 = 0
+    for x in xs:
+        s += x
+    return s
+
+fn main() -> i16:
+    let a: i16[3] = [1, 2, 3]
+    print(sum(a))
+    print(sum(tail(a)))
+    return 0
+";
+    assert_eq!(uncaptured(views), ["sum.0"]);
+    // A generator's frame outlives its call; a raw pointer goes where nothing follows it.
+    let escapes = "\
+fn walk(v: &[i16]) -> iter[i16]:
+    for x in v:
+        yield x
+
+fn address(x: &i16) -> void:
+    unsafe:
+        let p: *far i16 = &x
+
+fn main() -> i16:
+    let a: i16[2] = [1, 2]
+    let it = walk(a)
+    return 0
+";
+    // Only the frame's own `next(self)`, which keeps nothing of itself.
+    assert_eq!(uncaptured(escapes), ["$state0.next.0"]);
+}
+
+#[test]
+fn an_owned_aggregate_parameter_is_unaliased() {
+    // The caller copies a by-value struct for the call, so the callee's
+    // pointer reaches nothing else; none was stated, and a store through a
+    // borrow could not be told apart from a store to the copy.
+    let source = "\
+struct P:
+    mut x: i16
+    y: i16
+
+fn take(p: P, q: &mut P) -> i16:
+    q.x = 5
+    return p.x
+
+fn main() -> i16:
+    let mut a = P(x=1, y=2)
+    let mut b = P(x=3, y=4)
+    print(take(a, b))
+    return 0
+";
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let take = hir["modules"][0]["callables"].as_array().unwrap().iter().find(|one| one["name"] == "take").unwrap()["id"].as_i64().unwrap();
+    let noalias: Vec<i64> = hir["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "noalias" && one["function"].as_i64() == Some(take)).map(|one| one["id"].as_i64().unwrap()).collect();
+    assert_eq!(noalias, [0, 1]);
+}
+
+/// What a Nib match states of a tag reached the reader: the enum's tag load, bounded
+/// by its variants, from source through the HIR's facts and their lowering to the
+/// interval ranges reads. The `!range` was written and nothing read it.
+#[test]
+fn a_matched_enums_tag_is_bounded_by_its_variants_where_ranges_reads_it() {
+    let source = "\
+enum Shape:
+    dot
+    line(i16)
+    box(i16, i16)
+
+fn area(s: &Shape) -> i16:
+    match s:
+        .dot:
+            return 0
+        .line(n):
+            return n
+        .box(w, h):
+            return w * h
+
+fn main() -> i16:
+    let s = Shape.box(2, 3)
+    print(area(s))
+    return 0
+";
+    let text = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let program = llrm_hir::codec::decode(&text).expect("HIR");
+    let module = llrm_hir::mir::emit(&program).remove(0).module;
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref().is_some_and(|name| name.contains("area"))).expect("area").2;
+    let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
+    let known = llrm_analysis::ranges::scoped(&unit).expect("ranges");
+    let tag_loads: Vec<_> = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }) && function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "range")).collect();
+    assert!(!tag_loads.is_empty(), "the tag loads carry !range");
+    for (block, inst) in tag_loads {
+        let result = function.instruction(inst).result.expect("a tag");
+        let found = known.get(&llrm_analysis::cfg::id(block)).and_then(|at| at.get(&result));
+        let bound = found.map(|one| (one.low.clone(), one.high.clone()));
+        assert_eq!(bound, Some((0.into(), 2.into())), "the tag in block {}", llrm_analysis::cfg::id(block));
+    }
+}
+
+#[test]
+fn a_returned_generator_does_not_borrow_the_returning_functions_local() {
+    // #415: `return evens(local)` was accepted when `make()` was consumed in
+    // place, though refused once it escaped: the returned generator's state
+    // would hold a borrow of `make`'s local.
+    let source = "\
+fn evens(v: &vec[i16]) -> iter[i16]:
+    for x in v:
+        if x % 2 == 0:
+            yield x
+
+fn make() -> iter[i16]:
+    let local: vec[i16] = [1, 2, 3, 4]
+    return evens(local)
+
+fn main() -> i16:
+    for x in make():
+        print(x)
+    return 0
+";
+    let message = "8: a returned borrow of \"local\" would dangle; only a borrowed parameter's can be returned";
+    assert_eq!(refused_at(source), message);
+    assert_eq!(refused_at(&source.replace("for x in make():", "let it = make()\n    for x in it:")), message);
+    // What the caller lent outlives the returned generator.
+    let lent = source.replace("fn make() -> iter[i16]:\n    let local: vec[i16] = [1, 2, 3, 4]\n    return evens(local)", "fn make(local: &vec[i16]) -> iter[i16]:\n    return evens(local)")
+        .replace("for x in make():", "let local: vec[i16] = [1, 2, 3, 4]\n    for x in make(local):");
+    assert_eq!(output(&lent), "2\n4\n");
+    // A generator expression over the local is the same state.
+    let expression = source.replace("return evens(local)", "return (x for x in local if x % 2 == 0)");
+    assert_eq!(refused_at(&expression), message);
+}
+
+#[test]
+fn a_loop_variable_over_a_borrowed_parameter_returns_as_a_borrow() {
+    // #422: `p` of `for p in v` rooted in the loop binding, so returning it
+    // was refused as dangling though the element lives in the caller's `v`.
+    let source = "\
+struct P:
+    n: i16
+
+fn hit(v: &[P], n: i16) -> &P:
+    for p in v:
+        if p.n == n:
+            return p
+    return v[0]
+
+fn main() -> i16:
+    let v: vec[P] = [P(n=1), P(n=2)]
+    print(hit(v, 2).n)
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "2\n");
+    let optional = source
+        .replace("-> &P:", "-> Option[&P]:")
+        .replace("return p", "return .some(p)")
+        .replace("return v[0]", "return .none")
+        .replace("print(hit(v, 2).n)", "match hit(v, 2):\n        .some(p):\n            print(p.n)\n        .none:\n            print(0)");
+    assert_eq!(output_without_leaks(&optional), "2\n");
+    assert_eq!(output_without_leaks(&source.replace("v: &[P]", "v: &vec[P]").replace("for p in v", "for p in &v")), "2\n");
+    // The element of a local's loop is the local's: it dangles.
+    let local = "\
+struct P:
+    n: i16
+
+fn first() -> &P:
+    let v: vec[P] = [P(n=1)]
+    for p in v:
+        return p
+    return v[0]
+
+fn main() -> i16:
+    print(first().n)
+    return 0
+";
+    assert_eq!(refused_at(local), "7: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned");
+}
+
+#[test]
+fn a_conditional_of_borrowed_strings_is_a_borrow() {
+    // #419: `?:` with `&string` arms was "the arms of '?:' need a known type".
+    let source = "\
+fn longer(a: &string, b: &string) -> &string:
+    return a.len >= b.len ? a : b
+
+fn main() -> i16:
+    let x = \"ab\"
+    let y = \"abc\"
+    print(longer(x, y))
+    print(longer(y, x))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "abc\nabc\n");
+    let local = source.replace("fn longer(a: &string, b: &string) -> &string:\n    return a.len >= b.len ? a : b", "fn longer(a: &string, b: &string) -> &string:\n    let c = \"zz\"\n    return a.len >= b.len ? a : c");
+    assert_eq!(refused_at(&local), "3: a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned");
+}
+
+#[test]
+fn a_let_mut_borrow_is_reseated_by_assigning_a_borrow() {
+    // #417: `last = &v[1]` of a `&i16` was "binding is immutable"; `&string`
+    // reseated. A reference now lives in a cell the assignment rewrites.
+    let source = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [5, 6]
+    let mut last = &v[0]
+    print(last)
+    last = &v[1]
+    print(last)
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "5\n6\n");
+    // Reseated in a branch and in a loop, read after each.
+    let flow = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [5, 6, 7]
+    let mut cur = &v[0]
+    let mut i: i16 = 0
+    while cur < 7:
+        print(cur)
+        i += 1
+        cur = &v[i]
+    if i == 2:
+        cur = &v[0]
+    print(cur)
+    return 0
+";
+    assert_eq!(output_without_leaks(flow), "5\n6\n5\n");
+    // Still a borrow of `v` until reseated (E0502).
+    let held = source.replace("    last = &v[1]\n    print(last)\n", "    v.push(9)\n    print(last)\n");
+    assert_eq!(refused_at(&held), "5: \"v\" is borrowed here, so it cannot be changed");
+    // A reseated borrow is of the new owner, which a return may not leak (E0515).
+    let leak = "\
+fn bad() -> &i16:
+    let v: vec[i16] = [1]
+    let mut r = &v[0]
+    r = &v[0]
+    return r
+
+fn main() -> i16:
+    print(bad())
+    return 0
+";
+    assert_eq!(refused_at(leak), "5: a returned borrow of \"v\" would dangle; only a borrowed parameter's can be returned");
+}
+
+#[test]
+fn reseating_a_borrow_ends_its_old_borrow() {
+    // #418: a borrow lived to the binding's last use, not the value's, so a
+    // reseated binding kept its owner borrowed. Rust's NLL accepts these.
+    for (element, first, second, shown) in [("string", "\"a\"", "\"b\"", "a\nb\n"), ("i16", "1", "2", "1\n2\n")] {
+        let source = format!(
+            "\
+fn main() -> i16:
+    let mut v: vec[{element}] = [{first}]
+    let mut last = &v[0]
+    print(last)
+    v.push({second})
+    last = &v[1]
+    print(last)
+    return 0
+"
+        );
+        assert_eq!(output_without_leaks(&source), shown, "{element}");
+        // Without the reseat the second `print` reads a buffer `push` may move (E0502).
+        let held = source.replace("    last = &v[1]\n", "");
+        assert_eq!(refused_at(&held), "5: \"v\" is borrowed here, so it cannot be changed", "{element}");
+    }
+    // In a loop: print, push, reseat.
+    let looped = "\
+fn main() -> i16:
+    let mut words: vec[string] = [\"a\"]
+    let mut last = &words[0]
+    for i in 0..3:
+        print(last)
+        words.push(\"b\")
+        last = &words[i + 1]
+    print(last)
+    return 0
+";
+    assert_eq!(output_without_leaks(looped), "a\nb\nb\nb\n");
+    // A loop that pushes without reseating reads the stale borrow (E0502).
+    assert_eq!(refused_at(&looped.replace("        last = &words[i + 1]\n", "")), "6: \"words\" is borrowed here, so it cannot be changed");
+    // A branch that may leave the old borrow in place keeps it.
+    let branch = "\
+fn main() -> i16:
+    let mut v: vec[i16] = [1, 2]
+    let mut last = &v[0]
+    let c = v.len > 1
+    if c:
+        last = &v[1]
+    v.push(3)
+    print(last)
+    return 0
+";
+    assert_eq!(refused_at(branch), "7: \"v\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_string_behind_a_borrowed_struct_field_is_read_and_borrowed() {
+    // #423: `h.src.text.len` was "scalar or array field cannot be used as a
+    // struct", `&h.src.text` "only a place can be borrowed".
+    let source = "\
+struct Source:
+    text: string
+    count: u16
+
+struct Holder:
+    src: &Source
+
+fn first(h: &Holder) -> char:
+    return h.src.text[0]
+
+fn view(h: &Holder) -> &string:
+    return &h.src.text
+
+fn size(h: &Holder) -> u16:
+    let t = &h.src.text
+    return t.len + h.src.text.len + h.src.count
+
+fn main() -> i16:
+    let s = Source(text=\"move north\", count=3)
+    let h = Holder(src=s)
+    print(first(h))
+    print(view(h))
+    print(size(h))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "m\nmove north\n23\n");
+}
+
+#[test]
+fn a_borrow_copied_out_of_a_field_is_not_tied_to_the_struct_holding_it() {
+    // #424: `let src = self.src` rooted `src` in `self`, so `self.at += 1`
+    // was refused while it lived. The copy points at the caller's value.
+    let source = "\
+struct Source:
+    count: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn Scanner.size(self: &mut Scanner) -> u16:
+    let src = self.src
+    self.at += 1
+    return src.count + self.at
+
+fn bump(s: Scanner) -> u16:
+    let src = s.src
+    return src.count
+
+fn main() -> i16:
+    let src = Source(count=7)
+    let mut s = Scanner(src=src, at=0)
+    print(s.size())
+    print(bump(s))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "8\n7\n");
+    // The copy is still the caller's `src`: changing it while the copy lives is refused (E0506).
+    let caller = "\
+struct Source:
+    mut count: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn main() -> i16:
+    let mut src = Source(count=7)
+    let s = Scanner(src=src, at=0)
+    let r = s.src
+    src.count = 9
+    print(r.count)
+    return 0
+";
+    assert_eq!(refused_at(caller), "12: \"src\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_view_parameter_is_kept_in_a_view_field() {
+    // #425: a `&string` parameter, a slice or a returned view stored in a
+    // `&string` field was "borrow of \"src\" has the wrong type"; `&[T]` was
+    // "expected a type name". A view field is the 8-byte descriptor.
+    let source = "\
+struct Scanner:
+    src: &string
+    nums: &[i16]
+    mut at: u16
+
+fn scan(src: &string, nums: &[i16]) -> Scanner:
+    return Scanner(src=src, nums=nums, at=0)
+
+fn main() -> i16:
+    let line = \"move north\"
+    let v: vec[i16] = [4, 5, 6]
+    let s = scan(line, v)
+    print(s.src)
+    print(s.src.len)
+    print(s.nums[1])
+    print(s.nums.len)
+    let t = Scanner(src=&line[5:10], nums=&v[1:3], at=1)
+    print(t.src)
+    print(t.nums[0])
+    print(size_of[Scanner]())
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "move north\n10\n5\n3\nnorth\n5\n18\n");
+    // The field borrows what the view does: a local's is gone when the struct is returned (E0515)...
+    let local = "\
+struct Scanner:
+    src: &string
+    mut at: u16
+
+fn make() -> Scanner:
+    let line = \"move north\"
+    return Scanner(src=line, at=0)
+
+fn main() -> i16:
+    let s = make()
+    print(s.src)
+    return 0
+";
+    assert_eq!(refused_at(local), "7: a returned borrow of \"line\" would dangle; only a borrowed parameter's can be returned");
+    // ...and an owner changed while a slice of it is held is refused (E0506).
+    let changed = "\
+struct Scanner:
+    src: &string
+    mut at: u16
+
+fn main() -> i16:
+    let mut line = \"move north\"
+    let s = Scanner(src=&line[0:4], at=0)
+    line = \"other\"
+    print(s.src)
+    return 0
+";
+    assert_eq!(refused_at(changed), "8: \"line\" is borrowed here, so it cannot be changed");
+}
+
+#[test]
+fn a_method_is_called_on_a_borrowed_struct_field() {
+    // #426: `self.src.run(...)` was "a *far pointer is not a sequence".
+    let source = "\
+struct Source:
+    n: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn Source.run(self: &Source, at: u16) -> u16:
+    return at + self.n
+
+fn Scanner.word(self: &mut Scanner) -> u16:
+    let word = self.src.run(self.at)
+    self.at += 1
+    return word
+
+fn main() -> i16:
+    let src = Source(n=3)
+    let mut s = Scanner(src=src, at=0)
+    print(s.word())
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "3\n");
+    // A `&` field is read-only: a `&mut self` method is refused.
+    let writes = "\
+struct Source:
+    mut n: u16
+
+struct Scanner:
+    src: &Source
+    mut at: u16
+
+fn Source.bump(self: &mut Source) -> void:
+    self.n += 1
+
+fn Scanner.word(self: &mut Scanner) -> void:
+    self.src.bump()
+
+fn main() -> i16:
+    let src = Source(n=3)
+    let mut s = Scanner(src=src, at=0)
+    s.word()
+    return 0
+";
+    assert_eq!(refused_at(writes), "12: field \"src\" of Scanner is not declared 'mut'");
 }

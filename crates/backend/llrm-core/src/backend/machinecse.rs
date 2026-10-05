@@ -26,23 +26,6 @@ const _REPRODUCIBLE: [(Operation, &str); 4] = [
     (Operation::Address, "lea"),
 ];
 
-/// Remove an exact physical recomputation whose inputs still agree.
-pub struct MachineCSE;
-
-impl LIRTransform for MachineCSE {
-    fn class_name(&self) -> &'static str {
-        "MachineCSE"
-    }
-
-    fn name(&self) -> &str {
-        "machine-cse"
-    }
-
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        eliminated(&body)
-    }
-}
-
 fn _relocated(where_: &Loc) -> bool {
     match where_ {
         Loc::Imm(one) => one.address.is_some(),
@@ -151,7 +134,7 @@ fn _candidate(one: &Insn) -> Result<Option<(Expression, Vec<Lane>, Vec<Lane>)>, 
 /// Explicit and declared physical writes, or None for an opaque boundary.
 fn _written(one: &Insn) -> Option<Lanes> {
     let what = one.what.as_ref()?;
-    if [Operation::Barrier, Operation::Call, Operation::Return, Operation::Fill, Operation::Leave].contains(&what.op) {
+    if [Operation::Barrier, Operation::Call, Operation::Return, Operation::Fill, Operation::Copy, Operation::Leave].contains(&what.op) {
         return None;
     }
     let mut writes = Lanes::new();

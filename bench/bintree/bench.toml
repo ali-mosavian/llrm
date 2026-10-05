@@ -1,0 +1,7 @@
+description = "Array-backed binary tree: recursive insert of 600 keys and in-order walk"
+repetitions = 1
+
+[region]
+bas = "BenchBintree"
+c = "bench_bintree"
+nib = "bench_bintree"

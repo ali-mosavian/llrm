@@ -39,6 +39,16 @@ pub struct Offsets<'a> {
 impl Offsets<'_> {
     /// The value `pointer` is a constant byte offset from.
     pub fn relative(&self, pointer: Operand) -> Option<(Operand, i64)> {
+        self.stepped(pointer, true)
+    }
+
+    /// `relative` through steps that need not be `inbounds`: where the address is what matters, not
+    /// what the object it stays in is.
+    pub fn fixed(&self, pointer: Operand) -> Option<(Operand, i64)> {
+        self.stepped(pointer, false)
+    }
+
+    fn stepped(&self, pointer: Operand, inbounds: bool) -> Option<(Operand, i64)> {
         let (mut value, mut offset) = (pointer, 0_i64);
         let mut seen = HashSet::new();
         while seen.insert(value) {
@@ -46,7 +56,7 @@ impl Offsets<'_> {
             let ValueDef::Instruction(inst) = self.function.value(id).def else { return Some((value, offset)) };
             let instruction = self.function.instruction(inst);
             let Opcode::GetElementPtr { source } = instruction.opcode else { return Some((value, offset)) };
-            if !instruction.flags.contains(Flags::INBOUNDS) {
+            if inbounds && !instruction.flags.contains(Flags::INBOUNDS) {
                 return Some((value, offset));
             }
             let indices: Vec<Option<i128>> = instruction.operands[1..].iter().map(|&one| self.int(one)).collect();

@@ -177,7 +177,7 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.coerced(value, type_name)?;
                 self.consume(&value, span)?;
                 stores.push(Store::One(
-                    self.projected_place(destination, field.offset, type_name),
+                    self.field_place(destination, field.offset, type_name),
                     required(value, span)?,
                 ));
             }
@@ -203,6 +203,10 @@ impl<'a> FunctionCompiler<'a> {
         source: &StructView,
         stores: &mut Vec<Store>,
     ) -> Result<(), Diagnostic> {
+        if let Some(count) = self.types.byte_copy(destination.struct_id) {
+            stores.push(Store::Bytes { destination: destination.clone(), source: source.clone(), count });
+            return Ok(());
+        }
         let copy = self
             .types
             .copy_units(ElementType::Struct(destination.struct_id));
@@ -243,16 +247,37 @@ impl<'a> FunctionCompiler<'a> {
                 base: pointer,
                 offset: view.offset + field_offset,
                 type_id: type_id(type_name),
-                inbounds: false,
+                inbounds: false, member: None,
             }
         } else {
             hir::Operand::ProjectedPlace {
                 place: view.place,
                 indices: view.indices.clone(),
                 offset: view.offset + field_offset,
-                type_id: type_id(type_name),
+                type_id: type_id(type_name), member: None,
             }
         }
+    }
+
+    /// The aggregate type whose members `view` reaches: the struct it views, or, in a fixed
+    /// array's view, the array's element struct.
+    fn owner_of(&self, view: &StructView) -> Option<u32> {
+        match self.types.array_types.get(&view.struct_id) {
+            Some((ElementType::Struct(element), _)) => Some(*element),
+            Some(_) => None,
+            None => Some(view.struct_id),
+        }
+    }
+
+    /// `projected_place` of the member of the viewed aggregate at `member_offset`: the access
+    /// says which member it is, so a fact stated once of the member reaches it. For a field,
+    /// a tag or a payload, not for a piece of a copy.
+    pub(super) fn field_place(&self, view: &StructView, member_offset: u32, type_name: TypeName) -> hir::Operand {
+        let mut place = self.projected_place(view, member_offset, type_name);
+        if let (Some(owner), hir::Operand::ProjectedPlace { member, .. } | hir::Operand::IndirectPlace { member, .. }) = (self.owner_of(view), &mut place) {
+            *member = Some((owner, member_offset));
+        }
+        place
     }
 
     pub(super) fn struct_expression_type(
@@ -262,6 +287,10 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<Option<u32>, Diagnostic> {
         if let Some(call) = self.method_as_call(expression) {
             return self.struct_expression_type(&call, span);
+        }
+        // `v.len` of a view a field keeps is a property, not a field of its descriptor.
+        if self.sequence_property(expression).is_some() {
+            return Ok(None);
         }
         match expression {
             Expr::StructLiteral { name, .. } if self.types.bits.contains_key(name) => Ok(None),
@@ -393,7 +422,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 Ok(match member.type_ {
                     ElementType::Scalar(type_name) => AssignmentPlace::Scalar(
-                        self.projected_place(&parent, member.offset, type_name),
+                        self.field_place(&parent, member.offset, type_name),
                         type_name,
                     ),
                     ElementType::Struct(struct_id) => AssignmentPlace::Struct(StructView {
@@ -423,7 +452,7 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
-                                inbounds: false,
+                                inbounds: false, member: None,
                             },
                             Storage::Slice(_) => unreachable!("a scalar binding is not a slice"),
                             Storage::Lambda(_) => {
@@ -508,7 +537,7 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         Ok((
-            self.projected_place(&view, field.offset, type_name),
+            self.field_place(&view, field.offset, type_name),
             type_name,
             view.mutable,
             view.owner,

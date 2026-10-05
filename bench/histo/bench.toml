@@ -1,0 +1,10 @@
+description = "256-bin byte histogram of a 4096-byte table, weighted checksum"
+repetitions = 1
+
+[region]
+bas = "BenchHisto"
+c = "bench_histo"
+nib = "bench_histo"
+
+[gaps]
+bas = "#364 no unsigned types"

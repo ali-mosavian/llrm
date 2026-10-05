@@ -1,0 +1,58 @@
+# Nib: far pointers are *far mut fields used in `unsafe`; no address-of in a var initializer, so the cache is a kernel local.
+struct Cache:
+    mut bord: *far mut i16
+    mut bprev: *far mut i16
+    mut bnext: *far mut i16
+    mut bstamp: *far mut i32
+    mut clock: i32
+    mut lhead: i16[7]
+    mut ltail: i16[7]
+
+var bord: i16[3] = [0] * 3
+var bprev: i16[3] = [0] * 3
+var bnext: i16[3] = [0] * 3
+var bstamp: i32[3] = [0] * 3
+
+fn lru_use(sc: &mut Cache, block: i16) -> void:
+    if block < 0:
+        return
+    unsafe:
+        sc.clock += 1
+        sc.bstamp[block] = sc.clock
+        let chain = sc.bord[block]
+        let prev = sc.bprev[block]
+        let nxt = sc.bnext[block]
+        if prev >= 0 || nxt >= 0 || sc.lhead[chain] == block:
+            return
+        let tail = sc.ltail[chain]
+        sc.bprev[block] = tail
+        sc.bnext[block] = -1
+        if tail >= 0:
+            sc.bnext[tail] = block
+        else:
+            sc.lhead[chain] = block
+        sc.ltail[chain] = block
+
+fn new_cache() -> Cache:
+    unsafe:
+        return Cache(bord=&mut bord, bprev=&mut bprev, bnext=&mut bnext, bstamp=&mut bstamp, clock=7, lhead=[0] * 7, ltail=[0] * 7)
+
+fn bench_lru(block: i16) -> i32:
+    let mut cache = new_cache()
+    for index in 0..3:
+        bord[index] = 0
+        bprev[index] = -1
+        bnext[index] = -1
+        bstamp[index] = 0
+    for index in 0..7:
+        cache.lhead[index] = -1
+        cache.ltail[index] = -1
+    bord[1] = 2
+    cache.lhead[2] = 0
+    cache.ltail[2] = 0
+    lru_use(&mut cache, block)
+    return cache.clock + bstamp[block] * 3 + i32(bprev[block]) * 5 + i32(bnext[block] + 1) * 7 + i32(bnext[0]) * 11 + i32(cache.lhead[2]) * 13 + i32(cache.ltail[2]) * 17
+
+fn main() -> i16:
+    print(bench_lru(1))
+    return 0

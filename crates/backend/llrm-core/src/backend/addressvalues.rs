@@ -6,7 +6,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::model::ir::{Address, Loc, Operation};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, LirBody};
 use crate::objectfile::module::{Addr, Space};
 
 /// Turn allocated ADDRESS cells into LEA's non-memory operand spelling.

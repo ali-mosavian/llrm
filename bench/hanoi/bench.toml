@@ -1,0 +1,7 @@
+description = "Towers of Hanoi, 13 discs: move count"
+repetitions = 1
+
+[region]
+bas = "BenchHanoi"
+c = "bench_hanoi"
+nib = "bench_hanoi"

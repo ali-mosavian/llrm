@@ -13,18 +13,12 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::LazyLock;
 
-use iced_x86::Register;
-
 use crate::support::hash::IndexMap;
 
-use crate::backend::layout;
 use crate::backend::masm;
 use crate::backend::select;
 use crate::backend::target;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
-use crate::model::lir::LirBody;
-use crate::model::mir::SourceMap;
-use crate::objectfile::module::{Addr, Module};
 use crate::objectfile::omf;
 use crate::support::pyrepr::{self, Repr};
 
@@ -46,6 +40,21 @@ pub const CHUNK: usize = 1000;
 pub const ACBP: u8 = 0x48;
 /// relocatable, paragraph aligned, public, 16-bit
 pub const PARAGRAPH: u8 = 0x68;
+/// relocatable, paragraph aligned, stack, 16-bit
+pub const STACK_SEGMENT: u8 = 0x74;
+/// relocatable, dword aligned, public, 16-bit
+pub const DWORD: u8 = 0xA8;
+
+/// The segment alignment code a data item that asks for `to` bytes needs:
+/// the segment starts where its widest request holds, or the item's
+/// `align` pads to an offset that is not an address.
+fn alignment_for(to: usize) -> u8 {
+    match to {
+        0..=2 => ACBP,
+        3..=4 => DWORD,
+        _ => PARAGRAPH,
+    }
+}
 pub const SEGMENT_TARGET: u8 = 0;
 pub const GROUP_TARGET: u8 = 1;
 pub const EXTERNAL_TARGET: u8 = 2;
@@ -186,6 +195,10 @@ pub struct Segment {
     pub lines: Vec<(u32, usize)>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
+    /// The widest alignment a data item in it asks for.
+    pub align: usize,
+    /// Combined as the linker's stack: concatenated with the others', SS:SP at the end.
+    pub stack: bool,
 }
 
 impl Segment {
@@ -199,6 +212,8 @@ impl Segment {
             fixups: Vec::new(),
             lines: Vec::new(),
             bodies: Vec::new(),
+            align: 1,
+            stack: false,
         }
     }
 
@@ -261,302 +276,6 @@ fn field(buffer: &[u8], at: usize, loc: i64) -> i64 {
     } else {
         i64::from(u16::from_le_bytes([buffer[at], buffer[at + 1]]))
     }
-}
-
-/// Write a complete fresh object for the BC-object frontend.
-///
-/// BC's OBJ is input syntax here: its declarations, data and relocations
-/// are decoded, just as C source is decoded by the other frontend. The
-/// output is never made by splicing LEDATA or FIXUPP records back into BC's
-/// record stream; `_bc_object` serializes a new stream from those semantics.
-///
-/// `Ok(Err(reason))` is Python's `str` answer; `Err` is an exception.
-#[allow(clippy::too_many_arguments)]
-pub fn written_bc(
-    found: &Module,
-    bodies: &[LirBody],
-    records: &[Rc<omf::Record>],
-    assignment: &IndexMap<u32, Register>,
-    tables: &[(i64, i64)],
-    fields: &BTreeSet<i64>,
-    reached: Option<&BTreeSet<i64>>,
-    native_fpu: bool,
-    ordered: bool,
-    source: Option<&SourceMap>,
-) -> Result<Result<Vec<u8>, String>, Error> {
-    _require_no_phis(bodies)?;
-    let ordered = ordered || (!bodies.is_empty() && bodies.iter().all(|body| body.ordered));
-    let laid = layout::rebuild(
-        found,
-        bodies.iter().map(|one| (one.name.clone(), one.clone())).collect(),
-        tables,
-        fields,
-        reached,
-        native_fpu,
-        Some(assignment).filter(|assignment| !assignment.is_empty()),
-        ordered,
-        &bodies.iter().filter(|body| body.ordered).map(|body| body.entry).collect(),
-        source,
-    );
-    let laid = match laid {
-        Ok(laid) => laid,
-        Err(why) => return Ok(Err(why)),
-    };
-
-    let kept = bodies.iter().map(|body| body.entry).min().expect("min() arg is an empty sequence");
-    let mut image = found.code[..kept as usize].to_vec();
-    image.extend_from_slice(&laid.code);
-    let mut relocations: IndexMap<i64, Vec<i64>> = IndexMap::default();
-    for &(new, old) in &laid.relocations {
-        relocations.entry(old).or_default().push(kept + new);
-    }
-    let groups: Vec<String> = omf::groups(records).into_keys().collect();
-    // A SEGMENT-space address outside DGROUP is an offset in its owning
-    // segment, even when the instruction carries no explicit segment
-    // override. Fresh OMF therefore frames those references at their target
-    // segment.
-    let target_segment = |address: &Addr| address.space == Space::Segment && !found.dgroup.contains(address.index);
-    let group_framed = laid
-        .symbols
-        .iter()
-        .any(|(_offset, address)| address.segment == Register::None && !target_segment(address));
-    if group_framed && !groups.iter().any(|one| one == "DGROUP") {
-        return Ok(Err("generated data references require an established DGROUP frame".to_owned()));
-    }
-    let mut added: Vec<(i64, omf::Fixup)> = Vec::new();
-    for (offset, address) in &laid.symbols {
-        let target = if address.space == Space::Segment { "segment" } else { "external" };
-        let fixup = if address.segment != Register::None || target_segment(address) {
-            omf::target_offset_fixup(found.seg, kept + offset, target, address.index, address.disp)?
-        } else {
-            let group = groups.iter().position(|one| one == "DGROUP").expect("checked above") as i64 + 1;
-            omf::offset_fixup(found.seg, kept + offset, target, address.index, address.disp, group)?
-        };
-        added.push((kept + offset, fixup));
-    }
-    let mut moved = laid.covered.clone();
-    moved.extend(laid.moved.iter().map(|(old, new)| (*old, *new)));
-    let relocations: IndexMap<i64, Vec<i64>> = relocations
-        .into_iter()
-        .map(|(old, destinations)| {
-            let mut unique: Vec<i64> = Vec::new();
-            for one in destinations {
-                if !unique.contains(&one) {
-                    unique.push(one);
-                }
-            }
-            (old, unique)
-        })
-        .collect();
-    _bc_object(records, found.seg, kept, &image, &moved, &relocations, &laid.dropped, &added)
-}
-
-/// Reject SSA joins before anything attempts to encode instructions.
-pub fn _require_no_phis(bodies: &[LirBody]) -> Result<(), Error> {
-    let stuck: Vec<i64> =
-        bodies.iter().flat_map(|body| &body.blocks).filter(|block| !block.phis.is_empty()).map(|block| block.at).collect();
-    if !stuck.is_empty() {
-        let at: Vec<String> = stuck.iter().map(|one| format!("{one:#06x}")).collect();
-        return Err(Error::Survived(Survived(format!(
-            "a phi survives at {}; nothing below can emit one",
-            at.join(", ")
-        ))));
-    }
-    Ok(())
-}
-
-pub fn _mapped(offset: i64, kept: i64, moved: &IndexMap<i64, i64>) -> Option<i64> {
-    if offset < kept { Some(offset) } else { moved.get(&offset).copied() }
-}
-
-fn record(one: &omf::Record) -> Rc<omf::Record> {
-    Rc::new(omf::Record::new(one.r#type, one.body.clone()))
-}
-
-/// Canonical OMF serialization of one decoded BC module.
-///
-/// Segment and symbol indices deliberately retain the frontend's numbering;
-/// they are identities in decoded FIXUPP semantics, not positions borrowed
-/// from the old output stream. Record boundaries and ordering are ours.
-#[allow(clippy::too_many_arguments)]
-pub fn _bc_object(
-    records: &[Rc<omf::Record>],
-    code_seg: i64,
-    kept: i64,
-    code: &[u8],
-    moved: &IndexMap<i64, i64>,
-    relocations: &IndexMap<i64, Vec<i64>>,
-    dropped: &BTreeSet<i64>,
-    added: &[(i64, omf::Fixup)],
-) -> Result<Result<Vec<u8>, String>, Error> {
-    let segments = omf::segments(records);
-    if !(0 < code_seg && (code_seg as usize) < segments.len()) || segments[code_seg as usize].is_none() {
-        return Ok(Err("the module has no code segment".to_owned()));
-    }
-    if records.iter().any(|one| one.r#type & 0xFE == omf::MODEND && omf::has_start_address(one)) {
-        return Ok(Err("MODEND carries a start address, which this does not move yet".to_owned()));
-    }
-    let supported = [
-        omf::THEADR,
-        omf::COMENT,
-        omf::MODEND,
-        omf::EXTDEF,
-        omf::PUBDEF,
-        omf::LINNUM,
-        omf::LNAMES,
-        omf::SEGDEF,
-        omf::GRPDEF,
-        omf::FIXUPP,
-        omf::LEDATA,
-    ];
-    if let Some(unknown) = records.iter().find(|one| !supported.contains(&(one.r#type & 0xFE))) {
-        return Ok(Err(format!("fresh OMF emission does not model {}", unknown.name())));
-    }
-
-    let mut images: IndexMap<i64, Vec<u8>> = IndexMap::default();
-    let mut spans: IndexMap<i64, Vec<(i64, i64)>> = IndexMap::default();
-    for (index, segment) in segments.iter().enumerate() {
-        let index = index as i64;
-        let Some(segment) = segment.as_ref().filter(|_| index != 0) else { continue };
-        images.insert(
-            index,
-            if index == code_seg { code.to_vec() } else { omf::segment_image(records, index, segment.1) },
-        );
-        let pieces: Vec<(i64, i64)> = if index == code_seg && !code.is_empty() {
-            vec![(0, code.len() as i64)]
-        } else {
-            omf::ledata(records)
-                .into_iter()
-                .filter(|(_record, seg, _at, _payload)| *seg == index)
-                .map(|(_record, _seg, at, payload)| (at, at + payload.len() as i64))
-                .collect()
-        };
-        spans.insert(index, _merged(&pieces));
-    }
-
-    let mut placed: IndexMap<i64, Vec<(i64, omf::Fixup, i64)>> =
-        images.keys().map(|index| (*index, Vec::new())).collect();
-    for fixup in omf::fixups(records) {
-        let Some(seg) = fixup.seg.filter(|seg| placed.contains_key(seg)) else {
-            return Ok(Err("a fixup has no segment to attach to".to_owned()));
-        };
-        let destinations: Vec<i64> = if seg == code_seg {
-            let landed = if fixup.offset >= kept { relocations.get(&fixup.offset).cloned() } else { Some(vec![fixup.offset]) };
-            match landed {
-                Some(landed) => landed,
-                None => {
-                    if dropped.contains(&fixup.offset) {
-                        continue;
-                    }
-                    return Ok(Err(format!(
-                        "the fixup at {:#x} has nowhere to go in the rebuilt segment",
-                        fixup.offset
-                    )));
-                }
-            }
-        } else {
-            vec![fixup.offset]
-        };
-        let mut disp = fixup.disp;
-        if fixup.target == "segment" && fixup.index == code_seg && fixup.disp_pos.is_some() {
-            let Some(mapped) = _mapped(disp, kept, moved) else {
-                return Ok(Err(format!("a fixup names {disp:#x}, which is not an instruction the layout placed")));
-            };
-            disp = mapped;
-        }
-        for destination in destinations {
-            placed[&seg].push((destination, fixup.clone(), disp));
-        }
-    }
-    for (destination, fixup) in added {
-        placed[&code_seg].push((*destination, fixup.clone(), fixup.disp));
-    }
-
-    let mut headers: Vec<Rc<omf::Record>> = Vec::new();
-    let Some(first) = records.iter().find(|one| one.r#type & 0xFE == omf::THEADR) else {
-        return Ok(Err("the module has no THEADR".to_owned()));
-    };
-    headers.push(record(first));
-    headers.extend(records.iter().filter(|one| one.r#type & 0xFE == omf::COMENT).map(|one| record(one)));
-
-    let lnames: Vec<u8> = omf::names(records)[1..].iter().flat_map(|one| _string(one)).collect();
-    headers.push(Rc::new(omf::Record::new(omf::LNAMES, lnames)));
-
-    let mut seg_index = 0;
-    for one in records {
-        if one.r#type & 0xFE != omf::SEGDEF {
-            continue;
-        }
-        seg_index += 1;
-        let mut body = one.body.clone();
-        if seg_index == code_seg {
-            let at = omf::segment_length_at(one);
-            pack_into(&mut body, at, (code.len() & 0xFFFF) as i64);
-            if code.len() == 0x10000 {
-                body[0] |= 0x02;
-            } else {
-                body[0] &= !0x02;
-            }
-        }
-        headers.push(Rc::new(omf::Record::new(one.r#type, body)));
-    }
-    headers.extend(records.iter().filter(|one| one.r#type & 0xFE == omf::GRPDEF).map(|one| record(one)));
-    headers.extend(records.iter().filter(|one| one.r#type & 0xFE == omf::EXTDEF).map(|one| record(one)));
-
-    for one in records {
-        if !matches!(one.r#type & 0xFE, omf::PUBDEF | omf::LINNUM) {
-            continue;
-        }
-        let mut changes: IndexMap<usize, Option<i64>> = IndexMap::default();
-        for at in omf::code_offsets(one, code_seg) {
-            if at + 2 > one.body.len() {
-                return Ok(Err("a record names a code offset past its own end".to_owned()));
-            }
-            let value = i64::from(u16::from_le_bytes([one.body[at], one.body[at + 1]]));
-            changes.insert(at, _mapped(value, kept, moved));
-        }
-        if changes.values().any(Option::is_none) {
-            return Ok(Err("a symbol or line names code that the layout did not place".to_owned()));
-        }
-        let values: IndexMap<usize, i64> = changes.into_iter().filter_map(|(at, value)| Some((at, value?))).collect();
-        let patched = omf::patched(one, &values);
-        headers.push(Rc::new(omf::Record::new(patched.r#type, patched.body.clone())));
-    }
-
-    let mut data: Vec<Rc<omf::Record>> = Vec::new();
-    for index in 1..segments.len() as i64 {
-        if segments[index as usize].is_none() {
-            continue;
-        }
-        let made = _fresh_segment(index, &images[&index], &spans[&index], &mut placed[&index])?;
-        match made {
-            Ok(made) => data.extend(made),
-            Err(why) => return Ok(Err(why)),
-        }
-    }
-    let Some(end) = records.iter().rev().find(|one| one.r#type & 0xFE == omf::MODEND) else {
-        return Ok(Err("the module has no MODEND".to_owned()));
-    };
-    let mut fresh = headers;
-    fresh.extend(data);
-    fresh.push(record(end));
-    Ok(Ok(fresh.iter().flat_map(|one| one.emit()).collect()))
-}
-
-pub fn _merged(spans: &[(i64, i64)]) -> Vec<(i64, i64)> {
-    let mut sorted = spans.to_vec();
-    sorted.sort();
-    let mut out: Vec<(i64, i64)> = Vec::new();
-    for (lo, hi) in sorted {
-        if lo == hi {
-            continue;
-        }
-        match out.last_mut() {
-            Some(last) if lo <= last.1 => *last = (last.0, last.1.max(hi)),
-            _ => out.push((lo, hi)),
-        }
-    }
-    out
 }
 
 /// Canonical LEDATA/FIXUPP records for one semantic segment.
@@ -723,8 +442,9 @@ pub enum CodeLayout {
     /// All of it in one segment, where a near call may reach any procedure.
     OneSegment,
     /// A segment of its own for each procedure, all of one name, so that the
-    /// linker's `option eliminate` drops each one nothing calls. Every call
-    /// between procedures must then be far.
+    /// linker's `option eliminate` drops each one nothing calls. A near call
+    /// between them is a relative fixup to the other segment, which the linker
+    /// merges.
     PerProcedure,
 }
 
@@ -743,11 +463,17 @@ pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Re
     for (name, _items) in &module.data {
         if !named.contains_key(name) {
             let private = module.selector_addressed(name);
-            let klass = CLASSES.get(name.as_str()).copied().unwrap_or(if private { "FAR_DATA" } else { "DATA" });
+            let klass = CLASSES.get(name.as_str()).copied().unwrap_or(if module.far_bss.contains(name) { "FAR_BSS" } else if private { "FAR_DATA" } else { "DATA" });
             named.insert(name.clone(), Segment::new(name, klass, !private));
         }
     }
     segments.extend(named.into_values());
+    if module.stack > 0 {
+        let mut stack = Segment::new("STACK", "STACK", true);
+        stack.image = vec![0; module.stack as usize];
+        stack.stack = true;
+        segments.push(stack);
+    }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments
@@ -786,6 +512,7 @@ pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols
                 pack_into(&mut segment.image, at, offset & 0xFFFF);
             }
             masm::Datum::Align(masm::Align { to }) => {
+                segment.align = segment.align.max(*to as usize);
                 segment.put(&vec![0; (-(segment.image.len() as i64)).rem_euclid(*to) as usize], &[]);
             }
             masm::Datum::Bytes(item) => segment.put(item, &[]),
@@ -826,7 +553,9 @@ pub fn _code_by(
             }
         }
     }
-    let labels = _relaxed(&mut items)?;
+    // Tuned for size, a long conditional jump may go through a `jmp` within reach.
+    let size = !group.is_empty() && group.iter().all(|&number| module.procedures[number].size);
+    let labels = if size { _trampolined(&mut items)? } else { _relaxed(&mut items)? };
     let mut at = 0;
     for item in &items {
         match item {
@@ -847,9 +576,6 @@ pub fn _code_by(
                     return Err(Unencodable(format!("a near call to {name} {distance} bytes away")).into());
                 };
                 segment.put(&[&[0xE8][..], &distance.to_le_bytes()].concat(), &[]);
-            }
-            Encoded::Near(Near { name }) if module.procedures.iter().any(|one| &one.name == name) => {
-                return Err(Unencodable(format!("a near call to {name} in another code segment")).into());
             }
             Encoded::Near(Near { name }) => {
                 segment.put(&[0; 3], &[Fixup { relative: true, ..Fixup::new(1, OFFSET, name.clone()) }]);
@@ -943,6 +669,14 @@ pub fn _encoded(what: &Semantics, names: &IndexMap<(Space, i64), String>) -> Res
     Ok(Piece { code, fixups: fixups.into_values().collect() })
 }
 
+/// A short jump's length: opcode and an 8-bit displacement.
+pub const SHORT_JUMP: i64 = 2;
+
+/// Whether a short jump reaches `displacement`, counted from its end.
+pub fn short_reaches(displacement: i64) -> bool {
+    (-128..=127).contains(&displacement)
+}
+
 /// Every label's offset, with each jump short unless its target is out of reach.
 ///
 /// Short first and lengthened to a fixed point, as jwasm does: lengthening
@@ -966,7 +700,7 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
                     let Some(target) = labels.get(&item.label) else {
                         return Err(Unencodable(format!("a jump to {}, which is nowhere", item.label)));
                     };
-                    if !(-128..=127).contains(&(target - (at + 2))) {
+                    if !short_reaches(target - (at + SHORT_JUMP)) {
                         item.long = true;
                         changed = true;
                     }
@@ -980,13 +714,71 @@ pub fn _relaxed(items: &mut [Encoded]) -> Result<IndexMap<String, i64>, Unencoda
     }
 }
 
+/// Tuned for size, [`_relaxed`], then each conditional jump still long (a 386 `jcc rel16`, 4
+/// bytes) aimed at a label some `jmp` to it lies within short reach of becomes a short jump to
+/// that `jmp`, which carries on: 2 bytes saved, and the 3 clocks of a taken `jmp` more.
+/// Repeated while the shorter layout brings more within reach; Watcom's `SetBranches`.
+pub fn _trampolined(items: &mut Vec<Encoded>) -> Result<IndexMap<String, i64>, Unencodable> {
+    let mut labels = _relaxed(items)?;
+    loop {
+        let mut starts = Vec::with_capacity(items.len());
+        let mut at = 0i64;
+        for item in items.iter() {
+            starts.push(at);
+            at += _length(item) as i64;
+        }
+        let mut jumps: IndexMap<&str, Vec<usize>> = IndexMap::default();
+        for (index, item) in items.iter().enumerate() {
+            if let Encoded::Jump(Jump { name, label, .. }) = item {
+                if name == "jmp" {
+                    jumps.entry(label.as_str()).or_default().push(index);
+                }
+            }
+        }
+        let mut retargeted: Vec<(usize, usize)> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let Encoded::Jump(Jump { name, label, long: true }) = item else { continue };
+            if name == "jmp" {
+                continue;
+            }
+            let near = jumps.get(label.as_str()).into_iter().flatten().find(|&&jump| short_reaches(starts[jump] - (starts[index] + SHORT_JUMP)));
+            if let Some(&jump) = near {
+                retargeted.push((index, jump));
+            }
+        }
+        if retargeted.is_empty() {
+            return Ok(labels);
+        }
+        // A label before each `jmp` taken, from the back so the indices below stay.
+        let mut taken: Vec<usize> = retargeted.iter().map(|(_, jump)| *jump).collect();
+        taken.sort_unstable();
+        taken.dedup();
+        let name = |jump: usize| format!("{}$t{jump}", match &items[jump] { Encoded::Jump(one) => one.label.as_str(), _ => unreachable!("a jump") });
+        let named: IndexMap<usize, String> = taken.iter().map(|&jump| (jump, name(jump))).collect();
+        for (index, jump) in &retargeted {
+            if let Encoded::Jump(item) = &mut items[*index] {
+                item.label = named[jump].clone();
+            }
+        }
+        for &jump in taken.iter().rev() {
+            items.insert(jump, Encoded::Label(masm::Label { name: named[&jump].clone() }));
+        }
+        for item in items.iter_mut() {
+            if let Encoded::Jump(item) = item {
+                item.long = false;
+            }
+        }
+        labels = _relaxed(items)?;
+    }
+}
+
 pub fn _length(item: &Encoded) -> usize {
     match item {
         Encoded::Label(_) | Encoded::Mark(..) => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
         Encoded::Jump(Jump { name, long, .. }) => {
             if !long {
-                2
+                SHORT_JUMP as usize
             } else if name == "jmp" {
                 3
             } else {
@@ -1027,7 +819,8 @@ pub fn _records(
     for segment in segments.iter() {
         let (klass, name) = (lname(&segment.klass), lname(&segment.name));
         let size = segment.image.len();
-        let alignment = if module.selector_addressed(&segment.name) { PARAGRAPH } else { ACBP };
+        let alignment = if module.selector_addressed(&segment.name) { PARAGRAPH } else { alignment_for(segment.align) };
+        let alignment = if segment.stack { STACK_SEGMENT } else { alignment };
         let acbp = alignment | if size == 0x10000 { 2 } else { 0 };
         let mut body = vec![acbp];
         body.extend(((size & 0xFFFF) as u16).to_le_bytes());
@@ -1263,7 +1056,7 @@ mod tests {
     }
 
     fn procedure(name: &str, far: bool, body: lir::LirBody, reserve: i64, callees: Vec<(i64, masm::Callee)>) -> masm::Procedure {
-        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None }
+        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None, size: false, entry: 0, stack_check: None }
     }
 
     fn reg(register: Register) -> Loc {
@@ -1346,6 +1139,31 @@ mod tests {
         assert_eq!(labels["far"], 3 + 126 + 2 + 200);
     }
 
+    /// A `jcc rel16` (4 bytes) to a label a `jmp` to it is within short reach of is a short `jcc`
+    /// to that `jmp` (2): tuned for size, 141 of QCport's 1333 long conditional jumps. One with no
+    /// such `jmp`, or one out of reach, stays.
+    #[test]
+    fn test_a_long_conditional_jump_goes_through_a_jump_to_its_target_within_reach() {
+        let layout = |between: usize, jump_to: &str| {
+            let mut items = vec![
+                Encoded::Jump(Jump::new("je", "far")),
+                Encoded::Piece(Piece::new(vec![0; between])),
+                Encoded::Jump(Jump::new("jmp", jump_to)),
+                Encoded::Piece(Piece::new(vec![0; 300])),
+                Encoded::Label(masm::Label { name: "far".into() }),
+                Encoded::Label(masm::Label { name: "elsewhere".into() }),
+            ];
+            let labels = _trampolined(&mut items).unwrap();
+            (items.iter().map(_length).sum::<usize>(), labels["far"])
+        };
+        // 2 for the `je` short, the piece, a 3-byte `jmp`, and the 300 bytes: 2 + 20 + 3 + 300.
+        assert_eq!(layout(20, "far"), (2 + 20 + 3 + 300, 2 + 20 + 3 + 300));
+        // The `jmp` aims elsewhere: the `je` is 4 long.
+        assert_eq!(layout(20, "elsewhere").0, 4 + 20 + 3 + 300);
+        // The `jmp` is past a short jump's reach.
+        assert_eq!(layout(200, "far").0, 4 + 200 + 3 + 300);
+    }
+
     /// The module of `test_externals_are_declared_in_the_order_jwasm_declares_them`,
     /// whose jwasm half is deferred: text and object bytes as Python writes them.
     #[test]
@@ -1373,7 +1191,9 @@ mod tests {
                 vec![(2, masm::Callee::new("_f", true))],
             )],
             private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
             requests: BTreeSet::new(),
+            stack: 0,
             debug: None,
         };
         assert_eq!(
@@ -1387,6 +1207,39 @@ mod tests {
                  07004809000302010a9807004800000504010f9a040006ff025b8c0900025f6400025f6600df900b000001045f676574\
                  000000c1a00d00010000a100009a00000000cb4c9c0a00c401160101cc045602558a02000074")
         );
+    }
+
+    /// `align 4` in a data segment pads to an offset, and an offset is an
+    /// address only where the segment starts aligned: the segment was word
+    /// aligned whatever its items asked, so a dword the data placed at 4 was
+    /// at 2 mod 4 wherever the linker put the segment.
+    #[test]
+    fn test_a_segment_is_aligned_as_its_widest_item_asks() {
+        let acbps = |to: Option<i64>| -> Vec<u8> {
+            let mut items = vec![label("_a"), masm::Datum::Bytes(vec![1])];
+            items.extend(to.map(|to| masm::Datum::Align(masm::Align { to })));
+            items.push(masm::Datum::Bytes(vec![2]));
+            let module = masm::Module {
+                code: "M_TEXT".into(),
+                names: IndexMap::default(),
+                externs: vec![],
+                publics: strings(&["_a"]),
+                data: vec![("_DATA".into(), items)],
+                procedures: vec![],
+                private: BTreeSet::new(),
+                far_bss: BTreeSet::new(),
+                requests: BTreeSet::new(),
+            stack: 0,
+                debug: None,
+            };
+            let records = omf::parse(&written(&module, "m.c").unwrap()).unwrap();
+            // The code segment, then _DATA.
+            records.iter().filter(|one| one.r#type & 0xFE == omf::SEGDEF).map(|one| one.body[0]).collect()
+        };
+        assert_eq!(acbps(None)[1], ACBP);
+        assert_eq!(acbps(Some(2))[1], ACBP);
+        assert_eq!(acbps(Some(4))[1], DWORD);
+        assert_eq!(acbps(Some(16))[1], PARAGRAPH);
     }
 
     /// Every datum kind, a private and a grouped extra segment, a reserved
@@ -1460,7 +1313,9 @@ mod tests {
                 ),
             ],
             private: BTreeSet::from(["FAR_SEG".to_owned()]),
+            far_bss: BTreeSet::new(),
             requests: BTreeSet::new(),
+            stack: 0,
             debug: None,
         };
         assert_eq!(
@@ -1481,46 +1336,13 @@ mod tests {
             written(&rich, "rich.c").unwrap(),
             hex("80080006726963682e633b9649000004434f444509524943485f544558540444415441055f4441544103425353045f\
                  425353084641525f44415441074641525f534547044441544106534841524544064447524f555033980700482a0003\
-                 0201e9980700480d000504010298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
+                 0201e9980700a80d00050401a298070048050007060106980700681500090801d29807004802000b0a01019a08000c\
                  ff02ff03ff054b8c0500025f6200ac9009000001025f660500009a900d000102065f7461626c65000000f3a02e0001\
                  0000568bf05ec3558bec83ec048b460683f803740ba30200bb0400e8e4ffebed90900200000068000007c9cb009c18\
                  00c414140102c417140102c420140102c8225404c8255501eba0110002000001020300070707020000000000309c0a\
                  00c407140102cc0956014ca0190004000078797a78797a78797a78797a78797a78797a78797a56a006000500000100\
                  549c0500c4005404438a02000074")
         );
-    }
-
-    fn bc_emitted(path: &str) -> crate::wholeseg::Emitted {
-        crate::wholeseg::emitted(
-            &std::fs::read(path).unwrap(),
-            true,
-            true,
-            None,
-            None,
-            crate::backend::cpu::ProfileOrName::Name("386"),
-            false,
-            false,
-            None,
-            &crate::model::passes::O2(),
-        )
-        .unwrap()
-    }
-
-    /// hotlop used to finish by rewriting BC's record stream in place. BC's
-    /// first FIXUPP defines THREAD state; a serializer built from decoded
-    /// relocations emits every relocation explicitly.
-    #[test]
-    fn test_the_bc_frontend_uses_the_fresh_object_writer() {
-        let source = std::fs::read(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlop-p-g2.obj")).unwrap();
-        let got = bc_emitted(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/hotlop-p-g2.obj"));
-        assert_eq!(got.outcome, crate::wholeseg::Emission::Lir);
-        let records = omf::parse(&got.data).unwrap();
-        assert_eq!(records[0].r#type, omf::THEADR);
-        let fixupps = |records: &[Rc<omf::Record>]| {
-            records.iter().filter(|one| one.r#type & 0xFE == omf::FIXUPP).map(|one| one.body[0]).collect::<Vec<u8>>()
-        };
-        assert!(fixupps(&omf::parse(&source).unwrap()).iter().any(|lead| lead & 0x80 == 0));
-        assert!(fixupps(&records).iter().all(|lead| lead & 0x80 != 0));
     }
 
     /// A 32-bit symbolic address carries a disp32; an OFFSET fixup relocated

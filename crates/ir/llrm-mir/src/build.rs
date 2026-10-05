@@ -69,7 +69,7 @@ impl Module {
     /// A builder for `function`'s body, placed nowhere until `position`.
     pub fn builder(&mut self, function: GlobalId) -> Builder<'_> {
         let GlobalKind::Function(body) = &mut self.globals[function.0 as usize].kind else { panic!("@{function:?} is a variable") };
-        Builder { context: &mut self.context, function: body, block: None }
+        Builder { context: &mut self.context, function: body, metadata: &mut self.metadata, block: None }
     }
 }
 
@@ -77,6 +77,8 @@ impl Module {
 pub struct Builder<'m> {
     pub context: &'m mut Context,
     pub function: &'m mut Function,
+    /// The module's metadata nodes, for what an instruction is annotated with.
+    pub metadata: &'m mut Vec<crate::module::MetadataNode>,
     block: Option<BlockId>,
 }
 

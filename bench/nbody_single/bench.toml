@@ -1,0 +1,10 @@
+description = "Six-body 2D integrator in single-precision floats, 1000 steps"
+repetitions = 1
+
+[region]
+bas = "BenchNbodySingle"
+c = "bench_nbody_single"
+nib = "bench_nbody_single"
+
+[gaps]
+nib = "#367 module variables must be integer, char or bool"

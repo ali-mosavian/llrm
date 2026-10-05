@@ -2870,7 +2870,7 @@ Status: *now* the carrier and a reader exist; *reader* the carrier exists and no
 | 18 | Stack lifetime | `Place` | `Lifetime{start, end}` | lifetime markers | none | carrier | K |
 | 19 | Callee set; non-recursive | `Instruction`, `Function` | `Callees(set)`, `NoRecurse` | `!callees`, `norecurse` | none | carrier | K |
 | 20 | Unique ownership | `Param`, `Place` | `Owned` | `noalias` | as row 3 | now | K |
-| 21 | Floating-point freedom | `Instruction` | `Float(flags)` | fast-math flags | `A/floatfacts.rs:268` reads `nsz` only | reader | K |
+| 21 | Floating-point freedom | `Instruction` | `Reassoc`, `NoNaNs`, `NoInfs`, `NoSignedZeros`, `AllowReciprocal` | fast-math flags `reassoc nnan ninf nsz arcp` | `M/transforms/instcombine.rs` (`float_simplified`, `arcp`, `reassoc`), `A/floatfacts.rs` (`nsz`) | now | K |
 
 Rows 2, 5 and 6 replace `Instruction.pure`, `CallAbi.promises` and `RuntimePromises`; rows 3, 4 and 20 replace `Promise`. Rows 18 and 19 are the ones whose carrier must be designed first; nothing lands for them until it is.
 
@@ -2904,6 +2904,7 @@ Rows 2, 5 and 6 replace `Instruction.pure`, `CallAbi.promises` and `RuntimePromi
 The mechanism and the IR-proper items need no row: a frontend calls `state` for facts and sets the IR field for meaning. Rows that cannot be stated through the mechanism today:
 
 - **Rows 10 and 18** have no MIR carrier (`assume`, lifetime markers). The HIR call is defined; the row waits for the carrier.
+- **`copy_bytes`** is an IR-proper op, not a fact: `copy_bytes(to, from, n)` copies `n` bytes (a positive constant) between two places, byte for byte, lowered to `llvm.memcpy`. A frontend uses it for an aggregate assigned whole (a C struct, a QB TYPE, a Nib enum) where word loads and stores would read bytes it never wrote. The legacy lowering refuses it. No registry row: it states no fact.
 - **Rows 9, 15, 16, 17, 19 and 21** have carriers or none, and no reader that uses the stated fact. The fact is stated once; the reader is the work.
 - **Rows 3 and 4 for C** need the patched front end to emit the `FACT` record (the `const` qualifier and `static N` are in its type; `restrict` is already sent as `CGAttr n 3`).
 
@@ -2956,6 +2957,9 @@ Implemented in #119 (branch `alim/feat/hir-facts`), against `origin/main` at `fd
 | 8 | `InBounds` | landed on `Subject::Operand` (a place) and `Subject::Instruction` (`ptr_offset`); `inbounds` fields removed; C, Quick BASIC, Nib | 112 programs and 3 demos compile to identical assembly |
 | 14 | `Align` | landed on `Subject::Object`; `DataObject.align` removed | same |
 | (call) | `NoCapture`, `WriteOnly`, `Initializes` | landed on `Subject::Operand` of a call; `CallAbi.promises` removed; Quick BASIC fills | same |
+| 9, 10 | `Range`, `Align` of an instruction, `NoAlias` of a result | landed as carriers: a pair on the wire, `range` attribute or `!range`, access `align`; readers by their owners | none yet: nothing states them |
+| (rewrite) | merge and speculate policy | `Fact::merged`, `Facts::merged`, `Fact::survives_speculation`: one exhaustive `match` each, in `facts_rewrite.rs`; no pass merges across a promise (flags are in every value-numbering key) and every site on the compile route that moves an instruction was audited (listed in the module) | nothing calls them yet |
+| (places) | `Place`, `Field` subjects | a fact stated once of a place (`Subject::Place`) or of a member of an aggregate type (`Subject::Field{owner, offset}`) reaches every access of it: `Range` on a load as `!range`, `Align` on loads and stores. An access names its member (`ProjectedPlace`/`IndirectPlace` `member`); Nib states an enum's tag range once of its tag member | corpus identical (Nib's per-load statement is gone) |
 | 11, 12, 20 | `AliasClass`, `Immutable`, `Owned` | not facts: `alias_classes` is a module table each access refers to, as LLVM's TBAA nodes are; `zeroed_locals` is Quick BASIC's meaning, not a droppable promise | |
 | 6 | `NoUnwind`, `WillReturn` | `RuntimePromises` stays a named table with one owner: Quick BASIC derives it from the runtime description (`nounwind`, writers, user-code entries); C's `reads_arguments` is the C library's alone | |
 | 9, 10, 15 to 19, 21 | `Range`, `Assume`, hints, `Cold`, `MustProgress`, lifetimes, `Callees`, float flags | no variant: none has a program that shows a win, and a variant lands with its reader and a measured win | |

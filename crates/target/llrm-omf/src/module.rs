@@ -42,9 +42,6 @@ pub enum Space {
 }
 
 impl Space {
-    pub const ALL: [Space; 7] =
-        [Space::Segment, Space::External, Space::Frame, Space::Literal, Space::Group, Space::Far, Space::Stack];
-
     /// The member name.
     pub fn name(self) -> &'static str {
         match self {
@@ -367,14 +364,6 @@ pub fn literal_only(_field_offset: i64, literal: i64) -> Addr {
     Addr::new(Space::Literal, literal)
 }
 
-/// The widest access anything here can name -- an x87 qword load.
-pub const WIDEST: i64 = 8;
-
-/// Whether [disp, disp+width) intersect -- arithmetic, not analysis.
-pub fn _overlaps(a: &Addr, a_width: i64, b: &Addr, b_width: i64) -> bool {
-    a.disp < b.disp + b_width && b.disp < a.disp + a_width
-}
-
 /// Every displacement in each segment that some operand names exactly.
 ///
 /// The assumption is that a subscript is in range: the array beginning at
@@ -387,18 +376,6 @@ pub fn landmarks(found: &Module) -> IndexMap<(Space, i64), Vec<i64>> {
         }
     }
     found_at.into_iter().map(|(at, disps)| (at, disps.into_iter().collect())).collect()
-}
-
-/// The bytes an operand can touch, or None where nothing bounds it.
-pub fn reach(addr: &Addr, width: i64, bounds: &IndexMap<(Space, i64), Vec<i64>>) -> Option<(i64, i64)> {
-    if addr.base == Register::None {
-        return Some((addr.disp, addr.disp + width));
-    }
-    let known = bounds.get(&(addr.space, addr.index))?;
-    if known.is_empty() {
-        return None;
-    }
-    known.iter().copied().find(|&one| one > addr.disp).map(|after| (addr.disp, after))
 }
 
 /// The SEGDEF name BC gives the segment holding a program's own variables.

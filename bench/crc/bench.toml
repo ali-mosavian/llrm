@@ -1,0 +1,10 @@
+description = "CRC-32 (bitwise) of \"123456789\""
+repetitions = 1
+
+[region]
+bas = "BenchCrc"
+c = "bench_crc"
+nib = "bench_crc"
+
+[gaps]
+bas = "#364 no unsigned types"

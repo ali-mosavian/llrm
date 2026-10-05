@@ -11,7 +11,7 @@ use llrm_mir::Opcode;
 
 use super::{insn, semantics, Selector, Unselected};
 use crate::abi::runtime::EVERY;
-use crate::backend::lower::{call_clobbered_high, call_clobbers};
+use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::backend::lower_int64::_helper;
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock};

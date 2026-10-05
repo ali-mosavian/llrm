@@ -11,6 +11,10 @@ pub mod debuginfo;
 pub mod dominators;
 pub mod edit;
 pub mod facts;
+pub mod splice;
+mod facts_rewrite;
+#[cfg(test)]
+mod facts_coverage;
 pub mod interpret;
 pub mod intrinsics;
 pub mod lexer;
@@ -25,7 +29,7 @@ pub mod print;
 pub mod program;
 pub mod scalarevolution;
 pub mod target;
-pub mod transforms;
+pub mod tbaa;
 pub mod types;
 pub mod valuetracking;
 pub mod verify;
@@ -52,8 +56,6 @@ mod lint_tests;
 mod pass_tests;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod transforms_tests;
 #[cfg(test)]
 mod valuetracking_tests;
 #[cfg(test)]

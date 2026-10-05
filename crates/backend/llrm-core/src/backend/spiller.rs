@@ -6,57 +6,21 @@
 //! lives only across that one instruction.
 
 use std::collections::BTreeSet;
-use std::fmt;
 use std::sync::Arc;
 
 use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
-use crate::analysis::regions;
 use crate::backend::allocate::Error;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::target;
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::memory::MemoryKind;
-use crate::model::mir::{self, MemRef};
-use crate::model::passes::{Exception, LIRTransform};
+
+use crate::model::passes::LIRTransform;
 use crate::support::pyset::PySet;
-
-pub struct Spiller {
-    pub spilled: BTreeSet<u32>,
-    pub frame: Option<Frame>,
-}
-
-impl Spiller {
-    pub const NAME: &'static str = "spill";
-
-    pub fn new(spilled: BTreeSet<u32>, frame: Option<Frame>) -> Self {
-        Self { spilled, frame }
-    }
-}
-
-impl LIRTransform for Spiller {
-    fn class_name(&self) -> &'static str {
-        "Spiller"
-    }
-
-    fn name(&self) -> &str {
-        Self::NAME
-    }
-
-    /// Python returns `spilled(...)`'s pair; the trait carries the body.
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        spilled(&body, &self.spilled, self.frame.as_mut()).map(|(body, _made)| body).map_err(|error| error.to_string())
-    }
-
-    fn transform_raising(&mut self, body: LirBody) -> Result<LirBody, Exception> {
-        spilled(&body, &self.spilled, self.frame.as_mut()).map(|(body, _made)| body).map_err(|error| error.raised())
-    }
-}
-
 
 /// `frame.WORD` at the width type this module uses.
 const WORD: u32 = frames::WORD as u32;
@@ -108,10 +72,6 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// The values this plan puts in slots.
-    pub fn stored(&self) -> &BTreeSet<u32> {
-        &self.stored
-    }
 }
 
 /// `values` of `body` decided: how each is spilled, and the slots of those stored.
@@ -735,6 +695,13 @@ fn _color_slots(
     }
     let mut pending: Vec<u32> =
         values.iter().copied().filter(|value| !frame.slots.contains_key(&SlotKey::from(*value))).collect();
+    // After a second return from `setjmp` a slot another value used holds that value: none is shared.
+    if body.returns_twice {
+        for value in pending {
+            frame.slot(value, widths[&value])?;
+        }
+        return Ok(());
+    }
     pending.sort_by_key(|value| (-i64::from(widths[value].max(WORD)), *value));
     let copies = _copied_with(body, &pending.iter().copied().collect());
     for value in pending {
@@ -744,7 +711,6 @@ fn _color_slots(
             frame.slot(value, width)?;
             continue;
         };
-        let fits = |one: &(i64, u32, Vec<Interval>)| one.1 >= capacity && one.2.iter().all(|other| !interval.overlaps(other));
         // A slot the value is copied to or from makes that copy vanish.
         let partners: Vec<i64> = copies
             .get(&value)
@@ -755,10 +721,7 @@ fn _color_slots(
                 Ok(other) => frame.slots.get(&SlotKey::from(*other)).copied(),
             })
             .collect();
-        let color = partners
-            .iter()
-            .find_map(|home| colors.iter().position(|one| one.0 == *home && fits(one)))
-            .or_else(|| colors.iter().position(fits));
+        let color = crate::backend::slots::choose(&colors, interval, capacity, &partners);
         let Some(color) = color else {
             let home = frame.slot(value, width)?;
             colors.push((home, capacity, vec![interval.clone()]));
@@ -875,17 +838,6 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
     (colors, live)
 }
 
-/// Spill candidates whose value can be reconstructed without a slot.
-pub fn rematerializable(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
-    let mut out: BTreeSet<u32> = _constants(body, values).keys().copied().collect();
-    out.extend(_addresses(body, values).keys().copied());
-    out.extend(_extensions(body, values).keys().copied());
-    out.extend(frame_rematerializable(body, values));
-    out.extend(_stable_loads(body, values).keys().copied());
-    out.extend(_frame_homes(body, values).keys().copied());
-    out
-}
-
 /// The instruction that remakes `value` anywhere: its only definition, when
 /// that reads nothing (a constant or an address).
 pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
@@ -903,11 +855,6 @@ pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
         && one.clobbers.is_empty()
         && one.group.is_none();
     alone.then(|| Arc::clone(one))
-}
-
-/// Frame-loaded selectors whose proof permits eager rematerialization.
-pub fn frame_rematerializable(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
-    _frame_loads(body, values).keys().copied().collect()
 }
 
 /// Values loaded from a cell nothing changes before they are used again.
@@ -969,11 +916,6 @@ pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Me
     result
 }
 
-/// `regions.addresses`. The Rust helper refuses a span Python's integers
-/// can state and `i64` cannot; overlap is the conservative answer.
-fn _addresses_meet(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> bool {
-    regions::addresses(one, one_width, other, other_width, None).unwrap_or(true)
-}
 
 /// Whether `cell` still holds what it held at `define` after `one`.
 fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: bool) -> bool {
@@ -984,9 +926,9 @@ fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: 
     // Sealed, an incoming argument cell is reached by the frame's own stores alone.
     let meets = |dest: &Mem| {
         if sealed && _incoming_frame(cell) {
-            _in_frame(dest) && _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)
+            _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
         } else {
-            dest.addr.is_none() || _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)
+            dest.addr.is_none() || crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
         }
     };
     holds && !_may_write(one, cell, sealed) && !written.iter().any(meets)
@@ -1005,47 +947,26 @@ fn _incoming_frame(cell: &Mem) -> bool {
     _exact_frame(cell) && cell.addr.is_some_and(|addr| addr.disp >= 0)
 }
 
-/// Whether provenance confines an access to this activation's objects.
-fn _proven_local_frame(reference: &MemRef) -> bool {
-    reference.provenance.as_ref().is_some_and(|provenance| {
-        !provenance.slices.is_empty() && provenance.slices.iter().all(|one| one.object.kind == MemoryKind::Frame)
-    })
-}
-
 /// Whether the MIR operation may change `cell`; in a `sealed` body an
 /// incoming argument changes only where a frame store names it.
 pub(crate) fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
-    let op = one.op.as_deref();
+    let call = one.call.as_deref();
     let written = _written(one, cell);
     if sealed && _incoming_frame(cell) {
-        return written.iter().any(|dest| _in_frame(dest) && _addresses_meet(cell.addr, cell.width, dest.addr, dest.width));
+        return written.iter().any(|dest| _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width));
     }
     if _exact_frame(cell) && !written.is_empty() && written.iter().all(|dest| _exact_frame(dest)) {
-        if written.iter().any(|dest| _addresses_meet(cell.addr, cell.width, dest.addr, dest.width)) {
+        if written.iter().any(|dest| crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)) {
             return true;
         }
-        if op.is_none_or(|op| written.len() >= op.stores.len()) {
+        if call.is_none_or(|call| written.len() >= usize::from(call.writes())) {
             return false;
         }
     }
     if one.unmodeled_write() {
         return true;
     }
-    let Some(op) = op else {
-        return false;
-    };
-    for reference in &op.stores {
-        if _in_frame(cell) && reference.spares(_frame_disp(cell), cell.width) {
-            continue;
-        }
-        if _incoming_frame(cell) && _proven_local_frame(reference) {
-            continue;
-        }
-        if reference.addr.is_none() || _addresses_meet(cell.addr, cell.width, reference.addr, reference.width) {
-            return true;
-        }
-    }
-    false
+    call.is_some_and(|call| call.writes() && !(_in_frame(cell) && call.spares(_frame_disp(cell), cell.width)))
 }
 
 /// A fixed frame cell's displacement; none for one indexed or based.
@@ -1059,13 +980,8 @@ fn _in_frame(cell: &Mem) -> bool {
 
 /// The memory this instruction names as written that could be `cell`.
 fn _written(one: &Insn, cell: &Mem) -> Vec<Mem> {
-    let op = one.op.as_deref();
-    let spared = _in_frame(cell)
-        && op.is_some_and(|op| {
-            !op.stores.is_empty() && op.stores.iter().all(|reference| reference.excludes.contains(&mir::WHOLE_FRAME))
-        });
-    let written: Vec<Mem> = one
-        .what
+    let spared = _in_frame(cell) && one.call.as_ref().is_some_and(|call| call.writes() && call.spares_the_frame());
+    one.what
         .iter()
         .flat_map(|what| &what.dests)
         .filter_map(|dest| match dest {
@@ -1076,16 +992,7 @@ fn _written(one: &Insn, cell: &Mem) -> Vec<Mem> {
             }
             _ => None,
         })
-        .collect();
-    // A proven local object stays proven however selection spelled it.
-    if _incoming_frame(cell)
-        && op.is_some_and(|op| {
-            !op.stores.is_empty() && written.len() <= op.stores.len() && op.stores.iter().all(_proven_local_frame)
-        })
-    {
-        return Vec::new();
-    }
-    written
+        .collect()
 }
 
 /// The predecessors of every block, `at`s outside the body ignored.
@@ -1306,7 +1213,7 @@ fn _holding(one: &Arc<Insn>, value: u32, home: &Mem, store: &Arc<Insn>, holds: b
         && !_may_write(one, home, false)
         && !written
             .iter()
-            .any(|cell| cell.addr.is_none() || _addresses_meet(home.addr, home.width, cell.addr, cell.width))
+            .any(|cell| cell.addr.is_none() || crate::backend::overlap::may_overlap(home.addr, home.width, cell.addr, cell.width))
 }
 
 /// Whether `home` holds `value` at every use of it but the store itself.
@@ -1653,6 +1560,12 @@ fn _indexed_source(
 
 /// The spilled source arithmetic or a comparison reads as its memory operand, needing no reload.
 pub fn folded_source(one: &Insn, values: &BTreeSet<u32>) -> Option<Held> {
+    folded_source_in(one, values, true)
+}
+
+/// `folded_source`, for an instruction that `tied` writes the register of its first source (after
+/// two-address lowering) or, not tied, names its result apart (SSA).
+pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Option<Held> {
     if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
         return None;
     }
@@ -1660,14 +1573,14 @@ pub fn folded_source(one: &Insn, values: &BTreeSet<u32>) -> Option<Held> {
     let mut widths: &[u32] = &[2, 4];
     let (left, right) = match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
         (Operation::Binary, name, [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if !matches!(name, Some("add" | "sub" | "and" | "or" | "xor")) || dest != left {
+            if !matches!(name, Some("add" | "sub" | "and" | "or" | "xor")) || (tied && dest != left) {
                 return None;
             }
             (*left, *right)
         }
         (Operation::Compare, Some("cmp"), [], [Loc::Held(left), Loc::Held(right)]) => (*left, *right),
         (Operation::Multiply, Some("imul"), [Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) => {
-            if dest != left {
+            if tied && dest != left {
                 return None;
             }
             (*left, *right)
@@ -1801,7 +1714,7 @@ fn _group_source(one: &Insn) -> Option<Held> {
 /// The definition every one of `defining` repeats, if they all do the same.
 /// A split remakes a value where each piece ends, so a remakeable value can
 /// have several definitions that are one.
-fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
+pub fn _one_definition(defining: &[Arc<Insn>]) -> Option<&Arc<Insn>> {
     let first = defining.first()?;
     let alike = |one: &Insn| {
         one.what == first.what
@@ -1898,7 +1811,7 @@ fn _literals(body: &LirBody, values: &BTreeSet<u32>, any_width: bool) -> IndexMa
 }
 
 /// Pure addresses cheap enough to recreate at every use.
-fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> {
+pub fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Address> {
     let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
@@ -2021,7 +1934,7 @@ fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn
 }
 
 /// How wide each value is read or written anywhere, which is how big its slot has to be.
-fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+pub fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
@@ -2064,14 +1977,14 @@ fn _mov(into: Loc, out_of: Loc) -> Semantics {
 }
 
 /// The load that puts a spilled value back for one instruction.
-fn _reload(beside: &Insn, into: u32, cell: &Mem) -> Arc<Insn> {
+pub fn _reload(beside: &Insn, into: u32, cell: &Mem) -> Arc<Insn> {
     let inserted =
         _inserted(beside, _mov(Loc::Held(Held { value: into, width: cell.width }), Loc::Mem(cell.clone())), vec![into], Vec::new());
     _with(&inserted, |made| made.spill_reload = true)
 }
 
 /// The store that puts a spilled value away as soon as it is written.
-fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
+pub fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
     let inserted = _inserted(
         beside,
         _mov(Loc::Mem(cell.clone()), Loc::Held(Held { value: out_of, width: cell.width })),
@@ -2085,7 +1998,7 @@ fn _store(beside: &Insn, out_of: u32, cell: &Mem) -> Arc<Insn> {
 fn _inserted(beside: &Insn, what: Semantics, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
     let at = beside.covers.map_or(beside.at, |covers| covers.0);
     let mut made = Insn::new(beside.at, Some((at, at)), Some(what), defines, uses);
-    made.op = beside.op.clone();
+    made.call = beside.call.clone();
     Arc::new(made)
 }
 
@@ -2121,19 +2034,6 @@ pub fn _renamed(one: &Insn, rename: &IndexMap<u32, u32>) -> Arc<Insn> {
 fn _settled(place: &Loc, rename: &IndexMap<u32, u32>) -> Loc {
     ir::mapped(place, |one| Held { value: rename.get(&one.value).copied().unwrap_or(one.value), width: one.width })
 }
-
-/// A move in a parallel copy with both ends spilled. Retained for callers
-/// reporting this legacy refusal.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Simultaneous(pub String);
-
-impl fmt::Display for Simultaneous {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Simultaneous {}
 
 /// One move of a parallel copy, with its spilled end read or written where it lives.
 fn _in_place(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Option<Arc<Insn>>, Error> {
@@ -2342,8 +2242,6 @@ mod tests {
     use crate::backend::{omfwrite, select};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
-    use crate::model::memory::{Identity, MemoryKind, MemoryObject, Provenance};
-    use crate::model::mir::{self, MemRef, OpCode};
 
     fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
         Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
@@ -2520,9 +2418,7 @@ mod tests {
 
     #[test]
     fn test_parameter_is_reloaded_across_what_spares_the_frame() {
-        for between in
-            ["call sparing the frame", "call", "call unstated", "call with no MIR", "pointer store sparing the frame", "pointer store"]
-        {
+        for between in ["call sparing the frame", "call", "call listing nothing"] {
             let param = mem(Addr::new(Space::Frame, 6), 2, Register::BP, 0, 2);
             let load = insn(
                 0x100,
@@ -2531,48 +2427,16 @@ mod tests {
                 &[1],
                 &[],
             );
-            let spared = if between.ends_with("sparing the frame") { vec![mir::WHOLE_FRAME] } else { vec![] };
-            let middle = if between.starts_with("call") {
-                let reach = if between == "call unstated" {
-                    vec![]
-                } else {
-                    vec![MemRef { excludes: spared.clone(), ..MemRef::new(None, 4) }]
-                };
-                let mut site = mir::Op::new(0x101, OpCode::Operation(Operation::Nothing), "", vec![], vec![]);
-                site.kind = mir::Kind::Call;
-                site.stores = reach;
-                if between != "call unstated" {
-                    site.memory_complete = true;
-                }
-                let mut middle =
-                    insn(0x101, (0x101, 0x101), semantics(Operation::Call, "call", vec![], vec![]), &[], &[]);
-                // A call lowered from the new MIR carries no old operation: it may write anything.
-                middle.op = (between != "call with no MIR").then(|| Arc::new(site));
-                middle.clobbers = BTreeSet::from([Register::EAX]);
-                middle
-            } else {
-                let base = mir::Value::new(9, 0);
-                let reference = MemRef {
-                    base: Some(base),
-                    space: Some(Space::Literal),
-                    base_width: 2,
-                    excludes: spared.clone(),
-                    ..MemRef::new(Some(Addr::new(Space::Literal, 10)), 2)
-                };
-                let mut site = mir::Op::new(0x101, OpCode::Operation(Operation::Nothing), "", vec![], vec![base]);
-                site.kind = mir::Kind::Store;
-                site.stores = vec![reference];
-                let cell = mem(Addr::new(Space::Literal, 10), 2, Register::BX, 10, 2);
-                let mut middle = insn(
-                    0x101,
-                    (0x101, 0x101),
-                    semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![imm(0, 2)]),
-                    &[],
-                    &[],
-                );
-                middle.op = Some(Arc::new(site));
-                middle
-            };
+            let spared = between.ends_with("sparing the frame");
+            let mut middle = insn(0x101, (0x101, 0x101), semantics(Operation::Call, "call", vec![], vec![]), &[], &[]);
+            // A call listing nothing it touches may write anything.
+            middle.call = (between != "call listing nothing").then(|| {
+                Arc::new(crate::model::lir::CallMemory {
+                    effects: llrm_mir::memory::Effects::ANY,
+                    private: if spared { vec![crate::model::lir::WHOLE_FRAME] } else { vec![] },
+                })
+            });
+            middle.clobbers = BTreeSet::from([Register::EAX]);
             let got = _out(&_body(vec![load, middle, _add(2, 1, 0x102)]), &[1]);
             let slots: Vec<&Loc> = got
                 .iter()
@@ -2580,7 +2444,7 @@ mod tests {
                 .flat_map(|what| &what.dests)
                 .filter(|place| matches!(place, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)))
                 .collect();
-            assert_eq!(slots.is_empty(), !spared.is_empty(), "{between}: {got:?}");
+            assert_eq!(slots.is_empty(), spared, "{between}: {got:?}");
         }
     }
 
@@ -2610,57 +2474,30 @@ mod tests {
     #[test]
     fn test_parameter_rematerializes_across_an_exact_disjoint_local_store() {
         let local = mem(Addr::new(Space::Frame, -2), 2, Register::BP, 0, 2);
-        let vague_local = MemRef { space: Some(Space::Frame), ..MemRef::new(None, 2) };
-        let mut op =
-            mir::Op::new(0x101, OpCode::Operation(Operation::Move), "mov", vec![], vec![mir::Value::new(2, 0)]);
-        op.kind = mir::Kind::Store;
-        op.stores = vec![vague_local];
-        let mut store = insn(
+        let store = insn(
             0x101,
             (0x101, 0x101),
             semantics(Operation::Move, "mov", vec![Loc::Mem(local)], vec![held(2, 2)]),
             &[],
             &[2],
         );
-        store.op = Some(Arc::new(op));
         _assert_parameter_rematerialized(store);
     }
 
     #[test]
-    fn test_parameter_rematerializes_across_a_proven_local_array_store() {
+    fn test_parameter_rematerializes_across_a_local_array_store() {
         let local = Mem {
             index: Some(Held { value: 4, width: 2 }),
             index_through: Register::SI,
             ..mem(Addr::new(Space::Frame, -132), 2, Register::BP, 0, 2)
         };
-        let object = MemoryObject {
-            identity: Some(Identity::Tuple(vec![Identity::Int(7), Identity::Int(-132), Identity::Int(-4)])),
-            extent: Some(128),
-            ..MemoryObject::new(MemoryKind::Frame)
-        };
-        let indexed_local = MemRef {
-            base: Some(mir::Value::new(4, 0)),
-            space: Some(Space::Frame),
-            provenance: Some(Provenance::one_with_slice(object, 0, 128, 2, 2, BTreeSet::new()).unwrap()),
-            ..MemRef::new(None, 2)
-        };
-        let mut op = mir::Op::new(
-            0x101,
-            OpCode::Operation(Operation::Move),
-            "mov",
-            vec![],
-            vec![mir::Value::new(2, 0), mir::Value::new(4, 0)],
-        );
-        op.kind = mir::Kind::Store;
-        op.stores = vec![indexed_local];
-        let mut store = insn(
+        let store = insn(
             0x101,
             (0x101, 0x101),
             semantics(Operation::Move, "mov", vec![Loc::Mem(local)], vec![held(2, 2)]),
             &[],
             &[2, 4],
         );
-        store.op = Some(Arc::new(op));
         _assert_parameter_rematerialized(store);
     }
 
@@ -3122,6 +2959,22 @@ mod tests {
         spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
         assert_eq!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 4);
+    }
+
+    /// A body that calls `setjmp` shares no slot: after the second return one a dead value used
+    /// holds that value. Another value's dead slot is otherwise reused, as the test above shows.
+    #[test]
+    fn test_no_spill_slot_is_shared_in_a_body_that_calls_setjmp() {
+        let shared = |twice: bool| {
+            let mut frame = Frame::new(0);
+            let [wide, use_wide] = _wide_pair(1, 10, 11, 0x10);
+            let mut body = _body(vec![wide, use_wide, _move(2, 20, None, 0x14), _add(21, 2, 0x16)]);
+            body.returns_twice = twice;
+            let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame)).expect("spills");
+            spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
+            frame.slots[&slot(1)] == frame.slots[&slot(2)]
+        };
+        assert_eq!((shared(false), shared(true)), (true, false));
     }
 
     #[test]

@@ -111,6 +111,33 @@ pub fn same_length(_: &Cx, before: &Arc<Insn>, after: &Arc<Insn>) -> bool {
     matches!((emitted(before), emitted(after)), (Some(before), Some(after)) if after.code.len() == before.code.len())
 }
 
+/// A push of `value` as a dword is more bytes than its two word pushes (`select` sizes both).
+pub fn split_push_smaller(value: i64) -> bool {
+    let push = |width: u32, value: i64| {
+        let what = ir::Semantics {
+            name: Some("push".to_owned()),
+            sources: vec![Loc::Imm(Imm { value, width, address: None })],
+            ..ir::Semantics::new(Operation::Push)
+        };
+        select::emit(&what, 0, None, false, false, None).map(|code| code.code.len())
+    };
+    matches!(
+        (push(4, value), push(2, (value >> 16) & 0xFFFF), push(2, value & 0xFFFF)),
+        (Some(whole), Some(high), Some(low)) if high + low < whole
+    )
+}
+
+/// Tuned for size, the dword push of `i` is more bytes than its two word pushes. Two pushes
+/// are a clock slower than one, so only there.
+pub fn splits_smaller(cx: &Cx, i: &Imm) -> bool {
+    cx.cpu().size && i.width == 4 && i.address.is_none() && split_push_smaller(i.value)
+}
+
+/// Two word pushes join into one dword push unless tuned for size and the dword is longer.
+pub fn joins_no_larger(cx: &Cx, high: &Imm, low: &Imm) -> bool {
+    !cx.cpu().size || !split_push_smaller(((high.value & 0xFFFF) << 16) | (low.value & 0xFFFF))
+}
+
 /// The target prices `add r,r` below `shl r,1`.
 pub fn doubles_by_add(cx: &Cx) -> bool {
     cx.cpu().doubling().is_ok_and(|form| form == "alu_rr")
@@ -213,6 +240,10 @@ pub fn delays(_: &Cx, load: &Insn, crossed: &Arc<Insn>) -> bool {
     let Some(crossed_what) = &crossed.what else {
         return false;
     };
+    // Two volatile accesses keep their order: the device sees each.
+    if load.volatile && crossed.volatile {
+        return false;
+    }
     if !crossed.clobbers.is_empty()
         || !crossed.requires.is_empty()
         || !crossed.delivers.is_empty()

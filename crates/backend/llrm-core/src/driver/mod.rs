@@ -20,7 +20,6 @@ use crate::backend::cpu::{self, Profile, ProfileOrName};
 use crate::backend::masm;
 use crate::backend::target::Segments;
 use crate::hir::model;
-use crate::backend::ehprepare;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir;
 use data::Placed;
@@ -32,12 +31,16 @@ pub struct Options {
     pub machine: Machine,
     pub pipeline: llrm_transforms::pipeline::Options,
     pub dump: Option<PathBuf>,
+    /// `-fstack-usage`: print each procedure's frame and what it can reach.
+    pub stack_usage: bool,
+    /// `-Wstack-usage=N`: warn of each entry that can reach more than N bytes.
+    pub stack_limit: Option<i64>,
 }
 
 impl Options {
     /// For `machine` at -O2, the stages written where `LLRM_MIR_STAGES` names.
     pub fn of(machine: Machine) -> Self {
-        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into) }
+        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None }
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -58,22 +61,59 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
         let mut assembled = assemble::assembled(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
-        placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref())?;
+        placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref(), options.machine.far_bss)?;
         if let Some(directory) = &options.dump {
             let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
             let written = |name: &str, text: String| std::fs::write(directory.join(format!("{name}{suffix}")), text).map_err(|error| error.to_string());
             written("listing.asm", masm::text(&assembled).map_err(|error| error.to_string())?)?;
-            written("cost", assembled.procedures.iter().map(|one| executed::summary(&one.body) + "\n").collect())?;
+            let cpu = options.cpu()?;
+            written("cost", assembled.procedures.iter().map(|one| executed::summary(&one.body, cpu) + "\n").collect())?;
         }
         out.push(assembled);
     }
+    if options.stack_usage || options.stack_limit.is_some() {
+        let usage = crate::backend::stackusage::Usage::of(&out);
+        if options.stack_usage {
+            eprint!("{}", usage.report());
+        }
+        for warning in options.stack_limit.into_iter().flat_map(|limit| usage.warnings(limit)) {
+            eprintln!("{warning}");
+        }
+    }
     Ok(out)
+}
+
+/// What the spill model (`llrm_transforms::spill`) forecasts for each function the pipeline
+/// hands to instruction selection: the `spillmodel` channel, to set beside the spills the
+/// allocator makes (`cost` channel, `executed`).
+fn spill_model(program: &Program) {
+    use llrm_transforms::{profit, spill};
+    for module in &program.modules {
+        let Some(text) = module.datalayout.as_deref() else { continue };
+        let Ok(layout) = llrm_mir::datalayout::DataLayout::parse(text) else { continue };
+        let outer = llrm_mir::passes::Outer::of(module, Some(program.target.clone()));
+        let room = spill::Room::of(&outer);
+        let costs = program.target.costs();
+        for global in &module.globals {
+            let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
+            let unit = llrm_analysis::memory::Unit::of(module, &layout, function);
+            let trips = profit::proven_trips(&unit, &unit.registers());
+            let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
+            let found = llrm_analysis::liveness::live(function);
+            let across = |inst| spill::kept_across(&outer, &module.context, function, inst);
+            if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency, &found) {
+                llrm_support::debug!("spillmodel", "{} peak {} spilled {} price {}", global.name.as_deref().unwrap_or("?"), forecast.peak, forecast.spilled.len(), forecast.cost);
+            }
+        }
+    }
 }
 
 /// `program` as MIR, a module per HIR module, linked against the runtime
 /// its promises describe; and each module's data objects' globals, by the
 /// objects' ids.
 pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
+    // Whichever frontend made it, a program is checked before it is lowered.
+    crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
     let emitted = crate::hir::mir::emit(program);
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
@@ -100,8 +140,12 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
     llrm_transforms::pipeline::applied(program, &applied)?;
+    program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped);
     program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
     program.modules.iter_mut().try_for_each(crate::backend::selects::lowered)?;
+    if llrm_support::debug::enabled("spillmodel") {
+        spill_model(program);
+    }
     verified(program, "the pipeline")
 }
 
@@ -162,5 +206,11 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
         reserve: 0,
         callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
         interrupt: None,
+        size: false,
+        entry: 0,
+        stack_check: None,
     }
 }
+
+#[cfg(test)]
+mod lifetimes_tests;

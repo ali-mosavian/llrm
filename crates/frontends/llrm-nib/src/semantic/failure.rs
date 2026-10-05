@@ -57,7 +57,7 @@ impl FunctionCompiler<'_> {
             return Err(type_mismatch(span, expected.expect("checked"), type_name));
         }
         let value = self.value(type_name);
-        let place = self.projected_place(&view, field.offset, type_name);
+        let place = self.field_place(&view, field.offset, type_name);
         self.emit("load", vec![value], vec![place], None);
         // The payload leaves the outcome, which nothing drops: it is this
         // statement's to move or drop.
@@ -140,9 +140,7 @@ impl FunctionCompiler<'_> {
                 }
             },
         };
-        let tag = self.value(layout.tag);
-        let place = self.projected_place(&view, 0, layout.tag);
-        self.emit("load", vec![tag], vec![place], None);
+        let tag = self.load_tag(&view, &layout);
         let failed = self.value(TypeName::Bool);
         self.emit(
             "eq",
@@ -185,7 +183,7 @@ impl FunctionCompiler<'_> {
         let own = own.expect("checked");
         let destination = self.struct_view(&Expr::Name(RESULT.into(), span), span)?;
         let mut stores = vec![Store::One(
-            self.projected_place(&destination, 0, own.tag),
+            self.field_place(&destination, 0, own.tag),
             hir::Operand::Constant(type_id(own.tag), own_failure.tag),
         )];
         let (target, fields) = if own_failure.name == failure.name && same_types(&own_failure, failure) {
@@ -195,7 +193,7 @@ impl FunctionCompiler<'_> {
             let (_, field) = &own_failure.fields[0];
             let target = StructView { struct_id: wrapper, offset: destination.offset + field.offset, ..destination };
             let tag = self.types.enum_of(ElementType::Struct(wrapper)).expect("an enum").tag;
-            stores.push(Store::One(self.projected_place(&target, 0, tag), hir::Operand::Constant(type_id(tag), wrapping.tag)));
+            stores.push(Store::One(self.field_place(&target, 0, tag), hir::Operand::Constant(type_id(tag), wrapping.tag)));
             (target, wrapping.fields)
         } else {
             return Err(Diagnostic::new(
@@ -211,10 +209,10 @@ impl FunctionCompiler<'_> {
             match to.type_ {
                 ElementType::Scalar(type_name) => {
                     let value = self.value(type_name);
-                    let place = self.projected_place(source, from.offset, type_name);
+                    let place = self.field_place(source, from.offset, type_name);
                     self.emit("load", vec![value], vec![place], None);
                     stores.push(Store::One(
-                        self.projected_place(&target, to.offset, type_name),
+                        self.field_place(&target, to.offset, type_name),
                         hir::Operand::Value(value),
                     ));
                 }

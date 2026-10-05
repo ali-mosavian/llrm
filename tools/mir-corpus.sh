@@ -2,7 +2,7 @@
 # The rich-MIR corpus that llrm-analysis's corpus tests read: each program's
 # MIR as HIR emits it (emitted/NAME.ll) and after llrm_mir's pipeline
 # (optimized/NAME.ll, the last LLRM_MIR_STAGES dump of a compile).
-# Covers tests/suite (qb-), the QuickBASIC demos in $QBDEMOS (demo-), Nib's
+# Covers tests/run/qb (qb-), the QuickBASIC demos in $QBDEMOS (demo-), Nib's
 # fixtures and examples (nib-) and its runtime (nib-runtime). A program is
 # left out when a function is refused or the module fails the verifier, and
 # a module identical to one already kept is kept once. C has no route:
@@ -37,7 +37,7 @@ add() {
 }
 qb() {
   local name=$1 source=$2; shift 2
-  if "$bin/llrm-qb" "$source" "$@" --dump-hir "$work/$name.json" --mir >/dev/null 2>"$work/$name.frontend"; then
+  if "$bin/llrm-qb" "$source" "$@" --dump-hir "$work/$name.json" >/dev/null 2>"$work/$name.frontend"; then
     add "$name" "$work/$name.json" "$bin/llrm-qb" "$source" "$@"
   else
     echo "frontend fails: $name"
@@ -55,9 +55,9 @@ nib() {
 }
 # The pipeline's last pass, as the stage dumps name it.
 mkdir "$work/probe"
-LLRM_MIR_STAGES=$work/probe "$bin/llrm-qb" "$root/tests/suite/addrm.bas" -o "$work/probe.obj" >/dev/null 2>&1
+LLRM_MIR_STAGES=$work/probe "$bin/llrm-qb" "$root/tests/run/qb/addrm.bas" -o "$work/probe.obj" >/dev/null 2>&1
 pipeline_end=$(ls "$work/probe" | tail -1)
-for source in "$root"/tests/suite/*.bas; do
+for source in "$root"/tests/run/qb/*.bas; do
   qb "qb-$(basename "$source" .bas)" "$source"
 done
 for demo in qbdemo oimad deedlines; do

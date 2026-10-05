@@ -1,10 +1,8 @@
-//! Values placed from their sums: LLVM's `SCEVExpander`. A `Linear` is
+//! Values placed from their sums: LLVM's `SCEVExpander`. A `Scev` is
 //! built of its terms scaled and added once each, before one instruction,
 //! and the least of several as compares and selects.
 
-use std::collections::BTreeMap;
-
-use llrm_analysis::induction::Linear;
+use llrm_analysis::induction::{Scev, Monomial};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand};
@@ -24,7 +22,7 @@ pub fn signed(value: &BigInt, width: u32) -> BigInt {
 /// Builds invariants before the preheader's branch, each once.
 pub struct Expander {
     at: InstId,
-    made: HashMap<(Option<Operand>, Linear, TypeId), Operand>,
+    made: HashMap<(Option<Operand>, Scev, TypeId), Operand>,
 }
 
 impl Expander {
@@ -34,12 +32,12 @@ impl Expander {
     }
 
     /// `sum` as an integer of its width.
-    pub fn int(&mut self, context: &mut Context, function: &mut Function, sum: &Linear) -> Operand {
+    pub fn int(&mut self, context: &mut Context, function: &mut Function, sum: &Scev) -> Operand {
         sum_of(context, function, sum, Position::Before(self.at), &mut self.made)
     }
 
     /// `pointer + sum`, of type `ty`, or the integer sum where no pointer.
-    pub fn value(&mut self, context: &mut Context, function: &mut Function, pointer: Option<Operand>, sum: &Linear, ty: TypeId) -> Operand {
+    pub fn value(&mut self, context: &mut Context, function: &mut Function, pointer: Option<Operand>, sum: &Scev, ty: TypeId) -> Operand {
         let Some(pointer) = pointer else { return self.int(context, function, sum) };
         if sum.is_zero() {
             return pointer;
@@ -56,7 +54,7 @@ impl Expander {
     }
 
     /// The least of `sums` as unsigned numbers, each of their one width.
-    pub fn least(&mut self, context: &mut Context, function: &mut Function, sums: &[Linear]) -> Operand {
+    pub fn least(&mut self, context: &mut Context, function: &mut Function, sums: &[Scev]) -> Operand {
         let at = Position::Before(self.at);
         let mut least = self.int(context, function, &sums[0]);
         for sum in &sums[1..] {
@@ -71,24 +69,22 @@ impl Expander {
 }
 
 /// `sum` placed at `at`, reusing what `made` holds.
-fn sum_of(context: &mut Context, function: &mut Function, sum: &Linear, at: Position, made: &mut HashMap<(Option<Operand>, Linear, TypeId), Operand>) -> Operand {
+fn sum_of(context: &mut Context, function: &mut Function, sum: &Scev, at: Position, made: &mut HashMap<(Option<Operand>, Scev, TypeId), Operand>) -> Operand {
     let ty = context.types.int(sum.width);
     if let Some(&one) = made.get(&(None, sum.clone(), ty)) {
         return one;
     }
     let mut total: Option<Operand> = None;
     let mut negative = Vec::new();
-    for (&value, factor) in &sum.terms {
+    for (product, factor) in &sum.terms {
         let factor = signed(factor, sum.width);
         let magnitude = BigInt::from(factor.magnitude().clone());
-        let alone = (None, Linear { constant: BigInt::from(0), terms: BTreeMap::from([(value, magnitude.clone())]), width: sum.width }, ty);
+        let alone = (None, Scev::monomial(product.clone(), magnitude.clone(), sum.width), ty);
         let scaled = match made.get(&alone) {
             Some(&one) => one,
             None => {
-                // A term is its value's low bits.
-                let bits = context.types.int_bits(function.value(value).ty).unwrap_or(sum.width);
-                let term = if bits > sum.width { placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at) } else { Operand::Value(value) };
-                let one = scaled(context, function, term, &magnitude, sum.width, at);
+                let one = product_of(context, function, product, sum.width, at, made);
+                let one = scaled(context, function, one, &magnitude, sum.width, at);
                 made.insert(alone, one);
                 one
             }
@@ -119,6 +115,28 @@ fn sum_of(context: &mut Context, function: &mut Function, sum: &Linear, at: Posi
     result
 }
 
+/// The unknowns of `product` multiplied once, a product of invariants in
+/// the block `at` is in: each factor is its value's low bits.
+fn product_of(context: &mut Context, function: &mut Function, product: &Monomial, width: u32, at: Position, made: &mut HashMap<(Option<Operand>, Scev, TypeId), Operand>) -> Operand {
+    let ty = context.types.int(width);
+    let key = (None, Scev::monomial(product.clone(), BigInt::from(1), width), ty);
+    if let Some(&one) = made.get(&key) {
+        return one;
+    }
+    let mut made_product = None;
+    for &value in product.values() {
+        let bits = context.types.int_bits(function.value(value).ty).unwrap_or(width);
+        let factor = if bits > width { placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at) } else { Operand::Value(value) };
+        made_product = Some(match made_product {
+            Some(so_far) => placed(context, function, Opcode::Binary(BinaryOp::Mul), ty, vec![so_far, factor], at),
+            None => factor,
+        });
+    }
+    let made_product = made_product.expect("a product has a factor");
+    made.insert(key, made_product);
+    made_product
+}
+
 /// `value * k`, `k` positive: itself, a shift or a multiply.
 pub fn scaled(context: &mut Context, function: &mut Function, value: Operand, k: &BigInt, width: u32, at: Position) -> Operand {
     let ty = context.types.int(width);
@@ -140,3 +158,7 @@ pub fn placed(context: &mut Context, function: &mut Function, opcode: Opcode, ty
     Operand::Value(function.instruction(inst).result.expect("a value"))
 }
 
+
+#[cfg(test)]
+#[path = "expand_tests.rs"]
+mod tests;

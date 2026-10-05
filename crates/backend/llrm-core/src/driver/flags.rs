@@ -7,10 +7,9 @@ use llrm_transforms::inline::Threshold;
 use llrm_transforms::pipeline;
 
 use crate::abi::machine::Machine;
-use crate::model::passes;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [--cpu CPU] [--machine MACHINE] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,18 +39,6 @@ impl Level {
         })
     }
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::O0 => "O0",
-            Self::O1 => "O1",
-            Self::O2 => "O2",
-            Self::O3 => "O3",
-            Self::Os => "Os",
-            Self::Oz => "Oz",
-            Self::Og => "Og",
-        }
-    }
-
     pub fn options(self) -> pipeline::Options {
         match self {
             Self::O0 => pipeline::Options::none(),
@@ -68,7 +55,7 @@ impl Level {
 const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 11] = [
     ("unroll-loops", |options, on| options.unroll = on),
     ("peel-loops", |options, on| options.peel = on),
-    ("inline-functions", |options, on| options.inline = if !on { Threshold(0) } else if options.inline.0 == 0 { Threshold::default() } else { options.inline }),
+    ("inline-functions", |options, on| options.inline = if !on { Threshold::new(0) } else if options.inline.limit == 0 { Threshold { limit: Threshold::default().limit, ..options.inline } } else { options.inline }),
     ("strength-reduce", |options, on| options.strength = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
@@ -90,6 +77,9 @@ pub struct Sanitize {
     /// `signed-integer-overflow`, or `-ftrapv`: integer arithmetic and
     /// narrowing.
     pub signed_integer_overflow: bool,
+    /// `stack`: each procedure's entry compares SP with the runtime's limit. Not part of
+    /// `undefined`, as gcc's `-fstack-check` is not.
+    pub stack: bool,
 }
 
 impl Sanitize {
@@ -100,8 +90,9 @@ impl Sanitize {
                 "bounds" => self.bounds = on,
                 "integer-divide-by-zero" => self.integer_divide_by_zero = on,
                 "signed-integer-overflow" => self.signed_integer_overflow = on,
-                "undefined" => *self = Self { bounds: on, integer_divide_by_zero: on, signed_integer_overflow: on },
-                _ => return Err(format!("unknown sanitizer {name}; choose bounds, integer-divide-by-zero, signed-integer-overflow or undefined")),
+                "stack" => self.stack = on,
+                "undefined" => *self = Self { bounds: on, integer_divide_by_zero: on, signed_integer_overflow: on, stack: self.stack },
+                _ => return Err(format!("unknown sanitizer {name}; choose bounds, integer-divide-by-zero, signed-integer-overflow, stack or undefined")),
             }
         }
         Ok(())
@@ -122,17 +113,24 @@ pub struct Flags {
     machine: Option<PathBuf>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
+    far_bss: Option<bool>,
+    /// `--clocks-per-byte N`: the clocks an inline must save for each byte of code it adds (default 16; 0 allows no growth).
+    milliclocks_per_byte: Option<i64>,
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
     pub sanitize: Sanitize,
     /// `-g`: CodeView debug information.
     pub debug: bool,
+    /// `-fstack-usage`.
+    pub stack_usage: bool,
+    /// `-Wstack-usage=N`.
+    pub stack_limit: Option<i64>,
 }
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -160,13 +158,25 @@ impl Flags {
             "-g0" => self.debug = false,
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
+            "-mfar-bss" => self.far_bss = Some(true),
+            "-mno-far-bss" => self.far_bss = Some(false),
             "--cpu" => self.cpu = Some(value("--cpu")?),
+            "--clocks-per-byte" => {
+                let text = value("--clocks-per-byte")?;
+                let clocks = text.parse::<f64>().ok().filter(|clocks| clocks.is_finite() && *clocks >= 0.0);
+                self.milliclocks_per_byte = Some((clocks.ok_or_else(|| format!("--clocks-per-byte {text}: expected a number of clocks"))? * 1000.0).round() as i64);
+            }
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if flag.starts_with("-march=") || flag.starts_with("-mtune=") => {
                 let (option, name) = flag.split_once('=').expect("an =");
                 let cpu = CPUS.iter().find(|(gcc, _)| *gcc == name).ok_or_else(|| format!("unknown {option}={name}; choose i386, i486 or pentium"))?;
                 self.cpu = Some(cpu.1.to_owned());
+            }
+            "-fstack-usage" => self.stack_usage = true,
+            _ if flag.starts_with("-Wstack-usage=") => {
+                let limit = &flag["-Wstack-usage=".len()..];
+                self.stack_limit = Some(limit.parse().map_err(|_| format!("-Wstack-usage={limit}: expected a number of bytes"))?);
             }
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
@@ -192,34 +202,10 @@ impl Flags {
         for &(pass, on) in &self.passes {
             PASSES[pass].1(&mut options, on);
         }
-        options
-    }
-
-    /// The old MIR's options, for `--legacy`.
-    pub fn legacy(&self) -> passes::Options {
-        let options = self.pipeline();
-        let on = |pass: bool| options.optimize && pass;
-        passes::Options {
-            level: self.level.name().to_owned(),
-            max_unroll_iterations: options.limits.max_unroll_iterations,
-            max_unrolled_operations: options.limits.max_unrolled_operations,
-            grows: options.limits.grows,
-            lcssa: on(options.lcssa),
-            floatloop: on(options.floatloop),
-            fold: on(options.fold),
-            decide: on(options.decide),
-            dead: on(options.dead),
-            hoist: on(options.hoist),
-            forward: on(options.forward),
-            drop_loads: on(options.drop_loads),
-            drop_stores: on(options.drop_stores),
-            promote: on(options.promote),
-            strength: on(options.strength),
-            unroll: on(options.unroll),
-            peel: on(options.peel),
-            fill: on(options.fill),
-            unswitch: on(options.unswitch),
+        if let Some(clocks) = self.milliclocks_per_byte {
+            options.limits.milliclocks_per_byte = clocks;
         }
+        options
     }
 
     /// `default`, or the `--machine` description, on the CPU named.
@@ -234,12 +220,15 @@ impl Flags {
         if let Some(stack_is_data) = self.stack_is_data {
             machine.segments.stack_is_data = stack_is_data;
         }
+        if let Some(far_bss) = self.far_bss {
+            machine.far_bss = far_bss;
+        }
         Ok(machine)
     }
 
     /// The driver's options for `machine`.
     pub fn driver(&self, machine: Machine) -> super::Options {
-        super::Options { pipeline: self.pipeline(), ..super::Options::of(machine) }
+        super::Options { pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, ..super::Options::of(machine) }
     }
 }
 

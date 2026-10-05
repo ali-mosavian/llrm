@@ -1,0 +1,14 @@
+# 30000 i32s (120000 bytes) in huge memory: fill, then sum.
+huge var a: i32[30000] = [0] * 30000
+
+fn bench_long1d() -> i32:
+    let mut t: i32 = 0
+    for i in 0..30000:
+        a[i] = i32(i) + 5
+    for i in 0..30000:
+        t += a[i]
+    return t
+
+fn main() -> i16:
+    print(bench_long1d())
+    return 0

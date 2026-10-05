@@ -14,6 +14,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
+use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals::{self as ranges, Indexes, Interval};
 use crate::analysis::loops;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -146,8 +147,17 @@ pub fn live(body: &LirBody) -> (Live, Live) {
         })
         .collect();
     let mut exposed: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
+    // A phi's argument is read at the end of the predecessor it comes from.
+    let mut handed: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = BTreeSet::new();
+        for phi in &block.phis {
+            for (from, value) in &phi.incoming {
+                handed.entry(*from).or_default().insert(*value);
+            }
+        }
+    }
+    for block in &body.blocks {
+        let mut alive: BTreeSet<u32> = handed.get(&block.at).cloned().unwrap_or_default();
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
             let first = _group_start(block, index as usize);
@@ -232,7 +242,16 @@ pub fn live(body: &LirBody) -> (Live, Live) {
             .collect()
     };
     let live_in: Live = body.blocks.iter().zip(&into).map(|(block, set)| (block.at, values(set))).collect();
-    let live_out: Live = body.blocks.iter().zip(&out).map(|(block, set)| (block.at, values(set))).collect();
+    let live_out: Live = body
+        .blocks
+        .iter()
+        .zip(&out)
+        .map(|(block, set)| {
+            let mut leaving = values(set);
+            leaving.extend(handed.get(&block.at).into_iter().flatten().copied());
+            (block.at, leaving)
+        })
+        .collect();
     (live_in, live_out)
 }
 
@@ -285,50 +304,6 @@ pub fn narrowed(body: &LirBody, pinned: &IndexMap<u32, Register>) -> (LirBody, I
             .map(|(value, register)| (*value, *register))
             .collect(),
     )
-}
-
-/// Which values are ever live at the same moment.
-pub fn interference(body: &LirBody) -> IndexMap<u32, BTreeSet<u32>> {
-    let (_into, out_of) = live(body);
-    let mut graph: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
-
-    let meet = |graph: &mut IndexMap<u32, BTreeSet<u32>>, alive: &BTreeSet<u32>| {
-        for one in alive {
-            graph
-                .entry(*one)
-                .or_default()
-                .extend(alive.iter().copied().filter(|other| other != one));
-        }
-    };
-
-    for block in &body.blocks {
-        for one in &block.insns {
-            for value in one.defines.iter().chain(&one.uses) {
-                graph.entry(*value).or_default();
-            }
-        }
-        for value in block.arrives() {
-            graph.entry(value).or_default();
-        }
-        let mut alive = out_of[&block.at].clone();
-        meet(&mut graph, &alive);
-        let mut index = block.insns.len() as i64 - 1;
-        while index >= 0 {
-            let first = _group_start(block, index as usize);
-            let group = &block.insns[first..=index as usize];
-            for item in group {
-                for value in &item.defines {
-                    alive.remove(value);
-                }
-            }
-            for item in group {
-                alive.extend(item.uses.iter().copied());
-            }
-            meet(&mut graph, &alive);
-            index = first as i64 - 1;
-        }
-    }
-    graph
 }
 
 /// How far a range has got, and therefore what may still be tried on it.
@@ -1825,7 +1800,7 @@ struct Outcome {
 /// weighted by its loop depth. Alternatives differ only in what the
 /// allocator added, so this is the cost of that.
 fn _emitted(body: &LirBody) -> f64 {
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     body.blocks
         .iter()
         .map(|block| {
@@ -1835,7 +1810,7 @@ fn _emitted(body: &LirBody) -> f64 {
                 .filter_map(|one| one.what.as_ref())
                 .map(|what| what.dests.iter().chain(&what.sources).filter(|place| matches!(place, Loc::Mem(_))).count())
                 .sum();
-            ranges::level(deep.get(&block.at).copied().unwrap_or(0)) * (block.insns.len() + memory) as f64
+            busy.block(block.at) * (block.insns.len() + memory) as f64
         })
         .sum()
 }
@@ -1903,7 +1878,7 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
                 .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value))),
         );
     }
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for (at, (into, out_of)) in moves {
         if impure.contains(&into)
@@ -1912,7 +1887,7 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
         {
             continue;
         }
-        let each = ranges::level(deep.get(&at).copied().unwrap_or(0));
+        let each = busy.block(at);
         for value in [into, out_of] {
             *free.entry(value).or_insert(0.0) += each;
         }
@@ -1928,28 +1903,12 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
         .collect()
 }
 
-/// The memory references spilling these values costs, weighted by loop depth.
-pub fn _traffic(body: &LirBody, spilled: &BTreeSet<u32>) -> f64 {
-    let deep = ranges::depths(body);
-    let mut total = 0.0;
-    for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
-        for one in &block.insns {
-            for value in one.defines.iter().chain(&one.uses) {
-                if spilled.contains(value) {
-                    total += each;
-                }
-            }
-        }
-    }
-    total
-}
-
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
 /// reloads, stores and rematerializations, and the frame operands of x87 and
 /// other instructions. The allocator can reach only the first three.
 pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static str, f64> {
     let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut out = std::collections::BTreeMap::new();
     for block in &body.blocks {
         let depth = deep.get(&block.at).copied().unwrap_or(0);
@@ -1968,56 +1927,10 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
                 _ if frame => "int-frame",
                 _ => continue,
             };
-            *out.entry(cause).or_insert(0.0) += ranges::level(depth);
+            *out.entry(cause).or_insert(0.0) += busy.block(block.at);
         }
     }
     out
-}
-
-/// The instructions a plan inserted, weighted by loop depth.
-///
-/// Unpriced, sum_three's unfolded `add di,bx` looked free and the loop grew
-/// an instruction.
-fn _added(before: &LirBody, after: &LirBody) -> f64 {
-    let deep = ranges::depths(after);
-    let was: IndexMap<i64, usize> = before.blocks.iter().map(|block| (block.at, block.insns.len())).collect();
-    after
-        .blocks
-        .iter()
-        .map(|block| {
-            ranges::level(deep.get(&block.at).copied().unwrap_or(0))
-                * block.insns.len().saturating_sub(was.get(&block.at).copied().unwrap_or(0)) as f64
-        })
-        .sum()
-}
-
-/// The memory references to these values' frame slots, weighted by loop depth.
-fn _slot_traffic(body: &LirBody, frame: &Frame, values: &BTreeSet<u32>) -> f64 {
-    let homes: BTreeSet<i64> =
-        values.iter().filter_map(|value| frame.slots.get(&frames::SlotKey::from(*value)).copied()).collect();
-    if homes.is_empty() {
-        return 0.0;
-    }
-    let deep = ranges::depths(body);
-    let mut total = 0.0;
-    for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
-        for one in &block.insns {
-            let Some(what) = &one.what else {
-                continue;
-            };
-            for place in what.dests.iter().chain(&what.sources) {
-                if let Loc::Mem(cell) = place {
-                    if cell.addr.is_some_and(|addr| addr.space == Space::Frame && homes.contains(&addr.disp))
-                        && cell.base.is_none()
-                    {
-                        total += each;
-                    }
-                }
-            }
-        }
-    }
-    total
 }
 
 /// Spilled invariant frame loads that repeatedly form addresses.
@@ -2029,10 +1942,10 @@ fn _retainable_bases(body: &LirBody, spilled: &BTreeSet<u32>) -> BTreeSet<u32> {
     if stable.is_empty() {
         return BTreeSet::new();
     }
-    let deep = ranges::depths(body);
-    let mut references: IndexMap<u32, i64> = IndexMap::default();
+    let busy = Frequency::of(body);
+    let mut references: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
-        let weight = ranges::PER_LEVEL.pow(deep.get(&block.at).copied().unwrap_or(0));
+        let weight = busy.block(block.at);
         for one in &block.insns {
             let bases: BTreeSet<u32> = match &one.what {
                 Some(what) => what
@@ -2047,12 +1960,12 @@ fn _retainable_bases(body: &LirBody, spilled: &BTreeSet<u32>) -> BTreeSet<u32> {
                 None => BTreeSet::new(),
             };
             for value in stable.intersection(&bases) {
-                *references.entry(*value).or_insert(0) += weight;
+                *references.entry(*value).or_insert(0.0) += weight;
             }
         }
     }
     let repeated: BTreeSet<u32> =
-        references.iter().filter(|(_value, weight)| **weight > 1).map(|(value, _)| *value).collect();
+        references.iter().filter(|(_value, weight)| **weight > 1.0).map(|(value, _)| *value).collect();
     stable.intersection(&repeated).copied().collect()
 }
 
@@ -2063,7 +1976,7 @@ fn _scoped_foldable_indexes(body: &LirBody, bases: &BTreeSet<u32>) -> BTreeSet<u
     }
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut indexes: BTreeSet<u32> = BTreeSet::new();
-    for found in loops::loops(&ranges::_graph(&body.blocks), Some(body.entry)) {
+    for found in loops::loops(&body.blocks, Some(body.entry)) {
         let cells: Vec<&Mem> = found
             .body
             .iter()
@@ -2116,10 +2029,10 @@ fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 
 /// Discount reads by the target-specific saving from folding them.
 fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile) -> IndexMap<u32, Interval> {
-    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+        let each = busy.block(block.at);
         for one in &block.insns {
             let discount = _fold_discount(one, profile);
             if discount == 0.0 {
@@ -2398,7 +2311,7 @@ mod tests {
     use super::*;
     use crate::analysis::intervals::Segment;
     use crate::backend::regalloc_input::{before_regalloc, through};
-    use crate::backend::{cpu, parcopy, select, verify};
+    use crate::backend::{parcopy, select, verify};
     use crate::model::ir::Imm;
 
     fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
@@ -2909,6 +2822,27 @@ mod tests {
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
     }
 
+    /// A phi's argument is read at the end of the predecessor it names: a value
+    /// only a phi reads was live nowhere, and a next-use analysis saw it dead.
+    #[test]
+    fn test_a_phi_argument_is_live_out_of_its_predecessor() {
+        let define = Insn::new(
+            0,
+            Some((0, 2)),
+            Some(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(5, 2)])),
+            vec![1],
+            vec![],
+        );
+        let mut first = block(0, vec![define]);
+        first.succ = vec![0x10];
+        let mut second = block(0x10, vec![]);
+        second.phis = vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)] }];
+        let body = LirBody::new("phi", 0, vec![first, second], IndexMap::default(), IndexMap::default());
+        let (live_in, live_out) = live(&body);
+        assert!(live_out[&0].contains(&1), "the argument leaves its predecessor: {live_out:?}");
+        assert!(!live_in[&0x10].contains(&1) && !live_in[&0x10].contains(&2));
+    }
+
     /// A failed recoloring must leave every holder where it was.
     #[test]
     fn test_a_recoloring_that_fails_restores_every_holder() {
@@ -3173,7 +3107,6 @@ mod tests {
         assert_eq!(found[&2], *target::WORD_BASES);
     }
 
-
     #[test]
     fn test_repeated_acyclic_stable_address_base_is_a_retention_candidate() {
         let mut insns = vec![_frame_load(1, 1, 6)];
@@ -3368,6 +3301,4 @@ mod tests {
         let made = splitkit::_next_value(&after) - before;
         assert!(made < 1000, "{made} values made for ten walks");
     }
-
 }
-

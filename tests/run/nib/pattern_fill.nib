@@ -1,0 +1,33 @@
+# A word or dword stored in n cells by a loop: the cells filled and no others.
+var a: i16[64] = [0] * 64
+var b: i32[64] = [0] * 64
+
+fn fillw(n: u16, v: i16) -> i16:
+    for i in 0..n:
+        a[i] = v
+    return 0
+
+fn filll(n: u16, v: i32) -> i16:
+    for i in 0..n:
+        b[i] = v
+    return 0
+
+fn main() -> i16:
+    let counts: u16[6] = [0, 1, 2, 17, 63, 64]
+    for t in 0..6:
+        for i in 0..64:
+            a[i] = 0
+            b[i] = 0
+        let x: i16 = fillw(counts[t], 4660)
+        let y: i16 = filll(counts[t], 305419896)
+        let mut s: i32 = 0
+        let mut c: i16 = 0
+        for i in 0..64:
+            s += i32(a[i])
+            if b[i] != 0:
+                c += 1
+        print(counts[t])
+        print(s)
+        print(c)
+        print(b[63])
+    return 0

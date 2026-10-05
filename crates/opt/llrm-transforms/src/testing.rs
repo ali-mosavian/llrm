@@ -106,6 +106,8 @@ pub struct Tuned {
     pub address_forms: Vec<llrm_mir::target::AddressForm>,
     /// What a multiply by each constant costs, where not a multiply.
     pub multiplies: std::collections::BTreeMap<i64, i64>,
+    /// `Machine::huge_window`.
+    pub window: Option<(u32, i64)>,
 }
 
 impl llrm_mir::target::Machine for Tuned {
@@ -143,6 +145,10 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn multiply_by(&self, factor: i64) -> i64 {
         self.multiplies.get(&factor).copied().unwrap_or(self.costs.multiply)
+    }
+
+    fn huge_window(&self) -> Option<(u32, i64)> {
+        self.window
     }
 }
 

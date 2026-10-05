@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::analysis::intervals::{self as ranges, _graph};
+use crate::analysis::frequency::Frequency;
 use crate::analysis::loops::{self, Loop};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
@@ -448,7 +448,7 @@ fn spares(one: &Insn, at: i64) -> bool {
     let Some(what) = one.what.as_ref() else {
         return false;
     };
-    if matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape | Operation::Fill | Operation::Restore) {
+    if matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape | Operation::Fill | Operation::Copy | Operation::Restore) {
         return false;
     }
     what.dests.iter().all(|place| match place {
@@ -465,12 +465,12 @@ fn spares(one: &Insn, at: i64) -> bool {
 
 /// `body` with each loop-invariant reload moved to where its loop is entered.
 pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
-    let graph = _graph(&body.blocks);
+    let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
     let (live_into, _, _) = liveness::live_into(body);
     let mut blocks = body.blocks.clone();
-    let mut found = loops::loops(&graph, Some(body.entry));
+    let mut found = loops::loops(graph, Some(body.entry));
     found.sort_by_key(|one| one.body.len());
     let mut taken = BTreeSet::<i64>::new();
     for one in &found {
@@ -533,13 +533,14 @@ pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
 
 /// `body` with each loop's spill slots in the registers it leaves free.
 pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
-    let graph = _graph(&body.blocks);
+    let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
-    let mut found = loops::loops(&graph, Some(body.entry));
+    let mut found = loops::loops(graph, Some(body.entry));
     // Innermost first: it runs most often.
     found.sort_by_key(|one| one.body.len());
     let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
     let (live_into, _, _) = liveness::live_into(body);
+    let busy = Frequency::of(body);
     let mut blocks = body.blocks.clone();
     let mut taken = BTreeSet::<i64>::new();
     for one in &found {
@@ -592,6 +593,9 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
             .collect::<Vec<_>>();
         ranked.sort_by_key(|(saved, at)| (std::cmp::Reverse(*saved), *at));
         let (entered, left) = (entries.len() as i64, exits.len() as i64);
+        // The trips a saving repeats: the header's frequency per entry.
+        let entering: f64 = entries.iter().map(|from| busy.edge(*from, one.header)).sum();
+        let trips = if entering > 0.0 { busy.block(one.header) / entering } else { 1.0 };
         let written = |at: i64| insns().any(|insn| touch(insn).writes_slot(at));
         let stored = |at: i64| written(at) && { let live = live_in(body, at); exits.iter().any(|to| live.contains(to)) };
         // BP takes the last slot when the rest fill every free register.
@@ -601,7 +605,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         for (host, ((saved, at), (root, hold))) in ranked.iter().zip(&registers).enumerate() {
             let parked = if matches!(hold, Hold::Parked(_)) { (entered + left) * park } else { 0 };
             let cost = entered * costs.load + if stored(*at) { left * costs.store } else { 0 } + parked;
-            if saved * ranges::PER_LEVEL > cost {
+            if *saved as f64 * trips > cost as f64 {
                 homes.insert(*at, word(*root));
                 hosts.insert(*at, host);
             }
@@ -609,7 +613,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         let bp_slot = ranked.last().map(|(_, at)| *at).filter(|_| bp && homes.len() == registers.len());
         if let Some(at) = bp_slot {
             let saved = ranked.last().expect("a slot").0;
-            if saved * ranges::PER_LEVEL > entered * (costs.store + costs.load) + left * costs.load {
+            if saved as f64 * trips > (entered * (costs.store + costs.load) + left * costs.load) as f64 {
                 homes.insert(at, Loc::Reg(Reg { register: Register::BP, width: WORD }));
             }
         }

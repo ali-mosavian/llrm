@@ -2,7 +2,7 @@
 
 ## Current runtime benchmark check, 2026-09-09
 
-A fresh VBDOS `/G3` build of `bench/nbody.bas` has zero severe compiler
+A fresh VBDOS `/G3` build of `bench/nbody_fixed/nbody_fixed.bas` has zero severe compiler
 errors, but cannot yet provide a current optimized timing. Requiring
 `wholeseg.Emission.LIR` (rather than timing rewrite's unchanged fallback)
 first refused at `0x0444`: the allocator inserted `mov al,cl` before the

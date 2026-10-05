@@ -1,0 +1,4 @@
+normal 7, warning 206, inverted 112
+byte waiting, ready to send
+errors: false
+control 55: parity 2, offset 1

@@ -16,7 +16,6 @@ use super::*;
 use crate::backend::frame::Frame;
 use crate::backend::{copyprop, parcopy, prologue, spillforward, verify};
 use crate::model::ir::Addr;
-use crate::model::mir::{Kind, OpCode};
 use crate::support::pyrepr::Repr;
 
 fn r(register: Register, width: u32) -> Reg {
@@ -83,10 +82,6 @@ fn whats(insns: &[Arc<Insn>]) -> Vec<Semantics> {
         .collect()
 }
 
-fn op(at: i64, operation: Operation, name: &str, kind: Kind) -> mir::Op {
-    mir::Op { kind, ..mir::Op::new(at, OpCode::Operation(operation), name, vec![], vec![]) }
-}
-
 // ---------------------------------------------------------------- test_peephole
 
 #[test]
@@ -111,55 +106,6 @@ fn test_screen_argument_reuses_its_required_register_constant() {
         assert_eq!(insns[0].defines, [7]);
         assert_eq!(insns[1].uses, [7]);
     }
-}
-
-fn concat_parts(last: Insn) -> Vec<Arc<Insn>> {
-    let (high, low, result) = (rl(Register::DX, 2), rl(Register::AX, 2), rl(Register::EAX, 4));
-    let marker = op(0, Operation::Move, "concat", Kind::Concat);
-    vec![
-        Arc::new(Insn {
-            op: Some(Arc::new(marker)),
-            ..insn(0, Some((0, 0)), Some(sem(Operation::Push, "push", vec![], vec![high])), vec![], vec![1])
-        }),
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Push, "push", vec![], vec![low])), vec![], vec![2])),
-        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Pop, "pop", vec![result], vec![])), vec![3], vec![])),
-        Arc::new(last),
-    ]
-}
-
-#[test]
-fn test_word_pair_concat_uses_the_386_funnel_sequence() {
-    // qgl_surf_from_member used push DX/push AX/pop EAX; BCC needs only SHL/SHRD.
-    let compare = insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(Register::EAX, 4), im(0, 4)])),
-        vec![],
-        vec![3],
-    );
-    let transformed = transform(body("qgl_surf_from_member", 0, vec![block(0, concat_parts(compare), vec![])]));
-    let emitted: Vec<String> = whats(&transformed.insns()).into_iter().map(|what| what.name.unwrap()).collect();
-    assert_eq!(emitted[..2], ["shl", "shrd"]);
-    assert!(
-        !transformed
-            .insns()
-            .iter()
-            .any(|one| matches!(one.what.as_ref().unwrap().op, Operation::Push | Operation::Pop))
-    );
-}
-
-#[test]
-fn test_word_pair_concat_keeps_the_stack_sequence_when_flags_are_live() {
-    // SHL/SHRD modify flags; a branch reading the incoming flags must keep the stack join.
-    let branch = insn(1, Some((1, 1)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(10))), vec![], vec![]);
-    let transformed = transform(body(
-        "flagged",
-        0,
-        vec![block(0, concat_parts(branch), vec![10]), block(10, vec![], vec![])],
-    ));
-    let ops: Vec<Operation> =
-        transformed.blocks[0].insns[..3].iter().map(|one| one.what.as_ref().unwrap().op).collect();
-    assert_eq!(ops, [Operation::Push, Operation::Push, Operation::Pop]);
 }
 
 #[test]
@@ -416,6 +362,22 @@ fn test_commuted_accumulator_keeps_the_saved_value() {
     }
 }
 
+/// `push 112; push 112` joined into `pushd 7340144` at -Os: 6 bytes for 4. Tuned for size two
+/// word pushes join only where the dword is no longer (`push 0; push 0` is `pushd 0`, 3 for 4).
+#[test]
+fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() {
+    for (high, low, joined, size) in [(0x70i64, 0x70i64, false, true), (0x70, 0x70, true, false), (0, 0, true, true), (0x3F80, 0, false, true)] {
+        let push = |at: i64, number: i64| {
+            Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
+        };
+        let input = body("arguments", 0, vec![block(0, vec![push(0, high), push(3, low)], vec![])]);
+
+        let result = pushes(&input, crate::backend::cpu::tuned("486", size).unwrap()).insns();
+
+        assert_eq!(result.len(), if joined { 1 } else { 2 }, "{high:#x}:{low:#x} size={size}");
+    }
+}
+
 #[test]
 fn test_constant_push_pair_preserves_stack_bytes() {
     for (high, low) in [(0x43F3i64, 0xC000i64), (-1, -2), (0, 0), (0x8000, 0x7FFF)] {
@@ -423,7 +385,7 @@ fn test_constant_push_pair_preserves_stack_bytes() {
             Arc::new(insn(at, Some((at, at + 3)), Some(sem(Operation::Push, "push", vec![], vec![im(number, 2)])), vec![], vec![]))
         };
         let pair = vec![push(0, high), push(3, low)];
-        let result = pushes(&body("arguments", 0, vec![block(0, pair, vec![])])).insns();
+        let result = pushes(&body("arguments", 0, vec![block(0, pair, vec![])]), crate::backend::cpu::tuned("486", false).unwrap()).insns();
         assert!(result.len() == 1 && result[0].covers == Some((0, 6)));
         let Loc::Imm(operand) = &result[0].what.as_ref().unwrap().sources[0] else { unreachable!() };
         let expected: Vec<u8> = ((low & 0xFFFF) as u16)
@@ -443,7 +405,7 @@ fn test_constant_push_fusion_stops_at_boundaries() {
     for barrier in ["relocation", "block", "instruction"] {
         let mut first =
             insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
-        let mut second = Insn { at: 3, covers: Some((3, 6)), ..first.clone() };
+        let second = Insn { at: 3, covers: Some((3, 6)), ..first.clone() };
         match barrier {
             "relocation" => {
                 first.what.as_mut().unwrap().sources = vec![Loc::Imm(Imm {
@@ -467,7 +429,7 @@ fn test_constant_push_fusion_stops_at_boundaries() {
             vec![block(0, insns, vec![])]
         };
         let input = body("boundary", 0, blocks);
-        assert_eq!(pushes(&input), input, "{barrier}");
+        assert_eq!(pushes(&input, crate::backend::cpu::tuned("486", false).unwrap()), input, "{barrier}");
     }
 }
 
@@ -477,14 +439,14 @@ fn test_constant_push_fusion_stops_at_boundaries() {
 fn test_a_byte_gap_does_not_stop_push_fusion() {
     let first = insn(0, Some((0, 3)), Some(sem(Operation::Push, "push", vec![], vec![im(1, 2)])), vec![], vec![]);
     let second = Insn { at: 4, covers: Some((4, 7)), ..first.clone() };
-    let fused = pushes(&body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]));
+    let fused = pushes(&body("gap", 0, vec![block(0, vec![Arc::new(first.clone()), Arc::new(second.clone())], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
     let code: Vec<_> = fused.insns().into_iter().filter(|one| !one.is_meta()).collect();
     assert_eq!(code.len(), 1, "{code:?}");
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 4, 5, 6]);
 
     // Nor does a marker between them.
     let marker = insn(3, Some((3, 4)), Some(lir::inert()), vec![], vec![]);
-    let fused = pushes(&body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]));
+    let fused = pushes(&body("marked", 0, vec![block(0, vec![Arc::new(first), Arc::new(marker), Arc::new(second)], vec![])]), crate::backend::cpu::tuned("486", false).unwrap());
     assert_eq!(fused.insns().iter().filter(|one| !one.is_meta()).count(), 1, "{:?}", fused.insns());
     assert_eq!(fused.owned_bytes(), [0, 1, 2, 3, 4, 5, 6]);
 }
@@ -865,6 +827,43 @@ fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
     }
 }
 
+/// A frame cell has two address components, its fixed BP and the dynamic base the allocator gave it.
+/// Widening the base to a 32-bit address would drop BP: Nib's sum_three wrote its locals through
+/// `[eax+si]`. The shape of the test above, each access a frame cell.
+#[test]
+fn test_a_frame_cell_keeps_its_bp_when_its_base_copies_are_unified() {
+    let owner = insn(
+        1,
+        Some((1, 3)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::DX, 2)], vec![Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(6), 2) })])),
+        vec![1],
+        vec![],
+    );
+    let mut insns = vec![Arc::new(owner)];
+    for (index, register) in [Register::BX, Register::SI, Register::DI, Register::BX].into_iter().enumerate() {
+        let index = index as i64 + 2;
+        let value = u32::try_from(index).unwrap();
+        let copy = insn(index, Some((index, index)), Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(Register::DX, 2)])), vec![value], vec![1]);
+        let cell = Mem { through: register, base: Some(Held { value, width: 2 }), ..Mem::new(frame(-8), 2) };
+        let load = insn(index, Some((index, index)), Some(sem(Operation::Move, "mov", vec![rl(Register::AX, 2)], vec![Loc::Mem(cell)])), vec![30 + value], vec![value]);
+        insns.extend([Arc::new(copy), Arc::new(load)]);
+    }
+    let input = body("secondary-base", 1, vec![block(1, insns, vec![])]);
+
+    let result = secondary_bases(&input, "386").unwrap().insns();
+
+    assert!(!result.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")), "a frame cell's base was widened");
+    for one in result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")) {
+        for source in &one.what.as_ref().unwrap().sources {
+            if let Loc::Mem(cell) = source {
+                if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_some() {
+                    assert_eq!(cell.base.unwrap().width, 2, "{cell:?}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn test_loaded_scaled_add_skips_metadata_only_anchors() {
     // Matmul retained `load; shl; add` when metadata anchors separated it.
@@ -1083,6 +1082,151 @@ fn test_affine_address_sees_flags_dead_past_its_block() {
     let result = addresses(&input, "386").unwrap();
 
     assert_eq!(names(&result.blocks[0].insns), ["lea"]);
+}
+
+/// `mov ax,di; sub ax,4` stayed two instructions (5 bytes) at 486: the only LEA the pass
+/// built was the 67h dword form, priced at its prefix. The word form `lea ax,[di-4]` is 3 bytes
+/// and no prefix: QCport -Os had some 700 such pairs.
+#[test]
+fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
+    for (label, source, then, expected, through, index, offset) in [
+        ("base and offset", Register::DI, ("sub", im(4, 2)), vec!["lea", "call"], Register::DI, Register::None, -4),
+        ("base and index", Register::BX, ("add", rl(Register::SI, 2)), vec!["lea", "call"], Register::BX, Register::SI, 0),
+        ("not an address register", Register::CX, ("sub", im(4, 2)), vec!["mov", "sub", "call"], Register::None, Register::None, 0),
+        ("two indexes", Register::SI, ("add", rl(Register::DI, 2)), vec!["mov", "add", "call"], Register::None, Register::None, 0),
+    ] {
+        let ax = rl(Register::AX, 2);
+        let insns = vec![
+            Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![rl(source, 2)])), vec![], vec![])),
+            Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, then.0, vec![ax.clone()], vec![ax.clone(), then.1])), vec![], vec![])),
+            Arc::new(Insn {
+                clobbers: BTreeSet::from([Register::AX, Register::CX, Register::DX]),
+                ..insn(2, Some((2, 2)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+            }),
+        ];
+        let input = body("word-lea", 0, vec![block(0, insns, vec![])]);
+
+        let result = addresses(&input, "486").unwrap();
+
+        assert_eq!(names(&result.blocks[0].insns), expected, "{label}");
+        if let Some(Loc::Address(address)) = result.blocks[0].insns[0].what.as_ref().unwrap().sources.first() {
+            assert_eq!((address.through, address.index, address.offset), (through, index, offset), "{label}");
+        }
+    }
+}
+
+/// The word LEA keeps no flags: `mov ax,di; sub ax,4; adc ...` reads the borrow, so stays.
+#[test]
+fn test_affine_address_word_lea_keeps_a_flag_still_read() {
+    let (ax, di) = (rl(Register::AX, 2), rl(Register::DI, 2));
+    let insns = vec![
+        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![ax.clone()], vec![di])), vec![], vec![])),
+        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "sub", vec![ax.clone()], vec![ax.clone(), im(4, 2)])), vec![], vec![])),
+        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "adc", vec![ax.clone()], vec![ax, im(0, 2)])), vec![], vec![])),
+    ];
+    let input = body("word-lea-flags", 0, vec![block(0, insns, vec![])]);
+
+    let result = addresses(&input, "486").unwrap();
+
+    assert_eq!(names(&result.blocks[0].insns), ["mov", "sub", "adc"]);
+}
+
+/// What the epilogue saves: the convention's preserved registers.
+fn saved() -> Vec<Register> {
+    crate::backend::masm::SAVED.keys().copied().collect()
+}
+
+/// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
+fn literal_store(at: i64, width: u32, disp: i64, value: i64) -> Arc<Insn> {
+    let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(disp), width) });
+    Arc::new(insn(at, Some((at, at + 1)), Some(sem(Operation::Move, "mov", vec![cell], vec![im(value, width)])), vec![], vec![]))
+}
+
+/// The function's remaining block, which reads `reads` and writes the flags (`flags`) or reads them.
+fn after_stores(reads_flags: bool, reads: &[Register]) -> Vec<Arc<Insn>> {
+    let first = if reads_flags {
+        sem(Operation::Binary, "adc", vec![rl(Register::SI, 2)], vec![rl(Register::SI, 2), im(0, 2)])
+    } else {
+        sem(Operation::Compare, "cmp", vec![], vec![rl(Register::SI, 2), im(0, 2)])
+    };
+    let mut insns = vec![Arc::new(insn(10, Some((10, 11)), Some(first), vec![], vec![]))];
+    // Everything after the block is live (it has no successor), so what it does not write
+    // first is read: the four scratch registers are written last, except where `reads` first
+    // reads them.
+    for (at, register) in reads.iter().enumerate() {
+        let what = sem(Operation::Compare, "cmp", vec![], vec![rl(*register, 4), im(0, 4)]);
+        insns.push(Arc::new(insn(11 + at as i64, Some((11 + at as i64, 12 + at as i64)), Some(what), vec![], vec![])));
+    }
+    for (at, register) in [Register::EAX, Register::EBX, Register::ECX, Register::EDX].into_iter().enumerate() {
+        let what = sem(Operation::Move, "mov", vec![rl(register, 4)], vec![im(1, 4)]);
+        insns.push(Arc::new(insn(20 + at as i64, Some((20 + at as i64, 21 + at as i64)), Some(what), vec![], vec![])));
+    }
+    insns
+}
+
+/// QCport -Os kept `mov dword ptr [bp-8],0` twice (16 bytes) where a zeroed register stores
+/// them in 3+4+4: some 270 runs. The literal's register must be dead, and the zero is `xor`
+/// only where the flags are, else `mov`; one that saves no byte (a lone word store) stays.
+#[test]
+fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let all = [Register::EAX, Register::EBX, Register::ECX, Register::EDX];
+    for (label, stores, flags_read, live, expected) in [
+        ("two dwords, flags dead", vec![(4, -4), (4, -8)], false, vec![], vec!["xor", "mov", "mov"]),
+        ("two dwords, flags read", vec![(4, -4), (4, -8)], true, vec![], vec!["mov", "mov", "mov"]),
+        ("a dword and a word", vec![(4, -4), (2, -8)], false, vec![], vec!["xor", "mov", "mov"]),
+        ("one dword", vec![(4, -4)], false, vec![], vec!["xor", "mov"]),
+        ("one word saves nothing", vec![(2, -2)], false, vec![], vec!["mov"]),
+        ("every scratch register read after", vec![(4, -4), (4, -8)], false, all.to_vec(), vec!["mov", "mov"]),
+    ] {
+        let mut insns: Vec<Arc<Insn>> =
+            stores.iter().enumerate().map(|(at, (width, disp))| literal_store(at as i64, *width, *disp, 0)).collect();
+        let next = after_stores(flags_read, &live);
+        let input = body("stores", 0, vec![block(0, std::mem::take(&mut insns), vec![1]), block(1, next, vec![])]);
+
+        let result = sharedstores::shared(&input, size, &saved());
+
+        let got = names(&result.blocks[0].insns);
+        assert_eq!(got, expected, "{label}");
+    }
+}
+
+/// Which scratch register a run may take is the convention's fact (`masm::SAVED`): where it
+/// preserves BX, a run takes BX only if the body already names it (so its epilogue saves it),
+/// else it would push and pop a register to save a byte.
+#[test]
+fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_body_names_it() {
+    let size = crate::backend::cpu::tuned("486", true).unwrap();
+    let input = |named: bool| {
+        // BX is dead after the stores (the call clobbers it, nothing reads it); the other
+        // scratch registers are read first. The body names BX only where it writes it first.
+        let mut insns = vec![literal_store(1, 4, -4, 0), literal_store(2, 4, -8, 0)];
+        if named {
+            let write = sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![im(5, 4)]);
+            insns.insert(0, Arc::new(insn(0, Some((0, 1)), Some(write), vec![], vec![])));
+        }
+        let mut next = after_stores(false, &[Register::EAX, Register::ECX, Register::EDX]);
+        next.truncate(4);
+        next.push(Arc::new(Insn {
+            clobbers: BTreeSet::from([Register::EAX, Register::EBX, Register::ECX, Register::EDX]),
+            ..insn(40, Some((40, 41)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+        }));
+        body("stores", 0, vec![block(0, insns, vec![1]), block(1, next, vec![])])
+    };
+    let preserving_bx = [Register::ESI, Register::EDI, Register::EBX];
+
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx).blocks[0].insns), ["mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved()).blocks[0].insns), ["xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
+}
+
+/// Two pushes of a clock are not a size choice: -O2 keeps the stores.
+#[test]
+fn test_stores_of_one_literal_are_not_shared_at_o2() {
+    let o2 = crate::backend::cpu::tuned("486", false).unwrap();
+    let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
+
+    assert_eq!(sharedstores::shared(&input, o2, &saved()), input);
 }
 
 #[test]
@@ -2028,10 +2172,8 @@ fn test_single_use_loaded_addend_folds_into_the_arithmetic_operand() {
     let delta = Loc::Mem(mem(Some(Addr { base: Register::SI, ..Addr::new(Space::Segment, 0) }), 2, Register::SI, 0, 0));
     let load = plain(0, Operation::Move, "mov", vec![cx.clone()], vec![delta.clone()], None);
     let addition = plain(1, Operation::Binary, "add", vec![ax.clone()], vec![ax.clone(), cx], None);
-    let mut returned = op(2, Operation::Return, "", Kind::Return);
-    returned.reads_complete = true;
     let finish = Arc::new(Insn {
-        op: Some(Arc::new(returned)),
+        reads_complete: true,
         ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
     });
     let input = body("loaded-addend", 0, vec![block(0, vec![load, addition, Arc::clone(&finish)], vec![])]);
@@ -2101,10 +2243,8 @@ fn test_one_use_compare_folds_before_a_complete_return() {
     let load = Arc::new(insn(1, None, Some(sem(Operation::Move, "mov", vec![di.clone()], vec![cell.clone()])), vec![1], vec![]));
     let compare = Arc::new(insn(2, None, Some(sem(Operation::Compare, "cmp", vec![], vec![di, im(0, 2)])), vec![], vec![1]));
     let branch = plain(3, Operation::Branch, "jge", vec![], vec![], Some(2));
-    let mut returned = op(4, Operation::Return, "", Kind::Return);
-    returned.reads_complete = true;
     let ret = Arc::new(Insn {
-        op: Some(Arc::new(returned)),
+        reads_complete: true,
         ..insn(4, None, Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![])
     });
     let input = body(
@@ -2473,24 +2613,18 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
 #[test]
 fn test_dword_constant_is_narrowed_when_the_abi_reads_only_its_low_word() {
     // C SCALAR emitted `mov eax,1789` where BASIC needed only AX.
-    let value = mir::Value::new(1, 1);
+    let value: u32 = 1;
     let source = insn(
         1,
         Some((1, 1)),
         Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![im(1789, 4)])),
-        vec![value.id],
+        vec![value],
         vec![],
     );
-    let returned = mir::Op {
-        kind: Kind::Return,
-        args: vec![mir::Arg::Held(mir::Held { value, width: 2 })],
-        reads_complete: true,
-        ..mir::Op::new(2, OpCode::Operation(Operation::Return), "ret", vec![], vec![value])
-    };
     let finish = Insn {
-        requires: vec![(Held { value: value.id, width: 2 }, Register::AX)],
-        op: Some(Arc::new(returned)),
-        ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![value.id])
+        requires: vec![(Held { value: value, width: 2 }, Register::AX)],
+        reads_complete: true,
+        ..insn(2, Some((2, 2)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![value])
     };
     // Source/symbol ownership anchors from the unrolled frontend body must be
     // transparent to physical liveness even though they constrain layout.
@@ -2528,12 +2662,8 @@ fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
 }
 
 fn extract_parts(source: Loc, high: Loc, discarded: Loc, last: Insn) -> Vec<Arc<Insn>> {
-    let marker = op(10, Operation::Restore, "extract", Kind::Extract);
     vec![
-        Arc::new(Insn {
-            op: Some(Arc::new(marker)),
-            ..insn(10, Some((10, 10)), Some(sem(Operation::Push, "push", vec![], vec![source])), vec![], vec![1])
-        }),
+        Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Push, "push", vec![], vec![source])), vec![], vec![1])),
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Pop, "pop", vec![discarded], vec![])), vec![2], vec![])),
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Pop, "pop", vec![high.clone()], vec![])), vec![3], vec![])),
         Arc::new(insn(11, Some((11, 11)), Some(sem(Operation::Compare, "cmp", vec![], vec![high, im(0, 2)])), vec![], vec![3])),
@@ -2564,8 +2694,6 @@ fn test_register_high_extract_uses_one_double_shift_for_dx_ax_return() {
 fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
     // Frontend-parity ALGEBRA's C path retained MOV EDX,ECX; SHR EDX,16.
     let (source, high) = (rl(Register::ECX, 4), rl(Register::EDX, 4));
-    let mut returned = op(12, Operation::Return, "return", Kind::Return);
-    returned.reads_complete = true;
     let parts = vec![
         Arc::new(insn(10, Some((10, 10)), Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])), vec![3], vec![1])),
         Arc::new(insn(
@@ -2576,7 +2704,7 @@ fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
             vec![3],
         )),
         Arc::new(Insn {
-            op: Some(Arc::new(returned)),
+            reads_complete: true,
             requires: vec![(Held { value: 4, width: 2 }, Register::AX), (Held { value: 3, width: 2 }, Register::DX)],
             ..insn(
                 12,
@@ -2757,44 +2885,23 @@ fn test_commutative_result_copy_keeps_source_owned_copy_bytes() {
 }
 
 fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
-    let value = mir::Value::new(1, 1);
-    let source = mir::Value::new(2, 1);
-    let operation = Arc::new(mir::Op {
-        kind: Kind::Shr,
-        args: vec![mir::Arg::Held(mir::Held { value: source, width: 4 }), mir::Arg::Const(mir::Const::new(16, 1))],
-        results: vec![mir::Arg::Held(mir::Held { value, width: 4 })],
-        ..mir::Op::new(1, OpCode::Operation(Operation::Binary), "shr", vec![value], vec![source])
-    });
     let wide = rl(Register::EDX, 4);
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-4), 4) });
+    // A reload carries the call memory of what it stands beside: here a call
+    // that touches none.
+    let beside = crate::model::lir::CallMemory { effects: llrm_mir::memory::Effects::NONE, private: vec![] };
     let load = Insn {
-        op: Some(Arc::clone(&operation)),
         symbol: Some(false),
+        call: Some(Arc::new(beside)),
         ..insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![wide.clone()], vec![cell])), vec![1], vec![])
     };
-    let shift = Insn {
-        op: Some(operation),
-        ..insn(
-            1,
-            Some((1, 1)),
-            Some(sem(Operation::Binary, "shr", vec![wide.clone()], vec![wide, im(16, 1)])),
-            vec![1],
-            vec![1],
-        )
-    };
+    let shift = insn(1, Some((1, 1)), Some(sem(Operation::Binary, "shr", vec![wide.clone()], vec![wide, im(16, 1)])), vec![1], vec![1]);
     body("extract", 0, vec![block(0, [vec![Arc::new(load), Arc::new(shift)], tail].concat(), vec![])])
 }
 
 fn _return_high() -> Arc<Insn> {
-    let value = mir::Value::new(1, 1);
-    let operation = mir::Op {
-        kind: Kind::Return,
-        args: vec![mir::Arg::Held(mir::Held { value, width: 2 })],
-        reads_complete: true,
-        ..mir::Op::new(2, OpCode::Operation(Operation::Return), "", vec![], vec![value])
-    };
     Arc::new(Insn {
-        op: Some(Arc::new(operation)),
+        reads_complete: true,
         requires: vec![(Held { value: 1, width: 2 }, Register::DX)],
         ..insn(2, Some((2, 3)), Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![1])
     })
@@ -2972,4 +3079,39 @@ fn test_a_zero_test_of_a_cell_after_its_step_reads_the_step() {
     let blocks = vec![block(0, vec![Arc::new(step), Arc::new(anchor), Arc::new(compare), Arc::new(branch)], vec![0, 10]), block(10, vec![Arc::new(flags), Arc::new(exit)], vec![])];
     let names = tested(&body("zero", 0, blocks)).blocks[0].insns.iter().map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default()).collect::<Vec<_>>();
     assert_eq!(names, ["add", "", "", "jne"]);
+}
+
+#[test]
+fn test_a_borrow_mask_needs_no_zero() {
+    // A huge pointer's step spread its borrow as `mov si,0 ; sbb si,0`, one
+    // instruction more than `sbb si,si` each element of bench/huge.
+    let (dx, si) = (rl(Register::DX, 2), rl(Register::SI, 2));
+    let insns = vec![
+        Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Binary, "add", vec![dx.clone()], vec![dx.clone(), im(4, 2)])), vec![1], vec![1])),
+        Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![si.clone()], vec![im(0, 2)])), vec![2], vec![])),
+        Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), im(0, 2)])), vec![2], vec![2])),
+        Arc::new(insn(3, Some((3, 3)), Some(sem(Operation::Binary, "and", vec![si.clone()], vec![si.clone(), im(4096, 2)])), vec![2], vec![2])),
+    ];
+    let input = body("borrow", 0, vec![block(0, insns, vec![])]);
+
+    let result = borrows(&input);
+
+    assert_eq!(names(&result.insns().into_iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op != Operation::Nothing)).collect::<Vec<_>>()), ["add", "sbb", "and"]);
+    assert!(result.insns().iter().any(|one| one.what == Some(sem(Operation::Binary, "sbb", vec![si.clone()], vec![si.clone(), si.clone()]))));
+}
+
+/// A dword copy and add run under the operand-size prefix each, so on a CPU
+/// that charges a prefix they cost two more than their prices: `mov edx,ecx;
+/// add edx,1024` is four against the 67h lea's four, and one instruction.
+/// Priced without it, 2 against 3 kept both (SPHEREMAPLASMA, #386; mandel
+/// -3% instructions when it became lea).
+#[test]
+fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
+    let (dest, source) = (rl(Register::EDX, 4), rl(Register::ECX, 4));
+    let copy = insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![dest.clone()], vec![source.clone()])), vec![2], vec![1]);
+    let add = insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![dest.clone()], vec![dest.clone(), im(1024, 4)])), vec![2], vec![2]);
+    let compare = insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![dest, im(0, 4)])), vec![], vec![2]);
+    let input = body("dword-offset", 0, vec![block(0, vec![Arc::new(copy), Arc::new(add), Arc::new(compare)], vec![])]);
+    let result = addresses(&input, "486").unwrap().insns();
+    assert_eq!(names(&result), ["lea", "cmp"]);
 }

@@ -6,6 +6,8 @@ pub mod algebraic;
 pub mod canonical;
 #[cfg(test)]
 mod corpus_tests;
+#[cfg(test)]
+mod pipeline_ported_tests;
 pub mod cfg;
 pub mod counting;
 pub mod dead;
@@ -18,11 +20,33 @@ pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
 pub mod floatloop;
+pub mod argpromotion;
+pub mod calleepop;
+pub mod deadargs;
+pub mod inferspace;
+pub mod narrowspace;
+#[cfg(test)]
+mod calleepop_tests;
+#[cfg(test)]
+mod argpromotion_tests;
+#[cfg(test)]
+mod deadargs_tests;
+#[cfg(test)]
+mod inferspace_tests;
+#[cfg(test)]
+mod narrowspace_tests;
 pub mod globalopt;
 pub mod fold;
+pub mod splitcopy;
+pub mod availableexternally;
+#[cfg(test)]
+mod availableexternally_tests;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
+pub mod fixednarrow;
+pub mod addresssink;
+pub mod gepoffset;
 pub mod gvn;
 pub mod hoist;
 pub mod indvars;
@@ -36,6 +60,7 @@ pub mod loopmotion;
 pub mod loopclone;
 pub mod loopsimplify;
 pub mod lsr;
+pub mod window;
 pub mod peel;
 pub mod pipeline;
 pub mod ports;

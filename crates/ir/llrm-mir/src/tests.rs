@@ -265,6 +265,89 @@ b0:
 ",
     )
     .expect("parses");
-    let error = crate::transforms::optimized_with(&mut module, &["instcombine"]).unwrap_err();
+    struct Idle;
+    impl crate::passes::FunctionPass for Idle {
+        fn name(&self) -> &'static str {
+            "idle"
+        }
+
+        fn run(&mut self, _: &mut crate::passes::Unit, _: &mut crate::passes::Analyses) -> crate::passes::PreservedAnalyses {
+            crate::passes::PreservedAnalyses::all()
+        }
+    }
+    let mut manager = crate::passes::PassManager { verify_each: true, ..Default::default() };
+    manager.add(Idle);
+    let error = manager.run_module(&mut module, std::rc::Rc::new(crate::target::Neutral)).unwrap_err();
     assert!(error.starts_with("before the first pass:") && error.contains("dominate"), "{error}");
+}
+
+/// The recurrences a loop carries, for the loop corpus's `mir-ivs`: a far
+/// pointer walked beside a counter is two, though only the counter has a
+/// `Recurrence`. `wordlen` in BASIC counted one before the pass walked its
+/// far pointer as an integer offset and two after, for the same loop.
+#[test]
+fn a_walked_pointer_is_a_recurrence_the_loop_carries() {
+    let module = crate::parse::module(
+        "define i16 @f(ptr addrspace(1) %far, i16 %n) {
+entry:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %l ]
+  %p = phi ptr addrspace(1) [ %far, %entry ], [ %p.next, %l ]
+  %v = load i16, ptr addrspace(1) %p
+  %p.next = getelementptr i8, ptr addrspace(1) %p, i16 2
+  %i.next = add i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %i.next
+}
+
+define i16 @g(ptr addrspace(1) %far, i16 %n) {
+entry:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %entry ], [ %i.next, %l ]
+  %p = phi ptr addrspace(1) [ %far, %entry ], [ %p, %l ]
+  %v = load i16, ptr addrspace(1) %p
+  %i.next = add i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %i.next
+}
+",
+    )
+    .expect("a module");
+    let counted = |name: &str| {
+        let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function");
+        let tree = crate::dominators::DominatorTree::new(function);
+        let loops = crate::loops::LoopInfo::new(function, &tree);
+        let evolution = crate::scalarevolution::Evolution::new(&module.context, function, &loops);
+        evolution.counted(&module.context, function, &loops, loops.loops[0].header)
+    };
+    assert_eq!((counted("f"), counted("g")), (2, 1), "a counter and a walked pointer, then a counter and a pointer that stays");
+}
+
+/// `releases` read and written back, stated of a parameter: a copy of a routine that frees its
+/// argument has to know it.
+#[test]
+fn releases_is_a_parameter_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndeclare void @free(ptr releases)\n");
+    let once = crate::print::module(&crate::parse::module(&text).unwrap());
+    assert!(once.contains("declare void @free(ptr releases)"), "{once}");
+}
+
+/// `noretain` read and written back, stated of a parameter and of a call's
+/// argument; before it existed the parser refused the attribute.
+#[test]
+fn noretain_is_a_parameter_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndeclare void @erase(ptr nocapture noretain)\n\ndefine void @f(ptr %p) {{\nb0:\n  call void @erase(ptr noretain %p)\n  ret void\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("declare void @erase(ptr nocapture noretain)") && once.contains("call void @erase(ptr noretain %p)"), "{once}");
+    assert_eq!(round(&once), once);
 }

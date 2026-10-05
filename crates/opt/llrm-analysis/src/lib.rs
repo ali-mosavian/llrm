@@ -8,10 +8,13 @@
 //! analysis manager; `manager` makes the memory analyses its entries.
 
 pub mod alias;
+pub mod assumptions;
 pub mod avail;
+pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
+pub mod difference;
 pub mod consts;
 pub mod effects;
 pub mod floatbounds;
@@ -27,6 +30,7 @@ pub mod manager;
 pub mod memory;
 pub mod memoryssa;
 pub mod noreturn;
+pub mod parameter_ranges;
 pub mod observers;
 pub mod occurrence;
 pub mod peelsize;
@@ -36,5 +40,7 @@ pub mod regions;
 pub mod ssa;
 #[cfg(test)]
 mod corpus_tests;
+#[cfg(any(test, feature = "testing"))]
+pub mod generated;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

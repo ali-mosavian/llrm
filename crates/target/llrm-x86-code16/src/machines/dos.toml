@@ -11,6 +11,11 @@ addressing = "real"
 # 8086); DOSBox-X src/cpu/core_normal/table_ea.h, `GetEADirect`.
 segment_end_faults = true
 
+# Whether the program's start-up zeroes the far uninitialised data (class FAR_BSS): DOS does not
+# clear memory past the image, so a program whose start-up does not (Borland's, Open Watcom's)
+# keeps zero far data stored in the image. Nib's and the test runtimes' do.
+far_bss = false
+
 # The processor code is priced for.
 cpu = "486"
 

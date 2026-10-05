@@ -1,0 +1,7 @@
+description = "Sum of three 4-element 16-bit arrays through slice parameters"
+repetitions = 1
+
+[region]
+bas = "BenchSumThree"
+c = "bench_sum_three"
+nib = "bench_sum_three"

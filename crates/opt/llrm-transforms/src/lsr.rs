@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::graph::loops::Loop;
-use llrm_analysis::induction::{self, CountedLoop, IvUse, Linear, Recurrence, UseKind, Users};
+use llrm_analysis::induction::{self, CountedLoop, IvUse, Scev, Recurrence, UseKind, Users};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
@@ -113,7 +113,7 @@ struct Candidate {
 }
 
 /// An invariant a realization keeps in a register: a pointer plus a sum.
-type Key = (Option<Operand>, Linear);
+type Key = (Option<Operand>, Scev);
 
 /// A register an address reads.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -129,7 +129,7 @@ enum Reg {
 struct Fit {
     k: BigInt,
     base: Option<Operand>,
-    rest: Linear,
+    rest: Scev,
     constant: BigInt,
     /// The candidate's stepped value, read in the latch.
     next: bool,
@@ -140,7 +140,7 @@ struct Fit {
     trip: Option<(u32, bool, BigInt)>,
     /// An equality with an invariant, which takes the candidate itself and
     /// the invariant less the rest, times `k`, one or minus one.
-    folded: Option<Linear>,
+    folded: Option<Scev>,
 }
 
 /// What realizing a use from one candidate costs each time it runs, and
@@ -169,7 +169,7 @@ struct Site {
     /// The counted exit's compare, which may test a candidate's last value instead.
     exit: bool,
     /// Its value, where it is read as the loop leaves on a known count.
-    known: Option<Linear>,
+    known: Option<Scev>,
 }
 
 /// Where a realization is placed.
@@ -185,7 +185,7 @@ enum Place {
 #[derive(Clone, Debug)]
 struct Exit {
     proof: CountedLoop,
-    trips: Linear,
+    trips: Scev,
     most: BigInt,
     /// A symbolic count needs a guard, and the loop entered at its body.
     guarded: bool,
@@ -208,6 +208,8 @@ struct Plan {
 struct Problem<'a> {
     target: &'a Target<'a>,
     candidates: Vec<Candidate>,
+    /// What each candidate's step costs a trip.
+    steps: Vec<i64>,
     sites: Vec<Site>,
     /// Each site's fit and price from each candidate.
     fits: Vec<Vec<Option<(Fit, Price)>>>,
@@ -250,13 +252,13 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
     let counters = induction::basics(view, loop_);
-    let derived = induction::derived(view, loop_, Some(&counters));
-    let users = induction::users(view, loop_, &counters, &derived);
+    let users = induction::users(view, loop_, &counters);
     if users.counters.is_empty() || users.counters.iter().any(|&one| _latch_arm(function, one, cfg::block(latch)).is_none()) {
         return None;
     }
     let facts = view.registers();
-    let frequencies = profit::_frequencies(function, Some(&profit::proven_trips(view, &facts)))?;
+    // lsr's prices were fitted to trips multiplied, ten where unproven (#203), and a branch's cold arm less.
+    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(view, &facts)))?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).cloned().collect::<Vec<_>>();
@@ -327,9 +329,11 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         .iter()
         .map(|one| exit.as_ref().filter(|exit| _steps_before_test(function, &exit.proof, one) && _comparable(view, one)).and_then(|exit| _exit_price(target, exit, one, &mut keys)))
         .collect();
+    let steps = candidates.iter().map(|one| _step(view, target, one)).collect();
     let problem = Problem {
         target,
         candidates,
+        steps,
         sites,
         fits,
         exit,
@@ -347,7 +351,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         views: _views(view),
     };
     let current = problem.candidates.iter().enumerate().filter(|(_, one)| one.existing.is_some()).map(|(index, _)| index).collect::<BTreeSet<_>>();
-    let before = problem.total(&current);
+    let before = problem.total_of(&current, true);
     let chosen = problem.solved(&current);
     let after = chosen.as_ref().and_then(|chosen| problem.total(chosen));
     llrm_support::debug!(
@@ -496,13 +500,13 @@ fn _live_anyway(function: &Function, loop_: &Loop, users: &Users, exit: Option<&
 fn _symbols(users: &Users, exit: Option<&Exit>) -> BTreeSet<ValueId> {
     let mut symbols = BTreeSet::new();
     for of in users.values.values() {
-        symbols.extend(of.start.terms.keys().chain(of.step.terms.keys()));
+        symbols.extend(of.start.unknowns().chain(of.step.unknowns()));
         if let Some(Operand::Value(pointer)) = of.pointer {
             symbols.insert(pointer);
         }
     }
     if let Some(exit) = exit {
-        symbols.extend(exit.trips.terms.keys());
+        symbols.extend(exit.trips.unknowns());
         if let induction::AffineOperand::Value(bound, _) = exit.proof.bound {
             symbols.insert(bound);
         }
@@ -529,9 +533,11 @@ fn _fixed(
     let counted = |value: ValueId| spill::integer(view.context, function, value) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
     let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
-    let transient = |inst: InstId| spill::transient(view.context, view.layout, function, inst, room);
+    let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
     let segment = |value: ValueId| spill::segment_view(view.context, view.layout, function, value);
-    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment))).collect()
+    let addressed = spill::addressed(function);
+    let routed = |value: ValueId| addressed.contains(&value);
+    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.
@@ -544,6 +550,11 @@ fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64
             loop_.body.iter().map(|&at| (at, liveness::live_points(function, &found, cfg::block(at)).into_iter().map(|(_, before, _)| before.iter().any(|&one| own(one))).collect())).collect()
         })
         .collect()
+}
+
+/// What a trip pays to advance `one`: an add, or a pointer's own advance.
+fn _step(view: &memory::Unit, target: &Target, one: &Candidate) -> i64 {
+    one.pointer.map_or(target.costs.add, |ty| profit::advance(view.context, view.layout, ty, target.costs.add, one.of.step.known().is_some(), &target.costs))
 }
 
 /// The candidates: each use's own recurrence, less its symbols and its
@@ -567,7 +578,7 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
     for &counter in &users.counters {
         add(&mut found, users.values[&counter].clone(), pointer_type(counter), Some(counter));
     }
-    let mut steps = BTreeSet::<Linear>::new();
+    let mut steps = BTreeSet::<Scev>::new();
     for site in sites {
         let of = _normal(view, &site.one);
         steps.insert(of.step.clone());
@@ -577,14 +588,14 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
         let terms = of.start.terms.iter().collect::<Vec<_>>();
         if terms.len() <= _SPLIT_TERMS {
             for mask in 0..1_usize << terms.len() {
-                let part = terms.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).map(|(_, (value, factor))| (**value, (*factor).clone())).collect();
-                let symbolic = Linear { constant: BigInt::from(0), terms: part, width: of.width() };
+                let part = terms.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).map(|(_, (value, factor))| ((*value).clone(), (*factor).clone())).collect();
+                let symbolic = Scev { constant: BigInt::from(0), terms: part, width: of.width() };
                 add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None);
-                add(&mut found, Recurrence { start: symbolic.plus(&Linear::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None);
+                add(&mut found, Recurrence { start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None);
             }
         } else {
-            add(&mut found, Recurrence { start: Linear::constant(0, of.width()), ..bare.clone() }, None, None);
-            add(&mut found, Recurrence { start: Linear::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None);
+            add(&mut found, Recurrence { start: Scev::constant(0, of.width()), ..bare.clone() }, None, None);
+            add(&mut found, Recurrence { start: Scev::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None);
         }
         match of.pointer {
             Some(_) => {
@@ -608,9 +619,9 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
                 if &bytes % scale != BigInt::from(0) {
                     continue;
                 }
-                let step = Linear::constant(&bytes / scale, width);
+                let step = Scev::constant(&bytes / scale, width);
                 steps.insert(step.clone());
-                add(&mut found, Recurrence { pointer: None, start: Linear::constant(0, width), step }, None, None);
+                add(&mut found, Recurrence { pointer: None, start: Scev::constant(0, width), step }, None, None);
             }
         }
     }
@@ -820,7 +831,7 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             && let Operand::Value(other) = view.function.instruction(site.one.user).operands[1 - site.one.index]
         {
             let width = view.int_bits(Operand::Value(other)).unwrap_or(fit.rest.width);
-            held.push(_interned(keys, (None, Linear::of(&induction::AffineOperand::Value(other, width), width))));
+            held.push(_interned(keys, (None, Scev::of(&induction::AffineOperand::Value(other, width), width))));
         }
         return Some((fit, Price { cost, held, address: Vec::new(), wide: false, product: None }));
     }
@@ -845,6 +856,10 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
         }
         UseKind::Address => {
             let native = target.forms.first()?;
+            // An integer cannot index a pair in a carrying space: the use advances
+            // the pointer by it, and pays what an advance there costs over an address's.
+            let advance = profit::advance(view.context, view.layout, view.function.value(site.one.value).ty, costs.address, false, costs);
+            price.cost += advance - costs.address;
             if pointer_base(&fit) {
                 // A global is a displacement beside two registers; a frame object
                 // takes BP for its own, and leaves one register for all it adds.
@@ -904,10 +919,10 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             let other = op.operands[1 - site.one.index];
             let width = fit.rest.width;
             let invariant = match view.int_constant(other) {
-                Some(bits) => Linear::constant(BigInt::from(bits), width),
-                None => Linear::of(&induction::term(view, other)?, width),
+                Some(bits) => Scev::constant(BigInt::from(bits), width),
+                None => Scev::of(&induction::term(view, other)?, width),
             };
-            let folded = invariant.minus(&fit.rest).minus(&Linear::constant(fit.constant.clone(), width)).times(&fit.k);
+            let folded = invariant.minus(&fit.rest).minus(&Scev::constant(fit.constant.clone(), width)).times(&fit.k);
             if !folded.terms.is_empty() {
                 price.held.push(_interned(keys, (None, folded.clone())));
             }
@@ -924,19 +939,24 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             }
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
+            // A pointer made from an integer, in a carrying space, carries into its selector.
+            let made = |constant| {
+                let ty = view.function.value(site.one.value).ty;
+                if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
+            };
             if symbolic {
-                let whole = fit.rest.plus(&Linear::constant(fit.constant.clone(), fit.rest.width));
+                let whole = fit.rest.plus(&Scev::constant(fit.constant.clone(), fit.rest.width));
                 price.held.push(_interned(keys, (if pointer { None } else { fit.base }, whole)));
-                price.cost += costs.add;
+                price.cost += made(false);
             } else if fit.constant != BigInt::from(0) || fit.base.is_some() {
-                price.cost += costs.add;
+                price.cost += made(fit.k == BigInt::from(0));
             }
             if site.one.kind == UseKind::Compare {
                 price.cost += costs.add;
                 let op = view.function.instruction(site.one.user);
                 if let Operand::Value(other) = op.operands[1 - site.one.index] {
                     let width = view.int_bits(Operand::Value(other)).unwrap_or(fit.rest.width);
-                    price.held.push(_interned(keys, (None, Linear::of(&induction::AffineOperand::Value(other, width), width))));
+                    price.held.push(_interned(keys, (None, Scev::of(&induction::AffineOperand::Value(other, width), width))));
                 }
             }
         }
@@ -984,7 +1004,7 @@ fn _exit_price(target: &Target, exit: &Exit, candidate: &Candidate, keys: &mut V
 }
 
 /// `candidate`'s value as the loop leaves: its start plus its step each trip.
-fn _end(exit: &Exit, candidate: &Candidate) -> Linear {
+fn _end(exit: &Exit, candidate: &Candidate) -> Scev {
     let trips = exit.trips.truncated(candidate.of.width());
     candidate.of.start.plus(&trips.product(&candidate.of.step).expect("a constant step"))
 }
@@ -994,7 +1014,7 @@ impl Problem<'_> {
     /// else a new register.
     fn resident(&self, key: usize) -> Resident {
         let named = match &self.keys[key] {
-            (None, sum) if sum.constant == BigInt::from(0) && sum.terms.len() == 1 => sum.terms.iter().find(|(_, factor)| **factor == BigInt::from(1)).map(|(value, _)| *value),
+            (None, sum) if sum.constant == BigInt::from(0) && sum.terms.len() == 1 => sum.terms.iter().find(|(_, factor)| **factor == BigInt::from(1)).and_then(|(product, _)| product.single()),
             (Some(Operand::Value(value)), sum) if sum.is_zero() => Some(*value),
             _ => None,
         };
@@ -1064,11 +1084,35 @@ impl Problem<'_> {
 
     /// The cost of `set`, where every use has a fit in it.
     fn total(&self, set: &BTreeSet<usize>) -> Option<i64> {
+        self.total_of(set, false)
+    }
+
+    /// What site `index` costs from a counter of `set` that is already
+    /// there, extended: the extension is paid by the use, the rest is what the
+    /// use needs of a counter of that value at its width.
+    fn widened(&self, set: &BTreeSet<usize>, index: usize) -> Option<i64> {
+        let site = &self.sites[index];
+        set.iter()
+            .filter(|&&one| self.candidates[one].existing.is_some() && self.candidates[one].of.pointer.is_none() && self.candidates[one].of.width() < site.one.of.width())
+            .flat_map(|&one| {
+                let have = &self.candidates[one].of;
+                (0..self.candidates.len()).filter(move |&wide| {
+                    let of = &self.candidates[wide].of;
+                    of.pointer.is_none() && of.width() == site.one.of.width() && of.start.known().is_some() && of.start.known() == have.start.known() && of.step.known().is_some() && of.step.known() == have.step.known()
+                })
+            })
+            .filter_map(|wide| self.fits[index][wide].as_ref().map(|(_, price)| price.cost))
+            .min()
+    }
+
+    /// `total`; with `standing`, a wider use no counter of `set` fits costs
+    /// what the loop pays for it now, `widened`: the loop as it stands.
+    fn total_of(&self, set: &BTreeSet<usize>, standing: bool) -> Option<i64> {
         if set.is_empty() {
             return None;
         }
         let costs = &self.target.costs;
-        let mut cost = set.len() as i64 * costs.add * self.latch;
+        let mut cost = set.iter().map(|&one| self.steps[one]).sum::<i64>() * self.latch;
         // A counter wider than the native index pays the operand-size prefix a step.
         let native = self.target.forms.first().map_or(i64::MAX, |form| form.index_width * 8);
         cost += set.iter().filter(|&&one| i64::from(self.candidates[one].of.width()) > native).count() as i64 * costs.prefix * self.latch;
@@ -1085,7 +1129,15 @@ impl Problem<'_> {
         let mut reads = BTreeMap::<Resident, i64>::new();
 
         for (index, site) in self.sites.iter().enumerate() {
-            match self.choice(set, index)? {
+            let choice = match self.choice(set, index) {
+                Some(choice) => choice,
+                None if standing && self.widened(set, index).is_some() => {
+                    cost += (costs.extend + self.widened(set, index)?) * site.frequency;
+                    continue;
+                }
+                None => return None,
+            };
+            match choice {
                 (_, Some((one, (exit, key)))) => {
                     cost += exit * site.frequency;
                     *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
@@ -1193,7 +1245,7 @@ impl Problem<'_> {
     /// Whether `key` is a value the loop holds anyway.
     fn free(&self, key: &Key) -> bool {
         match key {
-            (None, sum) => sum.constant == BigInt::from(0) && sum.terms.len() == 1 && sum.terms.iter().all(|(value, factor)| *factor == BigInt::from(1) && self.live.contains(value)),
+            (None, sum) => sum.constant == BigInt::from(0) && sum.terms.len() == 1 && sum.terms.iter().all(|(product, factor)| *factor == BigInt::from(1) && product.single().is_some_and(|value| self.live.contains(&value))),
             (Some(Operand::Value(value)), sum) => sum.is_zero() && (self.live.contains(value) || self.frames.contains(value)),
             (Some(_), sum) => sum.is_zero(),
         }
@@ -1445,7 +1497,7 @@ fn _realized(
     let int = context.types.int(width);
     let i8 = context.types.int(8);
     let magnitude = BigInt::from(fit.k.magnitude().clone());
-    let constant = Linear::constant(fit.constant.clone(), width);
+    let constant = Scev::constant(fit.constant.clone(), width);
     let (register, pointer) = match &fit.trip {
         Some((shift, down, inverse)) => {
             let (shift, down) = (*shift, *down);

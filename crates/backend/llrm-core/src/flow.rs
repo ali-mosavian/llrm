@@ -1,10 +1,7 @@
-//! Port of `qbopt/flow.py`: so far the MIR fixed point, the machine phases and their gate.
+//! The machine phases and their gate: each LIR phase run, verified and checked.
 
-use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use crate::support::hash::IndexMap;
 use iced_x86::Register;
@@ -14,16 +11,17 @@ use crate::backend::constpool::Pool;
 use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, twoaddr,
+    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule, ssaspill, twoaddr,
 };
 
 use crate::backend::verify::{self, Malformed};
 use crate::model::lir::LirBody;
-use crate::model::mir::MirBody;
-use crate::model::passes::{LIRTransform, Options, LEVELS};
-use crate::optimize::transform;
+use crate::model::passes::LIRTransform;
 
-/// Every phase between lowering and emission, in order.
+
+/// Every phase between instruction selection and emission, in order, with the
+/// spiller in front of the allocator or left out.
+#[allow(clippy::too_many_arguments)]
 pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,
     frame: Option<Rc<RefCell<Frame>>>,
@@ -32,6 +30,7 @@ pub fn machine<'a>(
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
+    spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -42,8 +41,9 @@ pub fn machine<'a>(
         }
     }
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
-    Ok(vec![
+    let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
@@ -60,52 +60,12 @@ pub fn machine<'a>(
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
-        Box::new(jumps::ControlFlow),
-    ])
-}
-
-/// The MIR fixed point every driver runs, configured by target and options alone.
-///
-/// A switch one frontend sets and another does not makes the same program
-/// compile differently by spelling: sum_three took three paths here.
-/// Promotion needs dominators, which an irreducible CFG -- QB's RESUME
-/// entering a loop -- does not have; that is a fact about the body.
-#[allow(clippy::too_many_arguments)]
-pub fn optimized<'a>(
-    body: &Rc<MirBody>,
-    dgroup: &BTreeSet<i64>,
-    calls: &IndexMap<i64, String>,
-    cpu: impl Into<ProfileOrName<'a>>,
-    options: Options,
-    blocks: Option<Rc<Vec<crate::frontends::bc::blocks::Block>>>,
-    found: Option<Rc<crate::objectfile::module::Module>>,
-    only: Option<String>,
-    watch: Option<&mut dyn FnMut(&str, &MirBody)>,
-) -> Result<Rc<MirBody>, String> {
-    use crate::analysis::loops;
-
-    let target = targets::profile(cpu)?;
-    let mut options = options;
-    if !loops::irreducible(&body.blocks, Some(body.entry)).is_empty() {
-        options = Options { promote: false, ..options };
+        Box::new(jumps::ControlFlow { cpu: target }),
+    ];
+    if !spilling {
+        phases.retain(|phase| phase.class_name() != "SsaSpill");
     }
-    transform::applied(
-        body,
-        dgroup,
-        calls,
-        transform::Applied {
-            blocks,
-            found,
-            only,
-            options,
-            registers: Some(target.register_capacity),
-            call_registers: target.call_register_capacity,
-            index_scales: Some(target.address_scales.clone()),
-            address_forms: Some(target.address_forms.clone()),
-            costs: Some(target.operations.clone()),
-            watch,
-        },
-    )
+    Ok(phases)
 }
 
 /// Return a well-formed body or name the phase boundary that is not.
@@ -139,9 +99,6 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
         let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));
         let listed = |bytes: Vec<i64>| bytes.iter().map(|one| format!("{one:#x}")).collect::<Vec<_>>().join(" ");
         return Err(Checked::Malformed(Malformed(format!("{stage}: lost source bytes [{}], gained [{}]", listed(lost), listed(gained)))));
-    }
-    if stage == "jumps" && crate::support::debug::enabled("cost") {
-        llrm_support::debug!("cost", "{}", crate::backend::executed::summary(&body));
     }
     Ok(body)
 }

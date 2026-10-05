@@ -31,6 +31,9 @@ fn stepped(module: &mut Module, roots: &[&str], call: i64, threshold: Threshold)
             &mut modules,
             &roots,
             &costs,
+            None,
+            0,
+            costs.call,
             threshold,
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.clone().unwrap(), stage.to_owned()));
@@ -143,7 +146,7 @@ b:
 fn test_agreed_actuals_specialize_and_a_constant_return_is_carried() {
     let mut module = parsed(STORES);
     // With no inlining: a callee that stores to memory is inlined otherwise.
-    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold(0));
+    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold::new(0));
     let text = printed(&module);
     assert!(text.contains("  store i16 5, ptr @g\n"), "{text}");
     assert!(text.contains("  %s = add i16 7, %a\n"), "{text}");
@@ -196,7 +199,7 @@ fn test_a_terminal_body_in_another_module_cuts_its_callers_tail() {
     let mut program = Program::new(vec![spin, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap().exporting(exports);
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    let proved = optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert_eq!(proved.noreturn, [(0, program.modules[0].named("spin").unwrap())].into());
     assert!(printed(&program.modules[1]).contains("  call void @spin()\n  unreachable\n"), "{}", printed(&program.modules[1]));
 }
@@ -210,7 +213,7 @@ fn test_a_body_s_attributes_are_stated_on_its_declarations() {
     let mut program = Program::new(vec![double, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
     stamped_all(&mut program, &mut modules).unwrap();
-    assert!(printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind\n"), "{}", printed(&program.modules[1]));
+    assert!(printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind norecurse\n"), "{}", printed(&program.modules[1]));
 }
 
 /// Per module, a call to another module's body that always returns one
@@ -237,7 +240,7 @@ fn test_a_constant_another_module_returns_reaches_its_callers() {
     let mut program = Program::new(vec![seven, caller], std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[1]).contains("  ret i16 7\n"), "{}", printed(&program.modules[1]));
 }
 
@@ -251,7 +254,7 @@ fn test_an_entry_keeps_its_parameters_whatever_its_linkage() {
     program.exports.entries = ["entered".to_owned()].into();
     let roots = roots(&program);
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
-    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
+    optimized::<String>(&mut program, &mut modules, &roots, &OperationCosts::default(), None, 0, 1, Threshold::default(), &mut |_, _, _, _| Ok(()), &mut |_, _, _| Ok(())).unwrap();
     assert!(printed(&program.modules[0]).contains("  %y0 = add i16 %x, 1\n"), "{}", printed(&program.modules[0]));
 }
 
@@ -261,7 +264,7 @@ fn test_the_step_runs_as_a_program_pass() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     let target = crate::testing::Tuned { costs: OperationCosts { call: 4, ..OperationCosts::default() }, ..Default::default() };
-    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size: false });
+    manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate: None });
     let stages = manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
     assert_eq!(stages.iter().map(|stage| stage.function).collect::<BTreeSet<_>>(), ids(&module, &["f"]));
     assert_eq!(results(&module, INPUTS), results(&parsed(HELPERS), INPUTS));
@@ -269,8 +272,9 @@ fn test_the_step_runs_as_a_program_pass() {
 
 #[test]
 fn test_a_size_build_weighs_bytes_not_clocks() {
-    // A public six-operation body at three sites: cheaper than three calls
-    // in clocks, dearer in bytes. -Os copied it and grew the code.
+    // A nine-operation body at three sites: cheaper than three calls in clocks, dearer in bytes
+    // (the callers come to more with the body copied than with three calls, though the body goes).
+    // -Os copied it and grew the code.
     let text = "define i16 @mix(i16 %a, i16 %b) {
 b:
   %t0 = xor i16 %a, %b
@@ -279,7 +283,10 @@ b:
   %t3 = lshr i16 %b, 2
   %t4 = sub i16 %t2, %t3
   %t5 = and i16 %t4, 2047
-  ret i16 %t5
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
 }
 
 define i16 @f(i16 %x, i16 %y) {
@@ -290,15 +297,17 @@ b:
   ret i16 %r
 }
 ";
-    let calls = |size: bool| {
+    let calls = |rate: Option<i64>| {
         let mut module = parsed(text);
         let mut manager = PassManager::default();
         let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, ..OperationCosts::default() }, ..Default::default() };
-        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), size });
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate });
         manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
         printed(&module).matches("call i16 @mix").count()
     };
-    assert_eq!((calls(false), calls(true)), (0, 3));
+    // Weighing clocks alone inlines every site; weighing bytes puts them back, at -Os and at -O2 (QCport
+    // -O2 ran 11 KB past BCC's code, and out of memory), unless the clocks saved pay for the bytes.
+    assert_eq!((calls(None), calls(Some(0)), calls(Some(1))), (0, 3, 0));
 }
 
 const STAMPED: &str = "@slot = global ptr null
@@ -370,13 +379,13 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn {",
-            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn {",
-            "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind {",
-            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn {",
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn norecurse {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn norecurse {",
+            "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn norecurse {",
             "define internal void @hides(ptr %p) {",
-            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn {",
+            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn norecurse {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse {",
         ],
         "{text}"
     );
@@ -712,4 +721,356 @@ fn the_corpus_is_stamped_as_it_was() {
     let expected = include_str!("interprocedural_stamped.txt");
     let changed = found.lines().zip(expected.lines()).find(|(one, other)| one != other);
     assert!(found == expected, "first difference: {changed:?}; {} lines, expected {}", found.lines().count(), expected.lines().count());
+}
+
+/// Which defined functions of `text` the stamp gives `fact`.
+fn stamped_with(text: &str, fact: &str) -> Vec<String> {
+    let mut module = parsed(text);
+    crate::testing::stamped(&mut module).unwrap();
+    let mut found = printed(&module)
+        .lines()
+        .filter(|line| line.starts_with("define") && line.split(" {").next().unwrap_or_default().split_whitespace().any(|word| word == fact))
+        .filter_map(|line| line.split('@').nth(1).and_then(|rest| rest.split('(').next()).map(str::to_owned))
+        .collect::<Vec<_>>();
+    found.sort();
+    found
+}
+
+/// A function that nothing can enter while it runs says so: a leaf, one that
+/// calls a `nocallback` declaration or an intrinsic. Not one that calls itself,
+/// its mutual caller, an unbounded pointer, a declaration that may call back, or
+/// anything reaching those. The stamp the compilers run was never given this:
+/// the first inference lived where no compile reaches.
+#[test]
+fn the_stamp_infers_norecurse_where_nothing_can_reenter() {
+    let text = "declare void @quiet() nocallback
+declare void @loud()
+declare i16 @llvm.smax.i16(i16, i16)
+
+define void @leaf() {
+b0:
+  ret void
+}
+
+define void @calls_quiet() {
+b0:
+  call void @quiet()
+  ret void
+}
+
+define void @calls_loud() {
+b0:
+  call void @loud()
+  ret void
+}
+
+define i16 @calls_intrinsic(i16 %c) {
+b0:
+  %m = call i16 @llvm.smax.i16(i16 %c, i16 0)
+  ret i16 %m
+}
+
+define void @self() {
+b0:
+  call void @self()
+  ret void
+}
+
+define void @ping() {
+b0:
+  call void @pong()
+  ret void
+}
+
+define void @pong() {
+b0:
+  call void @ping()
+  ret void
+}
+
+define void @pointer(ptr %p) {
+b0:
+  call void %p()
+  ret void
+}
+
+define void @listed(ptr %p) {
+b0:
+  call void %p(), !callees !0
+  ret void
+}
+
+define void @through() {
+b0:
+  call void @pointer(ptr null)
+  ret void
+}
+
+!0 = !{ptr @leaf}
+";
+    assert_eq!(stamped_with(text, "norecurse"), ["calls_intrinsic", "calls_quiet", "leaf", "listed"]);
+}
+
+fn spin(attrs: &str, load: &str, marks: &str) -> String {
+    format!(
+        "define i16 @spin(ptr %p) {attrs} {{
+b0:
+  br label %b1
+
+b1:
+  %v = {load} i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %b1, label %b2, !llvm.loop !0
+
+b2:
+  ret i16 0
+}}
+
+{marks}"
+    )
+}
+
+/// A loop no counter bounds ended only where the language says it must, of
+/// every loop (`mustprogress` on the function) or of the loop (C11 6.8.5p6:
+/// clang marks each loop whose controlling expression is not constant). An
+/// observable loop (a volatile load) may legally run forever, and so may a loop
+/// no language marks.
+#[test]
+fn the_stamp_takes_the_languages_word_that_a_loop_ends() {
+    let marked = "!0 = distinct !{!0, !1}\n!1 = !{!\"llvm.loop.mustprogress\"}\n";
+    let unmarked = "!0 = distinct !{!0}\n";
+    let ends = |text: String| stamped_with(&text, "willreturn") == ["spin"];
+    assert!(ends(spin("mustprogress", "load", unmarked)), "the language says so of every loop");
+    assert!(ends(spin("", "load", marked)), "the loop says so");
+    assert!(!ends(spin("", "load", unmarked)), "no promise: an uncounted loop may not end");
+    assert!(!ends(spin("mustprogress", "load volatile", unmarked)), "an observable loop may run forever");
+    assert!(!ends(spin("", "load volatile", marked)));
+}
+
+/// `for (;;)` hangs: only a loop whose controlling expression is not constant may
+/// be assumed to end, so a function with one is never `willreturn`, whatever
+/// else is marked, and a loop with no edge out never ends however it is marked.
+#[test]
+fn a_loop_with_no_exit_is_never_taken_to_end() {
+    let function = |second: &str| {
+        format!(
+            "define void @f(ptr %p) {{
+b0:
+  br label %first
+
+first:
+  %v = load i16, ptr %p
+  %more = icmp ne i16 %v, 0
+  br i1 %more, label %first, label %next, !llvm.loop !0
+
+next:
+  br label %second
+
+second:
+{second}
+done:
+  ret void
+}}
+
+!0 = distinct !{{!0, !1}}
+!1 = !{{!\"llvm.loop.mustprogress\"}}
+!2 = distinct !{{!2, !1}}
+"
+        )
+    };
+    let conditional = "  %w = load i16, ptr %p\n  %again = icmp ne i16 %w, 0\n  br i1 %again, label %second, label %done, !llvm.loop !2\n";
+    let forever = "  %w = load i16, ptr %p\n  br label %second, !llvm.loop !2\n";
+    assert_eq!(stamped_with(&function(conditional), "willreturn"), ["f"], "both loops marked, both leave");
+    assert!(stamped_with(&function(forever), "willreturn").is_empty(), "an unconditional loop, even one something marked");
+}
+
+/// A call the byte price refuses and the clocks admit stays inlined where the callers and the
+/// callee that goes come to no more (speaker.nib: `now` at two sites, the loop then in registers,
+/// -30 bytes), and is put back where they do (the test above).
+#[test]
+fn test_what_only_the_clocks_admit_is_kept_where_the_callee_going_pays_for_it() {
+    let text = "define internal i16 @triple(i16 %a) {
+b:
+  %t0 = add i16 %a, %a
+  %t1 = add i16 %t0, %a
+  %t2 = xor i16 %t1, 7
+  ret i16 %t2
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @triple(i16 %x)
+  %q = call i16 @triple(i16 %y)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let calls = |size: bool| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        let target = crate::testing::Tuned { costs: OperationCosts { call: 20, ..OperationCosts::default() }, sizes: OperationCosts { call: 3, add: 4, ..OperationCosts::default() }, ..Default::default() };
+        manager.add_program(Interprocedural { pipeline: Box::new(|_, _, _, _| {}), proved: None, inline: Threshold::default(), rate: size.then_some(0) });
+        manager.run_module(&mut module, std::rc::Rc::new(target)).unwrap();
+        printed(&module).matches("call i16 @triple").count()
+    };
+    assert_eq!((calls(false), calls(true)), (0, 0));
+}
+
+/// A site put back is not tried again: it is the same call in the same body every round, and each try
+/// re-ran the caller's pipeline (mdl_ai.c: 59 s against 28 s for the same code).
+#[test]
+fn test_a_site_the_trial_put_back_is_not_tried_again() {
+    let text = "define internal i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let clocks = OperationCosts { call: 20, ..OperationCosts::default() };
+    let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
+    let (mix, f) = (module.named("mix").unwrap(), module.named("f").unwrap());
+    let counts = inline::call_counts(&module);
+    let candidates = inline::candidates(&module, &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let calls: Vec<_> = module.global(f).function().unwrap().walk().map(|(_, inst)| inst).filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some()).collect();
+    let sites: llrm_support::hash::IndexMap<_, _> = calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
+    let runs = std::cell::Cell::new(0);
+    let mut refused = BTreeSet::new();
+    let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
+        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
+            runs.set(runs.get() + 1);
+            Ok(())
+        })
+        .unwrap()
+    };
+    assert!(!again(&mut module, &mut analyses, &mut refused), "putting it back stays nothing");
+    let first = runs.get();
+    again(&mut module, &mut analyses, &mut refused);
+    assert_eq!((first > 0, runs.get()), (true, first), "the second round runs no pipeline: {refused:?}");
+}
+
+/// A body whose address is taken is also called through it, with actuals no
+/// site names: its one direct call passed 5, and the call through the
+/// pointer stored 5 as well.
+#[test]
+fn test_a_body_whose_address_is_taken_keeps_its_parameters() {
+    let text = STORES.replace("@g = global i16 0\n", "@g = global i16 0\n@slot = global ptr @set\n").replace("  call void @set(i16 5)\n  call void @set(i16 5)\n", "  call void @set(i16 5)\n  %p = load ptr, ptr @slot\n  call void %p(i16 %a)\n");
+    let mut module = parsed(&text);
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let after = printed(&module);
+    assert!(after.contains("  store i16 %x, ptr @g\n"), "{after}");
+}
+
+/// queens' `place(q, row, n)` recurses with `row + 1` and its own `n`: the
+/// one outside call passes 7, so every call does, and `n` is 7 inside.
+/// The recursive call named `%n` as a second value for it, so none was found.
+fn recursive(first: &str, second: &str) -> String {
+    format!(
+        "define internal i16 @place(i16 %row, i16 %n) {{
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %more
+more:
+  %next = add i16 %row, 1
+  %r = call i16 @place({first})
+  %s = add i16 %r, %row
+  ret i16 %s
+leaf:
+  ret i16 1
+}}
+
+define i16 @f(i16 %a) {{
+b:
+  %x = call i16 @place(i16 0, i16 7)
+{second}  ret i16 %x
+}}
+"
+    )
+}
+
+#[test]
+fn test_a_recursive_call_passing_a_parameter_on_leaves_the_others_actuals_agreed() {
+    let mut module = parsed(&recursive("i16 %next, i16 %n", ""));
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let text = printed(&module);
+    assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
+}
+
+/// A second outside call with another value, or the recursion passing the
+/// parameters swapped, keeps `n` unknown.
+#[test]
+fn test_another_actual_for_the_parameter_keeps_it_unknown() {
+    for text in [recursive("i16 %next, i16 %n", "  %y = call i16 @place(i16 0, i16 %a)\n"), recursive("i16 %n, i16 %next", "")] {
+        let mut module = parsed(&text);
+        stepped(&mut module, &["f"], 40, Threshold::new(0));
+        let after = printed(&module);
+        assert!(after.contains("icmp eq i16 %row, %n"), "{after}");
+    }
+}
+
+/// queens' `place`: `row` from 0 and from `row + 1` below `n`, the calls
+/// known to be those of the program: `row` is in 0 to 7, which `row <u 12`, the length's
+/// check, then leaves nothing to decide (`decide` reads the stamp).
+fn bounded_recursion(extra: &str) -> String {
+    format!(
+        "define internal i16 @place(i16 %row, i16 %n) {{
+b:
+  %done = icmp eq i16 %row, %n
+  br i1 %done, label %leaf, label %more
+more:
+  %fits = icmp ult i16 %row, 12
+  br i1 %fits, label %next, label %crash
+next:
+  %up = add nsw i16 %row, 1
+  %r = call i16 @place(i16 %up, i16 %n)
+  ret i16 %r
+leaf:
+  ret i16 1
+crash:
+  ret i16 99
+}}
+
+define i16 @f(i16 %a) {{
+b:
+  %x = call i16 @place(i16 0, i16 7)
+{extra}  ret i16 %x
+}}
+"
+    )
+}
+
+#[test]
+fn test_what_the_callers_pass_bounds_a_parameter_the_body_checks() {
+    let mut module = parsed(&bounded_recursion(""));
+    assert!(printed(&module).contains("icmp ult i16 %row, 12"), "premise");
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let text = printed(&module);
+    assert!(text.contains("range(i16 0, 8) %row"), "{text}");
+}
+
+/// A call from elsewhere with a value of its own, or through a pointer, leaves the parameter unbounded.
+#[test]
+fn test_another_caller_leaves_the_parameter_unbounded() {
+    let mut module = parsed(&bounded_recursion("  %y = call i16 @place(i16 %a, i16 7)\n"));
+    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let text = printed(&module);
+    assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
 }

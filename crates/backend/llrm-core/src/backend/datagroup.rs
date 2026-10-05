@@ -124,7 +124,7 @@ fn _restore(one: &Insn, data: Register, through: Register) -> Arc<Insn> {
         indirect: false,
     };
     let mut made = Insn::new(one.at, Some((at, at)), Some(what), vec![], vec![]);
-    made.op = one.op.clone();
+    made.call = one.call.clone();
     Arc::new(made)
 }
 

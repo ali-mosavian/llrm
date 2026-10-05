@@ -3307,5 +3307,222 @@ fn total(values: &[i16]) -> i16:
 fn the_panic_routines_are_stated_to_end_the_program() {
     let hir = super::compile("fn main() -> i16:\n    let mut a: i16[4] = [0] * 4\n    let n: i16 = 3\n    return a[n]\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
     let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
-    assert!(stated("noreturn") >= 1 && stated("noreturn") == stated("memory"), "{hir}");
+    assert!(stated("noreturn") >= 1 && stated("memory") >= stated("noreturn"), "{hir}");
+}
+
+/// Printing a number touches only the runtime's own state: a loop's loads
+/// ahead of `print(i)` need not be redone after it. The routines were
+/// declared with no effects stated, so each call was assumed to write all
+/// of memory and a function that prints came out `memory(readwrite, argmem: read)`.
+#[test]
+fn the_runtime_routines_state_what_they_touch() {
+    use llrm_core::abi::nib;
+    let hir = super::compile("fn main() -> i16:\n    print(1)\n    return 0\n", "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let stated = |fact: &str| hir.matches(&format!("\"fact\":\"{fact}\"")).count();
+    // N$EDIV is called by start.asm, not by compiled code: it is not declared.
+    assert_eq!(stated("noreturn"), nib::TERMINATING.len() - 1);
+    assert_eq!(stated("memory"), stated("noreturn") + nib::RUNTIME_STATE_ONLY.len() + nib::READ_ONLY.len(), "{hir}");
+}
+
+/// A module variable's address is a multiple of its element's width, up to
+/// a dword, so a 486 reads each of its dwords whole; the layout put a
+/// `u8` before an `i32` array and left the array odd.
+#[test]
+fn a_module_variable_states_its_alignment() {
+    let source = "var flag: u8 = 1\nvar words: i32[4] = [1, 2, 3, 4]\nvar pair: i16 = 5\n\nfn main() -> i16:\n    print(words[1] + i32(flag) + i32(pair))\n    return 0\n";
+    let hir = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
+    let facts: serde_json::Value = serde_json::from_str(&hir).expect("JSON");
+    let mut aligned: Vec<u64> = facts["modules"][0]["facts"].as_array().unwrap().iter().filter(|one| one["fact"] == "align" && one["subject"] == "object").map(|one| one["value"].as_u64().unwrap()).collect();
+    aligned.sort();
+    // `flag` is a byte and has none to state.
+    assert_eq!(aligned, [2, 4], "{hir}");
+}
+
+/// Every element address safe code makes is stated in bounds: a `ptr_offset`
+/// is only emitted after a check, for a view, a vec, a string, an array
+/// field and a ranked array alike. (Raw pointer arithmetic, `unsafe`, is not.)
+#[test]
+fn every_checked_index_form_states_inbounds() {
+    let source = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/fixtures/nib/indexing.nib")).expect("the fixture");
+    let hir = super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message)).replace([' ', '\n'], "");
+    let offsets = hir.matches("\"op\":\"ptr_offset\"").count();
+    assert!(offsets >= 5, "the premise: the fixture indexes several forms ({offsets})");
+    assert!(hir.matches("\"fact\":\"inbounds\",\"function\"").count() >= offsets, "{hir}");
+}
+
+/// A module variable an interrupt handler names is ordered access: the
+/// program's own functions read and write it in memory, between any two
+/// instructions the handler may run. A variable no handler names is not.
+#[test]
+fn only_what_a_handler_names_is_volatile() {
+    let source = "\
+var ticks: u16 = 0
+var other: u16 = 0
+
+@export(\"interrupt16\")
+fn tick() -> void:
+    ticks += 1
+
+fn main() -> i16:
+    other += 1
+    print(ticks + other)
+    return 0
+";
+    let hir: serde_json::Value = serde_json::from_str(&super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message))).expect("JSON");
+    let mut volatile: Vec<(String, bool)> = hir["modules"][0]["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|function| function["places"].as_array().unwrap().iter())
+        .filter(|place| place["storage"] == "module" && place["name"].as_str().is_some_and(|name| !name.starts_with('$')))
+        .map(|place| (place["name"].as_str().unwrap().to_owned(), place["volatile"].as_bool().unwrap()))
+        .collect();
+    volatile.sort();
+    volatile.dedup();
+    assert_eq!(volatile, [("other".to_owned(), false), ("ticks".to_owned(), true)]);
+}
+
+/// A far pointer is 32 bits, its segment in the high word: in `unsafe`, a
+/// literal that fits `u32` is one, as C's `(char far *)0xB8000000L`. The
+/// literal was typed `int` for want of an integer context, refused as
+/// "expected *far pointer, found i16", a type it never had.
+#[test]
+fn an_integer_literal_is_a_raw_pointer_in_unsafe() {
+    assert!(super::compile("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0xB8000000\n        p[0] = 1\n    return 0\n", "t").is_ok());
+    assert!(super::compile("fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0xFFFF\n        p[0] = 1\n    return 0\n", "t").is_ok());
+    let near = refused("fn main() -> i16:\n    unsafe:\n        let p: *near mut u8 = 0x10000\n        p[0] = 1\n    return 0\n");
+    assert!(near.contains("integer literal 65536 is 17 bits, wider than a *near pointer"), "{near}");
+    let far = refused("fn main() -> i16:\n    unsafe:\n        let p: *far mut u8 = 0x100000000\n        p[0] = 1\n    return 0\n");
+    assert!(far.contains("integer literal 4294967296 is 33 bits, wider than a *far pointer"), "{far}");
+    let safe = refused("fn main() -> i16:\n    let p: *far mut u8 = 0xB8000000\n    return 0\n");
+    assert!(safe.contains("unsafe"), "{safe}");
+    assert!(super::compile("fn main() -> i16:\n    let p: *far mut u8 = 0\n    return 0\n", "t").is_ok());
+}
+
+/// A literal's own type follows its value: `int`, else `i32`, else `u32`.
+/// Past `u32` the error names the literal's width, not a type it never had
+/// ("does not fit i32" for 0xB8000000, which fits `u32`).
+#[test]
+fn an_integer_literal_is_int_then_i32_then_u32() {
+    let printed = |literal: &str| {
+        let source = format!("fn main() -> i16:\n    let x = {literal}\n    let y = x + 1\n    print(y)\n    return 0\n");
+        let program = llrm_core::hir::codec::decode(&super::compile(&source, "t").unwrap_or_else(|error| panic!("{}", error.message))).unwrap();
+        llrm_core::hir::execute::run(&program, "main", &[]).unwrap().output
+    };
+    assert_eq!(printed("0x7FFF"), "-32768\n");
+    assert_eq!(printed("0x8000"), "32769\n");
+    assert_eq!(printed("0xFFFFFFFF"), "0\n");
+    assert_eq!(printed("0xB8000000"), "3087007745\n");
+    let wide = refused("fn main() -> i16:\n    let x = 0x100000000\n    return 0\n");
+    assert!(wide.contains("integer literal 4294967296 is 33 bits, wider than u32"), "{wide}");
+    let low = refused("fn main() -> i16:\n    let x = -0x80000001\n    return 0\n");
+    assert!(low.contains("is 33 bits, wider than i32"), "{low}");
+}
+
+#[test]
+fn a_loader_returns_its_table_and_a_failed_load_drops_the_half_built_one() {
+    let source = include_str!("../../../../examples/loader.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/loader.out"));
+    // The entry moved into the table; a use after the push is refused.
+    assert_eq!(
+        refused(&source.replace("table.entries.push(entry)\n", "table.entries.push(entry)\n        print(entry.key)\n")),
+        "\"entry\" was moved; copy it with .copy() to keep using it"
+    );
+    // The table is the callee's own: a view of its name would dangle.
+    let dangling = "fn title(text: &string) -> &string:\n    match load(\"x\", text):\n        .ok(t):\n            return t.name\n        .err(_):\n            return text\n\nfn report";
+    assert_eq!(
+        refused(&source.replace("fn report", dangling)),
+        "a returned borrow of \"t\" would dangle; only a borrowed parameter's can be returned"
+    );
+}
+
+#[test]
+fn channels_close_once_on_every_exit_in_reverse_order_and_a_drop_type_moves_whole() {
+    let source = include_str!("../../../../examples/channels.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/channels.out"));
+    // Taking a field out of a Link would close the channel twice.
+    assert_eq!(
+        refused(&source.replace("print(f\"{link.near.name} to {link.far.name}\")", "let n = link.near\n            print(f\"{n.name} to {link.far.name}\")")),
+        "cannot move a field out of Link, which has a drop"
+    );
+    // `drop` is the compiler's to call.
+    assert_eq!(
+        refused(&source.replace("print(f\"kept {c.name}\")\n        .none:\n            print(\"closed\")\n    match pass_on(Channel(name=\"f\")", "c.drop()\n            print(f\"kept {c.name}\")\n        .none:\n            print(\"closed\")\n    match pass_on(Channel(name=\"f\")")),
+        "drop runs when its owner ends; it cannot be called"
+    );
+}
+
+#[test]
+fn tickets_move_through_a_vec_an_option_and_a_struct_without_a_leak() {
+    let source = include_str!("../../../../examples/desk.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/desk.out"));
+    // A ticket in `aside` is not also in `closed`.
+    assert_eq!(
+        refused(&source.replace("            aside.push(ticket)\n", "            aside.push(ticket)\n            self.closed.push(ticket)\n")),
+        "\"ticket\" was moved; copy it with .copy() to keep using it"
+    );
+    // Closing moves the ticket into the desk.
+    assert_eq!(
+        refused(&source.replace("desk.close(ticket)\n        .none:\n            print(\"no email", "desk.close(ticket)\n            print(ticket.title)\n        .none:\n            print(\"no email")),
+        "\"ticket\" was moved; copy it with .copy() to keep using it"
+    );
+}
+
+#[test]
+fn borrows_of_a_returned_catalog_hold_the_catalog_still_until_their_last_use() {
+    let source = include_str!("../../../../examples/catalog.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/catalog.out"));
+    // The generator holds the parts for the whole loop.
+    assert!(
+        refused(&source.replace("    for part in scarce(a.parts, 5):\n        print(", "    for part in scarce(a.parts, 5):\n        a.add(\"nut\", 1, 500)\n        print("))
+            .contains("\"a\" is borrowed here, so it cannot be changed")
+    );
+    // A result may come from either catalog, so both stay put.
+    let changed = source
+        .replace("    let b = south()", "    let mut b = south()")
+        .replace("            print(f\"{part.name}: {part.stock} at {part.price}\")", "            b.add(\"x\", 1, 1)\n            print(f\"{part.name}: {part.stock} at {part.price}\")");
+    assert!(refused(&changed).contains("\"b\" is borrowed here, so it cannot be changed"));
+    // A name of a catalog the function built itself is gone with it.
+    assert_eq!(
+        refused(&source.replace("fn main", "fn title() -> &string:\n    let c = north()\n    return c.parts[0].name\n\nfn main")),
+        "a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned"
+    );
+}
+
+#[test]
+fn a_scanner_holding_a_borrow_is_passed_down_and_back_and_cannot_outlive_its_source() {
+    let source = include_str!("../../../../examples/scanner.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/scanner.out"));
+    // The source cannot grow while the scanner and a view of it are in use.
+    let grown = source
+        .replace("    let src = Source(", "    let mut src = Source(")
+        .replace("    text: string", "    mut text: string")
+        .replace("    print(f\"{tally.words}", "    src.text.push('x')\n    print(f\"{tally.words}");
+    assert!(refused(&grown).contains("\"src\" is borrowed here, so it cannot be changed"));
+    // Reseated to a source of an inner block, it would outlive it.
+    let inner = source.replace("    let mut s = skip(scan(src), 4)\n", "    let mut s = skip(scan(src), 4)\n    if true:\n        let other = Source(text=\"x\")\n        s = scan(other)\n");
+    assert!(refused(&inner).contains("\"s\" would outlive \"other\", which it borrows"));
+}
+
+#[test]
+fn a_void_function_value_is_called_and_returns_nothing() {
+    // #416: the dispatcher of a `fn() -> void` type was `return member()`,
+    // "void function cannot return a value" at 0:0; a lambda's body too.
+    let source = "\
+fn hi() -> void:
+    print(1)
+
+fn run(cb: fn() -> void) -> void:
+    cb()
+
+fn each(cb: fn(i16) -> void) -> void:
+    cb(2)
+
+fn main() -> i16:
+    run(hi)
+    each(|x| print(x))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "1\n2\n");
+    assert_eq!(refused("fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"), "void function cannot return a value");
 }

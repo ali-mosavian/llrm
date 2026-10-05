@@ -152,6 +152,7 @@ impl<'a> From<&'a Profile> for ProfileOrName<'a> {
 static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
     IndexMap::from_iter([
         ("alu_rr", 2),
+        ("alu_ri", 2),
         ("alu_rm", 6),
         ("alu_mr", 8),
         ("mov_rr", 2),
@@ -182,14 +183,20 @@ static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
         ("nop", 3),
         ("jmp_short", 7),
         ("jcc", 7),
+        // Intel's 80386 table: Jcc is 7+m taken, 3 not.
+        ("jcc_not_taken", 3),
         ("call_far", 37),
         ("ret_far", 18),
+        ("ret_pop", 18),
         ("lahf", 2),
         ("sahf", 3),
         ("lea", 2),
         ("leave", 6),
         ("rep_stos", 5),
         ("rep_stos_cell", 5),
+        // Intel's 80386 table: REP MOVS is 8+4n.
+        ("rep_movs", 8),
+        ("rep_movs_cell", 4),
         // GCC's i386 table: x87 loads/stores eight units, arithmetic
         // 23/27/88. Memory arithmetic includes both components.
         ("x87_load", 8),
@@ -216,6 +223,8 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
         divide: costs["div_r16"],
         shift: costs["shift_ri"],
         address: costs["lea"],
+        carry: llrm_mir::target::carry_cost(costs["movzx"], costs["alu_rr"], costs["shift_ri"], costs["mov_rr"]),
+        carry_step: llrm_mir::target::step_cost(costs["alu_rr"]),
         load: costs["mov_rm"],
         store: costs["mov_mr"],
         memory_update: costs["alu_mr"],
@@ -224,6 +233,10 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
         r#move: costs["mov_rr"],
         call: costs["call_far"],
         return_: costs["ret_far"],
+        argument: costs["mov_mr"] + costs["mov_rm"],
+        pop: costs["pop_r"],
+        adjust: costs["alu_ri"],
+        return_pops: costs["ret_pop"] - costs["ret_far"],
         float_add: costs["x87_add"],
         float_multiply: costs["x87_mul"],
         float_divide: costs["x87_div"],
@@ -234,6 +247,9 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
         // the value and count before `rep stos`; then restores ES.
         fill: costs["rep_stos"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 2 * costs["mov_ri"],
         fill_cell: costs["rep_stos_cell"],
+        copy: costs["rep_movs"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 3 * costs["mov_ri"],
+        copy_cell: costs["rep_movs_cell"],
+        direction: 2 * costs["alu_rr"],
     }
 }
 
@@ -461,5 +477,16 @@ mod tests {
             .collect();
 
         assert_eq!(selected, BTreeSet::from(["386", "K5", "K6", "K7", "Core"]));
+    }
+
+    /// The target every frontend lowers to prices a call at its clocks and, tuned for size, at its
+    /// bytes: `size_costs` was not forwarded, so it was `costs`, and every MIR decision made "for
+    /// size" (the inliner, the callee-pop convention) weighed clocks.
+    #[test]
+    fn test_the_lowered_target_forwards_its_size_costs() {
+        use llrm_mir::target::Machine;
+        let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: Default::default(), stack_check: None };
+        let target = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi);
+        assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
     }
 }

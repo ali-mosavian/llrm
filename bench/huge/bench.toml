@@ -1,0 +1,7 @@
+description = "Fill and sum a 200x201 INTEGER array over 64K (huge); BASIC is column-major, so it indexes h(c, r) to walk memory as C does"
+repetitions = 1
+
+[region]
+bas = "BenchHuge"
+c = "bench_huge"
+nib = "bench_huge"

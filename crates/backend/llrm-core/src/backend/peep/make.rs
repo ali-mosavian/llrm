@@ -49,6 +49,11 @@ impl LowWord for &Imm {
     }
 }
 
+/// An immediate's high word.
+pub fn high_word(one: &Imm) -> Loc {
+    Loc::Imm(Imm { value: (one.value >> 16) & 0xFFFF, width: 2, address: None })
+}
+
 pub fn low_word(one: impl LowWord) -> Loc {
     one.low_word()
 }

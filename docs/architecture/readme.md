@@ -20,51 +20,50 @@ targets and their evidence belong in `docs/measurement/targets.md`.
 flowchart LR
     QB["QB 4.5 / QBasic / PDS / VBDOS source"] --> QBFront["qbfront parser<br/>crates/frontends/qbfront/"]
     Nib["Nib source"] --> NibFront["lexer, parser, semantics<br/>crates/frontends/llrm-nib/src/"]
-    QBFront -->|"common HIR"| Hir["HIR verify and lower<br/>crates/backend/llrm-core/src/hir/"]
-    NibFront -->|"common HIR"| Hir
     C["C source"] --> Wcc["Open Watcom front end<br/>toolchain/owshim/ capture"]
-    Wcc -->|"code-generator stream"| CRaise["C trees to MIR<br/>crates/frontends/llrm-c/src/"]
-    BC["BC.EXE .OBJ"] --> Parse["OMF parse, CFG, raise<br/>crates/backend/llrm-core/src/frontends/bc/"]
+    Wcc -->|"code-generator stream"| CFront["C trees to HIR<br/>crates/frontends/llrm-c/src/translate.rs"]
+    QBFront -->|"common HIR"| Emit
+    NibFront -->|"common HIR"| Emit
+    CFront -->|"common HIR"| Emit
+    BC["BC.EXE .OBJ"] --> Raise["OMF decode and raise<br/>crates/bc/llrm-bc/"]
 
-    Hir -->|"MirBody"| Opt
-    CRaise -->|"MirBody"| Opt
-    Parse -->|"MirBody"| Opt
+    Emit["HIR to MIR<br/>crates/ir/llrm-hir/src/mir.rs"] -->|"MIR module"| Opt
+    Raise -->|"MIR module"| Opt
 
     subgraph Middle["Machine-independent middle end"]
         direction LR
-        Opt["MIR fixed point<br/>crates/backend/llrm-core/src/optimize/transform.rs"] --> MirOut["Optimized MirBody"]
+        Opt["MIR pipeline<br/>crates/opt/llrm-transforms/src/pipeline.rs"] --> MirOut["Optimized MIR"]
     end
 
-    MirOut -->|"the lowering boundary"| Lower
+    MirOut -->|"the lowering boundary"| Isel
 
     subgraph Backend["Machine backend"]
         direction LR
-        Lower["Instruction selection<br/>crates/backend/llrm-core/src/backend/lower.rs"] --> LIR["LirBody<br/>virtual values + constraints"]
+        Isel["Instruction selection<br/>crates/backend/llrm-core/src/backend/isel.rs"] --> LIR["LirBody<br/>virtual values + constraints"]
         LIR --> Machine["Machine phases<br/>crates/backend/llrm-core/src/flow.rs"]
         Machine --> Physical["Allocated LIR<br/>physical registers + frame slots"]
-        Physical --> Write["Select, layout, fresh OMF<br/>crates/backend/llrm-core/src/backend/omfwrite.rs"]
+        Physical --> Write["Layout, fresh OMF<br/>crates/backend/llrm-core/src/backend/masm.rs, omfwrite.rs"]
     end
 
     Write -->|"OMF .OBJ"| Link["LINK.EXE"]
 
-    Refuse["Any unsupported contract or encoding"] -.->|"strict default"| Error["Exit nonzero; write no output"]
-    Refuse -.->|"explicit --allow-unchanged"| Original["Retain original .OBJ"]
-    Parse -.-> Refuse
-    Lower -.-> Refuse
+    Refuse["Any unsupported construct or encoding"] -.-> Error["Exit nonzero; write no output"]
+    Emit -.-> Refuse
+    Raise -.-> Refuse
+    Isel -.-> Refuse
     Machine -.-> Refuse
-    Write -.-> Refuse
 ```
 
-| Tool | Frontend | Raise |
+| Tool | Frontend | To MIR |
 | --- | --- | --- |
-| `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, lowered by `crates/backend/llrm-core/src/hir/lower.rs` with the QB runtime ABI |
+| `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, emitted by `crates/ir/llrm-hir/src/mir.rs`; `crates/backend/llrm-core/src/driver/basic.rs` writes the BASIC module object |
 | `llrm-nib` | `crates/frontends/llrm-nib/src/` | the same HIR path |
-| `llrm-c` | a patched Open Watcom front end records its code-generator calls | `crates/frontends/llrm-c/src/raise_hir.rs`, Borland's medium-model ABI |
-| `llrm-omf` | OMF decode of BC's machine code | `crates/backend/llrm-core/src/frontends/bc/raising_*.rs` recognition |
+| `llrm-c` | a patched Open Watcom front end records its code-generator calls | HIR from `crates/frontends/llrm-c/src/translate.rs`, Borland's medium-model ABI |
+| `llrm-omf` | OMF decode of BC's machine code | `crates/bc/llrm-bc/` raises it; `crates/bc/llrm-bcdriver/` writes a fresh object |
 
-There is one production optimizer and one production backend. `crates/bc/llrm-bcmachine/src/legacy/`
-remains only where raising or encoding still shares old recognition data; it is
-not a second optimization route.
+`crates/backend/llrm-core/src/driver/mod.rs` runs the route: `emitted`,
+`optimized`, then `backend/assemble.rs` selects and runs the machine phases.
+There is one optimizer and one backend.
 
 ## The two boundaries
 
@@ -169,8 +168,8 @@ The main ownership split is:
 | Instruction lengths and BC emulator forms | `crates/bc/llrm-bcmachine/src/frontends/bc/declen.rs` |
 | Reachability, inline tables and basic blocks | `crates/bc/llrm-bcmachine/src/frontends/bc/blocks.rs` |
 | BC calling and runtime contracts | `crates/frontends/llrm-qbruntime/src/lib.rs`, `runtime.toml`; per call site, `crates/bc/llrm-bcmachine/src/abi/callsite.rs` |
-| Idiom recognition | `crates/backend/llrm-core/src/frontends/bc/raising_*.rs`, coordinated by `crates/backend/llrm-core/src/model/mir.rs` |
-| Pure analyses used by passes | `crates/backend/llrm-core/src/analysis/` |
+| Idiom recognition | `crates/bc/llrm-bc/src/` (`sites.rs`, `longs.rs`, `floats.rs`, ...) |
+| Pure analyses used by passes | `crates/opt/llrm-analysis/src/` |
 
 Established terminal calls lose their false return edges before body ownership
 and SSA construction. Registered `B$OEGA` error handlers are independent entries,
@@ -230,32 +229,6 @@ flowchart LR
 The distinction between fixed runtime storage and writes through a caller
 pointer is essential: it permits optimization of program data without claiming
 that a call is memory-pure.
-
-### Numeric and bounds policies
-
-Numeric and bounds policy is chosen before optimization and represented in the
-operations being optimized. Native-x87 selection is an emission policy. None is
-a late patch over already-emitted instructions.
-
-```mermaid
-flowchart TD
-    Flags["rewrite options"] --> Numeric{"--basic-semantics?"}
-    Numeric -->|"yes"| Basic["retain BASIC errors, conversions<br/>and observable FP behavior"]
-    Numeric -->|"no"| Native["native machine / C-like arithmetic contract"]
-
-    Flags --> Bounds{"--bounds-checks?"}
-    Bounds -->|"yes"| Checked["retain or hoist proven checks"]
-    Bounds -->|"no"| Unchecked["omit checks only for a supported<br/>native array lowering"]
-
-    Flags --> Fpu{"--native-fpu?"}
-    Fpu -->|"yes"| X87["emit real x87; requires coprocessor"]
-    Fpu -->|"no"| Emulator["preserve BC emulator protocol"]
-
-    Basic -. incompatible .-> X87
-```
-
-Unsupported unchecked array layouts refuse with a reason; they do not silently
-retain a helper and call that success.
 
 ## MIR and its optimization fixed point
 
@@ -481,103 +454,55 @@ back-conversion or duplicate assignment channel in the production emitter;
 the test-only `SourceMap.applied()` compatibility view is not part of the
 compile path.
 
-## Atomic refusal and idempotence
+## Atomic refusal
 
-```mermaid
-stateDiagram-v2
-    [*] --> Original
-    Original --> Raised: parse, map and raise
-    Raised --> Optimized: MIR fixed point
-    Optimized --> Lowered: lower every body
-    Lowered --> Allocated: every machine phase succeeds
-    Allocated --> Written: layout and relocation succeed
-    Written --> Finalized: add configuration marker
-    Finalized --> [*]
-
-    Raised --> Refused: unsupported meaning
-    Optimized --> Error: fixed point does not converge in 16 rounds
-    Lowered --> Refused: Unlowered or frame refusal
-    Allocated --> Refused: Unplaced, Spilled, Tangled
-    Written --> Refused: layout or relocation refusal
-    Refused --> Error: strict CLI exits nonzero and writes no output
-    Refused --> Original: only with explicit --allow-unchanged
-    Error --> [*]
-```
-
-The output marker records the options that affect emitted code. Re-running the
-same configuration returns the finalized object unchanged. Re-running it with a
-different configuration raises `Finalised` instead of raising already-generated
-prologues, spill code and edge copies as if BC had emitted them.
-
-A fallback is never reported as successful optimized output. `wholeseg.Emission`
-distinguishes `LIR` from `REFUSED`; the production CLI raises on `REFUSED` and
-buffers every object in a link unit before writing any of them.
+A compile either writes every object or none. A construct the MIR emitter,
+the BC raise, instruction selection or a machine phase cannot handle refuses
+with its reason, and the tool exits nonzero. `llrm-omf` raises every module of
+a link unit before it writes any of them.
 
 ## Source package map
 
 ```mermaid
 flowchart TD
-    Rewrite["crates/backend/llrm-core/src/rewrite.rs<br/>CLI, policy and finalization"] --> Whole["crates/backend/llrm-core/src/wholeseg.rs<br/>module orchestration"]
-    Whole --> Obj["objectfile/<br/>OMF model, module facts, writing, relocation"]
-    Whole --> Front["frontend/<br/>decode, CFG and recognition helpers"]
-    Whole --> ABI["abi/<br/>runtime and event contracts"]
-    Whole --> Model["model/<br/>IR, MIR, LIR and pass interfaces"]
-    Whole --> Opt["optimize/<br/>MIR transformations"]
-    Whole --> Flow["crates/backend/llrm-core/src/flow.rs<br/>machine pass order"]
-    Flow --> Back["backend/<br/>lowering, allocation, peephole, encoding"]
-
-    Front --> Model
-    Front --> Obj
-    Front --> ABI
-    Opt --> Model
-    Opt --> Analysis["analysis/<br/>pure data-flow, loop, range and FP facts"]
-    Analysis --> Model
-    Back --> Model
-    Back --> Analysis
-    Back --> Cycles["cycles/<br/>published target timing data"]
-    Obj --> Model
-
-    Legacy["legacy/<br/>remaining shared recognition/encoding support"] -.-> Front
-    Legacy -.-> Back
+    Front["frontends<br/>qbfront, llrm-nib, llrm-c, llrm-bc"] --> Hir["llrm-hir<br/>HIR and its MIR emitter"]
+    Hir --> Mir["llrm-mir<br/>MIR: types, verifier, text, interpreter"]
+    Front --> Mir
+    Trans["llrm-transforms<br/>MIR to MIR passes, the pipeline"] --> Mir
+    Trans --> Analysis["llrm-analysis<br/>MIR analyses"]
+    Analysis --> Mir
+    Core["llrm-core<br/>driver, isel, machine phases, OMF writing"] --> Trans
+    Core --> Mir
+    Core --> Target["llrm-x86-code16<br/>target description and costs"]
+    Core --> Obj["llrm-omf<br/>OMF records, modules, CodeView"]
+    Target --> Mir
 ```
 
 Dependency direction matters:
 
-- orchestration may depend on every phase, but phases do not call the driver;
-- analyses depend on models, not on emitting backends;
-- MIR optimizations do not import backend target or register policy;
-- backend modules may consume MIR/LIR but do not mutate OMF records directly;
-- `objectfile/` owns record mutation and serialization.
+- the driver may depend on every phase, but phases do not call the driver;
+- analyses depend on MIR, not on emitting backends;
+- MIR passes do not import backend target or register policy;
+- backend modules consume MIR and LIR but do not mutate OMF records directly;
+- `llrm-omf` owns record parsing and serialization.
 
 ## Diagnostics and verification
 
-`tools/stages.py` receives the bodies from the same production run through
-`wholeseg.emitted(..., watch=...)`. It dumps each MIR round, lowering, every
-machine phase and the final route. It must not reconstruct a parallel pipeline,
-because a newly recomputed allocation is not evidence about the bytes that
-failed.
-
-```mermaid
-flowchart LR
-    Run["one production rewrite"] --> M1["mir-r01-fold"] --> M2["..."] --> MN["mir-rNN-pass"]
-    MN --> Low["lowered"] --> F["floatalloc"] --> P["phielim"] --> A["regalloc"] --> PH["peephole"]
-    PH --> Route["route: LIR emitted or exact refusal"]
-    M1 -. "projected MIR diff" .-> M2
-    Low -. "LIR diff" .-> F
-    F -. "LIR diff" .-> P
-    P -. "LIR diff" .-> A
-```
+`LLRM_MIR_STAGES=DIR` writes the MIR after each pass of the production run, one
+`.ll` file per pass; diff adjacent files to find the pass that changed a bad
+program. `ISEL_DUMP=1` prints the LIR after each machine phase
+(`crates/backend/llrm-core/src/backend/lirtext.rs`). Neither reconstructs a
+parallel pipeline: they show the run that produced the object.
 
 Verification is layered:
 
 | Gate | What it establishes |
 | --- | --- |
-| OMF round trip | Untouched records and bytes remain identical |
 | Focused regression | A known symptom fails without its fix and passes with it |
 | MIR/LIR verifier | SSA, phis, constraints, placement and frame invariants hold |
 | Stage diff | The first transformation that changes a bad program is identified |
-| Real-program matrix | Linked programs preserve answers across supported BC configurations |
-| Scoreboard and timing | The emitted object, not BC's input or hidden helpers, is being measured |
+| Real-program matrix | Linked programs preserve answers across supported configurations |
+| Scoreboard and timing | The emitted object, not hidden helpers, is being measured |
 
 The full test suite is a release gate, not the inner development loop. Work on a
 failure begins with the smallest real reproducer and adjacent stage dumps; broad
@@ -594,7 +519,7 @@ one documented target without materially regressing another.
 - [ ] Canonicalize loops with dedicated preheaders, latches and exits
   (`LoopSimplify`).
   Raw-MIR inventory (2026-09-10): 489 objects, 587 bodies, 465 natural
-  loops across `tests/fixtures/omf` and `tests/fixtures/bench`. Every loop already has
+  loops across `tests/inputs/omf` and `tests/fixtures/bench`. Every loop already has
   a dedicated preheader and exits; only VBDOS PITSNAP in FPBENCH and NBODY
   has multiple latches. General canonicalization remains required, but is
   not the current arithmetic-kernel optimization blocker.
@@ -660,7 +585,7 @@ one documented target without materially regressing another.
   with downstream SSA merges where their values meet. Bypass phi inputs are
   repaired on their incoming edges; a direct use reachable without a defining
   exit is left unchanged rather than supplied an invented value.
-  Real PDS `tests/fixtures/regressions/lcmerge-p-g2.obj` exercises two `EXIT DO`
+  Real PDS `tests/inputs/omf/regressions/lcmerge-p-g2.obj` exercises two `EXIT DO`
   paths and an accumulator use after their join. Its MIR gains two exit phis
   and one downstream merge; all five focused regressions pass, including a
   following cycle and a bypass join. Baseline and both native builds print

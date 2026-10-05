@@ -43,6 +43,8 @@ pub struct DataObject {
     pub readonly: bool,
     /// The callable whose far address its bytes hold, when they hold one.
     pub code: Option<u32>,
+    /// A huge object's segment of its own, the first of as many as it fills.
+    pub segment: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -56,6 +58,8 @@ pub enum Operand {
         indices: Vec<Operand>,
         offset: u32,
         type_id: u32,
+        /// The member of an aggregate type this is: the type and the member's offset in it.
+        member: Option<(u32, u32)>,
     },
     IndirectPlace {
         base: u32,
@@ -63,6 +67,8 @@ pub enum Operand {
         type_id: u32,
         // An array element: the language promises it stays inside its array.
         inbounds: bool,
+        /// The member of an aggregate type this is: the type and the member's offset in it.
+        member: Option<(u32, u32)>,
     },
     DescriptorPlace {
         base: u32,
@@ -156,6 +162,7 @@ pub struct Function {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcedureAbi {
     pub distance: &'static str,
+    pub cleanup: &'static str,
     /// The argument bytes it removes on return.
     pub parameter_bytes: u32,
     pub float_return: &'static str,
@@ -164,11 +171,13 @@ pub struct ProcedureAbi {
 impl ProcedureAbi {
     /// A function of `abi`, taking `argument_bytes`, when it differs from a
     /// native one: it removes its arguments, or it returns with `iret`.
-    pub fn of(abi: Abi, argument_bytes: u32) -> Option<Self> {
+    /// An unexported one states no distance (`any`): only its own module calls it.
+    pub fn of(abi: Abi, argument_bytes: u32, exported: bool) -> Option<Self> {
+        let distance = if exported { "far" } else { "any" };
         match abi {
-            Abi::Cdecl16 => None,
-            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance: "far", parameter_bytes: argument_bytes, float_return: abi.float_return() }),
-            Abi::Interrupt16 => Some(Self { distance: "interrupt", parameter_bytes: 0, float_return: abi.float_return() }),
+            Abi::Cdecl16 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return() }),
+            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance, cleanup: "callee", parameter_bytes: argument_bytes, float_return: abi.float_return() }),
+            Abi::Interrupt16 => Some(Self { distance: "interrupt", cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return() }),
         }
     }
 }
@@ -226,7 +235,7 @@ impl Program {
         out.push_str("],\"data\":[");
         for (index, object) in self.data.iter().enumerate() {
             comma(&mut out, index);
-            write!(out, "{{\"address\":\"near\",\"bytes\":[").unwrap();
+            write!(out, "{{\"address\":\"{}\",\"bytes\":[", if object.segment.is_some() { "huge" } else { "near" }).unwrap();
             bytes(&mut out, &object.bytes);
             write!(
                 out,
@@ -235,6 +244,10 @@ impl Program {
             )
             .unwrap();
             string(&mut out, &object.name);
+            if let Some(segment) = &object.segment {
+                out.push_str(",\"segment\":");
+                string(&mut out, segment);
+            }
             write!(out, ",\"readonly\":{},\"relocations\":[", object.readonly).unwrap();
             if let Some(callable) = object.code {
                 write!(out, "{{\"addend\":0,\"address\":\"far\",\"at\":0,\"code\":true,\"target\":{callable}}}").unwrap();
@@ -253,6 +266,13 @@ impl Program {
             stated.extend(function.facts.iter().cloned());
             // A reference's place stays inside what it refers to, where the language checked it.
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+                // A bool is 0 or 1, whoever stored it.
+                let loaded = instruction.op == "load" && instruction.results.first().is_some_and(|result| {
+                    function.values.iter().find(|one| one.id == *result).and_then(|one| self.types.iter().find(|ty| ty.id == one.type_id)).is_some_and(|ty| ty.kind == "boolean")
+                });
+                if loaded {
+                    stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 1 }));
+                }
                 if instruction.inbounds {
                     stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_mir::facts::Fact::InBounds);
                 }
@@ -301,7 +321,7 @@ impl Program {
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
         out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":4,\"target\":\"i386-real-mode\"}\n",
+            "]}],\"runtime\":\"freestanding\",\"schema\":5,\"target\":\"i386-real-mode\",\"zeroed_locals\":false}\n",
         );
         out
     }
@@ -309,9 +329,9 @@ impl Program {
 
 fn function_json(out: &mut String, function: &Function) {
     match &function.abi {
-        Some(ProcedureAbi { distance, parameter_bytes, float_return }) => write!(
+        Some(ProcedureAbi { distance, cleanup, parameter_bytes, float_return }) => write!(
             out,
-            "{{\"abi\":{{\"cleanup\":\"callee\",\"distance\":\"{distance}\",\"float_return\":\"{float_return}\",\"parameter_bytes\":{parameter_bytes}}},\"blocks\":["
+            "{{\"abi\":{{\"cleanup\":\"{cleanup}\",\"distance\":\"{distance}\",\"float_return\":\"{float_return}\",\"parameter_bytes\":{parameter_bytes}}},\"blocks\":["
         )
         .unwrap(),
         None => out.push_str("{\"abi\":null,\"blocks\":["),
@@ -443,12 +463,17 @@ fn operands(out: &mut String, values: &[Operand]) {
                 indices,
                 offset,
                 type_id,
+                member,
             } => {
                 write!(out, "{{\"indices\":[").unwrap();
                 operands(out, indices);
+                write!(out, "],").unwrap();
+                if let Some((owner, at)) = member {
+                    write!(out, "\"member\":{{\"offset\":{at},\"owner\":{owner}}},").unwrap();
+                }
                 write!(
                     out,
-                    "],\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}"
+                    "\"offset\":{offset},\"place\":{place},\"tag\":\"projection\",\"type\":{type_id}}}"
                 )
                 .unwrap();
             }
@@ -457,11 +482,18 @@ fn operands(out: &mut String, values: &[Operand]) {
                 offset,
                 type_id,
                 inbounds: _,
-            } => write!(
-                out,
-                "{{\"base\":{base},\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
-            )
-            .unwrap(),
+                member,
+            } => {
+                write!(out, "{{\"base\":{base},").unwrap();
+                if let Some((owner, at)) = member {
+                    write!(out, "\"member\":{{\"offset\":{at},\"owner\":{owner}}},").unwrap();
+                }
+                write!(
+                    out,
+                    "\"offset\":{offset},\"tag\":\"indirect\",\"type\":{type_id},\"volatile\":false}}"
+                )
+                .unwrap()
+            }
             Operand::DescriptorPlace {
                 base,
                 field,

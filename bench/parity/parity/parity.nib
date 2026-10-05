@@ -1,0 +1,22 @@
+# link: ../../../tools/loops/runtime/ext.asm
+struct Pair:
+    mut x: i16
+    mut y: i16
+
+@extern("cdecl16")
+fn keep(x: i16) -> i16  # opaque: the compiler cannot fold the kernel away
+
+fn bench_parity(seed: i16) -> i32:
+    let mut points: Pair[8] = [Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0), Pair(x=0, y=0)]
+    let mut total: i32 = 17
+    for index in 0..8:
+        points[index].x = index * 3 + 1 + seed
+        points[index].y = 29 - index * 2
+    for index in 0..8:
+        total += i32(points[index].x) * i32(points[index].y)
+    return total
+
+fn main() -> i16:
+    unsafe:
+        print(bench_parity(keep(0)))
+    return 0

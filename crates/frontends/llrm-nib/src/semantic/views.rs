@@ -37,6 +37,7 @@ impl FunctionCompiler<'_> {
                 _ => None,
             },
             _ if self.string_bytes(expression).is_some() => Some((ElementType::Scalar(TypeName::U8), 1)),
+            Expr::Conditional { then, otherwise, .. } => self.view_type_of(then).or_else(|| self.view_type_of(otherwise)),
             Expr::Member { span, .. } => {
                 let id = self.struct_expression_type(expression, *span).ok()??;
                 self.types.kept_views.get(&id).copied()
@@ -70,6 +71,9 @@ impl FunctionCompiler<'_> {
                 _ => None,
             });
         }
+        if let Expr::Conditional { condition, then, otherwise, span } = expression {
+            return self.conditional_view_of(condition, then, otherwise, *span);
+        }
         if let Some(text) = self.string_bytes(expression) {
             let (binding, name) = self.sequence_of(text)?;
             let element = ElementType::Scalar(TypeName::U8);
@@ -99,6 +103,38 @@ impl FunctionCompiler<'_> {
         Ok(Some((pointer, element, rank)))
     }
 
+    /// `condition ? then : otherwise` of views: the chosen arm's descriptor,
+    /// copied to one slot of this frame on its own branch. `None` when
+    /// neither arm is a view.
+    fn conditional_view_of(&mut self, condition: &Expr, then: &Expr, otherwise: &Expr, span: Span) -> Result<Option<(u32, ElementType, u8)>, Diagnostic> {
+        let Some((element, rank)) = self.view_type_of(then).or_else(|| self.view_type_of(otherwise)) else {
+            return Ok(None);
+        };
+        let condition = self.expression(condition, Some(TypeName::Bool))?;
+        let condition = required(condition, span)?;
+        let slot = self.view_slot(element, rank);
+        let (then_block, otherwise_block, join) = (self.block(), self.block(), self.block());
+        self.terminate(hir::Terminator { kind: "branch", operands: vec![condition], targets: vec![then_block, otherwise_block] });
+        for (block, arm) in [(then_block, then), (otherwise_block, otherwise)] {
+            self.current = block;
+            let source = match self.view_of(arm)? {
+                Some((descriptor, found, found_rank)) if (found, found_rank) == (element, rank) => descriptor,
+                Some(_) => return Err(Diagnostic::new(arm.span(), "the arms of '?:' view different element types or ranks")),
+                None => {
+                    let pointer = self.types.slice_pointer(element, rank);
+                    let (hir::Operand::Value(descriptor), _) = self.borrow_argument(arm, false, BindingType::Slice { element, rank }, pointer)? else {
+                        unreachable!("a view is a descriptor pointer")
+                    };
+                    descriptor
+                }
+            };
+            self.copy_view(source, slot, element, rank);
+            self.terminate(jump(join));
+        }
+        self.current = join;
+        Ok(Some((slot, element, rank)))
+    }
+
     /// An uninitialized view descriptor in this frame: its far pointer.
     pub(super) fn view_slot(&mut self, element: ElementType, rank: u8) -> u32 {
         let descriptor_type = self.types.slice_descriptor(element, rank);
@@ -124,8 +160,8 @@ impl FunctionCompiler<'_> {
         let data = (descriptor::size(rank), self.types.pointer(element.id(), 0));
         for (offset, type_id) in words.chain([data]) {
             let value = self.value_type(type_id);
-            self.emit("load", vec![value], vec![hir::Operand::IndirectPlace { base: source, offset, type_id, inbounds: false }], None);
-            let destination = hir::Operand::IndirectPlace { base: target, offset, type_id, inbounds: false };
+            self.emit("load", vec![value], vec![hir::Operand::IndirectPlace { base: source, offset, type_id, inbounds: false, member: None }], None);
+            let destination = hir::Operand::IndirectPlace { base: target, offset, type_id, inbounds: false, member: None };
             self.emit("store", Vec::new(), vec![destination, hir::Operand::Value(value)], None);
         }
     }

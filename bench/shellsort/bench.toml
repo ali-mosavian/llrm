@@ -1,0 +1,10 @@
+description = "Shell sort of 64 generated 16-bit values, weighted checksum"
+repetitions = 1
+
+[region]
+bas = "BenchShellsort"
+c = "bench_shellsort"
+nib = "bench_shellsort"
+
+[gaps]
+bas = "#364 no unsigned types"

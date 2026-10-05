@@ -143,10 +143,10 @@ b3:
     assert!(through(growing, Peel::default()).0);
 }
 
-/// A call is priced, not refused: the loop is peeled, and @tick still
-/// counts every trip.
+/// A call that touches memory leaves little to fold: GCC refuses a copy that grows (QCport -O2 ran 4.8 KB
+/// past BCC's code on such copies). A call that touches none is priced, and the loop peeled.
 #[test]
-fn a_loop_with_a_call_is_peeled_at_its_price() {
+fn a_loop_with_a_call_is_peeled_only_where_the_call_touches_no_memory() {
     let text = "@count = global i16 0
 
 define void @tick() {
@@ -181,14 +181,17 @@ b3:
   ret i16 %r
 }
 ";
-    let tight = Peel { limits: Limits { max_unrolled_operations: 1, ..Limits::default() }, ..Peel::default() };
-    assert!(!through(text, tight).0);
-    assert!(through(text, Peel::default()).0);
+    let tight = || Peel { limits: Limits { max_unrolled_operations: 1, ..Limits::default() }, ..Peel::default() };
+    assert!(!through(text, tight()).0);
+    assert!(!through(text, Peel::default()).0, "@tick writes @count");
+    let pure = text.replace("define void @tick() {", "define void @tick() memory(none) {").replace("  %c = load i16, ptr @count\n  %d = add i16 %c, 1\n  store i16 %d, ptr @count\n", "");
+    assert!(!through(&pure, tight()).0);
+    assert!(through(&pure, Peel::default()).0);
 }
 
-/// A `select` has no target price, so nothing in its function is copied.
+/// A `frem` has no target price, so nothing in its function is copied.
 #[test]
 fn an_unpriced_function_is_left_alone() {
-    let text = diamond("4").replace("  %m = mul i16 %acc, 3\n", "  %m0 = mul i16 %acc, 3\n  %m = select i1 %even, i16 %m0, i16 %acc\n");
+    let text = diamond("4").replace("  %m = mul i16 %acc, 3\n", "  %f = sitofp i16 %acc to double\n  %g = frem double %f, 3.000000e+00\n  %m = fptosi double %g to i16\n");
     assert!(!through(&text, Peel::default()).0);
 }

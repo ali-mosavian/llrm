@@ -36,7 +36,7 @@ fn shape(records: &[Rc<Record>]) -> (Vec<String>, Vec<String>) {
 fn bc(name: &str) -> (Vec<String>, Vec<String>) {
     // BC's /Zi objects: the corpus's, and those only this reads.
     let path = crate::testing::fixtures().join(name);
-    let path = if path.exists() { path } else { crate::testing::fixtures().join("../cv").join(name) };
+    let path = if path.exists() { path } else { crate::testing::fixtures().join("../codeview").join(name) };
     let found = shape(&omf::read(path).expect("reads"));
     assert!(!found.0.is_empty(), "{name} carries no /Zi symbols");
     found
@@ -123,7 +123,7 @@ fn a_byval_parameter_is_its_scalar() {
 fn a_structure_and_an_array_of_it_read_as_bc_writes_them() {
     let module = |names: [&str; 5], extra: Option<&str>| {
         let [coord, x, y, c, pts] = names;
-        let field = |name: &str, offset| Field { name: name.into(), r#type: 0, offset };
+        let field = |name: &str, offset| Field { name: name.into(), r#type: 0, offset, bits: None };
         let mut data = vec![data(c, 1), data(pts, 2)];
         data.extend(extra.map(|name| self::data(name, 3)));
         Module {

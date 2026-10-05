@@ -93,10 +93,6 @@ impl<T: PyHash + PartialEq> PySet<T> {
         self.used
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.used == 0
-    }
-
     /// `set_add_entry`.
     pub fn add(&mut self, key: T) {
         let hash = key.py_hash();
@@ -178,17 +174,6 @@ impl<T: PyHash + PartialEq> PySet<T> {
 
     pub fn contains(&self, key: &T) -> bool {
         self.iter().any(|one| one == key)
-    }
-
-    /// `set.discard`: the slot becomes a dummy, so later order is unchanged.
-    pub fn discard(&mut self, key: &T) {
-        for slot in &mut self.table {
-            if matches!(slot, Slot::Active(_, one) if one == key) {
-                *slot = Slot::Dummy;
-                self.used -= 1;
-                return;
-            }
-        }
     }
 
     /// Iteration in slot order.

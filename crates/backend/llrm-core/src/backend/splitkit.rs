@@ -12,7 +12,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
-use crate::analysis::intervals::{self as ranges, Indexes, Interval, Segment};
+use crate::analysis::intervals::{self as ranges, Indexes, Segment};
 use crate::analysis::loops;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::{allocate, spiller};
@@ -27,7 +27,7 @@ pub fn loop_bases(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTreeSet<
     }
     let mut result = body.clone();
     let mut kept: BTreeSet<u32> = BTreeSet::new();
-    for found in loops::loops(&ranges::_graph(&result.blocks), Some(result.entry)) {
+    for found in loops::loops(&result.blocks, Some(result.entry)) {
         let inside = &found.body;
         let references: IndexMap<u32, IndexMap<i64, Vec<usize>>> =
             values.iter().map(|value| (*value, _references(&result, *value))).collect();
@@ -399,9 +399,11 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     let mut by_at: IndexMap<i64, LirBlock> = blocks.iter().map(|block| (block.at, block.clone())).collect();
     let mut made: Vec<LirBlock> = Vec::new();
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
+    let mut bridged: IndexMap<(i64, i64), i64> = IndexMap::default();
     for (source, outside, entering) in bridges {
         let bridge = next_at;
         next_at += 1;
+        bridged.insert((source, outside), bridge);
         let original = by_at[&source].clone();
         let beside = Arc::clone(original.insns.last().expect("checked above"));
         let rewritten: Vec<Arc<Insn>> = original
@@ -427,7 +429,7 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
             Vec::new(),
             Vec::new(),
         );
-        jump.op = beside.op.clone();
+        jump.call = beside.call.clone();
         made.push(LirBlock { succ: vec![outside], ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)]) });
         // A phi in the target now arrives from the bridge.
         if let Some(target) = by_at.get_mut(&outside) {
@@ -442,7 +444,12 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     }
     let mut out: Vec<LirBlock> = body.blocks.iter().map(|block| by_at[&block.at].clone()).collect();
     out.extend(made);
-    Some((body.with_blocks(out), moved))
+    let mut split = body.with_blocks(out);
+    for (&(source, outside), &bridge) in &bridged {
+        let succ = &body.blocks.iter().find(|one| one.at == source).expect("a bridged edge's block").succ;
+        split.odds.rerouted(source, succ, outside, &[(bridge, 1.0)]);
+    }
+    Some((split, moved))
 }
 
 fn _terminates(one: &Insn) -> bool {
@@ -464,7 +471,7 @@ fn _copy(beside: &Insn, into: u32, out_of: u32, width: u32) -> Arc<Insn> {
         vec![into],
         vec![out_of],
     );
-    made.op = beside.op.clone();
+    made.call = beside.call.clone();
     Arc::new(made)
 }
 
@@ -605,7 +612,7 @@ fn _last_split(block: &LirBlock) -> i64 {
 }
 
 /// Where `block`'s closing jumps start: a two-way block ends `jcc; jmp`.
-fn _tail(block: &LirBlock) -> usize {
+pub fn _tail(block: &LirBlock) -> usize {
     block.insns.len() - block.insns.iter().rev().take_while(|one| _terminates(one)).count()
 }
 
@@ -917,50 +924,6 @@ pub fn per_block(body: &LirBody, value: u32, live: (&allocate::Live, &allocate::
         .collect()
 }
 
-/// `value`'s interval divided at `region`: the piece inside and the rest,
-/// each weighted as `intervals::weights` weighs a whole range.
-pub fn divided(body: &LirBody, index: &Indexes, whole: &Interval, region: &Region, fresh: u32) -> (Interval, Interval) {
-    let spans = region.segments(body, index);
-    let (mut inside, mut outside) = (Vec::new(), Vec::new());
-    for one in &whole.segments {
-        let mut cursor = one.start;
-        let mut cuts: Vec<Segment> = spans.iter().filter(|span| span.overlaps(one)).copied().collect();
-        cuts.sort_by_key(|span| span.start);
-        for span in cuts {
-            let (start, end) = (span.start.max(one.start), span.end.min(one.end));
-            if cursor < start {
-                outside.push(Segment { start: cursor, end: start });
-            }
-            inside.push(Segment { start, end });
-            cursor = end;
-        }
-        if cursor < one.end {
-            outside.push(Segment { start: cursor, end: one.end });
-        }
-    }
-    let deep = ranges::depths(body);
-    let (mut within, mut without) = (0.0, 0.0);
-    for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
-        for (at, one) in block.insns.iter().enumerate() {
-            if !(one.defines.contains(&whole.value) || one.uses.contains(&whole.value)) {
-                continue;
-            }
-            if region.covers(block.at, at) {
-                within += each;
-            } else {
-                without += each;
-            }
-        }
-    }
-    let weighed = |value: u32, segments: Vec<Segment>, references: f64| {
-        let mut made = Interval::new(value, ranges::_merged(segments));
-        made.weight = references / (made.size() + ranges::GRACE) as f64;
-        made
-    };
-    (weighed(fresh, inside, within), weighed(whole.value, outside, without))
-}
-
 #[cfg(test)]
 mod tests {
     //! Port of `tests/test_splitkit.py`.
@@ -973,9 +936,10 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     use super::{carved, loop_bases, Region};
-    use crate::analysis::intervals::{self, Indexes};
+    use crate::analysis::intervals::{self};
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::analysis::frequency::Frequency;
+    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
 
     fn held(value: u32, width: u32) -> Loc {
         Loc::Held(Held { value, width })
@@ -1447,5 +1411,30 @@ mod tests {
             "nothing was cut"
         );
         assert_eq!(_run(&body)[&5], 10);
+    }
+
+    /// A block whose two edges both got a bridge read the even odds of edges isel
+    /// never estimated, and its loop's frequencies moved with them.
+    #[test]
+    fn test_bridging_both_edges_of_a_block_keeps_their_odds() {
+        let ret = |at| _insn(at, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[4]);
+        let mut loopy = body(
+            "bridged",
+            vec![
+                block(0, vec![move_imm(0, 4, 0)], &[1, 2, 3]),
+                block(1, vec![add(1, 4)], &[2, 3]),
+                block(2, vec![add(2, 4)], &[1, 3]),
+                block(3, vec![ret(3)], &[]),
+            ],
+        );
+        for (from, to, probability) in [(0, 1, 0.5), (0, 2, 0.25), (0, 3, 0.25), (1, 2, 0.5), (1, 3, 0.5), (2, 1, 0.5), (2, 3, 0.5)] {
+            loopy.odds.taken.insert((from, to), (probability * BlockOdds::CERTAIN).round() as u32);
+        }
+        let cut = carved(&loopy, 4, 9, 2, &region(&loopy, &[1, 2])).expect("cut");
+        assert!(cut.blocks.len() > loopy.blocks.len() + 1, "both edges from block 0 got a bridge");
+        let (before, after) = (Frequency::of(&loopy), Frequency::of(&cut));
+        for at in [1, 2, 3] {
+            assert!((before.block(at) - after.block(at)).abs() < 1e-6, "block {at}: {} bridged into {}", before.block(at), after.block(at));
+        }
     }
 }

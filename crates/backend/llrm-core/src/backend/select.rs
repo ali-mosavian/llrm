@@ -16,10 +16,7 @@ use crate::support::hash::IndexMap;
 
 use crate::backend::target;
 use crate::frontends::bc::declen::BITNESS;
-use crate::legacy::calls as machine;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
-use crate::model::mir;
-use crate::support::pyrepr::Repr;
 
 // The register file's own tables, not a copy of them.
 pub use crate::backend::target::{AT_WIDTH, WIDTHS};
@@ -88,8 +85,11 @@ pub enum Where<'a> {
 // Python iced's `Instruction.create_*`, which raise where Rust's `with*`
 // returns `Err`. The `Err` text is the Python exception's.
 
-fn overflow(error: std::num::TryFromIntError) -> String {
-    error.to_string()
+/// The text is spelled here: std's `TryFromIntError` wording changed in 1.99.0
+/// ("out of range integral type conversion attempted" to "number too large to
+/// fit in target type") and sweep_07 compared it.
+fn overflow(_: std::num::TryFromIntError) -> String {
+    "out of range integral type conversion attempted".to_owned()
 }
 
 fn i32_of(value: i64) -> Result<i32, String> {
@@ -287,8 +287,8 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
     }
 }
 
-pub const _WORD_BASES: [Register; 2] = [Register::BX, Register::BP];
-pub const _WORD_INDEXES: [Register; 2] = [Register::SI, Register::DI];
+pub const _WORD_BASES: [Register; 2] = llrm_x86_code16::ENCODABLE_BASES;
+pub const _WORD_INDEXES: [Register; 2] = llrm_x86_code16::WORD_INDEXES;
 
 /// `[base+index*scale+disp]`. A relocated cell takes only the word form,
 /// `[bx|bp+si|di+disp16]`: its fixup is 16 bits.
@@ -359,20 +359,6 @@ pub fn _code(name: &str) -> Option<Code> {
     CODES.get(name).copied()
 }
 
-pub fn _width_of(what: &Loc) -> Option<i64> {
-    match what {
-        Loc::Reg(one) => width_of(one.register),
-        Loc::Imm(one) => {
-            if one.width == 2 || one.width == 4 {
-                Some(i64::from(one.width))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
 pub fn _remapped(register: Register, r#where: Option<&RegisterMap>) -> Register {
     r#where.and_then(|map| map.get(&register)).copied().unwrap_or(register)
 }
@@ -429,6 +415,22 @@ pub fn _immediate(value: i64, width: i64) -> i64 {
     }
     let sign = 1_i64 << (8 * width - 1);
     ((value & (2 * sign - 1)) ^ sign) - sign
+}
+
+/// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low part of the
+/// destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes for 3, 3 and 4. None of them
+/// touches a flag.
+fn extended_in_place(name: &str, into: Register, outof: Register, at: u64) -> Option<Emitted> {
+    let bare = |code: &str| _assemble(&Instruction::with(_code(code)?), at, true);
+    match (name, into, outof) {
+        ("movzx", Register::AX, Register::AL) => load(Register::AH, 0, at),
+        ("movzx", Register::BX, Register::BL) => load(Register::BH, 0, at),
+        ("movzx", Register::CX, Register::CL) => load(Register::CH, 0, at),
+        ("movzx", Register::DX, Register::DL) => load(Register::DH, 0, at),
+        ("movsx", Register::AX, Register::AL) => bare("CBW"),
+        ("movsx", Register::EAX, Register::AX) => bare("CWDE"),
+        _ => None,
+    }
 }
 
 /// `mov into, imm`, at the width `into` names.
@@ -679,6 +681,7 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("pushad", "PUSHAD"),
         ("popad", "POPAD"),
         ("cld", "CLD"),
+        ("std", "STD"),
         // a call of one: its flags pushed first, as the interrupt does
         ("pushf", "PUSHFW"),
         ("iret", "IRETW"),
@@ -820,109 +823,6 @@ pub fn restore_of(wide: Register, low: Register, high: Register, at: u64) -> Opt
     Some(Emitted::new(out))
 }
 
-/// calls.py's own restore idiom, built from the encoder above.
-pub static RESTORE: LazyLock<IndexMap<i64, Vec<u8>>> = LazyLock::new(|| {
-    [
-        (0, restore_of(Register::EAX, Register::AX, Register::DX, 0)),
-        (1, restore_of(Register::ECX, Register::CX, Register::BX, 0)),
-    ]
-    .into_iter()
-    .filter_map(|(pair, made)| made.map(|made| (pair, made.code)))
-    .collect()
-});
-
-/// One absorbable runtime call as the instructions that replace it.
-///
-/// `fields` comes back in the order the instructions were emitted; the
-/// fixups they pair with are `absorbed_fixups`. `Err` is Python's `str`
-/// answer.
-pub fn absorbed(site: &machine::CallSite, live: ir::Flag, restore: bool) -> Result<Emitted, String> {
-    let made = machine::absorb(site, live, restore)?;
-    Ok(Emitted { fields: made.relocations.iter().map(|&(r#where, _field)| r#where).collect(), ..Emitted::new(made.code) })
-}
-
-/// A divide emitted from the operation's own operands.
-///
-/// `Err(reason)` is Python's `str` answer. calls.assemble's ValueError,
-/// which Python does not catch, panics.
-pub fn divides(op: &mir::Op, seats: (Register, Register), restore: bool) -> Result<Emitted, String> {
-    if op.kind != mir::Kind::Divmod || op.args.len() != 2 {
-        return Err(format!("{}: not a divide over two operands", op.name));
-    }
-
-    let mut steps: Vec<Instruction> = Vec::new();
-    let mut reads: Vec<usize> = Vec::new(); // which steps carry a relocatable field
-
-    for (r#where, one) in [(machine::RESULT, &op.args[0]), (machine::DIVISOR, &op.args[1])] {
-        // `where` given whatever this operand is, or why it cannot be.
-        match one {
-            mir::Arg::Const(constant) => {
-                let n = i64::try_from(&constant.n).unwrap_or_else(|_| panic!("out of range integral type conversion attempted"));
-                steps.push(raised(create_reg_i32(Code::Mov_r32_imm32, r#where, n)));
-                continue;
-            }
-            mir::Arg::Cell(cell) if cell.r#ref.addr.is_some() => {
-                // The accumulator's moffs form has no ModRM byte and is a
-                // byte shorter.
-                let base = cell.r#ref.addr.expect("checked").base;
-                let code = if base == Register::None && r#where == machine::RESULT {
-                    Code::Mov_EAX_moffs32
-                } else {
-                    Code::Mov_r32_rm32
-                };
-                reads.push(steps.len());
-                steps.push(raised(create_reg_mem(code, r#where, machine::relocated_memory(base, Register::None))));
-                continue;
-            }
-            _ => {}
-        }
-        // A value in a register needs the allocation to say which register.
-        return Err(format!("{} is not an operand a divide can read yet", one.repr()));
-    }
-
-    steps.push(Instruction::with(Code::Cdq));
-    steps.push(raised(create_reg(Code::Idiv_rm32, machine::DIVISOR)));
-    // Two moves that happen at once: ordered where one is free, exchanged
-    // where neither is.
-    let (quotient, remainder) = seats;
-    let mut moves: Vec<(Register, Register)> = [(quotient, machine::RESULT), (remainder, Register::EDX)]
-        .into_iter()
-        .filter(|(into, outof)| into != outof)
-        .collect();
-    if moves.len() == 2 && moves[0].0 == moves[1].1 && moves[1].0 == moves[0].1 {
-        steps.push(raised(create_reg_reg(Code::Xchg_rm32_r32, moves[0].0, moves[0].1)));
-    } else {
-        // Whichever move nothing else reads out of, first.
-        if moves.len() == 2 && moves[0].0 == moves[1].1 {
-            moves.reverse();
-        }
-        for (into, outof) in moves {
-            steps.push(raised(create_reg_reg(Code::Mov_r32_rm32, into, outof)));
-        }
-    }
-    if restore {
-        steps.extend(machine::restoring());
-    }
-    let relocated: Vec<(usize, usize)> = reads.iter().map(|&index| (index, index)).collect();
-    let made = raised(machine::assemble(&mut steps, &relocated));
-    Ok(Emitted { fields: made.relocations.iter().map(|&(r#where, _which)| r#where).collect(), ..Emitted::new(made.code) })
-}
-
-/// Which fixup each of an absorbed site's fields names, in the same order.
-///
-/// The same relocations `absorbed` reads the offsets from.
-pub fn absorbed_fixups(site: &machine::CallSite, live: ir::Flag, restore: bool) -> Vec<usize> {
-    match machine::absorb(site, live, restore) {
-        Ok(made) => made.relocations.iter().map(|&(_where, field)| field).collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
-/// The idiom that puts a widened value's halves back where BC reads them.
-pub fn restore(pair: i64) -> Option<Emitted> {
-    RESTORE.get(&pair).map(|made| Emitted::new(made.clone()))
-}
-
 /// `idiv` or `div` by a register.
 pub fn divide(name: &str, divisor: Register, at: u64) -> Option<Emitted> {
     if name != "idiv" && name != "div" {
@@ -1002,9 +902,6 @@ pub fn pop_segment(one: Register, width: i64, at: u64) -> Option<Emitted> {
     _assemble(&raised(create_reg(code, one)), at, true)
 }
 
-/// The string stores BC emits to clear an array.
-pub const STRING: [&str; 3] = ["stosb", "stosw", "stosd"];
-
 /// `rep stosw` and its kind, at this pass's own 16-bit address size.
 pub fn fill(name: &str, at: u64, repeated: bool) -> Option<Emitted> {
     let make = match name {
@@ -1015,6 +912,19 @@ pub fn fill(name: &str, at: u64, repeated: bool) -> Option<Emitted> {
     };
     let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
     _assemble(&raised(make(BITNESS, prefix).map_err(|error| error.to_string())), at, true)
+}
+
+/// `movs{b,w,d}`, with `rep` where it repeats: `over:si`, ds where none, to
+/// `es:di`.
+pub fn copy(name: &str, over: Register, at: u64, repeated: bool) -> Option<Emitted> {
+    let make = match name {
+        "movsb" => Instruction::with_movsb,
+        "movsw" => Instruction::with_movsw,
+        "movsd" => Instruction::with_movsd,
+        _ => return None,
+    };
+    let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
+    _assemble(&raised(make(BITNESS, over, prefix).map_err(|error| error.to_string())), at, true)
 }
 
 /// The shifts and rotates.
@@ -1489,6 +1399,9 @@ pub fn emit(
         let wide = |register: Register| width_of(register).unwrap_or(0);
         match (&dests[0], &sources[0]) {
             (Loc::Reg(into), Loc::Reg(outof)) => {
+                if let Some(short) = extended_in_place(name, into.register, outof.register, at) {
+                    return Some(short);
+                }
                 let code = _code(&format!("{upper}_R{}_RM{}", wide(into.register) * 8, wide(outof.register) * 8));
                 if let Some(code) = code {
                     if target::WIDTHS[&into.register] > target::WIDTHS[&outof.register] {
@@ -1822,8 +1735,21 @@ pub fn emit(
     if op == Operation::Fill && matches!(sources.len(), 3 | 4) {
         return fill(name, at, sources.len() == 4);
     }
+    if op == Operation::Copy && matches!(sources.len(), 4 | 5) {
+        // The source is read through ds unless its segment says otherwise.
+        let over = match &sources[sources.len() - 2] {
+            Loc::Reg(one) if one.register != Register::DS => one.register,
+            _ => Register::None,
+        };
+        return copy(name, over, at, sources.len() == 5);
+    }
     if op == Operation::Nothing && name.is_empty() {
         return Some(Emitted::new(Vec::new()));
+    }
+    if op == Operation::Nothing && name == "enter" {
+        let [Loc::Imm(size), Loc::Imm(level)] = sources.as_slice() else { return None };
+        let code = _code("ENTERW_IMM16_IMM8")?;
+        return _assemble(&Instruction::with2(code, size.value as u32, level.value as u32).ok()?, at, true);
     }
     if matches!(op, Operation::Extend | Operation::Nothing | Operation::Leave) {
         return bare(name, at);

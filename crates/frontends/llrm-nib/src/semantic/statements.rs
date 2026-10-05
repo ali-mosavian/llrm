@@ -18,12 +18,16 @@ impl<'a> FunctionCompiler<'a> {
                 let span = statement.span();
                 self.line = if span.module == 0 { span.line as u32 } else { 0 };
             }
+            self.reload_references(statement);
             match self.prepared(statement)? {
                 Some(rewritten) => self.statement(&rewritten)?,
                 None => self.statement(statement)?,
             }
             if let Some(error) = self.moves.error.take() {
                 return Err(Diagnostic::new(statement.span(), error.message));
+            }
+            if std::mem::take(&mut self.huge_address) {
+                return Err(Diagnostic::new(statement.span(), "a 'huge var' is only indexed: no view or pointer reaches past 64K"));
             }
             if self.open() {
                 self.drop_temporaries();
@@ -288,7 +292,7 @@ impl<'a> FunctionCompiler<'a> {
                     return self.statement(&settled);
                 }
                 if let (AssignTarget::Name(name), None) = (target, operation) {
-                    if self.reseat(name, value, *span)? {
+                    if self.reseat_reference(name, value, *span)? || self.reseat(name, value, *span)? {
                         return Ok(());
                     }
                 }
@@ -432,7 +436,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 if let Some(flag) = flag {
-                    let live = hir::Operand::Constant(BOOL, if matches!(value, Expr::Zero(_)) { 0 } else { -1 });
+                    let live = hir::Operand::Constant(BOOL, i64::from(!matches!(value, Expr::Zero(_))));
                     self.emit("store", Vec::new(), vec![flag, live], None);
                 }
                 if let Some(storage) = reinitialized {
@@ -486,6 +490,13 @@ impl<'a> FunctionCompiler<'a> {
                         return Err(Diagnostic::new(*span, "return value is required"));
                     }
                     (TypeName::Void, None) => Vec::new(),
+                    // `return f()` of a void `f` returns nothing, as in Rust.
+                    (TypeName::Void, Some(call @ (Expr::Call { .. } | Expr::MethodCall { .. }))) => {
+                        if self.expression(call, None)?.operand.is_some() {
+                            return Err(Diagnostic::new(*span, "void function cannot return a value"));
+                        }
+                        Vec::new()
+                    }
                     (TypeName::Void, Some(_)) => {
                         return Err(Diagnostic::new(
                             *span,
@@ -523,8 +534,14 @@ impl<'a> FunctionCompiler<'a> {
                 name,
                 iterable,
                 body,
+                returned,
                 span,
-            } => self.for_statement(*mode, name, iterable, body, *span)?,
+            } => {
+                if *returned {
+                    self.check_handed_over(iterable, *span)?;
+                }
+                self.for_statement(*mode, name, iterable, body, *span)?
+            }
             Statement::ForRange {
                 name,
                 start,
@@ -672,6 +689,7 @@ impl<'a> FunctionCompiler<'a> {
         self.terminate(jump(condition_block));
 
         self.current = condition_block;
+        self.reload_named(&condition.names());
         // `loop:` leaves only by `break`.
         let endless = matches!(condition, Expr::Boolean(true, _));
         if endless {

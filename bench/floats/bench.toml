@@ -1,0 +1,7 @@
+description = "Scalar f64 recurrence, 1000 iterations, result*1000 truncated"
+repetitions = 1
+
+[region]
+bas = "BenchFloats"
+c = "bench_floats"
+nib = "bench_floats"

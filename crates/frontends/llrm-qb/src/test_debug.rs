@@ -2,7 +2,6 @@
 
 use std::rc::Rc;
 
-use llrm_core::model::passes::O2;
 use llrm_core::objectfile::{cvinfo, omf};
 
 use super::compile as qb_compile;
@@ -19,7 +18,7 @@ fn object(source: &str, includes: &[(&str, &str)], dialect: &str, runtime: &str,
     let frontend = qb_driver::Frontend { debug, includes: vec![directory.path().to_path_buf()], ..qb_driver::Frontend::new(dialect, runtime) };
     let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{dialect}: {error}"));
     let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-    let bytes = qb_compile::object_bytes_by(&program, &path, None, &O2(), qb_compile::Route::Selected, &codegen).expect("compiles");
+    let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
     omf::parse(&bytes).expect("parses")
 }
 
@@ -62,20 +61,23 @@ fn shape(records: &[Rc<omf::Record>]) -> Vec<String> {
 fn debug_symbols_read_as_bc_writes_them() {
     for (program, fixture, dialect) in [
         ("byref2", "omf/byref2-q-o-zi", "qb45"),
-        ("byref2", "cv/byref2-p-g2-zi", "pds71"),
-        ("byref2", "cv/byref2-v-g3-zi", "vbdos"),
-        ("cvonly/byval", "cv/byval-p-g2-zi", "pds71"),
-        ("cvonly/byval", "cv/byval-v-g3-zi", "vbdos"),
-        ("udt", "cv/udt-q-o-zi", "qb45"),
-        ("udt", "cv/udt-p-g2-zi", "pds71"),
-        ("udt", "cv/udt-v-g3-zi", "vbdos"),
-        ("arrays", "cv/arrays-q-o-zi", "qb45"),
-        ("arrays", "cv/arrays-p-g2-zi", "pds71"),
-        ("arrays", "cv/arrays-v-g3-zi", "vbdos"),
+        ("byref2", "codeview/byref2-p-g2-zi", "pds71"),
+        ("byref2", "codeview/byref2-v-g3-zi", "vbdos"),
+        ("byval", "codeview/byval-p-g2-zi", "pds71"),
+        ("byval", "codeview/byval-v-g3-zi", "vbdos"),
+        ("udt", "codeview/udt-q-o-zi", "qb45"),
+        ("udt", "codeview/udt-p-g2-zi", "pds71"),
+        ("udt", "codeview/udt-v-g3-zi", "vbdos"),
+        ("arrays", "codeview/arrays-q-o-zi", "qb45"),
+        ("arrays", "codeview/arrays-p-g2-zi", "pds71"),
+        ("arrays", "codeview/arrays-v-g3-zi", "vbdos"),
         ("nestud", "omf/nestud-q-o-zi", "qb45"),
     ] {
-        let source = std::fs::read_to_string(root().join(format!("tests/suite/{program}.bas"))).expect("reads");
-        let bc = shape(&omf::read(root().join(format!("tests/fixtures/{fixture}.obj"))).expect("reads"));
+        let source = ["tests/run/qb", "tests/inputs/codeview"]
+            .iter()
+            .find_map(|dir| std::fs::read_to_string(root().join(format!("{dir}/{program}.bas"))).ok())
+            .expect("reads");
+        let bc = shape(&omf::read(root().join(format!("tests/inputs/{fixture}.obj"))).expect("reads"));
         assert!(!bc.is_empty(), "{fixture} carries no symbols");
         assert_eq!(shape(&object(&source, &[], dialect, dialect, true)), bc, "{fixture}");
     }
@@ -86,18 +88,18 @@ fn debug_symbols_read_as_bc_writes_them() {
 #[test]
 fn a_local_is_where_its_code_keeps_it() {
     let source = "SUB s\nDIM k AS INTEGER\nk = 12345\nPRINT k\nEND SUB\n";
-    for own_frames in [false, true] {
+    for runtime_frames in [true, false] {
         let directory = tempfile::tempdir().expect("creates a directory");
         let path = written(&directory, "local.bas", source.as_bytes());
-        let frontend = qb_driver::Frontend { debug: true, own_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+        let frontend = qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
         let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-        let bytes = qb_compile::object_bytes_by(&program, &path, None, &O2(), qb_compile::Route::Selected, &codegen).expect("compiles");
+        let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
         let info = cvinfo::parse(&omf::parse(&bytes).expect("parses"));
         let local = info.procedures.iter().flat_map(|one| &one.locals).find(|one| one.name == "k").expect("k is described");
-        let listing = super::test_hir::rich_listing(&program);
+        let listing = super::test_hir::listing(&program);
         let store = format!("mov word ptr [bp{:+}], 12345", local.bp_offset);
-        assert!(listing.contains(&store), "own frames {own_frames}: no {store:?} in\n{listing}");
+        assert!(listing.contains(&store), "runtime frames {runtime_frames}: no {store:?} in\n{listing}");
     }
 }
 

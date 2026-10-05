@@ -1,0 +1,106 @@
+reason = "Shrink-wrapped callee-saved registers on merged main"
+blessed = "2026-10-05"
+
+[bas.O2]
+instructions = 609549
+memory_operands = 163285
+code_bytes = 374
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 8.3499
+
+[bas.Os]
+instructions = 690586
+memory_operands = 163312
+code_bytes = 322
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 9.4308
+
+[c.O2]
+instructions = 569021
+memory_operands = 82807
+code_bytes = 213
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 7.5912
+
+[c.Os]
+instructions = 650015
+memory_operands = 82800
+code_bytes = 200
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 8.6713
+
+[nib.O2]
+instructions = 569021
+memory_operands = 82807
+code_bytes = 216
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 8.2626
+
+[nib.Os]
+instructions = 650015
+memory_operands = 82800
+code_bytes = 203
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 9.3428
+
+[ow.O2]
+instructions = 6756017
+memory_operands = 925604
+code_bytes = 295
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 90.1173
+
+[ow.Os]
+instructions = 6714616
+memory_operands = 885005
+code_bytes = 276
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 89.5651
+
+[bcc.O2]
+instructions = 4986414
+memory_operands = 120602
+code_bytes = 221
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 66.5136
+
+[bcc.Os]
+instructions = 4986412
+memory_operands = 120602
+code_bytes = 219
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 66.5136
+
+[bc.O2]
+instructions = 10014180
+memory_operands = 2895698
+code_bytes = 356
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 133.7264
+
+[pds71.O2]
+instructions = 10014196
+memory_operands = 3016302
+code_bytes = 360
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 133.7231
+
+[vbdos.O2]
+instructions = 10175076
+memory_operands = 3096729
+code_bytes = 362
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 135.8657

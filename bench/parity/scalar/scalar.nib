@@ -1,0 +1,15 @@
+# link: ../../../tools/loops/runtime/ext.asm
+@extern("cdecl16")
+fn keep(x: i16) -> i16  # opaque: the compiler cannot fold the kernel away
+
+fn bench_scalar(seed: i16) -> i32:
+    let mut total: i32 = 17
+    for index in 0..8:
+        let i: i16 = index
+        total += i32(i * 3 + 1 + seed) * i32(29 - i * 2)
+    return total
+
+fn main() -> i16:
+    unsafe:
+        print(bench_scalar(keep(0)))
+    return 0

@@ -1,0 +1,130 @@
+reason = "Shrink-wrapped callee-saved registers on merged main"
+blessed = "2026-10-05"
+
+[bas.O2]
+instructions = 88
+memory_operands = 42
+code_bytes = 305
+data_bytes = 103
+bss_bytes = 0
+kernel_ms = 0.0109
+
+[bas.Os]
+instructions = 88
+memory_operands = 42
+code_bytes = 304
+data_bytes = 103
+bss_bytes = 0
+kernel_ms = 0.0109
+
+[c.O2]
+instructions = 96
+memory_operands = 41
+code_bytes = 207
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.002
+
+[c.Os]
+instructions = 92
+memory_operands = 41
+code_bytes = 193
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0019
+
+[nib.O2]
+instructions = 92
+memory_operands = 44
+code_bytes = 215
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.0024
+
+[nib.Os]
+instructions = 89
+memory_operands = 44
+code_bytes = 208
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.0023
+
+[ow.O2]
+instructions = 123
+memory_operands = 62
+code_bytes = 185
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0024
+
+[ow.Os]
+instructions = 132
+memory_operands = 71
+code_bytes = 175
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0025
+
+[bcc.O2]
+instructions = 113
+memory_operands = 50
+code_bytes = 181
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0022
+
+[bcc.Os]
+instructions = 128
+memory_operands = 58
+code_bytes = 178
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0024
+
+[tc.O2]
+instructions = 147
+memory_operands = 94
+code_bytes = 199
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0026
+
+[tc.Os]
+instructions = 143
+memory_operands = 94
+code_bytes = 194
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0026
+
+[tcpp.O2]
+instructions = 133
+memory_operands = 58
+code_bytes = 180
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0024
+
+[tcpp.Os]
+instructions = 131
+memory_operands = 58
+code_bytes = 178
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.0024
+
+[bc.O2]
+instructions = 242
+memory_operands = 132
+code_bytes = 343
+data_bytes = 61
+bss_bytes = 40
+kernel_ms = 0.014
+
+[pds71.O2]
+instructions = 268
+memory_operands = 139
+code_bytes = 350
+data_bytes = 61
+bss_bytes = 40
+kernel_ms = 0.013

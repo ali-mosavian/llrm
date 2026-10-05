@@ -76,6 +76,9 @@ fn listed(body: LirBody, name: &str) -> Vec<String> {
         reserve: 0,
         callees: IndexMap::default(),
         interrupt: None,
+        size: false,
+        entry: 0,
+        stack_check: None,
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0)
         .unwrap()
@@ -175,7 +178,7 @@ fn test_shared_machine_pipeline_threads_the_final_branch_pair() {
         ],
     );
 
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN)
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN, false)
         .unwrap()
         .pop()
         .unwrap()
@@ -372,7 +375,7 @@ fn test_threading_preserves_an_exact_empty_loop_header() {
 
     assert!(result.blocks.iter().any(|block| block.at == 8));
     let headers: std::collections::BTreeSet<i64> =
-        loopy::loops(&intervals::_graph(&result.blocks), Some(result.entry)).iter().map(|one| one.header).collect();
+        loopy::loops(&result.blocks, Some(result.entry)).iter().map(|one| one.header).collect();
     assert_eq!(headers, [8, 10].into());
 }
 
@@ -448,7 +451,7 @@ fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
 /// Fresh frontends inherited C's two identical failure-result tails.
 #[test]
 fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
-    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN)
+    let result = crate::flow::machine(&IndexMap::default(), Some(Rc::new(RefCell::new(Frame::new(0)))), None, Some(&IndexMap::default()), false, "386", &crate::backend::target::BUILT_IN, false)
         .unwrap()
         .pop()
         .unwrap()
@@ -462,8 +465,9 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
 /// Unpriced tail sharing grew C sieve from 54 to 55 instructions.
 #[test]
 fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
+    // The loop's exit test stays in 31 times in 32, as isel's heuristic odds say.
     let shaped = |entry: Vec<Arc<Insn>>, looped: Vec<Arc<Insn>>| {
-        body(
+        let mut shaped = body(
             "f",
             1,
             vec![
@@ -472,7 +476,11 @@ fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
                 block(20, vec![_jump(20, 10)], vec![10]),
                 block(30, vec![_return(30)], vec![]),
             ],
-        )
+        );
+        for (to, probability) in [(20, 124.0 / 128.0), (30, 4.0 / 128.0)] {
+            shaped.odds.taken.insert((10, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
+        }
+        shaped
     };
 
     let before = shaped(
@@ -626,52 +634,213 @@ fn test_loop_trace_is_kept_before_its_exit() {
         && printed[index + 1].starts_with("jmp ")));
 }
 
-/// An error call on the branch's fall-through edge was laid out before the return.
-///
-/// No frontend marked it cold; the call's NEVER contract is what says so.
+/// A diamond, the fall-through arm 10 taken with `hot`, the branch arm 20
+/// with the rest; both rejoin at 30.
+fn weighted_diamond(hot: f64) -> LirBody {
+    let mut made = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]),
+            block(10, vec![_move(10, imm(1)), _jump(11, 30)], vec![30]),
+            block(20, vec![_move(20, imm(2)), _jump(21, 30)], vec![30]),
+            block(30, vec![_return(30)], vec![]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    made.odds.taken.insert((1, 10), fixed(hot));
+    made.odds.taken.insert((1, 20), fixed(1.0 - hot));
+    made
+}
+
+/// An arm leaves its join, to land after the return, only where the edge
+/// into the join from the block before it is `LIKELY`, MachineBlockPlacement's
+/// 80%. At even odds the arm went off the join, and a diamond no heuristic
+/// tells apart lost the shorter layout: deedlines ran 177 ms slower.
 #[test]
-fn test_a_block_that_only_reaches_a_terminal_call_is_placed_after_the_return() {
-    use crate::abi::runtime;
-    use crate::backend::lower;
-    use crate::model::mir::{self, Arg, Const, Held, Kind, MirBlock, MirBody};
+fn test_an_arm_leaves_its_join_only_for_a_likely_edge() {
+    let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    assert_eq!(order(0.9), vec![1, 10, 30, 20]);
+    // Short of it both arms stay before the join, the likelier one second.
+    assert_eq!(order(0.7), vec![1, 20, 10, 30]);
+    assert_eq!(order(0.5), vec![1, 10, 20, 30]);
+}
 
-    let x = mir::Value::new(1, 0);
-    let flags = mir::Value { flags: true, ..mir::Value::new(2, 0) };
-    let mut compare = mir::Op::new(1, mir::OpCode::Operation(Operation::Compare), "", vec![flags], vec![x]);
-    compare.kind = Kind::Sub;
-    compare.args = vec![Arg::Held(Held { value: x, width: 2 }), Arg::Const(Const::new(0, 2))];
-    let mut branch = mir::Op::new(2, mir::OpCode::Operation(Operation::Branch), "", vec![], vec![flags]);
-    branch.kind = Kind::Branch;
-    branch.test = Some(Kind::Ge);
-    branch.target = Some(20);
-    let mut raised = mir::Op::new(10, mir::OpCode::Operation(Operation::Call), "call", vec![], vec![]);
-    raised.kind = Kind::Call;
-    raised.args_known = true;
-    let mut returned = mir::Op::new(20, mir::OpCode::Operation(Operation::Return), "ret", vec![], vec![]);
-    returned.kind = Kind::Return;
-    let body = MirBody {
-        sealed: true,
-        ..MirBody::new(
-            0,
-            vec![
-                MirBlock::new(0, vec![], vec![compare, branch], vec![10, 20]),
-                MirBlock::new(10, vec![], vec![raised], vec![]),
-                MirBlock::new(20, vec![], vec![returned], vec![]),
-            ],
-        )
-    };
-    let never = runtime::Contract {
-        cleanup: Some(0),
-        control: runtime::Control::Never,
-        established: true,
-        inputs: Some(BTreeSet::new()),
-        ..runtime::worst("B$RUNERR")
-    };
-    let calls: IndexMap<i64, String> = [(10, "B$RUNERR".to_owned())].into_iter().collect();
-    let contracts: IndexMap<i64, runtime::Contract> = [(10, never)].into_iter().collect();
+/// A diamond short of `LIKELY` keeps both arms before the join, so its
+/// likelier arm goes second and falls into the join. Made the fall-through
+/// at 62.5%, it jumped over the rare arm instead: deedlines' zoomdistort
+/// ran a jump more each of 31,000 passes.
+#[test]
+fn test_a_diamonds_likelier_arm_falls_into_its_join() {
+    let order = |hot: f64| placed(&weighted_diamond(hot)).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    // The branch arm 20 likelier: it goes second.
+    assert_eq!(order(0.375), vec![1, 10, 20, 30]);
+    // The fall-through arm 10 likelier: 20 first, 10 second.
+    assert_eq!(order(0.625), vec![1, 20, 10, 30]);
+    // `LIKELY` and over: the likely arm falls through, the rare one leaves its join.
+    assert_eq!(order(0.1), vec![1, 20, 30, 10]);
+}
 
-    let low = lower::lowered("checked", &body, Some(&calls), BTreeSet::new(), Some(&contracts), "386", &crate::backend::target::BUILT_IN, Default::default())
-        .unwrap();
+/// For size a diamond keeps both arms before its join, and its arm order
+/// is free where both arms keep short jumps either way: the likelier arm
+/// goes second, into the join, at no byte's cost. Not past a short jump's
+/// reach, where the order could change a jump's size.
+#[test]
+fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
+    let order = |body: LirBody| _placed(&body, true).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+    // The premise: both arms are a few bytes, so either order uses short jumps.
+    let small = weighted_diamond(0.7);
+    assert!(small.blocks.iter().filter(|one| [10, 20].contains(&one.at)).all(|one| _arm_bytes(one).is_some_and(|bytes| bytes < 16)));
+    assert_eq!(order(small), vec![1, 20, 10, 30]);
+    // Arm 10 past a short jump's reach: the order stays the source's.
+    let mut large = weighted_diamond(0.7);
+    let arm = large.blocks.iter_mut().find(|one| one.at == 10).unwrap();
+    let mut insns: Vec<Arc<Insn>> = (0..60).map(|_| _move(10, imm(4660))).collect();
+    insns.push(_jump(11, 30));
+    arm.insns = insns;
+    assert!(_arm_bytes(large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
+    assert_eq!(order(large), vec![1, 10, 20, 30]);
+}
 
-    assert_eq!(placed(&low).unwrap().blocks.iter().map(|block| block.at).collect::<Vec<_>>(), vec![0, 20, 10]);
+/// A loop entered at its test, its body ending `jmp test`.
+fn entered_at_its_test(body_ends: Vec<Arc<Insn>>, body_succ: Vec<i64>) -> LirBody {
+    let mut made = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 30)], vec![30]),
+            block(10, body_ends, body_succ),
+            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]),
+            block(40, vec![_return(40)], vec![]),
+            block(50, vec![_return(50)], vec![]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    made.odds.taken.insert((30, 10), fixed(31.0 / 32.0));
+    made.odds.taken.insert((30, 40), fixed(1.0 / 32.0));
+    made
+}
+
+/// A loop body's `jmp` back to the test ran every trip: deedlines' blobs
+/// loops executed one per pass. Copied, the test runs where the jump did,
+/// and the copy's `jmp` to the exit only when the loop leaves (mark 8:
+/// 9,474 ms to 9,069). The copy owns no bytes; the test keeps its own.
+#[test]
+fn test_a_jump_to_a_short_loop_test_runs_a_copy_of_the_test() {
+    let before = entered_at_its_test(vec![_move(10, imm(1)), _jump(11, 30)], vec![30]);
+    let after = duplicated_tails(&before);
+    let jumps = |one: &LirBody| crate::backend::executed::executed(one).expect("reducible").jumps;
+    assert!(jumps(&before) > 30.0, "premise: the jump back runs every trip: {}", jumps(&before));
+    assert!(jumps(&after) < 3.0, "{}", jumps(&after));
+    let copied = after.blocks.iter().find(|one| one.at == 10).unwrap();
+    let names: Vec<String> = _real(copied).iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect();
+    assert_eq!(names, ["mov", "cmp", "jne", "jmp"]);
+    assert_eq!(after.owned_bytes(), before.owned_bytes());
+}
+
+/// A block ending `je out; jmp test` took the test's successors for its own
+/// and lost `out`: pipeline.nib's `je` led nowhere ("a jump to L2_162,
+/// which is nowhere").
+#[test]
+fn test_a_copied_tail_keeps_its_parents_own_branch_targets() {
+    let before = entered_at_its_test(vec![_compare(10), _branch(11, "je", 50), _jump(12, 30)], vec![50, 30]);
+    let after = duplicated_tails(&before);
+    let copied = after.blocks.iter().find(|one| one.at == 10).unwrap();
+    assert!(copied.succ.contains(&50), "{:?}", copied.succ);
+    assert!(after.blocks.iter().any(|one| one.at == 50));
+}
+
+/// A `jmp`'s edge carries no odds, being certain. Its copied test took none
+/// either, and `Frequency` split the copy's branch evenly: the loop it
+/// closes ran twice where it ran 32 times, and qbdemo's PLASMA read 16
+/// times cheaper with its code unchanged.
+#[test]
+fn test_a_copied_test_keeps_its_loops_odds() {
+    let before = entered_at_its_test(vec![_move(10, imm(1)), _jump(11, 30)], vec![30]);
+    assert!(!before.odds.taken.contains_key(&(10, 30)), "premise: the jump's edge has no odds");
+    let after = duplicated_tails(&before);
+    let runs = |one: &LirBody| crate::analysis::frequency::Frequency::of(one).block(10);
+    assert!((runs(&after) - runs(&before)).abs() < 1e-6, "{} {}", runs(&after), runs(&before));
+}
+
+/// A loop test reached from outside the loop by a `jmp` and by a `je`: a
+/// copy at the `jmp` enters the loop at its body while the `je` still
+/// enters at the test. deedlines' `__main` became irreducible that way and its estimate
+/// read "executes an unbounded amount", dropping 777,870 instructions from
+/// the sum.
+#[test]
+fn test_a_copy_never_makes_a_second_entry_into_a_loop() {
+    let mut before = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 30)], vec![30, 5]),
+            block(5, vec![_move(5, imm(2)), _jump(6, 30)], vec![30]),
+            block(10, vec![_move(10, imm(1))], vec![30]),
+            block(30, vec![_compare(30), _branch(31, "jne", 10)], vec![10, 40]),
+            block(40, vec![_return(40)], vec![]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    before.odds.taken.insert((30, 10), fixed(31.0 / 32.0));
+    before.odds.taken.insert((30, 40), fixed(1.0 / 32.0));
+    assert!(crate::backend::executed::executed(&before).is_some(), "premise: reducible");
+    assert!(crate::backend::executed::executed(&duplicated_tails(&before)).is_some(), "the copy made the loop irreducible");
+}
+
+/// SPHEREMAPLASMA's block 390: a loop that leaves by an edge with no
+/// stated odds (`jne` stated, its exit implied), into a `jmp` to a test
+/// split 3:5. The copy's edges took no odds, `Frequency` split the exit
+/// evenly, and the loop nest past `je` read 2.7% hotter (#217).
+#[test]
+fn test_a_copy_from_an_implied_edge_keeps_every_blocks_frequency() {
+    let mut before = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0))], vec![390]),
+            block(390, vec![_move(390, imm(1)), _branch(391, "jne", 390), _jump(392, 187)], vec![390, 187]),
+            block(40, vec![_return(40)], vec![]),
+            block(187, vec![_compare(187), _branch(188, "je", 190)], vec![190, 428]),
+            block(428, vec![_return(428)], vec![]),
+            block(190, vec![_return(190)], vec![]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    before.odds.taken.insert((390, 390), fixed(31.0 / 32.0));
+    before.odds.taken.insert((187, 190), fixed(0.375));
+    before.odds.taken.insert((187, 428), fixed(0.625));
+    assert!(!before.odds.taken.contains_key(&(390, 187)), "premise: the loop's exit is implied");
+    let after = duplicated_tails(&before);
+    assert!(after.blocks.iter().find(|one| one.at == 390).is_some_and(|one| one.succ.contains(&190)), "premise: the test was copied");
+    let (old, new) = (crate::analysis::frequency::Frequency::of(&before), crate::analysis::frequency::Frequency::of(&after));
+    for one in [1, 390, 190, 428] {
+        assert!((old.block(one) - new.block(one)).abs() < 1e-6, "block {one}: {} -> {}", old.block(one), new.block(one));
+    }
+}
+
+/// phielim split FRACLINE's self-loop 42 -> 42 through a landing block and
+/// kept the old edge's odds for an undo; threading the landing's `jmp`
+/// back to 42 added its odds to that kept entry, 0.97 + 0.97: the loop
+/// read as never leaving and qbdemo's FRACLINE ran 355 million times
+/// over, 22 thousand in truth.
+#[test]
+fn test_threading_a_split_loop_back_keeps_its_odds() {
+    let mut split = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0))], vec![42]),
+            block(42, vec![_move(42, imm(1)), _branch(43, "jne", 50)], vec![50, 60]),
+            block(60, vec![_return(60)], vec![]),
+            block(50, vec![_jump(50, 42)], vec![42]),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    split.odds.taken.insert((42, 42), fixed(31.0 / 32.0));
+    split.odds.taken.insert((42, 50), fixed(31.0 / 32.0));
+    let back = threaded(&split);
+    assert!(back.blocks.iter().find(|one| one.at == 42).is_some_and(|one| one.succ.contains(&42)), "premise: threaded back to itself");
+    let runs = crate::analysis::frequency::Frequency::of(&back).block(42);
+    assert!((runs - 32.0).abs() < 1e-3, "{runs}");
 }

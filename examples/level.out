@@ -1,0 +1,5 @@
+3 planes 3 nodes 5 faces, 62 bytes
+(40,50) leaf 0 node 1: f2 b2
+(40,10) leaf 1 node 1: f2 b2
+(8,20) leaf 2 node 2: f3 b4
+(8,4) leaf 3 node 2: f3 b4

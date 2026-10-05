@@ -16,8 +16,9 @@ use llrm_core::support::pyrepr::{self, Repr, Tuple};
 // fe_attr (bld/cg/h/cg.h)
 pub const FE_PROC: i64 = 0x1;
 pub const FE_CONSTANT: i64 = 0x10;
-pub const FE_VOLATILE: i64 = 0x800;
-pub const FE_INTERNAL: i64 = 0x1000;
+pub const FE_ADDR_TAKEN: i64 = 0x400;
+/// INIT `sw`: Watcom's -oa, relaxed alias checking.
+pub const CGSW_GEN_RELAX_ALIAS: i64 = 0x0020_0000;
 pub const FE_GLOBAL: i64 = 0x4;
 pub const FE_IMPORT: i64 = 0x8;
 pub const PRIVATE: i64 = 0x40; // a segment of its own, outside DGROUP
@@ -146,16 +147,14 @@ impl Symbol {
         self.attr & FE_IMPORT != 0
     }
 
+    /// Whether no pointer reaches it but one its unit makes: under -oa,
+    /// what a unit never takes the address of, no other unit does either.
+    pub fn unaddressed(&self, switches: i64) -> bool {
+        switches & CGSW_GEN_RELAX_ALIAS != 0 && self.attr & FE_ADDR_TAKEN == 0
+    }
+
     pub fn constant(&self) -> bool {
         self.attr & FE_CONSTANT != 0
-    }
-
-    pub fn volatile(&self) -> bool {
-        self.attr & FE_VOLATILE != 0
-    }
-
-    pub fn internal(&self) -> bool {
-        self.attr & FE_INTERNAL != 0
     }
 
     pub fn exported(&self) -> bool {
@@ -262,7 +261,8 @@ pub enum DebugType {
     Scalar { name: String, cg: String },
     Array { hi: i64, base: i64 },
     Pointer { cg: String, base: i64 },
-    Struct { name: String, union: bool, size: i64, fields: Vec<(i64, String, i64)> },
+    /// Fields: offset, name, type, and a bit field's first bit and width.
+    Struct { name: String, union: bool, size: i64, fields: Vec<(i64, String, i64, Option<(i64, i64)>)> },
     Enum { cg: String },
     Proc { result: i64, parameters: Vec<i64> },
     /// A tag or typedef name for the type it names.
@@ -298,6 +298,8 @@ pub struct Unit {
     pub procs: Vec<Proc>,
     /// Compiled with -d2.
     pub debug: Option<Debug>,
+    /// INIT's code-generator switches (`CGSW_GEN_*`).
+    pub switches: i64,
 }
 
 impl Unit {
@@ -385,6 +387,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             }
             "INIT" => {
                 made.target = hex(field(one, "target"));
+                made.switches = hex(field(one, "sw"));
                 // CGSW_GEN_DBG_TYPES or CGSW_GEN_DBG_LOCALS
                 if hex(field(one, "sw")) & 0x0018_0000 != 0 {
                     made.debug = Some(Debug::default());
@@ -408,9 +411,10 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let debug = made.debug.as_mut().ok_or_else(|| Unsupported(format!("stream line {}: a debug type without -d2", one.line)))?;
                 let known = debug.types.get_mut(&handle(arg(one, 0)));
                 match (one.call.as_str(), known) {
-                    ("DBField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)))),
-                    // A bit field as its base type: CodeView's own is unmeasured.
-                    ("DBBitField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 4).to_owned(), handle(arg(one, 5)))),
+                    ("DBField", Some(DebugType::Struct { fields, .. })) => fields.push((int(arg(one, 1)), arg(one, 2).to_owned(), handle(arg(one, 3)), None)),
+                    ("DBBitField", Some(DebugType::Struct { fields, .. })) => {
+                        fields.push((int(arg(one, 1)), arg(one, 4).to_owned(), handle(arg(one, 5)), Some((int(arg(one, 2)), int(arg(one, 3))))))
+                    }
                     ("DBParm", Some(DebugType::Proc { parameters, .. })) => parameters.push(handle(arg(one, 1))),
                     ("DBEndName", Some(DebugType::Name { target, .. })) => *target = Some(handle(arg(one, 1))),
                     _ => return Err(Unsupported(format!("stream line {}: {} of an unknown debug type", one.line, one.call))),
@@ -629,39 +633,4 @@ fn from_hex(text: &str) -> Vec<u8> {
                 .unwrap_or_else(|_| panic!("ValueError: non-hexadecimal number found in fromhex()"))
         })
         .collect()
-}
-
-/// The unit, one fact per line, for a stage dump.
-pub fn text(made: &Unit) -> String {
-    let mut out = vec![format!("target 0x{:x}", made.target)];
-    for one in made.segments.values() {
-        out.push(format!(
-            "segment {} {} attr=0x{:x} items={}",
-            one.id,
-            one.name,
-            one.attr,
-            one.items.repr()
-        ));
-    }
-    for one in made.symbols.values() {
-        out.push(format!("symbol {}", one.repr()));
-    }
-    for proc in &made.procs {
-        out.push(format!(
-            "proc {} {} parms={} autos={}",
-            made.symbols[&proc.symbol].object_name(),
-            proc.type_,
-            proc.parms.repr(),
-            proc.autos.repr()
-        ));
-        for one in &proc.body {
-            out.push(format!(
-                "  {}: {} {}",
-                one.line,
-                one.call,
-                one.args.join(" ")
-            ));
-        }
-    }
-    out.join("\n") + "\n"
 }

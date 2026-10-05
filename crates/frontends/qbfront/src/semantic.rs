@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
+mod bounds;
 mod debug;
 mod merging;
 mod assignment;
@@ -67,6 +68,9 @@ struct Variable {
     type_id: u32,
     element: Option<u32>,
     bounds: Vec<(i64, i64)>,
+    /// An array's dimension count, where its declaration states it: QB
+    /// fixes it at compile time.
+    rank: Option<usize>,
     indirect: Option<u32>,
     descriptor: Option<u32>,
     descriptor_place: Option<u32>,
@@ -288,6 +292,7 @@ struct Compiler {
     current_block: usize,
     descriptor_bases: BTreeMap<(u32, u32, &'static str), u32>,
     descriptor_fields: BTreeMap<(u32, usize, u32), u32>,
+    holdings: bounds::Holdings,
     labels: BTreeMap<String, u32>,
     data_labels: BTreeMap<String, usize>,
     next_read_data_row: usize,
@@ -383,7 +388,7 @@ pub struct Options {
     pub row_major: bool,
     /// /Ah.
     pub huge_arrays: bool,
-    /// /D: every element through B$HARY.
+    /// /D: every subscript checked against its dimension.
     pub checked_arrays: bool,
     /// /D's division check: integer division raises its error 11 in code,
     /// not by the processor's divide trap, whose statement the rich route
@@ -392,9 +397,6 @@ pub struct Options {
     /// /D's overflow check: INTEGER + - * and negation, LONG + - and
     /// negation, and LONG to INTEGER raise error 6.
     pub checked_overflow: bool,
-    /// LBOUND/UBOUND read the descriptor without checking it is allocated
-    /// or the dimension in range, as unchecked subscripts do.
-    pub unchecked_bounds: bool,
     /// /MBF.
     pub mbf: bool,
     /// /FPa.
@@ -404,9 +406,8 @@ pub struct Options {
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
-    /// Procedures frame themselves where the runtime needs no frame, as
-    /// the dialect may by default.
-    pub own_frames: bool,
+    /// Every procedure uses the runtime's frame entry and exit.
+    pub runtime_frames: bool,
     /// Errors in code without a landing pad, as a module handler's, report
     /// their BASIC line: a statement-table row, 4 bytes, per line.
     pub error_lines: bool,
@@ -605,6 +606,7 @@ fn built_from(
                         type_id: parameter_type,
                         element: Some(parameter_type),
                         bounds: Vec::new(),
+                        rank: None,
                         indirect: None,
                         descriptor: Some(value),
                         descriptor_place: None,
@@ -645,6 +647,7 @@ fn built_from(
                         type_id: parameter_type,
                         element: None,
                         bounds: Vec::new(),
+                        rank: None,
                         indirect: Some(value),
                         descriptor: None,
                         descriptor_place: None,
@@ -1370,6 +1373,7 @@ impl Compiler {
             current_block: 0,
             descriptor_bases: BTreeMap::new(),
             descriptor_fields: BTreeMap::new(),
+            holdings: bounds::Holdings::default(),
             labels: BTreeMap::new(),
             data_labels: BTreeMap::new(),
             next_read_data_row: 0,
@@ -1441,6 +1445,7 @@ impl Compiler {
         self.current_block = 0;
         self.descriptor_bases.clear();
         self.descriptor_fields.clear();
+        self.holdings = bounds::Holdings::default();
         self.labels.clear();
         self.exits.clear();
         self.loops.clear();
@@ -1494,6 +1499,7 @@ impl Compiler {
         if id != 1 && self.own_frames() {
             self.zero_locals(&external_entries);
         }
+        self.place_holdings(&external_entries);
         let table = self
             .data
             .iter_mut()
@@ -1559,7 +1565,7 @@ impl Compiler {
         } else {
             BTreeSet::new()
         };
-        let reads = assignment::unassigned_reads(&self.blocks, &tracked, &assigns_all, entries);
+        let reads = assignment::unassigned_reads(&self.blocks, &tracked, &assigns_all, entries, assignment::Named::Assigns);
         let warnings: Vec<String> = reads
             .into_iter()
             .map(|(place, instruction)| {
@@ -1580,7 +1586,7 @@ impl Compiler {
         let scalar = |place: &Place| integral(place.type_id) || matches!(place.type_id, SINGLE | DOUBLE);
         let locals: Vec<Place> = self.places.iter().filter(|place| place.storage == "local").cloned().collect();
         let tracked = locals.iter().filter(|place| scalar(place)).map(|place| place.id).collect();
-        let unassigned: BTreeSet<u32> = assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries)
+        let unassigned: BTreeSet<u32> = assignment::unassigned_reads(&self.blocks, &tracked, &BTreeSet::new(), entries, assignment::Named::MayRead)
             .into_iter()
             .map(|(place, _)| place)
             .collect();
@@ -2094,6 +2100,11 @@ impl Compiler {
                         let mut declaration = item.clone();
                         declaration.bounds.clear();
                         self.declare_as(&declaration, storage)?;
+                        // Its first REDIM fixes its rank, as BC's does.
+                        let key = self.declaration_key(item)?;
+                        if let Some(variable) = self.variables.get_mut(&key) {
+                            variable.rank = Some(item.bounds.len());
+                        }
                     }
                 }
                 Statement::Const { name, value, .. } => {
@@ -2243,8 +2254,10 @@ impl Compiler {
             vec![Operand::Place(descriptor_place)],
         );
         let bounds = self.bounds(declaration)?;
+        let stated = bounds.clone();
         let (operands, records) = self.dimensioned(bounds, element, descriptor);
         self.emit_runtime_call("B$DDIM", Vec::new(), operands);
+        self.holds(bounds::Held::Place(descriptor_place), Some(stated));
         self.tag_last(Tag::Allocate(Shape { descriptor, records, element }));
         Ok(())
     }
@@ -2416,6 +2429,7 @@ impl Compiler {
                     type_id: element,
                     element: Some(element),
                     bounds: Vec::new(),
+                    rank: Some(declaration.bounds.len()),
                     indirect: None,
                     descriptor: None,
                     descriptor_place: Some(descriptor_place),
@@ -2489,6 +2503,7 @@ impl Compiler {
                     type_id: element,
                     element: Some(element),
                     bounds,
+                    rank: None,
                     indirect: None,
                     descriptor: None,
                     descriptor_place: Some(descriptor_place),
@@ -2644,6 +2659,7 @@ impl Compiler {
                 place,
                 type_id,
                 element: array_element,
+                rank: array_element.map(|_| bounds.len()).filter(|&rank| rank > 0),
                 bounds,
                 indirect: None,
                 descriptor: None,
@@ -2943,6 +2959,9 @@ impl Compiler {
                             Vec::new(),
                             vec![Operand::Value(descriptor)],
                         );
+                        if let Some(held) = bounds::Held::of(&variable) {
+                            self.holds(held, None);
+                        }
                         self.tag_last(Tag::Release { descriptor });
                     }
                 }
@@ -3885,11 +3904,12 @@ impl Compiler {
                             "store",
                             Vec::new(),
                             vec![
+                                // POKE writes the memory every time, whatever reads it.
                                 Operand::Indirect {
                                     base: pointer,
                                     offset: 0,
                                     type_id: BYTE,
-                                    volatile: false,
+                                    volatile: true,
                                     inbounds: false,
                                 },
                                 value,
@@ -4751,15 +4771,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
+                if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.options.checked_arrays {
-                        "checked"
-                    } else {
-                        variable.descriptor_data
-                    };
-                    let pointer =
-                        self.descriptor_element(descriptor, element, arguments, address)?;
+                    let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
                     return Ok((
                         Operand::Indirect {
                             base: pointer,
@@ -4780,8 +4794,16 @@ impl Compiler {
                     if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
                         return self.fail(format!("array {name} subscript is not numeric"));
                     }
-                    if matches!(type_id, SINGLE | DOUBLE | BYTE) {
+                    let type_id = if matches!(type_id, SINGLE | DOUBLE | BYTE) {
                         operand = self.convert(operand, type_id, INTEGER)?;
+                        INTEGER
+                    } else {
+                        type_id
+                    };
+                    if self.options.checked_arrays {
+                        let (lower, upper) = variable.bounds[indices.len()];
+                        let long = |value: i64| Operand::Constant(LONG, Number::Integer(value));
+                        self.subscript_checked(operand.clone(), type_id, long(lower), long(upper - lower + 1))?;
                     }
                     indices.push(operand);
                 }
@@ -4847,15 +4869,9 @@ impl Compiler {
                 let element = variable.element.expect("an array has an element type");
                 let has_descriptor =
                     variable.descriptor.is_some() || variable.descriptor_place.is_some();
-                if has_descriptor && (variable.bounds.is_empty() || self.options.checked_arrays) {
+                if has_descriptor && variable.bounds.is_empty() {
                     let descriptor = self.descriptor_pointer(&variable)?;
-                    let address = if self.options.checked_arrays {
-                        "checked"
-                    } else {
-                        variable.descriptor_data
-                    };
-                    let pointer =
-                        self.descriptor_element(descriptor, element, arguments, address)?;
+                    let pointer = self.descriptor_element(descriptor, element, arguments, variable.descriptor_data)?;
                     return Ok((ProjectionBase::Indirect(pointer, false, true), 0, element));
                 }
                 if arguments.len() != variable.bounds.len() {
@@ -4867,8 +4883,16 @@ impl Compiler {
                     if !matches!(type_id, INTEGER | LONG | SINGLE | DOUBLE | BYTE) {
                         return self.fail(format!("array {name} subscript is not numeric"));
                     }
-                    if matches!(type_id, SINGLE | DOUBLE | BYTE) {
+                    let type_id = if matches!(type_id, SINGLE | DOUBLE | BYTE) {
                         operand = self.convert(operand, type_id, INTEGER)?;
+                        INTEGER
+                    } else {
+                        type_id
+                    };
+                    if self.options.checked_arrays {
+                        let (lower, upper) = variable.bounds[indices.len()];
+                        let long = |value: i64| Operand::Constant(LONG, Number::Integer(value));
+                        self.subscript_checked(operand.clone(), type_id, long(lower), long(upper - lower + 1))?;
                     }
                     indices.push(operand);
                 }
@@ -5018,37 +5042,6 @@ impl Compiler {
         if indices.is_empty() {
             return self.fail("array element requires at least one subscript");
         }
-        if matches!(address, "split_huge" | "checked") {
-            // PDS /Ah and /D do not inline descriptor arithmetic. BC evaluates
-            // source subscripts, pushes them so record 0's is last, then the
-            // rank, supplies the near descriptor in BX, and B$HARY returns ES:BX.
-            // Keep both returned words explicit until CONCAT makes the whole
-            // pointer consumed by the element load/store.
-            let mut operands = Vec::new();
-            for index in indices {
-                let (index, index_type) = self.subscript(index)?;
-                operands.push(self.convert(index, index_type, INTEGER)?);
-            }
-            operands.push(Operand::Constant(
-                INTEGER,
-                Number::Integer(indices.len() as i64),
-            ));
-            operands.push(Operand::Value(descriptor));
-            let mut order: Vec<_> = self.record_dimensions(indices.len()).into_iter().rev().collect();
-            order.extend(indices.len()..indices.len() + 2);
-            let offset = self.value(INTEGER);
-            let selector = self.value(INTEGER);
-            self.emit_call("B$HARY", vec![offset, selector], operands, order, false);
-            self.tag_last(Tag::ElementOffset { descriptor, origin: None });
-            let pointer_type = self.whole_pointer_type(element);
-            let pointer = self.value(pointer_type);
-            self.emit(
-                "concat",
-                vec![pointer],
-                vec![Operand::Value(selector), Operand::Value(offset)],
-            );
-            return Ok(pointer);
-        }
         let pointer_type = match address {
             "near" => self.pointer_type(element),
             "split_far" => self.far_pointer_type(element),
@@ -5063,10 +5056,18 @@ impl Compiler {
         // descriptor field: a subscript can call a function that REDIMs.
         let mut subscripts = Vec::new();
         for index in indices {
+            // A subscript is an INTEGER, as BC passes one.
             let (index, index_type) = self.subscript(index)?;
-            subscripts.push(self.convert(index, index_type, offset_type)?);
+            let index = self.convert(index, index_type, INTEGER)?;
+            subscripts.push(self.convert(index, INTEGER, offset_type)?);
         }
-        let linear = Some(self.element_number(descriptor, &subscripts, offset_type)?);
+        if self.options.checked_arrays {
+            self.descriptor_checked(descriptor, &subscripts, offset_type)?;
+        }
+        // A huge array's offset at +0Ah wraps at 64K, so its lower bounds
+        // are subtracted here and its elements counted from the data at +0.
+        let huge = address == "split_huge";
+        let linear = Some(self.element_number(descriptor, &subscripts, offset_type, huge)?);
         let bytes = self.value(offset_type);
         self.emit(
             "mul",
@@ -5118,6 +5119,33 @@ impl Compiler {
         Ok(pointer)
     }
 
+    /// /D: ERROR 9, Subscript out of range, unless the array is allocated
+    /// and each subscript is within its dimension, as B$HARY checks.
+    fn descriptor_checked(&mut self, descriptor: u32, subscripts: &[Operand], offset_type: u32) -> Result<(), SemanticError> {
+        let selector = self.descriptor_field(descriptor, 2, INTEGER);
+        let unallocated = self.computed("eq", BOOLEAN, vec![Operand::Value(selector), Operand::Constant(INTEGER, Number::Integer(0))]);
+        self.raise_if(unallocated, 9)?;
+        for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
+            let lower = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
+            let lower = self.convert(Operand::Value(lower), INTEGER, LONG)?;
+            let count = self.descriptor_field(descriptor, 14 + 4 * record, INTEGER);
+            let count = self.convert(Operand::Value(count), INTEGER, LONG)?;
+            self.subscript_checked(subscripts[dimension].clone(), offset_type, lower, count)?;
+        }
+        Ok(())
+    }
+
+    /// ERROR 9 unless `subscript` of `type_id` less `lower` is below `count`,
+    /// both LONG.
+    fn subscript_checked(&mut self, subscript: Operand, type_id: u32, lower: Operand, count: Operand) -> Result<(), SemanticError> {
+        let subscript = self.convert(subscript, type_id, LONG)?;
+        let from = self.computed("sub", LONG, vec![subscript, lower]);
+        let below = self.computed("lt", BOOLEAN, vec![from.clone(), Operand::Constant(LONG, Number::Integer(0))]);
+        self.raise_if(below, 9)?;
+        let above = self.computed("ge", BOOLEAN, vec![from, count]);
+        self.raise_if(above, 9)
+    }
+
     /// An array subscript's value and numeric type.
     /// An array subscript. A sized integer widens to INTEGER or LONG.
     fn subscript(&mut self, index: &Expr) -> Result<(Operand, u32), SemanticError> {
@@ -5140,16 +5168,25 @@ impl Compiler {
 
     /// The element number of `subscripts`, one per source dimension, from
     /// the descriptor's counts: record 0's subscript is the most significant.
-    /// The lower bounds are already in the adjusted offset at +0Ah.
+    /// The lower bounds are in the adjusted offset at +0Ah, else `lower`
+    /// subtracts each.
     fn element_number(
         &mut self,
         descriptor: u32,
         subscripts: &[Operand],
         offset_type: u32,
+        lower: bool,
     ) -> Result<Operand, SemanticError> {
         let mut linear: Option<Operand> = None;
         for (record, dimension) in self.record_dimensions(subscripts.len()).into_iter().enumerate() {
-            let subscript = subscripts[dimension].clone();
+            let mut subscript = subscripts[dimension].clone();
+            if lower {
+                let bound = self.descriptor_field(descriptor, 16 + 4 * record, INTEGER);
+                let bound = self.convert(Operand::Value(bound), INTEGER, offset_type)?;
+                let from = self.value(offset_type);
+                self.emit("sub", vec![from], vec![subscript, bound]);
+                subscript = Operand::Value(from);
+            }
             linear = Some(match linear {
                 None => subscript,
                 Some(previous) => {
@@ -5186,166 +5223,6 @@ impl Compiler {
         );
         self.descriptor_bases.insert(key, data);
         data
-    }
-
-    /// LBOUND/UBOUND read from the descriptor, as dynamic.asm's ULbound does.
-    /// Where that routine would raise "subscript out of range" -- no data,
-    /// or a dimension outside 1..=AD_cDims -- the call itself runs instead,
-    /// so the error and any RESUME behave exactly as before.
-    fn array_bound(
-        &mut self,
-        descriptor: u32,
-        dimension: Operand,
-        upper: bool,
-    ) -> Result<Operand, SemanticError> {
-        let result = self.compiler_temporary("$bound", INTEGER)?;
-        let checked = !self.options.unchecked_bounds;
-        // Every allocated array has a first dimension.
-        let first = matches!(dimension, Operand::Constant(_, Number::Integer(1)));
-        let read = self.new_block();
-        let ranking = self.new_block();
-        // The runtime is called only to raise "Subscript out of range".
-        let call = checked.then(|| self.error_block());
-        let done = self.new_block();
-
-        if let Some(call) = call {
-            let data = self.descriptor_field(descriptor, 2, INTEGER);
-            let allocated = self.value(BOOLEAN);
-            let zero = Operand::Constant(INTEGER, Number::Integer(0));
-            self.emit("ne", vec![allocated], vec![Operand::Value(data), zero]);
-            self.terminate(
-                "branch",
-                vec![Operand::Value(allocated)],
-                vec![ranking, call],
-            )?;
-        } else {
-            self.terminate("jump", Vec::new(), vec![ranking])?;
-        }
-
-        self.select_block(ranking);
-        let rank = self.descriptor_field(descriptor, 8, BYTE);
-        let rank = self.convert(Operand::Value(rank), BYTE, INTEGER)?;
-        match call {
-            Some(call) if !first => {
-                let ranked = self.new_block();
-                let positive = self.value(BOOLEAN);
-                let one = Operand::Constant(INTEGER, Number::Integer(1));
-                self.emit("ge", vec![positive], vec![dimension.clone(), one]);
-                self.terminate("branch", vec![Operand::Value(positive)], vec![ranked, call])?;
-
-                self.select_block(ranked);
-                let within = self.value(BOOLEAN);
-                self.emit("le", vec![within], vec![dimension.clone(), rank.clone()]);
-                self.terminate("branch", vec![Operand::Value(within)], vec![read, call])?;
-            }
-            _ => self.terminate("jump", Vec::new(), vec![read])?,
-        }
-
-        // As B$LBND: dimension d reads record cDims - d, which under /R holds
-        // source dimension cDims + 1 - d, as in BC.
-        self.select_block(read);
-        let entry = self.value(INTEGER);
-        self.emit("sub", vec![entry], vec![rank, dimension.clone()]);
-        let bytes = self.value(INTEGER);
-        self.emit(
-            "mul",
-            vec![bytes],
-            vec![
-                Operand::Value(entry),
-                Operand::Constant(INTEGER, Number::Integer(4)),
-            ],
-        );
-        let (pointer_type, offset_type) = {
-            let pointer_type = self
-                .values
-                .iter()
-                .find_map(|(id, type_id)| (*id == descriptor).then_some(*type_id))
-                .expect("descriptor value");
-            let offset_type = if self.width(pointer_type) == 4 {
-                LONG
-            } else {
-                INTEGER
-            };
-            (pointer_type, offset_type)
-        };
-        let bytes = self.convert(Operand::Value(bytes), INTEGER, offset_type)?;
-        let at = self.value(pointer_type);
-        self.emit(
-            "ptr_offset",
-            vec![at],
-            vec![Operand::Value(descriptor), bytes],
-        );
-        let lower = self.value(INTEGER);
-        self.emit(
-            "load",
-            vec![lower],
-            vec![Operand::Indirect {
-                base: at,
-                offset: 16,
-                type_id: INTEGER,
-                volatile: false,
-                inbounds: false,
-            }],
-        );
-        let value = if upper {
-            let count = self.value(INTEGER);
-            self.emit(
-                "load",
-                vec![count],
-                vec![Operand::Indirect {
-                    base: at,
-                    offset: 14,
-                    type_id: INTEGER,
-                    volatile: false,
-                    inbounds: false,
-                }],
-            );
-            let end = self.value(INTEGER);
-            self.emit(
-                "add",
-                vec![end],
-                vec![Operand::Value(lower), Operand::Value(count)],
-            );
-            let last = self.value(INTEGER);
-            self.emit(
-                "sub",
-                vec![last],
-                vec![
-                    Operand::Value(end),
-                    Operand::Constant(INTEGER, Number::Integer(1)),
-                ],
-            );
-            last
-        } else {
-            lower
-        };
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![Operand::Place(result), Operand::Value(value)],
-        );
-        self.terminate("jump", Vec::new(), vec![done])?;
-
-        if let Some(call) = call {
-            self.select_block(call);
-            let called = self.value(INTEGER);
-            self.emit_runtime_call(
-                if upper { "B$UBND" } else { "B$LBND" },
-                vec![called],
-                vec![Operand::Value(descriptor), dimension],
-            );
-            self.emit(
-                "store",
-                Vec::new(),
-                vec![Operand::Place(result), Operand::Value(called)],
-            );
-            self.terminate("jump", Vec::new(), vec![done])?;
-        }
-
-        self.select_block(done);
-        let merged = self.value(INTEGER);
-        self.emit("load", vec![merged], vec![Operand::Place(result)]);
-        Ok(Operand::Value(merged))
     }
 
     fn descriptor_field(&mut self, descriptor: u32, offset: usize, type_id: u32) -> u32 {
@@ -6065,6 +5942,9 @@ impl Compiler {
             return self.fail(format!("REDIM {} requires bounds", declaration.name));
         }
         let variable = self.array(&declaration.name)?;
+        if variable.rank.is_some_and(|rank| rank != declaration.bounds.len()) {
+            return self.fail(format!("{}: wrong number of dimensions", declaration.name));
+        }
         if variable.descriptor_place.is_some_and(|place| self.static_shapes.contains_key(&place)) {
             return self.fail(format!("{} is static: array already dimensioned", declaration.name));
         }
@@ -6089,9 +5969,13 @@ impl Compiler {
             ));
         }
         let bounds = self.bounds(declaration)?;
+        let stated = bounds.clone();
         let descriptor = self.descriptor_pointer(&variable)?;
         let (operands, records) = self.dimensioned(bounds, element, descriptor);
         self.emit_runtime_call("B$RDIM", Vec::new(), operands);
+        if let Some(held) = bounds::Held::of(&variable) {
+            self.holds(held, Some(stated));
+        }
         self.tag_last(Tag::Reallocate(Shape { descriptor, records, element }));
         Ok(())
     }
@@ -6839,6 +6723,7 @@ impl Compiler {
                 type_id,
                 element: None,
                 bounds: Vec::new(),
+                rank: None,
                 indirect: None,
                 descriptor: None,
                 descriptor_place: None,
@@ -6945,7 +6830,6 @@ impl Compiler {
             if intrinsic.lowering == Lowering::LowerBound && self.dialect.zero_based_arrays() {
                 return Ok(Some((Operand::Constant(INTEGER, Number::Integer(0)), INTEGER)));
             }
-            let descriptor = self.descriptor_pointer(&variable)?;
             let dimension = if let Some(dimension) = arguments.get(1) {
                 let (dimension, type_id) = self.expression(dimension)?;
                 self.convert(dimension, type_id, INTEGER)?
@@ -6953,7 +6837,7 @@ impl Compiler {
                 Operand::Constant(INTEGER, Number::Integer(1))
             };
             let upper = intrinsic.lowering == Lowering::UpperBound;
-            let result = self.array_bound(descriptor, dimension, upper)?;
+            let result = self.array_bound(&variable, dimension, upper)?;
             return Ok(Some((result, INTEGER)));
         }
         if let Lowering::RuntimeInteger(routine) = intrinsic.lowering {
@@ -7431,11 +7315,12 @@ impl Compiler {
             self.emit(
                 "load",
                 vec![byte],
+                // PEEK reads the memory every time: interrupts and hardware change it.
                 vec![Operand::Indirect {
                     base: pointer,
                     offset: 0,
                     type_id: BYTE,
-                    volatile: false,
+                    volatile: true,
                     inbounds: false,
                 }],
             );
@@ -9064,11 +8949,35 @@ impl Compiler {
         let payload_symbol = self.next_data;
         self.next_data += 1;
 
-        // QB 4.5 and PDS 7.1 keep one ordinary SD and its bytes together in
-        // BC_CN. VBDOS instead keeps immutable bytes in FSL_CONST: BC_CN then
+        // A near runtime keeps one ordinary SD and its bytes together in
+        // BC_CN. A far one keeps immutable bytes in FSL_CONST: BC_CN then
         // holds a near bridge to a far SD plus the shared selector-word
-        // address. These are different runtime profiles, not dialect syntax.
-        let (descriptor_symbol, payload_offset) = if self.runtime == "vbdos" {
+        // address. The runtime description says which, and where a near
+        // descriptor keeps what.
+        let (descriptor_symbol, payload_offset) = if let Some(near) = llrm_qbruntime::semantics::descriptor(&self.runtime) {
+            let mut literal = vec![0; near.size as usize];
+            literal[near.length as usize..near.length as usize + 2].copy_from_slice(&(encoded.len() as u16).to_le_bytes());
+            literal.extend_from_slice(&encoded);
+            if literal.len() % 2 != 0 {
+                literal.push(0);
+            }
+            self.data.push(DataObject {
+                align: 1,
+                id: payload_symbol,
+                name: format!("$string{payload_symbol}"),
+                bytes: literal,
+                readonly: true,
+                relocations: vec![DataRelocation {
+                    at: near.data as usize,
+                    target: payload_symbol,
+                    addend: near.size as isize,
+                    address: "near",
+                }],
+                linkage: "internal",
+                address: "near",
+            });
+            (payload_symbol, near.size as isize)
+        } else {
             let segment_symbol = if let Some(symbol) = self.far_string_segment_symbol {
                 symbol
             } else {
@@ -9141,29 +9050,6 @@ impl Compiler {
                 address: "near",
             });
             (descriptor_symbol, 6)
-        } else {
-            let mut literal = Vec::from((encoded.len() as u16).to_le_bytes());
-            literal.extend_from_slice(&[0, 0]);
-            literal.extend_from_slice(&encoded);
-            if literal.len() % 2 != 0 {
-                literal.push(0);
-            }
-            self.data.push(DataObject {
-                align: 1,
-                id: payload_symbol,
-                name: format!("$string{payload_symbol}"),
-                bytes: literal,
-                readonly: true,
-                relocations: vec![DataRelocation {
-                    at: 2,
-                    target: payload_symbol,
-                    addend: 4,
-                    address: "near",
-                }],
-                linkage: "internal",
-                address: "near",
-            });
-            (payload_symbol, 4)
         };
         let place = self.next_place;
         self.next_place += 1;
@@ -9852,8 +9738,13 @@ impl Compiler {
         }
         // What the language promises of a FOR counter's add: it does not wrap.
         for function in &self.functions {
+            // A signed counter's add does not wrap as signed; an unsigned counter's
+            // as unsigned (it may well pass 32767): a counter that wrapped hangs in BC.
+            let types: BTreeMap<u32, u32> = function.values.iter().copied().collect();
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
-                facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, llrm_hir::facts::Fact::NoSignedWrap);
+                let counts_up = instruction.results.first().and_then(|result| types.get(result)).is_some_and(|&type_id| unsigned(type_id));
+                let fact = if counts_up { llrm_hir::facts::Fact::NoUnsignedWrap } else { llrm_hir::facts::Fact::NoSignedWrap };
+                facts.state(llrm_hir::facts::Subject::Instruction { function: i64::from(function.id), id: i64::from(instruction.id) }, fact);
             }
         }
         // A call that fills a fixed-length destination: the callee writes its first
@@ -9893,7 +9784,7 @@ impl Compiler {
         }
         write!(
             out,
-            "}}],\"runtime\":\"{}\",\"schema\":4,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -9909,7 +9800,7 @@ impl Compiler {
 
     /// Whether procedures frame themselves where the runtime needs no frame.
     fn own_frames(&self) -> bool {
-        self.dialect.own_frames() || self.options.own_frames
+        !self.options.runtime_frames
     }
 
     fn fail<T>(&self, message: impl Into<String>) -> Result<T, SemanticError> {

@@ -15,13 +15,12 @@ use crate::backend::frame::Frame;
 use crate::backend::peep::{self, walk::Facts};
 use llrm_x86_code16::instructions;
 use crate::backend::{
-    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, spillforward, storecombine,
+    affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward, storecombine,
     target,
 };
 use crate::frontends::bc::declen;
 use crate::model::ir::{self, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::mir;
 use crate::model::passes::LIRTransform;
 
 pub use crate::backend::lanes::{Lane, Lanes};
@@ -138,7 +137,6 @@ impl LIRTransform for Peephole {
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
         let body = regthrash::thrashed(phielim::unsplit(&body));
-        let body = concatenated(&body);
         let body = frame_copies(&body, &self.cpu)?;
         let body = copyprop::forwarded(&body);
         let body = extensions(&body);
@@ -147,14 +145,15 @@ impl LIRTransform for Peephole {
         let body = storecombine::combined(&body);
         let body = pushed_constants(&body);
         let body = far_loads(&fused(&overwritten(&shuttles(&restored_copies(&high_extracts(
-            &transferred(&commuted(&constants(&pushes(&body)))),
+            &transferred(&commuted(&constants(&pushes(&body, &self.cpu)))),
             &self.cpu,
         )?)))));
         let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
-        let body = increments(&body);
+        let body = borrows(&increments(&body));
         let body = doubled(&body, &self.cpu)?;
+        let body = sharedstores::shared(&body, &self.cpu, &crate::backend::masm::SAVED.keys().copied().collect::<Vec<_>>());
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
@@ -198,102 +197,6 @@ pub fn popped_arguments(body: &LirBody, cpu: &Profile) -> Result<LirBody, String
     Ok(LirBody { blocks, ..body.clone() })
 }
 
-/// Pack two word halves without using the stack.
-///
-/// CONCAT_LOW lowers portably to `push high; push low; pop wide` before
-/// allocation.  Once the low word and the wide result share a physical root,
-/// a 386 has BCC's two-instruction answer instead: shift the unknown upper
-/// half away, then funnel the high word in with SHRD.  The original sequence
-/// preserves flags, so this is legal only where physical flag liveness proves
-/// the SHRD flags dead.
-pub fn concatenated(body: &LirBody) -> LirBody {
-    let exits = liveness::dead_at_exit(body);
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
-        let mut insns = block.insns.clone();
-        for index in 0..insns.len().saturating_sub(2) {
-            let (high_push, low_push, wide_pop) =
-                (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]), Arc::clone(&insns[index + 2]));
-            if high_push.op.as_ref().map(|op| op.kind) != Some(mir::Kind::Concat)
-                || [&high_push, &low_push, &wide_pop].into_iter().any(|one| (one.what.is_none()
-                || !one.clobbers.is_empty()
-                || !one.clobbers_high.is_empty()
-                || !one.requires.is_empty()
-                || !one.delivers.is_empty()
-                || !one.spread.is_empty()
-                || one.group.is_some()
-                || one.symbol == Some(true)
-                || one.frame_adjust
-                || one.spill_reload
-                || one.spill_store))
-            {
-                continue;
-            }
-            let (Some(first), Some(second), Some(third)) = (&high_push.what, &low_push.what, &wide_pop.what) else {
-                continue;
-            };
-            let (high, low, result) = match (
-                (first.op, first.name.as_deref(), first.dests.as_slice(), first.sources.as_slice()),
-                (second.op, second.name.as_deref(), second.dests.as_slice(), second.sources.as_slice()),
-                (third.op, third.name.as_deref(), third.dests.as_slice(), third.sources.as_slice()),
-            ) {
-                (
-                    (Operation::Push, Some("push"), [], [Loc::Reg(high)]),
-                    (Operation::Push, Some("push"), [], [Loc::Reg(low)]),
-                    (Operation::Pop, Some("pop"), [Loc::Reg(result)], []),
-                ) => {
-                    if high.width != low.width
-                        || high.width != 2
-                        || result.width != 4
-                        || ir::root(low.register) != ir::root(result.register)
-                        || ir::root(high.register) == ir::root(result.register)
-                    {
-                        continue;
-                    }
-                    (*high, *low, *result)
-                }
-                _ => continue,
-            };
-            let _ = low;
-            let count = Loc::Imm(imm(16, 1));
-            let wide_high = reg(target::named(high.register, 4), 4);
-            let shifted = semantics(
-                Operation::Binary,
-                "shl",
-                vec![Loc::Reg(result)],
-                vec![Loc::Reg(result), count.clone()],
-            );
-            let funnelled = semantics(
-                Operation::Funnel,
-                "shrd",
-                vec![Loc::Reg(result)],
-                vec![Loc::Reg(result), Loc::Reg(wide_high), count],
-            );
-            let encoded: Vec<Option<select::Emitted>> = [&shifted, &funnelled].into_iter().map(emit).collect();
-            if encoded.iter().any(Option::is_none) {
-                continue;
-            }
-            let mut modified_flags = Lanes::new();
-            for made in &encoded {
-                let code = made.as_ref().map_or(Vec::new(), |made| made.code.clone());
-                let mut decoder = Decoder::new(16, &code, DecoderOptions::NONE);
-                for insn in &mut decoder {
-                    modified_flags.extend(_flag_lanes(insn.rflags_modified()));
-                }
-            }
-            if !modified_flags.is_subset(&dead_after[&id(&wide_pop)]) {
-                continue;
-            }
-            insns[index] = lir::anchor(Arc::clone(&high_push));
-            insns[index + 1] = Arc::new(with_what(&low_push, shifted));
-            insns[index + 2] = Arc::new(with_what(&wide_pop, funnelled));
-        }
-        blocks.push(block.with_insns(insns));
-    }
-    body.with_blocks(blocks)
-}
-
 /// Use a dead GPR for an allocated frame-to-frame parallel copy.
 ///
 /// Parallel-copy scheduling has to work even when every GPR is live, so its
@@ -326,7 +229,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
         let mut insns = block.insns.clone();
         for index in 0..insns.len().saturating_sub(1) {
             let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
-            if [&pushed, &popped].into_iter().any(|one| (one.what.is_none()
+            if [&pushed, &popped].into_iter().any(|one| one.what.is_none()
                 || !one.clobbers.is_empty()
                 || !one.clobbers_high.is_empty()
                 || !one.requires.is_empty()
@@ -336,12 +239,12 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
                 || one.symbol == Some(true)
                 || one.frame_adjust
                 || one.spill_reload
-                || one.spill_store)) {
+                || one.spill_store) {
                 continue;
             }
             if pushed.at != popped.at
                 || popped.covers != Some((pushed.at, pushed.at))
-                || popped.op.is_some()
+                || popped.call.is_some()
                 || !pushed.defines.is_empty()
                 || !pushed.uses.is_empty()
                 || !popped.defines.is_empty()
@@ -408,10 +311,6 @@ pub fn extensions(body: &LirBody) -> LirBody {
     peep::extensions(body, &Facts::new(body, None))
 }
 
-
-
-
-
 /// Materialize a call's literal once when both stack and register need it (`peephole.peep`).
 pub fn pushed_constants(body: &LirBody) -> LirBody {
     peep::pushed_constants(body, &Facts::new(body, None))
@@ -453,8 +352,8 @@ fn _code_windows<E>(
 }
 
 /// Two adjacent immediate word pushes have one dword's stack layout (`peephole.peep`).
-pub fn pushes(body: &LirBody) -> LirBody {
-    peep::pushes(body, &Facts::new(body, None))
+pub fn pushes(body: &LirBody, cpu: &Profile) -> LirBody {
+    peep::pushes(body, &Facts::new(body, Some(cpu)))
 }
 
 pub fn _lanes(register: Register) -> Lanes {
@@ -494,8 +393,6 @@ pub fn commuted(body: &LirBody) -> LirBody {
 pub fn transferred(body: &LirBody) -> LirBody {
     peep::transferred(body, &Facts::new(body, None))
 }
-
-
 
 /// Select direct register or memory forms for a dword's high word.
 ///
@@ -550,7 +447,7 @@ fn _register_high_extract(
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
     let (pushed, discarded, kept) = (&parts[0], &parts[1], &parts[2]);
-    if parts.iter().any(|one| (one.what.is_none()
+    if parts.iter().any(|one| one.what.is_none()
                 || !one.clobbers.is_empty()
                 || !one.clobbers_high.is_empty()
                 || !one.requires.is_empty()
@@ -560,7 +457,7 @@ fn _register_high_extract(
                 || one.symbol == Some(true)
                 || one.frame_adjust
                 || one.spill_reload
-                || one.spill_store)) {
+                || one.spill_store) {
         return Ok(None);
     }
     let (Some(first), Some(second), Some(third)) = (&pushed.what, &discarded.what, &kept.what) else {
@@ -652,7 +549,7 @@ fn _selected_register_high_extract(
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
     let (moved, shift) = (&parts[0], &parts[1]);
-    if parts.iter().any(|one| (one.what.is_none()
+    if parts.iter().any(|one| one.what.is_none()
                 || !one.clobbers.is_empty()
                 || !one.clobbers_high.is_empty()
                 || !one.requires.is_empty()
@@ -662,7 +559,7 @@ fn _selected_register_high_extract(
                 || one.symbol == Some(true)
                 || one.frame_adjust
                 || one.spill_reload
-                || one.spill_store)) {
+                || one.spill_store) {
         return Ok(None);
     }
     let (Some(first), Some(second)) = (&moved.what, &shift.what) else {
@@ -766,12 +663,9 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
     // Only a synthetic reload may be narrowed.  A source memory operation can
     // be volatile, fault on bytes no longer read, or otherwise make its full
     // access width observable.
-    let source = load.op.as_ref();
     if !load.inserted()
         || load.symbol != Some(false)
-        || source.is_none_or(|source| {
-            source.source_backed || !source.loads.is_empty() || !source.stores.is_empty() || source.volatile
-        })
+        || load.call.as_ref().is_none_or(|call| call.effects.reads || call.effects.writes)
     {
         return None;
     }
@@ -833,12 +727,6 @@ pub fn shuttles(body: &LirBody) -> LirBody {
 pub fn restored_copies(body: &LirBody) -> LirBody {
     peep::restored_copies(body, &Facts::new(body, None))
 }
-
-
-
-
-
-
 
 /// One allocated operand with aliases of `before` renamed to `after`.
 pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
@@ -1000,6 +888,11 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
                 writes.extend(_lanes(*register));
             }
         }
+        // `rep` counts its register down to where it stops, which Iced calls a
+        // conditional write: a hoisted `mov cx, n` was run once, not per trip.
+        if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
+            writes.extend(_lanes(Register::ECX));
+        }
     }
     Some((reads, writes))
 }
@@ -1041,13 +934,8 @@ pub fn _frame_written(one: &Insn) -> Option<Mem> {
     if cells.len() != 1 || !_frame_cell(cells[0]) {
         return None;
     }
-    let stores: &[mir::MemRef] = one.op.as_ref().map_or(&[], |op| op.stores.as_slice());
-    if !one.spill_store
-        && (stores.len() > 1
-            || stores.iter().any(|reference| {
-                reference.addr.is_none_or(|addr| addr.space != Space::Frame) || reference.base.is_some()
-            }))
-    {
+    // A call that may write names no frame cell.
+    if !one.spill_store && one.call.as_ref().is_some_and(|call| call.writes()) {
         return None;
     }
     Some(cells[0].clone())
@@ -1147,26 +1035,15 @@ pub fn overwritten(body: &LirBody) -> LirBody {
     body.with_blocks(blocks)
 }
 
-
 /// Fold a load, an operation and a store into one memory operation (`peephole.peep`).
 pub fn fused(body: &LirBody) -> LirBody {
     peep::fused(body, &Facts::new(body, None))
 }
 
-
-
-
-
-
-
 /// Load a far pointer's two words with one les (lds, lfs, lgs) (`peephole.peep`).
 pub fn far_loads(body: &LirBody) -> LirBody {
     peep::far_loads(body, &Facts::new(body, None))
 }
-
-
-
-
 
 /// Replace a dead temporary's shift with a scaled 67h LEA.
 ///
@@ -1314,7 +1191,7 @@ fn _loaded_addresses(block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu
 
 /// The instructions of `block` after which no arithmetic flag is read,
 /// given whether any is read after its end.
-fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
+pub(crate) fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
     let mut dead: HashSet<usize> = HashSet::default();
     let mut flags_dead = dead_out;
     for one in block.insns.iter().rev() {
@@ -1597,7 +1474,7 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
             }
         }
         let extension = Arc::new(Insn {
-            op: definition.op.clone(),
+            call: definition.call.clone(),
             ..Insn::new(
                 definition.at,
                 Some((definition.at, definition.at)),
@@ -1697,7 +1574,7 @@ fn _affine_address(
     let bits = i64::from(dest.width) * 8;
     let wrapped = |value: i64| (value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1));
     let (mut terms, mut disp): (affine::Terms, i64) = (vec![(full32(source.register), 1)], 0);
-    let mut best: Option<(usize, Address, i64)> = None;
+    let mut best: Option<(usize, Address, i64, bool)> = None;
     for (at, one) in parts.iter().enumerate().skip(1) {
         let Some((written, step, cost)) = affine::step(one, cpu) else {
             break;
@@ -1727,17 +1604,26 @@ fn _affine_address(
         if !dead.contains(&id(one)) {
             continue;
         }
-        if let Some(address) = affine::form(&terms, disp, &wide.scales) {
-            best = Some((at, address, old));
+        if dest.width == 2 && let Some(address) = affine::word_form(&terms, disp) {
+            best = Some((at, address, old, true));
+        } else if let Some(address) = affine::form(&terms, disp, &wide.scales) {
+            best = Some((at, address, old, false));
         }
     }
-    let Some((last, address, old)) = best else {
+    let Some((last, address, old, word)) = best else {
         return Ok(None);
     };
     let replaced = &parts[..=last];
     let partial: HashSet<Register> = terms.iter().map(|term| term.0).collect();
     let stalls = if dest.width < 4 { partial.len() as i64 * cpu.partial_register_stall } else { 0 };
-    if cpu.operations.address + cpu.operations.prefix + stalls > old {
+    // The target's own price of the form (`three_operand`): a word address has no prefix and reads no dword register.
+    let scale = address.scale;
+    let width = i64::from(dest.width);
+    let Some(form) = llrm_mir::target::three_operand(&cpu.operations, &cpu.address_forms, width, scale, word) else {
+        return Ok(None);
+    };
+    let price = form + if word { 0 } else { stalls };
+    if price > old {
         return Ok(None);
     }
     let what = semantics(Operation::Address, "lea", vec![Loc::Reg(dest)], vec![Loc::Address(address)]);
@@ -1789,6 +1675,11 @@ pub fn increments(body: &LirBody) -> LirBody {
     peep::increments(body, &Facts::new(body, None))
 }
 
+/// `mov r,0 ; sbb r,0` as `sbb r,r` (`peephole.peep`).
+pub fn borrows(body: &LirBody) -> LirBody {
+    peep::borrows(body, &Facts::new(body, None))
+}
+
 /// `shl r,1` as `add r,r` where the target prices the add lower (`peephole.peep`).
 pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
     cpu.doubling()?;
@@ -1796,36 +1687,9 @@ pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
-    let Some(what) = &one.what else {
-        return false;
-    };
-    if !one.clobbers.is_empty() {
-        return false;
-    }
-    match (what.op, what.name.as_deref()) {
-        (Operation::Compare, Some("cmp" | "test")) => true,
-        (Operation::Binary, Some("add" | "sub" | "and" | "or" | "xor")) => true,
-        (Operation::Unary, Some("neg")) => true,
-        // INC/DEC preserve carry, but a carry which is dead afterwards
-        // is dead beforehand too.  Other arithmetic flags are replaced
-        // by the operation, so an all-dead state crosses it unchanged.
-        (Operation::Unary, Some("inc" | "dec")) => flags_dead,
-        (Operation::Move, Some("mov")) | (Operation::Address, Some("lea")) => flags_dead,
-        (Operation::Extend, Some("movsx" | "movzx" | "cwd" | "cdq")) => flags_dead,
-        (Operation::Push, Some("push")) | (Operation::Pop, Some("pop")) => flags_dead,
-        (Operation::Nothing, None | Some("")) | (Operation::Jump, _) | (Operation::Fill, _) => flags_dead,
-        _ => {
-            // Anything else by what it encodes: a far load writes no flag, and
-            // missing from the list above it kept `mov ax,0` from becoming `xor`.
-            let Some((reads, writes)) = _register_effects(one, false, true) else {
-                return false;
-            };
-            if !reads.is_disjoint(&_ARITHMETIC_LANES) {
-                return false;
-            }
-            flags_dead || _ARITHMETIC_LANES.is_subset(&writes)
-        }
-    }
+    let (reads, writes) = _flag_effect(one);
+    let dead = if flags_dead { _ARITHMETIC_LANES.clone() } else { Lanes::new() };
+    _ARITHMETIC_LANES.is_subset(&dead.or(&writes).minus(&reads))
 }
 
 /// What each conditional jump in the instruction description reads.
@@ -1986,6 +1850,44 @@ fn _flag_source(blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &R
     None
 }
 
+/// The flag lanes `one` reads and writes: the one answer flags liveness has, forwards and back.
+/// What a callee, a caller after a return, and whatever runs after the body leaves may read:
+/// no calling convention passes the adjust flag in or out, so only an instruction here
+/// that reads AF reads it.
+fn _exit_flags() -> Lanes {
+    _flag_lanes(_ARITHMETIC).minus(&_ADJUST)
+}
+
+pub fn _flag_effect(one: &Insn) -> (Lanes, Lanes) {
+    let every = _flag_lanes(_ARITHMETIC);
+    if _nothing(one) {
+        // One that clobbers is an opaque barrier, which may observe any flag.
+        return if one.clobbers.is_empty() { (Lanes::new(), Lanes::new()) } else { (every, Lanes::new()) };
+    }
+    if let Some(effect) = liveness::effect(one) {
+        let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
+        return (flags(&effect.reads), flags(&effect.writes));
+    }
+    if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
+        return (_exit_flags(), Lanes::new());
+    }
+    // Bytes this cannot encode -- a relocated operand, an x87 form --
+    // still name their instruction, and only a few instructions read
+    // a flag. Writes stay unknown, which only keeps flags live longer.
+    if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
+        if !name.is_empty() && !_reads_flags(name) {
+            let written = match name {
+                "add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "neg" => every,
+                // They keep the carry.
+                "inc" | "dec" => every.minus(&_flag_lanes(RflagsBits::CF)),
+                _ => Lanes::new(),
+            };
+            return (Lanes::new(), written);
+        }
+    }
+    (every, Lanes::new())
+}
+
 static _ADJUST: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::AF));
 /// Every mnemonic iced-x86 knows to read an arithmetic flag, and every
 /// interrupt: it hands the flags to the handler.
@@ -2092,34 +1994,8 @@ fn _sets_from(one: &Insn, register: &Reg) -> bool {
 
 /// Which flag lanes something may read after each block's last instruction.
 pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
-    let every = _flag_lanes(_ARITHMETIC);
-    // No calling convention passes the adjust flag in or out: a callee, a
-    // caller after a return, and whatever runs after the body leaves may read
-    // any other flag, but only an instruction here that reads AF reads it.
-    let exits: Lanes = every.minus(&_ADJUST);
-
-    // The flag lanes of each instruction's effect, as liveness reads it.
-    let effects = |one: &Insn| -> (Lanes, Lanes) {
-        if _nothing(one) {
-            return (Lanes::new(), Lanes::new());
-        }
-        if let Some(effect) = liveness::effect(one) {
-            let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
-            return (flags(&effect.reads), flags(&effect.writes));
-        }
-        if one.what.as_ref().is_some_and(|what| [Operation::Call, Operation::Return].contains(&what.op)) {
-            return (exits.clone(), Lanes::new());
-        }
-        // Bytes this cannot encode -- a relocated operand, an x87 form --
-        // still name their instruction, and only a few instructions read
-        // a flag. Writes stay unknown, which only keeps flags live longer.
-        if let Some(name) = one.what.as_ref().and_then(|what| what.name.as_deref()) {
-            if !name.is_empty() && !_reads_flags(name) {
-                return (Lanes::new(), Lanes::new());
-            }
-        }
-        (every.clone(), Lanes::new())
-    };
+    let exits = _exit_flags();
+    let effects = |one: &Insn| _flag_effect(one);
 
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> = body
         .blocks

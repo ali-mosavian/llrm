@@ -11,7 +11,7 @@ use super::{
 };
 use crate::analysis::flags::{ALL, CLOBBERS, written_by};
 use crate::frontends::bc::declen::{Insn, READS, WRITES, instruction_info_factory, to_signed};
-use crate::legacy::lift::{Resolver, operand as long_operand};
+use crate::model::ir::lift::{Resolver, operand as long_operand};
 use crate::objectfile::module::Space;
 
 /// Which roots this instruction may write, and which it may read.

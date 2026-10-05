@@ -9,7 +9,7 @@ use std::fmt;
 
 use llrm_support::pyrepr::{self, Repr};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// A Python `StrEnum`: members, their values, `str()` and `repr()`.
 macro_rules! str_enum {
@@ -128,6 +128,8 @@ str_enum!(AddressKind {
     Code("CODE") = "code",
     // A 16-bit protected/real-mode segment selector, without an offset.
     Segment("SEGMENT") = "segment",
+    // Memory at a fixed address no program object occupies: a device's.
+    Fixed("FIXED") = "fixed",
 });
 
 str_enum!(FloatEvaluation {
@@ -155,6 +157,8 @@ str_enum!(FloatReturn {
 str_enum!(CallDistance {
     Near("NEAR") = "near",
     Far("FAR") = "far",
+    // No caller outside its module and no runtime enters it: near where every call of it is direct.
+    Any("ANY") = "any",
     // Entered by INT or an IRQ, left by `iret`.
     Interrupt("INTERRUPT") = "interrupt",
 });
@@ -283,12 +287,23 @@ pub struct ArrayElement {
     pub indices: Vec<Operand>,
 }
 
+/// Which member of an aggregate type an access is: the aggregate's type and the
+/// byte offset of the member in it. A fact stated of the member (`Subject::Field`)
+/// reaches every access that names it, however the aggregate is reached.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Member {
+    pub owner: i64,
+    pub offset: i64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectedPlace {
     pub place: i64,
     pub indices: Vec<Operand>,
     pub offset: i64,
     pub r#type: i64,
+    /// The member this is, where the frontend knows it.
+    pub member: Option<Member>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -305,6 +320,8 @@ pub struct IndirectPlace {
     /// The descriptor place owning the far allocation the access stays
     /// inside, where the frontend knows it: disjoint from every place.
     pub allocation: Option<i64>,
+    /// The member this is, where the frontend knows it.
+    pub member: Option<Member>,
 }
 
 str_enum!(DescriptorField {
@@ -370,6 +387,8 @@ str_enum!(Op {
     // A place's address; with no operand, the address of the function `callee` names.
     Address("ADDRESS") = "address",
     PtrOffset("PTR_OFFSET") = "ptr_offset",
+    // The bytes between two huge pointers into one object.
+    PtrDiff("PTR_DIFF") = "ptr_diff",
     PointerSegment("POINTER_SEGMENT") = "pointer_segment",
     PointerOffset("POINTER_OFFSET") = "pointer_offset",
     Concat("CONCAT") = "concat",
@@ -434,8 +453,19 @@ str_enum!(Op {
     // operands[1], a byte, to operands[0]. Both are observable and ordered.
     PortIn("PORT_IN") = "port_in",
     PortOut("PORT_OUT") = "port_out",
+    // The language promises operands[0], a condition, holds here: passes may
+    // rely on it, as on LLVM's `llvm.assume`. No result.
+    Assume("ASSUME") = "assume",
+    // The bytes of the place operands[0] are those of operands[1], as many as
+    // the constant operands[2] says: an aggregate assigned whole. Byte for
+    // byte, so an unwritten byte stays only that byte. No result.
+    CopyBytes("COPY_BYTES") = "copy_bytes",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
+    // From here the local operands[0] names holds a value (start), or no longer (end): the
+    // scope of a block local. Not code; what a frame layout reads. No result.
+    LifetimeStart("LIFETIME_START") = "lifetime_start",
+    LifetimeEnd("LIFETIME_END") = "lifetime_end",
     // Inline machine code: operands go into its input registers, results
     // come out of its output registers. `Instruction.asm` says which.
     Asm("ASM") = "asm",
@@ -534,6 +564,9 @@ pub struct Callable {
     pub segmented: Vec<bool>,
     pub arrays: Vec<bool>,
     pub defined: bool,
+    /// It may return a second time, as C's `setjmp` does: no pass may treat
+    /// the code after a call as reached once.
+    pub returns_twice: bool,
     /// The name it links by, where not the language's own for `name`.
     pub symbol: Option<String>,
 }
@@ -620,6 +653,9 @@ pub struct DebugMember {
     pub name: String,
     pub r#type: i64,
     pub offset: i64,
+    /// A bit field's first bit in the unit at `offset`, and its width.
+    pub bit_start: Option<i64>,
+    pub bit_width: Option<i64>,
 }
 
 /// A parameter: the function's `argument`th, hidden ones counted.
@@ -799,6 +835,24 @@ impl Module {
     pub fn lands_errors(&self, function: &Function) -> bool {
         function.error_handler.is_some() || self.functions.iter().any(|one| one.error_handler.is_some() && !one.error_handler_local)
     }
+
+    /// The local STRING descriptors `function` owns, each of which asks
+    /// B$ENRA for a handle. Runtime-produced temporaries are not counted.
+    pub fn local_strings(&self, function: &Function) -> i64 {
+        let string = |place: &&Place| self.types.iter().any(|one| one.id == place.r#type && one.name == "string");
+        function.places.iter().filter(|place| place.storage == Storage::Local).filter(string).count() as i64
+    }
+
+    /// Whether `function` frames itself under `frames`: the runtime needs no
+    /// frame of its own for it. No error lands in it (the runtime reaches a
+    /// handler or RESUME target through its frame chain), and no local
+    /// STRING asks B$ENRA for a handle. The runtime frame zeroes its locals;
+    /// a frame of its own does not.
+    // Event handlers (ON TIMER/KEY, not parsed today) will need the runtime frame:
+    // B$EXSA polls events on exit.
+    pub fn frames_itself(&self, frames: Frames, function: &Function) -> bool {
+        frames == Frames::Own && !self.lands_errors(function) && function.external_entries.is_empty() && self.local_strings(function) == 0
+    }
 }
 
 /// The internal data object whose rows are where RESUME may continue.
@@ -836,6 +890,19 @@ pub struct RuntimePromises {
     /// The routines that only read what their pointer arguments reach and
     /// keep none of them, by their own names: C's strlen.
     pub reads_arguments: Vec<String>,
+    /// The routines that keep no pointer argument past their return.
+    pub no_retain: Vec<String>,
+    /// The routines that never come back to their caller: END, SYSTEM, the
+    /// error funnel. Their calls end their block.
+    pub no_return: Vec<String>,
+    /// How the runtime reads a string descriptor; none where it cannot be
+    /// said, and every routine of `routines` then keeps its call.
+    pub descriptor: Option<crate::meaning::Descriptor>,
+    /// What each routine of the runtime computes, as it states it.
+    pub routines: Vec<crate::meaning::Meaning>,
+    /// Whether a routine raises its error: the program asks for run-time
+    /// checks, or handles errors.
+    pub checked: bool,
 }
 
 impl RuntimePromises {
@@ -852,6 +919,11 @@ impl RuntimePromises {
             writers: writers.into_iter().map(|(cell, routines)| CellWriters { cell: cell.to_owned(), routines: routines.into_iter().map(str::to_owned).collect() }).collect(),
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
             reads_arguments: Vec::new(),
+            no_retain: Vec::new(),
+            no_return: Vec::new(),
+            descriptor: None,
+            routines: Vec::new(),
+            checked: false,
         }
     }
 
@@ -862,6 +934,34 @@ impl RuntimePromises {
             return None;
         }
         Some(self.writers.iter().filter(|one| one.routines.iter().any(|writer| writer == routine)).map(|one| one.cell.clone()).collect())
+    }
+}
+
+/// What a runtime says of its stack, for code that checks it on entry
+/// (`-fsanitize=stack`): where its lower limit is, what to call when SP falls
+/// below it, and the bytes below the limit an unchecked leaf may use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StackCheck {
+    /// The data-group word holding the lowest SP the runtime allows.
+    pub limit: String,
+    /// The far routine entered on overflow; it does not return.
+    pub handler: String,
+    /// Bytes below `limit` that the handler, interrupts and an unchecked
+    /// leaf's frame share.
+    pub red_zone: i64,
+    /// The runtime's own frame entry that checks, where it frames a
+    /// procedure: BC's /D calls it in place of the plain one.
+    pub entry: Option<String>,
+}
+
+impl StackCheck {
+    /// The check a runtime's description row states: `limit`, `handler`, `red_zone` and, where
+    /// its frame entry checks, `entry`.
+    pub fn from_toml(row: &toml::Value) -> Result<Self, String> {
+        let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
+        let need = |key: &str| text(key).ok_or_else(|| format!("stack {key} is not a string"));
+        let red_zone = row.get("red_zone").and_then(toml::Value::as_integer).ok_or("stack red_zone is not an integer")?;
+        Ok(Self { limit: need("limit")?, handler: need("handler")?, red_zone, entry: text("entry") })
     }
 }
 
@@ -889,6 +989,9 @@ pub struct Program {
     /// The segment of the constants the compiler makes; None: the default
     /// data segment.
     pub constant_segment: Option<String>,
+    /// Each procedure compares SP with the runtime's limit on entry: where
+    /// `-fsanitize=stack` asks, never otherwise.
+    pub stack_check: Option<StackCheck>,
 }
 
 impl Program {
@@ -908,6 +1011,7 @@ impl Program {
             entries: Vec::new(),
             preserved: Vec::new(),
             constant_segment: None,
+            stack_check: None,
         }
     }
 }

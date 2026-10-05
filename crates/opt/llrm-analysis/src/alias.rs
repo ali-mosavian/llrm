@@ -30,7 +30,7 @@
 //! its `memory_complete` flag: a call's effect is a side table.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -38,7 +38,7 @@ use crate::graph::loops;
 use llrm_mir::context::{ConstantKind, GlobalId};
 use llrm_mir::facts::Facts;
 use llrm_mir::memory::Effects;
-use llrm_mir::module::{InstId, Linkage, Operand, ValueId};
+use llrm_mir::module::{InstId, Linkage, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
@@ -143,6 +143,16 @@ fn nonnull(provenance: &Provenance) -> bool {
 /// as LLVM's `isKnownNonZero` reads a pointer's underlying object instead
 /// of solving every pointer; `None` where only the whole solve can say.
 pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
+    // A parameter the language states non-null, as a reference is; or
+    // dereferenceable in a near space, where null holds no object (DGROUP's
+    // first bytes are the runtime's); a far one may be 0000:0000.
+    if let ValueDef::Argument(at) = unit.function.value(value).def {
+        let facts = Facts::param(unit.function, at as usize);
+        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(0)));
+        if facts.non_null() || near && facts.dereferenceable().is_some_and(|bytes| bytes > 0) {
+            return Some(true);
+        }
+    }
     if let Some(seed) = seeds(unit).get(&value) {
         return Some(nonnull(seed));
     }
@@ -380,7 +390,7 @@ pub fn read_arguments(unit: &Unit, at: InstId) -> Vec<Operand> {
 /// at the site or on the callee's parameter.
 fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
-    let nocapture = |attrs: &[Attribute]| llrm_mir::memory::has(attrs, "nocapture");
+    let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at).and_then(|one| unit.globals.get(one.0 as usize)).and_then(|one| one.function());
     info.argument_attrs.get(index).is_some_and(|attrs| nocapture(attrs)) || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| nocapture(attrs))
 }
@@ -693,11 +703,13 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
         if effect.unknown_read {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
+            effect.reads.extend(NONLOCAL.slices.clone());
             effect.reads.extend(_tracked(&procedure.unit));
         }
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
             effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
+            effect.writes.extend(NONLOCAL.slices.clone());
             effect.writes.extend(_tracked(&procedure.unit));
         }
         let fills = _fills(&procedure.unit, &facts, at);
@@ -924,6 +936,14 @@ fn _cell_key(reference: &MemRef) -> Option<CellKey> {
     reference.addr().map(|addr| CellKey::Address(addr, i64::from(reference.width)))
 }
 
+/// Whether the call `inst` returns what its callee states `noalias`: a
+/// pointer to an object no other pointer reaches, as a constructor's.
+fn returns_unique(unit: &Unit, inst: InstId) -> bool {
+    llrm_mir::memory::callee(unit.context, unit.function, inst)
+        .and_then(|callee| unit.globals.get(callee.0 as usize)?.function())
+        .is_some_and(|callee| Facts::of(&callee.return_attrs).no_alias())
+}
+
 /// What `inst` computes as a pointer from what it is given: an object's
 /// own address, or a known pointer moved, cast or joined.
 fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> Result<Option<Provenance>, String> {
@@ -934,6 +954,12 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
     match &op.opcode {
         Opcode::Alloca { .. } => {
             let object = object_of(unit, Operand::Value(result)).expect("an alloca is an object");
+            Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
+        }
+        // A callee whose result is `noalias` returns a pointer to an object nothing else
+        // points to: its own, apart from every other.
+        Opcode::Call(_) | Opcode::Invoke(_) if returns_unique(unit, inst) => {
+            let object = MemoryObject { identity: Some(Identity::Value(result.0)), addressed: true, captured: true, ..MemoryObject::new(MemoryKind::Allocation) };
             Provenance::one_with_slice(object, 0, 1, 1, 1, BTreeSet::new()).map(Some).map_err(|error| error.to_string())
         }
         // A segment is no pointer to a program object: `segment:0` is a
@@ -1246,7 +1272,7 @@ pub fn points_to(
                         let objects = one.slices.iter().map(|one| one.object.clone());
                         if kept(index)? {
                             newly.extend(objects)
-                        } else if reads(index) {
+                        } else if reads(index) && !llrm_mir::memory::noretain(unit.context, unit.globals, unit.function, inst, index) {
                             lent.extend(objects)
                         }
                     }
@@ -1258,8 +1284,8 @@ pub fn points_to(
                 }
             }
             newly.extend(_lost(unit, inst, &values));
-            // Returned, or turned into an integer: found from outside.
-            if matches!(op.opcode, Opcode::Ret | Opcode::Cast(CastOp::PtrToInt)) {
+            // Returned, or turned into an integer something reads: found from outside.
+            if op.opcode == Opcode::Ret || (op.opcode == Opcode::Cast(CastOp::PtrToInt) && op.result.is_none_or(|result| _read(function, result, &mut BTreeSet::new()))) {
                 newly.extend(provenances(&op.operands, &values));
             }
             match (&op.opcode, MemRef::of(unit, inst)) {
@@ -1338,6 +1364,19 @@ pub fn points_to(
     let escaped = named(&every);
     let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
     Ok(PointsTo { values, escaped, escaped_before })
+}
+
+/// Whether anything that stays reads `value`: a use that is no pure operation, or a pure
+/// one whose own result is read. The dead-code fact, without the callee summaries a call
+/// would need, so a call reads.
+fn _read(function: &llrm_mir::module::Function, value: ValueId, seen: &mut BTreeSet<ValueId>) -> bool {
+    if !seen.insert(value) {
+        return false;
+    }
+    function.users(value).iter().any(|one| {
+        let user = function.instruction(one.user);
+        !llrm_mir::memory::pure_operation(&user.opcode) || user.result.is_some_and(|result| _read(function, result, seen))
+    })
 }
 
 /// Objects whose address `inst` turns into what no pointer fact follows,
@@ -1476,8 +1515,9 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
             let op = function.instruction(inst);
             let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
             let (Opcode::Binary(kind), [left, right], Some(width)) = (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value))) else { continue };
+            // A value nothing is known of is a multiple of 1: `x << 1` is a multiple of 2 all the same.
             let fact = |one: Operand| match one {
-                Operand::Value(source) => result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))),
+                Operand::Value(source) => Some(result.get(&source).cloned().or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone()))).unwrap_or_else(|| (BigInt::from(1), BigInt::from(0)))),
                 _ => unit.int_constant(one).map(|n| (BigInt::from(0), BigInt::from(n))),
             };
             let (Some(mut a), Some(mut b)) = (fact(*left), fact(*right)) else { continue };
@@ -1501,6 +1541,9 @@ pub fn congruences_with(unit: &Unit, constants: &IndexMap<ValueId, Known>) -> In
                 }
                 _ => continue,
             };
+            if found.0 == BigInt::from(1) {
+                continue;
+            }
             result.insert(value, found);
             changed = true;
         }
@@ -1564,6 +1607,13 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
                 got = Some(foreign);
             }
+        }
+        // An access the language says is at a fixed address names linear
+        // memory, whatever its pointer was made from.
+        // The frontend states it only where the target says the address is outside
+        // the program; where the selector is a constant here, the target is asked again.
+        if reference.space == llrm_mir::datalayout::FIXED_SPACE && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
+            got = Some(regions::fixed_provenance());
         }
         Ok(MemRef { provenance: got, ..reference.clone() })
     };

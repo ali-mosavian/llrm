@@ -17,7 +17,6 @@ use crate::backend::phielim;
 use crate::backend::select;
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space, St};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
-use crate::model::mir::Op;
 
 fn sem(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
@@ -369,12 +368,10 @@ fn test_arithmetic_overwrites_the_operand_that_dies() {
 /// A call that lists its writes as sparing the frame leaves the cell; one
 /// that lists nothing may write it, and was read as writing nothing.
 fn _sparing_the_frame(body: LirBody) -> LirBody {
-    use crate::model::mir;
-    let mut call = mir::Op::new(0, mir::OpCode::nothing(), "call", vec![], vec![]);
-    call.kind = mir::Kind::Call;
-    call.memory_complete = true;
-    call.stores = vec![mir::MemRef { excludes: vec![mir::WHOLE_FRAME], ..mir::MemRef::new(None, 4) }];
-    let call = Arc::new(call);
+    let call = Arc::new(crate::model::lir::CallMemory {
+        effects: llrm_mir::memory::Effects { reads: false, writes: true },
+        private: vec![crate::model::lir::WHOLE_FRAME],
+    });
     let blocks = body
         .blocks
         .iter()
@@ -384,7 +381,7 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
                     .insns
                     .iter()
                     .map(|one| match &one.what {
-                        Some(what) if matches!(what.op, Operation::Call | Operation::Barrier) => Arc::new(Insn { op: Some(Arc::clone(&call)), ..Insn::clone(one) }),
+                        Some(what) if matches!(what.op, Operation::Call | Operation::Barrier) => Arc::new(Insn { call: Some(Arc::clone(&call)), ..Insn::clone(one) }),
                         _ => Arc::clone(one),
                     })
                     .collect(),
@@ -652,42 +649,6 @@ fn test_conversion_result_is_kept_for_non_operand_readers() {
 }
 
 #[test]
-fn test_a_pinned_conversion_result_survives_lowering_into_floatalloc() {
-    // Lower keyed `pins` by `mir.Value` and floatalloc read ids, so a result
-    // pinned to EAX with no other reader was left in the frame, never loaded.
-    use crate::backend::lower;
-    use crate::model::floating::{Format, Precision, Rounding, Semantics as Floating};
-    use crate::model::mir::{AllocationHints, Arg, Cell, Held as Named, Kind, MemRef, MirBlock, MirBody, OpCode, Value};
-
-    let cell = MemRef { space: Some(Space::Frame), ..MemRef::new(Some(Addr::new(Space::Frame, -10)), 10) };
-    let (real, integer) = (Value::new(1, 0x10), Value::new(2, 0x20));
-    let mut load = Op::new(0x10, OpCode::Operation(Operation::FloatLoad), "fld", vec![real], vec![]);
-    load.kind = Kind::Fload;
-    load.args = vec![Arg::Cell(Cell { r#ref: cell.clone() })];
-    load.results = vec![Arg::Held(Named { value: real, width: 10 })];
-    load.loads = vec![cell];
-    load.floating = Some(Floating::new([Format::Extended80], Format::Extended80, Precision::Exact, Rounding::None));
-    let mut store = Op::new(0x20, OpCode::Operation(Operation::FloatStore), "fistp", vec![integer], vec![real]);
-    store.kind = Kind::Fstore;
-    store.args = vec![Arg::Held(Named { value: real, width: 10 })];
-    store.results = vec![Arg::Held(Named { value: integer, width: 4 })];
-    store.floating = Some(Floating::new([Format::Extended80], Format::Signed32, Precision::Destination, Rounding::Dynamic));
-    store.source = Some(200);
-    let body = MirBody::new(0x10, vec![MirBlock::new(0x10, vec![], vec![load, store], vec![])]);
-    let mut hints = AllocationHints::new();
-    hints.pins.insert((200, 0), Register::EAX);
-    let options = lower::Lowered { hints: Some(&hints), ..Default::default() };
-    let low = lower::lowered("pinned", &body, Some(&IndexMap::default()), BTreeSet::new(), Some(&IndexMap::default()), "386", &crate::backend::target::BUILT_IN, options)
-        .unwrap();
-    let allocated = allocated(&low, Some(&mut Frame::new(-10)), None, false, "386").unwrap();
-    let result = Loc::Held(Held { value: integer.id, width: 4 });
-    assert!(allocated.insns().iter().any(|one| one
-        .what
-        .as_ref()
-        .is_some_and(|what| what.name.as_deref() == Some("mov") && what.dests == vec![result.clone()])));
-}
-
-#[test]
 fn test_ninth_float_uses_an_owned_spill() {
     // Nine live FP values previously refused allocation. Machine semantics spill as a double.
     let sources = _cells((-40..-4).step_by(4), 4);
@@ -866,14 +827,19 @@ fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
             body.blocks.iter().map(|block| block.at).collect::<Vec<_>>()
         );
         let by_at: HashMap<i64, &LirBlock> = allocated.blocks.iter().map(|block| (block.at, block)).collect();
-        assert_eq!(by_at[&0].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fld", "fld", "fmul", "fstp"]);
-        assert_eq!(by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fdiv", "fstp"]);
-        assert_eq!(what(&by_at[&24].insns[0]).sources, vec![st(0), m(&cell)]);
-        assert!(allocated.insns().iter().all(|one| emits(what(one))));
+        // Where the other way out reads none, the load is made once the fork is taken's way: the
+        // fork's block 0 no longer loads for an arm half the calls never read.
+        let first: &[&str] = if boundary == "fork" { &["", "fld", "fmul", "fstp"] } else { &["fld", "fld", "fmul", "fstp"] };
+        assert_eq!(by_at[&0].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), first, "{boundary}");
         if boundary == "fork" {
-            // The other way out does not read it, and pops it.
-            assert_eq!(by_at[&80].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fstp"]);
+            // The arm that reads it loads it; the other keeps nothing on the stack to pop.
+            assert_eq!(by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fld", "fdiv", "fstp"]);
+            assert_eq!(by_at[&80].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), Vec::<&str>::new());
+        } else {
+            assert_eq!(by_at[&24].insns.iter().map(|one| name(one)).collect::<Vec<_>>(), ["fdiv", "fstp"], "{boundary}");
+            assert_eq!(what(&by_at[&24].insns[0]).sources, vec![st(0), m(&cell)]);
         }
+        assert!(allocated.insns().iter().all(|one| emits(what(one))));
     }
 }
 
@@ -1043,7 +1009,7 @@ fn test_shared_producer_is_kept_across_two_arithmetic_consumers() {
     assert_eq!(what(duplicate).sources, vec![st(0)]);
     assert_eq!(what(duplicate).dests, vec![st(0)]);
     assert_eq!(select::emit(what(duplicate), 0, None, false, false, None).unwrap().code, [0xd9, 0xc0]);
-    assert!(duplicate.covers == Some((8, 8)) && duplicate.op.is_none());
+    assert!(duplicate.covers == Some((8, 8)) && duplicate.call.is_none());
     assert_eq!(what(&insns[4]).sources, vec![st(0), m(&cell)]);
 }
 
@@ -1226,9 +1192,7 @@ fn test_volatile_float_load_breaks_reload_equivalence() {
     let cell = frame_cell(-4, 4);
     let body = _body(vec![_load(1, &cell), _load(2, &cell), _load(3, &cell)]);
     let mut insns = body.insns();
-    let mut volatile = Op::new(8, None, "", vec![], vec![]);
-    volatile.volatile = true;
-    insns[1] = Arc::new(Insn { op: Some(Arc::new(volatile)), ..(*insns[1]).clone() });
+    insns[1] = Arc::new(Insn { volatile: true, ..(*insns[1]).clone() });
 
     assert!(_equivalent_loads(&insns, &Default::default()).is_empty());
 }
@@ -1447,7 +1411,6 @@ fn test_a_value_every_successor_spills_leaves_in_memory() {
     }
 }
 
-
 /// A value on the stack into a join that reads none is popped on the edge
 /// that brings it, not balanced by fillers on every other edge: qmove's
 /// early return made its other paths push five fillers and pop six.
@@ -1462,8 +1425,10 @@ fn test_a_join_that_reads_no_float_takes_none_on_its_other_edges() {
     for path in [vec![0, 16, 48], vec![0, 48]] {
         let insns = _along(&result, &path);
         assert!(insns.iter().all(|one| emits(what(one))), "{path:?}");
+        // The path that stores loads once; the other, which reads none, loads
+        // nothing: block frequencies put the load where it is read.
         let loads = insns.iter().filter(|one| what(one).op == Operation::FloatLoad).count();
-        assert_eq!(loads, 1, "{path:?}: {insns:?}");
+        assert_eq!(loads, path.len() - 2, "{path:?}: {insns:?}");
         let (_, stack) = _x87(&insns, &[(&source, 1.5)]);
         assert!(stack.is_empty(), "{path:?}");
     }

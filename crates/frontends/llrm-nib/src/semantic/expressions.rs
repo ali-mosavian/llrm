@@ -106,7 +106,7 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 }
                 Ok(TypedOperand {
-                    operand: Some(hir::Operand::Constant(BOOL, if *value { -1 } else { 0 })),
+                    operand: Some(hir::Operand::Constant(BOOL, i64::from(*value))),
                     type_name: TypeName::Bool,
                 })
             }
@@ -156,7 +156,7 @@ impl<'a> FunctionCompiler<'a> {
                                 base: pointer,
                                 offset: 0,
                                 type_id: type_id(type_name),
-                                inbounds: false,
+                                inbounds: false, member: None,
                             }],
                             None,
                         );
@@ -209,7 +209,7 @@ impl<'a> FunctionCompiler<'a> {
                     if expected.is_some_and(|one| one != target) {
                         return Err(type_mismatch(*span, expected.expect("checked"), target));
                     }
-                    let through = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false };
+                    let through = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(target), inbounds: false, member: None };
                     let result = self.value(target);
                     self.emit("load", vec![result], vec![through], None);
                     return Ok(TypedOperand { operand: Some(hir::Operand::Value(result)), type_name: target });
@@ -236,14 +236,7 @@ impl<'a> FunctionCompiler<'a> {
             Expr::Unary { op, operand, span } => {
                 if *op == UnaryOp::Negative {
                     if let Expr::Integer(value, _) = operand.as_ref() {
-                        let wanted = expected.unwrap_or({
-                            if *value <= 32768 {
-                                TypeName::I16
-                            } else {
-                                TypeName::I32
-                            }
-                        });
-                        return self.integer(-*value, Some(wanted), *span);
+                        return self.integer(-*value, expected, *span);
                     }
                 }
                 // Only a literal takes its type from context; anything else has its own.
@@ -365,7 +358,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     pub(super) fn integer(
-        &self,
+        &mut self,
         value: i64,
         expected: Option<TypeName>,
         span: Span,
@@ -382,23 +375,20 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(pointer) = expected.filter(|one| value == 0 && self.types.raw_target(*one).is_some()) {
             return Ok(TypedOperand { operand: Some(hir::Operand::Constant(type_id(pointer), 0)), type_name: pointer });
         }
-        let type_name = match expected {
-            Some(type_name) if is_integer(type_name) || type_name == TypeName::Char => type_name,
-            Some(other) => return Err(type_mismatch(span, other, TypeName::I16)),
-            None if i16::try_from(value).is_ok() => TypeName::I16,
-            None if i32::try_from(value).is_ok() => TypeName::I32,
-            None => return Err(Diagnostic::new(span, "integer literal does not fit i32")),
+        if let Some(pointer @ TypeName::Pointer { width, .. }) = expected.filter(|one| self.types.raw_target(*one).is_some()) {
+            return self.integer_pointer(value, pointer, width, span);
+        }
+        let own = self.rules.literal(value);
+        let type_name = match (expected, own) {
+            (Some(type_name), _) if is_integer(type_name) || type_name == TypeName::Char => type_name,
+            (Some(other), Some(own)) => return Err(type_mismatch(span, other, own)),
+            (_, None) => {
+                let widest = if value < 0 { "i32" } else { "u32" };
+                return Err(Diagnostic::new(span, format!("integer literal {value} is {} bits, wider than {widest}", conversions::literal_bits(value))));
+            }
+            (None, Some(own)) => own,
         };
-        let fits = match type_name {
-            TypeName::Char | TypeName::U8 => u8::try_from(value).is_ok(),
-            TypeName::I8 => i8::try_from(value).is_ok(),
-            TypeName::I16 => i16::try_from(value).is_ok(),
-            TypeName::U16 => u16::try_from(value).is_ok(),
-            TypeName::I32 => i32::try_from(value).is_ok(),
-            TypeName::U32 => u32::try_from(value).is_ok(),
-            _ => false,
-        };
-        if !fits {
+        if !conversions::fits(value, type_name) {
             return Err(Diagnostic::new(
                 span,
                 format!(
@@ -411,6 +401,18 @@ impl<'a> FunctionCompiler<'a> {
             operand: Some(hir::Operand::Constant(type_id(type_name), value)),
             type_name,
         })
+    }
+
+    /// A far pointer's segment and offset words, or a near one's offset, as
+    /// the literal's bits: C's `(char far *)0xB8000000L`.
+    fn integer_pointer(&mut self, value: i64, pointer: TypeName, width: u8, span: Span) -> Result<TypedOperand, Diagnostic> {
+        self.require_unsafe("an integer as a raw pointer", span)?;
+        let words = if width == 2 { TypeName::U16 } else { TypeName::U32 };
+        if !conversions::fits(value, words) {
+            return Err(Diagnostic::new(span, format!("integer literal {value} is {} bits, wider than a {}", conversions::literal_bits(value), type_name_text(pointer))));
+        }
+        let bits = TypedOperand { operand: Some(hir::Operand::Constant(type_id(words), value)), type_name: words };
+        self.convert_value(bits, pointer, span)
     }
 
     pub(super) fn float(

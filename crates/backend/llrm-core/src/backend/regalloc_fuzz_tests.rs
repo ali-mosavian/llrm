@@ -10,11 +10,15 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::backend::allocate::RegAlloc;
+use crate::backend::coalesce::Coalescer;
+use crate::backend::phielim::PhiElimination;
+use crate::backend::ssaspill::SsaSpill;
+use crate::backend::twoaddr::TwoAddress;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::parcopy::ParallelCopy;
 use crate::backend::{target, verify};
-use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
@@ -242,6 +246,86 @@ fn body(seed: u64, shape: &Shape) -> (LirBody, Vec<String>) {
     (LirBody::new(format!("fuzz{seed}"), ENTRY, blocks, IndexMap::default(), IndexMap::default()), build.notes)
 }
 
+/// `place` with every value it reads renamed by `map`.
+fn read_as(place: &Loc, map: &dyn Fn(u32) -> u32) -> Loc {
+    let held = |one: Option<Held>| one.map(|one| Held { value: map(one.value), ..one });
+    match place {
+        Loc::Held(one) => Loc::Held(Held { value: map(one.value), ..*one }),
+        Loc::Mem(cell) => Loc::Mem(Mem { base: held(cell.base), index: held(cell.index), selector: held(cell.selector), ..cell.clone() }),
+        other => other.clone(),
+    }
+}
+
+/// The generated body in SSA: the loop's variables become phis at its header, every
+/// definition a fresh name, and the exit reads the names the loop ends with. Values
+/// an instruction defines that are not variables (a quotient, a call's answer) are
+/// already defined once and keep their names.
+fn in_ssa(body: &LirBody) -> LirBody {
+    let all: Vec<u32> = body.insns().iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied()).collect();
+    let mut next = all.iter().copied().max().unwrap_or(0) + 1;
+    let mut fresh = || {
+        next += 1;
+        next - 1
+    };
+    let variables: Vec<u32> = body.blocks[0].insns.iter().flat_map(|one| one.defines.iter().copied()).collect();
+    let mut current: IndexMap<u32, u32> = variables.iter().map(|value| (*value, fresh())).collect();
+    let headers: Vec<(u32, u32)> = variables.iter().map(|value| (*value, current[value])).collect();
+    let mut inside: Vec<Arc<Insn>> = Vec::new();
+    // A parallel copy reads what stood before it.
+    let mut before: Option<IndexMap<u32, u32>> = None;
+    for one in &body.blocks[1].insns {
+        if one.group.is_none() {
+            before = None;
+        } else if before.is_none() {
+            before = Some(current.clone());
+        }
+        let seen = before.clone().unwrap_or_else(|| current.clone());
+        let read = |value: u32| seen.get(&value).copied().unwrap_or(value);
+        let made: IndexMap<u32, u32> = one.defines.iter().map(|value| (*value, if variables.contains(value) { fresh() } else { *value })).collect();
+        let written = |value: u32| made.get(&value).copied().unwrap_or(value);
+        let mut changed = (**one).clone();
+        if let Some(what) = &one.what {
+            let place = |place: &Loc| match place {
+                Loc::Held(one) => Loc::Held(Held { value: written(one.value), ..*one }),
+                other => read_as(other, &read),
+            };
+            changed.what = Some(Semantics {
+                dests: what.dests.iter().map(place).collect(),
+                sources: what.sources.iter().map(|source| read_as(source, &read)).collect(),
+                ..what.clone()
+            });
+        }
+        // What a tied instruction reads of its destination is the old name.
+        changed.defines = one.defines.iter().map(|value| written(*value)).collect();
+        changed.uses = one.uses.iter().map(|value| read(*value)).collect();
+        changed.requires = one.requires.iter().map(|(held, register)| (Held { value: read(held.value), ..*held }, *register)).collect();
+        changed.delivers = one.delivers.iter().map(|(held, register)| (Held { value: written(held.value), ..*held }, *register)).collect();
+        for (value, name) in &made {
+            if variables.contains(value) {
+                current.insert(*value, *name);
+            }
+        }
+        inside.push(Arc::new(changed));
+    }
+    let latch = |value: u32| current.get(&value).copied().unwrap_or(value);
+    let exit: Vec<Arc<Insn>> = body.blocks[2]
+        .insns
+        .iter()
+        .map(|one| {
+            let mut changed = (**one).clone();
+            if let Some(what) = &one.what {
+                changed.what = Some(Semantics { dests: what.dests.iter().map(|place| read_as(place, &latch)).collect(), sources: what.sources.iter().map(|place| read_as(place, &latch)).collect(), ..what.clone() });
+            }
+            changed.uses = one.uses.iter().map(|value| latch(*value)).collect();
+            Arc::new(changed)
+        })
+        .collect();
+    let mut blocks = body.blocks.clone();
+    blocks[1] = LirBlock { phis: headers.iter().map(|(value, result)| Phi { result: *result, incoming: vec![(ENTRY, *value), (LOOP, latch(*value))] }).collect(), ..blocks[1].with_insns(inside) };
+    blocks[2] = blocks[2].with_insns(exit);
+    body.with_blocks(blocks)
+}
+
 /// What a finished body must be: every value placed, nothing a later phase
 /// cannot schedule or the machine cannot name.
 fn complaints(done: &LirBody) -> Vec<String> {
@@ -270,7 +354,6 @@ fn complaints(done: &LirBody) -> Vec<String> {
     }
     out
 }
-
 
 /// What a body does, run: the generator's body in values, and the allocator's
 /// in registers and frame cells, must store the same things.
@@ -542,14 +625,14 @@ fn allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), String> {
         phases.push(Box::new(ParallelCopy));
     }
     if std::env::var_os("FUZZ_SHOW").is_some() {
-        eprintln!("{}", crate::tools::stages::lir_stage("input", &[(body.name.clone(), body.clone())]));
+        eprintln!("{}", crate::backend::lirtext::lir_stage("input", &[(body.name.clone(), body.clone())]));
     }
     let mut now = body;
     for phase in &mut phases {
         now = phase.transform(now).map_err(|error| format!("{}: {error}\n{}", phase.name(), notes.join("\n")))?;
     }
     if std::env::var_os("FUZZ_SHOW").is_some() {
-        eprintln!("{}", crate::tools::stages::lir_stage("allocated", &[(now.name.clone(), now.clone())]));
+        eprintln!("{}", crate::backend::lirtext::lir_stage("allocated", &[(now.name.clone(), now.clone())]));
         for block in &now.blocks {
             eprintln!("BLOCK {:#x} succ {:x?} last {:?}", block.at, block.succ, block.insns.last().and_then(|one| one.what.as_ref()).map(|what| (&what.name, what.target)));
         }
@@ -559,6 +642,71 @@ fn allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), String> {
         bad.extend(behaves_alike(&generated, &now, shape.pool).err());
     }
     if bad.is_empty() { Ok(()) } else { Err(format!("{}\n{}", bad.join("\n"), notes.join("\n"))) }
+}
+
+/// The generated body in SSA through the production phases from the spiller on, and the
+/// result must store what the generated body stores.
+fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), String> {
+    let (body, notes) = body(seed, shape);
+    let generated = body.clone();
+    let segments = &*target::BUILT_IN;
+    let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
+    let mut phases: Vec<Box<dyn LIRTransform>> = vec![
+        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), prices: crate::backend::ssaspill::Prices::clocks() }),
+        Box::new(PhiElimination),
+        Box::new(TwoAddress),
+        Box::new(Coalescer::new(None, segments)),
+        Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments)?),
+        Box::new(ParallelCopy),
+    ];
+    if std::env::var_os("FUZZ_NO_PARCOPY").is_some() {
+        phases.pop();
+    }
+    let mut now = in_ssa(&body);
+    if std::env::var_os("FUZZ_NO_SPILL").is_some() {
+        phases.remove(0);
+    }
+    for phase in &mut phases {
+        if std::env::var_os("FUZZ_SHOW").is_some() {
+            eprintln!("{}", crate::backend::lirtext::lir_stage(&format!("before {}", phase.name()), &[(now.name.clone(), now.clone())]));
+        }
+        now = phase.transform(now).map_err(|error| format!("{}: {error}\n{}", phase.name(), notes.join("\n")))?;
+    }
+    let mut bad = complaints(&now);
+    if bad.is_empty() {
+        bad.extend(behaves_alike(&generated, &now, shape.pool).err());
+    }
+    if bad.is_empty() { Ok(()) } else { Err(format!("{}\n{}", bad.join("\n"), notes.join("\n"))) }
+}
+
+/// Seeds the lane found wrong results for: the allocator spilled a value whose number
+/// SsaSpill had already slotted and was handed that slot, whose contents were another
+/// live range's (seed 17: value#2 left as 0x69df, not 0x6ffc).
+#[test]
+fn test_the_allocator_is_not_handed_the_spillers_slots() {
+    for seed in [17, 28] {
+        for cpu in ["386", "486", "Core", "P5"] {
+            let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+            spilled_and_allocated(seed, &shape, cpu).unwrap_or_else(|why| panic!("seed {seed} on {cpu}: {why}"));
+        }
+    }
+}
+
+#[test]
+fn test_generated_ssa_bodies_spill_and_allocate() {
+    let count: u64 = std::env::var("FUZZ_SEEDS").ok().and_then(|one| one.parse().ok()).unwrap_or(40);
+    let only: Option<u64> = std::env::var("FUZZ_SEED").ok().and_then(|one| one.parse().ok());
+    let cpus: Vec<String> = std::env::var("FUZZ_CPU").map(|one| vec![one]).unwrap_or_else(|_| ["386", "486", "Core", "P5"].map(str::to_owned).to_vec());
+    let mut failures = Vec::new();
+    for seed in only.map_or(0..count, |one| one..one + 1) {
+        for cpu in &cpus {
+            let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+            if let Err(why) = spilled_and_allocated(seed, &shape, cpu) {
+                failures.push(format!("seed {seed} on {cpu} (pool {}, ops {}): {why}", shape.pool, shape.ops));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{} failed; replay with FUZZ_SEED=<seed>:\n{}", failures.len(), failures[..failures.len().min(3)].join("\n\n"));
 }
 
 #[test]
@@ -598,15 +746,16 @@ fn test_generated_bodies_allocate() {
     );
 }
 
-/// Seed 5 on 386, twelve values over six registers with calls and far
-/// accesses: a reload no register was free for was refused ("value#52 cannot
-/// be spilled and no register is free for it", #134). Its holders cannot all
-/// stay, so the last resort evicts the cheapest and spills them.
+/// Seed 4 on 386, twelve values over six registers with calls and far
+/// accesses: a reload no register is free for was refused ("value#52 cannot
+/// be spilled and no register is free for it", #134, seed 5 before block
+/// frequencies moved the spill weights). Its holders cannot all stay, so the
+/// last resort evicts the cheapest and spills them.
 #[test]
 fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     let before = crate::backend::allocate::last_resorts();
     let shape = Shape { pool: 12, ops: 11 };
-    let done = allocated(5, &shape, "386");
+    let done = allocated(4, &shape, "386");
     assert!(done.is_ok(), "{done:?}");
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
 }

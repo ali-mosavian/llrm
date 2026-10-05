@@ -162,7 +162,7 @@ impl Initializer<'_> {
                 let (global, offset) = target(self.module, self.layout, id)?;
                 Datum::Pointer(Pointer { name: self.symbol(global), offset, far: false })
             }
-            (_, Type::Pointer(1)) => {
+            (_, Type::Pointer(space)) if self.layout.is_pair(*space) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
                 let near = self.module.global(global).address_space == 0 && matches!(self.module.global(global).kind, GlobalKind::Variable(_));
                 self.out.extend(far_pointer(self.symbol(global), offset, near));

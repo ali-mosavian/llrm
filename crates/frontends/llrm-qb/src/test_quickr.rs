@@ -439,8 +439,8 @@ fn quickr_procedures_frame_and_zero_fill_themselves() {
     assert!(!own.contains("B$ENRA") && !own.contains("B$EXSA"), "{own}");
     // The HIR's own stores zero the locals; no inline rep stosw.
     assert!(!own.contains("0f3h,0abh"), "{own}");
-    // VBDOS keeps the runtime's frame.
-    assert!(procedure_listing(source, "vbdos", "S").contains("B$ENRA"));
+    // So does VBDOS, unless asked for the runtime's.
+    assert!(!procedure_listing(source, "vbdos", "S").contains("B$ENRA"));
 }
 
 #[test]
@@ -459,7 +459,7 @@ fn quickr_keeps_the_runtime_frame_where_the_runtime_needs_it() {
 fn a_module_handler_keeps_procedures_on_the_runtime_frame() {
     let source = "ON ERROR GOTO h\nDIM k AS INTEGER\nFOR k = 0 TO 2\ns k\nNEXT\nPRINT \"done\"; k\nEND\n\
         h:\nRESUME NEXT\nSUB s (d AS INTEGER)\nDIM a AS INTEGER\na = 10 \\ d\nPRINT a\nEND SUB\n";
-    let listing = super::test_hir::rich_listing(&quickr_program(source));
+    let listing = super::test_hir::listing(&quickr_program(source));
     assert!(super::test_hir::between(&listing, "S proc", "S endp").contains("B$ENRA"), "{listing}");
 }
 
@@ -531,14 +531,30 @@ fn a_runtime_framed_procedure_keeps_no_zero_stores() {
     assert!(entry(&laid_out) < entry(&program));
 }
 
+/// The memsets procedure `name` of `source` makes on the rich route, as
+/// compiled: its own-frame locals laid out, then the pipeline.
+fn fills(source: &str, name: &str) -> Vec<String> {
+    let program = compiled(source).unwrap_or_else(|error| panic!("{error}"));
+    let laid_out = super::zero_fill::laid_out(&program, |module, function| !super::compile::_inline_frame(&program, module, function));
+    let mir = super::test_hir::optimized_mir(&laid_out);
+    let start = mir.find(&format!("@{name}(")).expect("the procedure");
+    let body = &mir[start..mir[start..].find("\n}").map_or(mir.len(), |end| start + end)];
+    body.lines().filter(|line| line.contains("call void @llvm.memset")).map(str::to_owned).collect()
+}
+
+/// QuickrBASIC zeroes every local, but a BYREF pass counted as assigning
+/// it: EXT read stack garbage from a, b and c, never zeroed. Two zeroed
+/// records are one block, and one fill clears it.
 #[test]
 fn a_large_zeroed_block_is_one_fill() {
-    let large = "SUB s\nDIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\nPRINT a; b; c\nEND SUB\n";
-    let code = procedure_listing(large, "quickr", "S");
-    assert!(code.contains("rep stosd") && code.contains("mov cx, 6"), "{code}");
-    // Below FILL_BYTES the stores stay: the fill's setup would be larger.
-    let small = procedure_listing("SUB s\nDIM a AS INTEGER\nPRINT a\nEND SUB\n", "quickr", "S");
-    assert!(!small.contains("stos"), "{small}");
+    let doubles = "DECLARE SUB ext (x AS DOUBLE, y AS DOUBLE, z AS DOUBLE)\nSUB s\nDIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\next a, b, c\nEND SUB\n";
+    let each = fills(doubles, "S");
+    assert_eq!(each.len(), 3, "{each:?}");
+    assert!(each.iter().all(|one| one.contains("i8 0, i16 8,")), "{each:?}");
+    let records = "TYPE v\nx AS DOUBLE\ny AS DOUBLE\nEND TYPE\nDECLARE SUB ext (p AS v, q AS v)\nSUB s\nDIM a AS v, b AS v\next a, b\nEND SUB\n";
+    let block = fills(records, "S");
+    assert_eq!(block.len(), 1, "{block:?}");
+    assert!(block[0].contains("i8 0, i16 32,"), "{block:?}");
 }
 
 /// The whole listing of `source`, compiled as `dialect`.
@@ -552,13 +568,14 @@ fn module_listing(source: &str, dialect: &str) -> String {
 
 #[test]
 fn private_procedures_are_near_and_not_public() {
+    // Recursive, so the pipeline cannot inline ADD away.
     let source = "PRINT add&(40, 2); pub&(1)\n\
-        PRIVATE FUNCTION add& (a AS LONG, b AS LONG)\nadd& = a + b\nEND FUNCTION\n\
+        PRIVATE FUNCTION add& (a AS LONG, b AS LONG)\nIF a > 0 THEN add& = add&(a - 1, b + 1) ELSE add& = b\nEND FUNCTION\n\
         FUNCTION pub& (x AS LONG)\npub& = x + 1\nEND FUNCTION\n";
     let listing = module_listing(source, "quickr");
     assert!(listing.contains("ADD proc near") && listing.contains("PUB proc far"), "{listing}");
     assert!(!listing.contains("public ADD") && listing.contains("public PUB"), "{listing}");
-    assert!(listing.contains("call ADD") && listing.contains("call far ptr PUB"), "{listing}");
+    assert!(listing.contains("call ADD\n") && !listing.contains("call far ptr ADD"), "{listing}");
     // A near return address puts the first of two parameters at bp+6, not bp+8.
     let add = super::test_hir::between(&listing, "ADD proc near", "ADD endp");
     assert!(add.contains("[bp+6]") && add.contains("[bp+4]") && add.contains("ret 4"), "{add}");
@@ -566,9 +583,10 @@ fn private_procedures_are_near_and_not_public() {
 
 #[test]
 fn a_private_procedure_on_the_runtime_frame_stays_far() {
-    let source = "s\nPRIVATE SUB s\nDIM t AS STRING\nt = \"x\"\nEND SUB\n";
+    let source = "s\ns\nPRIVATE SUB s\nDIM t AS STRING\nt = INKEY$\nPRINT t\nIF t = \"\" THEN s\nEND SUB\n";
     let listing = module_listing(source, "quickr");
     assert!(listing.contains("S proc far") && !listing.contains("public S"), "{listing}");
+    assert!(listing.contains("call far ptr S"), "{listing}");
 }
 
 #[test]

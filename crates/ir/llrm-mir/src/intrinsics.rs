@@ -24,12 +24,32 @@ pub enum Intrinsic {
     /// nearest, ties to even.
     LRint,
     MemSet,
+    /// `llvm.experimental.memset.pattern`: its first argument's cells, as many
+    /// as the third says and as wide as the second, each become the second.
+    MemSetPattern,
+    /// `llvm.memcpy`: as many bytes from its second argument to its first as
+    /// its third says, byte for byte. A byte the source never wrote stays
+    /// only that byte undefined; the two do not overlap.
+    MemCpy,
+    /// `llvm.memmove`: as `memcpy`, where the two may overlap: every byte
+    /// read is as it was before the call.
+    MemMove,
     LifetimeStart,
     LifetimeEnd,
+    /// `llvm.assume`: its condition holds here, which a pass may use and no
+    /// code checks. Undefined where it does not.
+    Assume,
     /// An I/O port's value, read: a target intrinsic, as `llvm.x86.*` are.
     PortIn,
     /// A value written to an I/O port.
     PortOut,
+    /// The bytes between two pointers into one object, as a wrapping integer:
+    /// a target's own, where a pointer's integer form is not its address.
+    PtrDiff,
+    /// The far pointer naming the same byte as its huge argument, its offset
+    /// as low as the selector allows: a target's own window over the bytes
+    /// from there that no displacement carries out of (`Machine::huge_window`).
+    Window,
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
@@ -48,6 +68,12 @@ pub enum Intrinsic {
     /// It has side effects, and its bytes jump nowhere outside themselves.
     Asm,
 }
+
+/// Metadata on a `llvm.memmove` call saying which way its copy may run, as the
+/// pass that made it proved: ascending addresses, or descending. Without either,
+/// lowering compares the two pointers itself.
+pub const FORWARD: &str = "llrm.forward";
+pub const BACKWARD: &str = "llrm.backward";
 
 /// What names inline code: `llrm.ia16.code.<hex bytes>` and, per argument,
 /// `.<offset>` of the word that takes its displacement, `p<n>` or `m<n>`
@@ -205,7 +231,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 29] = [
+const TABLE: [Spec; 35] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -255,13 +281,49 @@ const TABLE: [Spec; 29] = [
         memory: &[(Some("argmem"), "write")],
     },
     Spec {
+        name: "llvm.experimental.memset.pattern",
+        intrinsic: Intrinsic::MemSetPattern,
+        overloads: &[Kind::Pointer, Kind::Int, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &[]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "write")],
+    },
+    Spec {
+        name: "llvm.memcpy",
+        intrinsic: Intrinsic::MemCpy,
+        overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llvm.memmove",
+        intrinsic: Intrinsic::MemMove,
+        overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llvm.assume",
+        intrinsic: Intrinsic::Assume,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[(Slot::Int(1), &["noundef"])],
+        attrs: LIFETIME_ATTRS,
+        memory: &[(Some("inaccessiblemem"), "write")],
+    },
+    Spec {
         name: "llvm.lifetime.start",
         intrinsic: Intrinsic::LifetimeStart,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: LIFETIME,
         attrs: LIFETIME_ATTRS,
-        memory: &[(Some("argmem"), "readwrite")],
+        memory: &[(Some("argmem"), "write")],
     },
     Spec {
         name: "llvm.lifetime.end",
@@ -270,7 +332,7 @@ const TABLE: [Spec; 29] = [
         returns: Slot::Void,
         parameters: LIFETIME,
         attrs: LIFETIME_ATTRS,
-        memory: &[(Some("argmem"), "readwrite")],
+        memory: &[(Some("argmem"), "write")],
     },
     Spec {
         name: "llrm.ia16.in",
@@ -298,6 +360,24 @@ const TABLE: [Spec; 29] = [
         parameters: &[(Slot::Any(0), &[])],
         attrs: &["nounwind"],
         memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llrm.ia16.ptrdiff",
+        intrinsic: Intrinsic::PtrDiff,
+        overloads: &[Kind::Int, Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Any(1), &[]), (Slot::Any(1), &[])],
+        attrs: PURE,
+        memory: NO_MEMORY,
+    },
+    Spec {
+        name: "llrm.ia16.window",
+        intrinsic: Intrinsic::Window,
+        overloads: &[Kind::Pointer, Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[(Slot::Any(1), &[])],
+        attrs: PURE,
+        memory: NO_MEMORY,
     },
     Spec {
         name: "llrm.ia16.out",
@@ -328,6 +408,11 @@ pub(crate) fn declare(function: &mut Function, name: &str) {
 
 /// Whether `name` is in LLVM's reserved namespace, or llrm's own for
 /// its target's intrinsics.
+/// `Intrinsic::Window`'s name, from `huge` pointers to `far` ones.
+pub fn window_name(types: &Types, far: TypeId, huge: TypeId) -> String {
+    format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
+}
+
 pub fn is_reserved(name: &str) -> bool {
     name.starts_with("llvm.") || name.starts_with("llrm.ia16.")
 }
@@ -378,7 +463,7 @@ impl Intrinsic {
     /// The function's attributes and each parameter's.
     pub fn attributes(self) -> (Vec<Attribute>, Vec<Vec<Attribute>>) {
         if matches!(self, Intrinsic::Code | Intrinsic::Asm) {
-            return (vec![Attribute::Flag("nounwind".to_owned())], Vec::new());
+            return (vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new());
         }
         let spec = self.spec();
         let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();

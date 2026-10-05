@@ -20,7 +20,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
+use llrm_analysis::effects::Declarations;
 use llrm_analysis::consts::Known;
 use llrm_analysis::liveness::Liveness;
 use llrm_analysis::{induction, memory};
@@ -32,7 +34,7 @@ use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_mir::types::Type;
+use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 use num_traits::ToPrimitive;
 
@@ -56,8 +58,20 @@ fn floating(context: &Context, function: &Function, operand: Operand) -> bool {
     function.operand_type(context, operand).is_some_and(|ty| matches!(context.types.get(ty), Type::Float(_)))
 }
 
+/// What advancing a pointer of type `ty` costs: `plain`, the price of the
+/// advance as its caller makes it, or the carry into the selector where its
+/// space's displacement has one (`DataLayout::carries`), less by a
+/// `constant` displacement. The one place the carry's price is stated.
+pub fn advance(context: &Context, layout: &DataLayout, ty: TypeId, plain: i64, constant: bool, costs: &OperationCosts) -> i64 {
+    match context.types.get(ty) {
+        Type::Pointer(space) if layout.carries(*space) && constant => costs.carry_step,
+        Type::Pointer(space) if layout.carries(*space) => costs.carry,
+        _ => plain,
+    }
+}
+
 /// Target price for semantic work, or None when it cannot be priced.
-pub fn operation(context: &Context, function: &Function, callees: &Callees, one: InstId, costs: &OperationCosts) -> Option<i64> {
+pub fn operation(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, one: InstId, costs: &OperationCosts) -> Option<i64> {
     let instruction = function.instruction(one);
     let price = match &instruction.opcode {
         Opcode::Load { .. } if instruction.result.is_some_and(|value| floating(context, function, Operand::Value(value))) => costs.float_load,
@@ -69,7 +83,13 @@ pub fn operation(context: &Context, function: &Function, callees: &Callees, one:
         Opcode::Binary(BinaryOp::Mul) => costs.multiply,
         Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => costs.divide,
         Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) => costs.shift,
-        Opcode::Alloca { .. } | Opcode::GetElementPtr { .. } => costs.address,
+        Opcode::GetElementPtr { .. } => {
+            let constant = instruction.operands[1..].iter().all(|&index| matches!(index, Operand::Constant(_)));
+            advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs)
+        }
+        Opcode::Alloca { .. } => costs.address,
+        // Lowered as a jump around a move, the compare priced on its own.
+        Opcode::Select => costs.branch + costs.r#move,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
         Opcode::Binary(BinaryOp::FDiv) => costs.float_divide,
@@ -85,24 +105,42 @@ pub fn operation(context: &Context, function: &Function, callees: &Callees, one:
         }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,
         Opcode::Ret | Opcode::Resume | Opcode::Unreachable => costs.return_,
-        Opcode::Br | Opcode::Switch => costs.branch,
+        Opcode::Br => costs.branch,
+        // Lowered as a compare and a jump for each case, then the jump for the rest.
+        Opcode::Switch => costs.branch + (instruction.operands.len() as i64 - 2) / 2 * (costs.add + costs.branch),
         _ => return None,
     };
     Some(price)
 }
 
-pub fn _block(context: &Context, function: &Function, callees: &Callees, block: i64, costs: &OperationCosts) -> Option<i64> {
-    function.block(cfg::block(block)).instructions().iter().map(|&one| operation(context, function, callees, one, costs)).sum()
+pub fn _block(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, block: i64, costs: &OperationCosts) -> Option<i64> {
+    function.block(cfg::block(block)).instructions().iter().map(|&one| operation(context, layout, function, callees, one, costs)).sum()
 }
 
 /// Semantic work present once in the body, independent of frequency.
-pub fn r#static(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
-    function.layout().iter().map(|&block| _block(context, function, callees, cfg::id(block), costs)).sum()
+pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
+    function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
+}
+
+/// Where `loop_` stands in the unit's function: how often it is entered for each entry of the function, in
+/// `UNIT`ths (what its outside predecessors weigh), and whether it calls a function that may touch memory.
+pub fn site(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop) -> llrm_analysis::peelsize::Site {
+    let trips = proven_trips(unit, &unit.registers());
+    let entries = match _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips)) {
+        Some(frequency) => cfg::graph(unit.function).iter().filter(|block| !loop_.body.contains(&block.at) && block.succ.contains(&loop_.header)).map(|block| frequency.get(&block.at).copied().unwrap_or(UNIT)).sum::<i64>().max(1),
+        None => UNIT,
+    };
+    let callees = outer.callees();
+    let writes = unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).any(|(_, inst)| {
+        unit.calls_out(inst) && !callee(unit.context, unit.function, inst).and_then(|id| callees.get(&id)).is_some_and(|summary| summary.effects == llrm_mir::memory::Effects::NONE)
+    });
+    llrm_support::debug!("peelsite", "callees of the loop at b{}: {:?}", loop_.header, unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).filter(|(_, inst)| unit.calls_out(*inst)).map(|(_, inst)| callee(unit.context, unit.function, inst).map(|id| (id, callees.get(&id).map(|one| one.effects)))).collect::<Vec<_>>());
+    llrm_analysis::peelsize::Site { entries, writes }
 }
 
 /// Whether the target prices every instruction here, which a copy's cost needs.
-pub fn priced(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
-    r#static(context, function, callees, costs).is_some()
+pub fn priced(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> bool {
+    r#static(context, layout, function, callees, costs).is_some()
 }
 
 /// Each loop's trips by latch, where induction proves them: the `trips`
@@ -117,8 +155,36 @@ pub fn proven_trips(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>) -> In
     trips
 }
 
-/// Profile-free block frequencies, or `None` for conflicting proofs.
-pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+/// What one execution of the entry weighs in `_frequencies`: a block taken a
+/// third of the time weighs a third of it.
+pub const UNIT: i64 = 256;
+
+/// Block frequencies as `branchprob` estimates them (the heuristics, a loop's
+/// proven `trips` by latch), per entry, in `UNIT`ths of an execution and never
+/// below one, so a cold arm is near free but still ordered. `None`
+/// for conflicting proofs.
+pub fn _frequencies(context: &Context, metadata: &[llrm_mir::module::MetadataNode], globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+    let shape = cfg::Shape::of(function);
+    let empty = IndexMap::default();
+    let trips = trips.unwrap_or(&empty);
+    let mut counted = BTreeMap::new();
+    for loop_ in &shape.loops {
+        let exact = loop_.latches.iter().filter_map(|at| trips.get(at).copied()).collect::<BTreeSet<_>>();
+        if exact.len() > 1 {
+            return None;
+        }
+        if let Some(count) = exact.into_iter().next() {
+            counted.insert(loop_.header, count);
+        }
+    }
+    let odds = branchprob::estimated(context, metadata, globals, function, &shape, &counted);
+    Some(cfg::graph(function).iter().map(|block| (block.at, odds.frequency.get(&block.at).map_or(UNIT, |one| ((one * UNIT as f64).round() as i64).max(1)))).collect())
+}
+
+/// Block frequencies as a product of the trips of each loop around a block, ten where none is
+/// proven: the model lsr's and gvn's prices were tuned on (#203, #202), until they are retuned on `_frequencies`. `None` for
+/// conflicting proofs.
+pub fn _loop_products(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
     let graph = cfg::graph(function);
     let mut frequency = graph.iter().map(|block| (block.at, 1_i64)).collect::<BTreeMap<_, _>>();
     let empty = IndexMap::default();
@@ -138,18 +204,58 @@ pub fn _frequencies(function: &Function, trips: Option<&IndexMap<i64, i64>>) -> 
     Some(frequency)
 }
 
-/// Profile-free expected work, using exact or ten trips per loop level.
-///
-/// `trips` keys a proven count by latch block; every other loop retains
-/// the conventional factor of ten.
-pub fn weighted(context: &Context, function: &Function, callees: &Callees, costs: &OperationCosts, trips: Option<&IndexMap<i64, i64>>) -> Option<i64> {
-    let frequency = _frequencies(function, trips)?;
+/// `_loop_products`, each block weighed by the share of its innermost loop's
+/// trips that reach it, as `_frequencies` finds the share: the latch runs once
+/// a trip, so a block behind a branch runs `odds[block] / odds[latch]` of them
+/// and a block every trip passes through weighs the whole product, as before.
+pub fn _loop_products_by_branch(context: &Context, metadata: &[llrm_mir::module::MetadataNode], globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+    let mut weight = _loop_products(function, trips)?;
+    let odds = _frequencies(context, metadata, globals, function, trips)?;
+    let loops = cfg::Shape::of(function).loops;
+    for (at, count) in weight.iter_mut() {
+        let Some(innermost) = loops.iter().filter(|one| one.body.contains(at)).min_by_key(|one| one.body.len()) else { continue };
+        let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
+        let here = odds.get(at).copied().unwrap_or(UNIT);
+        if here < trip {
+            *count = (*count * here / trip).max(1);
+        }
+    }
+    Some(weight)
+}
+
+/// Profile-free expected work at `frequency`, a block's executions per entry
+/// (`_frequencies`, or the older `_loop_products`).
+pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
     let mut total = 0;
     for &block in function.layout() {
-        let priced = _block(context, function, callees, cfg::id(block), costs)?;
+        let priced = _block(context, layout, function, callees, cfg::id(block), costs)?;
         total += frequency[&cfg::id(block)] * priced;
     }
     Some(total)
+}
+
+/// What fitting MIR within `room` spills, a call keeping what `across`
+/// says, as the one spill model (`spill`) forecasts it.
+#[allow(clippy::too_many_arguments)]
+pub fn spill_forecast(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    costs: &OperationCosts,
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
+    frequency: &BTreeMap<i64, i64>,
+    found: &Liveness,
+) -> Option<spill::Forecast<ValueId>> {
+    if !room.priced() {
+        return Some(spill::Forecast { cost: 0, spilled: BTreeSet::new(), peak: 0 });
+    }
+    let cells = spill::cells(function);
+    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
+    let counted = |value: ValueId| spill::integer(context, function, value);
+    let addressed = spill::addressed(function);
+    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, function, value), &|value| addressed.contains(&value))).flat_map(spill::Site::points);
+    Some(spill::forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
 }
 
 /// Whole-live-range traffic needed to fit MIR within `room`, a call
@@ -162,18 +268,10 @@ pub fn spill_risk(
     costs: &OperationCosts,
     room: Room,
     across: &dyn Fn(InstId) -> i64,
-    trips: Option<&IndexMap<i64, i64>>,
+    frequency: &BTreeMap<i64, i64>,
     found: &Liveness,
 ) -> Option<i64> {
-    if !room.priced() {
-        return Some(0);
-    }
-    let frequency = _frequencies(function, trips)?;
-    let cells = spill::cells(function);
-    let traffic = spill::traffic(function, &frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
-    let counted = |value: ValueId| spill::integer(context, function, value);
-    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst| spill::transient(context, layout, function, inst, room), &cells, &counted, &|value| spill::segment_view(context, layout, function, value))).flat_map(spill::Site::points);
-    Some(spill::spilled(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
+    spill_forecast(context, layout, function, costs, room, across, frequency, found).map(|one| one.cost)
 }
 
 /// Semantic work plus finite-capacity whole-range spill traffic.
@@ -185,11 +283,11 @@ pub fn pressure_adjusted(
     costs: &OperationCosts,
     room: Room,
     across: &dyn Fn(InstId) -> i64,
-    trips: Option<&IndexMap<i64, i64>>,
+    frequency: &BTreeMap<i64, i64>,
     found: &Liveness,
 ) -> Option<i64> {
-    let work = weighted(context, function, callees, costs, trips);
-    let pressure = spill_risk(context, layout, function, costs, room, across, trips, found);
+    let work = weighted(context, layout, function, callees, costs, frequency);
+    let pressure = spill_risk(context, layout, function, costs, room, across, frequency, found);
     match (work, pressure) {
         (Some(work), Some(pressure)) => Some(work + pressure),
         _ => None,

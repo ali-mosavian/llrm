@@ -10,6 +10,7 @@ use std::sync::Arc;
 use iced_x86::Register;
 
 use crate::backend::peep::{self, walk::Facts};
+use crate::backend::cpu::Profile;
 use crate::backend::{comparefold, farload, rmw};
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::lir::{self, Insn, LirBlock};
@@ -17,7 +18,7 @@ use crate::support::hash::IndexMap;
 
 /// `blocks` with the selections made. No value of isel's is exposed: a
 /// result leaves through a return's operands.
-pub(super) fn combined(blocks: Vec<LirBlock>) -> Vec<LirBlock> {
+pub(super) fn combined(blocks: Vec<LirBlock>, cpu: &Profile) -> Vec<LirBlock> {
     let exposed = BTreeSet::new();
     let read_by_phis: BTreeSet<u32> = blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)).collect();
     let made: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
@@ -31,7 +32,7 @@ pub(super) fn combined(blocks: Vec<LirBlock>) -> Vec<LirBlock> {
     // x86 can express a C read-modify-write update in one memory operand.
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, rmw::selected(&insns, &uses))).collect();
     // The argument selections of peephole.peep, over held values.
-    let facts = Facts::counted(&uses);
+    let facts = Facts::counted(&uses).with_cpu(cpu);
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, peep::memory_arguments_insns(&insns, &facts))).collect();
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, peep::paired_pushes_insns(&insns, &facts))).collect();
     let made: IndexMap<i64, Vec<Arc<Insn>>> = made.into_iter().map(|(at, insns)| (at, peep::immediate_arguments_insns(&insns, &facts))).collect();
@@ -240,7 +241,7 @@ fn _rematerialized_arguments(
                     what.sources = vec![Loc::Imm(immediate.clone())];
                     rewritten.what = Some(what);
                     rewritten.uses = vec![];
-                    rewritten.op = definition.op.clone();
+                    rewritten.call = definition.call.clone();
                     rewritten.symbol = Some(immediate.address.is_some());
                     rewritten.rematerialized = true;
                     one = Arc::new(rewritten);

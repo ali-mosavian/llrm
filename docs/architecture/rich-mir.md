@@ -1,8 +1,7 @@
 # Rich portable MIR
 
-Status: steps 0 to 3 landed (`tools/baseline.sh`, `crates/ir/llrm-mir`, the
-rewrite ledger, LIR meta instructions, LLVM IR in `llrm-mir`); the compiler
-still runs on the old MIR.
+Status: done. Steps 0 to 7 landed; the old MIR is deleted and every
+frontend compiles through this MIR alone.
 
 ## Decision
 
@@ -93,7 +92,7 @@ call graph. Each fact has one owner (the seventh rule).
 
 ## Stage dumps and the verifier
 
-`tools/stages.py` writes one `.ll` per pass; diffing adjacent files is the
+`LLRM_MIR_STAGES=DIR` writes one `.ll` per pass; diffing adjacent files is the
 debugging evidence (the fourth rule).
 
 `llrm-mir` implements LLVM's `Verifier` rules for its subset, so the
@@ -278,9 +277,10 @@ old MIR operation's.
 
 ### 7. Delete the old MIR
 
-- `Op`, `MemRef`, the decoded-operation fallbacks and their constructors, in
-  one bounded cleanup. Update `docs/architecture/split.md`,
-  `docs/architecture/mir-vocabulary.md` and the diagrams.
+Done (#323): the legacy route, then `Op`, `MemRef`, the old memory
+model and its analyses. LIR carries what it needs of a call as `CallMemory`;
+`backend/overlap.rs` compares machine addresses syntactically.
+`docs/history/mir-vocabulary.md` keeps the old vocabulary's story.
 
 ## Acceptance gates
 

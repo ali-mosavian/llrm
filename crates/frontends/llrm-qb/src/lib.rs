@@ -5,7 +5,6 @@ pub mod compile;
 pub mod driver;
 pub mod cli;
 pub mod qbstages;
-pub mod stage_text;
 mod zero_fill;
 
 #[cfg(test)]
@@ -27,7 +26,13 @@ mod test_quickr;
 mod test_frames;
 
 #[cfg(test)]
+mod test_stack_check;
+
+#[cfg(test)]
 mod test_intrinsics;
+
+#[cfg(test)]
+mod test_inline_runtime;
 
 #[cfg(test)]
 mod test_debug;
@@ -37,8 +42,5 @@ mod test_runtime_model;
 
 #[cfg(test)]
 mod test_pipeline;
-#[cfg(test)]
-mod test_cellmap;
-
 #[cfg(test)]
 mod callconv_tests;

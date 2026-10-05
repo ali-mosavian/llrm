@@ -1,0 +1,7 @@
+description = "Six-body f32 n-body, 20 steps, weighted checksum of pos*64"
+repetitions = 1
+
+[region]
+bas = "BenchFpbench"
+c = "bench_fpbench"
+nib = "bench_fpbench"

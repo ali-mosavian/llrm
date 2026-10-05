@@ -193,6 +193,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.store_call_borrows(arguments, &signature.parameters, &lent, span)?;
         self.record_lends(&signature.name, arguments, &lent, span);
+        self.lend_to_call(&signature.name, &lent);
         operands.extend(signature.result_pointer.map(|pointer| self.result_pointer(pointer)));
         let returned = signature.returned(self.types);
         let results = if returned == TypeName::Void { Vec::new() } else { vec![self.value(returned)] };
@@ -467,7 +468,7 @@ impl<'a> FunctionCompiler<'a> {
                 place: descriptor,
                 indices: Vec::new(),
                 offset,
-                type_id,
+                type_id, member: None,
             };
             self.emit("store", Vec::new(), vec![place, value], None);
         }

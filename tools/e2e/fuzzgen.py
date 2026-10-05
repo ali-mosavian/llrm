@@ -27,11 +27,11 @@ external, run by tools/fuzzcheck.py: does BC's own independently-compiled,
 independently-run build agree with it, checked before llrm is ever in the
 loop. The one thing generation must not do is filter *values* toward what
 stays in range -- wraparound is exactly the behaviour this exists to exercise
-(see `tests/suite/divmod.bas`'s MULOVF and this project's own
+(see `tests/run/qb/divmod.bas`'s MULOVF and this project's own
 multiply-is-absorbed-because-it-wraps reasoning). The only filters below are
 the divide-by-zero and LONG/INTEGER MIN-by-(-1) trap cases, which llrm's bare
 `idiv` faults on and BC's runtime does not -- fuzzing that boundary on purpose
-is tests/suite/divmod.bas's job, by hand, not this generator's.
+is tests/run/qb/divmod.bas's job, by hand, not this generator's.
 
 One more filter turned out to be load-bearing rather than optional, found by
 compiling the first generated batch: BC's *compiler* constant-folds an
@@ -39,7 +39,7 @@ arithmetic operator whose both operands are literals, and that fold is
 overflow-checked even though the equivalent runtime code is not (measured:
 `(-1970530648 * -13199)` alone -- no variables -- fails to compile with "Math
 overflow", where the same multiply through a variable, as in
-`tests/suite/divmod.bas`'s MULOVF, silently wraps at runtime). Every `BinOp` this
+`tests/run/qb/divmod.bas`'s MULOVF, silently wraps at runtime). Every `BinOp` this
 generator builds therefore keeps at least one variable-rooted operand, which
 forces BC to emit real code instead of trying to fold it. An array element and
 a function call both count as variable-rooted: BC can fold neither.
@@ -539,7 +539,7 @@ def render_lit(width: Width, value: int) -> str:
     lo, hi = bounds(width)
     # a bare MIN literal (-32768, -2147483648) does not compile -- BASIC's
     # lexer sees unary minus over a literal one past the positive range.
-    # tests/suite/cmpord.bas writes the LONG one the same way: "-2147483647 - 1"
+    # tests/run/qb/cmpord.bas writes the LONG one the same way: "-2147483647 - 1"
     return f"(-{hi} - 1)" if value == lo else str(value)
 
 
@@ -599,7 +599,7 @@ def render_stmts(stmts: tuple[Stmt, ...], indent: int) -> list[str]:
                 lines.append(f"{pad}{name}({render_expr(index)}) = {render_expr(expr)}")
             case Print(tag, expr, width):
                 # Through CLNG where the value is a float, exactly as
-                # tests/suite/fpemu.bas does: what is under test is that the x87
+                # tests/run/qb/fpemu.bas does: what is under test is that the x87
                 # site computed the right number, never QuickBASIC's own
                 # floating-point PRINT formatting, which is a far larger
                 # thing to model and none of this pass's business.
@@ -963,7 +963,7 @@ def _repeated(ctx: _Ctx, left: Expr) -> Expr | None:
     chance -- which in practice it never did. It is the shape that broke
     llrm: `fld dword ptr [si]` twice running are two pushes, and a pass
     that read si as the destination deleted the second as a redundant
-    reload. bench/fpbench.bas found that; nothing generated here could
+    reload. bench/fpbench/fpbench.bas found that; nothing generated here could
     have.
 
     Only a Var or an Index is repeated, so the copy reads memory and
@@ -1115,7 +1115,7 @@ def _gen_stmt(ctx: _Ctx, depth: int) -> Stmt | None:
         case Kind.BRANCH:
             # A condition is an INTEGER truth value and _gen_condition builds
             # it from comparisons; a float one would be asking a different
-            # question -- what x87 compares -- which tests/suite/fpemu.bas covers
+            # question -- what x87 compares -- which tests/run/qb/fpemu.bas covers
             # by hand and this grammar does not generate.
             plain = width if width not in FLOAT else Width.INT
             return IfPrint(_fresh(ctx.ids, "T"), _gen_condition(ctx, plain, depth))
@@ -1249,7 +1249,7 @@ def generate_program(
     # One of each width. It was 2, and the widths are handed out in the
     # order INT, LNG, SNG, DBL -- so a float array was never once generated
     # and float array access went entirely uncovered. That is where the
-    # miscompile bench/fpbench.bas found was living.
+    # miscompile bench/fpbench/fpbench.bas found was living.
     n_arrays: int = 4,
     n_subs: int = 2,
     n_funcs: int = 2,

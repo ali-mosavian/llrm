@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 use llrm_mir::program::SegmentLayout;
+use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Module};
 
 use super::Options;
@@ -41,54 +42,6 @@ pub fn _semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>)
 
 pub fn _reg(register: Register) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
-}
-
-/// Zero a native frame as BASIC's runtime entry routines do.
-///
-/// QB variables begin at zero, and runtime-managed string/array descriptors
-/// require that invariant before their first assignment.  The shared backend
-/// deliberately owns only reservation; this source ABI initialization stays
-/// in the frontend and runs before any source instruction.
-pub fn _initialize_frame(
-    body: &lir::LirBody,
-    size: i64,
-) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), String> {
-    let size = size + (size & 1);
-    if size == 0 {
-        return Ok((body.clone(), IndexMap::default()));
-    }
-    if size > 0x7FFE {
-        return Err(format!("{}: {size} byte native frame exceeds a 16-bit BP displacement", body.name).into());
-    }
-    let at = body.blocks.iter().flat_map(|block| &block.insns).map(|one| one.at).max().unwrap_or(0) + 1;
-    let initialize = _insn(at, _semantics(Operation::Call, "frame-zero", vec![], vec![]));
-    let blocks = body
-        .blocks
-        .iter()
-        .map(|block| {
-            if block.at == body.entry {
-                let insns = std::iter::once(Arc::clone(&initialize)).chain(block.insns.iter().cloned()).collect();
-                block.with_insns(insns)
-            } else {
-                block.clone()
-            }
-        })
-        .collect();
-    let code: Vec<u8> = [
-        vec![0x06, 0x57, 0x16, 0x07, 0x31, 0xc0, 0x8d, 0xbe],
-        ((-size) as i16).to_le_bytes().to_vec(),
-        vec![0xB9],
-        ((size / 2) as u16).to_le_bytes().to_vec(),
-        vec![0xfc, 0xf3, 0xab, 0x5f, 0x07],
-    ]
-    .concat();
-    Ok((
-        body.with_blocks(blocks),
-        IndexMap::from_iter([(
-            at,
-            masm::Callee { name: "$frame_zero".into(), far: false, code: vec![masm::InlinePart::Bytes(code)] },
-        )]),
-    ))
 }
 
 #[allow(non_snake_case)]
@@ -169,6 +122,7 @@ pub fn _runtime_frame(
     size: i64,
     runtime: model::RuntimeProfile,
     temporary_strings: i64,
+    enter_by: &str,
 ) -> Result<(lir::LirBody, IndexMap<i64, masm::Callee>), String> {
     let size = size + (size & 1);
     let header = _RUNTIME_FRAME_HEADER(runtime)?;
@@ -255,7 +209,7 @@ pub fn _runtime_frame(
         .collect();
     Ok((
         lir::LirBody { variables, ..body.with_blocks(framed) },
-        IndexMap::from_iter([(serial + 2, masm::Callee::new("B$ENRA", true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
+        IndexMap::from_iter([(serial + 2, masm::Callee::new(enter_by, true)), (leave_at, masm::Callee::new("B$EXSA", true))]),
     ))
 }
 
@@ -347,14 +301,15 @@ fn _basic_segment_classes(data: &[u8], code: &str) -> Result<Vec<u8>, String> {
     Ok(rewritten.iter().flat_map(omf::Record::emit).collect())
 }
 
-/// Remove the native shell when B$ENRA/B$EXSA own the whole frame.
+/// Remove the native shell when the runtime's entry and B$EXSA own the whole frame.
 ///
 /// The shared MASM model supplies a C-shaped BP shell whenever a body
 /// addresses BP or calls anything. B$ENRA itself saves BP, SI and DI, and
 /// B$EXSA restores them, so this source-ABI exception stays in the frontend.
 pub fn _basic_listing(procedure: &masm::Procedure, number: usize) -> Result<Vec<masm::Item>, String> {
     let listing = masm::listing(procedure, number).map_err(|error| error.0)?;
-    let runtime_frame = procedure.callees.values().any(|callee| callee.name == "B$ENRA");
+    // Whichever entry the runtime states: B$ENRA, or the checking B$ENRD, which builds the same frame.
+    let runtime_frame = procedure.entry != 0;
     let module_body = procedure.name == "$QB$MAIN";
     if !runtime_frame && !module_body {
         return Ok(listing);
@@ -421,6 +376,12 @@ pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Resu
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
         omfwrite::_data(&mut segments[index], index, items, &mut symbols);
+    }
+    if module.stack > 0 {
+        let mut stack = omfwrite::Segment::new("STACK", "STACK", true);
+        stack.image = vec![0; module.stack as usize];
+        stack.stack = true;
+        segments.push(stack);
     }
     let every: Vec<usize> = (0..module.procedures.len()).collect();
     omfwrite::_code_by(&mut segments[0], 0, module, &every, &mut symbols, _basic_listing).map_err(|error| error.to_string())?;
@@ -533,11 +494,6 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
     Ok(Finalized { body: body.with_blocks(blocks), callees: sites })
 }
 
-/// Return one audited expansion for diagnostics and stage dumps.
-pub fn expansion(name: &str) -> Option<Vec<u8>> {
-    _CODE(name)
-}
-
 /// The main body's symbol.
 pub const MAIN: &str = "$QB$MAIN";
 /// The code segment's first byte: the module header.
@@ -573,6 +529,8 @@ pub struct Object {
     pub frames: BTreeMap<String, Frame>,
     /// Each source line's BASIC line number, for the statement table.
     pub line_numbers: BTreeMap<i64, i64>,
+    /// The runtime's stack limit and overflow handler, where the program checks its stack.
+    pub stack_check: Option<model::StackCheck>,
 }
 
 /// How a function is framed.
@@ -610,7 +568,7 @@ pub fn compiled(program: &model::Program, object: &Object, options: &Options) ->
     let (mut mir, data) = super::emitted(program, options)?;
     let [(module, data)] = [(&mir.modules[0], &data[0])];
     let global = |id: &i64| data.get(id).and_then(|&global| module.global(global).name.clone());
-    let mut resolved = Object { segments: Vec::new(), symbols: object.symbols.clone(), data: BTreeMap::new(), private: object.private.clone(), requests: object.requests.clone(), frames: object.frames.clone(), line_numbers: object.line_numbers.clone(), code: object.code.clone(), header: object.header.clone(), main: object.main.clone(), constants: object.constants.clone() };
+    let mut resolved = Object { segments: Vec::new(), symbols: object.symbols.clone(), data: BTreeMap::new(), private: object.private.clone(), requests: object.requests.clone(), frames: object.frames.clone(), line_numbers: object.line_numbers.clone(), code: object.code.clone(), header: object.header.clone(), main: object.main.clone(), constants: object.constants.clone(), stack_check: program.stack_check.clone() };
     resolved.symbols.extend(object.data.iter().filter_map(|(id, symbol)| Some((global(id)?, symbol.clone()))));
     for segment in &object.segments {
         let items = segment.items.iter().filter_map(|item| match item {
@@ -650,7 +608,7 @@ pub fn object(module: &Module, object: &Object, runtime: model::RuntimeProfile, 
 /// The calls of the BASIC module object `object` lays out: its runtime's,
 /// and its own by their symbols.
 fn object_abi(object: &Object, runtime: model::RuntimeProfile) -> HirAbi {
-    HirAbi { runtime, objects: object.symbols.clone(), preserved: BTreeSet::new() }
+    HirAbi { runtime, objects: object.symbols.clone(), preserved: BTreeSet::new(), stack_check: object.stack_check.clone() }
 }
 
 /// `module` selected and assembled as a BASIC module: the main body first,
@@ -667,7 +625,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             names.insert((globals::space(module, id), i64::from(id.0)), symbol.clone());
         }
     }
-    names.extend(crate::hir::lower::symbol_names());
+    names.extend(crate::hir::symbols::symbol_names());
     let main = module.named(&object.main).ok_or("no main body")?;
     names.insert((Space::Segment, i64::from(main.0)), MAIN.to_owned());
     names.insert((Space::Segment, MAIN_FRAME_ID), MAIN_FRAME.to_owned());
@@ -739,6 +697,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             None => data.push((object.constants.clone(), pooled)),
         }
     }
+    crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -751,6 +710,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         }
     }
     externs.extend(object.requests.iter().map(|name| (name.clone(), "near".to_owned())));
+    externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
     let flavor = llrm_omf::cvwrite::Flavor { qb45: runtime == model::RuntimeProfile::Qb45 };
@@ -764,7 +724,9 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         procedures,
         private: object.private.clone(),
         requests: object.requests.clone(),
+        far_bss: BTreeSet::new(),
         debug,
+        stack: 0,
     })
 }
 
@@ -790,7 +752,11 @@ fn procedure(
     let finalized = finalized(&machined.body, machined.popped)?;
     let mut callees = finalized.callees;
     let mut reserve = 0;
+    let mut entry = 0;
     let mut statics = 0;
+    // The runtime's checking entry where it frames a checked procedure; the procedure's own check where it frames itself.
+    let check = global.function().is_some_and(|one| one.attrs.iter().any(|attr| Fact::of_attribute(attr) == Some(Fact::StackCheck))).then(|| abi.stack_check()).flatten().filter(|_| !main);
+    let mut stack_check = None;
     let (body, framed) = if !super::framed(module, id) {
         (finalized.body, IndexMap::default())
     } else if main {
@@ -798,9 +764,14 @@ fn procedure(
         (_static_frame(&finalized.body, statics), IndexMap::default())
     } else {
         match frame {
-            Frame::Runtime { strings } => _runtime_frame(&finalized.body, machined.reserve, runtime, strings)?,
+            Frame::Runtime { strings } => {
+                entry = machined.reserve + (machined.reserve & 1) + _RUNTIME_FRAME_HEADER(runtime)?;
+                let by = check.and_then(|one| one.entry.as_deref()).unwrap_or("B$ENRA");
+                _runtime_frame(&finalized.body, machined.reserve, runtime, strings, by)?
+            }
             Frame::Own => {
                 reserve = machined.reserve;
+                stack_check = check.cloned();
                 (finalized.body, IndexMap::default())
             }
         }
@@ -832,6 +803,9 @@ fn procedure(
         reserve,
         callees,
         interrupt: None,
+        size: false,
+        entry,
+        stack_check,
     };
     Ok((procedure, machined.landing, statics))
 }

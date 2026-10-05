@@ -1,0 +1,7 @@
+description = "recursive fib(24) plus digit sums of 1..30000: call/frame overhead"
+repetitions = 1
+
+[region]
+bas = "BenchFrames"
+c = "bench_frames"
+nib = "bench_frames"

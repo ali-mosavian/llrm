@@ -72,7 +72,7 @@ impl FunctionPass for Unroll {
 /// each; whether any was.
 pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
     let costs = &profit::costs(analyses.outer());
-    if !profit::priced(unit.context, unit.function, analyses.outer().callees(), costs) {
+    if !profit::priced(unit.context, unit.layout, unit.function, analyses.outer().callees(), costs) {
         return Ok(false);
     }
     let mut changed = false;
@@ -108,7 +108,7 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
-        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits) {
+        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_)) {
             continue;
         }
         if let Some(count) = count.to_i64() {

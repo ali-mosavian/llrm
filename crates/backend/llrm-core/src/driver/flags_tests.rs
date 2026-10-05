@@ -31,25 +31,19 @@ fn each_level_selects_its_pipeline() {
     assert_eq!(pipeline(&["-Og"]), o1);
     let o3 = pipeline(&["-O3"]);
     assert_eq!(o3.limits, Limits { max_unrolled_operations: 400, ..Limits::default() });
-    assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold(250), true, true));
+    assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold::new(250), true, true));
     let os = pipeline(&["-Os"]);
-    assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default(), true));
+    assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
-    assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default(), false, false));
+    assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default().for_size(), false, false));
     assert!(parsed(&["-O4"]).is_err());
-}
-
-#[test]
-fn the_default_level_is_the_old_o2() {
-    assert_eq!(parsed(&[]).unwrap().legacy(), passes::O2());
-    assert_eq!(parsed(&["-Os"]).unwrap().legacy(), passes::LEVELS()["Os"]);
 }
 
 #[test]
 fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
-    assert_eq!(options.inline, Threshold(0));
+    assert_eq!(options.inline, Threshold::new(0));
     assert_eq!(pipeline(&["-O2", "-fno-peel-loops", "-fpeel-loops"]).peel, true);
     assert_eq!(pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline, Threshold::default());
     let error = parsed(&["-fno-vectorize"]).unwrap_err();
@@ -85,16 +79,53 @@ fn stack_is_data_only_when_asked() {
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
 }
 
+/// Far zero data is stored unless -mfar-bss says the start-up zeroes it: a start-up that does not
+/// (Borland's, Open Watcom's) would otherwise read whatever DOS left there.
+#[test]
+fn far_zero_data_is_stored_unless_the_startup_zeroes_it() {
+    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(crate::abi::machine::BUILT_IN.clone()).unwrap().far_bss;
+    assert!(!machine(&[]));
+    assert!(machine(&["-mfar-bss"]));
+    assert!(!machine(&["-mfar-bss", "-mno-far-bss"]));
+}
+
 /// gcc's run-time check names: each sanitizer alone, `undefined` all of
 /// them, `-fno-sanitize` and `-ftrapv` as gcc reads them.
 #[test]
 fn sanitizers_take_gccs_names() {
     let sanitize = |arguments: &[&str]| parsed(arguments).unwrap().sanitize;
-    let all = Sanitize { bounds: true, integer_divide_by_zero: true, signed_integer_overflow: true };
+    let all = Sanitize { bounds: true, integer_divide_by_zero: true, signed_integer_overflow: true, stack: false };
     assert_eq!(sanitize(&[]), Sanitize::default());
     assert_eq!(sanitize(&["-fsanitize=undefined"]), all);
     assert_eq!(sanitize(&["-fsanitize=bounds,integer-divide-by-zero"]), Sanitize { signed_integer_overflow: false, ..all });
     assert_eq!(sanitize(&["-fsanitize=undefined", "-fno-sanitize=bounds"]), Sanitize { bounds: false, ..all });
     assert_eq!(sanitize(&["-ftrapv"]), Sanitize { signed_integer_overflow: true, ..Sanitize::default() });
     assert!(parsed(&["-fsanitize=address"]).is_err());
+    // A check that costs code on every call is asked for by name, never by `undefined`.
+    assert!(sanitize(&["-fsanitize=stack"]).stack && !sanitize(&["-fsanitize=undefined"]).stack && !sanitize(&[]).stack);
+    assert!(!sanitize(&["-fsanitize=stack", "-fno-sanitize=stack"]).stack);
+}
+
+/// `-fstack-usage` and `-Wstack-usage=N` were no options: the stack a program
+/// could use was never reported, and `-f` named every flag a pass.
+#[test]
+fn test_stack_usage_options_reach_the_driver() {
+    let mut flags = Flags::default();
+    for argument in ["-fstack-usage", "-Wstack-usage=512"] {
+        let argv = vec![argument.to_owned()];
+        assert!(flags.take(&argv, &mut 0).unwrap(), "{argument}");
+    }
+    let options = flags.driver(crate::abi::machine::BUILT_IN.clone());
+    assert!(options.stack_usage);
+    assert_eq!(options.stack_limit, Some(512));
+    assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());
+}
+
+#[test]
+fn clocks_per_byte_limits_the_growth_an_inline_may_buy() {
+    assert_eq!(pipeline(&[]).limits.milliclocks_per_byte, 16_000);
+    assert_eq!(pipeline(&["--clocks-per-byte", "2"]).limits.milliclocks_per_byte, 2000);
+    assert_eq!(pipeline(&["--clocks-per-byte=0.25"]).limits.milliclocks_per_byte, 250);
+    assert!(parsed(&["--clocks-per-byte", "-1"]).is_err());
+    assert!(parsed(&["--clocks-per-byte", "lots"]).is_err());
 }

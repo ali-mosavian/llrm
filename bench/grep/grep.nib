@@ -1,0 +1,99 @@
+# data: @dickens
+# Aho-Corasick over the bytes of DICKENS, as grep.c.
+import std.io as io
+
+const STRIDE = 32
+
+var nxt: u8[2560] = [0] * 2560
+var classof: u8[256] = [0] * 256
+var fail: u8[80] = [0] * 80
+var hit: u8[80] = [0] * 80
+var queue: u8[80] = [0] * 80
+
+fn bench_grep(checksum: &mut i32) -> i32:
+    let patterns: string = "Oliver|Scrooge|Copperfield|Dombey|Marley|Micawber|Heep|ghost|gentleman|Tiny Tim|"
+    let mut classes: u16 = 1
+    let mut states: u16 = 1
+    let mut id: u8 = 1
+    let mut s: u16 = 0
+    for i in 0..patterns.len:
+        let c: u16 = u16(patterns[i])
+        if c == 124:
+            hit[s] = id
+            id += 1
+            s = 0
+        else:
+            if classof[c] == 0:
+                classof[c] = u8(classes)
+                classes += 1
+            if nxt[s * STRIDE + u16(classof[c])] == 0:
+                nxt[s * STRIDE + u16(classof[c])] = u8(states)
+                states += 1
+            s = u16(nxt[s * STRIDE + u16(classof[c])])
+    let mut head: u16 = 0
+    let mut tail: u16 = 0
+    for cl in 1..classes:
+        if nxt[cl] != 0:
+            queue[tail] = nxt[cl]
+            tail += 1
+    while head < tail:
+        s = u16(queue[head])
+        head += 1
+        for cl in 0..classes:
+            let t: u8 = nxt[s * STRIDE + cl]
+            let f: u8 = nxt[u16(fail[s]) * STRIDE + cl]
+            if t != 0:
+                fail[t] = f
+                if hit[t] == 0:
+                    hit[t] = hit[f]
+                queue[tail] = t
+                tail += 1
+            else:
+                nxt[s * STRIDE + cl] = f
+    s = 0
+    match io.File.open("DICKENS"):
+        .ok(opened):
+            let mut file = opened
+            return scan(file, s, checksum)
+        .err(_):
+            return -1
+
+# The file's bytes through the automaton, 1K at a time.
+fn scan(file: &mut io.File, start: u16, checksum: &mut i32) -> i32:
+    let mut buffer: u8[1024] = [0] * 1024
+    let mut lines: i32 = 0
+    let mut sum: i32 = 0
+    let mut pos: i32 = 0
+    let mut inline: i32 = 0
+    let mut s: u16 = start
+    loop:
+        let n = fill(file, buffer)
+        if n == 0:
+            break
+        for i in 0..n:
+            let b: u16 = u16(buffer[i])
+            s = u16(nxt[s * STRIDE + u16(classof[b])])
+            if hit[s] != 0:
+                inline = 1
+                sum = ((sum << 1) + pos + i32(hit[s])) & 0x1FFFFFFF
+            if b == 10:
+                lines += inline
+                inline = 0
+            pos += 1
+    checksum = sum
+    return lines + inline
+
+fn fill(file: &mut io.File, buffer: &mut u8[1024]) -> u16:
+    unsafe:
+        let data: *far mut u8 = &mut buffer
+        match file.read_raw(data, 1024):
+            .ok(n):
+                return n
+            .err(_):
+                return 0
+
+fn main() -> i16:
+    let mut sum: i32 = 0
+    print(bench_grep(sum))
+    print(sum)
+    return 0

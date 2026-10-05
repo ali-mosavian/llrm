@@ -72,7 +72,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
-                round |= _rewritten(context, function, &recurrences, inst);
+                round |= _rewritten(context, layout, function, &recurrences, inst);
             }
         }
         round |= _reassociated_recurrences(function);
@@ -85,19 +85,24 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
 }
 
 /// The first rule that rewrites `inst`.
-fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
+fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
+        || _nonnegative_sext(context, function, inst)
+        || _masked_extension(context, layout, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
+        || _duplicate_phi(function, inst)
         || _negated_difference(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst)
         || _offset_chain(context, function, inst)
         || _bitwise_chain(context, function, inst)
         || _identity(context, function, inst)
+        || _decided(context, function, inst)
+        || _selected(context, function, inst)
         || _inverted_compare(context, function, inst)
         || _extended_boolean_tested(context, function, inst)
         || _extended_boolean_negated(context, function, inst)
@@ -355,6 +360,45 @@ fn _offset_scaled(context: &mut Context, function: &mut Function, inst: InstId) 
     true
 }
 
+/// `sext x` where `x`'s sign bit is known zero is `zext x`, as InstCombine's
+/// `visitSExt`: `zext` has the cheaper selection and folds with masks.
+fn _nonnegative_sext(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::SExt) {
+        return false;
+    }
+    let source = instruction.operands[0];
+    let Some(width) = function.operand_type(context, source).and_then(|ty| context.types.int_bits(ty)).filter(|&width| width <= 128) else { return false };
+    if llrm_mir::valuetracking::known_zero(context, function, source) >> (width - 1) & 1 == 0 {
+        return false;
+    }
+    _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![source]);
+    true
+}
+
+/// `zext(and x, 2^k-1)`, the mask read by nothing else and `k` a native
+/// integer width, is `zext(trunc x)`: a native narrow value is a register's
+/// low part, where the `and` copies the register and masks it.
+fn _masked_extension(context: &mut Context, layout: &DataLayout, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::ZExt) || !_single_use(function, instruction.operands[0]) {
+        return false;
+    }
+    let Some(made) = _definition(function, instruction.operands[0]) else { return false };
+    let Some((BinaryOp::And, left, right, wide)) = _binary(context, function, made) else { return false };
+    let Some((value, mask)) = _value_and_constant(context, BinaryOp::And, left, right) else { return false };
+    let low = mask.trailing_ones();
+    if !layout.legal_integer(low) || low >= wide || mask != (1_u128 << low) - 1 {
+        return false;
+    }
+    let narrow = context.types.int(low);
+    let cut = function.create_instruction(Opcode::Cast(CastOp::Trunc), narrow, vec![value], Flags::default(), None);
+    function.insert(cut, Position::Before(inst)).expect("a placed instruction");
+    let cut = Operand::Value(function.instruction(cut).result.expect("a value"));
+    _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![cut]);
+    true
+}
+
 /// Two integer casts that are one, or none: `trunc(ext x)` is `x`, a
 /// narrower `trunc x` or a narrower `ext x`; `trunc(trunc x)` is one
 /// `trunc`; an extension of a like extension, or `sext` of a `zext`, whose
@@ -372,6 +416,19 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
     let bits = |operand: Operand| function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty));
     let result = Operand::Value(function.instruction(inst).result.expect("a value"));
     let (Some(from), Some(to)) = (bits(source), bits(result)) else { return false };
+    // `zext(trunc x)` where the bits `trunc` drops are known zero reads `x`.
+    if (inner, outer) == (CastOp::Trunc, CastOp::ZExt) && from <= 128 {
+        let kept = bits(middle).unwrap_or(from);
+        let dropped = (u128::MAX >> (128 - from)) & !(u128::MAX >> (128 - kept));
+        if llrm_mir::valuetracking::known_zero(context, function, source) & dropped == dropped {
+            if to == from {
+                _forward(function, inst, source);
+            } else {
+                _replace(function, inst, Opcode::Cast(if to > from { CastOp::ZExt } else { CastOp::Trunc }), vec![source]);
+            }
+            return true;
+        }
+    }
     let op = match (inner, outer) {
         (CastOp::ZExt | CastOp::SExt, CastOp::Trunc) if to == from => {
             _forward(function, inst, source);
@@ -501,6 +558,28 @@ fn _phi_of_casts(context: &mut Context, function: &mut Function, inst: InstId) -
     true
 }
 
+/// A phi that takes the values of an earlier phi of its block, from the same
+/// predecessors, is that phi: SimplifyCFG's `EliminateDuplicatePHINodes`.
+/// gvn's partial redundancy elimination made two where one stood, and the
+/// loop carried both in registers (SPHEREMAPLASMA, #386).
+fn _duplicate_phi(function: &mut Function, inst: InstId) -> bool {
+    if function.instruction(inst).opcode != Opcode::Phi {
+        return false;
+    }
+    let block = function.parent(inst).expect("a placed phi");
+    let mine = &function.instruction(inst).operands;
+    let ty = function.instruction(inst).ty;
+    // One arm per predecessor: the same count, and each arm of this one among the other's.
+    let earlier = function.block(block).instructions().iter().copied().take_while(|&one| one != inst).find(|&one| {
+        let other = function.instruction(one);
+        other.opcode == Opcode::Phi && other.ty == ty && other.operands.len() == mine.len() && mine.chunks(2).all(|arm| other.operands.chunks(2).any(|theirs| theirs == arm))
+    });
+    let Some(earlier) = earlier else { return false };
+    let with = Operand::Value(function.instruction(earlier).result.expect("a phi's value"));
+    _forward(function, inst, with);
+    true
+}
+
 /// Negating a single-use modular difference reverses its operands.
 fn _negated_difference(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
     let Some((BinaryOp::Sub, zero, difference, _)) = _binary(context, function, inst) else { return false };
@@ -584,7 +663,7 @@ fn _identity(context: &mut Context, function: &mut Function, inst: InstId) -> bo
 }
 
 /// The operand `inst` equals by an identity: `x + 0`, `x - 0`, `x | 0`,
-/// `x ^ 0`, a shift by 0, `x * 1` and `x & -1` are `x`; `x * 0` and `x & 0`
+/// `x ^ 0`, a shift by 0, `x * 1`, `x / 1` and `x & -1` are `x`; `x * 0` and `x & 0`
 /// are 0, and `x | -1` is -1.
 pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<Operand> {
     let (op, left, right, width) = _binary(context, function, inst)?;
@@ -595,13 +674,51 @@ pub fn identity(context: &Context, function: &Function, inst: InstId) -> Option<
         let all = mask(width);
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if number == 0 => Some(kept),
-            BinaryOp::Mul if number == 1 => Some(kept),
+            BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv if number == 1 => Some(kept),
             BinaryOp::And if number == all => Some(kept),
             BinaryOp::Mul | BinaryOp::And if number == 0 => Some(other),
             BinaryOp::Or if number == all => Some(other),
             _ => None,
         }
     })
+}
+
+/// `x % 1` is 0, a comparison of a value with itself is decided by its predicate,
+/// and `x >= 0` or `x < 0` unsigned is true or false.
+fn _decided(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    let answer = match instruction.opcode {
+        Opcode::Binary(BinaryOp::URem | BinaryOp::SRem) if _integer(context, instruction.operands[1]) == Some(1) => Some(0),
+        Opcode::ICmp(predicate) => {
+            let (left, right) = (instruction.operands[0], instruction.operands[1]);
+            if left == right && matches!(left, Operand::Value(_)) {
+                Some(u128::from(matches!(predicate, IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle)))
+            } else {
+                match predicate {
+                    IntPredicate::Uge if _integer(context, right) == Some(0) => Some(1),
+                    IntPredicate::Ult if _integer(context, right) == Some(0) => Some(0),
+                    _ => None,
+                }
+            }
+        }
+        _ => None,
+    };
+    let Some(bits) = answer else { return false };
+    let decided = _constant(context, function, inst, bits);
+    _forward(function, inst, decided);
+    true
+}
+
+/// A `select` on a constant condition is the arm it chooses.
+fn _selected(context: &Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Select {
+        return false;
+    }
+    let Some(bits) = _integer(context, instruction.operands[0]) else { return false };
+    let chosen = instruction.operands[if bits & 1 == 1 { 1 } else { 2 }];
+    _forward(function, inst, chosen);
+    true
 }
 
 /// Put a loop-carried operand at the root of an integer `add` tree:

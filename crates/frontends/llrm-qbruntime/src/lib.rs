@@ -1682,23 +1682,6 @@ pub fn handles_errors<'a>(routines: impl IntoIterator<Item = &'a Contract>) -> b
     routines.into_iter().any(|routine| routine.error_handling)
 }
 
-// helpi4.asm is the model the four shipped contracts in calls.py and stack.py
-// were read off, and nothing below contradicts them. cProc's parm declarations
-// give the cleanup directly: cEnd emits `ret <parameter bytes>` under the PL/M
-// convention (inc/cmacros.inc), and parmD is 4 bytes, parmW and parmSD 2
-// (inc/string.inc makes parmSD an alias for parmW).
-// All five print entry points in the corpus set ax to a [terminator|value type]
-// pair and fall into B$PRINT, which pops its own arguments in a hand-written
-// epilogue keyed on that type byte (rt/prnval.asm PRINTX): one word for I2 and
-// SD, two for I4. That epilogue also re-pushes the far return address and RETs,
-// so control does come back to the byte after the call.
-static _PRINT_CLOBBERS: LazyLock<BTreeSet<Reg>> = LazyLock::new(|| {
-    EVERY
-        .difference(&BTreeSet::from([Reg::Bp, Reg::Si, Reg::Sp]))
-        .copied()
-        .collect()
-});
-
 /// Bytes consumed by value by prnval.asm's PRINTX path, not a descriptor pointer.
 pub fn numeric_print_argument(name: &str) -> Option<i64> {
     if !["B$PEI2", "B$PSI2", "B$PEI4", "B$PSI4", "B$PER4"].contains(&name) {
@@ -1725,119 +1708,13 @@ pub fn numeric_stack_arguments(name: &str) -> Option<i64> {
     numeric_print_argument(name)
 }
 
-const _PRINT_EVIDENCE: &str = concat!(
-    "rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls ",
-    "straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before ",
-    "returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file ",
-    "comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's ",
-    "\"Per convention. (DS, ES, SI, DI, BP preserved.)\" for the same routine, and the conservative reading wins. ",
-    "PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 ",
-    "and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using ",
-    "goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], ",
-    "[VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths ",
-    "reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors ",
-    "referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live ",
-    "descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or ",
-    "Disk full error when flush the buffer if a EOL encountered`."
-);
-
-fn _print(name: &str, cleanup: i64) -> Contract {
-    Contract {
-        name: name.to_owned(),
-        // The stub sets ax itself before jumping to B$PRINT, and BC pushes
-        // the value: nothing here is a register the caller has to have set.
-        inputs: Some(BTreeSet::new()),
-        cleanup: Some(cleanup),
-        control: Control::Returns,
-        enters_user_code: false,
-        raises_error: true,
-        error_handling: false,
-        writes: Memory::Own,
-        reads: Memory::Own,
-        clobbers: _PRINT_CLOBBERS.clone(),
-        established: true,
-        evidence: _PRINT_EVIDENCE.to_owned(),
-        documented: None,
-        direct_inputs: None,
-        clobbers_reached: false,
-        caller_cleanup: 0,
-        i386: false,
-        direct_writes: None,
-        flags_result: false,
-        direct_reads: None,
-    }
-}
-
-// Everything here reaches user BASIC, or leaves without coming back, or both.
-// Their details are recorded for the record; barrier() is the field that
-// matters, and it is true for every one of them.
-// The three whose own implementation is not in the local tree. B$ENRA and
-// B$EXSA are named only by the include files, and B$OGTA only by ulib.inc and
-// rtmint.inc -- extent.py's docstring already says so and this does not repeat
-// the reasoning. What is established about them is established from the frame
-// layout and from measurements of BC's output, not from read code, so
-// everything except the fields named in each citation stays at the worst case.
-// The x87 helpers, all six of them one module -- 87bhelp.asm -- and byte for
-// byte the same object in QuickBASIC 4.5's BCOM45.LIB, PDS 7.1's BCL71ENR.LIB
-// and VBDOS 1.0's VBDCL10E.LIB. They are the one group here established from
-// a disassembly rather than from source: runtime/inc/rtmint.inc declares them
-// and nothing in the 148-file runtime tree defines them, because the math
-// library is not in the source drop. tools/libdump.py is what read them out.
-//
-// Every one of them keeps its own frame (push bp / mov bp,sp ... mov sp,bp /
-// pop bp / retf), takes no argument on the 8086 stack -- the operands are in
-// registers or already on the x87 stack -- and touches no memory but its own
-// scratch below sp. So cleanup is 0 and writes is NONE throughout, and what
-// differs between them is only which registers come back changed.
-/// One of READ's per-type entries.
-///
-/// rt/read.asm: `B$RD<type> only sets the type, [b$VTYP], and then jump to
-/// a common routine, CommRead`. Entry is `pDest = far pointer to the
-/// destination for the data`, so four bytes come off; `cbDest` is a fifth
-/// parameter for SD and FS only, and none of those is here.
-///
-/// It writes through pDest and reads the DATA area, and CommRead reaches
-/// B$ReadVal through the [b$GetOneVal] vector -- so Memory.ANY on both
-/// sides rather than the destination alone. `Uses: per convention` names
-/// nothing preserved. It raises: out of DATA, syntax error, overflow.
-fn _read(name: &str) -> Contract {
-    Contract {
-        name: name.to_owned(),
-        // pDest is a parameter, so nothing arrives in a register.
-        inputs: Some(BTreeSet::new()),
-        cleanup: Some(4),
-        control: Control::Returns,
-        enters_user_code: false,
-        raises_error: true,
-        error_handling: false,
-        writes: Memory::Own,
-        reads: Memory::Own,
-        clobbers: EVERY.clone(),
-        established: true,
-        evidence: concat!(
-            "rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the ",
-            "data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then ",
-            "jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the ",
-            "[b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` ",
-            "names no preserved register. Exceptions: out of DATA, syntax error, overflow."
-        )
-        .to_owned(),
-        documented: None,
-        direct_inputs: None,
-        clobbers_reached: false,
-        caller_cleanup: 0,
-        i386: false,
-        direct_writes: None,
-        flags_result: false,
-        direct_reads: None,
-    }
-}
-
 // Where the rows live. Data, not code: every field is a claim about the
 // runtime, and a claim wants an audit trail more than it wants a Python
 // literal. `tools/runtime_writes.py` regenerates the measured columns from
 // a linked image, so re-measuring is a diff against this file rather than a
 // rewrite of one.
+pub mod semantics;
+
 pub const TABLE: &str = include_str!("runtime.toml");
 
 /// One entry per runtime name the corpus calls, read from the table.
@@ -1853,7 +1730,7 @@ pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Con
         .parse()
         .map_err(|error: toml::de::Error| error.to_string())?;
     let mut out = IndexMap::default();
-    for (name, row) in &rows {
+    for (name, row) in rows.iter().filter(|(name, _)| name.starts_with("B$")) {
         let row = row
             .as_table()
             .ok_or_else(|| format!("{} is not a table", pyrepr::string(name)))?;
@@ -1954,6 +1831,22 @@ pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
 
+/// The runtime entries whose row says `captures = "NONE"`: they keep no
+/// pointer argument past their return.
+pub fn captures_nothing() -> Vec<&'static str> {
+    let rows: toml::Table = TABLE.parse().expect("runtime.toml parses");
+    let kept: BTreeSet<&str> = rows.iter().filter(|(_, row)| row.get("captures").and_then(|one| one.as_str()) == Some("NONE")).map(|(name, _)| name.as_str()).collect();
+    CONTRACTS.keys().map(String::as_str).filter(|name| kept.contains(name)).collect()
+}
+
+/// The runtime entries that never come back to their caller: the table's
+/// NEVER rows and the error funnel's.
+pub fn never_returning() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = CONTRACTS.iter().filter(|(_, known)| known.established && known.control == Control::Never).map(|(name, _)| name.as_str()).collect();
+    names.push("B$RUNERR");
+    names
+}
+
 /// Whether a runtime entry never comes back to its caller.
 ///
 /// The table's NEVER rows, plus the error funnel: rt/erproc.asm's RTEDEF
@@ -2047,11 +1940,11 @@ mod tests {
             .map(|(name, one)| format!("{name} {}", one.repr()))
             .collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../../../tests/fixtures/abi/runtime-contracts.txt")
+        let want: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-contracts.txt")
             .lines()
             .collect();
         assert_eq!(got, want);
-        let order: Vec<&str> = include_str!("../../../../tests/fixtures/abi/runtime-contract-order.txt")
+        let order: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-contract-order.txt")
             .lines()
             .collect();
         assert_eq!(CONTRACTS.keys().collect::<Vec<_>>(), order);
@@ -2064,7 +1957,7 @@ mod tests {
             .map(|((name, family), one)| format!("{name} {family} {}", one.repr()))
             .collect();
         got.sort();
-        let want: Vec<&str> = include_str!("../../../../tests/fixtures/abi/runtime-variants.txt")
+        let want: Vec<&str> = include_str!("../../../../tests/inputs/abi/runtime-variants.txt")
             .lines()
             .collect();
         assert_eq!(got, want);
@@ -2168,6 +2061,13 @@ mod tests {
                 assert_eq!(direct_slots(&routine), Vec::new(), "{name} {family}");
             }
         }
+    }
+
+    /// ERASE of an array behind a descriptor made the array escape: the
+    /// runtime's declaration kept no `noretain` until the table said so.
+    #[test]
+    fn test_erase_keeps_no_pointer_it_is_handed() {
+        assert_eq!(captures_nothing(), ["B$ERAS"]);
     }
 
     #[test]
@@ -2539,6 +2439,7 @@ mod tests {
     #[test]
     fn test_every_row_in_the_table_is_loaded() {
         let rows: toml::Table = TABLE.parse().unwrap();
+        let rows: toml::Table = rows.into_iter().filter(|(name, _)| name.starts_with("B$")).collect();
         assert_eq!(
             rows.keys().collect::<BTreeSet<_>>(),
             CONTRACTS.keys().collect::<BTreeSet<_>>(),

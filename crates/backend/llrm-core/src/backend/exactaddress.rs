@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use iced_x86::Register;
 
-use crate::analysis::intervals::_graph;
 use crate::analysis::loops;
 use crate::backend::affine::{self, Step};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -446,8 +445,8 @@ fn folded(body: &LirBody, form: &AddressForm, profile: &Profile) -> Option<LirBo
     }
     let block_of: HashMap<usize, i64> =
         body.blocks.iter().flat_map(|block| block.insns.iter().map(move |one| (id(one), block.at))).collect();
-    let graph = _graph(&body.blocks);
-    let natural = loops::loops(&graph, Some(body.entry));
+    let graph = &body.blocks;
+    let natural = loops::loops(graph, Some(body.entry));
     let innermost =
         |at: i64| natural.iter().filter(|one| one.body.contains(&at)).min_by_key(|one| one.body.len()).map(|one| one.header);
 

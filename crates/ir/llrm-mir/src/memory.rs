@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::context::{ConstantKind, Context, GlobalId};
 use crate::facts::Facts;
 use crate::datalayout::DataLayout;
-use crate::module::{Function, GlobalKind, InstId, Module, Operand, ValueDef};
+use crate::module::{Function, GlobalKind, GlobalValue, InstId, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, Opcode};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -36,6 +36,12 @@ pub struct Summary {
     /// It is `llvm.memset`: its first argument's bytes, as many as the
     /// third says, become the second.
     pub memset: bool,
+    /// It is `llvm.experimental.memset.pattern`: as `memset`, of cells
+    /// of the second argument's width, counted by the third.
+    pub pattern: bool,
+    /// It is `llvm.lifetime.start` or `.end`: the object its second argument
+    /// points to has its bytes live, or not, from here.
+    pub lifetime: bool,
 }
 
 pub type Callees = HashMap<GlobalId, Summary>;
@@ -47,8 +53,8 @@ pub fn callees(module: &Module) -> Callees {
         .enumerate()
         .filter_map(|(at, global)| match &global.kind {
             GlobalKind::Function(function) => {
-                let memset = global.name.as_deref().is_some_and(|name| name.starts_with("llvm.memset."));
-                Some((GlobalId(at as u32), Summary { memset, ..summary(function) }))
+                let named = |prefix: &str| global.name.as_deref().is_some_and(|name| name.starts_with(prefix));
+                Some((GlobalId(at as u32), Summary { memset: named("llvm.memset."), pattern: named("llvm.experimental.memset.pattern."), lifetime: named("llvm.lifetime."), ..summary(function) }))
             }
             GlobalKind::Variable(_) => None,
         })
@@ -62,9 +68,18 @@ pub fn summary(function: &Function) -> Summary {
         accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),
         returns: returns(attrs),
-        nocapture: function.parameter_attrs.iter().map(|one| has(one, "nocapture")).collect(),
+        nocapture: function.parameter_attrs.iter().map(|one| Facts::of(one).no_capture()).collect(),
         memset: false,
+        pattern: false,
+        lifetime: false,
     }
+}
+
+/// A call to `llvm.experimental.memset.pattern`: where, the cell, and how many cells.
+pub fn pattern(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> Option<(Operand, Operand, Operand)> {
+    let summary = callees.get(&callee(context, function, inst)?)?;
+    let operands = &function.instruction(inst).operands;
+    (summary.pattern && operands.len() == 5).then(|| (operands[0], operands[1], operands[2]))
 }
 
 /// A call to `llvm.memset`: where, the byte, and how many.
@@ -74,21 +89,49 @@ pub fn memset(context: &Context, callees: &Callees, function: &Function, inst: I
     (summary.memset && operands.len() == 5).then(|| (operands[0], operands[1], operands[2]))
 }
 
-/// Whether `attrs` carry the flag `flag`.
+/// A call to `llvm.lifetime.start` or `.end`: the pointer it is about.
+pub fn lifetime(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> Option<Operand> {
+    let summary = callees.get(&callee(context, function, inst)?)?;
+    let operands = &function.instruction(inst).operands;
+    (summary.lifetime && operands.len() == 3).then(|| operands[1])
+}
+
+/// Whether `function` calls a routine that returns twice (`setjmp`): the call or
+/// its callee says so. In such a function a stack slot another local used before the
+/// first return holds that local's value after the second, so no slot is shared.
+pub fn calls_returns_twice(module: &Module, function: &Function) -> bool {
+    function.walk().any(|(_, inst)| {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+        has(&info.attrs, "returns_twice") || callee(&module.context, function, inst).and_then(|one| module.global(one).function()).is_some_and(|one| has(&one.attrs, "returns_twice"))
+    })
+}
+
+/// Whether `attrs` carry the flag `flag`: for what is no fact (`returns_twice`,
+/// `optnone`); a fact is asked of `Facts`.
 pub fn has(attrs: &[Attribute], flag: &str) -> bool {
     attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag))
 }
 
 /// Whether `attrs` promise `willreturn`.
 pub fn returns(attrs: &[Attribute]) -> bool {
-    has(attrs, "willreturn")
+    Facts::of(attrs).will_return()
 }
 
 /// Whether the call `inst` keeps no copy of its argument `index`.
 pub fn nocapture(context: &Context, callees: &Callees, function: &Function, inst: InstId, index: usize) -> bool {
     let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
-    info.argument_attrs.get(index).is_some_and(|attrs| has(attrs, "nocapture"))
+    info.argument_attrs.get(index).is_some_and(|attrs| Facts::of(attrs).no_capture())
         || callee(context, function, inst).and_then(|one| callees.get(&one)).is_some_and(|one| one.nocapture.get(index) == Some(&true))
+}
+
+/// Whether the call `inst` keeps neither its argument `index` nor any pointer
+/// read out of what that points to: `noretain` at the site or on the callee
+/// among `globals`.
+pub fn noretain(context: &Context, globals: &[GlobalValue], function: &Function, inst: InstId, index: usize) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    let declared = callee(context, function, inst).and_then(|one| globals.get(one.0 as usize)).and_then(|one| one.function());
+    info.argument_attrs.get(index).is_some_and(|attrs| Facts::of(attrs).no_retain())
+        || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| Facts::of(attrs).no_retain())
 }
 
 /// Whether `attrs` confine every access to memory the pointer arguments
@@ -118,11 +161,18 @@ pub fn callee(context: &Context, function: &Function, inst: InstId) -> Option<Gl
 /// memory to a function that always comes back.
 pub fn only_value(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
     match function.instruction(inst).opcode {
-        Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
-        | Opcode::FNeg | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Freeze | Opcode::Alloca { .. } | Opcode::Load { volatile: false, .. } => true,
         Opcode::Call(_) => call_returns(context, callees, function, inst) && of(context, callees, function, inst) == Effects::NONE,
-        _ => false,
+        ref opcode => pure_operation(opcode),
     }
+}
+
+/// Whether `opcode` is an operation, a plain load among them, whose only effect is its value.
+pub fn pure_operation(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::Binary(_) | Opcode::Cast(_) | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select
+            | Opcode::FNeg | Opcode::ExtractValue(_) | Opcode::InsertValue(_) | Opcode::Freeze | Opcode::Alloca { .. } | Opcode::Load { volatile: false, .. }
+    )
 }
 
 /// What `memory(...)`, `readnone`, `readonly` or `writeonly` among `attrs`
@@ -183,15 +233,10 @@ fn at(attrs: &[Attribute], location: Option<&str>) -> Effects {
 /// What `readnone`, `readonly` or `writeonly` among `attrs` allow, on a
 /// function or on one pointer parameter.
 pub fn through(attrs: &[Attribute]) -> Effects {
-    let mut effects = Effects::ANY;
-    for attr in attrs {
-        match attr {
-            Attribute::Flag(flag) if flag == "readnone" => effects = Effects::NONE,
-            Attribute::Flag(flag) if flag == "readonly" => effects.writes = false,
-            Attribute::Flag(flag) if flag == "writeonly" => effects.reads = false,
-            _ => {}
-        }
-    }
+    let facts = Facts::of(attrs);
+    let mut effects = if facts.read_none() { Effects::NONE } else { Effects::ANY };
+    effects.writes &= !facts.read_only();
+    effects.reads &= !facts.write_only();
     effects
 }
 
@@ -241,8 +286,17 @@ pub fn invariant(context: &Context, layout: &DataLayout, function: &Function, po
     let (Operand::Value(base), _) = crate::valuetracking::underlying(context, layout, function, pointer) else { return false };
     let ValueDef::Argument(at) = function.value(base).def else { return false };
     let attrs = &function.parameter_attrs[at as usize];
-    let has = |flag: &str| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(one) if one == flag));
-    Facts::of(attrs).no_alias() && has("readonly")
+    let facts = Facts::of(attrs);
+    facts.no_alias() && facts.read_only()
+}
+
+/// Whether the load `inst` reads memory nothing writes once it is initialised: the language says
+/// so of the load (`!invariant.load`) or of what it reads (`invariant`). Every pass that asks
+/// what may clobber a load asks this first.
+pub fn invariant_load(context: &Context, layout: &DataLayout, function: &Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    matches!(instruction.opcode, Opcode::Load { volatile: false, .. })
+        && (Facts::of_instruction(function, inst).invariant() || invariant(context, layout, function, instruction.operands[0]))
 }
 
 /// Whether the call `inst` always comes back, as it or its callee says.

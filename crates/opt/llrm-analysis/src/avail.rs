@@ -32,7 +32,7 @@ use crate::alias::EscapedBefore;
 use crate::cellmap::CellMap;
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
-use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
+use crate::memoryssa::{self, Accesses, changes, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges::{self, Interval};
 use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets};
 
@@ -81,11 +81,10 @@ fn serves(unit: &Unit, holder: Operand, value: ValueId) -> bool {
 
 /// The map across one instruction.
 fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
-    let Some(stores) = accesses.writes(inst) else {
-        return Holders::default();
-    };
-    for store in stores {
-        holders.retain(|one, _| !may_clobber(unit, known, one, store));
+    let writes = accesses.writes(inst);
+    holders.retain(|one, _| !changes(one, false, writes, |store| may_clobber(unit, known, one, store)));
+    if writes.is_none() {
+        return holders;
     }
     let found = stored_from(unit, accesses, inst).or_else(|| loaded_into(unit, accesses, inst).map(|(cell, value)| (cell, Operand::Value(value))));
     if let Some((cell, value)) = found {
@@ -266,7 +265,7 @@ impl Solve<'_, '_> {
             // Nothing can read a private cell but by its name: not a call,
             // and not an address this cannot resolve.
             let shielded = self.private.is_some();
-            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.stored(unit.function, inst)) else {
+            let (Some(loads), Some(stores)) = (self.accesses.reads(inst), self.accesses.writes(inst)) else {
                 if shielded && call {
                     overwritten.intersect_with(&stored.private);
                 } else {

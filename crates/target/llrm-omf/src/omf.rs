@@ -32,35 +32,6 @@ pub const FIXUPP: u8 = 0x9C;
 pub const LEDATA: u8 = 0xA0;
 pub const LIDATA: u8 = 0xA2;
 
-pub static NAMES: LazyLock<IndexMap<u8, &'static str>> = LazyLock::new(|| {
-    IndexMap::from_iter([
-        (0x80, "THEADR"),
-        (0x88, "COMENT"),
-        (0x8A, "MODEND"),
-        (0x8B, "MODEND32"),
-        (0x8C, "EXTDEF"),
-        (0x90, "PUBDEF"),
-        (0x91, "PUBDEF32"),
-        (0x94, "LINNUM"),
-        (0x95, "LINNUM32"),
-        (0x96, "LNAMES"),
-        (0x98, "SEGDEF"),
-        (0x99, "SEGDEF32"),
-        (0x9A, "GRPDEF"),
-        (0x9C, "FIXUPP"),
-        (0x9D, "FIXUPP32"),
-        (0xA0, "LEDATA"),
-        (0xA1, "LEDATA32"),
-        (0xA2, "LIDATA"),
-        (0xA3, "LIDATA32"),
-        (0xB0, "COMDEF"),
-        (0xB4, "LEXTDEF"),
-        (0xB6, "LPUBDEF"),
-        (0xB8, "LCOMDEF"),
-        (0x8E, "TYPDEF"),
-    ])
-});
-
 /// Python's `ValueError`, carrying its message.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValueError(pub String);
@@ -121,13 +92,6 @@ impl Record {
         }
     }
 
-    pub fn name(&self) -> String {
-        match NAMES.get(&self.r#type) {
-            Some(name) => (*name).to_owned(),
-            None => format!("{:02X}", self.r#type),
-        }
-    }
-
     pub fn emit(&self) -> Vec<u8> {
         // the checksum byte makes the record's bytes sum to zero mod 256;
         // a zero byte is also accepted and is what many tools write
@@ -171,7 +135,6 @@ impl Repr for Record {
     }
 }
 
-
 /// Every record in the file, in order.
 pub fn read(path: impl AsRef<Path>) -> Result<Vec<Rc<Record>>, ReadError> {
     let data = std::fs::read(path).map_err(ReadError::OSError)?;
@@ -202,95 +165,12 @@ pub fn parse(d: &[u8]) -> Result<Vec<Rc<Record>>, ValueError> {
     Ok(out)
 }
 
-/// The named object modules in an OMF library, or no modules for an OBJ.
-///
-/// A library begins with its F0 header and aligns every THEADR..MODEND object
-/// module to the page size recorded there. Its F1 dictionary is not an OMF
-/// record stream and is deliberately not parsed.
-pub fn library_modules(data: &[u8]) -> Result<Vec<(String, Vec<Rc<Record>>)>, ValueError> {
-    if data.is_empty() || data[0] != 0xF0 {
-        return Ok(Vec::new());
-    }
-    if data.len() < 3 {
-        return Err(ValueError("truncated OMF library header".to_owned()));
-    }
-    let payload = unpack_from(data, 1) as usize;
-    let page = payload + 3;
-    if payload == 0 || page > data.len() {
-        return Err(ValueError("invalid OMF library page size".to_owned()));
-    }
-
-    let mut modules: Vec<(String, Vec<Rc<Record>>)> = Vec::new();
-    let mut current: Vec<Rc<Record>> = Vec::new();
-    let mut name: Option<String> = None;
-    let mut at = page;
-    while at + 3 <= data.len() {
-        let kind = data[at];
-        if kind == 0xF1 {
-            break;
-        }
-        let size = unpack_from(data, at + 1) as usize;
-        if size == 0 || at + 3 + size > data.len() {
-            return Err(ValueError(format!("invalid OMF library record at {at}")));
-        }
-        let raw = &data[at..at + 3 + size];
-        let body = &data[at + 3..at + 2 + size];
-        if kind == THEADR {
-            if !current.is_empty() {
-                return Err(ValueError("OMF library module has no MODEND".to_owned()));
-            }
-            if body.is_empty() || body.len() != body[0] as usize + 1 {
-                return Err(ValueError("invalid OMF library THEADR".to_owned()));
-            }
-            name = Some(decode_latin1(&body[1..]));
-        }
-        if name.is_none() {
-            return Err(ValueError(format!(
-                "OMF library record at {at} precedes THEADR"
-            )));
-        }
-        current.push(Rc::new(Record {
-            r#type: kind,
-            body: body.to_vec(),
-            raw: Some(raw.to_vec()),
-        }));
-        at += 3 + size;
-        if kind == MODEND || kind == MODEND | 1 {
-            modules.push((name.take().unwrap(), std::mem::take(&mut current)));
-            at = at.div_ceil(page) * page;
-        }
-    }
-    if !current.is_empty() {
-        return Err(ValueError("truncated OMF library module".to_owned()));
-    }
-    if modules.is_empty() {
-        return Err(ValueError("OMF library contains no modules".to_owned()));
-    }
-    Ok(modules)
-}
-
-pub fn write(path: impl AsRef<Path>, recs: &[Rc<Record>]) -> std::io::Result<()> {
-    std::fs::write(
-        path,
-        recs.iter().flat_map(|r| r.emit()).collect::<Vec<u8>>(),
-    )
-}
-
 /// An OMF index: one byte under 128, otherwise two with the top bit set.
 pub fn _index(b: &[u8], i: usize) -> (i64, usize) {
     if b[i] & 0x80 != 0 {
         return ((((b[i] & 0x7F) as i64) << 8) | b[i + 1] as i64, i + 2);
     }
     (b[i] as i64, i + 1)
-}
-
-/// `_index`, or None where Python's raises `IndexError` on a short body.
-pub fn _index_checked(b: &[u8], i: usize) -> Option<(i64, usize)> {
-    let first = *b.get(i)?;
-    if first & 0x80 != 0 {
-        return Some(((((first & 0x7F) as i64) << 8) | *b.get(i + 1)? as i64, i + 2));
-    }
-    Some((first as i64, i + 1))
 }
 
 /// The LNAMES strings, 1-based as every other record refers to them.
@@ -528,7 +408,6 @@ pub const LOC_OFF16: i64 = 1;
 pub const LOC_BASE: i64 = 2;
 pub const LOC_PTR32: i64 = 3;
 pub const LOC_HIBYTE: i64 = 4;
-pub const LOC_OFF32: i64 = 9;
 
 pub static TARGET_KIND: LazyLock<IndexMap<i64, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([(0, "segment"), (1, "group"), (2, "external")]));
@@ -708,21 +587,6 @@ pub const WIDE: [u8; 7] = [
 ];
 pub const COMDAT: [u8; 2] = [0xC2, 0xC3];
 
-/// Per byte of the segment, which LEDATA record finally wrote it.
-///
-/// The value is the record's `id()`.
-pub fn last_writers(records: &[Rc<Record>], seg: i64, size: i64) -> IndexMap<i64, usize> {
-    let mut owner = IndexMap::default();
-    for (record, index, offset, payload) in ledata(records) {
-        if index == seg {
-            for at in offset..(offset + payload.len() as i64).min(size) {
-                owner.insert(at, id(&record));
-            }
-        }
-    }
-    owner
-}
-
 /// Why this module must be left alone, if it must. Empty means it may be read.
 pub fn refusals(records: &[Rc<Record>]) -> Vec<String> {
     let mut reasons = Vec::new();
@@ -846,44 +710,6 @@ pub fn fixups(records: &[Rc<Record>]) -> Vec<Fixup> {
         }
     }
     found
-}
-
-/// Every external index this fixup depends on, threads resolved.
-///
-/// Not the THREAD declarations: one may name an external no fixup ever
-/// uses, and dropping the EXTDEF it names is exactly what pruning is for.
-pub fn names_externals(one: &Fixup) -> HashSet<i64> {
-    let mut out: HashSet<i64> = HashSet::default();
-    if one.target == "external" {
-        out.insert(one.index);
-    }
-    match one.frame {
-        Some(Frame::Thread(frame)) => {
-            if frame.method == 2 {
-                out.insert(frame.index);
-            }
-        }
-        Some(Frame::Int(frame)) if one.frame_method == Some(2) => {
-            out.insert(frame);
-        }
-        _ => {}
-    }
-    out
-}
-
-/// One EXTDEF record's (name, type index) pairs, in order.
-pub fn extdef_entries(record: &Record) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let (mut out, mut at) = (Vec::new(), 0usize);
-    let body = &record.body;
-    while at < body.len() {
-        let n = body[at] as usize;
-        let name = slice(body, at + 1, at + 1 + n).to_vec();
-        at += 1 + n;
-        let start = at;
-        (_, at) = _index(body, at);
-        out.push((name, slice(body, start, at).to_vec()));
-    }
-    out
 }
 
 /// An EXTDEF record holding exactly these names.
@@ -1080,38 +906,6 @@ pub fn renumbered(
     })
 }
 
-/// A new absolute offset16 relocation, framed relative to a data group.
-pub fn offset_fixup(
-    seg: i64,
-    offset: i64,
-    target: &str,
-    index: i64,
-    disp: i64,
-    group: i64,
-) -> Result<Fixup, ValueError> {
-    let method = target_method(target);
-    let mut raw = bytes(&[0xC4, 0, 0x10 | method])?;
-    raw.extend(as_index(group)?);
-    raw.extend(as_index(index)?);
-    raw.extend(pack(disp));
-    let record = fixupp_record(&[raw.clone()]);
-    Ok(Fixup {
-        seg: Some(seg),
-        offset,
-        loc: LOC_OFF16,
-        selfrel: false,
-        target: target.to_owned(),
-        index,
-        disp,
-        frame: Some(Frame::Int(group)),
-        record,
-        lo: 0,
-        hi: raw.len(),
-        disp_pos: Some(raw.len() - 2),
-        frame_method: Some(1),
-    })
-}
-
 /// A new absolute offset16 relocation framed by its own target.
 ///
 /// An explicitly segmented operand such as `es:[bx+symbol]` does not use
@@ -1149,34 +943,6 @@ pub fn target_offset_fixup(
     })
 }
 
-/// This fixup's own bytes, with the fields given replaced. None leaves one alone.
-///
-/// Only two fixed positions ever change; the thread encoding survives.
-pub fn reemit(
-    fixup: &Fixup,
-    offset: Option<i64>,
-    disp: Option<i64>,
-) -> Result<Vec<u8>, ValueError> {
-    let mut out = fixup.raw().to_vec();
-    if let Some(offset) = offset {
-        if !(0..1024).contains(&offset) {
-            return Err(ValueError(format!(
-                "a fixup offset is ten bits; {} does not fit",
-                hex(offset)
-            )));
-        }
-        out[0] = (out[0] & 0xFC) | (offset >> 8) as u8;
-        out[1] = (offset & 0xFF) as u8;
-    }
-    if let Some(disp) = disp {
-        let Some(disp_pos) = fixup.disp_pos else {
-            return Err(ValueError("this fixup carries no displacement".to_owned()));
-        };
-        pack_into(&mut out, disp_pos - fixup.lo, disp);
-    }
-    Ok(out)
-}
-
 pub fn ledata_record(seg: i64, offset: i64, payload: &[u8]) -> Result<Rc<Record>, ValueError> {
     if payload.len() > 1024 {
         return Err(ValueError(format!(
@@ -1200,11 +966,6 @@ pub fn _emit_index(value: i64) -> Result<Vec<u8>, ValueError> {
     } else {
         bytes(&[0x80 | (value >> 8), value & 0xFF])
     }
-}
-
-/// Where SEGDEF keeps its length. Absolute segments push it three bytes on.
-pub fn segment_length_at(record: &Record) -> usize {
-    if record.body[0] >> 5 == 0 { 4 } else { 1 }
 }
 
 /// Byte positions in `record.body` of 16-bit offsets into segment `seg`.
@@ -1254,65 +1015,6 @@ pub fn lines(record: &Record) -> (i64, Vec<(u16, u16)>) {
     (segment, record.body[at..].chunks_exact(4).map(pair).collect())
 }
 
-/// A copy of `record` with 16-bit fields replaced. Unchanged records are not copied.
-pub fn patched(record: &Rc<Record>, values: &IndexMap<usize, i64>) -> Rc<Record> {
-    if values.is_empty() {
-        return record.clone();
-    }
-    let mut body = record.body.clone();
-    for (&at, &value) in values {
-        pack_into(&mut body, at, value);
-    }
-    Rc::new(Record::new(record.r#type, body))
-}
-
-pub fn has_start_address(record: &Record) -> bool {
-    record.body[0] & 0x40 != 0
-}
-
-pub fn main(path: impl AsRef<Path>) -> Result<(), ReadError> {
-    let path = path.as_ref();
-    let recs = read(path)?;
-    let (segs, exts) = (segments(&recs), externals(&recs));
-    let mut counts: IndexMap<String, i64> = IndexMap::default();
-    for r in &recs {
-        *counts.entry(r.name()).or_insert(0) += 1;
-    }
-    println!("{}", path.display());
-    let mut items: Vec<(&String, &i64)> = counts.iter().collect();
-    items.sort();
-    let listed: Vec<String> = items.iter().map(|(k, v)| format!("{k} {v}")).collect();
-    println!("  records: {}", listed.join(", "));
-    println!("  segments:");
-    for (i, s) in segs.iter().enumerate() {
-        if let Some((name, length)) = s {
-            println!("    {i:2} {name:<16} {length:6}");
-        }
-    }
-    let code: usize = ledata(&recs).iter().map(|(_, _, _, b)| b.len()).sum();
-    println!("  LEDATA bytes: {code}");
-    if exts.len() > 1 {
-        println!("  externals: {}", exts[1..].join(", "));
-    }
-    let fx = fixups(&recs);
-    println!("  fixups: {}", fx.len());
-    for f in &fx {
-        if f.target == "external" {
-            let nm = if (f.index as usize) < exts.len() {
-                exts[f.index as usize].clone()
-            } else {
-                format!("?{}", f.index)
-            };
-            let loc = match LOCNAME.get(&f.loc) {
-                Some(name) => (*name).to_owned(),
-                None => f.loc.to_string(),
-            };
-            println!("    seg {} {:04X}  {loc:<10} {nm}", f.seg.repr(), f.offset);
-        }
-    }
-    Ok(())
-}
-
 /// `{"segment": 0, "external": 2}[target]`.
 fn target_method(target: &str) -> i64 {
     match target {
@@ -1351,18 +1053,6 @@ fn pack(value: i64) -> [u8; 2] {
         panic!("struct.error: 'H' format requires 0 <= number <= 65535");
     }
     (value as u16).to_le_bytes()
-}
-
-/// `struct.pack_into("<H", buffer, at, value)`.
-fn pack_into(buffer: &mut [u8], at: usize, value: i64) {
-    let packed = pack(value);
-    if at + 2 > buffer.len() {
-        panic!(
-            "struct.error: pack_into requires a buffer of at least {} bytes",
-            at + 2
-        );
-    }
-    buffer[at..at + 2].copy_from_slice(&packed);
 }
 
 /// `bytes([...])`.
@@ -1429,15 +1119,6 @@ fn decode_ascii_replace(b: &[u8]) -> String {
         .collect()
 }
 
-/// `f"{value:#x}"`.
-fn hex(value: i64) -> String {
-    if value < 0 {
-        format!("-{:#x}", -value)
-    } else {
-        format!("{value:#x}")
-    }
-}
-
 /// `id(record)`.
 fn id(record: &Rc<Record>) -> usize {
     Rc::as_ptr(record) as usize
@@ -1450,7 +1131,7 @@ mod tests {
     use super::*;
 
     fn fixtures() -> PathBuf {
-        Path::new(env!("LLRM_ROOT")).join("tests/fixtures/omf")
+        Path::new(env!("LLRM_ROOT")).join("tests/inputs/omf")
     }
 
     /// The `obj` fixture: every committed OMF object, sorted by name.
@@ -1949,7 +1630,7 @@ mod tests {
     fn test_adding_pointer_dependency_keeps_existing_fixups() {
         for tag in ["p-g2", "q-O", "v-g3"] {
             let path = Path::new(env!("LLRM_ROOT"))
-                .join(format!("tests/fixtures/regressions/huge2-{tag}.obj").to_lowercase());
+                .join(format!("tests/inputs/omf/regressions/huge2-{tag}.obj").to_lowercase());
             let records = read(path).unwrap();
             let before = externals(&records);
             let (added, index) = with_external(&records, "b$HugeShift").unwrap();

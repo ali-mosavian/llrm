@@ -142,10 +142,17 @@ pub enum Tag {
     FixedStringQb45 = 0x78,
     /// a procedure's own return type + arglist -- always followed by 0x80
     Signature = 0x75,
+    /// a bit field: its width, `BITFIELD_SIGNED` or `_UNSIGNED`, its first
+    /// bit in its member's unit, as QuickC 2.5 writes one
+    Bitfield = 0x5C,
 }
 
+/// A bit field's base, signed or unsigned int.
+pub const BITFIELD_UNSIGNED: u8 = 0x7C;
+pub const BITFIELD_SIGNED: u8 = 0x7D;
+
 impl Tag {
-    const ALL: [Tag; 11] = [
+    const ALL: [Tag; 12] = [
         Tag::Array,
         Tag::Pointer,
         Tag::ByRef,
@@ -157,6 +164,7 @@ impl Tag {
         Tag::FixedString,
         Tag::FixedStringQb45,
         Tag::Signature,
+        Tag::Bitfield,
     ];
 
     /// `Tag(value)` where it is a member.
@@ -178,6 +186,7 @@ impl Tag {
             Tag::FixedString => "FIXED_STRING",
             Tag::FixedStringQb45 => "FIXED_STRING_QB45",
             Tag::Signature => "SIGNATURE",
+            Tag::Bitfield => "BITFIELD",
         }
     }
 }
@@ -241,6 +250,14 @@ pub struct Struct {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Array {
     pub element: i64,
+}
+
+/// A bit field: `width` bits from bit `start` of its member's unit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bitfield {
+    pub width: i64,
+    pub signed: bool,
+    pub start: i64,
 }
 
 /// An array laid out in place, `size_bits` long.
@@ -314,6 +331,7 @@ pub enum TypeEntry {
     NamedOffsetList(NamedOffsetList),
     FixedString(FixedString),
     Sized(Sized),
+    Bitfield(Bitfield),
     Signature(Signature),
     Unresolved(Unresolved),
 }
@@ -394,6 +412,10 @@ impl Repr for TypeEntry {
             TypeEntry::Sized(one) => pyrepr::dataclass(
                 "Sized",
                 &[("element", one.element.repr()), ("size_bits", one.size_bits.repr())],
+            ),
+            TypeEntry::Bitfield(one) => pyrepr::dataclass(
+                "Bitfield",
+                &[("width", one.width.repr()), ("signed", one.signed.repr()), ("start", one.start.repr())],
             ),
             TypeEntry::Signature(one) => one.repr(),
             TypeEntry::Unresolved(one) => pyrepr::dataclass(
@@ -625,6 +647,9 @@ fn _parse_type_entry(kind: u8, data: &[u8], table: &Types) -> TypeEntry {
             }
         }
         Some(Tag::Struct) => _parse_struct(data, table),
+        Some(Tag::Bitfield) if data.len() == 4 && [BITFIELD_SIGNED, BITFIELD_UNSIGNED].contains(&data[2]) => {
+            TypeEntry::Bitfield(Bitfield { width: data[1].into(), signed: data[2] == BITFIELD_SIGNED, start: data[3].into() })
+        }
         Some(Tag::FixedString)
             if data.len() >= 5 && data[1] == 0x00 && data[2] == Tag::Offset as u8 =>
         {
@@ -685,6 +710,9 @@ pub fn type_name(type_index: i64, types: Option<&Types>) -> Option<String> {
         Some(TypeEntry::Pointer(Pointer { target })) => Some(format!("BYREF {}", named(*target))),
         Some(TypeEntry::FixedString(FixedString { length })) => Some(format!("STRING * {length}")),
         Some(TypeEntry::Sized(Sized { element, size_bits })) => Some(format!("{} BYTES OF {}", size_bits / 8, named(*element))),
+        Some(TypeEntry::Bitfield(Bitfield { width, signed, start })) => {
+            Some(format!("BITFIELD {width} {} @{start}", if *signed { "SIGNED" } else { "UNSIGNED" }))
+        }
         _ => None,
     }
 }
@@ -1153,7 +1181,7 @@ mod tests {
 
     fn fixture(name: &str) -> DebugInfo {
         let path = Path::new(env!("LLRM_ROOT"))
-            .join("tests/fixtures/omf")
+            .join("tests/inputs/omf")
             .join(name);
         parse(&omf::read(path).unwrap())
     }
@@ -1378,7 +1406,7 @@ mod tests {
     fn dump() {
         std::env::set_current_dir(env!("LLRM_ROOT")).unwrap();
         let mut paths = Vec::new();
-        objects(Path::new(concat!(env!("LLRM_ROOT"), "/tests/fixtures")), &mut paths);
+        objects(Path::new(concat!(env!("LLRM_ROOT"), "/tests/inputs")), &mut paths);
         paths.sort();
         let text: String = paths
             .iter()

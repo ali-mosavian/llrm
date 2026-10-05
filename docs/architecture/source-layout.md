@@ -9,8 +9,8 @@
 | `crates/opt/llrm-transforms` | MIR to MIR passes and the pipeline |
 | `crates/target/llrm-x86-code16` | The 16-bit x86 target: the `Dos` cost model passes see as `llrm_mir::target::Machine`, and the machine description (`machine`) |
 | `crates/target/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
-| `crates/backend/llrm-core` | HIR lowering and interpreter, the optimize and codegen driver, the x86 backend, and BC raising |
-| `crates/bc/llrm-bcmachine` | BC objects: x86 decode, the instruction model, object reading, legacy lift and flags |
+| `crates/backend/llrm-core` | The compile driver, instruction selection, the machine phases and object writing; the HIR interpreter |
+| `crates/bc/llrm-bcmachine` | BC objects: x86 decode, the instruction model and its classification (`model::ir::lift`), object reading, flags |
 | `crates/bc/llrm-bc` | The BC object frontend: machine code raised onto MIR |
 | `crates/bc/llrm-bcdriver` | The rich route for BC objects |
 | `crates/frontends/llrm-qbruntime` | The QB-family runtime's `B$` routine contracts and `runtime.toml` |
@@ -31,23 +31,20 @@
 and never on each other. `LLRM_ROOT` (`.cargo/config.toml`) is the
 repository root for any crate's tests.
 
-In `llrm-core`, `flow.rs` is the pipeline; `rewrite.rs` and `wholeseg.rs`
-rewrite BC objects. The rest is grouped by responsibility:
+In `llrm-core`, `driver` runs a compile and `flow.rs` orders the machine
+phases. The rest is grouped by responsibility:
 
 | Module | Responsibility |
 | --- | --- |
-| `hir` | Lowering the HIR to MIR, and the HIR interpreter |
-| `model` | MIR, LIR, decoded IR, floating semantics, phase interfaces |
-| `analysis` | SSA, liveness, ranges, loops, induction, memory/value facts |
-| `optimize` | MIR transformations |
-| `backend` | Lowering, instruction selection, allocation, frame/layout, peepholes, object writing |
+| `driver` | The compile driver: HIR or lifted MIR through the pipeline to an object |
+| `flow` | The machine phases and their gate |
+| `hir` | The HIR interpreter, and `llrm-hir` re-exported |
+| `model` | LIR, decoded IR and phase interfaces |
+| `analysis` | Loops, intervals and block frequency over LIR |
+| `backend` | Instruction selection, allocation, frame/layout, peepholes, object writing |
 | `abi` | Runtime contracts (`llrm-qbruntime`, as `abi::runtime`) and the QB runtime ABI (`abi::qb`) |
-| `frontends::bc` | BC objects: decode, partition, recognize BC idioms, raise SSA values |
-| `legacy` | Older lifting and call absorption still shared by raising |
+| `frontends::bc` | `llrm-bcmachine`'s BC decoding, re-exported |
 
-This organization makes ownership visible; it does not claim the architectural
-migration is finished. Existing dependency cycles and machine-aware MIR
-transformations remain debt documented in `split.md`. Recognition belongs in
-the frontend, machine-independent optimization above lowering, and physical
-placement in the backend. `model::ir` is the older decoded machine
-representation, not the machine-independent MIR contract.
+Recognition belongs in the frontend, machine-independent optimization in
+`llrm-transforms`, and physical placement in the backend; see `split.md`.
+`model::ir` is the decoded machine representation LIR uses, not MIR.

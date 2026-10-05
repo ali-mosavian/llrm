@@ -12,7 +12,7 @@ use iced_x86::Register;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::backend::target;
-use crate::model::ir::{self, Loc, Mem, Operation, Reg, Semantics};
+use crate::model::ir::{self, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::pyrepr::Repr;
@@ -129,7 +129,7 @@ fn _expanded(one: &Arc<Insn>) -> Result<Vec<Arc<Insn>>, Malformed> {
     let mut pop = (**one).clone();
     pop.what = Some(semantics(Operation::Pop, "pop", vec![Loc::Mem(into)], vec![]));
     pop.covers = Some((one.at, one.at));
-    pop.op = None;
+    pop.call = None;
     pop.defines = vec![];
     pop.uses = vec![];
     pop.spread = vec![];
@@ -160,14 +160,9 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
     // virtual value its destination represents: keep a zero-cost marker.
     let mut out: Vec<Arc<Insn>> = identities.into_iter().map(lir::anchor).collect();
     while !left.is_empty() {
-        // Free where nothing still to come reads the place it writes.
-        let wanted: IndexSet<String> = left.iter().map(|one| _outof(one)).collect::<Result<_, _>>()?;
-        let mut ready = Vec::new();
-        for one in &left {
-            if !wanted.contains(&_into(one)?) {
-                ready.push(Arc::clone(one));
-            }
-        }
+        let reads = left.iter().map(|one| Ok(vec![_outof(one)?])).collect::<Result<Vec<_>, Malformed>>()?;
+        let writes = left.iter().map(|one| Ok(vec![_into(one)?])).collect::<Result<Vec<_>, Malformed>>()?;
+        let ready: Vec<Arc<Insn>> = ready(&reads, &writes, &(0..left.len()).collect::<Vec<_>>()).into_iter().map(|at| Arc::clone(&left[at])).collect();
         if ready.is_empty() {
             let (made, used) = _rotated(&left)?;
             out.extend(made);
@@ -182,6 +177,28 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
         }
     }
     Ok(out)
+}
+
+/// Of the copies `left` (indices into `reads` and `writes`, the places each reads and writes),
+/// those that may go: nothing else still to come reads a place they write.
+pub(crate) fn ready<K: Eq + std::hash::Hash>(reads: &[Vec<K>], writes: &[Vec<K>], left: &[usize]) -> Vec<usize> {
+    left.iter().copied().filter(|one| {
+        let others: IndexSet<&K> = left.iter().filter(|other| *other != one).flat_map(|other| &reads[*other]).collect();
+        !writes[*one].iter().any(|place| others.contains(place))
+    }).collect()
+}
+
+/// One copy of a cycle `ready` is stuck on, when none of `left` may go: following who is waited for
+/// until a copy comes round again. Taking that copy's sources first breaks the cycle.
+pub(crate) fn in_cycle<K: Eq + std::hash::Hash>(reads: &[Vec<K>], writes: &[Vec<K>], left: &[usize]) -> Option<usize> {
+    let waiting_for = |one: usize| left.iter().copied().find(|other| *other != one && reads[*other].iter().any(|place| writes[one].contains(place)));
+    let mut seen = Vec::new();
+    let mut one = *left.first()?;
+    while !seen.contains(&one) {
+        seen.push(one);
+        one = waiting_for(one)?;
+    }
+    Some(one)
 }
 
 type Rotation = (Vec<Arc<Insn>>, Vec<Arc<Insn>>);

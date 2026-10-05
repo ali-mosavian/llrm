@@ -5,7 +5,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use llrm_core::model::passes::O2;
 use llrm_core::testing::boundary::{self, Byte, Procedure};
 
 use super::compile as qb_compile;
@@ -144,9 +143,9 @@ fn llrm(dialect: &str, module: &str) -> Result<BTreeMap<String, Procedure>, Stri
         std::fs::copy(fixtures().join("qb45").join(stub), directory.path().join(stub)).map_err(|error| error.to_string())?;
     }
     let source = directory.path().join(format!("{module}.BAS"));
-    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new(dialect, dialect), None).map_err(|error| error.0)?;
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend { runtime_frames: true, ..qb_driver::Frontend::new(dialect, dialect) }, None).map_err(|error| error.0)?;
     let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
-    let assembled = qb_compile::assembled_by(&program, None, &O2(), qb_compile::Route::Selected, &codegen).map_err(|error| error.to_string())?;
+    let assembled = qb_compile::assembled(&program, None, &codegen).map_err(|error| error.to_string())?;
     let text = llrm_core::driver::basic::text(&assembled)?;
     Ok(boundary::procedures(&text).into_iter().map(|(name, one)| (name.to_uppercase(), one)).collect())
 }

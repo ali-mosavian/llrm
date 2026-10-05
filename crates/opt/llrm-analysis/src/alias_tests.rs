@@ -531,9 +531,19 @@ b0:
 #[test]
 fn a_returned_or_integer_address_escapes_and_a_frame_spill_does_not() {
     assert_eq!(escaped("ret ptr %a").len(), 1);
-    assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  ret ptr null").len(), 1);
+    assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  %m = inttoptr i16 %n to ptr\n  ret ptr %m").len(), 1);
+    assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = inttoptr i16 %m to ptr\n  ret ptr %k").len(), 1);
     assert!(escaped("store ptr %a, ptr %slot\n  ret ptr null").is_empty());
     assert_eq!(escaped("store ptr %a, ptr %slot\n  ret ptr %slot").len(), 2);
+}
+
+/// PDS and VB FPDEEP: the raise left `ptrtoint` of `i`'s global and an `add` of it, nothing
+/// reading either, and the global counted as escaped, so each PRINT might have written `i`
+/// and its loop stayed rolled.
+#[test]
+fn an_integer_address_nothing_reads_escapes_nothing() {
+    assert!(escaped("%n = ptrtoint ptr %a to i16\n  ret ptr null").is_empty());
+    assert!(escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = add i16 %m, 2\n  ret ptr null").is_empty());
 }
 
 #[test]
@@ -663,4 +673,67 @@ b0:
     );
     let effects = parsed.effects(&IndexMap::default());
     assert!(!writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4)));
+}
+
+/// A call that keeps no pointer it reads out of its argument (`noretain`) lends
+/// nothing: `nocapture` alone still lets it keep `inner`, whose address `slot`
+/// holds, so a later unknown call may write it. QB's `ERASE` of an array behind
+/// a descriptor made the array escape everywhere (deedlines).
+#[test]
+fn a_noretain_argument_publishes_nothing_it_points_to() {
+    let after = |attrs: &str| {
+        let parsed = Parsed::new(&format!(
+            "declare void @external()
+
+declare void @use(ptr {attrs})
+
+define void @f() {{
+b0:
+  %slot = alloca [4 x i8]
+  %inner = alloca [4 x i8]
+  store ptr %inner, ptr %slot
+  call void @use(ptr %slot)
+  call void @external()
+  ret void
+}}
+"
+        ));
+        let effects = parsed.effects(&IndexMap::default());
+        writes(&effects[1], &bytes(&parsed.object("inner"), 0, 4))
+    };
+    assert!(after("nocapture"));
+    assert!(!after("nocapture noretain"));
+}
+
+/// A value nothing is known of is a multiple of 1, so `x << 1` and
+/// `0 - (x << 1)` are multiples of 2 and `x * 8` of 8: the fact a trip
+/// count's divisibility proof reads. Only operands with a fact gave one.
+#[test]
+fn test_a_shift_or_multiple_of_an_unknown_is_a_multiple() {
+    let parsed = Parsed::new(
+        "define void @f(i16 %x, i16 %y) {
+b0:
+  %s = shl i16 %x, 1
+  %t = sub i16 0, %s
+  %m = mul i16 %y, 8
+  %u = add i16 %x, %y
+  ret void
+}
+",
+    );
+    let found = congruences(&parsed.unit());
+    assert_eq!(found.get(&parsed.value("s")), Some(&(2.into(), 0.into())));
+    assert_eq!(found.get(&parsed.value("t")), Some(&(2.into(), 0.into())));
+    assert_eq!(found.get(&parsed.value("m")), Some(&(8.into(), 0.into())));
+    assert_eq!(found.get(&parsed.value("u")), None);
+}
+
+/// A parameter the language states `nonnull` is non-null at its definition;
+/// the same pointer unstated may be null.
+#[test]
+fn a_nonnull_parameter_is_nonnull_by_definition() {
+    let parsed = Parsed::new("define void @f(ptr nonnull %p, ptr %q) {\nb0:\n  ret void\n}\n");
+    let unit = parsed.unit();
+    assert_eq!(nonnull_by_definition(&unit, parsed.value("p")), Some(true));
+    assert_eq!(nonnull_by_definition(&unit, parsed.value("q")), Some(false));
 }

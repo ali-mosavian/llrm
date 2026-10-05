@@ -263,10 +263,13 @@ impl _Exit<'_> {
         let block = cfg::block(at);
         for &inst in operations(function, block).iter().rev() {
             let op = function.instruction(inst);
-            let Some(writes) = self.accesses.stored(function, inst) else { return (false, usize::MAX) };
+            let writes = self.accesses.writes(inst);
             let overlaps = |written: &MemRef| regions::overlapping(reference, written, None, None, unit.program).unwrap_or(true);
-            if !writes.iter().any(overlaps) {
+            if !llrm_analysis::memoryssa::changes(reference, false, writes, overlaps) {
                 continue;
+            }
+            if writes.is_none() {
+                return (false, usize::MAX);
             }
             let (Opcode::Store { volatile: false, .. }, Some(written)) = (&op.opcode, self.accesses.references.get(&inst)) else { return (false, usize::MAX) };
             if let Some(wanted) = _known(unit, expected) {

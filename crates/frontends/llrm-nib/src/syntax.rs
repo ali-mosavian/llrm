@@ -335,6 +335,8 @@ pub struct Static {
     pub annotation: TypeAnnotation,
     pub value: Expr,
     pub span: Span,
+    /// `huge var`: far data of its own, which may pass 64K.
+    pub huge: bool,
 }
 
 /// `import a.b` or `import a.b as c`.
@@ -517,6 +519,8 @@ pub enum Statement {
         name: String,
         iterable: Expr,
         body: Vec<Statement>,
+        /// Made of a `return items` in a generator: `iterable` is handed over.
+        returned: bool,
         span: Span,
     },
     ForRange {
@@ -1149,6 +1153,7 @@ impl Statement {
                 name,
                 iterable,
                 body,
+                returned: false,
                 span,
             },
         }

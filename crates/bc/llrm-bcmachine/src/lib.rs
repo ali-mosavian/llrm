@@ -8,7 +8,6 @@
 pub mod abi;
 pub mod analysis;
 pub mod frontends;
-pub mod legacy;
 pub mod model;
 pub use llrm_omf as objectfile;
 pub use llrm_support as support;

@@ -17,7 +17,7 @@ Rust: `compiler/rustc_borrowck/src` of rust-lang/rust (shallow clone). Nib: `cra
 | Reborrows | `prefixes.rs`, supporting prefixes | `borrows.rs: roots` extends an exact root by each field; an element or a call's result is somewhere below its path |
 | Two-phase borrows | `borrow_set.rs: TwoPhaseActivation`; `tests/ui/borrowck/two-phase-*` | not needed: `v.push(v.len)` is accepted because args evaluate before the `&mut` (probe k) |
 | Branches, loops (flow sensitivity) | liveness over MIR (`type_check/liveness`), `polonius/` | moves: `moves.rs: flow_moves`; borrows: `liveness.rs`, last use of a holder, or a pointer derived from one, along each HIR path |
-| Returning references | outlives constraints, E0515; `tests/ui/borrowck/borrowck-borrow-from-temporary` | `borrows.rs: check_returned_borrows`: only `Life::Lent` roots (borrowed parameters); a call's result borrows what its borrowed arguments reach |
+| Returning references | outlives constraints, E0515; `tests/ui/borrowck/borrowck-borrow-from-temporary` | `borrows.rs: check_returned_borrows`: only `Life::Lent` roots (borrowed parameters); a call's result, a generator call's too, borrows what its borrowed arguments reach; `return items` in a generator is the same rule (`check_handed_over`) |
 | Refs in structs/closures/generators | struct lifetime params; closure captures in MIR | a binding holds what its value holds (`held`, `keep_borrows`); lambdas inlined at the call, their changes see the caller's borrows; an escaping generator keeps only caller-lent borrows (`escaping.rs: check_lent`) |
 | Iterator invalidation | falls out of `&v` outliving the loop | a walk borrows what it walks for the loop (`iterated`); a `&mut` walk is a change on entry |
 | Slices, indexing | place conflicts on `Index` projections | `&v[a:b]` roots somewhere in `v`; `f(v[0], v[1])` refused as one place |
@@ -32,7 +32,7 @@ Probes are in `~/scratch/nibborrow-probe/p` (copied below). Each was compiled wi
 
 ### S1 Shadowed parameter name — #120 (fixed in #126)
 
-```nib
+```python
 fn pick(x: &i16, c: bool) -> &i16:
     if c:
         let x: i16 = 5
@@ -50,7 +50,7 @@ fn main() -> i16:
 
 ### S2 Borrow of an owned parameter returned — #121 (fixed in #126)
 
-```nib
+```python
 fn first(v: vec[i16]) -> &i16:
     return v[0]
 fn main() -> i16:
@@ -63,7 +63,7 @@ Accepted. Optimised MIR of `first`: `call N$BDRP(v2)` (drop the buffer) then `re
 
 ### S3 Write through a `&T` field — #122 (fixed in #126)
 
-```nib
+```python
 struct H:
     mut r: &i16
 fn main() -> i16:
@@ -78,7 +78,7 @@ Accepted; prints `7`: an immutable `let` is changed through a shared reference. 
 
 ### S4 Module variable lent and written by the callee — #124 (fixed in #126)
 
-```nib
+```python
 struct P:
     mut n: i16
 var g: P = P(n=1)
@@ -96,7 +96,7 @@ Accepted; prints `99` from a `&P` that is supposed to be read-only. The `&mut` f
 
 ### S5 Borrow of a local pushed into a caller's `vec[&T]` — #123 (fixed in #126)
 
-```nib
+```python
 fn stash(out: &mut vec[&i16]) -> void:
     let local: i16 = 7
     out.push(local)

@@ -268,9 +268,7 @@ impl FunctionCompiler<'_> {
             .enum_of(ElementType::Struct(view.struct_id))
             .cloned()
         {
-            let tag = self.value(layout.tag);
-            let place = self.projected_place(view, 0, layout.tag);
-            self.emit("load", vec![tag], vec![place], None);
+            let tag = self.load_tag(view, &layout);
             for variant in &layout.variants {
                 if !variant
                     .fields
@@ -312,7 +310,7 @@ impl FunctionCompiler<'_> {
         }
         match field.type_ {
             ElementType::Scalar(type_name) if needs_drop(type_name) => {
-                let place = self.projected_place(view, field.offset, type_name);
+                let place = self.field_place(view, field.offset, type_name);
                 self.owned_leaf(place, type_name, action);
             }
             ElementType::Struct(struct_id) if self.element_needs_drop(field.type_) => {

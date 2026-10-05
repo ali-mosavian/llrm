@@ -4,10 +4,18 @@
 loop passes. It is `crates/opt/llrm-transforms/src/lsr.rs`.
 
 Every read of a counter, or of a value affine in one, is one recurrence:
-`pointer + start + step * trip`, with invariant symbols allowed in `start`
-and `step`. `induction::users` finds them, pointer walks included, and
-says how each is read: as an address, compared with an invariant, or
-otherwise.
+`pointer + start + step * trip`. `start` and `step` are one form, `Scev`: a
+polynomial in invariant unknowns modulo the width, as SCEV's n-ary add and
+mul. A term is a coefficient times a monomial (`m*w*x`), so `i*m`, `(i+k)*m`
+and `i*m*w` are recurrences whatever their start. Equal values are equal
+forms: coefficients are masked, zero ones dropped, monomials sorted.
+`induction::recurrences` is the one place that builds them, by one fold per
+opcode; a recurrence times a recurrence (`i*i`) is not one, as it is a
+second-order add recurrence nothing here uses. A product past 16 terms or
+degree 4 is refused. `induction::users` adds how each is read: as an
+address, compared with an invariant, or otherwise. A truncation and `c - r`
+stay reads there: a candidate has one width, and the pass realizes each
+site alone, where the loop computed one negation and shared it.
 
 A candidate is a recurrence the loop could carry in a register: each use's
 own, with its start's symbols split every way between counter and base, the
@@ -64,6 +72,35 @@ of it. One rule is beyond LLVM and GCC, which never merge live exits: exits
 that leave to the same place with the same values, with nothing seen or
 trapping between them, become one test on the least of their counts. That is
 what gives Nib's `zip` of two slices the loop C's dot has.
+
+## The constant under a scale
+
+`gepoffset` (LLVM's SeparateConstOffsetFromGEP) runs last, after `hoist`. It
+splits `gep T, p, (i + 8) * 2` into a `gep` of the constant bytes and one of
+the rest, which isel folds into a displacement. The walk goes through add,
+sub, a constant multiply or shift, truncation, and `sext`/`zext` only over
+adds whose `nsw`/`nuw` keeps them from wrapping. The split is kept when it
+frees an instruction and makes none that cost more; a sum a compare also
+reads stays whole, as the address would hold one register more. The new
+`gep`s are not `inbounds`.
+
+## Huge pointers
+
+A huge pointer's displacement carries into its selector. Built from a
+counter, each use pays the whole carry (`OperationCosts::carry`); stepped by
+a constant, the step pays a borrow spread to a mask, cut to the selector's
+stride and added to it (`carry_step`). So LSR walks a huge array with a huge
+pointer, in C, BASIC and Nib alike.
+
+`window` runs after LSR. A counted loop's huge recurrences are split into
+windows, as LLVM's IRCE splits off the range where a check cannot fire, with
+the carry as the check. At each window every recurrence is normalized
+(`llrm.ia16.window`) and the loop runs as many whole trips as the target's
+window holds (`Machine::huge_window`: 64K less 15 bytes on DOS) on far
+pointers that never carry; an outer loop walks the windows. Where the trips
+fit one window there is no outer loop. The split is priced: a window's setup
+against the carries it saves, over the trips or `UNKNOWN_TRIPS`, or in
+bytes at -Os; its branches carry the trips as weights.
 
 ## What it replaced
 

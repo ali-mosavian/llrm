@@ -231,7 +231,8 @@ fn test_gvn_joins_the_values_each_arm_stored() {
 /// inside it, where serving the reload holds `%a` through a point that
 /// then spills. Priced at the conventional ten trips even when proven
 /// one, the reload was always served: a spill for one saved load. The
-/// registers are the target's; gvn used to ignore them.
+/// registers are the target's; gvn used to ignore them. Where `%a` spills
+/// in the loop, each reload of it costs the load it saves.
 #[test]
 fn a_loop_of_proven_trips_prices_the_reload_it_serves() {
     let text = |bound: &str| {
@@ -269,19 +270,19 @@ b3:
 "
         )
     };
-    let reloads = |bound: &str| {
+    let reloads = |bound: &str, registers: i64| {
         let before = parsed(&text(bound));
         let mut module = before.clone();
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn::default());
-        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() })).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() })).unwrap();
         let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
         assert_eq!(results(&module, inputs), results(&before, inputs));
         printed(&module).contains("%b = load i16, ptr @x")
     };
-    assert!(reloads("1"));
-    assert!(!reloads("%n"));
+    assert!(reloads("1", 4));
+    assert!(!reloads("%n", 6), "room for %a: serving the reload saves a load per trip");
 }
 
 /// Without `Summaries` required the pass runs, as an LLVM function pass
@@ -432,4 +433,204 @@ b0:
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let after = printed(&module);
     assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
+}
+
+/// A load of what the language says is written once and never again is the value an earlier
+/// load of it read, whatever a call between may write.
+#[test]
+fn a_load_the_language_says_is_invariant_is_reused_across_a_call_that_may_write() {
+    let gvn = |second: &str| {
+        let mut module = parsed(&format!(
+            "@g = global i16 0
+
+declare void @poke()
+
+define i16 @f() {{
+b0:
+  %a = load i16, ptr @g
+  call void @poke()
+  %b = {second}
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+
+!0 = !{{}}
+"
+        ));
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn::default());
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        printed(&module)
+    };
+    assert!(gvn("load i16, ptr @g").contains("  %r = add i16 %a, %b\n"), "a plain load is read again");
+    let stated = gvn("load i16, ptr @g, !invariant.load !0");
+    assert!(stated.contains("  %r = add i16 %a, %a\n"), "{stated}");
+}
+
+/// The program's global is read again after a store to a device: through a
+/// pointer in the fixed-address space the store cannot change it, so the
+/// second read is the first; through a far pointer it may, and stays.
+#[test]
+fn test_a_store_at_a_fixed_address_keeps_a_global_loaded_before() {
+    for (space, reloaded) in [(4, false), (1, true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global i16 0
+
+define i16 @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr @g
+  store i8 1, ptr addrspace({space}) %p
+  %b = load i16, ptr @g
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let mut module = parsed(&text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr @g").count() == 2, reloaded, "space {space}\n{after}");
+    }
+}
+
+/// The device is read again after a store to the program's global: through
+/// the fixed-address space the store cannot have changed it, so the second
+/// read is the first; through a far pointer it may have, and stays.
+#[test]
+fn test_a_store_to_a_global_keeps_a_fixed_address_read_before() {
+    for (space, reloaded) in [(4, false), (1, true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global i16 0
+
+define i16 @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr addrspace({space}) %p
+  store i16 1, ptr @g
+  %b = load i16, ptr addrspace({space}) %p
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let mut module = parsed(&text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches(&format!("load i16, ptr addrspace({space})")).count() == 2, reloaded, "space {space}\n{after}");
+    }
+}
+
+/// Two pointers a constructor returns are apart: a store through one does
+/// not change what the other holds, so a second read of the other is the
+/// first. A callee that states its result `noalias` is a constructor; one that
+/// does not may return the same object twice, and the read stays.
+#[test]
+fn test_a_noalias_result_is_apart_from_every_other_object() {
+    for (attribute, reloaded) in [("noalias ", false), ("", true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"
+
+declare {attribute}ptr @make()
+
+define i16 @f() {{
+b0:
+  %p = call ptr @make()
+  %q = call ptr @make()
+  store i16 1, ptr %p
+  %a = load i16, ptr %q
+  store i16 2, ptr %p
+  %b = load i16, ptr %q
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let mut module = parsed(&text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        manager.add(Gvn);
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        let after = printed(&module);
+        assert_eq!(after.matches("load i16, ptr %q").count() == 2, reloaded, "{attribute:?}\n{after}");
+    }
+}
+
+/// `text` through `Gvn` with the module's summaries, printed.
+fn numbered(text: &str) -> String {
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    printed(&module)
+}
+
+/// A volatile store writes only the bytes it addresses, as LLVM's: @g is
+/// read once across one to a fixed address or to another global, and again
+/// across one through a far pointer that may be @g. It was a barrier, and
+/// TEXTFILL read its variables again after every POKE (#257).
+#[test]
+fn test_a_volatile_store_elsewhere_keeps_a_global_loaded_before() {
+    for (store, reloaded) in [("ptr addrspace(4) %dev", false), ("ptr @h", false), ("ptr addrspace(1) %far", true)] {
+        let text = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global i16 0
+@h = global i8 0
+
+define i16 @f(ptr addrspace(4) %dev, ptr addrspace(1) %far) {{
+b0:
+  %a = load i16, ptr @g
+  store volatile i8 1, {store}
+  %b = load i16, ptr @g
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        );
+        let after = numbered(&text);
+        assert_eq!(after.matches("load i16, ptr @g").count() == 2, reloaded, "{store}\n{after}");
+        assert!(after.contains(&format!("store volatile i8 1, {store}")), "{after}");
+    }
+}
+
+/// Volatile accesses keep their number and order: two stores of one address
+/// both stay, and a second volatile read is not the first's value.
+#[test]
+fn test_volatile_accesses_keep_their_order_and_count() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+define i16 @f(ptr addrspace(4) %dev) {
+b0:
+  store volatile i8 1, ptr addrspace(4) %dev
+  store volatile i8 2, ptr addrspace(4) %dev
+  %a = load volatile i8, ptr addrspace(4) %dev
+  %b = load volatile i8, ptr addrspace(4) %dev
+  %c = sub i8 %a, %b
+  %r = zext i8 %c to i16
+  ret i16 %r
+}
+";
+    let after = numbered(text);
+    let volatile = after.lines().filter(|one| one.contains("volatile")).map(str::trim).collect::<Vec<_>>();
+    assert_eq!(
+        volatile,
+        [
+            "store volatile i8 1, ptr addrspace(4) %dev",
+            "store volatile i8 2, ptr addrspace(4) %dev",
+            "%a = load volatile i8, ptr addrspace(4) %dev",
+            "%b = load volatile i8, ptr addrspace(4) %dev"
+        ],
+        "{after}"
+    );
 }

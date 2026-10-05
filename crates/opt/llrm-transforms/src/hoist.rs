@@ -3,7 +3,7 @@
 //! Adapted from llrm-core's `optimize/transform.rs` `Hoist`: `hoisted`,
 //! `_invariant_run`, `_preheader`, `_crossed_values`, `_cannot_fault` and
 //! `_guaranteed_float_work`. Loads ask memoryssa's `Accesses`, from the
-//! manager, whether the loop writes them (`transform::_unwritten`), so the
+//! manager, whether the loop writes them (`transform::_undisturbed`), so the
 //! pipeline requires `Summaries`; induction says whether the loop makes a
 //! trip, and noreturn which calls end one.
 //!
@@ -37,7 +37,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 
-use crate::transform::_unwritten;
+use crate::transform::_undisturbed;
 
 pub struct Hoist;
 
@@ -149,9 +149,7 @@ fn _movable(unit: &passes::Unit, inst: InstId, insts: &[InstId], accesses: &Acce
         | Opcode::InsertValue(_) => true,
         // Memory in a `noalias readonly` parameter is written by no one: a
         // slice's length, read past a store through its data pointer.
-        Opcode::Load { volatile: false, .. } => {
-            llrm_mir::memory::invariant(unit.context, unit.layout, unit.function, unit.function.instruction(inst).operands[0]) || _unwritten(unit.function, inst, insts, accesses, program)
-        }
+        Opcode::Load { volatile: false, .. } => llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, inst) || _undisturbed(inst, insts, accesses, program),
         _ => false,
     }
 }

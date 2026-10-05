@@ -3,14 +3,6 @@
 # shortfalls.txt.
 
 [[bug]]
-match = "data before any label"
-issue = "#101"
-
-[[bug]]
-match = "exceeds 64k by"
-issue = "#102"
-
-[[bug]]
 match = "llrm-c did not finish"
 issue = "#104"
 

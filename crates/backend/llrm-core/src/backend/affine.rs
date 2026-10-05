@@ -51,6 +51,7 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
         return None;
     }
     let costs = &cpu.operations;
+    let width = i64::from(dest.width);
     let (step, cost) = match (what.op, what.name.as_deref(), what.sources.as_slice()) {
         (Operation::Move, Some("mov"), [Loc::Reg(source)]) if register(source) && source.register != dest.register => {
             (Step::Copy(*source), costs.r#move)
@@ -67,7 +68,7 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
         (Operation::Binary, Some("add"), [_, Loc::Reg(other)]) if register(other) => (Step::AddRegister(*other), costs.add),
         _ => return None,
     };
-    Some((*dest, step, cost))
+    Some((*dest, step, costs.sized(cost, width)))
 }
 
 /// The 67h address naming `terms` plus `disp`, if one does.
@@ -82,6 +83,29 @@ pub fn form(terms: &[(Register, i64)], disp: i64, scales: &BTreeSet<i64>) -> Opt
         [(only, scale)] => at(only, only, scale - 1).or_else(|| at(Register::None, only, scale)),
         [(base, 1), (index, scale)] | [(index, scale), (base, 1)] => {
             at(base, index, scale).or_else(|| at(index, base, 1).filter(|_| scale == 1))
+        }
+        _ => None,
+    }
+}
+
+/// The real-mode address naming `terms` plus `disp`, if one does: a lone base or index
+/// register, or one of BX/BP and one of SI/DI. No prefix, no scale.
+pub fn word_form(terms: &[(Register, i64)], disp: i64) -> Option<Address> {
+    let word = |one: Register| match one {
+        Register::EBX => Some(Register::BX),
+        Register::EBP => Some(Register::BP),
+        Register::ESI => Some(Register::SI),
+        Register::EDI => Some(Register::DI),
+        _ => None,
+    };
+    let is_base = |one: Register| matches!(one, Register::BX | Register::BP);
+    match *terms {
+        [(only, 1)] => Some(Address { through: word(only)?, offset: disp, ..Address::new(None) }),
+        [(first, 1), (second, 1)] => {
+            let (first, second) = (word(first)?, word(second)?);
+            let (base, index) = if is_base(first) { (first, second) } else { (second, first) };
+            (is_base(base) && !is_base(index))
+                .then_some(Address { through: base, index, scale: 1, offset: disp, ..Address::new(None) })
         }
         _ => None,
     }

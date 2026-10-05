@@ -50,7 +50,7 @@ impl Compiler {
             LONG => DebugScalar::Int32,
             SINGLE => DebugScalar::Float32,
             DOUBLE => DebugScalar::Float64,
-            STRING if self.runtime == "vbdos" => DebugScalar::FarString,
+            STRING if llrm_qbruntime::semantics::form(&self.runtime) == Some(llrm_hir::meaning::Form::Far) => DebugScalar::FarString,
             STRING => DebugScalar::String,
             _ => return self.string_width(type_id).map(|width| self.debug.fixed_string(width as i64)),
         };
@@ -78,7 +78,7 @@ impl Compiler {
             members.push((self.debug_name(&field.name, field.span, 0), r#type, offset as i64));
         }
         let name = self.debug_name(declared, span, 0);
-        let fields: Vec<(&str, i64, i64)> = members.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset)).collect();
+        let fields: Vec<(&str, i64, i64, Option<(i64, i64)>)> = members.iter().map(|(name, r#type, offset)| (name.as_str(), *r#type, *offset, None)).collect();
         let made = self.debug.structure(&name, bytes as i64, &fields);
         self.debug_structures.insert(type_id, made);
     }

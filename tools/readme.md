@@ -4,15 +4,20 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 
 | Tool | Does |
 |---|---|
+| `bench/bench.py` | the benchmark gate: executed instructions and memory operands per kernel against `bench/NAME/expected.toml`; `--bless --reason` to move a baseline; see `bench/readme.md` |
+| `bench/history.py`, `bench/dashboard.py` | the per-commit benchmark history on the `bench-history` branch, and the static HTML dashboard drawn from it |
 | `nib-build.sh` | builds a Nib program into a DOS `.EXE` |
 | `mir-corpus.sh` | regenerates `crates/opt/llrm-analysis/corpus`, the rich MIR the corpus tests read |
 | `baseline.sh OUT` | every stage dump of the OMF corpus and Nib examples; `diff -r` two of them |
-| `e2e/e2e.py` | BC compiles `tests/suite`, `llrm-omf` rewrites, LINK links, DOSBox runs, output compared |
+| `dosbatch/dosbatch.py` | many programs in one DOSBox launch: build, run each under a time budget, read stdout. Shared by `tests/run`, `loops` |
+| `dosbatch/run_tests.py` | `tests/run`: compile, run, diff with `NAME.out`; `cargo test --test run` calls it |
+| `e2e/e2e.py` | (route deleted in #318) BC compiles `tests/run/qb`, `llrm-omf` recompiles, LINK links, DOSBox runs, output compared |
 | `e2e/matrix.py` | `e2e` over all twelve BC configurations |
 | `e2e/fuzzgen.py`, `e2e/fuzzcheck.py` | random BASIC programs, judged by an evaluator, BC and `llrm-omf` |
 | `e2e/mkgolden.py` | the suite's expected outputs, computed from what each program means |
-| `e2e/mkfixtures.py` | rebuilds `tests/fixtures/omf` with the BC toolchains |
+| `e2e/mkfixtures.py` | rebuilds `tests/inputs/omf` with the BC toolchains |
 | `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
+| `qcport-compile.sh [llrm-c]` | QCport's 65 C modules compiled at -O2 and -Os; each refusal listed (QCPORT, QCPORT_INC name its sources) |
 | `sizes.py BASE [NEW] [-O2 -Os ...]` | object bytes and the backend's expected instructions and memory operands of every test, bench, example and demo program, two builds side by side |
 | `innerloops.py` | each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or msp430) |
 | `loops/run.py` | the loop corpus: cases in C, BASIC and Nib, checked by an oracle, llrm-mir and DOSBox, measured against hand-derived bounds and reference compilers; see below |

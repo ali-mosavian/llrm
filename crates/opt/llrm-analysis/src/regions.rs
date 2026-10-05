@@ -71,6 +71,13 @@ fn linear() -> MemoryObject {
     MemoryObject { identity: Some(Identity::Str("linear".to_owned())), ..MemoryObject::new(MemoryKind::Absolute) }
 }
 
+/// What an access through a fixed-address pointer names: linear memory, wholly.
+/// The language says no program object lives there, and no selector range
+/// has to prove it.
+pub fn fixed_provenance() -> Provenance {
+    Provenance::one(linear())
+}
+
 /// The range of `value`'s interval, `disp` plus `scale` times it.
 fn scaled(interval: &Interval, disp: i64, scale: i64) -> (BigInt, BigInt) {
     let (one, other) = (BigInt::from(disp) + &interval.low * scale, BigInt::from(disp) + &interval.high * scale);
@@ -88,23 +95,23 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, prog
         let word = |one: i64| one.rem_euclid(0x1_0000);
         (high - low < 0x1_0000 && word(low) <= word(high)).then(|| (word(low), word(high)))
     };
-    let selectors = match (reference.selector, reference.segment?) {
+    let selectors = match (reference.selector, reference.segment) {
         (Some(selector), _) => words(selector.into(), selector.into())?,
-        (None, Operand::Value(segment)) => {
+        (None, Some(Operand::Value(segment))) => {
             let selector = known?.get(&segment)?;
             words(selector.low.clone(), selector.high.clone())?
         }
         (None, _) => return None,
     };
-    let disp = BigInt::from(reference.disp);
+    let disp = BigInt::from(reference.origin) + reference.disp;
     let offsets = match reference.base {
         None => words(disp.clone(), disp),
         Some(base) => known
             .and_then(|known| known.get(&base))
             .filter(|interval| interval.width == reference.base_width)
             .and_then(|interval| {
-                let (low, high) = scaled(interval, reference.disp, reference.scale);
-                words(low, high)
+                let (low, high) = scaled(interval, 0, reference.scale);
+                words(low + &disp, high + &disp)
             }),
     }
     .unwrap_or((0, 0xFFFF));
@@ -146,12 +153,19 @@ fn same_typed_start(one: &MemRef, other: &MemRef) -> bool {
 }
 
 /// Python `typed_apart`: accesses of different `!tbaa` types cannot alias
-/// except for two views explicitly computed from the same union start.
+/// unless one's type is an ancestor of the other's, or for two views
+/// explicitly computed from the same union start.
 pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
     let (Some(one_type), Some(other_type)) = (&one.typed, &other.typed) else {
         return false;
     };
-    one_type != other_type && !same_typed_start(one, other)
+    // As LLVM's TypeBasedAA: types of one root, neither covering the other.
+    // A type with no root, or of another root, says nothing: may alias.
+    let (Some(one_root), Some(other_root)) = (one.lineage.last(), other.lineage.last()) else {
+        return false;
+    };
+    let related = one.lineage.contains(other_type) || other.lineage.contains(one_type);
+    one_root == other_root && one_type != other_type && !related && !same_typed_start(one, other)
 }
 
 /// Python `may_alias`'s private `narrowed` helper.
@@ -585,6 +599,45 @@ b0:
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(elsewhere, one(&object, 0, 1))));
     }
 
+    const C_TAGS: &str = "!0 = !{!\"Simple C/C++ TBAA\"}
+!1 = !{!\"omnipotent char\", !0, i64 0}
+!2 = !{!\"int2\", !1, i64 0}
+!3 = !{!\"int4\", !1, i64 0}
+!4 = !{!1, !1, i64 0}
+!5 = !{!2, !2, i64 0}
+!6 = !{!3, !3, i64 0}
+!7 = !{!\"llrm hir\"}
+!8 = !{!\"place\", !7, i64 0}
+!9 = !{!8, !8, i64 0}
+";
+
+    /// `*q = 1` through a `char *` between two loads of `*p` was no write of
+    /// `*p`: the types differed by name, and `omnipotent char`, the parent of
+    /// every scalar type, was not read as one that covers them. C lets a
+    /// char access any object (llrm-c at -O2 added `*p` to itself).
+    #[test]
+    fn a_type_covers_its_descendants_and_roots_are_not_compared() {
+        let module = module(&format!(
+            "define void @f(ptr %p, ptr %q, ptr %r, ptr %s) {{
+b0:
+  store i8 1, ptr %q, !tbaa !4
+  store i16 2, ptr %p, !tbaa !5
+  store i32 3, ptr %r, !tbaa !6
+  store i16 4, ptr %s, !tbaa !9
+  ret void
+}}
+
+{C_TAGS}"
+        ));
+        let dl = layout(&module);
+        let [character, short, long, place] = &accesses(&module, &dl)[..] else { panic!() };
+        // The parent covers a child; siblings are apart; another root says nothing.
+        assert!(!typed_apart(character, short));
+        assert!(!typed_apart(long, character));
+        assert!(typed_apart(short, long));
+        assert!(!typed_apart(short, place));
+    }
+
     #[test]
     fn provenance_alias_uses_canonical_subobjects_and_byte_ranges() {
         // Fields of one object, and equal offsets in distinct objects, are disjoint.
@@ -899,6 +952,100 @@ b0:
         assert!(!may_alias(text, near, Some(&foreign), None, Some(&dos)).unwrap());
         assert!(overlapping(near, text, None, Some(&ordinary), Some(&dos)).unwrap());
         assert!(overlapping(near, text, None, Some(&foreign), None).unwrap());
+    }
+
+    /// A store through a pointer the language puts at a fixed address
+    /// (address space 4) cannot reach a program global, however its pointer
+    /// was made; through a far pointer it can, a far pointer reaching any
+    /// object. Every POKE to a stated device kept the reloads of the
+    /// program's own data behind it.
+    #[test]
+    fn test_an_access_at_a_fixed_address_misses_program_objects() {
+        for (space, apart) in [(4, true), (1, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f(ptr addrspace({space}) %p) {{
+b0:
+  %a = load i16, ptr @g
+  store i8 0, ptr addrspace({space}) %p
+  ret void
+}}
+"
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let unit = Unit::of(&module, &dl, f);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!(!may_alias(load, store, None, None, None).unwrap(), apart, "space {space}");
+        }
+    }
+
+    /// The language's word that an address is a device's is checked against
+    /// the target where the address is a constant: DOS loads a program
+    /// anywhere in conventional memory, so a constant segment there (0x1234)
+    /// may be the program's own data and is no fixed address; B800 is video.
+    #[test]
+    fn test_a_constant_segment_in_conventional_memory_is_no_fixed_address() {
+        for (segment, apart) in [(0xB800, true), (0x1234, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f() {{
+b0:
+  %a = load i16, ptr @g
+  %s = inttoptr i16 {segment} to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %dev = addrspacecast ptr addrspace(1) %far to ptr addrspace(4)
+  store i8 0, ptr addrspace(4) %dev
+  ret void
+}}
+"
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let dos = dos(&module);
+            let mut unit = Unit::of(&module, &dl, f);
+            unit.program = Some(&dos);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!(!may_alias(load, store, None, None, Some(&dos)).unwrap(), apart, "segment {segment:#x}");
+        }
+    }
+
+    /// A far pointer an integer constant makes is its selector and offset,
+    /// the integer's high and low words: C's `(char far *)0xB8000010L` is
+    /// video memory, apart from the program's global. It was no known
+    /// segment, so a loop storing there read its other variables again. At
+    /// 0x1234 it may be the program's data.
+    #[test]
+    fn test_a_far_pointer_made_from_a_constant_is_placed_by_its_words() {
+        for (integer, apart) in [(0xB800_0010_u32, true), (0x1234_0010, false)] {
+            let module = module(&format!(
+                "@g = global i16 0
+
+define void @f() {{
+b0:
+  %a = load i16, ptr @g
+  %far = inttoptr i32 {} to ptr addrspace(1)
+  %at = getelementptr i8, ptr addrspace(1) %far, i16 2
+  store volatile i8 0, ptr addrspace(1) %at
+  ret void
+}}
+",
+                integer as i32
+            ));
+            let dl = layout(&module);
+            let f = function(&module, "f");
+            let dos = dos(&module);
+            let mut unit = Unit::of(&module, &dl, f);
+            unit.program = Some(&dos);
+            let found = crate::alias::annotated(&unit).unwrap();
+            let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
+            assert_eq!((store.selector, store.origin, store.disp), (Some(i64::from(integer >> 16)), 0x10, 2));
+            assert_eq!(!may_alias(load, store, None, None, Some(&dos)).unwrap(), apart, "{integer:#x}");
+        }
     }
 
     /// Only an address space the segment layout places program data in is

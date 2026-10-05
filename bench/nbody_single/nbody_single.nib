@@ -1,0 +1,41 @@
+# Six-body integrator in f32, 1000 steps. Module vars cannot be floats: arrays are locals.
+# Overdamped: the bodies settle at their centre of mass whatever the intermediate precision (a lighter damping was chaotic: #360).
+const BODIES: i32 = 6
+
+fn bench_nbody_single() -> i32:
+    let mut pos_x: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut pos_y: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut vel_x: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    let mut vel_y: f32[6] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    for body in 0..BODIES:
+        pos_x[body] = f32(body * 7 - 15)
+        pos_y[body] = f32(body * 5 - 12)
+        vel_x[body] = 0.0
+        vel_y[body] = 0.0
+    for _step in 0..1000:
+        for body in 0..BODIES:
+            let mut acc_x: f32 = 0.0
+            let mut acc_y: f32 = 0.0
+            for other in 0..BODIES:
+                if other != body:
+                    let delta_x = pos_x[other] - pos_x[body]
+                    let delta_y = pos_y[other] - pos_y[body]
+                    let dist2 = delta_x * delta_x + delta_y * delta_y + 1.0
+                    let falloff = 1.0 / (dist2 + 1.0)
+                    acc_x += delta_x * falloff
+                    acc_y += delta_y * falloff
+            vel_x[body] += acc_x
+            vel_y[body] += acc_y
+            vel_x[body] -= vel_x[body] / 8.0
+            vel_y[body] -= vel_y[body] / 8.0
+        for body in 0..BODIES:
+            pos_x[body] += vel_x[body]
+            pos_y[body] += vel_y[body]
+    let mut sum: f32 = 0.0
+    for body in 0..BODIES:
+        sum += f32(body + 1) * (pos_x[body] + 3.0 * pos_y[body] + 5.0 * vel_x[body] + 7.0 * vel_y[body])
+    return i32(sum * 1024.0 + 0.5)
+
+fn main() -> i16:
+    print(bench_nbody_single())
+    return 0

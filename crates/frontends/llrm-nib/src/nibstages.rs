@@ -32,7 +32,7 @@ pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options:
     write(&output.join("03-hir.json"), &hir::encode(&program, Some(2)).map_err(|error| error.to_string())?)?;
     let stages = output.join("mir");
     std::fs::create_dir_all(&stages).map_err(|error| error.to_string())?;
-    nib::assembled_from_mir(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() })?;
+    nib::assembled(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() })?;
     write(
         &output.join("README.txt"),
         "Nib frontend stage dumps\n========================\n\n\
@@ -80,7 +80,7 @@ mod tests {
         assert!(syntax.contains("Struct {\n            name: \"body\""));
         assert!(syntax.contains("ForRange {"));
         let Json::Dict(document) = pyjson::loads(&read("03-hir.json")).expect("JSON") else { panic!("an object") };
-        assert_eq!(document.get("schema"), Some(&Json::Int(4)));
+        assert_eq!(document.get("schema"), Some(&Json::Int(5)));
         let stages = names(&output.join("mir"));
         assert!(stages.iter().any(|one| one.ends_with(".ll")), "{stages:?}");
         assert!(stages.contains(&"listing.asm".to_owned()) && stages.contains(&"cost".to_owned()), "{stages:?}");
@@ -126,7 +126,7 @@ mod tests {
         let argv = [source.display().to_string(), "-O2".into(), "-fno-inline-functions".into(), "-fno-unroll-loops".into(), "-fno-peel-loops".into(), "--dump".into(), output.display().to_string()];
         assert_eq!(crate::cli::main(&argv), 0);
         let listing = dumped_listing(&output);
-        let body = listing.split("_bump proc far\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");
+        let body = listing.split("_bump proc near\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");
         // The loop: from the label its backward jump names to that jump.
         let jump = regex::Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
         let (head, end) = jump

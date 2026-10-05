@@ -1,0 +1,7 @@
+description = "Solutions of 7-queens by recursive placement"
+repetitions = 1
+
+[region]
+bas = "BenchQueens"
+c = "bench_queens"
+nib = "bench_queens"

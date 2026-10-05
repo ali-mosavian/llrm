@@ -39,6 +39,19 @@ pub trait Machine {
         0
     }
 
+    /// Whether an arithmetic result is made in the register of its first
+    /// operand (x86: `sub dst, src`), so a first operand that stays live is
+    /// copied before the result is made.
+    fn two_address(&self) -> bool {
+        false
+    }
+
+    /// Of `registers`, how many an address's pointer and index may be held
+    /// in, where only some can: none where any can.
+    fn address_registers(&self) -> i64 {
+        0
+    }
+
     /// Of `registers`, how many survive a call to `callee`, named where the
     /// call is direct: its own contract may keep more than any call does.
     fn kept_across(&self, _callee: Option<&str>) -> i64 {
@@ -61,11 +74,33 @@ pub trait Machine {
         true
     }
 
+    /// Where `Intrinsic::Window` makes a huge pointer far: the far pointers'
+    /// space, and the bytes from the one it makes that no displacement
+    /// carries out of. None where the target has no such window.
+    fn huge_window(&self) -> Option<(u32, i64)> {
+        None
+    }
+
     /// Whether an I/O access to a port in the inclusive range `ports` may
     /// read or write memory. By default any may.
     fn port_touches_memory(&self, _ports: (i64, i64)) -> bool {
         true
     }
+}
+
+/// What advancing a pair pointer in a carrying space costs, given the price
+/// of its instructions: the offset widened, the displacement added, the
+/// carry copied and shifted down and up by the stride, added to the
+/// selector, and the offset and selector copied out.
+pub const fn carry_cost(extend: i64, add: i64, shift: i64, r#move: i64) -> i64 {
+    extend + 2 * add + 2 * shift + 3 * r#move
+}
+
+/// What advancing a pair pointer in a carrying space by a constant costs:
+/// the offset's sum, its carry spread to a mask, the mask cut to the
+/// selector's stride, and added to the selector.
+pub const fn step_cost(add: i64) -> i64 {
+    4 * add
 }
 
 /// Machine-neutral costs a MIR profitability decision may compare.
@@ -76,6 +111,12 @@ pub struct OperationCosts {
     pub divide: i64,
     pub shift: i64,
     pub address: i64,
+    /// An address advanced in a space whose displacement carries into its
+    /// selector (a huge pointer's): the offset's sum, its carry, and the
+    /// selector stepped by it.
+    pub carry: i64,
+    /// The same advance by a constant (`step_cost`).
+    pub carry_step: i64,
     pub load: i64,
     pub store: i64,
     pub memory_update: i64,
@@ -84,6 +125,14 @@ pub struct OperationCosts {
     pub r#move: i64,
     pub call: i64,
     pub return_: i64,
+    /// What one argument word costs around a call: pushed by the caller, read by the callee.
+    pub argument: i64,
+    /// What a caller pays to take `n` words of arguments off the stack: the cheaper of `n` pops
+    /// (`pop` each) and one `adjust` of the stack pointer.
+    pub pop: i64,
+    pub adjust: i64,
+    /// What a return popping its callee's arguments costs more than a plain one.
+    pub return_pops: i64,
     pub float_add: i64,
     pub float_multiply: i64,
     pub float_divide: i64,
@@ -92,6 +141,37 @@ pub struct OperationCosts {
     pub extend: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
+    /// what each cell costs it; `direction` is `std` and `cld` around a backward one.
+    pub copy: i64,
+    pub copy_cell: i64,
+    pub direction: i64,
+}
+
+impl OperationCosts {
+    /// What a caller pays to take `words` words of arguments off the stack.
+    pub fn cleanup(&self, words: i64) -> i64 {
+        (words * self.pop).min(self.adjust)
+    }
+
+    /// `price` for an operation on `width`-byte values: a dword one in real
+    /// mode runs under the operand-size prefix.
+    pub fn sized(&self, price: i64, width: i64) -> i64 {
+        price + if width == 4 { self.prefix } else { 0 }
+    }
+}
+
+/// What one `lea` of `width`-byte values costs, where the target has an
+/// address form for it. A `word` one is a plain address (a base and an
+/// index, unscaled, no prefix); any other takes a form that scales, which
+/// costs its address-size prefix, and runs under the operand-size prefix a
+/// dword does.
+pub fn three_operand(costs: &OperationCosts, forms: &[AddressForm], width: i64, scale: i64, word: bool) -> Option<i64> {
+    if word {
+        return forms.iter().any(|form| !form.secondary).then_some(costs.address);
+    }
+    let form = forms.iter().find(|form| form.secondary && form.scales.contains(&scale))?;
+    Some(costs.sized(costs.address, width) + form.use_cost)
 }
 
 impl Default for OperationCosts {
@@ -102,6 +182,8 @@ impl Default for OperationCosts {
             divide: 1,
             shift: 1,
             address: 1,
+            carry: 1,
+            carry_step: 1,
             load: 1,
             store: 1,
             memory_update: 1,
@@ -110,6 +192,10 @@ impl Default for OperationCosts {
             r#move: 1,
             call: 1,
             return_: 1,
+            argument: 2,
+            pop: 1,
+            adjust: 1,
+            return_pops: 0,
             float_add: 1,
             float_multiply: 1,
             float_divide: 1,
@@ -118,6 +204,9 @@ impl Default for OperationCosts {
             extend: 1,
             fill: 1,
             fill_cell: 1,
+            copy: 1,
+            copy_cell: 1,
+            direction: 1,
         }
     }
 }

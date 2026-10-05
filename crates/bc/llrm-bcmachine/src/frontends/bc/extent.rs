@@ -83,35 +83,6 @@ pub struct Body {
 }
 
 impl Body {
-    pub fn length(&self) -> usize {
-        self.ranges.iter().map(|(lo, hi)| hi - lo).sum()
-    }
-
-    /// The body as bodies of one entry each: its seed's code, then each
-    /// entry's, as the partition made them before a body had entries.
-    pub fn apart(&self) -> Vec<Body> {
-        let theirs: Vec<(usize, usize)> = self.entry_ranges.iter().flatten().copied().collect();
-        let own = self.ranges.iter().flat_map(|&range| without(range, &theirs)).collect();
-        let owner = Body { ranges: own, entries: Vec::new(), entry_ranges: Vec::new(), ..self.clone() };
-        let entries = self.entries.iter().zip(&self.entry_ranges).map(|(&seed, ranges)| Body {
-            kind: BodyKind::ResumeEntry,
-            seed,
-            name: Some("resume entry".to_owned()),
-            ranges: ranges.clone(),
-            entries: Vec::new(),
-            entry_ranges: Vec::new(),
-        });
-        std::iter::once(owner).chain(entries).collect()
-    }
-}
-
-/// `range` less every one of `holes`.
-fn without((lo, hi): (usize, usize), holes: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    let mut out = vec![(lo, hi)];
-    for &(start, end) in holes {
-        out = out.into_iter().flat_map(|(lo, hi)| [(lo, hi.min(start)), (lo.max(end), hi)]).filter(|(lo, hi)| lo < hi).collect();
-    }
-    out
 }
 
 /// `repr(tuple[tuple[int, int], ...])`.

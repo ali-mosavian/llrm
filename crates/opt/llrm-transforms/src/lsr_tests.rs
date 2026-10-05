@@ -935,7 +935,7 @@ l3:
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
-/// `bench/c/mandel.c` as the pass meets it, over two rows: `cx`, the
+/// `bench/mandel/mandel.c` as the pass meets it, over two rows: `cx`, the
 /// column's `xOffset - 512 + 24 * px`, read across the inner loop.
 const MANDEL: &str = "define i32 @f(i16 %0) {
 b1:
@@ -1035,7 +1035,7 @@ fn test_a_value_read_across_an_inner_loop_is_its_own_counter() {
     assert!(per_column.is_empty(), "{printed}");
 }
 
-/// `tests/suite/addrm.bas`: a word array read at `i` and `i + 1`, and a
+/// `tests/run/qb/addrm.bas`: a word array read at `i` and `i + 1`, and a
 /// dword one stored `i` at `i`.
 const ADDRM: &str = "  br label %l1
 
@@ -1745,4 +1745,186 @@ fn test_a_loop_the_pass_cannot_improve_is_left_as_it_is() {
     let (before, printed) = reduced(&text);
     let loop_of = |text: &str| text.split("\nl1:").nth(1).and_then(|rest| rest.split("\n\n").next()).unwrap_or_default().to_owned();
     assert_eq!(loop_of(&printed), loop_of(&crate::testing::printed(&before)), "{printed}");
+}
+
+/// `a[i]` over a huge pointer, as C's `__huge` lowers it: the counter beside
+/// a pointer that each trip advances with a carry into its selector.
+const HUGE_WALK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+
+define i16 @f(ptr addrspace(3) %a, i16 %n) {
+start:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l ]
+  %s = phi i16 [ 0, %start ], [ %s.next, %l ]
+  %p = phi ptr addrspace(3) [ %a, %start ], [ %p.next, %l ]
+  %v = load i16, ptr addrspace(3) %p
+  %s.next = add i16 %s, %v
+  %p.next = getelementptr inbounds i16, ptr addrspace(3) %p, i16 1
+  %i.next = add nsw i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %s.next
+}
+";
+
+/// Every advance of a huge pointer pays the carry into its selector, so
+/// an integer offset and a `getelementptr` per use saves nothing over the
+/// pointer that steps once. With the carry dear, the pass swapped the
+/// pointer for `%lsr.iv` and kept the carry in the loop all the same.
+#[test]
+fn test_a_huge_pointer_walk_is_not_swapped_for_an_offset_that_carries_too() {
+    let machine = Tuned { costs: OperationCosts { carry: 30, ..target().costs }, ..target() };
+    let mut after = parsed(HUGE_WALK);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.add(Lsr);
+    manager.run_module(&mut after, Rc::new(machine)).unwrap();
+    let printed = printed(&after);
+    assert!(!printed.contains("lsr.iv"), "{printed}");
+}
+
+/// A huge array indexed by a counter, as each frontend states one.
+const HUGE_INDEXED: &str = "@g = addrspace(1) global [120000 x i8] zeroinitializer
+
+define i16 @f() {
+start:
+  %b = addrspacecast ptr addrspace(1) @g to ptr addrspace(3)
+  br label %l
+
+l:
+  %i = phi i32 [ 0, %start ], [ %i.next, %l ]
+  %o = mul i32 %i, 4
+  %p = getelementptr inbounds i8, ptr addrspace(3) %b, i32 %o
+  store i32 %i, ptr addrspace(3) %p
+  %i.next = add nsw i32 %i, 1
+  %c = icmp slt i32 %i.next, 30000
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 0
+}
+";
+
+/// A huge pointer stepped by a constant carries by a mask; built from a
+/// counter it pays the whole carry each use. Priced alike, bench/huge kept
+/// the counter and carried twice an element in C, BASIC and Nib.
+#[test]
+fn test_a_huge_array_indexed_by_a_counter_is_walked_by_a_huge_pointer() {
+    let machine = Tuned { costs: OperationCosts { carry: 11, carry_step: 4, ..target().costs }, ..target() };
+    let (_, printed) = reduced_for(HUGE_INDEXED, machine);
+    assert!(printed.contains("phi ptr addrspace(3)"), "{printed}");
+}
+
+/// Two arrays walked by pointers beside their counter, where a copy loop
+/// reads one and writes the other.
+const POINTER_WALK: &str = "@a = global [64 x i16] zeroinitializer
+@b = global [64 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+start:
+  br label %l
+
+l:
+  %i = phi i16 [ 0, %start ], [ %i.next, %l ]
+  %p = phi ptr [ @a, %start ], [ %p.next, %l ]
+  %q = phi ptr [ @b, %start ], [ %q.next, %l ]
+  %v = load i16, ptr %p
+  %w = add i16 %v, 1
+  store i16 %w, ptr %q
+  %p.next = getelementptr inbounds i16, ptr %p, i16 1
+  %q.next = getelementptr inbounds i16, ptr %q, i16 7
+  %i.next = add nsw i16 %i, 1
+  %c = icmp slt i16 %i.next, %n
+  br i1 %c, label %l, label %d
+
+d:
+  ret i16 %i.next
+}
+";
+
+/// A pointer steps with an add, not an address: pricing its step as `lea`
+/// (#183) made a dear `lea` swap every pointer walk for integer offsets,
+/// one more register in the loop (x_tripdata_usescale7 in C: the bound spilled).
+#[test]
+fn test_a_pointer_steps_at_the_price_of_an_add_whatever_an_address_costs() {
+    let run = |address| {
+        let machine = Tuned { costs: OperationCosts { address, ..target().costs }, ..target() };
+        let mut after = parsed(&format!("{DOS}{POINTER_WALK}"));
+        let mut manager = PassManager::default();
+        manager.add(Lsr);
+        manager.run_module(&mut after, Rc::new(machine)).unwrap();
+        printed(&after)
+    };
+    assert_eq!(run(3), run(1));
+}
+
+/// Prices followed the loop's trips only, and a loop with no counter fitting a
+/// wider use took any plan: a use behind a branch (the sieve's `sum += i32(i)`,
+/// on the primes) weighed as much as one on every trip, so lsr carried a
+/// 32-bit counter, an `inc` a trip, for a `movzx` on one trip in six
+/// (sieve.nib -O2: 12111 -> 12951 instructions, #386).
+#[test]
+fn test_a_use_behind_a_branch_is_not_priced_as_one_on_every_trip() {
+    let text = "define i32 @f(ptr %a) {
+b1:
+  br label %b6
+
+b6:
+  %i = phi i16 [ 2, %b1 ], [ %next, %b8 ]
+  %sum = phi i32 [ 0, %b1 ], [ %sum.out, %b8 ]
+  %count = phi i16 [ 0, %b1 ], [ %count.out, %b8 ]
+  %more = icmp ult i16 %i, 1024
+  br i1 %more, label %b7, label %b9
+
+b7:
+  %p = getelementptr inbounds i8, ptr %a, i16 %i
+  %v = load i8, ptr %p
+  %composite = icmp ne i8 %v, 0
+  br i1 %composite, label %b8, label %b14
+
+b8:
+  %sum.out = phi i32 [ %sum, %b7 ], [ %added, %b14 ], [ %added, %b20 ]
+  %count.out = phi i16 [ %count, %b7 ], [ %counted, %b14 ], [ %counted, %b20 ]
+  %next = add nuw i16 %i, 1
+  br label %b6
+
+b9:
+  %total = zext i16 %count to i32
+  %high = shl i32 %total, 16
+  %mixed = xor i32 %high, %sum
+  ret i32 %mixed
+
+b14:
+  %counted = add i16 %count, 1
+  %wide = zext i16 %i to i32
+  %added = add i32 %sum, %wide
+  %small = icmp ule i16 %i, 31
+  br i1 %small, label %b15, label %b8
+
+b15:
+  %square = mul i16 %i, %i
+  br label %b18
+
+b18:
+  %at = phi i16 [ %square, %b15 ], [ %after, %b19 ]
+  %inside = icmp ult i16 %at, 1024
+  br i1 %inside, label %b19, label %b20
+
+b19:
+  %q = getelementptr inbounds i8, ptr %a, i16 %at
+  store i8 1, ptr %q
+  %after = add i16 %at, %i
+  br label %b18
+
+b20:
+  br label %b8
+}
+";
+    let (_, after) = reduced(text);
+    let wide = |text: &str| text.lines().filter(|line| line.contains("phi i32")).count();
+    assert_eq!(wide(&after), wide(text), "{after}");
 }

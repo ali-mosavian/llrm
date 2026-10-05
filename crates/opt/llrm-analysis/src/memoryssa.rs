@@ -1,8 +1,8 @@
 //! LLVM's `MemorySSA`: llrm-core's `analysis/memoryssa.rs`, adapted to the
 //! rich MIR. Conservative, rebuilt after a function changes.
 //!
-//! Stores, writing calls and volatile accesses define a single memory
-//! state; loads and reading calls use it. The clobber walker skips writes
+//! Stores and writing calls define a single memory state; loads and
+//! reading calls use it. The clobber walker skips writes
 //! `may_clobber` rules out. What each instruction touches is `Accesses`'.
 //!
 //! A site is an instruction. Dropped, with no rich MIR counterpart: the x87
@@ -26,7 +26,7 @@ use crate::cfg;
 use crate::alias::{self, Effect, Procedure, Summary};
 use crate::consts::Calls;
 use crate::manager::{Annotated, CallEffects};
-use crate::memory::{MemRef, Unit, unmodeled_write};
+use crate::memory::{MemRef, Unit, own_bytes, unmodeled_write};
 use crate::pointerfacts::{self, Location};
 use crate::ranges::Interval;
 use crate::regions::{displaced_span, overlapping};
@@ -121,12 +121,13 @@ impl Accesses {
         let mut touched = IndexMap::default();
         for (_, inst) in function.walk() {
             let reference = || references.get(&inst).cloned().into_iter().collect::<Vec<_>>();
-            let found = match &function.instruction(inst).opcode {
-                Opcode::Load { volatile: false, .. } => (Some(reference()), Some(Vec::new())),
-                Opcode::Store { volatile: false, .. } => (Some(Vec::new()), Some(reference())),
-                // A volatile access reads only its own bytes, and orders every write.
-                Opcode::Load { .. } => (Some(reference()), None),
-                Opcode::Store { .. } => (Some(Vec::new()), None),
+            let opcode = &function.instruction(inst).opcode;
+            let found = match opcode {
+                // Its order against other volatile accesses is the passes', which never move one.
+                _ if let Some(own) = own_bytes(opcode) => {
+                    let touched = |does: bool| Some(if does { reference() } else { Vec::new() });
+                    (touched(own.reads), touched(own.writes))
+                }
                 Opcode::Call(info) | Opcode::Invoke(info) => {
                     let callee = llrm_mir::memory::callee(unit.context, function, inst).and_then(|one| unit.globals.get(one.0 as usize)).and_then(GlobalValue::function);
                     let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
@@ -145,16 +146,6 @@ impl Accesses {
         self.touched.get(&inst).map_or(Some(&[]), |(_, writes)| writes.as_deref())
     }
 
-    /// What `inst` writes to memory: `writes`, but a volatile access only
-    /// its own bytes, without its order against every other access.
-    pub fn stored(&self, function: &Function, inst: InstId) -> Option<&[MemRef]> {
-        match function.instruction(inst).opcode {
-            Opcode::Load { volatile: true, .. } => Some(&[]),
-            Opcode::Store { volatile: true, .. } => self.references.get(&inst).map(std::slice::from_ref),
-            _ => self.writes(inst),
-        }
-    }
-
     /// What the call `inst` writes before reading any: `initializes`.
     pub fn fills(&self, inst: InstId) -> &[MemRef] {
         self.fills.get(&inst).map_or(&[], Vec::as_slice)
@@ -168,6 +159,14 @@ impl Accesses {
 
 fn located(reference: &MemRef) -> Option<Location> {
     reference.pointer.map(|pointer| Location { pointer, bytes: u64::from(reference.width) })
+}
+
+/// Whether `writes`, what an instruction writes (`None`: anything), may
+/// change a byte of `cell`, each write asked `clobbers`: the one answer to
+/// it, so that the rules hold everywhere. Nothing changes a constant
+/// object, nor what an `invariant` read reads (`memory::invariant_load`).
+pub fn changes(cell: &MemRef, invariant: bool, writes: Option<&[MemRef]>, clobbers: impl Fn(&MemRef) -> bool) -> bool {
+    !invariant && !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
 }
 
 /// Whether writing `store` may change a byte of `cell`: `regions` leaves
@@ -267,6 +266,8 @@ impl MemorySSA<'_> {
 
     fn frontier(&self, site: InstId, memory: &MemRef, boundary: Option<usize>, edge: Option<i64>, edge_memory: Option<&MemRef>) -> BTreeSet<usize> {
         let block = self.at(site).block;
+        // A load of what is written once, then never: no write changes what it reads.
+        let invariant = llrm_mir::memory::invariant_load(self.unit.context, self.unit.layout, self.unit.function, site);
         let mut pending = vec![self.at(site).defining];
         let mut seen = BTreeSet::new();
         let mut found = BTreeSet::new();
@@ -299,7 +300,7 @@ impl MemorySSA<'_> {
                         _ => memory,
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
-                    if written.as_ref().is_none_or(|stores| stores.iter().any(|store| may_clobber(&self.unit, None, queried, store))) {
+                    if changes(queried, invariant, written.as_deref(), |store| may_clobber(&self.unit, None, queried, store)) {
                         found.insert(current);
                     } else {
                         pending.push(access.defining);

@@ -201,6 +201,11 @@ impl Flags {
     pub const SAMESIGN: Flags = Flags(1 << 5);
     pub const INBOUNDS: Flags = Flags(1 << 6);
     pub const NUSW: Flags = Flags(1 << 7);
+    pub const REASSOC: Flags = Flags(1 << 8);
+    pub const NNAN: Flags = Flags(1 << 9);
+    pub const NINF: Flags = Flags(1 << 10);
+    pub const NSZ: Flags = Flags(1 << 11);
+    pub const ARCP: Flags = Flags(1 << 12);
     pub const FAST: Flags = Flags(0x7f << 8);
 
     pub const NAMES: [(Flags, &'static str); 16] = [
@@ -213,11 +218,11 @@ impl Flags {
         (Flags::NNEG, "nneg"),
         (Flags::SAMESIGN, "samesign"),
         (Flags::FAST, "fast"),
-        (Flags(1 << 8), "reassoc"),
-        (Flags(1 << 9), "nnan"),
-        (Flags(1 << 10), "ninf"),
-        (Flags(1 << 11), "nsz"),
-        (Flags(1 << 12), "arcp"),
+        (Flags::REASSOC, "reassoc"),
+        (Flags::NNAN, "nnan"),
+        (Flags::NINF, "ninf"),
+        (Flags::NSZ, "nsz"),
+        (Flags::ARCP, "arcp"),
         (Flags(1 << 13), "contract"),
         (Flags(1 << 14), "afn"),
     ];
@@ -232,6 +237,11 @@ impl Flags {
 
     pub fn is_empty(self) -> bool {
         self.0 == 0
+    }
+
+    /// The flags both have.
+    pub fn intersect(self, other: Flags) -> Flags {
+        Flags(self.0 & other.0)
     }
 
     /// The words LLVM prints, `fast` standing for all seven fast-math flags.
@@ -274,7 +284,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 37] = [
+pub const FLAG_ATTRIBUTES: [&str; 41] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -282,6 +292,7 @@ pub const FLAG_ATTRIBUTES: [&str; 37] = [
     "dead_on_unwind",
     "hot",
     "immarg",
+    "inlinehint",
     "inreg",
     "minsize",
     "mustprogress",
@@ -296,6 +307,7 @@ pub const FLAG_ATTRIBUTES: [&str; 37] = [
     "nomerge",
     "nonnull",
     "norecurse",
+    "noretain",
     "noreturn",
     "nosync",
     "noundef",
@@ -304,10 +316,12 @@ pub const FLAG_ATTRIBUTES: [&str; 37] = [
     "optsize",
     "readnone",
     "readonly",
+    "releases",
     "returned",
     "returns_twice",
     "signext",
     "speculatable",
+    "threeway",
     "willreturn",
     "writable",
     "writeonly",
@@ -346,10 +360,47 @@ pub const CONVENTIONS: [(&str, u32); 6] = [("ccc", 0), ("fastcc", 8), ("coldcc",
 pub const BASIC: u32 = 1000;
 
 /// LLVM's `x86_intrcc`: an interrupt handler, entered with the flags pushed
-/// and left by `iret`. Unlike LLVM's, its one parameter points at the
-/// registers the handler saved, which Borland C's handlers take as their
-/// parameters, not at the IP, CS and flags the interrupt pushed.
+/// and left by `iret`. Unlike LLVM's, its one parameter points at the frame
+/// the handler saved, `X86_INTR_FRAME`, not at the IP, CS and flags alone.
 pub const X86_INTR: u32 = 83;
+
+/// What an `X86_INTR` handler's frame pointer addresses, lowest address
+/// first, each slot's name and bytes: the segments it saved, PUSHAD's image
+/// (EDI lowest), then what the interrupt pushed. A handler writing a slot
+/// writes what POPAD, a pop or `iret` restores. The one statement of the
+/// layout: the backend pushes in this order and frontends name registers
+/// through `x86_intr_slot`.
+pub const X86_INTR_FRAME: [(&str, i64); 15] = [
+    ("gs", 2),
+    ("fs", 2),
+    ("es", 2),
+    ("ds", 2),
+    ("edi", 4),
+    ("esi", 4),
+    ("ebp", 4),
+    ("esp", 4),
+    ("ebx", 4),
+    ("edx", 4),
+    ("ecx", 4),
+    ("eax", 4),
+    ("ip", 2),
+    ("cs", 2),
+    ("flags", 2),
+];
+
+/// Where register `name`'s low word is in the frame, from its pointer; a
+/// 16-bit name (`ax`) is the low word of its 32-bit slot (`eax`).
+pub fn x86_intr_slot(name: &str) -> Option<i64> {
+    let wide = format!("e{name}");
+    let mut at = 0;
+    for (slot, size) in X86_INTR_FRAME {
+        if slot == name || (slot == wide && matches!(name, "ax" | "bx" | "cx" | "dx" | "si" | "di" | "bp" | "sp")) {
+            return Some(at);
+        }
+        at += size;
+    }
+    None
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Clause {
@@ -420,3 +471,8 @@ impl Opcode {
         }
     }
 }
+
+/// LLVM's `fastcc`, the convention the compiler gives a function it sees every caller of: here
+/// arguments pushed right to left and popped by the callee (`ret N`), which a caller's
+/// `add sp,N` then does not repeat.
+pub const FAST: u32 = 8;

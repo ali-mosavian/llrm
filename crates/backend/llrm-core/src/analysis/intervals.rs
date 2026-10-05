@@ -7,15 +7,13 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::analysis::frequency::Frequency;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::loops as loopy;
 use crate::backend::allocate;
 use crate::model::lir::{Insn, LirBlock, LirBody};
-use crate::model::mir::MirBlock;
 
-// Points per instruction: where it reads, and where it writes.
-pub const USE: i64 = 0;
 pub const DEF: i64 = 1;
 pub const PER_INSN: i64 = 2;
 
@@ -231,18 +229,16 @@ pub fn _merged(mut runs: Vec<Segment>) -> Vec<Segment> {
     out
 }
 
-/// `loopy.loops` reads only `at` and `succ`; MIR blocks carry both.
-pub fn _graph(blocks: &[LirBlock]) -> Vec<MirBlock> {
-    blocks
-        .iter()
-        .map(|block| MirBlock::new(block.at, Vec::new(), Vec::new(), block.succ.clone()))
-        .collect()
-}
 
 /// How deeply each block is nested in loops.
 pub fn depths(body: &LirBody) -> IndexMap<i64, u32> {
+    depths_in(body, &loopy::loops(&body.blocks, Some(body.entry)))
+}
+
+/// `depths`, from loops already found.
+pub fn depths_in(body: &LirBody, loops: &[loopy::Loop]) -> IndexMap<i64, u32> {
     let mut out: IndexMap<i64, u32> = body.blocks.iter().map(|block| (block.at, 0)).collect();
-    for found in loopy::loops(&_graph(&body.blocks), Some(body.entry)) {
+    for found in loops {
         for at in &found.body {
             if let Some(depth) = out.get_mut(at) {
                 *depth += 1;
@@ -252,36 +248,26 @@ pub fn depths(body: &LirBody) -> IndexMap<i64, u32> {
     out
 }
 
-/// What one reference costs per level of loop nesting.
+/// What one reference costs per level of loop nesting: the weight region
+/// splitting and slot sharing still give a block (`spillplacement`,
+/// `splitkit`, `spiller`), which block frequencies made larger code in
+/// their hands (#191).
 pub const PER_LEVEL: i64 = 10;
-
-/// Added to the size before dividing. LLVM's `25 * InstrDist`.
-pub const GRACE: i64 = 25 * PER_INSN;
 
 /// `float(PER_LEVEL ** depth)`.
 pub fn level(depth: u32) -> f64 {
     PER_LEVEL.pow(depth) as f64
 }
 
-/// What spilling each value would cost. See `_weights` for the formula.
-pub fn weights(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, f64> {
-    let owned;
-    let index = match index {
-        Some(index) => index,
-        None => {
-            owned = indexed(body);
-            &owned
-        }
-    };
-    _weights(body, index, &_ranges(body, index))
-}
+/// Added to the size before dividing. LLVM's `25 * InstrDist`.
+pub const GRACE: i64 = 25 * PER_INSN;
 
-/// `references weighted by loop depth / (live slots + grace)`.
+/// `references weighted by block frequency / (live slots + grace)`.
 fn _weights(body: &LirBody, _index: &Indexes, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
-    let deep = depths(body);
+    let busy = Frequency::of(body);
     let mut total: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
-        let each = level(deep.get(&block.at).copied().unwrap_or(0));
+        let each = busy.block(block.at);
         for one in &block.insns {
             for value in one.defines.iter().chain(&one.uses) {
                 *total.entry(*value).or_insert(0.0) += each;

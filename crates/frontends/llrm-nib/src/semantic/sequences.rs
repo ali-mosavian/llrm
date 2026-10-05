@@ -119,7 +119,7 @@ impl FunctionCompiler<'_> {
         match element {
             ElementType::Scalar(type_name) => {
                 let value = self.value(type_name);
-                let place = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(type_name), inbounds: false };
+                let place = hir::Operand::IndirectPlace { base: pointer, offset: 0, type_id: type_id(type_name), inbounds: false, member: None };
                 self.emit("load", vec![value], vec![place.clone()], None);
                 Subject::Scalar(hir::Operand::Value(value), type_name, Some(place))
             }

@@ -14,6 +14,12 @@ pub struct PointerSpec {
     pub index_bits: u32,
 }
 
+/// The address space of memory at a fixed address, where no program object
+/// lives: a device's registers or its frame buffer. Represented as a far
+/// pointer is; a frontend states it of an access, and an analysis reads it
+/// as "apart from every program object".
+pub const FIXED_SPACE: u32 = 4;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataLayout {
     pub big_endian: bool,
@@ -99,6 +105,24 @@ impl DataLayout {
 
     pub fn pointer(&self, space: u32) -> PointerSpec {
         self.pointers.get(&space).or_else(|| self.pointers.get(&0)).copied().expect("space 0 always has a pointer")
+    }
+
+    /// Whether a pointer in `space` is a selector and an offset: wider than
+    /// the space-0 pointer, which is the offset alone.
+    pub fn is_pair(&self, space: u32) -> bool {
+        self.pointer(space).bits > self.pointer(0).bits
+    }
+
+    /// The bits of a pair's offset: its entry's, a selector word then an
+    /// offset word. The one place the split is stated.
+    pub fn offset_bits(&self, space: u32) -> u32 {
+        self.pointer(space).bits / 2
+    }
+
+    /// Whether a displacement in `space` carries into the selector: a pair
+    /// whose index is wider than its offset, as a huge pointer's.
+    pub fn carries(&self, space: u32) -> bool {
+        self.is_pair(space) && self.pointer(space).index_bits > self.offset_bits(space)
     }
 
     /// An integer's ABI alignment: its own entry, else the next wider one's,

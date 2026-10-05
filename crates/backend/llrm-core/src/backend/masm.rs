@@ -68,6 +68,11 @@ impl Callee {
     }
 }
 
+pub use crate::hir::model::StackCheck;
+
+/// The data object `StackCheck::limit` names, which no global takes.
+pub const STACK_LIMIT_ID: i64 = i64::MAX - 1;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Procedure {
     pub name: String,
@@ -80,6 +85,15 @@ pub struct Procedure {
     /// An interrupt handler's data group, whose selector it loads into DS
     /// and ES; `None` for a procedure entered by a call.
     pub interrupt: Option<Addr>,
+    /// Tuned for size (-Os): fewer bytes at the price of clocks, as the frame's `push bp; mov
+    /// bp,sp; sub sp,N` as `enter N,0` (4 bytes for 6, 14 clocks for 3 on the 486), and the
+    /// jumps `omfwrite` lays out.
+    pub size: bool,
+    /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
+    /// procedure shows: its header and the locals `cx` names.
+    pub entry: i64,
+    /// Compare SP with the runtime's limit once the frame is allocated.
+    pub stack_check: Option<StackCheck>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -134,10 +148,15 @@ pub struct Module {
     pub procedures: Vec<Procedure>,
     /// data segments outside DGROUP; only ever asked for membership
     pub private: BTreeSet<String>,
+    /// Of those, the segments of uninitialised data: class FAR_BSS, which an image does not store.
+    pub far_bss: BTreeSet<String>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
     pub debug: Option<super::codeview::Debug>,
+    /// Bytes of the linker's stack this module adds to the others' (OMF stack
+    /// segments concatenate): where its call graph is the whole program's.
+    pub stack: i64,
 }
 
 impl Module {
@@ -157,10 +176,13 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
 pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>) -> Result<String, Unprintable> {
     let mut out: Vec<String> = vec![".model medium".into(), ".386".into(), String::new()];
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
+    if module.stack > 0 {
+        out.push(format!(".stack {}", module.stack));
+    }
     for (segment, items) in &module.data {
         let private = module.selector_addressed(segment);
         out.push(SEGMENTS.get(segment.as_str()).map_or_else(
-            || format!("{segment} segment {} public '{}'", if private { "para" } else { "word" }, if private { "FAR_DATA" } else { "DATA" }),
+            || format!("{segment} segment {} public '{}'", if private { "para" } else { "word" }, if module.far_bss.contains(segment) { "FAR_BSS" } else if private { "FAR_DATA" } else { "DATA" }),
             |one| (*one).to_owned(),
         ));
         out.extend(
@@ -266,15 +288,54 @@ pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, 
     Ok(body.with_blocks(blocks))
 }
 
+/// Names the limit each procedure's stack check compares with, and the externs those checks
+/// need: the limit a data object, the handler a far routine, unless a procedure here is it.
+pub fn stack_externs(procedures: &[Procedure], names: &mut IndexMap<(Space, i64), String>) -> Vec<(String, String)> {
+    let mut externs = Vec::new();
+    for check in procedures.iter().filter_map(|one| one.stack_check.as_ref()) {
+        names.insert((Space::External, STACK_LIMIT_ID), check.limit.clone());
+        externs.push((check.limit.clone(), "byte".to_owned()));
+        if !procedures.iter().any(|one| one.name == check.handler) {
+            externs.push((check.handler.clone(), "far".to_owned()));
+        }
+    }
+    externs
+}
+
+/// Whether a procedure, by its symbol, is entered only by the direct calls `module`'s own
+/// functions make: its address is taken nowhere (`callgraph::addressed`).
+pub fn entered_directly<'a>(module: &'a llrm_mir::Module, names: &'a IndexMap<(Space, i64), String>) -> impl Fn(&str) -> bool + 'a {
+    let addressed: BTreeSet<&String> = llrm_mir::callgraph::addressed(module).iter().filter_map(|id| names.get(&(Space::Segment, i64::from(id.0)))).collect();
+    move |name| !addressed.contains(&name.to_owned())
+}
+
+/// The block number the overflow call takes: past every instruction's.
+pub fn cold_at(body: &lir::LirBody) -> i64 {
+    body.blocks.iter().map(|block| block.at).chain(body.insns().into_iter().map(|one| one.at)).max().unwrap_or(0) + 1
+}
+
+fn sp_reg() -> Loc {
+    reg(Register::SP)
+}
+
+/// The registers `procedure` keeps for its caller: each one it names that the convention leaves to the
+/// callee, by its low half.
+fn saved_of(procedure: &Procedure) -> Vec<Register> {
+    let roots = _roots(&procedure.body);
+    // An interrupt handler has saved everything before its frame.
+    SAVED.iter().filter(|(whole, _)| procedure.interrupt.is_none() && roots.contains(whole)).map(|(_, low)| *low).collect()
+}
+
+/// Where `procedure` saves them, where that is not its entry (`shrinkwrap`).
+fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
+    let kept: BTreeSet<Register> = SAVED.iter().filter(|(_, low)| saved_of(procedure).contains(low)).map(|(whole, _)| *whole).collect();
+    crate::backend::shrinkwrap::wrapped(&procedure.body, &kept)
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     let roots = _roots(&procedure.body);
-    // An interrupt handler has saved everything before its frame.
-    let saved: Vec<Register> = SAVED
-        .iter()
-        .filter(|(whole, _)| procedure.interrupt.is_none() && roots.contains(whole))
-        .map(|(_, low)| *low)
-        .collect();
+    let saved = saved_of(procedure);
     let reserve = procedure.reserve + (procedure.reserve & 1);
     // Inline code is bytes this printer cannot read, so it may address the frame.
     let framed = reserve != 0
@@ -289,19 +350,35 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
     let mut enter: Vec<Semantics> = Vec::new();
-    if framed {
+    if framed && reserve != 0 && procedure.size && procedure.stack_check.is_none() {
+        let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
+        enter.push(semantics(Operation::Nothing, "enter", vec![], vec![count(reserve, 2), count(0, 1)]));
+    } else if framed {
         enter.extend([
             semantics(Operation::Push, "push", vec![], vec![bp.clone()]),
             semantics(Operation::Move, "mov", vec![bp], vec![sp.clone()]),
         ]);
     }
-    if reserve != 0 {
+    if reserve != 0 && !(framed && procedure.size && procedure.stack_check.is_none()) {
         enter.push(semantics(
             Operation::Binary,
             "sub",
             vec![sp.clone()],
             vec![sp, Loc::Imm(ir::Imm { value: reserve, width: 2, address: None })],
         ));
+    }
+    if procedure.stack_check.is_some() {
+        let cold = Some(cold_at(&procedure.body));
+        let overflow = |name: &str| Semantics { target: cold, ..semantics(Operation::Branch, name, vec![], vec![]) };
+        let limit = Addr { index: STACK_LIMIT_ID, ..Addr::new(Space::External, 0) };
+                // `sub` carries where SP wrapped past zero.
+        if reserve != 0 {
+            enter.push(overflow("jb"));
+        }
+        enter.extend([
+            semantics(Operation::Compare, "cmp", vec![], vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), 2))]),
+            overflow("jb"),
+        ]);
     }
     enter.extend(saved.iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])));
     if let Some(group) = procedure.interrupt {
@@ -312,17 +389,12 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     (enter, leave)
 }
 
-/// The registers an interrupt handler saves first, in Borland C's order:
-/// its parameters, BP nearest.
-const INTERRUPTED: [Register; 9] =
-    [Register::AX, Register::BX, Register::CX, Register::DX, Register::ES, Register::DS, Register::SI, Register::DI, Register::BP];
-
-/// Where an interrupt handler's first parameter, the first register it
-/// saved, is above its own BP: past what its entry pushes after those, and
-/// the BP its frame pushes.
+/// Where the frame an interrupt handler saved starts above its own BP: the
+/// last register it saved, past what its entry pushes after those and the BP
+/// its frame pushes. `llrm_mir::opcode::X86_INTR_FRAME` is the frame.
 pub fn interrupt_parameters() -> i64 {
     let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
-    let pushed: i64 = enter[INTERRUPTED.len()..]
+    let pushed: i64 = enter[INTERRUPT_SAVED..]
         .iter()
         .map(|one| match (one.op, one.name.as_deref()) {
             (_, Some("pushad")) => 32,
@@ -334,18 +406,23 @@ pub fn interrupt_parameters() -> i64 {
     pushed + 2
 }
 
+/// The entry's first instructions, which save the frame: PUSHAD, then the
+/// segments, so the last one pushed is the lowest slot.
+const INTERRUPT_SAVED: usize = 5;
+
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
-/// so it saves every register it or a callee may change, and gives compiled
-/// code what it assumes: DGROUP in DS and ES, the direction flag clear.
-/// Borland C's nine words come first, so its parameters are those registers
-/// and what it writes to them is what `iret` goes back with; PUSHAD then
-/// keeps their high halves. The x87 state is not saved.
+/// so it saves every register it or a callee may change once, as the frame
+/// `llrm_mir::opcode::X86_INTR_FRAME` lays out, and gives compiled code what
+/// it assumes: DGROUP in DS and ES, the direction flag clear. A handler's
+/// register parameters are slots of that frame, so what it writes to them is
+/// what POPAD or `iret` goes back with. The x87 state is not saved.
 fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
     let push = |one: Loc| semantics(Operation::Push, "push", vec![], vec![one]);
     let pop = |one: Register| semantics(Operation::Pop, "pop", vec![reg(one)], vec![]);
-    let mut enter: Vec<Semantics> = INTERRUPTED.iter().map(|one| push(reg(*one))).collect();
-    enter.extend([
+    let enter = vec![
         semantics(Operation::Nothing, "pushad", vec![], vec![]),
+        push(reg(Register::DS)),
+        push(reg(Register::ES)),
         push(reg(Register::FS)),
         push(reg(Register::GS)),
         push(Loc::Imm(ir::Imm { value: 0, width: 2, address: Some(group) })),
@@ -353,9 +430,14 @@ fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
         push(reg(Register::DS)),
         pop(Register::ES),
         semantics(Operation::Nothing, "cld", vec![], vec![]),
-    ]);
-    let mut leave = vec![pop(Register::GS), pop(Register::FS), semantics(Operation::Nothing, "popad", vec![], vec![])];
-    leave.extend(INTERRUPTED.iter().rev().map(|one| pop(*one)));
+    ];
+    let leave = vec![
+        pop(Register::GS),
+        pop(Register::FS),
+        pop(Register::ES),
+        pop(Register::DS),
+        semantics(Operation::Nothing, "popad", vec![], vec![]),
+    ];
     (enter, leave)
 }
 
@@ -373,7 +455,18 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// The procedure as emitted, frame included: what this prints and omfwrite
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
-    let (enter, leave) = _frame_parts(procedure);
+    let (mut enter, mut leave) = _frame_parts(procedure);
+    // Saved where first needed, restored where that path returns: not at the entry and every return.
+    let wrap = wrap_of(procedure);
+    let (saves, restores): (Vec<Semantics>, Vec<Semantics>) = match &wrap {
+        Some(_) => {
+            let count = saved_of(procedure).len();
+            enter.truncate(enter.len() - count);
+            let pops: Vec<Semantics> = leave.drain(..count).collect();
+            (saved_of(procedure).iter().map(|one| semantics(Operation::Push, "push", vec![], vec![reg(*one)])).collect(), pops)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
     let blocks = &procedure.body.blocks;
     let lined = || blocks.iter().flat_map(|block| &block.insns).filter(|one| one.line.is_some());
     let first = lined().next();
@@ -385,6 +478,9 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
     let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
+        if wrap.as_ref().is_some_and(|wrap| wrap.at == block.at) {
+            out.extend(saves.iter().cloned().map(Item::Semantics));
+        }
         let following = if index + 1 < blocks.len() { Some(blocks[index + 1].at) } else { None };
         let fallthrough = _fallthrough_jump(block, following);
         for one in &block.insns {
@@ -429,6 +525,9 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
                     }
                 }
                 Operation::Return => {
+                    if wrap.as_ref().is_some_and(|wrap| wrap.restored.contains(&block.at)) {
+                        out.extend(restores.iter().cloned().map(Item::Semantics));
+                    }
                     out.extend(leave.iter().cloned().map(Item::Semantics));
                     let name = match what.name.as_deref() {
                         _ if procedure.interrupt.is_some() => "iret".to_owned(),
@@ -452,6 +551,11 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
                 }));
             }
         }
+    }
+    // Last, where nothing falls into it: the call that does not return.
+    if let Some(check) = &procedure.stack_check {
+        out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
+        out.push(Item::Callee(Callee::new(check.handler.clone(), true)));
     }
     Ok(out)
 }
@@ -594,6 +698,22 @@ pub fn _instruction(
         // Its operands are the registers the instruction names in its opcode.
         return Ok(vec![format!("{}{name}", if what.sources.len() == 4 { "rep " } else { "" })]);
     }
+    if what.op == Operation::Copy {
+        // Its operands are the registers the instruction names in its opcode;
+        // a source read through another segment than ds says so.
+        let rep = if what.sources.len() == 5 { "rep " } else { "" };
+        let size = match name {
+            "movsb" => "byte",
+            "movsw" => "word",
+            _ => "dword",
+        };
+        return Ok(vec![match &what.sources[what.sources.len() - 2] {
+            Loc::Reg(one) if one.register != Register::DS => {
+                format!("{rep}movs {size} ptr es:[di], {size} ptr {}:[si]", format!("{:?}", one.register).to_lowercase())
+            }
+            _ => format!("{rep}{name}"),
+        }]);
+    }
     let dests = what.dests.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
     let sources = what.sources.iter().map(|x| _operand(x, names)).collect::<Result<Vec<_>, _>>()?;
     let last = |items: &[String]| items[items.len() - 1].clone();
@@ -601,6 +721,8 @@ pub fn _instruction(
         Operation::Nothing => {
             if matches!(name, "" | "nop") {
                 vec![]
+            } else if name == "enter" {
+                vec![format!("enter {}, {}", sources[0], sources[1])]
             } else {
                 vec![name.to_owned()]
             }
@@ -810,8 +932,6 @@ mod tests {
     //! select encodes it.
 
     use super::*;
-    use crate::backend::lower::{self, Placed};
-    use crate::model::mir;
 
     fn no_names() -> IndexMap<(Space, i64), String> {
         IndexMap::default()
@@ -825,14 +945,32 @@ mod tests {
         Loc::Reg(ir::Reg { register: Register::AX, width: 2 })
     }
 
+    /// A string move prints as the instruction it is: `rep` where it has a count.
+    #[test]
+    fn test_a_string_move_prints_with_rep_where_it_repeats() {
+        let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
+        let semantics = |sources: Vec<Loc>| Semantics { name: Some("movsw".to_owned()), sources, ..Semantics::new(Operation::Copy) };
+        let repeated = semantics(vec![held(1), held(2), held(3), held(4), held(5)]);
+        let single = semantics(vec![held(2), held(3), held(4), held(5)]);
+        assert_eq!(_instruction(&repeated, &no_names(), 0).unwrap(), ["rep movsw"]);
+        assert_eq!(_instruction(&single, &no_names(), 0).unwrap(), ["movsw"]);
+        let ss = |name: &str, sources: Vec<Loc>| Semantics { name: Some(name.to_owned()), sources, ..Semantics::new(Operation::Copy) };
+        let segment = |register| Loc::Reg(ir::Reg { register, width: 2 });
+        let through = ss("movsd", vec![held(1), held(2), held(3), segment(Register::SS), segment(Register::ES)]);
+        assert_eq!(_instruction(&through, &no_names(), 0).unwrap(), ["rep movs dword ptr es:[di], dword ptr ss:[si]"]);
+    }
+
     /// `lea bx,[bp-20]` for `&n` at bp-10: lower carries the displacement in
     /// both addr and offset, and the printer added them. asset_seek wrote n
     /// ten bytes below where qglsurf then read it.
     #[test]
     fn test_frame_address_displacement_once() {
-        let Placed::Loc(placed) = lower::operand(&mir::Arg::FrameAddress(mir::FrameAddress::new(-10, 2))) else {
-            panic!("a frame address places as a location");
-        };
+        let placed = Loc::Address(ir::Address {
+            through: Register::BP,
+            offset: -10,
+            disp_width: 1,
+            ..ir::Address::new(Some(Addr::new(Space::Frame, -10)))
+        });
         assert_eq!(_operand(&placed, &no_names()).unwrap(), "[bp-10]");
     }
 
@@ -854,13 +992,55 @@ mod tests {
         assert_eq!(_instruction(&swap, &no_names(), 0).unwrap(), ["fxch st(1)"]);
     }
 
+    /// What the interrupt entry saves, lowest slot first: each push's register
+    /// name, PUSHAD's eight dwords (EDI lowest) in its place.
+    fn saved_by_the_entry() -> Vec<(String, i64)> {
+        let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
+        let mut pushed = Vec::new();
+        for one in &enter[..INTERRUPT_SAVED] {
+            match (one.op, one.name.as_deref(), one.sources.first()) {
+                (_, Some("pushad"), _) => pushed.push(vec!["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].into_iter().map(|name| (name.to_owned(), 4)).collect::<Vec<_>>()),
+                (Operation::Push, _, Some(Loc::Reg(register))) => pushed.push(vec![(format!("{:?}", register.register).to_lowercase(), 2)]),
+                other => panic!("the entry saves with {other:?}"),
+            }
+        }
+        pushed.into_iter().rev().flat_map(|group| group.into_iter().rev()).collect()
+    }
+
+    /// The handler pushed AX, BX, CX, DX, SI, DI and BP in BCC's nine words and
+    /// again in PUSHAD: 14 bytes of code, 14 of stack and 14-35 cycles per
+    /// interrupt, saved twice for a frame nothing else read.
+    #[test]
+    fn test_an_interrupt_handler_saves_each_register_once() {
+        let mut names: Vec<String> = saved_by_the_entry().into_iter().map(|(name, size)| if size == 4 { name[1..].to_owned() } else { name }).collect();
+        names.sort();
+        let unique: BTreeSet<_> = names.iter().cloned().collect();
+        assert_eq!(names.len(), unique.len(), "saved twice: {names:?}");
+        assert_eq!(names, ["bp", "bx", "cx", "di", "ds", "dx", "es", "fs", "gs", "ax", "si", "sp"].iter().map(|one| one.to_string()).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>());
+    }
+
+    /// The frame MIR states (`X86_INTR_FRAME`) is the one the entry builds, so
+    /// a handler's parameters read the registers they name.
+    #[test]
+    fn test_the_entry_builds_the_frame_mir_states() {
+        let stated: Vec<(String, i64)> = llrm_mir::opcode::X86_INTR_FRAME.iter().map(|&(name, size)| (name.to_owned(), size)).collect();
+        assert_eq!(saved_by_the_entry()[..], stated[..12]);
+        assert_eq!(interrupt_parameters(), 2);
+        assert_eq!(llrm_mir::opcode::x86_intr_slot("ax"), Some(36));
+        assert_eq!(llrm_mir::opcode::x86_intr_slot("ds"), Some(6));
+    }
+
     fn _printed(sources: Vec<Loc>, reserve: i64) -> Vec<String> {
+        _printed_entering(sources, reserve, false)
+    }
+
+    fn _printed_entering(sources: Vec<Loc>, reserve: i64, enter: bool) -> Vec<String> {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], sources));
         let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0, stack_check: None };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -892,6 +1072,44 @@ mod tests {
         assert!(!has(&lines, "mov sp, bp") && !has(&lines, "pop bp"));
     }
 
+    /// Tuned for size, a frame with locals opens with `enter N,0` (4 bytes) where `push bp; mov
+    /// bp,sp; sub sp,N` is 6: 407 QCport functions. One with no locals keeps `push bp; mov bp,sp`.
+    #[test]
+    fn test_a_frame_with_locals_opens_with_enter_where_asked() {
+        let entered = _printed_entering(vec![through_bp()], 4, true);
+        assert_eq!(entered[1], "enter 4, 0");
+        assert!(!has(&entered, "push bp") && !has(&entered, "sub sp, 4"), "{entered:?}");
+        let plain = _printed_entering(vec![through_bp()], 4, false);
+        assert_eq!(plain[1..4], ["push bp", "mov bp, sp", "sub sp, 4"]);
+        let bare = _printed_entering(vec![through_bp()], 0, true);
+        assert_eq!(bare[1..3], ["push bp", "mov bp, sp"]);
+    }
+
+    fn _checked(check: Option<StackCheck>, reserve: i64) -> (Vec<String>, Vec<(String, String)>) {
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
+        let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
+        let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
+        let procedure = Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: true, entry: 0, stack_check: check };
+        let mut names = no_names();
+        let externs = stack_externs(std::slice::from_ref(&procedure), &mut names);
+        (_procedure(&procedure, &names, 0).unwrap().iter().map(|line| line.trim().to_owned()).collect(), externs)
+    }
+
+    /// `-fsanitize=stack` compares SP with the word and calls the routine the runtime's description
+    /// names, here made-up ones: a pass that wrote `b$pendchk` itself would not follow them. The
+    /// call is last, where no block falls into it, and the default has neither.
+    #[test]
+    fn test_a_stack_check_names_what_the_runtime_states() {
+        let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), red_zone: 0, entry: None };
+        let (lines, externs) = _checked(Some(check), 4);
+        assert_eq!(lines[1..7], ["push bp", "mov bp, sp", "sub sp, 4", "jb L0_2", "cmp sp, word ptr FOO", "jb L0_2"], "{lines:?}");
+        assert_eq!(lines[lines.len() - 3..], ["L0_2:", "call far ptr BAR", "_get endp"]);
+        assert_eq!(externs, [("FOO".to_owned(), "byte".to_owned()), ("BAR".to_owned(), "far".to_owned())]);
+        let (plain, none) = _checked(None, 4);
+        assert!(plain.iter().all(|one| !one.contains("cmp sp") && !one.contains("BAR")) && none.is_empty(), "{plain:?}");
+        assert_eq!(plain[1], "enter 4, 0", "the check turns -Os's `enter` into push/mov/sub, whose carry it tests");
+    }
+
     /// Return-tail layout must count the pop/leave absent from allocated LIR.
     #[test]
     fn test_return_overhead_prices_the_implicit_frame_teardown() {
@@ -907,6 +1125,9 @@ mod tests {
             reserve,
             callees: IndexMap::default(),
             interrupt: None,
+            size: false,
+            entry: 0,
+            stack_check: None,
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);
@@ -920,6 +1141,45 @@ mod tests {
         let lines = _printed(vec![Loc::Reg(ir::Reg { register: Register::ESI, width: 4 })], 0);
         assert!(has(&lines, "push si") && has(&lines, "pop si"));
         assert!(!has(&lines, "push esi") && !has(&lines, "pop esi"));
+    }
+
+    /// `place` saved SI on every call, entered or not, though only its loop names it: the early
+    /// `return 1` pushed and popped it for nothing. The save is where the loop starts.
+    #[test]
+    fn test_a_register_only_a_later_block_names_is_saved_there() {
+        let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
+        let si = || Loc::Reg(ir::Reg { register: Register::SI, width: 2 });
+        let blocks = vec![
+            lir::LirBlock { succ: vec![3, 2], ..lir::LirBlock::new(1, vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()])), insn(2, branch)]) },
+            lir::LirBlock::new(2, vec![insn(3, semantics(Operation::Move, "mov", vec![si()], vec![through_bp()])), insn(4, semantics(Operation::Return, "ret", vec![], vec![]))]),
+            lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
+        ];
+        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None };
+        let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        let at = |text: &str| lines.iter().position(|one| one == text).unwrap_or_else(|| panic!("{text} in {lines:?}"));
+        assert_eq!(lines.iter().filter(|one| *one == "push si").count(), 1, "{lines:?}");
+        assert!(at("push si") > at("L0_2:") && at("push si") < at("L0_3:"), "{lines:?}");
+        // The return that path makes pops it; the early one has nothing to pop.
+        assert_eq!(lines.iter().filter(|one| *one == "pop si").count(), 1, "{lines:?}");
+        assert!(at("pop si") < at("L0_3:"), "{lines:?}");
+    }
+
+    /// Reached around the block that names it as well, a return cannot pop what was not pushed: the
+    /// entry saves, as before.
+    #[test]
+    fn test_a_return_reached_around_the_save_keeps_the_save_at_the_entry() {
+        let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
+        let si = || Loc::Reg(ir::Reg { register: Register::SI, width: 2 });
+        let blocks = vec![
+            lir::LirBlock { succ: vec![3, 2], ..lir::LirBlock::new(1, vec![insn(1, branch)]) },
+            lir::LirBlock { succ: vec![3], ..lir::LirBlock::new(2, vec![insn(3, semantics(Operation::Move, "mov", vec![si()], vec![through_bp()]))]) },
+            lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
+        ];
+        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None };
+        let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(lines.iter().position(|one| one == "push si").unwrap() < lines.iter().position(|one| one == "L0_1:").unwrap(), "{lines:?}");
     }
 
     /// peephole's multiply by three has no address, only base, index and scale.

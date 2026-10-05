@@ -7,7 +7,7 @@ use llrm_analysis::{cfg, liveness};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Function, Module, ValueId};
 
-use super::{Room, Traffic, cells, integer, segment_view, sites, spilled, traffic, words};
+use super::{Room, Site, Traffic, addressed, cells, forecast, integer, segment_view, sites, spilled, transient, traffic, words};
 use crate::profit::OperationCosts;
 
 fn module(text: &str) -> Module {
@@ -141,16 +141,16 @@ entry:
     let cells = cells(function);
     let room = Room { registers: 3, across_call: 1, ..Room::default() };
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_| 0, &cells, &integer, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| room.across_call, &|_, _| 0, &cells, &integer, &|_| false, &|_| false)).flat_map(super::Site::points).collect::<Vec<_>>();
     let prices = traffic(function, &looped(function), &cells, &costs(), &|_| true, &|_| 1);
     // Each of `a` and `b` is stored once and loaded once.
     assert_eq!(spilled(points, |one| prices.get(&one).map_or(0, |one| one.price(&costs()))), 2);
 }
 
 /// A load through a far pointer takes the register its selector passes
-/// through: one fewer holds values there, which no point counted, so a loop
-/// with four products and a counter live across ten such loads was planned
-/// to fit and could not be allocated.
+/// through besides the pointer's own: one fewer holds values there, which no
+/// point counted, so a loop with four products and a counter live across ten
+/// such loads was planned to fit and could not be allocated.
 #[test]
 fn test_a_far_access_takes_a_register_of_its_own() {
     let module = module("define i16 @f(ptr addrspace(1) %far, ptr %near) {
@@ -165,8 +165,11 @@ entry:
     let layout = llrm_analysis::testing::layout(&module);
     let room = Room { registers: 6, across_call: 2, far_access: 1, ..Room::default() };
     let loads = function.layout().iter().flat_map(|&block| function.block(block).instructions().to_vec()).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect::<Vec<_>>();
-    let taken = loads.iter().map(|&inst| super::transient(&module.context, &layout, function, inst, room)).collect::<Vec<_>>();
-    assert_eq!(taken, [2, 1]);
+    let taken = loads.iter().map(|&inst| {
+        let live = function.instruction(inst).operands.iter().filter_map(|one| if let llrm_mir::module::Operand::Value(value) = one { Some(*value) } else { None }).collect();
+        super::transient(&module.context, &layout, function, inst, room, &live)
+    }).collect::<Vec<_>>();
+    assert_eq!(taken, [1, 0]);
 }
 
 /// A far view of a segment is held in a segment register: counted against the
@@ -196,11 +199,184 @@ entry:
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
-        sites(function, &found, block, room, &|_| 2, &|_| 0, &cells, &integer, &views).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
+        sites(function, &found, block, room, &|_| 2, &|_, _| 0, &cells, &integer, &views, &|_| false).into_iter().find(|site| matches!(function.instruction(site.inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).expect("a load")
     };
     let held = at(3);
     assert_eq!(held.segments.residents.len(), 2, "both views are in segment registers");
     assert!(held.before.residents.iter().all(|&one| !views(one)));
     let none = at(0);
     assert!(none.segments.residents.is_empty() && none.before.residents.iter().filter(|&&one| views(one)).count() == 2, "no segment registers: general ones");
+}
+
+fn _peak(text: &str, room: Room) -> i64 {
+    let module = module(text);
+    let function = function(&module);
+    let layout = llrm_analysis::testing::layout(&module);
+    let found = liveness::live(function);
+    let cells = cells(function);
+    let integer = |value: ValueId| integer(&module.context, function, value);
+    let views = |value: ValueId| segment_view(&module.context, &layout, function, value);
+    let addressed = addressed(function);
+    let routed = |value: ValueId| addressed.contains(&value);
+    let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| 2, &|inst, live| transient(&module.context, &layout, function, inst, room, live), &cells, &integer, &views, &routed)).flat_map(Site::points);
+    forecast(points, |_| 1).peak
+}
+
+fn _walk(registers: i64) -> i64 {
+    _peak("define i16 @f(ptr %p) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %n, %loop ]
+  %g = getelementptr i16, ptr %p, i16 %i
+  %v = load i16, ptr %g
+  %n = add i16 %i, 1
+  %more = icmp ne i16 %n, 100
+  br i1 %more, label %loop, label %exit
+exit:
+  ret i16 %n
+}
+", Room { registers, across_call: 2, ..Room::default() })
+}
+
+/// An address only its own access takes is folded into the access: it is not
+/// held in a register besides its pointer and index, which the access reads.
+/// Counted as a third, a loop holding a pointer and an index forecast a spill
+/// on two registers and the allocator made none: 54% of the corpus's loops
+/// had a forecast spill that was never made.
+#[test]
+fn test_an_address_folded_into_its_access_takes_no_register_of_its_own() {
+    assert_eq!(_walk(2), 0, "the pointer and the index fit two registers");
+    assert_eq!(_walk(1), 1, "one more than one register holds");
+}
+
+/// `p[i + 8]` is two `getelementptr`s, one the other's base, and one access:
+/// folded together, the chain holds no register but its pointer and index. The
+/// inner one counted as a third, so a loop of one pointer and one index
+/// forecast a spill on two registers.
+#[test]
+fn test_a_chain_of_addresses_folds_into_its_access() {
+    let text = "define i16 @f(ptr %p) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %n, %loop ]
+  %a = getelementptr i8, ptr %p, i16 %i
+  %b = getelementptr i8, ptr %a, i16 16
+  %v = load i16, ptr %b
+  %n = add i16 %i, 2
+  %more = icmp ne i16 %n, 100
+  br i1 %more, label %loop, label %exit
+exit:
+  ret i16 %n
+}
+";
+    assert_eq!(_peak(text, Room { registers: 2, across_call: 2, ..Room::default() }), 0);
+}
+
+/// 16-bit addresses hold a pointer in BX, SI or DI: three pointers and an
+/// index live through a loop did not fit three address registers though six
+/// registers held them, and the allocator reloaded one every trip (conc3's
+/// 40 reloads) where the model forecast no spill.
+#[test]
+fn test_pointers_and_an_index_fit_the_registers_an_address_may_use() {
+    let text = "define i16 @f(ptr %a, ptr %b, ptr %c) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %n, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s3, %loop ]
+  %ga = getelementptr i16, ptr %a, i16 %i
+  %va = load i16, ptr %ga
+  %s1 = add i16 %s, %va
+  %gb = getelementptr i16, ptr %b, i16 %i
+  %vb = load i16, ptr %gb
+  %s2 = add i16 %s1, %vb
+  %gc = getelementptr i16, ptr %c, i16 %i
+  %vc = load i16, ptr %gc
+  %s3 = add i16 %s2, %vc
+  %n = add i16 %i, 1
+  %more = icmp ne i16 %n, 100
+  br i1 %more, label %loop, label %exit
+exit:
+  ret i16 %s3
+}
+";
+    let room = |addresses| Room { registers: 6, across_call: 2, addresses, ..Room::default() };
+    assert_eq!(_peak(text, room(0)), 0, "no address constraint");
+    assert_eq!(_peak(text, room(4)), 0, "three pointers and the index fit four");
+    assert_eq!(_peak(text, room(3)), 1, "one more than three hold");
+}
+
+const HALVED: &str = "define i32 @f(ptr %base, i16 %bound) {
+b1:
+  br label %b2
+
+b2:
+  %iv = phi i16 [ 0, %b1 ], [ %next, %b3 ]
+  %i = phi i16 [ 0, %b1 ], [ %i1, %b3 ]
+  %sum = phi i32 [ 0, %b1 ], [ %sum1, %b3 ]
+  %more = icmp slt i16 %i, %bound
+  br i1 %more, label %b3, label %b4
+
+b3:
+  %sign = ashr i16 %i, 15
+  %biased = sub i16 %i, %sign
+  %half = ashr i16 %biased, 1
+  %at = getelementptr i8, ptr %base, i16 %half
+  %v = load i16, ptr %at
+  %w = sext i16 %v to i32
+  %sum1 = add i32 %sum, %w
+  %i1 = add i16 %i, 1
+  %next = add i16 %iv, 2
+  br label %b2
+
+b4:
+  ret i32 %sum
+}
+";
+
+/// A result made in its first operand's register copies an operand that stays
+/// live: `x / 2` is `mov cx, dx; sub cx, di` with `dx` (the index) live after, so
+/// base, bound, index, sum, a second counter and the sign held six values and the
+/// copy made a seventh. No point held it: lsr then added the counter, the bound
+/// went to `[bp+8]`, and the loop reloaded it each trip (#242).
+#[test]
+fn test_an_arithmetic_result_copies_the_first_operand_that_stays_live() {
+    let room = |two_address| Room { registers: 6, across_call: 2, two_address, ..Room::default() };
+    assert_eq!(_peak(HALVED, room(false)), 0, "six values in six registers");
+    assert_eq!(_peak(HALVED, room(true)), 1, "the copy is a seventh");
+}
+
+/// A frame object's address and a constant offset into it, made before a loop and
+/// read in its blocks, are displacements in each access (`[bp+si-188]`), not a value in a
+/// register. Counted as one, nbody's four arrays' sixteen element addresses
+/// forecast 23 residents on six registers, charged lsr 3000 for a counter
+/// the listing kept in a register, and sent its stride-8 counter away (#386).
+#[test]
+fn test_a_constant_offset_into_a_frame_object_takes_no_register() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  %a = alloca [32 x i8]
+  %p = getelementptr inbounds i16, ptr %a, i16 3
+  %q = getelementptr inbounds i16, ptr %a, i16 5
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %latch ]
+  %v = load i16, ptr %p
+  %at = getelementptr i16, ptr %a, i16 %i
+  %u = load i16, ptr %at
+  %more = icmp ult i16 %i, %n
+  br i1 %more, label %latch, label %exit
+latch:
+  %t = add i16 %v, %u
+  %w = add i16 %t, %i
+  store i16 %w, ptr %q
+  %next = add i16 %i, 1
+  br label %loop
+exit:
+  ret i16 %n
+}
+";
+    assert_eq!(_peak(text, Room { registers: 4, across_call: 2, ..Room::default() }), 0, "%n, %i, %v and %u fit four registers; %a, %p and %q are [bp+disp]");
 }

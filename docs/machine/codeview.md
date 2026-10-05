@@ -77,9 +77,9 @@ can look like it.** A module with at least one zero-parameter procedure gets
 a `0x75 0x80` signature record there whose `arglist` field points straight
 back at `0x0200` rather than at a real `TypeList` -- there is nothing to
 list, so BC reuses the segment's own first entry as the "empty" sentinel
-(`tests/suite/arrudt.bas` and `tests/suite/nestud.bas`'s `Inside`, both zero-argument
+(`tests/run/qb/arrudt.bas` and `tests/run/qb/nestud.bas`'s `Inside`, both zero-argument
 SUBs). A module with no procedure at all never reaches index `0x0201`
-(`tests/suite/arrays.bas`, `tests/suite/udt.bas`), which is what tells the two apart --
+(`tests/run/qb/arrays.bas`, `tests/run/qb/udt.bas`), which is what tells the two apart --
 `cvinfo.py`'s `_parse_signature` matches `nparms == 0` and
 `arglist == BASE_TYPE_INDEX` as this specific shape rather than another
 `Unresolved`.
@@ -101,13 +101,13 @@ them:
 
 **An array's record carries only its element type, never bounds.** A 1-D
 `DIM x(N) AS LONG` and a 2-D `DIM x(N, M) AS LONG` produce the byte-identical
-11-byte `$$TYPES` segment (`tests/suite/arrays.bas` and a throwaway 2-D probe) --
+11-byte `$$TYPES` segment (`tests/run/qb/arrays.bas` and a throwaway 2-D probe) --
 so BASIC's own array bounds live in the runtime's array descriptor, not in
 debug type info, and `Array` here has nowhere to put a bound because BC never
 writes one. Confirmed for both a primitive element and a `TYPE` element
-(`tests/suite/udt.bas`'s `pts`, an array of `Coord`) -- the same `0x8c` shape either
+(`tests/run/qb/udt.bas`'s `pts`, an array of `Coord`) -- the same `0x8c` shape either
 way, just pointing at a different type_index. **The same array-of-`TYPE`
-shape is scope-independent**: `tests/suite/arrudt.bas`'s `pts` (a module-level
+shape is scope-independent**: `tests/run/qb/arrudt.bas`'s `pts` (a module-level
 `LDATA`) and its `Inside` SUB's own `lpts` (a `BPREL` local) are the exact
 same `$$TYPES` entry, not two re-emissions of it.
 
@@ -120,7 +120,7 @@ name being alignment padding tied to name-length parity -- it is not; it is
 present, and always `0x69`, regardless of whether the record's own length is
 even or odd). What that trailing byte means is still not resolved, and it
 stayed `0x69` under every further shape thrown at it: a one-field structure
-(`tests/suite/nestud.bas`'s `Inner`), a structure whose last field is a fixed
+(`tests/run/qb/nestud.bas`'s `Inner`), a structure whose last field is a fixed
 string rather than a primitive (`Outer`), and a structure that ends up the
 very last record in the segment because nothing else references it
 afterward (`Solo`, used only as a bare local). `cvinfo.py` reads a
@@ -132,7 +132,7 @@ all.** `_parse_struct` already stores a field's type_index exactly like any
 other, and `type_name`'s `Struct` branch already recurses into it -- BC's own
 `$$TYPES` just points the outer structure's field-type list at the inner
 structure's own record, the same way it points at a primitive or an array.
-Confirmed on `tests/suite/nestud.bas`'s `Outer` (a field of type `Inner`), both as
+Confirmed on `tests/run/qb/nestud.bas`'s `Outer` (a field of type `Inner`), both as
 a module-level `DIM` and a procedure-local one, plain and arrayed
 (`ARRAY OF TYPE Outer` for `arr`/`larr`). The one genuinely new shape nesting
 exposed is a `STRING * n` field -- BASIC requires a fixed length inside a
@@ -142,14 +142,14 @@ own, structurally unrelated one.
 
 **A BYREF parameter is two hops on VBDOS and PDS**: the `$$SYMBOLS` record's
 type_index names a `0x76` record, which names a `0x7a` (pointer) record,
-which finally names the parameter's real type (`tests/suite/procs.bas`'s
+which finally names the parameter's real type (`tests/run/qb/procs.bas`'s
 `Twice&`/`Report`, `LONG` and `STRING` respectively). `cvinfo.py` walks both
 hops and reports e.g. `BYREF LONG`; the two tags are not exposed as separate
 concepts since BASIC has no syntax for a bare pointer to tell them apart with.
 
 **An array parameter is BYREF through the exact same chain on VBDOS and
 PDS** -- `0x76` wrapping `0x7a` wrapping `0x8c`, no new tag, just an array
-where a primitive or `TYPE` would otherwise be (`tests/suite/arrprm.bas`'s
+where a primitive or `TYPE` would otherwise be (`tests/run/qb/arrprm.bas`'s
 `FillNums`/`FillPts`). **QuickBASIC 4.5 diverges a second way here**: rather
 than its own PRIMITIVES-plus-`0x20` shortcut below (which only covers
 INTEGER/LONG/STRING), an array parameter's type_index names a bare `0x7a`
@@ -161,12 +161,12 @@ passed by reference regardless of which shape names it.
 **BYVAL skips the wrapper chain entirely.** A `BYVAL n AS LONG` parameter's
 own type_index is the plain PRIMITIVES/custom code, exactly like a local's
 -- no `$$TYPES` record at all for it, on either VBDOS or PDS
-(`tests/suite/cvonly/byval.bas`'s `AddVal&`, contrasted with `AddRef&`'s ordinary
+(`tests/run/qb/cvonly/byval.bas`'s `AddVal&`, contrasted with `AddRef&`'s ordinary
 BYREF `n` in the same module). `cvinfo.py` needed no code change for this:
 `PRIMITIVES` already reports a bare code as itself. **QuickBASIC 4.5 has no
 BYVAL at all** -- `BC.EXE` rejects `BYVAL n AS LONG` outright ("Formal
 parameter specification illegal"), so this measurement is VBDOS/PDS only,
-and the probe lives in `tests/suite/cvonly/` rather than `tests/suite/` so
+and the probe lives in `tests/run/qb/cvonly/` rather than `tests/run/qb/` so
 `tools/e2e.py`'s differential harness -- which needs every configuration to
 compile, link and run -- never tries to build it.
 
@@ -176,7 +176,7 @@ record -- never touching `$$TYPES` -- and BYREF `INTEGER`/`STRING` get
 `0xa1`/`0xb7`. Each is exactly its PRIMITIVES byte plus `0x20`
 (`0x81`+`0x20`, `0x82`+`0x20`, `0x97`+`0x20`), and the same pattern holds for
 `SINGLE`/`DOUBLE` (`0x88`+`0x20` = `0xa8`, `0x89`+`0x20` = `0xa9`,
-`tests/suite/byref2.bas`'s `Half!`/`Doubled#`). `STRING`(far) is still unmeasured:
+`tests/run/qb/byref2.bas`'s `Half!`/`Doubled#`). `STRING`(far) is still unmeasured:
 forcing a far string needs `/Fs`, and PDS is the only one of the three that
 accepts it (`docs/history/inherited-plan.md`'s own switch matrix), so there is no
 QB 4.5 switch that reaches that code path at all.
@@ -211,13 +211,13 @@ QB 4.5 switch that reaches that code path at all.
 function's name (`%`/`&`/`!`/`#`/`$`), read directly off the name already in
 the `0x01` record -- not reconstructed from `$$TYPES`. Reliable when the
 sigil is there; PDS 7.1 and QB 4.5 keep it in the debug name, VBDOS drops it
-unconditionally -- `Twice&` (`tests/suite/procs.bas`, explicitly `LONG`, not just
+unconditionally -- `Twice&` (`tests/run/qb/procs.bas`, explicitly `LONG`, not just
 the `DEFINT` default) still shows up as plain `Twice` under VBDOS, so this
 isn't about redundancy with a default, VBDOS just never puts a sigil on a
 procedure's debug name.
 
 **QB 4.5 under `ON ERROR GOTO`/`RESUME` emits a label per resumable
-statement.** `tests/suite/divmod.bas` has exactly one source label (`handler:`);
+statement.** `tests/run/qb/divmod.bas` has exactly one source label (`handler:`);
 VBDOS and PDS 7.1 report exactly two label records (`_0` and `handler`), but
 QB 4.5 reports 33 -- one compiler-generated `_0` at nearly every statement
 boundary, presumably so `RESUME NEXT` has something to jump to. Confirmed

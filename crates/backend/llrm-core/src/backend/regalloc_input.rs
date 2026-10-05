@@ -19,15 +19,41 @@ pub enum Calls {
     Everything,
 }
 
-/// `name` of a C program's `tests/fixtures/mir/{fixture}`, as `before_regalloc_in`.
+/// `name` of a C program's `tests/check/mir/{fixture}`, as `before_regalloc_in`.
 pub fn before_regalloc<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
     before_regalloc_in(Calls::C, fixture, name, cpu_name)
 }
 
-/// `name` of `tests/fixtures/mir/{fixture}` for `cpu`, run through every
-/// phase before `RegAlloc`; the body, and the phases from `RegAlloc` on.
+/// `name` of `tests/check/mir/{fixture}` for `cpu`, run through every
+/// phase before `RegAlloc` as production runs them (the spiller included);
+/// the body, and the phases from `RegAlloc` on.
 pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mir").join(fixture);
+    before_phase_skipping(calls, fixture, name, cpu_name, "RegAlloc", &[])
+}
+
+/// `before_regalloc`, without the spiller: the allocator is handed the pressure the spiller
+/// takes away in production. For tests of the allocator on its own, which must hold for any input
+/// it is given; a test whose premise only holds here guards code the production pipeline may not reach.
+pub fn before_regalloc_unspilled<'a>(fixture: &str, name: &str, cpu_name: &'a str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    before_phase_skipping(Calls::C, fixture, name, cpu_name, "RegAlloc", &["SsaSpill"])
+}
+
+/// `name` of `tests/check/mir/{fixture}` for `cpu`, run through every
+/// phase before the one of class `phase`; the body, and the phases from it on.
+pub fn before_phase<'a>(calls: Calls, fixture: &str, name: &str, cpu_name: &'a str, phase_class: &str) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    before_phase_skipping(calls, fixture, name, cpu_name, phase_class, &[])
+}
+
+/// `before_phase`, leaving out the phases of the classes in `skipped`.
+pub fn before_phase_skipping<'a>(
+    calls: Calls,
+    fixture: &str,
+    name: &str,
+    cpu_name: &'a str,
+    phase_class: &str,
+    skipped: &[&str],
+) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/check/mir").join(fixture);
     let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
     let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
     let abi = crate::abi::qb::HirAbi {
@@ -37,6 +63,7 @@ pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name:
             Calls::C => EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(),
             Calls::Everything => Default::default(),
         },
+        stack_check: None,
     };
     let cpu = cpu::profile(cpu_name).unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));
@@ -47,15 +74,18 @@ pub fn before_regalloc_in<'a>(calls: Calls, fixture: &str, name: &str, cpu_name:
     let pinned = selected.body.pins.clone();
     let mut body = selected.body;
     let phases =
-        crate::flow::machine(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN).unwrap();
+        crate::flow::machine(&pinned, Some(shared), Some(pool), Some(&selected.calls), false, ProfileOrName::Profile(cpu), &target::BUILT_IN, true).unwrap();
     let mut phases = phases.into_iter();
     for mut phase in phases.by_ref() {
-        if phase.class_name() == "RegAlloc" {
+        if phase.class_name() == phase_class {
             return (body, std::iter::once(phase).chain(phases).collect());
+        }
+        if skipped.contains(&phase.class_name()) {
+            continue;
         }
         body = phase.transform(body).unwrap();
     }
-    panic!("no RegAlloc phase");
+    panic!("no {phase_class} phase");
 }
 
 /// `body` through every phase given, in order.

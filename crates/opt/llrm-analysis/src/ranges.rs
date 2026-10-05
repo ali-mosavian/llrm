@@ -22,8 +22,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::loops;
 use llrm_mir::context::signed;
-use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
+use llrm_mir::context::ConstantKind;
+use llrm_mir::module::{BlockId, InstId, MetadataOperand, Operand, ValueDef, ValueId};
+use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
@@ -113,21 +115,28 @@ pub fn on_edge(
     let Some((condition, taken)) = branch(unit, block) else {
         return Ok(Some(result));
     };
+    Ok(narrowed(unit, condition, successor == taken, known, facts))
+}
+
+/// What `known` becomes where `condition`, an `icmp`, is `holds`; `None`
+/// where it cannot be.
+fn narrowed(unit: &Unit, condition: Operand, holds: bool, known: &IndexMap<ValueId, Interval>, facts: &IndexMap<ValueId, Known>) -> Option<IndexMap<ValueId, Interval>> {
+    let result = known.clone();
     let Some((_, compare)) = unit.defining(condition) else {
-        return Ok(Some(result));
+        return Some(result);
     };
     let Opcode::ICmp(predicate) = compare.opcode else {
-        return Ok(Some(result));
+        return Some(result);
     };
     let (mut left, mut right) = (compare.operands[0], compare.operands[1]);
     let (Some(left_width), Some(right_width)) = (unit.int_bits(left), unit.int_bits(right)) else {
-        return Ok(Some(result));
+        return Some(result);
     };
     if right_width != left_width {
-        return Ok(Some(result));
+        return Some(result);
     }
     let mut kind = predicate;
-    if successor != taken {
+    if !holds {
         kind = kind.inverse();
     }
     let sign = BigInt::from(1_u8) << (left_width - 1);
@@ -143,7 +152,7 @@ pub fn on_edge(
             IntPredicate::Ult => first_low < second_high,
             _ => first_low <= second_high,
         };
-        return Ok(possible.then_some(result));
+        return possible.then_some(result);
     }
     if matches!(kind, IntPredicate::Sge | IntPredicate::Sgt) {
         (left, right) = (right, left);
@@ -174,18 +183,71 @@ pub fn on_edge(
             };
             [excluding(&first, &second), excluding(&second, &first)]
         }
-        _ => return Ok(Some(result)),
+        _ => return Some(result),
     };
     let mut result = result;
     for (operand, (low, high)) in [left, right].into_iter().zip(spans) {
         if low > high {
-            return Ok(None);
+            return None;
         }
         if let Operand::Value(value) = operand {
-            result.insert(value, Interval { low, high, width: left_width });
+            let interval = Interval { low, high, width: left_width };
+            result.insert(value, interval.clone());
+            _refine_through(unit, value, &interval, known, facts, &mut result, 3)?;
         }
     }
-    Ok(Some(result))
+    Some(result)
+}
+
+/// What `value` lying in `interval` says of the operands of the instruction that made
+/// it, put in `result`; `None` where they cannot be. Only an instruction that, from
+/// `known`, computes an interval does so without wrapping, so only then do its
+/// operands' bounds follow from the result's.
+fn _refine_through(unit: &Unit, value: ValueId, interval: &Interval, known: &IndexMap<ValueId, Interval>, facts: &IndexMap<ValueId, Known>, result: &mut IndexMap<ValueId, Interval>, depth: usize) -> Option<()> {
+    let Some((inst, op)) = unit.defining(Operand::Value(value)) else { return Some(()) };
+    if depth == 0 || _computed(unit, inst, known, facts).is_none() {
+        return Some(());
+    }
+    let width = interval.width;
+    let operand = |one: Operand| _operand(unit, one, known, facts).filter(|found| found.width == width);
+    let mut bounds: Vec<(Operand, BigInt, BigInt)> = Vec::new();
+    match (&op.opcode, unit.intrinsic(inst)) {
+        (Opcode::Binary(BinaryOp::Add), _) => {
+            let (Some(a), Some(b)) = (operand(op.operands[0]), operand(op.operands[1])) else { return Some(()) };
+            bounds.push((op.operands[0], &interval.low - &b.high, &interval.high - &b.low));
+            bounds.push((op.operands[1], &interval.low - &a.high, &interval.high - &a.low));
+        }
+        (Opcode::Binary(BinaryOp::Sub), _) => {
+            let (Some(a), Some(b)) = (operand(op.operands[0]), operand(op.operands[1])) else { return Some(()) };
+            bounds.push((op.operands[0], &interval.low + &b.low, &interval.high + &b.high));
+            bounds.push((op.operands[1], &a.low - &interval.high, &a.high - &interval.low));
+        }
+        (_, Some(Intrinsic::Fixed { divide: false })) if op.operands[0] == op.operands[1] => {
+            let Some(scale) = unit.int_constant(op.operands[2]).and_then(|scale| usize::try_from(scale).ok()) else { return Some(()) };
+            if interval.high < BigInt::from(0_u8) {
+                return None;
+            }
+            // The least square past `high`, floored by the scale, is `high + 1` scaled.
+            let limit: BigInt = ((&interval.high + 1) << scale) - 1;
+            let root = limit.sqrt();
+            bounds.push((op.operands[0], -root.clone(), root));
+        }
+        _ => {}
+    }
+    for (one, low, high) in bounds {
+        let Operand::Value(inner) = one else { continue };
+        let Some(current) = operand(one) else { continue };
+        let (low, high) = (current.low.clone().max(low), current.high.clone().min(high));
+        if low > high {
+            return None;
+        }
+        let narrower = Interval { low, high, width };
+        if narrower != current {
+            result.insert(inner, narrower.clone());
+            _refine_through(unit, inner, &narrower, known, facts, result, depth - 1)?;
+        }
+    }
+    Some(())
 }
 
 fn _unsigned_span(interval: &Interval) -> (BigInt, BigInt) {
@@ -211,8 +273,73 @@ pub fn _operand(unit: &Unit, operand: Operand, known: &IndexMap<ValueId, Interva
     if let Some(interval) = known.get(&value).filter(|interval| interval.width == width) {
         return Some(interval.clone());
     }
+    if let Some(interval) = declared_argument(unit, value).filter(|interval| interval.width == width) {
+        return Some(interval);
+    }
     let fact = facts.get(&value).filter(|fact| fact.width >= width)?;
     Some(singleton(&fact.n, width))
+}
+
+/// What the program states of `value` alone: a parameter's `range`, or the
+/// `!range` or `range` of the load or call that makes it.
+pub fn declared(unit: &Unit, value: ValueId) -> Option<Interval> {
+    match unit.function.value(value).def {
+        ValueDef::Argument(_) => declared_argument(unit, value),
+        ValueDef::Instruction(inst) => _computed(unit, inst, &IndexMap::default(), &IndexMap::default()).filter(|_| {
+            let op = unit.function.instruction(inst);
+            matches!(op.opcode, Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_))
+        }),
+        _ => None,
+    }
+}
+
+/// The interval a `range` attribute states, if it is one that does not wrap
+/// past the signed bounds: `[lower, upper)` at the type's width.
+fn stated(unit: &Unit, attribute: &Attribute) -> Option<Interval> {
+    let Attribute::Range { ty, lower, upper } = attribute else { return None };
+    let width = unit.context.types.int_bits(*ty)?;
+    let (low, high) = (singleton(&BigInt::from(*lower), width), singleton(&(BigInt::from(*upper) - 1), width));
+    (lower != upper && low.low <= high.low).then_some(Interval { low: low.low, high: high.low, width })
+}
+
+/// What `!range` on `inst` says of its result: `[lo, hi)` at the result's
+/// width, as LLVM's `computeConstantRange` reads it of a load or a call, the
+/// way a frontend states what a value may hold of an instruction.
+fn declared_metadata(unit: &Unit, inst: InstId) -> Option<Interval> {
+    let op = unit.function.instruction(inst);
+    let (_, node) = op.metadata.iter().find(|(kind, _)| kind == "range")?;
+    let [MetadataOperand::Constant(lower), MetadataOperand::Constant(upper)] = unit.metadata.get(node.0 as usize)?.operands[..] else { return None };
+    let ty = op.result.map(|result| unit.function.value(result).ty)?;
+    let bits = |one| match unit.context.get(one).kind {
+        ConstantKind::Int(bits) => Some(bits),
+        ConstantKind::Zero => Some(0),
+        _ => None,
+    };
+    stated(unit, &Attribute::Range { ty, lower: bits(lower)?, upper: bits(upper)? })
+}
+
+/// Every parameter's stated range.
+fn declared_arguments(unit: &Unit) -> IndexMap<ValueId, Interval> {
+    unit.function.parameters().iter().filter_map(|&value| Some((value, declared_argument(unit, value)?))).collect()
+}
+
+/// What a `range` on parameter `value` says of it.
+fn declared_argument(unit: &Unit, value: ValueId) -> Option<Interval> {
+    let ValueDef::Argument(index) = unit.function.value(value).def else { return None };
+    unit.function.parameter_attrs.get(index as usize)?.iter().find_map(|one| stated(unit, one))
+}
+
+/// What a `range` on call `inst`'s result says of it, at the call or on the
+/// callee: the contract of a routine whose result is bounded, `LEN`'s
+/// 0 to 32767.
+fn declared_result(unit: &Unit, inst: InstId) -> Option<Interval> {
+    let op = unit.function.instruction(inst);
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return None };
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst).and_then(|global| unit.globals.get(global.0 as usize)).and_then(|global| global.function());
+    let attributes = info.return_attrs.iter().chain(callee.iter().flat_map(|function| function.return_attrs.iter()));
+    let mut stated = attributes.filter_map(|one| stated(unit, one));
+    let first = stated.next()?;
+    stated.try_fold(first, |one, other| (one.width == other.width).then(|| Interval { low: one.low.max(other.low), high: one.high.min(other.high), width: one.width }).filter(|met| met.low <= met.high))
 }
 
 /// `n`'s low `width` bits, signed, as an interval of one.
@@ -228,6 +355,13 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
     let op = unit.function.instruction(inst);
     let result = op.result?;
     let width = unit.int_bits(Operand::Value(result))?;
+    let declared = [declared_result(unit, inst), declared_metadata(unit, inst)].into_iter().flatten().filter(|interval| interval.width == width);
+    if let Some(interval) = declared.reduce(|one, other| Interval { low: one.low.max(other.low), high: one.high.min(other.high), width }).filter(|interval| interval.low <= interval.high) {
+        return Some(interval);
+    }
+    if let Some(Intrinsic::Fixed { divide: false }) = unit.intrinsic(inst) {
+        return _fixed_product(unit, inst, width, known, facts);
+    }
     // Every other operation answers None below, whatever its operands.
     let kind = match op.opcode {
         Opcode::Cast(CastOp::SExt) => None,
@@ -271,18 +405,39 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
         match kind {
             Some(BinaryOp::Add) => (low, high) = (&first.low + &second.low, &first.high + &second.high),
             Some(BinaryOp::Sub) => (low, high) = (&first.low - &second.high, &first.high - &second.low),
-            _ => {
-                let products = [&first.low, &first.high]
-                    .into_iter()
-                    .flat_map(|left| [&second.low, &second.high].into_iter().map(move |right| left * right))
-                    .collect::<Vec<_>>();
-                (low, high) = (products.iter().min().expect("four products").clone(), products.iter().max().expect("four products").clone());
-            }
+            _ => (low, high) = product(first, second, op.operands[0] == op.operands[1]),
         }
     } else {
         return None;
     }
     fits(&low, &high, width).then_some(Interval { low, high, width })
+}
+
+/// The values `a * b` takes, before any wrap. `same` is that both are one value, a square:
+/// never negative, though its corners' products are.
+pub fn product(a: &Interval, b: &Interval, same: bool) -> (BigInt, BigInt) {
+    if same {
+        let zero = BigInt::from(0_u8);
+        let (low, high) = (&a.low * &a.low, &a.high * &a.high);
+        let spans_zero = a.low <= zero && zero <= a.high;
+        return (if spans_zero { zero } else { low.clone().min(high.clone()) }, low.max(high));
+    }
+    let corners = [&a.low, &a.high].into_iter().flat_map(|left| [&b.low, &b.high].into_iter().map(move |right| left * right)).collect::<Vec<_>>();
+    (corners.iter().min().expect("four products").clone(), corners.iter().max().expect("four products").clone())
+}
+
+/// `llvm.smul.fix` of two integers: the wide product floored by the scale, where it
+/// fits the width; one that wraps when stored has no interval.
+fn _fixed_product(unit: &Unit, inst: InstId, width: u32, known: &IndexMap<ValueId, Interval>, facts: &IndexMap<ValueId, Known>) -> Option<Interval> {
+    let operands = &unit.function.instruction(inst).operands;
+    let scale = usize::try_from(unit.int_constant(operands[2])?).ok().filter(|&scale| (0..width as usize).contains(&scale))?;
+    let operand = |one: Operand| _operand(unit, one, known, facts).filter(|interval| interval.width == width);
+    let (a, b) = (operand(operands[0])?, operand(operands[1])?);
+    let (low, high) = product(&a, &b, operands[0] == operands[1]);
+    // `>>` on a BigInt floors, as the arithmetic shift of the wide product does.
+    let (low, high) = (low >> scale, high >> scale);
+    let sign = BigInt::from(1_u8) << (width - 1);
+    (-&sign <= low && high < sign).then_some(Interval { low, high, width })
 }
 
 /// Taken values and the final latch update must all fit without wrapping.
@@ -319,14 +474,17 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
     let predecessors = loops::predecessors(&graph);
     let immediate = unit.shape().dominance.immediate_dominators(function);
     let mut known: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
+    let mut own: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
+    let assumed = unit.assumptions();
     for at in loops::reverse_postorder(&graph, cfg::id(entry)) {
         let block = cfg::block(at);
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
+        let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { IndexMap::default() };
         let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
             Some((parent, inherited)) if edges(unit, cfg::block(parent), block) == 1 => {
                 on_edge(unit, cfg::block(parent), block, inherited, Some(facts))?.unwrap_or_else(|| inherited.clone())
             }
-            _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).cloned().unwrap_or_default(),
+            _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).cloned().unwrap_or(seeded),
         };
         for &inst in function.block(block).instructions() {
             let (Some(interval), Some(result)) = (_computed(unit, inst, &scoped, facts), function.instruction(inst).result) else {
@@ -344,12 +502,21 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
                 scoped.insert(result, interval);
             }
         }
-        known.insert(at, scoped);
+        // What the block assumes holds below it, not in it: the code before the
+        // assume is not covered.
+        let mut below = scoped.clone();
+        for &condition in assumed.here(at) {
+            if let Some(narrower) = narrowed(unit, condition, true, &below, facts) {
+                below = narrower;
+            }
+        }
+        own.insert(at, scoped);
+        known.insert(at, below);
     }
     Ok(function
         .layout()
         .iter()
-        .filter_map(|&block| known.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), scoped.clone())))
+        .filter_map(|&block| own.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), scoped.clone())))
         .collect())
 }
 
@@ -376,8 +543,13 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let shape = unit.shape();
+    let assumed = unit.assumptions();
+    let edges_above = dominated_edges_with(unit, facts)?;
     let mut result = Facts::default();
-    for loop_ in &shape.loops {
+    // An enclosing loop's facts are in `result` before an inner loop reads them.
+    let mut nest: Vec<_> = shape.loops.iter().collect();
+    nest.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
+    for loop_ in nest {
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
@@ -385,7 +557,7 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         if proofs.is_empty() || !proofs.iter().all(|proof| proof.posttested) {
             inside.remove(&loop_.header);
         }
-        let mut known = IndexMap::<ValueId, Interval>::default();
+        let mut known = declared_arguments(unit);
         let mut trips = BTreeSet::new();
         for proof in &proofs {
             if let (Some((low, high)), Some(count)) = (proof.span(), &proof.count) {
@@ -405,11 +577,25 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                 }
             }
         }
-        if known.is_empty() {
-            continue;
+        let counted = !known.is_empty();
+        // What is known above the loop of the values made outside it.
+        let at_entry = |at: i64| {
+            let mut found = edges_above.get(&at).cloned().unwrap_or_default();
+            for (value, interval) in result.get(&at).into_iter().flatten() {
+                narrow(&mut found, *value, interval.clone());
+            }
+            found
+        };
+        let outside = |value: ValueId| match function.value(value).def {
+            ValueDef::Argument(_) => true,
+            ValueDef::Instruction(inst) => function.parent(inst).is_some_and(|block| !loop_.body.contains(&cfg::id(block))),
+        };
+        let header_scope = shape.dominance.immediate(loop_.header).map(at_entry).unwrap_or_default();
+        for (value, interval) in header_scope {
+            if outside(value) && !known.contains_key(&value) {
+                known.insert(value, interval);
+            }
         }
-        // The header's values too: seen from inside, they are the trip's,
-        // though the header itself also sees the exit value.
         let operations = function
             .layout()
             .iter()
@@ -417,20 +603,24 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
             .flat_map(|&block| function.block(block).instructions().iter().copied())
             .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .collect::<Vec<_>>();
-        loop {
-            let before = known.len();
-            for &inst in &operations {
-                if let Some(result) = function.instruction(inst).result.filter(|result| !known.contains_key(result))
-                    && let Some(interval) = _computed(unit, inst, &known, facts)
-                {
-                    known.insert(result, interval);
+        // What each operation computes, from what `known` holds.
+        let closed = |mut known: IndexMap<ValueId, Interval>| {
+            loop {
+                let before = known.len();
+                for &inst in &operations {
+                    if let Some(result) = function.instruction(inst).result.filter(|result| !known.contains_key(result))
+                        && let Some(interval) = _computed(unit, inst, &known, facts)
+                    {
+                        known.insert(result, interval);
+                    }
+                }
+                if known.len() == before {
+                    return known;
                 }
             }
-            if known.len() == before {
-                break;
-            }
-        }
-        for &at in &inside {
+        };
+        // Everything the branch edges above `at` and the assumes narrow `known` to there.
+        let scope_at = |at: i64, known: &IndexMap<ValueId, Interval>| -> Result<IndexMap<ValueId, Interval>, String> {
             let mut scoped = known.clone();
             for block in &graph {
                 for &successor in &block.succ {
@@ -442,6 +632,12 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                     {
                         scoped = narrowed;
                     }
+                }
+            }
+            // What the blocks above it assume.
+            for condition in assumed.above(&shape, at) {
+                if let Some(narrower) = narrowed(unit, condition, true, &scoped, facts) {
+                    scoped = narrower;
                 }
             }
             loop {
@@ -461,19 +657,139 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                     before.entry(result).or_insert(previous);
                 }
                 if before.iter().all(|(value, was)| scoped.get(value) == was.as_ref()) {
-                    break;
+                    return Ok(scoped);
                 }
             }
+        };
+        let boxes = inductive_boxes(unit, loop_, facts, &known, &at_entry, &closed, &scope_at)?;
+        if !counted && boxes.is_empty() {
+            continue;
+        }
+        known.extend(boxes);
+        // The header's values too: seen from inside, they are the trip's,
+        // though the header itself also sees the exit value.
+        let known = closed(known);
+        for &at in &inside {
+            let scoped = scope_at(at, &known)?;
             let destination = result.entry(at).or_default();
             for (value, interval) in scoped {
                 narrow(destination, value, interval);
             }
         }
     }
-    for (at, known) in dominated_edges_with(unit, facts)? {
+    for (at, known) in edges_above {
         result.entry(at).or_insert(known);
     }
     Ok(result)
+}
+
+/// Header phis, made by no counted proof, that every entry and every trip round the
+/// loop keeps inside one box `[-2^k, 2^k)`: a value in the box at the header is in it
+/// again at each latch, from the facts the edges and assumes in the loop give, and it
+/// starts there. The box is grown by powers of two, the phis assumed together, until
+/// the latches stay in it; a phi any latch gives no interval for is dropped.
+fn inductive_boxes(
+    unit: &Unit,
+    loop_: &loops::Loop,
+    facts: &IndexMap<ValueId, Known>,
+    known: &IndexMap<ValueId, Interval>,
+    at_entry: &dyn Fn(i64) -> IndexMap<ValueId, Interval>,
+    closed: &dyn Fn(IndexMap<ValueId, Interval>) -> IndexMap<ValueId, Interval>,
+    scope_at: &dyn Fn(i64, &IndexMap<ValueId, Interval>) -> Result<IndexMap<ValueId, Interval>, String>,
+) -> Result<IndexMap<ValueId, Interval>, String> {
+    const PHIS: usize = 8;
+    const ROUNDS: usize = 8;
+    const SIZE: usize = 512;
+    let function = unit.function;
+    let header = cfg::block(loop_.header);
+    let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum();
+    if size > SIZE {
+        return Ok(IndexMap::default());
+    }
+    // (phi, width, the entries' hull, the (latch, value) pairs coming round)
+    let mut candidates = Vec::new();
+    for &inst in function.block(header).instructions() {
+        let op = function.instruction(inst);
+        let (Opcode::Phi, Some(phi)) = (&op.opcode, op.result) else { continue };
+        let Some(width) = unit.int_bits(Operand::Value(phi)).filter(|&width| width > 1) else { continue };
+        if known.contains_key(&phi) {
+            continue;
+        }
+        let (mut entries, mut latches) = (Vec::new(), Vec::new());
+        for pair in op.operands.chunks(2) {
+            let &[value, Operand::Block(from)] = pair else { continue };
+            if loop_.body.contains(&cfg::id(from)) {
+                latches.push((cfg::id(from), value));
+            } else {
+                entries.push(_operand(unit, value, &at_entry(cfg::id(from)), facts).filter(|interval| interval.width == width));
+            }
+        }
+        let hull = entries.into_iter().try_fold(None::<Interval>, |hull, one| {
+            let one = one?;
+            Some(Some(match hull {
+                None => one,
+                Some(hull) => Interval { low: hull.low.min(one.low), high: hull.high.max(one.high), width },
+            }))
+        });
+        if let Some(Some(hull)) = hull
+            && !latches.is_empty()
+        {
+            candidates.push((phi, width, hull, latches));
+        }
+    }
+    candidates.truncate(PHIS);
+    let mut boxes: IndexMap<ValueId, Interval> = candidates.iter().map(|(phi, _, hull, _)| (*phi, hull.clone())).collect();
+    for _ in 0..ROUNDS {
+        if boxes.is_empty() {
+            break;
+        }
+        let mut assumed = known.clone();
+        assumed.extend(boxes.iter().map(|(phi, interval)| (*phi, interval.clone())));
+        let assumed = closed(assumed);
+        let mut scopes = BTreeMap::new();
+        let mut grown = false;
+        let mut dropped = Vec::new();
+        for (phi, width, _, latches) in &candidates {
+            let Some(current) = boxes.get(phi).cloned() else { continue };
+            let mut wanted = current.clone();
+            let mut known_all = true;
+            for (latch, value) in latches {
+                if !scopes.contains_key(latch) {
+                    scopes.insert(*latch, scope_at(*latch, &assumed)?);
+                }
+                match _operand(unit, *value, &scopes[latch], facts).filter(|interval| interval.width == *width) {
+                    Some(interval) => {
+                        wanted.low = wanted.low.min(interval.low);
+                        wanted.high = wanted.high.max(interval.high);
+                    }
+                    None => known_all = false,
+                }
+            }
+            if !known_all {
+                dropped.push(*phi);
+            } else if wanted != current {
+                match power_box(&wanted, *width) {
+                    Some(wider) => {
+                        boxes.insert(*phi, wider);
+                        grown = true;
+                    }
+                    None => dropped.push(*phi),
+                }
+            }
+        }
+        for phi in &dropped {
+            boxes.swap_remove(phi);
+        }
+        if !grown && dropped.is_empty() {
+            return Ok(boxes);
+        }
+    }
+    Ok(IndexMap::default())
+}
+
+/// The least box `[-2^k, 2^k)` holding `interval`, none where that is the whole width.
+fn power_box(interval: &Interval, width: u32) -> Option<Interval> {
+    (0..width - 1).map(|bits| BigInt::from(1_u8) << bits).find(|limit| -limit <= interval.low && interval.high < *limit).map(|limit| Interval { low: -limit.clone(), high: limit - 1, width })
 }
 
 /// `interval` for `value` in `known`, met with what it already held at that width.

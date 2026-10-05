@@ -12,10 +12,8 @@ rebuild after an edit takes about 30 seconds.
 Tests assert program behavior, representation invariants, or a named regression.
 Exact corpus totals and coverage shares are measurements; keep those in the
 reporting tools and documentation, not as assertions that fail when fixtures or
-the pipeline change. The legacy machine arm remains tested while it ships, but
-tests must not feed raised MIR directly to its layout/allocator and call that the
-production path. Current integration tests go through MIR optimization, lowering,
-LIR allocation, and object writing.
+the pipeline change. Integration tests go through MIR optimization, instruction
+selection, LIR allocation, and object writing.
 
 ## Every program compiles
 
@@ -26,6 +24,15 @@ test, and so does a listed one that compiles: the list may only shrink. It is
 skipped, loudly, when `target/release` has no binaries.
 
     uv run --no-project --with pytest --with iced-x86 python -m pytest tests/test_programs_compile.py -rs
+
+## QCport compiles
+
+QCport, the largest C program llrm-c compiles, is not in this repository,
+so CI cannot build it. Before merging a change to llrm-c, HIR, its verifier
+or MIR lowering, compile its 65 modules at -O2 and -Os; every one must
+compile (#238 made the driver's verifier refuse five, unseen):
+
+    QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-compile.sh
 
 ## The loop corpus
 

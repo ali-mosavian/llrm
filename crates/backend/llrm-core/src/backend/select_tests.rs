@@ -768,50 +768,6 @@ fn test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() {
     assert!(silent.places().is_empty() && silent.relocated_at().is_none());
 }
 
-/// `divides` has no Python test of its own; these are Python's answers.
-#[test]
-fn divides_matches_python() {
-    use crate::model::mir::{self, Arg, Kind, MemRef, OpCode};
-
-    let cell = |disp, base| Arg::Cell(mir::Cell { r#ref: MemRef::new(Some(a(Space::Segment, disp, 1, base, Register::None)), 4) });
-    let constant = |n: i64| Arg::Const(mir::Const::new(n, 4));
-    let args = |key| match key {
-        "cc" => vec![constant(100), constant(7)],
-        "mm" => vec![cell(0x10, Register::None), cell(0x20, Register::None)],
-        "mb" => vec![cell(0x10, Register::SI), cell(0x20, Register::BX)],
-        "cm" => vec![constant(-5), cell(0x20, Register::None)],
-        _ => vec![Arg::Held(mir::Held { value: mir::Value::new(1, 1), width: 4 }), constant(7)],
-    };
-    let (eax, ecx, edx, ebx) = (Register::EAX, Register::ECX, Register::EDX, Register::EBX);
-    let held = "Held(value=v1, width=4) is not an operand a divide can read yet";
-    let rows: [(&str, (Register, Register), bool, Result<(&str, Vec<usize>), &str>); 16] = [
-        ("cc", (eax, edx), true, Ok(("66b86400000066b907000000669966f7f96650585a", vec![]))),
-        ("cc", (edx, eax), false, Ok(("66b86400000066b907000000669966f7f96687c2", vec![]))),
-        ("cc", (ebx, eax), true, Ok(("66b86400000066b907000000669966f7f9668bd8668bc26650585a", vec![]))),
-        ("cc", (eax, ebx), false, Ok(("66b86400000066b907000000669966f7f9668bda", vec![]))),
-        ("cc", (ecx, edx), true, Ok(("66b86400000066b907000000669966f7f9668bc86650585a", vec![]))),
-        ("mm", (eax, edx), true, Ok(("66a10000668b0e0000669966f7f96650585a", vec![2, 7]))),
-        ("mm", (edx, eax), false, Ok(("66a10000668b0e0000669966f7f96687c2", vec![2, 7]))),
-        ("mm", (ebx, eax), false, Ok(("66a10000668b0e0000669966f7f9668bd8668bc2", vec![2, 7]))),
-        ("mb", (eax, edx), false, Ok(("668b840000668b8f0000669966f7f9", vec![3, 8]))),
-        ("mb", (eax, ebx), true, Ok(("668b840000668b8f0000669966f7f9668bda6650585a", vec![3, 8]))),
-        ("mb", (ecx, edx), false, Ok(("668b840000668b8f0000669966f7f9668bc8", vec![3, 8]))),
-        ("cm", (eax, edx), true, Ok(("66b8fbffffff668b0e0000669966f7f96650585a", vec![9]))),
-        ("cm", (edx, eax), true, Ok(("66b8fbffffff668b0e0000669966f7f96687c26650585a", vec![9]))),
-        ("cm", (ebx, eax), false, Ok(("66b8fbffffff668b0e0000669966f7f9668bd8668bc2", vec![9]))),
-        ("held", (eax, edx), true, Err(held)),
-        ("held", (edx, eax), false, Err(held)),
-    ];
-    for (key, seats, restore, want) in rows {
-        let op = mir::Op { kind: Kind::Divmod, args: args(key), ..mir::Op::new(0, OpCode::Operation(Operation::Call), "B$DVI4", vec![], vec![]) };
-        let got = divides(&op, seats, restore).map(|made| (hex(&made.code), made.fields));
-        let want = want.map(|(code, fields)| (code.to_owned(), fields)).map_err(str::to_owned);
-        assert_eq!(got, want, "{key} {seats:?} {restore}");
-    }
-    let op = mir::Op { kind: Kind::Mul, args: args("cc"), ..mir::Op::new(0, OpCode::Operation(Operation::Call), "B$DVI4", vec![], vec![]) };
-    assert_eq!(divides(&op, (eax, edx), true).map(|made| made.code), Err("B$DVI4: not a divide over two operands".to_owned()));
-}
-
 /// A u16 count held in cx selected nothing: `sar eax,cx` had no encoding. The shift reads only cl.
 #[test]
 fn test_a_shift_counts_from_cl_whatever_width_holds_the_count() {
@@ -838,3 +794,65 @@ fn near_counted_return() {
     check(sem(Op::Return, Some("ret"), vec![], vec![im(2, 2, None)], None, false), 0, false, false, None, None, Some(("c20200", None, Some(1), vec![1], true)));
     check(sem(Op::Return, Some("ret"), vec![], vec![im(0, 2, None)], None, false), 0, false, false, None, None, Some(("c3", None, None, vec![], true)));
 }
+
+/// sweep_07 failed on rustc 1.99.0: an immediate too wide for i32 raised std's own
+/// text, which that release reworded. The error is ours, and says one thing.
+#[test]
+fn test_an_immediate_too_wide_raises_the_same_text_on_every_compiler() {
+    assert_eq!(i32_of(1 << 40), Err("out of range integral type conversion attempted".to_owned()));
+}
+
+fn decoded_over(segment: Register) -> (Register, usize) {
+    let code = made(copy("movsw", segment, 0, false)).code;
+    (decoded(&code, 0).segment_prefix(), code.len())
+}
+
+/// A string move is `movs` with the width in its name, and `rep` where it
+/// repeats; 16-bit code spells the dword form with the operand-size prefix.
+#[test]
+fn test_a_string_move_encodes_by_width_and_repeat() {
+    let decoded = |name: &str, repeated: bool| {
+        let code = made(copy(name, Register::None, 0, repeated)).code;
+        let one = decoded(&code, 0);
+        (one.mnemonic(), one.has_rep_prefix(), code.len())
+    };
+    assert_eq!(decoded("movsb", false), (Mnemonic::Movsb, false, 1));
+    assert_eq!(decoded("movsw", false), (Mnemonic::Movsw, false, 1));
+    assert_eq!(decoded("movsd", false), (Mnemonic::Movsd, false, 2));
+    assert_eq!(decoded("movsw", true), (Mnemonic::Movsw, true, 2));
+    assert_eq!(decoded("movsd", true), (Mnemonic::Movsd, true, 3));
+    assert!(copy("movsq", Register::None, 0, false).is_none());
+    // The source read through another segment is an override on the move.
+    let over = decoded_over(Register::SS);
+    assert_eq!(over, (Register::SS, 2));
+    assert_eq!(decoded_over(Register::FS), (Register::FS, 2));
+}
+
+/// An extension of a register into its own wider register has a shorter form: `movzx ax,al`
+/// (0f b6 c0, 3 bytes) is `mov ah,0` (b4 00), `movsx ax,al` is `cbw` (98) and `movsx eax,ax`
+/// `cwde` (66 98, not 66 0f bf c0). QCport -Os had some 200; neither writes a flag.
+#[test]
+fn test_an_extension_in_place_takes_its_shortest_form() {
+    for (name, into, from, expected) in [
+        ("movzx", rg(Register::AX, 2), rg(Register::AL, 1), "b400"),
+        ("movzx", rg(Register::DX, 2), rg(Register::DL, 1), "b600"),
+        ("movsx", rg(Register::AX, 2), rg(Register::AL, 1), "98"),
+        ("movsx", rg(Register::EAX, 4), rg(Register::AX, 2), "6698"),
+        // Not in place: a different register, or one with no high byte.
+        ("movzx", rg(Register::AX, 2), rg(Register::BL, 1), "0fb6c3"),
+        ("movzx", rg(Register::SI, 2), rg(Register::AL, 1), "0fb6f0"),
+        ("movsx", rg(Register::EBX, 4), rg(Register::BX, 2), "660fbfdb"),
+        ("movzx", rg(Register::EAX, 4), rg(Register::AX, 2), "660fb7c0"),
+    ] {
+        let what = sem(Operation::Extend, Some(name), vec![into], vec![from], None, false);
+        assert_eq!(hex(&made(emitted(&what)).code), expected, "{name}");
+    }
+}
+
+/// `enter N,0` is c8 N N 00: the frame `push bp; mov bp,sp; sub sp,N` in 4 bytes of 6.
+#[test]
+fn test_enter_encodes_its_size_and_nesting_level() {
+    let what = sem(Operation::Nothing, Some("enter"), vec![], vec![imm(300, 2), imm(0, 1)], None, false);
+    assert_eq!(hex(&made(emitted(&what)).code), "c82c0100");
+}
+

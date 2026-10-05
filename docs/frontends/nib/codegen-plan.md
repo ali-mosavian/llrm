@@ -3686,7 +3686,7 @@ pricing, loop versioning, and pressure forecasting remain open.
 
 ### 38. Nbody dynamic-measurement audit — 2026-09-18
 
-At `15b77c9`, a fresh `tools/quality.py bench/c/nbody.c --cpu 386
+At `15b77c9`, a fresh `tools/quality.py bench/nbody/nbody.c --cpu 386
 --references` run reports 598 bytes / 138 raw instructions for qbopt,
 against 292 / 267 raw instructions for Clang 21 / i686 GCC 16.2.  Raw
 assembly explains the apparent contradiction in the heuristic's dynamic
@@ -4067,7 +4067,7 @@ legality fact as the default 386 frontend; the focused CPU-profile suite passes
 (`10 passed`, `0.34s`).  An explicit profile still owns its own machine-neutral
 capacity, costs, and legal-form facts.
 
-A fresh `bench/c/nbody.c --cpu 386 --references` run at the preceding clean
+A fresh `bench/nbody/nbody.c --cpu 386 --references` run at the preceding clean
 revision generated both Apple Clang and installed `i686-elf-gcc` strict-x87
 flat-i386 listings.  qbopt remains 598 bytes / 138 static instructions;
 Clang and GCC are 0.45x and 0.49x respectively on normalized static
@@ -4202,7 +4202,7 @@ medium-model listings remain the ABI and encoding authority.
 
 ### 59. Refreshed nbody structural listing audit — 2026-09-18
 
-The current committed `tools/quality.py bench/c/nbody.c --cpu 386
+The current committed `tools/quality.py bench/nbody/nbody.c --cpu 386
 --references` report records qbopt at 1,095 emitted bytes / 280 raw
 instructions (274 ABI-normalized instructions).  Apple Clang 21 emits 290
 normalized instructions and installed i686 GCC 16.2 emits 263.  This makes

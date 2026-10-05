@@ -14,12 +14,11 @@ fn main() -> ExitCode {
     let mut checked_division = false;
     let mut debug = false;
     let mut checked_overflow = false;
-    let mut unchecked_bounds = false;
     let mut mbf = false;
     let mut alternate_math = false;
     let mut whole_program = false;
     let mut array_merging = false;
-    let mut own_frames = false;
+    let mut runtime_frames = false;
     let mut error_lines = false;
     let mut syntax = false;
     let mut include_dirs = Vec::new();
@@ -58,8 +57,6 @@ fn main() -> ExitCode {
             checked_division = true;
         } else if argument == "--checked-overflow" {
             checked_overflow = true;
-        } else if argument == "--unchecked-bounds" {
-            unchecked_bounds = true;
         } else if argument == "--mbf" {
             mbf = true;
         } else if argument == "--alternate-math" {
@@ -69,7 +66,9 @@ fn main() -> ExitCode {
         } else if argument == "--array-merging" {
             array_merging = true;
         } else if argument == "--own-frames" {
-            own_frames = true;
+            // Accepted: own frames are the default.
+        } else if argument == "--runtime-frames" {
+            runtime_frames = true;
         } else if argument == "--error-lines" {
             error_lines = true;
         } else if argument == "--array-order" {
@@ -104,7 +103,7 @@ fn main() -> ExitCode {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--unchecked-bounds] [--whole-program] [--array-merging] [--own-frames] [--error-lines] [-g] [--include DIR] [--syntax] FILE"
+            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [-g] [--include DIR] [--syntax] FILE"
         );
         return ExitCode::from(2);
     };
@@ -117,12 +116,11 @@ fn main() -> ExitCode {
             checked_arrays,
             checked_division,
             checked_overflow,
-            unchecked_bounds,
             mbf,
             alternate_math,
             whole_program,
             array_merging,
-            own_frames,
+            runtime_frames,
             error_lines,
         },
         debug,

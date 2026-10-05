@@ -13,7 +13,7 @@ use crate::objectfile::omf::{self, Record};
 use crate::support::hash::IndexMap;
 
 fn fpcsex() -> Module {
-    module::load(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/omf/fpcsex-p-g2.obj")).unwrap().unwrap()
+    module::load(Path::new(env!("LLRM_ROOT")).join("tests/inputs/omf/fpcsex-p-g2.obj")).unwrap().unwrap()
 }
 
 fn first_call(found: &Module) -> i64 {
@@ -86,7 +86,7 @@ fn loaded(name: &str) -> Module {
 fn test_event_stub_near_call_has_no_register_arguments() {
     // ADDRM /V refused at 0048 before its first statement could execute.
     for tag in ["p-evt", "v-evt"] {
-        let found = loaded(&format!("{}/tests/fixtures/omf/addrm-{tag}.obj", env!("LLRM_ROOT")));
+        let found = loaded(&format!("{}/tests/inputs/omf/addrm-{tag}.obj", env!("LLRM_ROOT")));
         let routine = for_module(&found, None).unwrap()[&0x48].clone();
         assert_eq!(routine.inputs, Some(BTreeSet::new()), "{tag}");
         assert_eq!(routine.cleanup, Some(0), "{tag}");
@@ -98,7 +98,7 @@ fn test_event_stub_near_call_has_no_register_arguments() {
 #[test]
 fn test_changed_event_stub_remains_unknown() {
     // Only instruction bytes: a relocated field's addend is folded into its fixup before recognition.
-    let found = loaded(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/addrm-p-evt.obj"));
+    let found = loaded(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/addrm-p-evt.obj"));
     let width = |loc: i64| match loc {
         omf::LOC_OFF16 => 2,
         omf::LOC_PTR32 => 4,
@@ -118,7 +118,7 @@ fn test_changed_event_stub_remains_unknown() {
 
 #[test]
 fn test_event_stub_requires_exact_relocation() {
-    let found = loaded(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf/addrm-p-evt.obj"));
+    let found = loaded(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/addrm-p-evt.obj"));
     for field in [0x34, 0x3E] {
         let fixup = omf::fixups(&found.records)
             .into_iter()
@@ -154,7 +154,7 @@ fn test_event_stub_requires_exact_relocation() {
 
 /// Every `B$` routine a committed OMF fixture calls.
 fn _runtime_targets() -> BTreeSet<String> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(fixture(concat!(env!("LLRM_ROOT"), "/tests/fixtures/omf")))
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(fixture(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf")))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "obj"))

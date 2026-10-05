@@ -84,6 +84,7 @@ static _MODULE: LazyLock<(
     //                         486  P5  P6  K5  K6  K7 Core
     let mut cost: IndexMap<&'static str, [i64; 7]> = IndexMap::from_iter([
         ("alu_rr", [1, 1, 1, 1, 1, 1, 1]), // add/and/or/xor/sub/cmp reg,reg
+        ("alu_ri", [1, 1, 1, 1, 1, 1, 1]), // ... reg,imm
         ("alu_rm", [2, 2, 1, 1, 1, 1, 1]), // ... reg,[mem]
         ("alu_mr", [3, 3, 1, 1, 1, 1, 1]), // ... [mem],reg
         ("mov_rr", [1, 1, 1, 1, 1, 1, 1]),
@@ -114,6 +115,8 @@ static _MODULE: LazyLock<(
         ("jcc", [3, 1, 1, 1, 1, 1, 1]),       // predicted
         ("call_far", [18, 4, 21, 4, 4, 5, 22]), // real mode, no gate
         ("ret_far", [13, 4, 17, 4, 4, 5, 18]),
+        // RET imm16: the same clocks as RET, 2 bytes more.
+        ("ret_pop", [13, 4, 17, 4, 4, 5, 18]),
         ("unknown", [2, 2, 2, 2, 2, 2, 2]),
     ]);
 
@@ -177,6 +180,14 @@ static _MODULE: LazyLock<(
     latency.insert("rep_stos", cost["rep_stos"]);
     latency.insert("rep_stos_cell", cost["rep_stos_cell"]);
 
+    // REP MOVS: Intel's 486 is 12+3n and the P5's 13+n; the rest are small-count
+    // rankings like REP STOS', where fast strings have not paid for their startup.
+    //                              486  P5  P6  K5  K6  K7 Core
+    cost.insert("rep_movs", [12, 13, 30, 12, 12, 15, 30]);
+    cost.insert("rep_movs_cell", [3, 1, 1, 1, 1, 1, 1]);
+    latency.insert("rep_movs", cost["rep_movs"]);
+    latency.insert("rep_movs_cell", cost["rep_movs_cell"]);
+
     // 32-bit multiply, for telling it from the 16-bit one
     cost.insert("mul_r32", [26, 10, 4, 4, 3, 5, 3]);
     latency.insert("mul_r32", [26, 10, 4, 4, 3, 5, 3]);
@@ -219,6 +230,11 @@ static _MODULE: LazyLock<(
     ] {
         latency.insert(_form, cost[_form]);
     }
+
+    // A branch not taken: the 486 refills its prefetch queue only when one is.
+    //                                    486  P5  P6  K5  K6  K7 Core
+    cost.insert("jcc_not_taken", [1, 1, 1, 1, 1, 1, 1]);
+    latency.insert("jcc_not_taken", cost["jcc_not_taken"]);
     (cost, latency)
 });
 
@@ -228,7 +244,8 @@ mod tests {
 
     /// Key order and rows printed by
     /// `uv run python -c "from qbopt.cycles import timings as t; print(list(t.COST)); ..."`
-    /// on 2026-09-22. Order matters: callers iterate these tables.
+    /// on 2026-09-22, then `jcc_not_taken`, which Python never had. Order
+    /// matters: callers iterate these tables.
     #[test]
     fn test_tables_match_python() {
         let cost_keys: Vec<&str> = COST.keys().copied().collect();
@@ -236,6 +253,7 @@ mod tests {
             cost_keys,
             [
                 "alu_rr",
+                "alu_ri",
                 "alu_rm",
                 "alu_mr",
                 "mov_rr",
@@ -263,6 +281,7 @@ mod tests {
                 "jcc",
                 "call_far",
                 "ret_far",
+                "ret_pop",
                 "unknown",
                 "mul_r16",
                 "div_r16",
@@ -271,6 +290,8 @@ mod tests {
                 "lea",
                 "rep_stos",
                 "rep_stos_cell",
+                "rep_movs",
+                "rep_movs_cell",
                 "mul_r32",
                 "leave",
                 "x87_load",
@@ -285,6 +306,7 @@ mod tests {
                 "x87_div_m",
                 "x87_control_load",
                 "x87_control_store",
+                "jcc_not_taken",
             ]
         );
         let latency_keys: Vec<&str> = LATENCY.keys().copied().collect();
@@ -324,9 +346,13 @@ mod tests {
                 "lahf",
                 "sahf",
                 "unknown",
+                "alu_ri",
+                "ret_pop",
                 "lea",
                 "rep_stos",
                 "rep_stos_cell",
+                "rep_movs",
+                "rep_movs_cell",
                 "mul_r32",
                 "leave",
                 "x87_load",
@@ -341,6 +367,7 @@ mod tests {
                 "x87_div_m",
                 "x87_control_load",
                 "x87_control_store",
+                "jcc_not_taken",
             ]
         );
         for (k, row) in [

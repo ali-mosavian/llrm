@@ -5,29 +5,40 @@
 //! guard proves a test of the same two sides that it is at least as
 //! strong as, either way round.
 
+use std::collections::BTreeMap;
+
 use llrm_mir::module::{Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
 use num_bigint::BigInt;
 
 use crate::cfg;
-use crate::induction::{Linear, term};
+use crate::difference;
+use crate::ranges::declared;
+use crate::induction::{Scev, term};
 use crate::memory::Unit;
 
 /// `left predicate right`, proven on some edge.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Guard {
     pub predicate: IntPredicate,
-    pub left: Linear,
-    pub right: Linear,
+    pub left: Scev,
+    pub right: Scev,
 }
 
 /// The compares proven on entry to block `at`.
 pub fn guards(unit: &Unit, at: i64) -> Vec<Guard> {
     let function = unit.function;
     let shape = unit.shape();
+    let assumed = unit.assumptions();
     let mut found = Vec::new();
     let mut reached = at;
     while let Some(above) = shape.dominance.immediate(reached) {
+        // What the block assumes holds below it, wherever its terminator goes.
+        for condition in assumed.here(above) {
+            if let Operand::Value(condition) = *condition {
+                _proven(unit, condition, true, &mut found);
+            }
+        }
         // The edge from `above` toward `at` that alone enters the block it leads to.
         if let Some(branch) = function.terminator(cfg::block(above))
             && let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = function.instruction(branch).operands[..]
@@ -55,7 +66,7 @@ fn _proven(unit: &Unit, condition: ValueId, holds: bool, found: &mut Vec<Guard>)
         (Opcode::ICmp(predicate), [left, right]) => {
             let (Some(left), Some(right), Some(width)) = (term(unit, *left), term(unit, *right), unit.int_bits(*left)) else { return };
             let predicate = if holds { *predicate } else { predicate.inverse() };
-            found.push(Guard { predicate, left: Linear::of(&left, width), right: Linear::of(&right, width) });
+            found.push(Guard { predicate, left: Scev::of(&left, width), right: Scev::of(&right, width) });
         }
         (Opcode::Binary(kind @ (BinaryOp::And | BinaryOp::Or)), [Operand::Value(one), Operand::Value(other)]) if (*kind == BinaryOp::And) == holds => {
             _proven(unit, *one, holds, found);
@@ -67,15 +78,46 @@ fn _proven(unit: &Unit, condition: ValueId, holds: bool, found: &mut Vec<Guard>)
 
 /// Whether `left predicate right` holds on entry to block `at`: both
 /// constants, or a guard there proves it.
-pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Linear, right: &Linear) -> bool {
+pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
     if let (Some(one), Some(other)) = (left.known(), right.known()) {
         return evaluated(predicate, &one, &other, left.width);
     }
     guards(unit, at).iter().any(|guard| implies(guard, predicate, left, right))
 }
 
+/// `holds`, given also `assumed` and what the program states of the
+/// values the guards test: their ranges, by difference bounds.
+pub fn holds_given(unit: &Unit, at: i64, assumed: &[Guard], predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
+    if holds(unit, at, predicate, left, right) {
+        return true;
+    }
+    let mut facts = guards(unit, at);
+    facts.extend(assumed.iter().cloned());
+    // What the loops holding the block prove of the phis that follow their counters.
+    let shape = unit.shape();
+    for loop_ in shape.loops.iter().filter(|one| one.body.contains(&at)) {
+        for (follower, counter, start) in crate::induction::followers(unit, loop_) {
+            let Some(width) = unit.int_bits(Operand::Value(follower)) else { continue };
+            let (follower, counter) = (Scev::unknown(follower, width), Scev::unknown(counter, width));
+            facts.push(Guard { predicate: IntPredicate::Sle, left: Scev::of(&start, width), right: follower.clone() });
+            facts.push(Guard { predicate: IntPredicate::Sle, left: follower, right: counter });
+        }
+    }
+    let mut ranges = BTreeMap::new();
+    for side in facts.iter().flat_map(|one| [&one.left, &one.right]).chain([left, right]) {
+        for monomial in side.terms.keys() {
+            if let Some(value) = monomial.single()
+                && let Some(interval) = declared(unit, value).filter(|one| one.width == left.width)
+            {
+                ranges.insert(monomial.clone(), (interval.low, interval.high));
+            }
+        }
+    }
+    difference::proves(left.width, &facts, &ranges, predicate, left, right)
+}
+
 /// Whether `guard` proves `left predicate right`.
-pub fn implies(guard: &Guard, predicate: IntPredicate, left: &Linear, right: &Linear) -> bool {
+pub fn implies(guard: &Guard, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
     if guard.left == *left && guard.right == *right {
         return _stronger(guard.predicate, predicate);
     }

@@ -61,7 +61,7 @@ Build logs, executables and individual outputs are retained locally under
 
 ## Current nbody runtime check — 2026-09-09
 
-`bench/nbody.bas`, VBDOS `/O /FPi /R /G3 /E /Zi`, 25,000 steps,
+`bench/nbody_fixed/nbody_fixed.bas`, VBDOS `/O /FPi /R /G3 /E /Zi`, 25,000 steps,
 five paired repetitions, `conf/pinned.conf`, tuning CPU `386`, native-FPU
 replacement disabled. BASE is BC's unchanged object; OPT must report
 `wholeseg.Emission.LIR`, not fallback. All 24 final position/velocity values
@@ -100,7 +100,7 @@ SHA256 values:
 
 ## Current floating benchmark — 2026-09-09
 
-`bench/fpbench.bas`, revision `a24fc54`, VBDOS `/O /FPi /R /G3 /E /Zi`,
+`bench/fpbench/fpbench.bas`, revision `a24fc54`, VBDOS `/O /FPi /R /G3 /E /Zi`,
 50,000 steps, five paired repetitions. Same pinned configuration, host,
 emulator and toolchain hashes as the nbody measurement above. Both compile
 and link logs were checked; optimization reports LIR emission, not fallback.
@@ -155,7 +155,7 @@ floating CSE or a fully optimized integrator. Full stages are in
 ## Static: what the pass does to the corpus
 
 
-Measured 2026-08-30, over the 110 objects in `tests/fixtures/omf`, with
+Measured 2026-08-30, over the 110 objects in `tests/inputs/omf`, with
 `uv run python tools/census.py`, after `docs/optimizations/residue.md`'s D, I and B all
 landed.
 
@@ -181,12 +181,12 @@ immediate-operand ALU pairs, previously invisible to `classify()`, are what
 those 4 single-pair regions actually were -- recognising them either lets the
 pair widen on its own where it used to lose to its own restore, or reunites
 it with a neighbouring load/store into one bigger region entirely (the
-`bench/nbody.bas` case documented in `docs/optimizations/residue.md`'s own D section). I
+`bench/nbody_fixed/nbody_fixed.bas` case documented in `docs/optimizations/residue.md`'s own D section). I
 and B are not visible in this table at all: both need either cross-block
 liveness a call sits in the middle of (I) or a widened region's restore
 sitting directly against a `consume()`-absorbed call (B), neither of which
 the 110 small, single-statement-per-fixture objects in this corpus happen to
-produce -- `bench/nbody.bas`'s own before/after numbers, in `docs/optimizations/residue.md`,
+produce -- `bench/nbody_fixed/nbody_fixed.bas`'s own before/after numbers, in `docs/optimizations/residue.md`,
 are where their real payoff shows.
 
 133 bytes bigger, 76 bytes bigger, than the census immediately before this
@@ -199,7 +199,7 @@ bytes were never part of any region's own before/after accounting until now
 -- widening across the call's restore is what commit 1 (`ir.py`) made
 representable at all, per `RESTORE_EFFECTS`'s own documented fact that the
 restore leaves the 32-bit result untouched. Net, corpus-wide: 57 more bytes
-saved than before (5080 against 5023). `bench/nbody.bas`'s own VBDOS `/G3`
+saved than before (5080 against 5023). `bench/nbody_fixed/nbody_fixed.bas`'s own VBDOS `/G3`
 object, not part of this census, shows the real payoff more clearly: 12
 combined call+tail edits, 59 bytes saved over what standalone call absorption
 alone would have produced.
@@ -207,7 +207,7 @@ alone would have produced.
 That 59-byte win is against what standalone absorption alone would have cost
 on this file, not against BC's own code -- and it is not enough to make this
 one program a net win yet. Measured directly (`module.of(...).code` on both
-objects, 2026-08-30): `bench/nbody.bas`'s rewritten object was, at that point,
+objects, 2026-08-30): `bench/nbody_fixed/nbody_fixed.bas`'s rewritten object was, at that point,
 **80 bytes larger** than BC's own, 1440 against 1360 (+5.9 per cent), not
 smaller. Most of that growth was `f2b6f05`'s own necessary correctness fix to
 compare absorption (below), which this one file happens to exercise more
@@ -215,7 +215,7 @@ heavily, relative to its size, than the corpus average; the remainder was
 `docs/optimizations/residue.md`'s own patterns B, D, E, F and I.
 
 **Re-measured again 2026-08-30**, after D, I and B all landed (same day, same
-document): `bench/nbody.bas`'s rewritten object is now **35 bytes larger**
+document): `bench/nbody_fixed/nbody_fixed.bas`'s rewritten object is now **35 bytes larger**
 than BC's own, 1395 against 1360 (+2.6 per cent) -- D, I and B accounted for
 45 of the 80 bytes (-5, -16, -24, in that order; see `docs/optimizations/residue.md`'s own
 Priority table for the full progression). Still not a net win on this one
@@ -223,18 +223,18 @@ file: what remains is F and E, both still architectural and open, plus I's
 own 4 still-open instances (a second, post-rewrite liveness pass, out of this
 round's scope). The corpus-wide 19 per cent smaller above is a real aggregate
 and does not average out per-file --
-`bench/nbody.bas` is the one program tracked closely enough in this document
+`bench/nbody_fixed/nbody_fixed.bas` is the one program tracked closely enough in this document
 to know it currently regresses.
 
 **Re-measured a third time 2026-08-30**, after E's own closure (`docs/optimizations/residue.md`'s
-own E section has the mechanism and the worked example): `bench/nbody.bas`'s
+own E section has the mechanism and the worked example): `bench/nbody_fixed/nbody_fixed.bas`'s
 rewritten object is now **26 bytes larger** than BC's own, 1386 against 1360
 (+1.9 per cent) -- E alone, -9 bytes. F's own recognition gap closed too
 (register- and memory-sourced `cwd`, `Op.MOVSX`), but it does not move this
 object's byte count at all: every one of its 9 measured sites is still
 refused by the same growth check that refuses any region wider than what it
 replaces, for reasons `docs/optimizations/residue.md`'s own F section now measures in
-full rather than estimates. The 110-object `tests/fixtures/omf` static census
+full rather than estimates. The 110-object `tests/inputs/omf` static census
 (below) is unchanged by either -- neither shape occurs in that corpus.
 
 4268 bytes bigger than the previous census (16942), from a correctness fix
@@ -376,7 +376,7 @@ refusals above.
 
 Re-measured 2026-08-31, code bytes only, `v-g3`.
 
-| | tests/fixtures/omf (155) | qb-qrender (15) |
+| | tests/inputs/omf (155) | qb-qrender (15) |
 |---|---|---|
 | BC | 95,189 | 74,855 |
 | absorbed | 89,665 (-5.80%) | 76,198 (+1.79%) |
@@ -453,7 +453,7 @@ not. The cycle columns from `price.py` on that object are not reproduced
 here, for the reason above.
 
 **What this table does not price: the routine's own bytes staying linked in
-regardless.** `bench/nbody.bas` drops all 21 calls into
+regardless.** `bench/nbody_fixed/nbody_fixed.bas` drops all 21 calls into
 `B$MUI4`/`B$DVI4`/`B$CPI4` -- every reference to that 262-byte runtime
 module (`runtime/rt/helpi4.asm`, shared with the never-called `B$RMI4`) is
 gone from `NBODYQ.OBJ`. Measured directly against the linked `.EXE`s: the
@@ -467,7 +467,7 @@ links are counted alongside `NBODY.OBJ`'s own code.
 
 ## Dynamic
 
-`bench/nbody.bas`, `v-g3`, 25000 steps, 7 repetitions, `conf/pinned.conf`,
+`bench/nbody_fixed/nbody_fixed.bas`, `v-g3`, 25000 steps, 7 repetitions, `conf/pinned.conf`,
 re-measured 2026-08-31 after divide strength reduction landed. Read via the
 8253, not `TIMER` -- see `docs/measurement/readme.md` for why this reads as a
 spread rather than an exact repeat.
@@ -485,7 +485,7 @@ keep it anyway is the subject of the next section.
 
 ### Floats
 
-`bench/fpbench.bas` is the same integrator in SINGLE, `v-g3`, 4000 steps, 5
+`bench/fpbench/fpbench.bas` is the same integrator in SINGLE, `v-g3`, 4000 steps, 5
 repetitions, measured 2026-08-31.
 
 | | base | opt | opt `--native-fpu` |
@@ -509,15 +509,15 @@ Both numbers are on code that computes the right answer. An earlier
 measurement of 1.78 was not: `forward.py` was deleting the second of two
 `fld dword ptr [si]`, and the build it timed printed -2147483648 for every
 coordinate. It ran faster because it was doing less, and less was wrong.
-`tests/suite/fpdeep.bas` exists so that shape is in the corpus now.
+`tests/run/qb/fpdeep.bas` exists so that shape is in the corpus now.
 
 ## Absorption
 
-All 21 of `bench/nbody.bas`'s arithmetic call sites -- 11 `B$MUI4`, 6
+All 21 of `bench/nbody_fixed/nbody_fixed.bas`'s arithmetic call sites -- 11 `B$MUI4`, 6
 `B$DVI4`, 4 `B$CPI4` -- are absorbed; the rewritten object contains none of
 them. Base is unchanged, as it must be
--- BC's own build does not move. `bench/nbody.bas` uses Q23.9 (see
-`tests/suite/nbody.bas`'s own comment), and BC alone builds the base half of this
+-- BC's own build does not move. `bench/nbody_fixed/nbody_fixed.bas` uses Q23.9 (see
+`tests/run/qb/nbody.bas`'s own comment), and BC alone builds the base half of this
 comparison.
 
 Re-measured, not reasoned: opt dropped from 4649876 to 4519562 ticks (2.8%
@@ -569,12 +569,12 @@ the code costs. Where the two disagree the cycle model is the one about
 hardware, and this document quotes both rather than picking the flattering
 one.
 
-One honest gap: `bench/nbody.bas` itself has no golden and prints only
-`TICKS=`, so nothing here checks its own arithmetic. `tests/suite/nbody.bas` --
+One honest gap: `bench/nbody_fixed/nbody_fixed.bas` itself has no golden and prints only
+`TICKS=`, so nothing here checks its own arithmetic. `tests/run/qb/nbody.bas` --
 the same integrator, Q16.16 instead of Q23.9 -- is golden-checked across all
 twelve configurations by `tools/matrix.py`/`tests/test_e2e.py`, and passes;
 that is the evidence this number rests on for correctness, not an
-independent check of `bench/nbody.bas`'s own object.
+independent check of `bench/nbody_fixed/nbody_fixed.bas`'s own object.
 
 This number moved three times before landing here, and every move is worth
 recording rather than only the final figure. The first measurement, before
@@ -601,3 +601,19 @@ did not come from qbopt and are not comparable to a row above without care.
 |---|---|---|---|
 | bitwise, additive | 1.96 | 1.37 | 1.0 |
 | multiply, divide | 5.62 | 3.27 | 1.0 |
+
+## `tools/sizes.py` program set: new baseline
+
+The program set changed with the bench rewrite (#354, #355, #361: `tests/run/qb`,
+`examples`, `bench/NAME/` in BASIC, C and Nib), so totals from before commit
+`9a84d038` are not comparable. Totals over every program of the set at that
+commit, `--cpu 486`, code bytes, estimated executed instructions and memory
+operands per call, summed (a cost estimate, not a timing):
+
+| level | programs measured | bytes | instructions | memory operands |
+|---|---:|---:|---:|---:|
+| -O2 | 182 | 318302 | 10574687 | 2135121 |
+| -Os | 188 | 301233 | 13789733 | 2601869 |
+
+Programs that do not compile (`known:` headers, #358) are not in the totals; six
+more compile at -Os than at -O2.

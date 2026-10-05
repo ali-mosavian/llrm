@@ -606,12 +606,56 @@ b2:
   ret void
 }
 ",
+        // Mandelbrot's escape loop: the phis stay in a box only by the loop's own exit test.
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+
+define void @f(i16 %n) {
+b0:
+  %m = and i16 %n, 255
+  %w = sext i16 %m to i32
+  %cx = sub i32 %w, 128
+  %cy = sub i32 %w, 100
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %inext, %b3 ]
+  %x = phi i32 [ 0, %b0 ], [ %xn, %b3 ]
+  %y = phi i32 [ 0, %b0 ], [ %yn, %b3 ]
+  %lim = icmp slt i32 %i, 32
+  br i1 %lim, label %b5, label %b4
+
+b5:
+  %xx = call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 8)
+  %yy = call i32 @llvm.smul.fix.i32(i32 %y, i32 %y, i32 8)
+  %s = add i32 %xx, %yy
+  %c = icmp sgt i32 %s, 1024
+  ;check
+  br i1 %c, label %b4, label %b2
+
+b2:
+  %x2 = add i32 %x, %x
+  %xy = call i32 @llvm.smul.fix.i32(i32 %x2, i32 %y, i32 8)
+  %yn = add i32 %xy, %cy
+  %d = sub i32 %xx, %yy
+  %xn = add i32 %d, %cx
+  %inext = add i32 %i, 1
+  ;check
+  br label %b3
+
+b3:
+  ;check
+  br label %b1
+
+b4:
+  ret void
+}
+",
     ];
     for text in loops {
         for facts in [bounded, super::scoped] {
             let (checking, checks) = checked(text, |parsed| facts(&parsed.unit()).unwrap());
             assert!(checks > 3, "{checks} checks of {text}");
-            for n in [-3, 0, 2, 7, 100] {
+            for n in [-3, 0, 2, 7, 100, 127, 128, 200, 255] {
                 assert_eq!(broken(&checking, n), 0, "{n}: {checking}");
             }
         }
@@ -660,4 +704,383 @@ fn an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
         let found = exact_offsets(&parsed.unit()).unwrap();
         assert_eq!(found.contains(&parsed.value("off")), exact, "{offset} {gep}");
     }
+}
+
+/// A `range` a callee states of its result, or a parameter states of itself,
+/// bounded nothing: no analysis read it. `LEN` (0 to 32767), `INSTR`, the
+/// runtime's counts and every frontend's stated range were dropped on the way
+/// to the pass that would have used them.
+#[test]
+fn a_stated_range_bounds_a_parameter_and_a_call_result() {
+    let parsed = Parsed::new(
+        "define range(i16 0, 100) i16 @len(ptr %p) {
+b0:
+  ret i16 0
+}
+
+declare i16 @plain(ptr)
+
+define i16 @f(i16 range(i16 -5, 6) %x, ptr %p) {
+b0:
+  %n = call i16 @len(ptr %p)
+  %m = call i16 @plain(ptr %p)
+  %o = call range(i16 1, 3) i16 @plain(ptr %p)
+  %c = icmp slt i16 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %n
+
+b2:
+  ret i16 %m
+}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        let at = &scoped[&cfg::id(parsed.block("b2"))];
+        assert_eq!(at.get(&parsed.value("x")), Some(&interval(0, 5, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("n")), Some(&interval(0, 99, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("o")), Some(&interval(1, 2, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("m")), None, "a call with no range says nothing");
+    }
+}
+
+/// What a block assumes bounds a value in the blocks it dominates, as the
+/// branch of a check does, in loops and out; not in its own block.
+#[test]
+fn an_assume_bounds_a_value_below_its_block() {
+    let parsed = Parsed::new(
+        "declare void @llvm.assume(i1)
+
+define i16 @f(i16 %x, i1 %c) {
+b0:
+  %low = icmp sge i16 %x, 0
+  %high = icmp slt i16 %x, 10
+  call void @llvm.assume(i1 %low)
+  call void @llvm.assume(i1 %high)
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %x
+
+b2:
+  ret i16 %x
+}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        for name in ["b1", "b2"] {
+            assert_eq!(scoped[&cfg::id(parsed.block(name))].get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{name}");
+        }
+        assert_eq!(scoped.get(&cfg::id(parsed.block("b0"))).and_then(|at| at.get(&parsed.value("x"))), None, "not in its own block");
+    }
+}
+
+#[test]
+fn an_assume_above_a_counted_loop_bounds_a_value_in_its_body() {
+    let parsed = Parsed::new(
+        "declare void @llvm.assume(i1)
+declare void @use(i16, i16)
+
+define void @f(i16 %x) {
+b0:
+  %low = icmp sge i16 %x, 0
+  %high = icmp slt i16 %x, 10
+  call void @llvm.assume(i1 %low)
+  call void @llvm.assume(i1 %high)
+  br label %body
+
+body:
+  %i = phi i16 [ 0, %b0 ], [ %next, %body ]
+  call void @use(i16 %i, i16 %x)
+  %next = add nsw i16 %i, 1
+  %more = icmp slt i16 %next, 8
+  br i1 %more, label %body, label %out
+
+out:
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let at = &bounded(&unit).unwrap()[&cfg::id(parsed.block("body"))];
+    assert!(at.contains_key(&parsed.value("i")), "the loop is counted: {at:?}");
+    assert_eq!(at.get(&parsed.value("x")), Some(&interval(0, 9, 16)), "{at:?}");
+}
+
+/// A condition a frontend states with `Op::Assume` bounds the value in the code
+/// that follows it: HIR through its lowering to the reader, no hand-written MIR.
+#[test]
+fn an_assume_a_frontend_states_bounds_a_value_below_it() {
+    use llrm_hir::model::{Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile, Terminator, TerminatorKind, Type, TypeKind, Value};
+    let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
+    integer.signed = Some(true);
+    let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
+    // v1 is the parameter; v2 = v1 < 10; assume v2; then a block that returns v1.
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
+    let less = Instruction::new(1, Op::Lt, vec![2], vec![HirOperand::value_ref(1), HirOperand::constant(1, 10)]);
+    let assume = Instruction::new(2, Op::Assume, vec![], vec![HirOperand::value_ref(2)]);
+    let first = Block::new(1, vec![less, assume], Terminator::new(TerminatorKind::Jump, Vec::new(), vec![2]));
+    let second = Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(1)], Vec::new()));
+    let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
+    function.parameters = vec![1];
+    let program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
+    let emitted = llrm_hir::mir::emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    // The assumption is made on the comparison's own `i1`, before any pass.
+    let module = emitted.module;
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
+    let unit = Unit::of(&module, &layout, function);
+    let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
+    let parameter = function.parameters()[0];
+    assert_eq!(below.get(&parameter), Some(&Interval { low: (-32768).into(), high: 9.into(), width: 16 }), "{below:?}");
+}
+
+/// What `!range` says of a load or a call bounded nothing: an enum's tag, `LEN`,
+/// every value a frontend states of an instruction was written to the IR and
+/// never read, though a parameter's `range` was.
+#[test]
+fn a_range_in_metadata_bounds_a_load_and_a_call_result() {
+    let parsed = Parsed::new(
+        "declare i16 @count(ptr)
+
+define i16 @f(ptr %p, i1 %c) {
+b0:
+  %tag = load i16, ptr %p, !range !0
+  %n = call i16 @count(ptr %p), !range !1
+  %free = load i16, ptr %p
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 %tag
+
+b2:
+  ret i16 %n
+}
+
+!0 = !{i16 0, i16 3}
+!1 = !{i16 1, i16 100}
+",
+    );
+    let unit = parsed.unit();
+    for scoped in [dominated_edges(&unit).unwrap(), bounded(&unit).unwrap(), super::scoped(&unit).unwrap()] {
+        let at = &scoped[&cfg::id(parsed.block("b1"))];
+        assert_eq!(at.get(&parsed.value("tag")), Some(&interval(0, 2, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("n")), Some(&interval(1, 99, 16)), "{at:?}");
+        assert_eq!(at.get(&parsed.value("free")), None, "a load with no range says nothing");
+    }
+}
+
+/// A frontend's `Fact::Range` of an instruction reaches the reader: HIR to its
+/// lowering to `!range` to the interval.
+#[test]
+fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
+    use llrm_hir::facts::{Builder, Subject};
+    use llrm_hir::model::{Block, Dialect, Function, Instruction, Module as HirModule, Op, Operand as HirOperand, Program, RuntimeProfile, Terminator, TerminatorKind, Type, TypeKind, Value};
+    let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
+    integer.signed = Some(true);
+    let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
+    let sum = Instruction::new(1, Op::Add, vec![2], vec![HirOperand::value_ref(1), HirOperand::value_ref(1)]);
+    let first = Block::new(1, vec![sum], Terminator::new(TerminatorKind::Jump, Vec::new(), vec![2]));
+    let second = Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![HirOperand::value_ref(2)], Vec::new()));
+    let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
+    function.parameters = vec![1];
+    let mut program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, llrm_hir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 7 }));
+    program.modules[0].facts = facts.finish();
+    let emitted = llrm_hir::mir::emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let module = emitted.module;
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
+    let unit = Unit::of(&module, &layout, function);
+    let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
+    let result = function.instruction(function.block(function.layout()[0]).instructions()[0]).result.expect("a sum");
+    assert_eq!(below.get(&result), Some(&interval(0, 7, 16)), "{below:?}");
+}
+
+fn fixed(operation: &str) -> String {
+    format!(
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+
+define void @f(i32 %x, i32 %z) {{
+b0:
+  %y = {operation}
+  ret void
+}}
+"
+    )
+}
+
+/// `smul.fix` had no interval, so no fixed-point product was ever known to be small.
+#[test]
+fn a_fixed_product_of_bounded_operands_is_bounded_with_its_floor() {
+    let body = fixed("call i32 @llvm.smul.fix.i32(i32 %x, i32 %z, i32 1)");
+    assert_eq!(computed(&body, "y", &[("x", interval(-3, 2, 32)), ("z", interval(1, 1, 32))]), Some(interval(-2, 1, 32)));
+}
+
+/// The wide product wraps when stored: 2^20 * 2^20 >> 8 is 2^32.
+#[test]
+fn a_fixed_product_whose_result_wraps_has_no_interval() {
+    let body = fixed("call i32 @llvm.smul.fix.i32(i32 %x, i32 %z, i32 8)");
+    assert_eq!(computed(&body, "y", &[("x", interval(0, 1 << 20, 32)), ("z", interval(0, 1 << 20, 32))]), None);
+}
+
+/// x * x over [-5, 3] came out [-15, 25]: the corners treat the two x as independent.
+#[test]
+fn a_square_is_never_negative() {
+    let body = fixed("call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 0)");
+    assert_eq!(computed(&body, "y", &[("x", interval(-5, 3, 32))]), Some(interval(0, 25, 32)));
+    let body = fixed("mul i32 %x, %x");
+    assert_eq!(computed(&body, "y", &[("x", interval(-5, 3, 32))]), Some(interval(0, 25, 32)));
+    assert_eq!(computed(&body, "y", &[("x", interval(2, 3, 32))]), Some(interval(4, 9, 32)));
+}
+
+/// `%s` computed from `x` and `z`, then compared against 1024: `no` is the edge where `%s <= 1024`.
+fn tested(computation: &str) -> Parsed {
+    Parsed::new(&format!(
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+
+define void @f(i32 %x, i32 %z) {{
+b0:
+  {computation}
+  %c = icmp sgt i32 %s, 1024
+  br i1 %c, label %yes, label %no
+
+yes:
+  ret void
+
+no:
+  ret void
+}}
+"
+    ))
+}
+
+fn after_no(parsed: &Parsed, known: &[(&str, Interval)]) -> Option<IndexMap<ValueId, Interval>> {
+    let known = known.iter().map(|(name, one)| (parsed.value(name), one.clone())).collect::<IndexMap<_, _>>();
+    on_edge(&parsed.unit(), parsed.block("b0"), parsed.block("no"), &known, None).unwrap()
+}
+
+/// `a + b <= 1024` left `a` unbounded above, though `b >= 0` caps it.
+#[test]
+fn a_bounded_sum_bounds_its_addends() {
+    let parsed = tested("%s = add i32 %x, %z");
+    let result = after_no(&parsed, &[("x", interval(0, 5000, 32)), ("z", interval(3, 9, 32))]).unwrap();
+    assert_eq!(result[&parsed.value("x")], interval(0, 1021, 32));
+    assert_eq!(result[&parsed.value("z")], interval(3, 9, 32));
+}
+
+/// Without an interval for each addend the sum may have wrapped, and says nothing of them.
+#[test]
+fn a_sum_of_an_unbounded_addend_bounds_nothing() {
+    let parsed = tested("%s = add i32 %x, %z");
+    let result = after_no(&parsed, &[("z", interval(3, 9, 32))]).unwrap();
+    assert!(!result.contains_key(&parsed.value("x")));
+}
+
+/// `xx + yy <= 1024` with squares `xx = x*x >> 8` bounds `x` to 512: the exit test of a Mandelbrot loop.
+#[test]
+fn a_bounded_square_bounds_its_root() {
+    let parsed = tested("%s = call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 8)");
+    let result = after_no(&parsed, &[("x", interval(-4096, 4095, 32))]).unwrap();
+    assert_eq!(result[&parsed.value("x")], interval(-512, 512, 32));
+}
+
+/// An unbounded `x` may have wrapped `x*x >> 8` below 1024; its root is no smaller for that.
+#[test]
+fn a_square_of_an_unbounded_value_bounds_nothing() {
+    let parsed = tested("%s = call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 8)");
+    let result = after_no(&parsed, &[]).unwrap();
+    assert!(!result.contains_key(&parsed.value("x")));
+}
+
+/// Mandelbrot's escape loop: `x' = xx - yy + cx`, `y' = (2xy >> 8) + cy`, left once `xx + yy > 1024`.
+/// `x_next` is what the latch hands back; `start` what the loop starts from.
+fn escape(x_next: &str, start: &str) -> Parsed {
+    Parsed::new(&format!(
+        "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
+
+define void @f(i32 range(i32 -512, 233) %cx, i32 range(i32 -288, 265) %cy) {{
+b0:
+  br label %b1
+
+b1:
+  %x = phi i32 [ {start}, %b0 ], [ %xn, %b3 ]
+  %y = phi i32 [ 0, %b0 ], [ %yn, %b3 ]
+  %xx = call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 8)
+  %yy = call i32 @llvm.smul.fix.i32(i32 %y, i32 %y, i32 8)
+  %s = add i32 %xx, %yy
+  %c = icmp sgt i32 %s, 1024
+  br i1 %c, label %b4, label %b2
+
+b2:
+  %x2 = add i32 %x, %x
+  %xy = call i32 @llvm.smul.fix.i32(i32 %x2, i32 %y, i32 8)
+  %yn = add i32 %xy, %cy
+  %d = sub i32 %xx, %yy
+  {x_next}
+  br label %b3
+
+b3:
+  br label %b1
+
+b4:
+  ret void
+}}
+"
+    ))
+}
+
+/// The loop's own exit test bounds what each trip squares, so the phis stay in a box the whole
+/// loop through: with no relation between phi and test, `x` and `y` had no interval at all and every
+/// product in the loop needed its 64-bit form.
+#[test]
+fn a_loop_phi_whose_exit_test_bounds_its_square_stays_in_a_box() {
+    let parsed = escape("%xn = add i32 %d, %cx", "0");
+    let known = bounded(&parsed.unit()).unwrap();
+    let at = &known[&cfg::id(parsed.block("b2"))];
+    assert_eq!(at[&parsed.value("x")], interval(-512, 512, 32), "{at:?}");
+    assert_eq!(at[&parsed.value("y")], interval(-512, 512, 32), "{at:?}");
+    assert_eq!(at[&parsed.value("xy")], interval(-2048, 2048, 32), "{at:?}");
+}
+
+/// `x' = 2x` with no test on `x` leaves every box.
+#[test]
+fn a_doubling_loop_phi_has_no_box() {
+    let parsed = Parsed::new(
+        "define void @f(i1 %p) {
+b0:
+  br label %b1
+
+b1:
+  %x = phi i32 [ 1, %b0 ], [ %xn, %b2 ]
+  br label %b2
+
+b2:
+  %xn = mul i32 %x, 2
+  br i1 %p, label %b1, label %b3
+
+b3:
+  ret void
+}
+",
+    );
+    let known = bounded(&parsed.unit()).unwrap();
+    let at = known.get(&cfg::id(parsed.block("b2")));
+    assert!(at.is_none_or(|at| !at.contains_key(&parsed.value("x"))), "{at:?}");
+}
+
+/// A phi whose entry is outside every box the latch keeps has no box: `x` starts at 2^30.
+#[test]
+fn an_entry_outside_the_box_gets_no_box() {
+    let parsed = escape("%xn = add i32 %d, %cx", "1073741824");
+    let known = bounded(&parsed.unit()).unwrap();
+    let at = known.get(&cfg::id(parsed.block("b2")));
+    assert!(at.is_none_or(|at| at.get(&parsed.value("x")).is_none_or(|x| x.high >= BigInt::from(1_u64 << 30))), "{at:?}");
 }

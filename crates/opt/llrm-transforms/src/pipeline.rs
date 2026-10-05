@@ -35,8 +35,8 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    algebraic, dead, decide, dse, fill, floatloop, fold, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, unroll, unswitch,
+    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
+    promote, rotate, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -103,7 +103,7 @@ impl Options {
     /// -O3: LLVM's -O3 budgets, twice the unrolled size and a 250 inline threshold.
     pub fn aggressive() -> Self {
         let limits = Limits::default();
-        Self { limits: Limits { max_unrolled_operations: 2 * limits.max_unrolled_operations, ..limits }, inline: inline::Threshold(250), ..Self::default() }
+        Self { limits: Limits { max_unrolled_operations: 2 * limits.max_unrolled_operations, ..limits }, inline: inline::Threshold::new(250), ..Self::default() }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -112,7 +112,7 @@ impl Options {
     /// shrinks the code here. A lower one would also refuse a constant-site
     /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, ..Limits::default() }, ..Self::default() }
+        Self { limits: Limits { grows: false, ..Limits::default() }, inline: inline::Threshold::default().for_size(), ..Self::default() }
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.
@@ -138,7 +138,7 @@ impl Options {
             "gvn" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sroa" | "promote" => self.promote,
-            "indvars" | "lsr" => self.strength,
+            "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
@@ -180,6 +180,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(floatloop::FloatLoop),
         Box::new(hoist::Hoist),
         Box::new(loopmotion::LoopMotion),
+        // Before gvn: a far pointer cast from a near one is read as the near one.
+        Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
         Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
@@ -189,7 +191,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
-        Box::new(fill::Fill),
+        Box::new(fill::Fill { size: applied.options.prefers_size() }),
         Box::new(fill::Merge),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
@@ -211,6 +213,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
     if !applied.options.optimize {
+        manager.add_program(availableexternally::EliminateAvailableExternally);
         return manager.run(program);
     }
     // As LLVM's O2 requires GlobalsAA before the function pipeline.
@@ -224,6 +227,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     if applied.options.wanted("ports") {
         manager.add(ports::Ports);
     }
+    manager.add_program(crate::interprocedural::Stamp);
     manager.add(Fixed::new(applied));
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
@@ -232,14 +236,27 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
         pipeline: Box::new(move |module, analyses, id, _| rerun(module, analyses, id, &mut again).unwrap_or_else(|error| panic!("pipeline: {error}"))),
         proved: None,
         inline: applied.options.inline,
-        size: applied.options.prefers_size(),
+        rate: Some(if applied.options.prefers_size() { 0 } else { applied.options.limits.milliclocks_per_byte }),
     });
     // What no live code names any more goes before selection, as LLVM runs
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
+    manager.add_program(availableexternally::EliminateAvailableExternally);
+    // Once the callers that remain are the ones that stay: an internal function they all call directly pops its own arguments.
+    if applied.options.wanted("calleepop") {
+        manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
+    }
+    // Before LSR: a factor of two or a scale the product carries still shows as a shift.
+    if applied.options.wanted("fixednarrow") {
+        manager.add(fixednarrow::FixedNarrow);
+    }
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
         manager.add(lsr::Lsr);
+    }
+    // On the pointers LSR chose: a huge one a loop keeps in one window is far there.
+    if applied.options.wanted("window") {
+        manager.add(window::Window { size: applied.options.prefers_size() });
     }
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
@@ -248,6 +265,14 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") {
         manager.add(hoist::Hoist);
+    }
+    // After hoist, which would move a constant `gep` out of its loop.
+    if applied.options.wanted("gepoffset") {
+        manager.add(gepoffset::GepOffset);
+    }
+    // After gvn's last partial redundancy elimination, which makes the phis it sinks.
+    if applied.options.wanted("addresssink") {
+        manager.add(addresssink::AddressSink);
     }
     manager.run(program)
 }

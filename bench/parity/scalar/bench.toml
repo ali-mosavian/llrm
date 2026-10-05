@@ -1,0 +1,7 @@
+description = "Sum of products in a scalar loop (parity without the array)"
+repetitions = 1
+
+[region]
+bas = "BenchScalar"
+c = "bench_scalar"
+nib = "bench_scalar"

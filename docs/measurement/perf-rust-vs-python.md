@@ -6,7 +6,7 @@ byte-identical to Python's before and after.
 
 ## Method
 
-- Inputs are `bench/c/*.c`. Release build with debug symbols.
+- Inputs are `bench/*/*.c`. Release build with debug symbols.
 - Each cell is the minimum CPU time (user+sys) over 5 runs, with the stages
   interleaved so they share the host's load. Python is the minimum of 2.
 - The host was loaded, so CPU ms still drifts by up to 2x between sessions.

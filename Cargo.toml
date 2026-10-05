@@ -47,6 +47,7 @@ default-run = "llrm-qb"
 
 [dependencies]
 llrm-core = { workspace = true }
+llrm-mir = { workspace = true }
 llrm-bcdriver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
@@ -57,11 +58,16 @@ tempfile = { workspace = true }
 
 [features]
 default = ["toolchain"]
-# Open Watcom's wccq (llrm-c), jwasm, jwlink and DOSBox-X, which the build scripts bootstrap.
-toolchain = ["llrm-c/toolchain"]
+# What the build scripts bootstrap: Open Watcom's wccq (llrm-c), jwasm and jwlink, and DOSBox-X.
+# The lib tests need only wccq.
+toolchain = ["wccq", "jw", "dosrun"]
+wccq = ["llrm-c/toolchain"]
+jw = []
+dosrun = []
 
 [dev-dependencies]
 regex = { workspace = true }
+toml = { workspace = true }
 
 [[bin]]
 name = "llrm-qb"
@@ -78,6 +84,10 @@ path = "src/bin/llrm-omf.rs"
 [[bin]]
 name = "llrm-nib"
 path = "src/bin/llrm-nib.rs"
+
+[[bin]]
+name = "llrm-mir"
+path = "src/bin/llrm-mir.rs"
 
 [[bin]]
 name = "llrm-run"

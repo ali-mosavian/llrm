@@ -1,0 +1,10 @@
+description = "qbsp demo kernel from the Quake port"
+repetitions = 1
+
+[region]
+bas = "BenchQbsp"
+c = "bench_qbsp"
+nib = "bench_qbsp"
+
+[gaps]
+nib = "#368 no i16 literal 0x8000"

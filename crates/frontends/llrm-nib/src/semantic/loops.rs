@@ -60,8 +60,7 @@ impl<'a> FunctionCompiler<'a> {
         let inferred = self
             .expression_type_hint(expression)
             .or_else(|| match expression {
-                Expr::Integer(value, _) if i16::try_from(*value).is_ok() => Some(TypeName::I16),
-                Expr::Integer(value, _) if i32::try_from(*value).is_ok() => Some(TypeName::I32),
+                Expr::Integer(value, _) => self.rules.literal(*value),
                 _ => None,
             });
         self.scopes.pop();
@@ -371,6 +370,12 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
         };
+        // An element reached by reference lies in what the loop walks.
+        if let Storage::Reference(pointer) = view_storage {
+            let walked = self.roots(iterable);
+            self.borrowed_from.insert(borrows::BorrowKey::Value(pointer), walked);
+            self.walking.insert(borrows::BorrowKey::Value(pointer));
+        }
         self.scopes.push(BTreeMap::new());
         self.scopes.last_mut().expect("scope").insert(
             name.into(),

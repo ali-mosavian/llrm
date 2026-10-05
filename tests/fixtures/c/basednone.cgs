@@ -1,0 +1,38 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+SEG 10000 attr=0x46 name="ELSEWHERE" align=2
+START
+SYM y1 name=".ELSEWHERE" base=".ELSEWHERE" pattern="_*" attr=0x1042 seg=10000
+b1 BENewBack y1
+SETSEG 10000
+- DGLabel b1
+SETSEG 11
+SYM y2 name="ep" base="ep" pattern="_*" attr=0x6 seg=11
+b2 BENewBack y2
+- DGLabel b2
+- DGUBytes 2
+f3 DBSrcFile "fixtures/c/basednone.c"
+- DBSrcCue f3 3 1
+SYM y3 name="read_elsewhere" base="read_elsewhere" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INTEGER
+l4 CGLastParm
+t5 CGTemp TY_INTEGER
+n6 CGFEName y1 TY_UINT_2
+n7 CGFEName y2 TY_NEAR_POINTER
+n8 CGUnary O_POINTS n7 TY_NEAR_POINTER
+n9 CGBinary O_CONVERT n8 n6 TY_LONG_POINTER
+n10 CGUnary O_POINTS n9 TY_INT_1
+n11 CGUnary O_CONVERT n10 TY_INTEGER
+n12 CGTempName t5 TY_INTEGER
+n13 CGAssign n12 n11 TY_INTEGER
+- CGDone n13
+n14 CGTempName t5 TY_INTEGER
+n15 CGUnary O_POINTS n14 TY_INTEGER
+- CGReturn n15 TY_INTEGER
+STOP
+FINI

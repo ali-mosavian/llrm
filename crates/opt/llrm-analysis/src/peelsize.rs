@@ -17,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::loops::Loop;
+use llrm_mir::facts::Facts;
 use llrm_mir::module::{InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
@@ -31,6 +32,32 @@ use crate::memory::{self, Unit};
 /// GCC's `--param max-peel-branches`: undecided branches a copied sequence may hold.
 const MAX_PEEL_BRANCHES: i64 = 16;
 
+/// GCC's `optimize_loop_nest_for_speed_p`: a loop entered less often than this, in percent of its
+/// function's entries, is cold, and no copy of it grows the code.
+const COLD_PERCENT: i64 = 5;
+
+/// What one entry of a function weighs in `entries`: `profit::UNIT`.
+pub const ENTRY: i64 = 256;
+
+/// What the loop's surroundings say, which the loop alone does not.
+#[derive(Clone, Copy, Debug)]
+pub struct Site {
+    /// How often the loop is entered for each entry of its function, in 256ths.
+    pub entries: i64,
+    /// The loop calls a function that may touch memory.
+    pub writes: bool,
+}
+
+impl Default for Site {
+    fn default() -> Self {
+        Self { entries: ENTRY, writes: false }
+    }
+}
+
+/// LLVM's `-unroll-threshold` for a loop the language marks (`#pragma unroll`): operations a
+/// copy the language asked for may hold, past the size budget.
+const HINTED_OPERATIONS: i64 = 16384;
+
 /// LLVM's `-unroll-max-percent-threshold-boost`: how far saved work may raise the budget.
 const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 
@@ -38,16 +65,18 @@ const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 /// `UL_NO_GROWTH`: a copy is taken only when it is no larger.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Limits {
-    /// `--param max-completely-peel-times`; 0 is unbounded.
+    /// LLVM's `-unroll-max-iteration-count-to-analyze` (10), where GCC's `max-completely-peel-times` is 16; 0 is unbounded.
     pub max_unroll_iterations: i64,
     /// `--param max-completely-peeled-insns`; 0 is unbounded.
     pub max_unrolled_operations: i64,
     pub grows: bool,
+    /// Clocks an inline that grows the code must save for each byte it adds: `--clocks-per-byte`.
+    pub milliclocks_per_byte: i64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 16, max_unrolled_operations: 200, grows: true }
+        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, grows: true, milliclocks_per_byte: 16_000 }
     }
 }
 
@@ -62,11 +91,30 @@ impl Default for Limits {
 /// does (`getFullUnrollBoostingFactor`). A loop holding another is copied only when
 /// that shrinks it, as GCC does for outer loops.
 ///
+/// `site` is where the loop stands: GCC refuses a growing copy of a loop with a call that touches memory,
+/// too, as little is left to fold.
+///
 /// GCC also refuses a call on the path, guessing little is left to fold; the
 /// simulation measures what folds, so a call is priced as LLVM's cost model prices
 /// one instead.
-pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits) -> bool {
-    if limits.max_unroll_iterations != 0 && *count > BigInt::from(limits.max_unroll_iterations) {
+pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<ValueId, Known>, limits: &Limits, site: Site) -> bool {
+    // What the language says of copying this loop: never, or as many as it permits, which
+    // at least the trip count is asked, and is then copied past the budget. Fewer than the
+    // trip count is no partial unrolling, which does not exist here: it is a refusal.
+    let stated = loop_.latches.iter().filter_map(|&latch| unit.function.terminator(cfg::block(latch))).filter_map(|branch| Facts::of_terminator(unit.context, unit.metadata, unit.function, branch).unroll()).min();
+    let asked = match stated {
+        Some(0) => {
+            llrm_support::debug!("unroll", "loop b{} x{count}: refused: the language says never", loop_.header);
+            return false;
+        }
+        Some(copies) if BigInt::from(copies) < *count => {
+            llrm_support::debug!("unroll", "loop b{} x{count}: refused: the language permits only {copies} copies", loop_.header);
+            return false;
+        }
+        Some(_) => true,
+        None => false,
+    };
+    if !asked && limits.max_unroll_iterations != 0 && *count > BigInt::from(limits.max_unroll_iterations) {
         llrm_support::debug!("unroll", "loop b{} x{count}: refused: max-completely-peel-times", loop_.header);
         return false;
     }
@@ -74,22 +122,26 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
     let graph = cfg::graph(unit.function);
     let blocks = graph.iter().filter(|block| loop_.body.contains(&block.at)).map(|block| (block.at, block)).collect::<BTreeMap<i64, &cfg::Block>>();
     let (Some(order), Some(count)) = (_ordered(&blocks, loop_.header), count.to_i64()) else {
-        let shrinks = count * BigInt::from(size - folded) <= BigInt::from(size);
+        let shrinks = asked || count * BigInt::from(size - folded) <= BigInt::from(size);
         llrm_support::debug!("unroll", "loop b{} x{count}: holds a loop, {size} ops, {}", loop_.header, if shrinks { "shrinks" } else { "refused: not innermost and code would grow" });
         return shrinks;
     };
     let budget = if limits.max_unrolled_operations == 0 { i64::MAX } else { limits.max_unrolled_operations };
-    let limit = budget.saturating_mul(MAX_PERCENT_THRESHOLD_BOOST) / 100;
+    let limit = if asked { HINTED_OPERATIONS } else { budget.saturating_mul(MAX_PERCENT_THRESHOLD_BOOST) / 100 };
     let Some(unrolled) = unrolled(unit, &blocks, &order, loop_, count, facts, limit.max(size)) else {
         llrm_support::debug!("unroll", "loop b{} x{count}: {size} ops, refused: over {} ops unrolled", loop_.header, limit.max(size));
         return false;
     };
     let boost = _boost(&unrolled);
     // GCC's reasons, in its order.
-    let refusal = if unrolled.size <= size {
+    let refusal = if asked || unrolled.size <= size {
         None
     } else if !limits.grows {
         Some("size would grow")
+    } else if site.entries * 100 < COLD_PERCENT * ENTRY {
+        Some("cold")
+    } else if site.writes {
+        Some("a call that touches memory")
     } else if unrolled.branches > MAX_PEEL_BRANCHES {
         Some("max-peel-branches")
     } else if unrolled.size > budget.saturating_mul(boost) / 100 {

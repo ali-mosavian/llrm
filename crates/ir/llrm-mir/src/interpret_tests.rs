@@ -3,7 +3,7 @@ use crate::interpret::{Trap, Val, run};
 use crate::parse;
 use crate::types::{FloatKind, Type, Types};
 
-const LAYOUT: &str = "e-p:16:16-p1:32:16:16:16-i32:16-i64:16";
+const LAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16";
 
 fn result(text: &str) -> Result<Val, Trap> {
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{text}")).unwrap_or_else(|error| panic!("{error}"));
@@ -47,6 +47,27 @@ fn a_far_offset_wraps_at_its_index_width() {
     let text = "@a = global [2 x i16] [i16 1, i16 2]\ndefine i32 @f() {\n  %far = addrspacecast ptr @a to ptr addrspace(1)\n  %p = getelementptr i16, ptr addrspace(1) %far, i16 32768\n  %base = ptrtoint ptr addrspace(1) %far to i32\n  %moved = ptrtoint ptr addrspace(1) %p to i32\n  %d = sub i32 %moved, %base\n  ret i32 %d\n}\n";
     // 32768 * 2 bytes is 0x10000: the 16-bit offset wraps to where it began.
     assert_eq!(result(text), int(0, 32));
+}
+
+/// A huge pointer indexes by 32 bits, so a displacement past 64K carries into
+/// its selector where a far one's wraps.
+#[test]
+fn a_huge_offset_carries_where_a_far_one_wraps() {
+    let moved = |space: u32| {
+        let cast = if space == 1 { "getelementptr i8, ptr addrspace(1) @a, i32 0".to_owned() } else { format!("addrspacecast ptr addrspace(1) @a to ptr addrspace({space})") };
+        format!(
+            "@a = addrspace(1) global [2 x i16] [i16 1, i16 2]\ndefine i32 @f() {{\n  %p = {cast}\n  %q = getelementptr i8, ptr addrspace({space}) %p, i32 65536\n  %base = ptrtoint ptr addrspace({space}) %p to i32\n  %moved = ptrtoint ptr addrspace({space}) %q to i32\n  %d = sub i32 %moved, %base\n  ret i32 %d\n}}\n"
+        )
+    };
+    assert_eq!(result(&moved(1)), int(0, 32), "far: the offset wraps to where it began");
+    assert_eq!(result(&moved(3)), int(65536, 32), "huge: the selector carries");
+}
+
+/// Two huge pointers' distance in bytes, across 64K segments.
+#[test]
+fn a_huge_pointer_difference_is_the_bytes_between() {
+    let text = "@a = addrspace(1) global [40000 x i32] zeroinitializer\ndeclare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))\ndefine i32 @f() {\n  %p = addrspacecast ptr addrspace(1) @a to ptr addrspace(3)\n  %q = getelementptr i32, ptr addrspace(3) %p, i32 39999\n  %d = call i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3) %q, ptr addrspace(3) %p)\n  ret i32 %d\n}\n";
+    assert_eq!(result(text), int(159_996, 32));
 }
 
 #[test]
@@ -211,4 +232,115 @@ fn a_noalias_parameter_reached_another_way_is_reported() {
 fn aliased_pointers_without_noalias_or_with_only_reads_are_fine() {
     assert_eq!(aliased("", WRITES_THEN_READS), int(1, 16));
     assert_eq!(aliased("noalias", "  %x = load i16, ptr %p\n  %y = load i16, ptr %q\n  %s = add i16 %x, %y\n  ret i16 %s\n"), int(0, 16));
+}
+
+/// Runs `@g(ptr %p)` checked, with `attrs` on the parameter, on `argument`.
+fn one_pointer(attrs: &str, body: &str, argument: u64) -> Result<Val, Trap> {
+    let text = format!("target datalayout = \"{LAYOUT}\"\n@cell = global [2 x i16] zeroinitializer\ndefine i16 @g(ptr {attrs} %p) {{\n{body}}}\n");
+    let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    crate::interpret::run_checked(&module, "g", vec![Val::Ptr(argument)], 10_000)
+}
+
+/// A parameter stated `readonly` and written through is a broken promise.
+#[test]
+fn a_readonly_parameter_written_through_is_reported() {
+    let writes = "  store i16 1, ptr %p\n  ret i16 0\n";
+    let trapped = one_pointer("readonly", writes, 16).unwrap_err();
+    assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("readonly parameter")), "{trapped:?}");
+    assert_eq!(one_pointer("", writes, 16), int(0, 16));
+    assert_eq!(one_pointer("readonly", "  %x = load i16, ptr %p\n  ret i16 %x\n", 16), int(0, 16));
+}
+
+/// A parameter stated `nonnull` and passed null is a broken promise.
+#[test]
+fn a_nonnull_parameter_passed_null_is_reported() {
+    let reads = "  %x = load i16, ptr @cell\n  ret i16 %x\n";
+    let trapped = one_pointer("nonnull", reads, 0).unwrap_err();
+    assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("nonnull parameter 0")), "{trapped:?}");
+    assert_eq!(one_pointer("nonnull", reads, 16), int(0, 16));
+    assert_eq!(one_pointer("", reads, 0), int(0, 16));
+}
+
+/// A memcpy moves bytes: one the source never wrote stays only that byte
+/// undefined, so the byte written beside it reads back. Copied as an i16
+/// load and store it was the whole word that went poison.
+#[test]
+fn a_memcpy_keeps_an_unwritten_byte_apart_from_the_written_one() {
+    let text = |read: &str| {
+        format!(
+            "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i8 @f() {{
+  %from = alloca [4 x i8]
+  %to = alloca [4 x i8]
+  store i8 7, ptr %from
+  call void @llvm.memcpy.p0.p0.i16(ptr %to, ptr %from, i16 4, i1 false)
+  {read}
+  ret i8 %v
+}}
+"
+        )
+    };
+    assert_eq!(result(&text("%v = load i8, ptr %to")), int(7, 8));
+    assert_eq!(result(&text("%at = getelementptr i8, ptr %to, i16 1\n  %v = load i8, ptr %at")), Ok(Val::Poison));
+}
+
+/// A pattern fill stores its cell little-endian, once per count: a dword
+/// read back as two words is its halves.
+#[test]
+fn a_pattern_fill_stores_its_cell_little_endian() {
+    let text = |read: &str| {
+        format!(
+            "declare void @llvm.experimental.memset.pattern.p0.i32.i16(ptr, i32, i16, i1)
+define i16 @f() {{
+  %to = alloca [3 x i32]
+  call void @llvm.experimental.memset.pattern.p0.i32.i16(ptr %to, i32 305419896, i16 3, i1 false)
+  {read}
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(result(&text("%v = load i16, ptr %to")), int(0x5678, 16));
+    assert_eq!(result(&text("%at = getelementptr i16, ptr %to, i16 5\n  %v = load i16, ptr %at")), int(0x1234, 16));
+}
+
+/// Runs `@g` of `text` checked on `arguments`.
+fn range_run(text: &str, arguments: Vec<Val>) -> Result<Val, Trap> {
+    let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n@cell = global i16 5\n{text}")).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    crate::interpret::run_checked(&module, "g", arguments, 10_000)
+}
+
+fn small(bits: u128) -> Val {
+    Val::Int { bits, width: 16 }
+}
+
+/// A value outside the `range` stated of a parameter, of the result, or of a
+/// load (`!range`) is a broken promise; a value inside, or an unchecked run, is not.
+#[test]
+fn a_value_outside_its_stated_range_is_reported() {
+    let parameter = "define i16 @g(i16 range(i16 0, 2) %p) {\nentry:\n  ret i16 %p\n}\n";
+    assert_eq!(range_run(parameter, vec![small(1)]), Ok(small(1)));
+    let trapped = range_run(parameter, vec![small(5)]).unwrap_err();
+    assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("parameter 0") && why.contains("[0, 2)")), "{trapped:?}");
+    let result = "define range(i16 0, 2) i16 @g(i16 %p) {\nentry:\n  ret i16 %p\n}\n";
+    assert_eq!(range_run(result, vec![small(0)]), Ok(small(0)));
+    assert!(matches!(range_run(result, vec![small(7)]).unwrap_err(), Trap::Undefined(why) if why.contains("the result")));
+    let load = "define i16 @g() {\nentry:\n  %v = load i16, ptr @cell, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 2}\n";
+    assert!(matches!(range_run(load, vec![]).unwrap_err(), Trap::Undefined(why) if why.contains("!range")));
+    // Two pairs, 0..2 and 10..12: inside the second is inside.
+    let by_pair = |value: u128| {
+        let text = format!("define i16 @g() {{\nentry:\n  %v = load i16, ptr @cell3, !range !0\n  ret i16 %v\n}}\n\n@cell3 = global i16 {value}\n!0 = !{{i16 0, i16 2, i16 10, i16 12}}\n");
+        range_run(&text, vec![])
+    };
+    assert_eq!(by_pair(11), Ok(small(11)), "inside the second pair");
+    assert_eq!(by_pair(1), Ok(small(1)), "inside the first");
+    assert!(matches!(by_pair(5).unwrap_err(), Trap::Undefined(why) if why.contains("!range")), "between the pairs");
+    let signed = "define i16 @g(i16 range(i16 -1, 2) %p) {\nentry:\n  ret i16 %p\n}\n";
+    assert_eq!(range_run(signed, vec![small(0xffff)]), Ok(small(0xffff)), "-1 is inside -1..=1");
+    assert!(range_run(signed, vec![small(2)]).is_err());
+    // Unchecked, the promise is not looked at.
+    let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{parameter}")).unwrap();
+    assert_eq!(crate::interpret::run(&module, "g", vec![small(5)], 100), Ok(small(5)));
 }

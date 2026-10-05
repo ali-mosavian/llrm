@@ -41,12 +41,21 @@ pub struct Declared {
     ids: HashMap<String, GlobalId>,
     next: u32,
     pending: Vec<(String, crate::types::TypeId)>,
+    /// Metadata nodes made, numbered after the module's.
+    nodes: Vec<crate::module::MetadataNode>,
+    first_node: u32,
 }
 
 impl Declared {
     pub fn of(module: &Module) -> Self {
         let ids = module.globals.iter().enumerate().filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32)))).collect();
-        Self { ids, next: module.globals.len() as u32, pending: Vec::new() }
+        Self { ids, next: module.globals.len() as u32, pending: Vec::new(), nodes: Vec::new(), first_node: module.metadata.len() as u32 }
+    }
+
+    /// A metadata node, its id at once, added to the module after the pass.
+    pub fn node(&mut self, node: crate::module::MetadataNode) -> crate::module::MetadataId {
+        self.nodes.push(node);
+        crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
     }
 
     /// The function `name` of type `ty`, declared where the module has none.
@@ -67,6 +76,9 @@ impl Declared {
             let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
             assert_eq!(Some(&id), self.ids.get(&name), "declared in order");
         }
+        assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");
+        module.metadata.append(&mut self.nodes);
+        self.first_node = module.metadata.len() as u32;
         Ok(())
     }
 }
@@ -144,6 +156,17 @@ impl ModuleAnalysis for GlobalSizes {
     const NAME: &'static str = "global-sizes";
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
         crate::valuetracking::sizes(module, &analyses.program().layout)
+    }
+}
+
+/// The module's `!tbaa` type tree.
+pub struct TypeAncestry;
+
+impl ModuleAnalysis for TypeAncestry {
+    type Result = crate::tbaa::Tbaa;
+    const NAME: &'static str = "type-ancestry";
+    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+        crate::tbaa::Tbaa::of(&module.metadata)
     }
 }
 
@@ -292,6 +315,11 @@ impl Outer {
     /// Each global variable's size: `GlobalSizes`.
     pub fn sizes(&self) -> &crate::valuetracking::Sizes {
         self.cached_ref::<GlobalSizes>().expect("every outer proxy holds the globals' sizes")
+    }
+
+    /// The type tree of the module's `!tbaa` nodes: `TypeAncestry`.
+    pub fn tbaa(&self) -> &crate::tbaa::Tbaa {
+        self.cached_ref::<TypeAncestry>().expect("every outer proxy holds the type tree")
     }
 
     /// `M`'s result, if computed: LLVM's `getCachedResult`.
@@ -525,7 +553,7 @@ impl ModuleAnalyses {
     /// What a function analysis reads of `module`: the same proxy as last
     /// time where nothing it holds changed.
     pub fn outer(&mut self, module: &Module) -> Rc<Outer> {
-        let every = [Kind::of::<CalleeEffects>(), Kind::of::<CallRegisters>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>()].into_iter().chain(self.required.clone());
+        let every = [Kind::of::<CalleeEffects>(), Kind::of::<CallRegisters>(), Kind::of::<GlobalSizes>(), Kind::of::<Declarations>(), Kind::of::<TypeAncestry>()].into_iter().chain(self.required.clone());
         let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()]).downcast::<Vec<GlobalValue>>().expect("keyed by its type");
         let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };

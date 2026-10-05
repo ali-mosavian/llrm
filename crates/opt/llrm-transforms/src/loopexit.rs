@@ -184,10 +184,10 @@ fn _exit_terms(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, 
     let mut counters = counters.clone();
     counters.extend(widened);
     // Each value affine in a counter is `start + step * trip`, summed over the trips.
-    let recurrences = induction::derived(unit, loop_, Some(&counters))
-        .iter()
-        .filter(|one| one.pointer.is_none())
-        .filter_map(|one| Some((function.instruction(one.op).result?, induction::recurrence(one)?)))
+    let recurrences = induction::recurrences(unit, loop_, &counters)
+        .values
+        .into_iter()
+        .filter(|(_, one)| one.pointer.is_none())
         .collect::<BTreeMap<_, _>>();
     headers.extend(recurrences.keys().copied());
     let within = |value: ValueId| unit.defining(Operand::Value(value)).and_then(|(inst, _)| function.parent(inst)).is_some_and(|block| loop_.body.contains(&cfg::id(block)));
@@ -227,7 +227,14 @@ fn _exit_terms(unit: &Unit, loop_: &Loop, counters: &IndexMap<ValueId, Affine>, 
                     let sums = [(&of.start, coefficient * count), (&of.step, induction::floor_div(&(coefficient * count * (count - 1)), &BigInt::from(2)))];
                     for (sum, times) in sums {
                         terms.push((AffineOperand::constant(sum.constant.clone(), width), times.clone()));
-                        terms.extend(sum.terms.iter().map(|(term, factor)| (AffineOperand::Value(*term, width), factor * &times)));
+                        for (product, factor) in &sum.terms {
+                            // A term is one value: a product of unknowns is not an operand.
+                            let Some(term) = product.single() else {
+                                complete = false;
+                                break;
+                            };
+                            terms.push((AffineOperand::Value(term, width), factor * &times));
+                        }
                     }
                 }
                 AffineOperand::Value(..) => {

@@ -10,6 +10,9 @@
 # every register and every byte of memory, which is the only safe answer
 # to a routine nobody has read.
 #
+# `captures = "NONE"` (optional, default: may keep) says the routine keeps no
+# pointer argument past its return; it needs the source to show it.
+#
 # `cleanup = -1` is "not known", which is not the same as zero.
 
 ["B$HARY"]
@@ -185,10 +188,11 @@ writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
 documented = ["ax", "bx", "cx", "dx"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
-rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption. VBDCL10E.LIB erase.asm B$ERAS 0020..00c4 is the same: PUSH BP/SI/DI, pAd from [bp+6], an empty array straight to the epilogue, the rest through B$EraseAllAFHDs, B$DeLink, B$DelStrBlock/B$FreePpv/B$CompactSB, B$FHDealloc or B$ADArraySize with B$STD1 or REP STOSW through ES; every path joins POP DI/SI/BP / RETF 2.
+rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption. VBDCL10E.LIB erase.asm B$ERAS 0020..00c4 is the same: PUSH BP/SI/DI, pAd from [bp+6], an empty array straight to the epilogue, the rest through B$EraseAllAFHDs, B$DeLink, B$DelStrBlock/B$FreePpv/B$CompactSB, B$FHDealloc or B$ADArraySize with B$STD1 or REP STOSW through ES; every path joins POP DI/SI/BP / RETF 2. Audit of what it keeps (`captures = "NONE"`, which the compiler reads as `noretain`): rt/dynamic.asm ERASE_COMMON reads pAd into BX once and never stores BX, pAd or any word it loads from the descriptor anywhere but back into the descriptor (hData/cPara cleared); the static path only REP STOSWs the array. The dynamic path's callees B$FHDealloc and B$LHDALC are not in rt/*.asm (ulib.inc declares them); rt/fhinit.asm shows the far heap keeps its entries by address in a list (FHD_pNext) that B$FHDDIM-style allocation links an array descriptor into, so deallocation is what unlinks it -- the part taken from that name and its callers, not read. B$DDIM, the allocator, links the descriptor in and keeps it, so it is not NONE.
 '''
 
 ["B$EVCK"]
@@ -1009,3 +1013,94 @@ inputs = []
 evidence = '''
 rt/strfcn.asm: `cProc B$LEFT,<FAR,PUBLIC>` with parmW psd, parmW len, `Registers: Per convention`; it jumps into B$RGHT's `CALL LEFRIG` and RETF 4. LEFRIG: a negative length is `JL ARGERR` -> B$ERR_FC; zero frees the argument temp and returns b$nuldes; otherwise B$STALCTMPSUB (rt/nhstutil.asm), which saves ES, AX, CX, SI and DI, copies the substring and frees the source temp. BCOM45.LIB strfcn 00b8..00d9 with LEFRIG 0114..0132, and BCL71ENR.LIB 0000..0024 with 005c..007d, are that code.
 '''
+
+
+# What an inline copy of a routine computes, where the program is told how
+# the runtime reads a string. The interprocedural inliner prices each copy
+# against the call it replaces; a routine nothing here describes keeps its
+# call.
+#
+# A runtime keeps its strings in one `form`. A `near` string is a descriptor
+# in DGROUP: a `length` word and a `data` pointer at these offsets, `size`
+# bytes in all, and a literal is that descriptor with its bytes after it.
+# QB 4.5 and PDS 7.1 are near. VBDOS's strings are `far`: the length is in
+# the payload's header, not at an offset in the descriptor, so nothing here
+# reads one and every routine below keeps its call there.
+
+[layout.qb45]
+form = "near"
+length = 0
+data = 2
+size = 4
+
+[layout.pds71]
+form = "near"
+length = 0
+data = 2
+size = 4
+
+[layout.vbdos]
+form = "far"
+
+# What `-fsanitize=stack` compares and calls, per runtime. `limit` is the data-group word holding
+# the lowest SP the runtime allows, `handler` the far routine entered when SP falls below it, and
+# `entry` the runtime's own frame entry that checks (BC's /D calls it in place of B$ENRA, which
+# does not check). `red_zone` is the bytes below the limit the runtime promises nothing else uses
+# beyond its handler: 0 where that is not measured, so no leaf goes unchecked.
+# Source: rt\rtenexit.asm in BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB, disassembled: B$ENRD
+# does `mov ax,sp; sub ax,cx; jc E; sub ax,HDR; jc E; cmp ax,[b$pendchk]; jc E`, E being
+# `push bp; mov bp,sp; jmp B$ERR_OSS` ("Out of stack space", the fatal 9007h of messages.inc),
+# and falls into B$ENRA.
+
+[stack.qb45]
+limit = "b$pendchk"
+handler = "B$ERR_OSS"
+entry = "B$ENRD"
+red_zone = 0
+
+[stack.pds71]
+limit = "b$pendchk"
+handler = "B$ERR_OSS"
+entry = "B$ENRD"
+red_zone = 0
+
+[stack.vbdos]
+limit = "b$pendchk"
+handler = "B$ERR_OSS"
+entry = "B$ENRD"
+red_zone = 0
+
+# `parameters`: `string` is a descriptor's address, `int` a word. `result`
+# is a word, or a `view`: a string made of a `length` and a `data` address,
+# which the runtime allocates a temporary descriptor for. `check` raises
+# error `raise` where `when` holds; it is emitted only where the program
+# asks for run-time checks or handles errors. `releases` lists the string
+# parameters the routine frees if the runtime allocated them, which no copy
+# can: a copy stands in only where the actual is not a runtime temporary.
+# `$n` is parameter n; `len($n)` and `data($n)` read a string parameter;
+# `byte(p)` is the byte at p; `slot(v)` the address of a frame byte holding v's low byte.
+
+[semantics."B$FLEN"]
+evidence = "rt/strfcn.asm B$FLEN: the length word of the descriptor."
+parameters = ["string"]
+result = "len($0)"
+
+[semantics."B$FASC"]
+evidence = "rt/strfcn.asm B$FASC: a null string is JZ ERRFC -> B$ERR_FC (error 5); otherwise the first byte, and B$STDALCTMP frees the argument if it is a temp."
+parameters = ["string"]
+result = "byte(data($0))"
+releases = [0]
+check = { when = "len($0) == 0", raise = 5 }
+
+[semantics."B$FMID"]
+evidence = "rt/mid.asm: MID$(s, i, n) is the n bytes of s from the i-th, fewer where s ends and none past it; a start below 1 or a negative count is error 5."
+parameters = ["string", "int", "int"]
+releases = [0]
+view = { length = "min($2, max(0, len($0) - $1 + 1))", data = "data($0) + ($1 - 1)" }
+check = { when = "$1 < 1 or $2 < 0", raise = 5 }
+
+[semantics."B$FCHR"]
+evidence = "rt/stcore.asm B$FCHR: OR AH,AH / JNZ ERRFC raises error 5 where the value is not a byte; otherwise a one-byte temporary string holds it."
+parameters = ["int"]
+view = { length = "1", data = "slot($0)" }
+check = { when = "$0 < 0 or 255 < $0", raise = 5 }

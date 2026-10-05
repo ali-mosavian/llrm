@@ -7,6 +7,40 @@
 
 pub use llrm_mir::facts::{Effect, Fact, Kind};
 
+/// A module's functions and instructions by id, found once, for every fact
+/// that names one.
+pub struct Index<'m> {
+    functions: std::collections::HashMap<i64, &'m crate::model::Function>,
+    instructions: std::collections::HashMap<(i64, i64), &'m crate::model::Instruction>,
+    value_types: std::collections::HashMap<(i64, i64), i64>,
+}
+
+impl<'m> Index<'m> {
+    pub fn of(module: &'m crate::model::Module) -> Self {
+        let functions = module.functions.iter().map(|one| (one.id, one)).collect();
+        let instructions = module
+            .functions
+            .iter()
+            .flat_map(|function| function.blocks.iter().flat_map(|block| &block.instructions).map(move |instruction| ((function.id, instruction.id), instruction)))
+            .collect();
+        let value_types = module.functions.iter().flat_map(|function| function.values.iter().map(move |value| ((function.id, value.id), value.r#type))).collect();
+        Self { functions, instructions, value_types }
+    }
+
+    pub fn function(&self, id: i64) -> Option<&'m crate::model::Function> {
+        self.functions.get(&id).copied()
+    }
+
+    /// The HIR type of value `id` of `function`.
+    pub fn value_type(&self, function: i64, id: i64) -> Option<i64> {
+        self.value_types.get(&(function, id)).copied()
+    }
+
+    pub fn instruction(&self, function: i64, id: i64) -> Option<&'m crate::model::Instruction> {
+        self.instructions.get(&(function, id)).copied()
+    }
+}
+
 /// What a fact is stated of, by HIR ids. A routine is one subject, whether
 /// the module defines it or only calls it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,6 +51,12 @@ pub enum Subject {
     /// Operand `operand` of call `instruction`.
     Operand { function: i64, instruction: i64, operand: i64 },
     Object(i64),
+    /// The terminator of block `block`.
+    Terminator { function: i64, block: i64 },
+    /// A place of `function`.
+    Place { function: i64, place: i64 },
+    /// The member at byte `offset` of aggregate type `owner`.
+    Field { owner: i64, offset: i64 },
 }
 
 impl Subject {
@@ -27,6 +67,9 @@ impl Subject {
             Subject::Instruction { .. } => Kind::Instruction,
             Subject::Operand { .. } => Kind::Operand,
             Subject::Object(_) => Kind::Object,
+            Subject::Terminator { .. } => Kind::Terminator,
+            Subject::Place { .. } => Kind::Place,
+            Subject::Field { .. } => Kind::Field,
         }
     }
 
@@ -38,11 +81,14 @@ impl Subject {
             Kind::Instruction => "instruction",
             Kind::Operand => "operand",
             Kind::Object => "object",
+            Kind::Terminator => "terminator",
+            Kind::Place => "place",
+            Kind::Field => "field",
         }
     }
 
     pub fn kind_named(key: &str) -> Option<Kind> {
-        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object].into_iter().find(|&kind| Self::kind_key(kind) == key)
+        [Kind::Callable, Kind::Param, Kind::Instruction, Kind::Operand, Kind::Object, Kind::Terminator, Kind::Place, Kind::Field].into_iter().find(|&kind| Self::kind_key(kind) == key)
     }
 
     /// The function a subject belongs to, its own id in it, and, for what
@@ -53,12 +99,10 @@ impl Subject {
             Subject::Param { function, index } => (Some(function), Some(index), None),
             Subject::Instruction { function, id } => (Some(function), Some(id), None),
             Subject::Operand { function, instruction, operand } => (Some(function), Some(instruction), Some(operand)),
+            Subject::Terminator { function, block } => (Some(function), Some(block), None),
+            Subject::Place { function, place } => (Some(function), Some(place), None),
+            Subject::Field { owner, offset } => (None, Some(owner), Some(offset)),
         }
-    }
-
-    /// The function of a parameter or instruction.
-    pub fn function(self) -> Option<i64> {
-        self.fields().0
     }
 
     /// The subject of `kind` with these fields; none where one is missing.
@@ -69,6 +113,9 @@ impl Subject {
             Kind::Instruction => Subject::Instruction { function: function?, id: id? },
             Kind::Operand => Subject::Operand { function: function?, instruction: id?, operand: part? },
             Kind::Object => Subject::Object(id?),
+            Kind::Terminator => Subject::Terminator { function: function?, block: id? },
+            Kind::Place => Subject::Place { function: function?, place: id? },
+            Kind::Field => Subject::Field { owner: id?, offset: part? },
         })
     }
 }

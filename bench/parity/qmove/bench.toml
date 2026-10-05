@@ -1,0 +1,7 @@
+description = "qmove demo kernel from the Quake port"
+repetitions = 1
+
+[region]
+bas = "BenchQmove"
+c = "bench_qmove"
+nib = "bench_qmove"

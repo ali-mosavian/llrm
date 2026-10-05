@@ -1,0 +1,5 @@
+fn main() -> i16:
+    let mut t: i16[32000] = [0] * 32000
+    t[31999] = 7
+    print(t[31999])
+    return 0

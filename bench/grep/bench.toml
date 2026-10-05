@@ -1,0 +1,8 @@
+description = "Aho-Corasick grep of ten patterns over the 10 MB Silesia dickens text, read in 1K chunks through DOS: lines matched and a checksum of match positions"
+repetitions = 1
+timed_only = true
+
+[region]
+bas = "BenchGrep"
+c = "bench_grep"
+nib = "bench_grep"

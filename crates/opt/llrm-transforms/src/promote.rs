@@ -31,8 +31,7 @@
 //!   no array request; `MemRef::at` decomposes an address.
 //! - `_bounded_leaves`, `_bounded_ref`, `_pointed_ref`: `alias::annotated`
 //!   narrows constant indices and follows exact pointers.
-//! - `_split_copies` and its helpers: no frontend moves an aggregate by one
-//!   load and one store.
+//! - `_split_copies` and its helpers: `splitcopy`, for a `llvm.memcpy`.
 //! - `loop_only`: no caller set it.
 
 use std::cell::RefCell;
@@ -220,8 +219,11 @@ impl FunctionPass for Sroa {
 }
 
 fn run(unit: &mut passes::Unit, analyses: &mut Analyses, aggregate_only: bool, name: &str) -> PreservedAnalyses {
+    // A copy of an aggregate is its leaves' loads and stores before they are promoted.
+    let split = aggregate_only && crate::splitcopy::split(unit.context, unit.layout, unit.function, analyses.outer());
     match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
         Ok(true) => PreservedAnalyses::none(),
+        Ok(false) if split => PreservedAnalyses::none(),
         Ok(false) => PreservedAnalyses::all(),
         Err(error) => panic!("{name}: {error}"),
     }
@@ -310,9 +312,9 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
         .collect::<HashMap<_, _>>();
     // A cell's `!tbaa` type, where every access of it agrees: what keeps a
     // write of another type from reaching it.
-    let mut typed = IndexMap::<&Key, Option<Option<String>>>::default();
+    let mut typed = IndexMap::<&Key, Option<Option<(String, Vec<String>)>>>::default();
     for (inst, key) in keys.iter().filter(|(_, key)| candidates.contains_key(*key)) {
-        let one = refs[inst].typed.clone();
+        let one = refs[inst].typed.clone().map(|name| (name, refs[inst].lineage.clone()));
         let agreed = typed.entry(key).or_insert_with(|| Some(one.clone()));
         if agreed.as_ref() != Some(&one) {
             *agreed = None;
@@ -331,14 +333,14 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
 
 /// Loads a stored value reaches on every path, with no write between that
 /// may reach its cell.
-fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, typed: &[Option<String>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
+fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, typed: &[Option<(String, Vec<String>)>], slots: &HashMap<InstId, usize>) -> HashSet<InstId> {
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
     let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
-    let refs = cells.iter().zip(typed).map(|((key, &ty), typed)| MemRef { typed: typed.clone(), .._reference(key, unit.layout.store_size(&unit.context.types, ty) as u32) }).collect::<Vec<_>>();
+    let refs = cells.iter().zip(typed).map(|((key, &ty), typed)| MemRef { typed: typed.as_ref().map(|one| one.0.clone()), lineage: typed.as_ref().map(|one| one.1.clone()).unwrap_or_default(), .._reference(key, unit.layout.store_size(&unit.context.types, ty) as u32) }).collect::<Vec<_>>();
     // The cells whose address a value is part of: its definition, a phi's
     // on a back edge among them, moves them.
     let mut based = HashMap::<ValueId, Vec<usize>>::default();
@@ -371,7 +373,7 @@ fn _available(unit: &Unit, accesses: &Accesses, cells: &IndexMap<Key, TypeId>, t
             let instruction = function.instruction(inst);
             let store = matches!(instruction.opcode, Opcode::Store { .. });
             // A volatile access writes its own bytes: it orders, it does not clobber.
-            let Some(writes) = accesses.stored(function, inst) else {
+            let Some(writes) = accesses.writes(inst) else {
                 available = Bits::new(cells.len());
                 continue;
             };

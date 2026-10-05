@@ -13,13 +13,28 @@ public N$OSIV
 public N$OCHN
 public N$OVEC
 public N$OTOP
+public N$OSLO
 public N$OPSP
+public BSS_LAST
+public FBSS_LAST
+
+; Where the uninitialised data ends, near and far, which start.asm zeroes: this object is linked last.
+_BSS segment word public 'BSS'
+BSS_LAST label byte
+_BSS ends
+FBSS_END segment para public 'FAR_BSS'
+FBSS_LAST label byte
+    db 16 dup (?)
+FBSS_END ends
 
 .data
 ; The near heap's end, a DGROUP offset, and the program's PSP, whose
 ; memory block the heap grows. Startup sets both.
 N$OTOP dw 0
 N$OPSP dw 0
+; The lowest SP a checked function may reach (-fsanitize=stack): the stack's bottom plus the
+; reserve the panic, DOS and an interrupt use below it. Startup sets it.
+N$OSLO dw 0
 
 ; Each vector the program replaced, and what it entered before, which
 ; N$OVEC puts back. A vector replaced past the last entry is not.

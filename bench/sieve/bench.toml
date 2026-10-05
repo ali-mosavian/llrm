@@ -1,0 +1,10 @@
+description = "Sieve of Eratosthenes below 1024: prime count and sum packed in one word"
+repetitions = 1
+
+[region]
+bas = "BenchSieve"
+c = "bench_sieve"
+nib = "bench_sieve"
+
+[gaps]
+bas = "#364 no unsigned types"

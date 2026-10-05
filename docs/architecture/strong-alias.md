@@ -1,9 +1,8 @@
 # Strong alias analysis
 
-`crates/backend/llrm-core/src/model/memory.rs` is the one machine-independent vocabulary for memory.
-The C frontend attaches it while raising HIR; every MemorySSA consumer reaches
-it through `mir.overlapping`, so GVN, promotion, DSE and loop motion ask the
-same question.
+`crates/opt/llrm-analysis/src/memory.rs` is the one machine-independent vocabulary for memory.
+Every MemorySSA consumer reaches it through `regions::overlapping`, so GVN,
+promotion, DSE and loop motion ask the same question.
 
 ## 1. Canonical objects and subobjects
 

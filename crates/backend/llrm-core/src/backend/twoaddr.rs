@@ -12,11 +12,11 @@ use crate::support::hash::{IndexMap, IndexSet};
 use crate::analysis::intervals as ranges;
 use crate::backend::{allocate, coalesce, spiller};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
 /// Operations that read their destination.
-const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
+pub const _TIED: [Operation; 3] = [Operation::Binary, Operation::Unary, Operation::Funnel];
 
 pub struct TwoAddress;
 
@@ -40,6 +40,8 @@ impl LIRTransform for TwoAddress {
 
 /// `body` with every tied instruction reading what it writes.
 pub fn tied(body: &LirBody) -> LirBody {
+    let reused = _reused(body);
+    let body = &reused;
     let mut changed = false;
     let mut counter = spiller::_next_value(body);
     let mut mint = || {
@@ -73,6 +75,62 @@ pub fn tied(body: &LirBody) -> LirBody {
                 continue;
             };
             insns.extend(fix);
+            changed = true;
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// An update in place: `c := a + b` then `a := c`, with `a` dead between,
+/// is `a := a + b`. `c` is defined once and read only by that copy, so the
+/// copy the coalescer may refuse is gone and no interval grows.
+fn _reused(body: &LirBody) -> LirBody {
+    let mut defined: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        for value in &one.defines {
+            *defined.entry(*value).or_insert(0) += 1;
+        }
+    }
+    let (_, leaving) = allocate::live(body);
+    let mut changed = false;
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut insns: Vec<Arc<Insn>> = block.insns.clone();
+        let out = &leaving[&block.at];
+        for at in 0..insns.len() {
+            let Some(what) = insns[at].what.as_ref().filter(|what| ties(what)) else { continue };
+            let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else { continue };
+            let (into, first) = (*into, *first);
+            let pinned = |value: u32| body.pins.contains_key(&value);
+            if what.dests.len() != 1 || into.value == first.value || into.width != first.width || pinned(into.value) || pinned(first.value) || insns[at].group.is_some() {
+                continue;
+            }
+            if defined.get(&into.value) != Some(&1) || out.contains(&into.value) || insns[..at].iter().any(|one| one.uses.contains(&into.value)) {
+                continue;
+            }
+            // `first` dies here: nothing after reads it, not even a parallel
+            // copy beside the one that writes it, which reads the old value.
+            let later = &insns[at + 1..];
+            if later.iter().any(|one| one.uses.contains(&first.value)) {
+                continue;
+            }
+            // Only `first := into` reads it: the copy back of an update in place.
+            let readers: Vec<usize> = later.iter().enumerate().filter(|(_, one)| one.uses.contains(&into.value)).map(|(index, _)| at + 1 + index).collect();
+            let [last] = readers[..] else { continue };
+            let back = insns[last].what.as_ref().is_some_and(|what| {
+                what.op == Operation::Move && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(to)], [Loc::Held(from)]) if to.value == first.value && from.value == into.value && to.width == from.width)
+            });
+            if !back {
+                continue;
+            }
+            if insns[at + 1..last].iter().any(|one| one.defines.contains(&first.value)) {
+                continue;
+            }
+            let swap = |value: u32| if value == into.value { first.value } else { value };
+            for one in &mut insns[at..=last] {
+                *one = coalesce::_renamed(one, &swap);
+            }
             changed = true;
         }
         blocks.push(block.with_insns(insns));
@@ -190,12 +248,19 @@ fn _nothing(beside: &Insn) -> (i64, i64) {
 
 fn _inserted(beside: &Insn, what: Semantics, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
     let mut made = Insn::new(beside.at, Some(_nothing(beside)), Some(what), defines, uses);
-    made.op = beside.op.clone();
+    made.call = beside.call.clone();
     Arc::new(made)
 }
 
 fn _move(into: Loc, out_of: Loc) -> Semantics {
     Semantics { name: Some("mov".to_owned()), dests: vec![into], sources: vec![out_of], ..Semantics::new(Operation::Move) }
+}
+
+/// Whether `what` writes the register of its first source: x86's two-address form.
+pub fn ties(what: &Semantics) -> bool {
+    !what.dests.is_empty()
+        && !what.sources.is_empty()
+        && (_TIED.contains(&what.op) || (what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2))
 }
 
 /// The copy and the fixed instruction, or None where it is already tied.
@@ -204,8 +269,7 @@ fn _untied(one: &Insn, mint: &mut dyn FnMut() -> u32) -> Option<Vec<Arc<Insn>>> 
     if what.dests.is_empty() || what.sources.is_empty() {
         return None;
     }
-    let multiply = what.op == Operation::Multiply && what.dests.len() == 1 && what.sources.len() == 2;
-    if !_TIED.contains(&what.op) && !multiply {
+    if !ties(what) {
         return None;
     }
     let (into, first) = (&what.dests[0], &what.sources[0]);
@@ -290,9 +354,11 @@ mod tests {
 
     use crate::support::hash::IndexMap;
 
-    use super::{_commuted, _untied};
+    use std::sync::Arc;
+
+    use super::{_commuted, _untied, tied};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
-    use crate::model::lir::Insn;
+    use crate::model::lir::{Insn, LirBlock, LirBody};
 
     fn held(value: u32, width: u32) -> Loc {
         Loc::Held(Held { value, width })
@@ -367,6 +433,41 @@ mod tests {
 
         assert_eq!(sources(copy), vec![held(1, 4)]);
         assert_eq!(sources(tied), vec![held(3, 4), held(2, 4), Loc::Imm(Imm { value: 9, width: 1, address: None })]);
+    }
+
+    /// copy1d's huge pointer stepped `c := a + 4` then copied `a := c` back
+    /// at the latch; under BASIC's register pressure the allocator kept both
+    /// copies, and its loop differed from C's by two moves.
+    #[test]
+    fn test_an_update_copied_back_is_made_in_place() {
+        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
+        let add = Insn::new(0, Some((0, 0)), what(Operation::Binary, "add", vec![held(2, 2)], vec![held(1, 2), Loc::Imm(Imm { value: 4, width: 2, address: None })]), vec![2], vec![1]);
+        let back = Insn::new(1, Some((1, 1)), what(Operation::Move, "mov", vec![held(1, 2)], vec![held(2, 2)]), vec![1], vec![2]);
+        let input = LirBody::new("update", 0, vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back)]) }], IndexMap::default(), IndexMap::default());
+
+        let got = tied(&input);
+
+        let insns = got.insns();
+        let first = insns[0].what.as_ref().expect("semantics");
+        assert_eq!((first.name.as_deref(), first.dests.clone(), sources(&insns[0])[0].clone()), (Some("add"), vec![held(1, 2)], held(1, 2)), "{insns:?}");
+        assert_eq!(insns.len(), 2, "{insns:?}");
+    }
+
+    /// The runtime's number formatting kept `ax := cx` beside `cx := cx + 1`
+    /// in its latch's parallel copy; made in place, `ax` read the stepped
+    /// count and mandel.nib never finished.
+    #[test]
+    fn test_an_update_whose_old_value_is_still_copied_is_not_made_in_place() {
+        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
+        let add = Insn::new(0, Some((0, 0)), what(Operation::Binary, "add", vec![held(2, 2)], vec![held(1, 2), Loc::Imm(Imm { value: 1, width: 2, address: None })]), vec![2], vec![1]);
+        let back = Insn::new(1, Some((1, 1)), what(Operation::Move, "mov", vec![held(1, 2)], vec![held(2, 2)]), vec![1], vec![2]);
+        let old = Insn::new(1, Some((1, 1)), what(Operation::Move, "mov", vec![held(3, 2)], vec![held(1, 2)]), vec![3], vec![1]);
+        let input = LirBody::new("update", 0, vec![LirBlock { succ: vec![0], ..LirBlock::new(0, vec![Arc::new(add), Arc::new(back), Arc::new(old)]) }], IndexMap::default(), IndexMap::default());
+
+        let got = tied(&input);
+
+        let insns = got.insns();
+        assert!(insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.dests == vec![held(2, 2)] && what.name.as_deref() == Some("add"))), "{insns:?}");
     }
 
     #[test]
@@ -452,40 +553,6 @@ mod tests {
         assert_eq!(sources(&fixed[0]), [first]);
         assert_eq!(sources(&fixed[1]), [result, second]);
         assert_eq!(fixed[1].uses.iter().copied().collect::<BTreeSet<u32>>(), BTreeSet::from([900, 902]));
-    }
-
-    #[test]
-    fn test_constant_multiply_lowers_without_a_destination_tie() {
-        use crate::backend::lower::{self, Place, Placed};
-        use crate::model::mir;
-
-        let (source, result) = (mir::Value::new(900, 0), mir::Value::new(901, 1));
-        let mut op = mir::Op::new(1, mir::OpCode::Operation(Operation::Multiply), "", vec![result], vec![source]);
-        op.kind = mir::Kind::Mul;
-        op.args =
-            vec![mir::Arg::Held(mir::Held { value: source, width: 2 }), mir::Arg::Const(mir::Const::new(20, 2))];
-        op.results = vec![mir::Arg::Held(mir::Held { value: result, width: 2 })];
-        let made = lower::semantics(&op, None, Place::AsAValue).unwrap().expect("semantics");
-        let located = |places: Vec<Placed>| -> Vec<Loc> {
-            places
-                .into_iter()
-                .map(|place| match place {
-                    Placed::Loc(one) => one,
-                    other => panic!("not located: {other:?}"),
-                })
-                .collect()
-        };
-        let what = Semantics {
-            name: made.name,
-            dests: located(made.dests),
-            sources: located(made.sources),
-            target: made.target,
-            indirect: made.indirect,
-            ..Semantics::new(made.op)
-        };
-        assert_eq!(what.sources[1..], [held(source.id, 2), imm(20, 2)]);
-        let insn = Insn::new(1, Some((1, 1)), Some(what), vec![result.id], vec![source.id]);
-        assert!(fixed(&insn).is_none());
     }
 
     /// hotlop kept its old accumulator live through the add after copying it.

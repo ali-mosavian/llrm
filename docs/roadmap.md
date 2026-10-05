@@ -644,7 +644,7 @@ version without it would make qb-qrender bigger.
         a two-and-two pair. `layout.py` keys every op by address, so the two
         collided. What an op emits and which of BC's bytes it stands for are
         separate questions, and `layout.py` now measures a restore by the
-        first. `tests/suite/negnot.bas` is that shape, added because no fixture
+        first. `tests/run/qb/negnot.bas` is that shape, added because no fixture
         had it -- and with it the corpus is 170 objects, which moved every
         measured count in this file
 
@@ -777,7 +777,7 @@ six and `B$CPI4` ten.
 
 - [ ] **and `--native-fpu` does not work on qb-qrender.** It hangs, and both
       halves of the fifteen modules hang independently, so it is systematic
-      rather than one module. `bench/fpbench.bas` runs correctly under the
+      rather than one module. `bench/fpbench/fpbench.bas` runs correctly under the
       same flag and the same DOSBox (1.88x), so the flag is not simply
       broken.
 
@@ -846,13 +846,13 @@ configurations.
 `matrix.py` and `fuzzcheck.py` found every real bug this session. The host
 suite was green for all of them.
 
-A benchmark found the one they missed. `bench/fpbench.bas` printed
+A benchmark found the one they missed. `bench/fpbench/fpbench.bas` printed
 -2147483648 for every coordinate: `forward.py` read the base register of
 `fld dword ptr [si]` as the load's destination, so two pushes of the same
 address looked like a load and a redundant reload, and deleting the second
 slid every x87 slot after it. Nothing in the suite could have caught it --
 every other float program here is one operation deep, and `fuzzgen.py`'s
-floats stay inside the exactly-representable integers. `tests/suite/fpdeep.bas`
+floats stay inside the exactly-representable integers. `tests/run/qb/fpdeep.bas`
 is the two-deep indexed shape, added so the corpus holds it now.
 
 Widening the generator to cover it found a second one immediately. It made

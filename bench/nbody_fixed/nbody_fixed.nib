@@ -1,0 +1,50 @@
+# Six-body Q9 fixed-point integrator, 1000 steps. BASIC and C truncate each product toward
+# zero, fixed '*' floors (#383): tmul() truncates. P holds delta^2 exactly, as BASIC and C do.
+type Q = fixed i32, fraction=9
+type P = fixed i32, fraction=18
+
+const BODIES: i32 = 6
+
+var pos_x: Q[6] = [0, 0, 0, 0, 0, 0]
+var pos_y: Q[6] = [0, 0, 0, 0, 0, 0]
+var vel_x: Q[6] = [0, 0, 0, 0, 0, 0]
+var vel_y: Q[6] = [0, 0, 0, 0, 0, 0]
+
+fn tmul(a: Q, b: Q) -> Q:
+    return a < 0 ? 0 - (0 - a) * b : a * b
+
+fn bench_nbody_fixed() -> i32:
+    for body in 0..BODIES:
+        pos_x[body] = Q(body * 7 - 15)
+        pos_y[body] = Q(body * 5 - 12)
+        vel_x[body] = 0
+        vel_y[body] = 0
+    for _step in 0..1000:
+        for body in 0..BODIES:
+            let mut acc_x: Q = 0
+            let mut acc_y: Q = 0
+            for other in 0..BODIES:
+                if other != body:
+                    let delta_x = pos_x[other] - pos_x[body]
+                    let delta_y = pos_y[other] - pos_y[body]
+                    let wide_x = P(delta_x)
+                    let wide_y = P(delta_y)
+                    let dist2 = wide_x * wide_x + wide_y * wide_y + 1
+                    let falloff = 1 / Q(i32(dist2) + 1)
+                    acc_x += tmul(delta_x, falloff)
+                    acc_y += tmul(delta_y, falloff)
+            vel_x[body] += acc_x
+            vel_y[body] += acc_y
+            vel_x[body] -= vel_x[body] / 16
+            vel_y[body] -= vel_y[body] / 16
+        for body in 0..BODIES:
+            pos_x[body] += vel_x[body]
+            pos_y[body] += vel_y[body]
+    let mut sum: Q = 0
+    for body in 0..BODIES:
+        sum += Q(body + 1) * (pos_x[body] + 3 * pos_y[body] + 5 * vel_x[body] + 7 * vel_y[body])
+    return i32(sum * 512)
+
+fn main() -> i16:
+    print(bench_nbody_fixed())
+    return 0

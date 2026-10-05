@@ -1,27 +1,78 @@
 //! What each lowered operation requires of a register.
 //!
 //! Direct port of `qbopt.model.lir`.  This is deliberately not the newer
-//! generic Machine IR: Python LIR owns source-byte spans and retains the
-//! source-backed MIR operation which selection, layout, and OMF emission
-//! still consult.
+//! generic Machine IR: LIR owns source-byte spans, and carries from the MIR
+//! the answers it was selected with, such as what a call may touch.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::model::ir::nodes::Node;
-use crate::model::ir::{Addr, Held, Operation, Semantics};
+use crate::model::ir::{Addr, Held, Operation, Semantics, Space};
 
 use crate::support::hash::IndexMap;
 
-use super::mir::{self, Arg, Kind, Op};
 use crate::support::pyrepr::{self, Repr};
+
+/// Every byte a 16-bit frame can address, below and above BP.
+pub const WHOLE_FRAME: (Addr, u32) = (Addr::new(Space::Frame, -(1 << 15)), 1 << 16);
+
+/// The frame's bytes no range in `reach` covers.
+pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
+    let (start, size) = WHOLE_FRAME;
+    let (low, high) = (start.disp, start.disp + i64::from(size));
+    let mut out = Vec::new();
+    let mut at = low;
+    for &(start, end) in reach {
+        if start > at {
+            out.push((Addr::new(Space::Frame, at), (start - at) as u32));
+        }
+        at = at.max(end);
+    }
+    if at < high {
+        out.push((Addr::new(Space::Frame, at), (high - at) as u32));
+    }
+    out
+}
+
+/// What a call may read and write: its effects, as `llrm_mir::memory::of`
+/// answers, and the frame bytes it cannot reach, those of the allocas
+/// `llrm_analysis::frameescape` finds no pointer to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallMemory {
+    pub effects: llrm_mir::memory::Effects,
+    pub private: Vec<(Addr, u32)>,
+}
+
+impl CallMemory {
+    /// Whether it may write memory.
+    #[must_use]
+    pub fn writes(&self) -> bool {
+        self.effects.writes
+    }
+
+    /// Whether no byte of the frame is reachable from it.
+    #[must_use]
+    pub fn spares_the_frame(&self) -> bool {
+        self.private.contains(&WHOLE_FRAME)
+    }
+
+    /// Whether the frame bytes at `disp`, `width` long, are private to the
+    /// caller; with no `disp`, whether the whole frame is.
+    #[must_use]
+    pub fn spares(&self, disp: Option<i64>, width: u32) -> bool {
+        let (whole, size) = WHOLE_FRAME;
+        let (low, high) = match disp {
+            Some(disp) => (disp, disp + i64::from(width)),
+            None => (whole.disp, whole.disp + i64::from(size)),
+        };
+        self.private.iter().any(|(start, size)| start.space == Space::Frame && start.disp <= low && high <= start.disp + i64::from(*size))
+    }
+}
 
 /// One machine instruction, as the thing that emits it needs it.
 ///
-/// Direct port of `qbopt.model.lir:Insn`.  `op` and `node` use shared owned
-/// references so cloned LIR instructions retain the same source-backed MIR
-/// operation and decoded source occurrence, as Python's frozen dataclass
-/// copies do.
+/// Direct port of `qbopt.model.lir:Insn`.  `call` is a shared owned reference
+/// so cloned LIR instructions retain it, as Python's frozen dataclass copies do.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Insn {
     pub at: i64,
@@ -32,8 +83,8 @@ pub struct Insn {
     pub clobbers: BTreeSet<iced_x86::Register>,
     pub clobbers_high: BTreeSet<iced_x86::Register>,
     pub spread: Vec<(i64, i64)>,
-    pub op: Option<Arc<Op>>,
-    pub node: Option<Arc<Node>>,
+    /// What a call may touch, as the MIR's answers say.
+    pub call: Option<Arc<CallMemory>>,
     pub group: Option<i64>,
     pub requires: Vec<(Held, iced_x86::Register)>,
     pub delivers: Vec<(Held, iced_x86::Register)>,
@@ -71,8 +122,7 @@ impl Insn {
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
             spread: Vec::new(),
-            op: None,
-            node: None,
+            call: None,
             group: None,
             requires: Vec::new(),
             delivers: Vec::new(),
@@ -88,121 +138,35 @@ impl Insn {
         }
     }
 
-    /// Python `Insn.inserted`.
+    /// Whether it was inserted beside a source instruction: it covers no bytes.
     #[must_use]
     pub fn inserted(&self) -> bool {
-        let idiom = self.op.is_some()
-            && matches!(self.node.as_deref(), Some(Node::Restore(_)))
-            && self
-                .what
-                .as_ref()
-                .is_some_and(|what| what.op == Operation::Restore);
-        !idiom && self.covers.is_some_and(|(start, end)| start == end)
+        self.covers.is_some_and(|(start, end)| start == end)
     }
 
-    /// Whether its access must happen exactly as written: its own mark, or
-    /// its MIR operation's.
+    /// Whether its access must happen exactly as written.
     #[must_use]
     pub fn volatile(&self) -> bool {
-        self.volatile || self.op.as_ref().is_some_and(|op| op.volatile)
+        self.volatile
     }
 
-    /// Whether it reads no register beyond its `requires` and the
-    /// epilogue's: its own mark, or its MIR operation's.
+    /// Whether it reads no register beyond its `requires` and the epilogue's.
     #[must_use]
     pub fn reads_complete(&self) -> bool {
-        self.reads_complete || self.op.as_ref().is_some_and(|op| op.reads_complete)
+        self.reads_complete
     }
 
     /// Whether nothing may move across it or merge with it.
     #[must_use]
     pub fn barrier(&self) -> bool {
-        self.volatile || self.op.as_ref().is_some_and(|op| op.barrier())
+        self.volatile
     }
 
-    /// Whether it may write memory its operands do not name. A call or
-    /// barrier with no MIR operation to list what it touches may touch
-    /// anything, as `effects::unmodeled_write` says of one with an operation.
+    /// Whether it may write memory its operands do not name: a call or
+    /// barrier with no `call` to list what it touches.
     #[must_use]
     pub fn unmodeled_write(&self) -> bool {
-        match &self.op {
-            Some(op) => crate::analysis::effects::unmodeled_write(op),
-            None => self.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier)),
-        }
-    }
-
-    /// Python `Insn.source`.
-    #[must_use]
-    pub fn source(&self) -> Option<&Op> {
-        (!self.inserted()).then_some(())?;
-        self.op.as_deref()
-    }
-
-    /// The source operation whose relocations this instruction re-emits
-    /// (Python `Insn.id`).
-    #[must_use]
-    pub fn source_id(&self) -> Option<u32> {
-        if self.inserted() && self.symbol != Some(true) {
-            return None;
-        }
-        self.op.as_ref().and_then(|op| op.source)
-    }
-
-    /// Python `Insn.kind`.
-    #[must_use]
-    pub fn kind(&self) -> Kind {
-        let Some(source) = self.source() else {
-            return self
-                .what
-                .as_ref()
-                .map_or(Kind::Nothing, |what| mir::kind_of(what, &[], &[]));
-        };
-        if source.kind == Kind::Divmod {
-            if let Some(what) = &self.what {
-                return mir::kind_of(what, &[], &[]);
-            }
-        }
-        source.kind
-    }
-
-    /// Python `Insn.name`.
-    #[must_use]
-    pub fn name(&self) -> Option<&str> {
-        if let Some(source) = self.source() {
-            return Some(source.name.as_str());
-        }
-        match &self.what {
-            Some(what) => what.name.as_deref(),
-            None => Some(""),
-        }
-    }
-
-    /// Python `Insn.args`.
-    #[must_use]
-    pub fn args(&self) -> &[Arg] {
-        self.source().map_or(&[], |source| &source.args)
-    }
-
-    /// Python `Insn.results`.
-    #[must_use]
-    pub fn results(&self) -> &[Arg] {
-        self.source().map_or(&[], |source| &source.results)
-    }
-
-    /// Python `Insn.raised`.
-    #[must_use]
-    pub fn raised(&self) -> Option<&(Vec<Arg>, Vec<Arg>)> {
-        self.source().and_then(|source| source.raised.as_ref())
-    }
-
-    /// Python `Insn.extra_covers`.
-    #[must_use]
-    pub fn extra_covers(&self) -> Vec<(i64, i64)> {
-        self.spread
-            .iter()
-            .copied()
-            .filter(|span| Some(*span) != self.covers)
-            .collect()
+        self.call.is_none() && self.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
     }
 
     /// Whether this instruction puts bytes out, which its machine form
@@ -216,7 +180,8 @@ impl Insn {
     pub fn emits(&self) -> bool {
         match &self.what {
             Some(what) => what.op != Operation::Nothing || what.name.as_deref().is_some_and(|name| !name.is_empty()),
-            None => self.kind() != Kind::Nothing,
+            // A call selected with its effects listed, not an inserted copy.
+            None => self.call.is_some() && !self.inserted(),
         }
     }
 
@@ -240,12 +205,6 @@ impl Insn {
         if self.spread.is_empty() { self.covers.into_iter().filter(|(lo, hi)| lo < hi).collect() } else { self.spread.clone() }
     }
 
-    /// Python `Insn.rewritten`.
-    #[must_use]
-    pub fn rewritten(&self) -> bool {
-        self.source()
-            .is_none_or(|source| !source.source_backed || mir::rewritten(source))
-    }
 }
 
 /// One value that is two definitions above this block, by id.
@@ -275,7 +234,7 @@ pub struct LirBlock {
     pub insns: Vec<Arc<Insn>>,
     pub succ: Vec<i64>,
     pub phis: Vec<Phi>,
-    // See mir.MirBlock.cold.
+    /// Laid out after the hot code: every path from it ends in `unreachable`, isel finds.
     pub cold: bool,
 }
 
@@ -336,9 +295,84 @@ pub struct LirBody {
     pub sealed_arguments: bool,
     /// `-g`'s parameters, in order, then variables.
     pub variables: Vec<DebugVariable>,
+    /// Estimated branch probabilities, by edge, as isel found them; an
+    /// edge made since has none.
+    pub odds: BlockOdds,
+    /// It calls a routine that returns twice (`setjmp`): no frame slot is shared.
+    pub returns_twice: bool,
+}
+
+/// Fixed point, in 2^31sts, so a body stays `Eq`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BlockOdds {
+    pub taken: IndexMap<(i64, i64), u32>,
+}
+
+impl BlockOdds {
+    pub const CERTAIN: f64 = 2147483648.0;
+
+    /// `from`'s edge to `to`'s probability, if isel estimated it.
+    pub fn probability(&self, from: i64, to: i64) -> Option<f64> {
+        self.taken.get(&(from, to)).map(|one| f64::from(*one) / Self::CERTAIN)
+    }
+
+    /// `from`'s edge to `to` among its successors `succ`: as isel stated it,
+    /// or an even part of what its stated edges leave the unstated ones.
+    pub fn chance(&self, from: i64, succ: &[i64], to: i64) -> f64 {
+        let succ: BTreeSet<i64> = succ.iter().copied().collect();
+        if !succ.contains(&to) {
+            return 0.0;
+        }
+        if succ.len() == 1 {
+            return 1.0;
+        }
+        if let Some(stated) = self.probability(from, to) {
+            return stated;
+        }
+        let known: f64 = succ.iter().filter_map(|one| self.probability(from, *one)).sum();
+        let unknown = succ.iter().filter(|one| self.probability(from, **one).is_none()).count();
+        (1.0 - known).max(0.0) / unknown as f64
+    }
+
+    /// `from`'s edge to `old`, among its successors `succ`, replaced by edges
+    /// to `into`, each at `old`'s chance times its share. Every edge `from`
+    /// had is stated first, implicit ones included, so each reads the same
+    /// whatever its successors become; the old edge stays recorded so that
+    /// undoing a split finds it.
+    pub fn rerouted(&mut self, from: i64, succ: &[i64], old: i64, into: &[(i64, f64)]) {
+        let before: Vec<(i64, f64)> = succ.iter().map(|to| (*to, self.chance(from, succ, *to))).collect();
+        let through = self.chance(from, succ, old);
+        let fixed = |probability: f64| (probability * Self::CERTAIN).round().min(f64::from(u32::MAX)) as u32;
+        for (to, probability) in &before {
+            self.taken.insert((from, *to), fixed(*probability));
+        }
+        // Only a successor's edge adds to what an edge brings: an entry kept
+        // for an edge `from` no longer has is no part of it.
+        let had = |to: i64| before.iter().find(|(one, _)| *one == to && to != old).map_or(0.0, |(_, probability)| *probability);
+        for (to, share) in into {
+            self.taken.insert((from, *to), fixed(had(*to) + through * share));
+        }
+    }
 }
 
 impl LirBody {
+    /// The edges from a block with more than one successor into a block with more than one predecessor: code
+    /// that must run on one of them has no block of its own to go in until one is made.
+    #[must_use]
+    pub fn critical_edges(&self) -> BTreeSet<(i64, i64)> {
+        let mut preds: IndexMap<i64, usize> = IndexMap::default();
+        for block in &self.blocks {
+            for to in &block.succ {
+                *preds.entry(*to).or_default() += 1;
+            }
+        }
+        self.blocks
+            .iter()
+            .filter(|block| block.succ.len() > 1)
+            .flat_map(|block| block.succ.iter().filter(|to| preds.get(*to).is_some_and(|count| *count > 1)).map(move |to| (block.at, *to)))
+            .collect()
+    }
+
     /// Constructs Python's five-required-field `LirBody` form.
     #[must_use]
     pub fn new(
@@ -361,6 +395,8 @@ impl LirBody {
             source_order: false,
             sealed_arguments: false,
             variables: Vec::new(),
+            odds: BlockOdds::default(),
+            returns_twice: false,
         }
     }
 
@@ -380,6 +416,8 @@ impl LirBody {
             source_order: self.source_order,
             sealed_arguments: self.sealed_arguments,
             variables: self.variables.clone(),
+            odds: self.odds.clone(),
+            returns_twice: self.returns_twice,
         }
     }
 
@@ -535,9 +573,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{Insn, anchor, without};
-    use crate::model::ir::nodes::{Node, Restore};
-    use crate::model::ir::{Effects, Held, Operation, Semantics};
-    use crate::model::mir::{Kind, Op, OpCode};
+
+    use crate::model::ir::{Held, Operation, Semantics};
 
     fn instruction(at: i64, covers: Option<(i64, i64)>) -> Arc<Insn> {
         Arc::new(Insn::new(
@@ -573,57 +610,6 @@ mod tests {
         assert!(anchored.requires.is_empty());
         assert_eq!(anchored.symbol, Some(false));
         assert!(!anchored.spill_reload);
-    }
-
-    #[test]
-    fn direct_lir_model_preserves_python_provenance_properties() {
-        // Port of qbopt.model.lir:Insn.{inserted,source,id,kind,name,args,
-        // results,raised,extra_covers,rewritten}. The restore exception is
-        // source-owned despite its zero-width primary span.
-        let mut source = Op::new(
-            0x10,
-            Some(OpCode::Operation(Operation::Divide)),
-            "source-divmod",
-            Vec::new(),
-            Vec::new(),
-        );
-        source.source = Some(44);
-        source.kind = Kind::Divmod;
-        source.source_backed = true;
-        source.raised = Some((Vec::new(), Vec::new()));
-
-        let mut lowered = (*instruction(0x10, Some((0x10, 0x12)))).clone();
-        lowered.what = Some(Semantics::new(Operation::Divide));
-        lowered.op = Some(Arc::new(source));
-        lowered.spread = vec![(0x10, 0x12), (0x20, 0x22)];
-        assert!(!lowered.inserted());
-        assert_eq!(lowered.source().unwrap().source, Some(44));
-        assert_eq!(lowered.source_id(), Some(44));
-        assert_eq!(lowered.kind(), Kind::Div);
-        assert_eq!(lowered.name(), Some("source-divmod"));
-        assert!(lowered.args().is_empty());
-        assert!(lowered.results().is_empty());
-        assert!(lowered.raised().is_some());
-        assert_eq!(lowered.extra_covers(), vec![(0x20, 0x22)]);
-        assert!(!lowered.rewritten());
-
-        let mut inserted = lowered.clone();
-        inserted.covers = Some((0x12, 0x12));
-        assert!(inserted.inserted());
-        assert!(inserted.source().is_none());
-        assert_eq!(inserted.source_id(), None);
-        inserted.symbol = Some(true);
-        assert_eq!(inserted.source_id(), Some(44));
-
-        inserted.node = Some(Arc::new(Node::Restore(Restore::new(
-            0x12,
-            0x12,
-            0,
-            Effects::no_effect(),
-        ))));
-        inserted.what = Some(Semantics::new(Operation::Restore));
-        assert!(!inserted.inserted());
-        assert!(inserted.source().is_some());
     }
 
     #[test]
@@ -710,13 +696,6 @@ mod tests {
         );
         assert!(Arc::ptr_eq(&result[0], &kept));
         assert!(result[1].is_meta() && result[1].spread == refused.spread, "{:?}", result[1]);
-    }
-
-    #[test]
-    fn name_of_an_unnamed_semantics_is_none() {
-        // Python returns `what.name`, which is None here; the port said "".
-        let one = instruction(0, None);
-        assert_eq!(one.name(), None);
     }
 
     #[test]

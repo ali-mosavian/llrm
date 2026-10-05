@@ -1,0 +1,14 @@
+# 40000 i16s (80000 bytes) in huge memory filled with one value no one byte repeats: past 64K.
+huge var a: i16[40000] = [0] * 40000
+
+fn bench_fillw() -> i32:
+    let mut t: i32 = 0
+    for i in 0..40000:
+        a[i] = 4660
+    for i in 0..40000:
+        t += i32(a[i])
+    return t
+
+fn main() -> i16:
+    print(bench_fillw())
+    return 0

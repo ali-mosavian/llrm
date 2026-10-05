@@ -179,13 +179,27 @@ b2:
 /// Not a positive power of two below the sign bit, possibly zero, or unsigned.
 #[test]
 fn test_other_divisions_stay() {
-    for divisor in ["6", "1", "-4", "-32768", "0"] {
+    for divisor in ["6", "-4", "-32768", "0"] {
         for op in ["sdiv", "srem"] {
             unchanged(&unary(16, &format!("  %r = {op} i16 %x, {divisor}\n  ret i16 %r\n")));
         }
     }
     unchanged("define i16 @f(i16 %x, i16 %y) {\nb0:\n  %r = sdiv i16 %x, %y\n  ret i16 %r\n}\n");
     unchanged(&unary(16, "  %r = udiv i16 %x, 4\n  ret i16 %r\n"));
+}
+
+/// A division by one is the dividend, a remainder by one is zero: no power-of-two
+/// rewrite is needed (`llrm-mir`'s instcombine had both, #237).
+#[test]
+fn test_division_and_remainder_by_one_are_decided() {
+    for op in ["sdiv", "udiv"] {
+        let out = checked(&unary(16, &format!("  %r = {op} i16 %x, 1\n  ret i16 %r\n")), &singles(&edges(16)));
+        assert!(out.contains("ret i16 %x") && !out.contains(op), "{out}");
+    }
+    for op in ["srem", "urem"] {
+        let out = checked(&unary(16, &format!("  %r = {op} i16 %x, 1\n  ret i16 %r\n")), &singles(&edges(16)));
+        assert!(out.contains("ret i16 0") && !out.contains(op), "{out}");
+    }
 }
 
 /// No legal integer is 64 bits wide, so its shifts and adds lower to more
@@ -512,4 +526,77 @@ fn inttoptr_of_a_constant_is_the_constant_address() {
     assert!(text.contains("%p = inttoptr i16 1132 to ptr"), "the shape that was kept");
     let after = bare(&simplified(text).1);
     assert!(after.contains("load i16, ptr inttoptr (i16 1132 to ptr)") && !after.contains("%p ="), "{after}");
+}
+
+/// Two phis of one block that take the same values from the same
+/// predecessors are one value. gvn's PRE made the second beside a phi that
+/// stood, and SPHEREMAPLASMA's loop carried both (+234k estimated
+/// instructions, #386).
+#[test]
+fn test_a_phi_that_repeats_an_earlier_one_of_its_block_is_that_phi() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+  %q = phi i16 [ %y, %b2 ], [ %x, %b1 ]
+  %r = add i16 %p, %q
+  ret i16 %r
+}
+";
+    let inputs: Vec<Vec<i128>> = vec![vec![3, 5, 0], vec![3, 5, 1], vec![-1, 7, 1]];
+    let out = checked(text, &inputs);
+    assert_eq!(out.matches("phi").count(), 1, "{out}");
+}
+
+/// `zext i32 (trunc i8 (and i16 x, 255))` kept the `and`, then the `trunc`,
+/// then extended: `and dx,0FFh; movzx edx,dl`. The `trunc` drops bits the
+/// mask cleared, so the `zext` reads the mask; that mask is a byte read.
+#[test]
+fn test_a_mask_then_trunc_then_zext_reads_the_low_part_once() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %t = trunc i16 %m to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n}\n";
+    let (before, _) = simplified(text);
+    assert!(printed(&before).contains("and i16 %x, 255") && printed(&before).contains("trunc i16"), "premise: the mask and the trunc are there");
+    let after = checked(text, &singles(&edges(16)));
+    assert_eq!(after, "define i32 @f(i16 %x) {\nb0:\n  %0 = trunc i16 %x to i8\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n}\n");
+}
+
+/// A `sext` of a masked value, whose sign bit the mask cleared, is a
+/// `zext`: `movsx edx,dx` after the mask in the QB loop.
+#[test]
+fn test_a_sign_extension_of_a_masked_value_is_a_zero_extension() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %r = sext i16 %m to i32\n  ret i32 %r\n}\n";
+    assert!(!checked(text, &singles(&edges(16))).contains("sext"));
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 32768\n  %r = sext i16 %m to i32\n  ret i32 %r\n}\n");
+}
+
+/// The mask stays where it is read twice, or keeps more than a byte or word.
+#[test]
+fn test_a_mask_that_is_not_a_low_part_or_is_shared_stays() {
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 511\n  %r = zext i16 %m to i32\n  ret i32 %r\n}\n");
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %z = zext i16 %m to i32\n  %w = zext i16 %m to i32\n  %r = add i32 %z, %w\n  ret i32 %r\n}\n");
+}
+
+/// A mask of a width the layout does not compute natively stays: the byte
+/// narrowing was hard-coded, whatever the target's `n`.
+#[test]
+fn test_a_mask_narrows_only_to_a_native_width() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %r = zext i16 %m to i32\n  ret i32 %r\n}\n";
+    let run = |layout: &str| {
+        let mut module = parsed(text);
+        module.datalayout = Some(layout.to_owned());
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(super::Algebraic);
+        passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        printed(&module)
+    };
+    assert!(run("n8:16:32").contains("trunc i16 %x to i8"));
+    assert!(!run("n16:32").contains("trunc"));
 }

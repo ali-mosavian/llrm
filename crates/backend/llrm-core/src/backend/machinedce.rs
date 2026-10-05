@@ -16,8 +16,7 @@ use iced_x86::Register;
 use crate::backend::liveness;
 use crate::backend::peephole::id;
 use crate::model::ir::{Loc, Operation, Space};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
+use crate::model::lir::{self, Insn, LirBody};
 
 const _PURE: [Operation; 9] = [
     Operation::Move,
@@ -33,23 +32,6 @@ const _PURE: [Operation; 9] = [
 const _STATEFUL_REGISTERS: [Register; 6] =
     [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
 
-/// Remove an allocated computation with no live physical result.
-pub struct MachineDCE;
-
-impl LIRTransform for MachineDCE {
-    fn class_name(&self) -> &'static str {
-        "MachineDCE"
-    }
-
-    fn name(&self) -> &str {
-        "machine-dce"
-    }
-
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        Ok(eliminated(body))
-    }
-}
-
 fn _relocated(where_: &Loc) -> bool {
     match where_ {
         Loc::Imm(one) => one.address.is_some(),
@@ -64,6 +46,11 @@ fn _stateful_destination(where_: &Loc) -> bool {
         if one.register.full_register32() == Register::ESP || _STATEFUL_REGISTERS.contains(&one.register))
 }
 
+/// A frame slot read by name: no fault, nothing else stored through it.
+fn _slot(where_: &Loc) -> bool {
+    matches!(where_, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_none() && cell.index.is_none() && cell.selector.is_none())
+}
+
 /// Whether removing this occurrence can remove only registers and flags.
 fn _pure(one: &Insn) -> bool {
     let Some(what) = &one.what else {
@@ -72,7 +59,8 @@ fn _pure(one: &Insn) -> bool {
     _PURE.contains(&what.op)
         && what.target.is_none()
         && !what.indirect
-        && what.dests.iter().chain(&what.sources).all(|arg| matches!(arg, Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_)))
+        && what.dests.iter().all(|arg| matches!(arg, Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_)))
+        && what.sources.iter().all(|arg| matches!(arg, Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_)) || _slot(arg))
         && !what.dests.iter().chain(&what.sources).any(_relocated)
         && !what.dests.iter().any(_stateful_destination)
         && one.clobbers.is_empty()
@@ -251,6 +239,22 @@ mod tests {
             block(20, vec![], vec![]),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, add.what);
+    }
+
+    /// Nib's quicksort left `mov bx, [bp+8]; mov bx, [bp+10]` on the loop exit: reloads of two
+    /// parameters, the second overwriting the first and neither read, two instructions per call.
+    #[test]
+    fn test_dead_frame_slot_load_is_eliminated() {
+        let load = Arc::new(Insn::new(
+            0,
+            Some((0, 3)),
+            what(Operation::Move, "mov", vec![reg(Register::BX)], vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 8)), 2))]),
+            vec![1],
+            vec![],
+        ));
+        let result =
+            eliminated(body(vec![block(0, vec![Arc::clone(&load)], vec![5]), block(5, vec![_mov(5, 2, Register::BX)], vec![])]));
+        assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().op, Operation::Nothing);
     }
 
     #[test]

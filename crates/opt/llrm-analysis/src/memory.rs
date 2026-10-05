@@ -44,6 +44,7 @@ use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 
 use crate::alias::PointsTo;
+use crate::assumptions::Assumptions;
 use crate::cfg::Shape;
 use crate::consts::Known;
 use crate::globalsaa::Globals;
@@ -115,11 +116,14 @@ pub struct MemoryObject {
     // NONLOCAL and PARAMETER may reach it. Unaddressed implies uncaptured.
     pub addressed: bool,
     pub captured: bool,
+    /// A `constant` global: writing it is undefined, so nothing changes it,
+    /// wherever its address went.
+    pub constant: bool,
 }
 
 impl MemoryObject {
     pub const fn new(kind: MemoryKind) -> Self {
-        Self { kind, identity: None, generation: 0, extent: None, addressed: true, captured: true }
+        Self { kind, identity: None, generation: 0, extent: None, addressed: true, captured: true, constant: false }
     }
 
     fn key(&self) -> (MemoryKind, &Option<Identity>, i64, Option<i64>) {
@@ -397,6 +401,8 @@ pub struct Unit<'a> {
     pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub metadata: &'a [MetadataNode],
+    /// The type tree of `metadata`'s `!tbaa` nodes, the module's, built once.
+    pub tbaa: Option<&'a llrm_mir::tbaa::Tbaa>,
     pub globals: &'a [GlobalValue],
     pub function: &'a Function,
     /// Each access with the provenance alias found (`alias::annotated`).
@@ -413,6 +419,8 @@ pub struct Unit<'a> {
     /// Each access's reference as alias finds it, the manager's
     /// `Annotated`; unlike `references`, the unit does not read through it.
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
+    /// What each block assumes; without it each ask finds it.
+    pub assumptions: Option<&'a Assumptions>,
 }
 
 impl<'a> Unit<'a> {
@@ -429,7 +437,7 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, context: &module.context, layout, metadata: &module.metadata, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None }
+        Self { program: None, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -485,6 +493,13 @@ impl<'a> Unit<'a> {
 
     /// The function's dominance and loops: the manager's where the unit
     /// carries them.
+    pub fn assumptions(&self) -> Cow<'a, Assumptions> {
+        match self.assumptions {
+            Some(found) => Cow::Borrowed(found),
+            None => Cow::Owned(Assumptions::of(self)),
+        }
+    }
+
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => Cow::Borrowed(shape),
@@ -549,7 +564,7 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
             };
             // Only a reference naming an alloca reaches it until its address
             // is exposed.
-            let exposed = crate::frameescape::exposes(unit.function, value);
+            let exposed = crate::frameescape::exposes(unit.function, value, |inst| matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd)));
             Some(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
@@ -573,7 +588,8 @@ pub fn global_object(unit: &Unit, global: GlobalId) -> Option<MemoryObject> {
         GlobalKind::Function(_) => return None,
     };
     let captured = !unit.globals_aa.is_some_and(|aa| aa.tracked(global));
-    Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, ..MemoryObject::new(MemoryKind::Global) })
+    let constant = matches!(&unit.globals.get(global.0 as usize)?.kind, GlobalKind::Variable(variable) if variable.constant);
+    Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) })
 }
 
 /// An access as the alias queries read it: LLVM's `MemoryLocation`, its
@@ -598,8 +614,12 @@ pub struct MemRef {
     /// The selector of a far pointer made from one, as `segment:0`: old
     /// `segment`.
     pub segment: Option<Operand>,
-    /// `segment`'s number, where it is a constant.
+    /// The selector's number, where it is a constant: `segment`'s, or that
+    /// of a pair `root` an integer constant makes.
     pub selector: Option<i64>,
+    /// `root`'s offset in its segment where an integer constant makes it,
+    /// else 0: `disp` counts from it.
+    pub origin: i64,
     /// `root` is an object's own address, so `disp` is an offset in it:
     /// old `Space::Segment` and `Space::Frame`, as against a pointer.
     pub object: bool,
@@ -609,6 +629,10 @@ pub struct MemRef {
     pub width: u32,
     /// The `!tbaa` access type's name.
     pub typed: Option<String>,
+    /// The names of that type's ancestors, nearest first: an access whose type
+    /// is one of them may alias this one's (a parent type covers its children,
+    /// as C's `omnipotent char` covers every scalar).
+    pub lineage: Vec<String>,
     /// Every GEP on the way from `root` was `inbounds`.
     pub inbounds: bool,
     pub volatile: bool,
@@ -616,6 +640,12 @@ pub struct MemRef {
 }
 
 impl MemRef {
+    /// Whether every object it may reach is constant, so that no write
+    /// changes it.
+    pub fn unwritable(&self) -> bool {
+        self.provenance.as_ref().is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.constant))
+    }
+
     /// `width` bytes at `pointer`.
     pub fn at(unit: &Unit, pointer: Operand, width: u32) -> Self {
         let space = unit.space(pointer).unwrap_or(0);
@@ -629,11 +659,13 @@ impl MemRef {
             base_width: 0,
             segment: None,
             selector: None,
+            origin: 0,
             object: false,
             space,
             index_bits,
             width,
             typed: None,
+            lineage: Vec::new(),
             inbounds: true,
             volatile: false,
             provenance: None,
@@ -664,6 +696,9 @@ impl MemRef {
         made.disp = wrapped(disp, index_bits);
         made.segment = segment(unit, root);
         made.selector = made.segment.and_then(|one| unit.int_constant(one)).map(|bits| bits as i64);
+        if let Some((selector, origin)) = pair_constant(unit, root) {
+            (made.selector, made.origin) = (Some(selector), origin);
+        }
         made.object = object_of(unit, root).is_some();
         made
     }
@@ -677,7 +712,7 @@ impl MemRef {
             _ => return None,
         };
         let width = unit.layout.store_size(&unit.context.types, ty) as u32;
-        Some(Self { typed: typed(unit, inst), volatile, ..Self::at(unit, pointer, width) })
+        Some(Self { typed: typed(unit, inst), lineage: lineage(unit, inst), volatile, ..Self::at(unit, pointer, width) })
     }
 
     /// Whether the access names its bytes outright rather than reaching
@@ -696,10 +731,12 @@ impl MemRef {
         let Opcode::Call(_) = instruction.opcode else { return None };
         let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
         let name = unit.globals.get(callee.0 as usize)?.name.as_deref()?;
-        if Intrinsic::named(name) != Some(Intrinsic::MemSet) {
-            return None;
-        }
-        let width = u32::try_from(unit.int_constant(instruction.operands[2])?).ok().filter(|&one| one > 0)?;
+        let cell = match Intrinsic::named(name)? {
+            Intrinsic::MemSet => 1,
+            Intrinsic::MemSetPattern => unit.int_bits(instruction.operands[1])? / 8,
+            _ => return None,
+        };
+        let width = u32::try_from(unit.int_constant(instruction.operands[2])?).ok()?.checked_mul(cell).filter(|&one| one > 0)?;
         let volatile = unit.int_constant(instruction.operands[3])? != 0;
         Some(Self { volatile, ..Self::at(unit, instruction.operands[0], width) })
     }
@@ -716,11 +753,13 @@ impl MemRef {
             base_width: 0,
             segment: None,
             selector: None,
+            origin: 0,
             object: false,
             space: 0,
             index_bits: 16,
             width,
             typed: None,
+            lineage: Vec::new(),
             inbounds: false,
             volatile: false,
             provenance: Some(provenance),
@@ -877,6 +916,30 @@ fn segment(unit: &Unit, root: Operand) -> Option<Operand> {
     }
 }
 
+/// The selector and offset of a pair pointer `root` an integer constant
+/// makes: a pair's integer form is its selector word, then its offset word.
+fn pair_constant(unit: &Unit, root: Operand) -> Option<(i64, i64)> {
+    let space = unit.space(root)?;
+    if !unit.layout.is_pair(space) {
+        return None;
+    }
+    let integer = match root {
+        Operand::Value(_) => match unit.defining(root)? {
+            (_, made) if matches!(made.opcode, Opcode::Cast(CastOp::IntToPtr)) => made.operands[0],
+            _ => return None,
+        },
+        Operand::Constant(id) => match &unit.context.get(id).kind {
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => Operand::Constant(*value),
+            _ => return None,
+        },
+        Operand::Block(_) => return None,
+    };
+    let bits = unit.int_constant(integer)?;
+    let offset = unit.layout.offset_bits(space);
+    let word = |shift: u32| ((bits >> shift) & ((1 << offset) - 1)) as i64;
+    Some((word(offset), word(0)))
+}
+
 /// The name of the `!tbaa` access type `inst` carries.
 pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
     let (_, tag) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa")?;
@@ -887,14 +950,39 @@ pub fn typed(unit: &Unit, inst: InstId) -> Option<String> {
     }
 }
 
+/// The names of the ancestors of the `!tbaa` access type `inst` carries,
+/// nearest first, the root last: the module's type tree where the unit holds
+/// it, else built here from the metadata.
+pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
+    let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return Vec::new() };
+    match unit.tbaa {
+        Some(tree) => tree.of_tag(unit.metadata, *tag).to_vec(),
+        None => llrm_mir::tbaa::Tbaa::of(unit.metadata).of_tag(unit.metadata, *tag).to_vec(),
+    }
+}
+
+/// What a load or store does to the bytes it addresses, and it touches no
+/// others: volatile or not, as LLVM's. None for any other instruction.
+/// The one statement of it: `Accesses`, `unmodeled_write` and
+/// `effects::unmodeled` all ask here (#257 regressed where one did not).
+pub fn own_bytes(opcode: &Opcode) -> Option<llrm_mir::memory::Effects> {
+    match opcode {
+        Opcode::Load { .. } => Some(llrm_mir::memory::Effects { reads: true, writes: false }),
+        Opcode::Store { .. } => Some(llrm_mir::memory::Effects { reads: false, writes: true }),
+        _ => None,
+    }
+}
+
 /// Whether `inst` may write memory beyond what its own access says:
 /// effects.rs's `unmodeled_write`. A call writes what its callee may, as
-/// its attributes and the callee's state it; a volatile access is a
-/// barrier.
+/// its attributes and the callee's state it; a load or store only what
+/// it addresses (`own_bytes`).
 pub fn unmodeled_write(unit: &Unit, inst: InstId) -> bool {
     let instruction = unit.function.instruction(inst);
+    if own_bytes(&instruction.opcode).is_some() {
+        return false;
+    }
     match &instruction.opcode {
-        Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => *volatile,
         Opcode::Call(info) | Opcode::Invoke(info) => {
             let callee = instruction.operands.last().and_then(|&one| match one {
                 Operand::Constant(id) => match unit.context.get(id).kind {
@@ -936,7 +1024,7 @@ mod tests {
             generation: 0,
             extent: Some(8),
             addressed: true,
-            captured: true,
+            captured: true, constant: false,
         };
         let second = MemoryObject { identity: Some(Identity::Value(2)), ..first.clone() };
         let a = Provenance::one_with_slice(first.clone(), 0, 4, 1, 1, BTreeSet::new()).unwrap();

@@ -1,5 +1,5 @@
 """
-Regenerate tests/fixtures/omf from the suite, and record where each object came from.
+Regenerate tests/inputs/omf from the suite, and record where each object came from.
 
 The objects are committed; this is what made them. Generating at test time would
 make the suite unrunnable for anyone without three DOS toolchains, and would
@@ -30,8 +30,8 @@ from dosbox import dosbox_bin
 from configs import switches_for
 
 ROOT = Path(__file__).resolve().parents[2]
-SUITE = ROOT / "tests/suite"
-FIXTURES = ROOT / "tests/fixtures" / "omf"
+SUITE = ROOT / "tests/run/qb"
+FIXTURES = ROOT / "tests/inputs" / "omf"
 MANIFEST = FIXTURES / "manifest.tsv"
 
 # /Zd and /Zi add records rather than changing code, so each is a variant of
@@ -142,7 +142,7 @@ def collect(
                 (
                     artifact,
                     digest(out / artifact),
-                    f"tests/suite/{program}.bas",
+                    f"tests/run/qb/{program}.bas",
                     config.tag,
                     commands[stem],
                     digest(config.mount / config.bc[3:].replace("\\", "/")),
@@ -160,7 +160,7 @@ def write_manifest(rows: list[str]) -> None:
     A --prog or --config run builds a slice of the corpus, and writing only
     that slice erases the provenance of everything it did not build. The
     objects stay on disk; the record of which compiler made them, on which
-    switches, does not. Adding tests/suite/fpdeep.bas silently dropped all fifteen
+    switches, does not. Adding tests/run/qb/fpdeep.bas silently dropped all fifteen
     fpemu rows this way before the merge was here.
 
     A rebuilt object replaces its old row -- the file name is the key, so the

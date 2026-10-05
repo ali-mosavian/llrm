@@ -6,7 +6,7 @@ use llrm_bc::objects::Carving;
 use llrm_bcmachine::objectfile::omf;
 
 fn loaded(fixture: &str) -> llrm_omf::module::Module {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/omf").join(fixture);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(fixture);
     llrm_omf::module::load(&path).expect("reads").expect("an object")
 }
 

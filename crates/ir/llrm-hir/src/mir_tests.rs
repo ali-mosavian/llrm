@@ -207,7 +207,7 @@ fn an_external_object_is_as_large_as_its_places() {
 fn an_allocation_and_a_place_are_tagged_apart() {
     use crate::model::{AddressKind, IndirectPlace, Place, Storage};
     let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
-    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation });
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation, member: None });
     let instructions = vec![
         Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
         Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
@@ -228,8 +228,39 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !4\n"), "{text}");
-    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!3 = !{!\"allocation\", !0, i64 0}\n"), "{text}");
+    assert!(text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"), "{text}");
+    assert!(text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!5 = !{!\"allocation.0\", !3, i64 0}\n"), "{text}");
+}
+
+/// Another module may name a COMMON array under its own tag path, and the
+/// interprocedural passes meet both in one body: per-array tags would call the
+/// same bytes apart. A COMMON array keeps the generic `allocation` tag.
+#[test]
+fn a_common_array_keeps_the_generic_allocation_tag() {
+    use crate::model::{AddressKind, IndirectPlace, Place, Storage};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset, allocation| Operand::IndirectPlace(IndirectPlace { base, offset, r#type: 1, volatile: false, origin: None, allocation, member: None });
+    let instructions = vec![
+        Instruction::new(1, Op::Address, vec![2], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Load, vec![3], vec![indirect(2, 2, None)]),
+        Instruction::new(3, Op::Store, vec![], vec![indirect(1, 0, Some(1)), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let places = vec![Place::new(1, "D", 4, Storage::Common, 0)];
+    let mut function = Function::new(1, "FILL", 0, values, places, vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    let mut descriptor = Type::new(4, "descriptor", TypeKind::Array, 4);
+    (descriptor.element, descriptor.rank, descriptor.bounds) = (Some(1), 1, vec![(0, 1)]);
+    program.modules[0].types.extend([far, Type::new(3, "near", TypeKind::Pointer, 2), descriptor]);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(!text.contains("allocation."), "{text}");
 }
 
 /// A far pointer advanced by a displacement moves its offset alone: a GEP
@@ -431,6 +462,94 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     assert!(text.contains(entry), "{text}");
 }
 
+/// A block local's scope is its lifetime markers, over the bytes of its place; the markers
+/// are declared once, and verify.
+#[test]
+fn a_locals_scope_is_its_lifetime_markers() {
+    use crate::model::{Place, Storage};
+    let instructions = vec![
+        Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)]),
+        Instruction::new(2, Op::Store, vec![], vec![Operand::place_ref(1), Operand::constant(1, 5)]),
+        Instruction::new(3, Op::LifetimeEnd, vec![], vec![Operand::place_ref(1)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+    let function = Function::new(1, "F%", 1, Vec::new(), vec![Place::new(1, "X", 1, Storage::Local, -2)], vec![block], 1);
+    let program = program(function);
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("  call void @llvm.lifetime.start.p0(i64 2, ptr %0)\n"), "{text}");
+    assert!(text.contains("  call void @llvm.lifetime.end.p0(i64 2, ptr %0)\n"), "{text}");
+    assert_eq!(text.matches("declare void @llvm.lifetime.start.p0").count(), 1, "{text}");
+}
+
+/// A lifetime is a block local's: a marker on anything else is a frontend's mistake, which
+/// a layout reading it would turn into a wrong frame.
+#[test]
+fn a_lifetime_marker_names_one_local() {
+    use crate::model::{Place, Storage};
+    let marked = |mut place: Place| {
+        place.extent = Some(2);
+        let instructions = vec![Instruction::new(1, Op::LifetimeStart, vec![], vec![Operand::place_ref(1)])];
+        let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+        program(Function::new(1, "F%", 1, Vec::new(), vec![place], vec![block], 1))
+    };
+    let good = crate::verify::verify(&marked(Place::new(1, "X", 1, Storage::Local, -2)));
+    assert!(good.is_ok(), "{good:?}");
+    let error = crate::verify::verify(&marked(Place::new(1, "P", 1, Storage::Parameter, 4))).unwrap_err();
+    assert!(error.to_string().contains("names one local place"), "{error}");
+}
+
+/// An aggregate assigned whole is a byte copy: `llvm.memcpy` of the bytes the instruction
+/// names, declared once. As word loads and stores it made an unwritten byte poison.
+#[test]
+fn a_byte_copy_is_a_memcpy_of_its_bytes() {
+    use crate::model::{Place, Storage};
+    let place = |id, offset| {
+        let mut one = Place::new(id, "X", 1, Storage::Local, offset);
+        one.extent = Some(6);
+        one
+    };
+    let places = vec![place(1, -6), place(2, -12)];
+    let copy = |at| Instruction::new(at, Op::CopyBytes, vec![], vec![Operand::place_ref(2), Operand::place_ref(1), Operand::constant(1, 6)]);
+    let block = Block::new(1, vec![copy(1), copy(2)], Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+    let program = program(Function::new(1, "F%", 1, Vec::new(), places, vec![block], 1));
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert_eq!(text.matches(", i16 6, i1 false)").count(), 2, "{text}");
+    assert_eq!(text.matches("declare void @llvm.memcpy.p0.p0.i16").count(), 1, "{text}");
+}
+
+/// A byte copy names two places and a positive constant count of bytes; anything else is a
+/// frontend's mistake a backend would copy wrongly.
+#[test]
+fn a_byte_copy_takes_two_places_and_a_byte_count() {
+    use crate::model::{Place, Storage};
+    let copying = |operands: Vec<Operand>| {
+        let instructions = vec![Instruction::new(1, Op::CopyBytes, vec![], operands)];
+        let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::constant(1, 0)], Vec::new()));
+        let mut places = vec![Place::new(1, "X", 1, Storage::Local, -2), Place::new(2, "Y", 1, Storage::Local, -4)];
+        places.iter_mut().for_each(|one| one.extent = Some(2));
+        program(Function::new(1, "F%", 1, Vec::new(), places, vec![block], 1))
+    };
+    let good = crate::verify::verify(&copying(vec![Operand::place_ref(1), Operand::place_ref(2), Operand::constant(1, 2)]));
+    assert!(good.is_ok(), "{good:?}");
+    for operands in [
+        vec![Operand::place_ref(1), Operand::place_ref(2)],
+        vec![Operand::place_ref(1), Operand::place_ref(2), Operand::constant(1, 0)],
+        vec![Operand::constant(1, 1), Operand::place_ref(2), Operand::constant(1, 2)],
+        vec![Operand::place_ref(1), Operand::place_ref(2), Operand::place_ref(2)],
+    ] {
+        let error = crate::verify::verify(&copying(operands.clone())).unwrap_err();
+        assert!(error.to_string().contains("two places and a positive constant byte count"), "{operands:?}: {error}");
+    }
+}
+
 /// A parameter's facts are its LLVM attributes, which LICM and EarlyCSE
 /// ask; with none, a view descriptor's loads never left a loop.
 #[test]
@@ -460,6 +579,23 @@ fn a_string_comparison_compares_its_callees_sign() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("%2 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(i16 %0, i16 %1)\n  %3 = icmp sgt i16 %2, 0\n  %4 = sext i1 %3 to i16"), "{text}");
+}
+
+/// A string comparison's callee is stated a three-way compare: its sign
+/// says which string is greater, nothing of how often. Without it
+/// branchprob read `a$ > b$` as a likely `x > 0`.
+#[test]
+fn a_string_comparisons_callee_is_a_three_way_compare() {
+    use crate::model::{CallAbi, CallDistance, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut compare = Instruction::new(1, Op::StringGt, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    compare.callee = Some("B$SCMP".to_owned());
+    function.blocks[0].instructions = vec![compare];
+    function.calls = vec![CallAbi { instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let emitted = emit(&program(function)).remove(0);
+    let module = &emitted.module;
+    let callee = module.global(module.named("llrm.qb.B$SCMP").expect("declared")).function().expect("a function");
+    assert!(llrm_mir::facts::Facts::of(&callee.attrs).three_way_compare(), "{}", llrm_mir::print::module(module));
 }
 
 /// A port read and write are calls of the target's port intrinsics, the
@@ -574,8 +710,8 @@ fn a_languages_promises_reach_mir() {
     let mut boolean = Type::new(2, "bool", TypeKind::Boolean, 2);
     boolean.signed = Some(false);
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 3 }, Value { id: 3, r#type: 1 }, Value { id: 4, r#type: 2 }];
-    let mut advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
-    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None });
+    let advance = Instruction::new(1, Op::PtrOffset, vec![2], vec![Operand::value_ref(1), Operand::constant(1, 2)]);
+    let at = Operand::IndirectPlace(IndirectPlace { base: 2, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None });
     let instructions = vec![
         advance,
         Instruction::new(2, Op::Load, vec![3], vec![at]),
@@ -652,6 +788,16 @@ fn a_routine_reading_its_arguments_is_argmem_read() {
     let promises = crate::model::RuntimePromises { reads_arguments: vec!["_strlen".to_owned()], ..Default::default() };
     let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
     assert!(runtime.contains("declare i16 @_strlen(ptr nocapture) memory(argmem: read)\n") && !runtime.contains("puts"), "{runtime}");
+}
+
+/// A routine that keeps no pointer it is handed, nor any it reads out of
+/// what they point to: the table's `captures = "NONE"`.
+#[test]
+fn a_routine_retaining_nothing_is_noretain() {
+    let module = llrm_mir::parse::module("declare void @erase(ptr)\ndeclare void @puts(ptr)\n").unwrap();
+    let promises = crate::model::RuntimePromises { no_retain: vec!["erase".to_owned()], ..Default::default() };
+    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
+    assert!(runtime.contains("declare void @erase(ptr nocapture noretain)\n") && !runtime.contains("puts"), "{runtime}");
 }
 
 /// The blocks of `function` reached from `from`.
@@ -789,7 +935,7 @@ fn a_fact_of_the_wrong_subject_is_refused() {
         program.modules[0].facts = vec![Stated { subject, fact: Fact::NoAlias, source: None }];
         crate::verify::verify(&program).unwrap_err().0
     };
-    assert!(refusal(Subject::Callable(1)).contains("noalias is not stated of a callable"));
+    assert!(refusal(Subject::Operand { function: 1, instruction: 1, operand: 0 }).contains("noalias is not stated of a operand"));
     assert!(refusal(Subject::Param { function: 1, index: 2 }).contains("noalias is stated of a param the module lacks"));
     assert!(refusal(Subject::Param { function: 9, index: 0 }).contains("the module lacks"));
     let mut program = program(difference());
@@ -797,6 +943,40 @@ fn a_fact_of_the_wrong_subject_is_refused() {
     facts.state(Subject::Param { function: 1, index: 0 }, Fact::NoAlias);
     program.modules[0].facts = facts.finish();
     assert!(crate::verify::verify(&program).is_ok());
+}
+
+/// A freedom of floating arithmetic stated of an integer subtraction, or a
+/// wrap fact of a floating add, was lowered to a flag on an instruction it
+/// means nothing for; the verifier refuses both, and takes the right pairs.
+#[test]
+fn a_float_freedom_or_a_wrap_fact_of_the_wrong_operation_is_refused() {
+    use crate::facts::{Stated, Subject};
+    use llrm_mir::facts::Fact;
+    // `difference` is two integers' sub; `floats` two doubles' fadd.
+    let floats = || {
+        let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 2 }];
+        let add = Instruction::new(1, Op::Fadd, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+        let block = Block::new(1, vec![add], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+        let mut function = Function::new(1, "f", 2, values, Vec::new(), vec![block], 1);
+        function.parameters = vec![1, 2];
+        let mut program = program(function);
+        let mut double = Type::new(2, "double", TypeKind::Float, 8);
+        double.evaluation = crate::model::FloatEvaluation::Binary64;
+        program.modules[0].types.push(double);
+        program
+    };
+    let stated = |mut program: crate::model::Program, fact| {
+        program.modules[0].facts = vec![Stated { subject: Subject::Instruction { function: 1, id: 1 }, fact, source: None }];
+        crate::verify::verify(&program).map_err(|error| error.0)
+    };
+    for fact in [Fact::Reassoc, Fact::NoNaNs, Fact::NoInfs, Fact::NoSignedZeros, Fact::AllowReciprocal] {
+        assert!(stated(program(difference()), fact).unwrap_err().contains("is stated of an instruction that is no floating operation"), "{}", fact.key());
+        assert_eq!(stated(floats(), fact), Ok(()), "{}", fact.key());
+    }
+    for fact in [Fact::NoSignedWrap, Fact::NoUnsignedWrap] {
+        assert!(stated(floats(), fact).unwrap_err().contains("no integer add, sub, mul or neg"), "{}", fact.key());
+        assert_eq!(stated(program(difference()), fact), Ok(()), "{}", fact.key());
+    }
 }
 
 /// Stated facts cross the wire and come back the same, source and all.
@@ -827,7 +1007,7 @@ fn a_program_of_the_old_schema_is_refused_by_its_version() {
 /// refused for.
 #[test]
 fn old_json_is_refused_by_its_schema() {
-    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":4", "\"promises\":[],\"schema\":1");
+    let text = crate::codec::encode(&program(difference()), None).unwrap().replace("\"schema\":5", "\"promises\":[],\"schema\":1");
     assert!(crate::codec::decode(&text).unwrap_err().0.contains("unsupported HIR schema 1"));
 }
 
@@ -883,7 +1063,7 @@ fn inbounds_is_a_fact_of_an_operand() {
     use crate::facts::{Builder, Subject};
     use crate::model::IndirectPlace;
     use llrm_mir::facts::Fact;
-    let at = || Operand::IndirectPlace(IndirectPlace { base: 1, offset: 2, r#type: 1, volatile: false, origin: None, allocation: None });
+    let at = || Operand::IndirectPlace(IndirectPlace { base: 1, offset: 2, r#type: 1, volatile: false, origin: None, allocation: None, member: None });
     let values = vec![Value { id: 1, r#type: 3 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }];
     let loads = vec![Instruction::new(1, Op::Load, vec![2], vec![at()]), Instruction::new(2, Op::Load, vec![3], vec![at()])];
     let block = Block::new(1, loads, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
@@ -899,4 +1079,437 @@ fn inbounds_is_a_fact_of_an_operand() {
     let text = llrm_mir::print::module(&emitted.module);
     assert_eq!(text.matches("getelementptr inbounds i8, ptr %0, i16 2").count(), 1, "{text}");
     assert_eq!(text.matches("getelementptr i8, ptr %0, i16 2").count(), 1, "{text}");
+}
+
+/// A program that calls `B$NEAR`, a routine of one `Callable`, with the
+/// facts `stated` of it.
+fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> String {
+    use crate::facts::Builder;
+    use crate::model::{CallAbi, CallDistance, Callable, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(1)]);
+    call.callee = Some("B$NEAR".to_owned());
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.push(call);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
+    function.calls = vec![CallAbi { instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    program.modules[0].callables.push(Callable {
+        id: 1,
+        name: "B$NEAR".to_owned(),
+        result_type: Some(1),
+        parameter_types: vec![1],
+        by_value: vec![true],
+        segmented: vec![false],
+        arrays: vec![false],
+        defined: false,
+        returns_twice: false,
+        symbol: None,
+    });
+    let mut facts = Builder::new("test");
+    for (subject, fact) in stated {
+        facts.state(subject, fact);
+    }
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    llrm_mir::print::module(&emitted.module)
+}
+
+/// A range stated of a routine's parameter and of its result is the
+/// attribute LLVM reads, half-open and at the integer's width: a boolean
+/// 0..=1 is `range(i16 0, 2)`; one stated of a result of a signed
+/// -1..=1 wraps its upper bound.
+#[test]
+fn a_range_of_a_routines_parameter_and_result_is_its_attribute() {
+    use crate::facts::Subject;
+    use llrm_mir::facts::{Bounds, Fact};
+    let text = calling(vec![
+        (Subject::Param { function: 1, index: 0 }, Fact::Range(Bounds { lo: 0, hi: 1 })),
+        (Subject::Callable(1), Fact::Range(Bounds { lo: -1, hi: 1 })),
+        (Subject::Callable(1), Fact::NoAlias),
+    ]);
+    assert!(text.contains("(i16 range(i16 0, 2) %0,"), "{text}");
+    assert!(text.contains("declare cc1000 range(i16 -1, 2) noalias i16 @B$NEAR"), "{text}");
+}
+
+/// A range stated of a load's result is `!range` on that load; a byte
+/// read as unsigned, 0..=255, is the whole of it and says nothing.
+#[test]
+fn a_range_of_an_instruction_is_its_metadata() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    let mut function = difference();
+    function.blocks[0].instructions[0].results = vec![3];
+    let mut program = program(function);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, Fact::Range(Bounds { lo: -4, hi: 9 }));
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("!range"), "{text}");
+    assert!(text.contains("i16 -4, i16 10"), "{text}");
+}
+
+/// An alignment stated of an instruction is the alignment of its access.
+#[test]
+fn an_alignment_of_an_access_is_stated_of_its_instruction() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::IndirectPlace;
+    use llrm_mir::facts::Fact;
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None })]);
+    function.blocks[0].instructions.insert(0, load);
+    function.values.iter_mut().find(|one| one.id == 1).expect("a").r#type = 2;
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "pointer", TypeKind::Pointer, 2));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Align(1));
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("load i16, ptr %0, align 1"), "{text}");
+}
+
+/// A range is stated of what yields a value, an alignment of an access;
+/// either of another instruction would be lowered onto whatever came out.
+#[test]
+fn a_range_or_alignment_of_the_wrong_instruction_is_refused() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    let refusal = |fact| {
+        let mut program = program(difference());
+        let mut facts = Builder::new("test");
+        facts.state(Subject::Instruction { function: 1, id: 1 }, fact);
+        program.modules[0].facts = facts.finish();
+        crate::verify::verify(&program)
+    };
+    assert!(refusal(Fact::Range(Bounds { lo: 0, hi: 1 })).is_ok());
+    assert!(refusal(Fact::Align(2)).unwrap_err().0.contains("align is stated of a instruction the module lacks"));
+}
+
+/// A pair travels the wire whole, and a pair the wrong way round is no fact.
+#[test]
+fn a_range_survives_the_codec() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Param { function: 1, index: 0 }, Fact::Range(Bounds { lo: -3, hi: 7 }));
+    program.modules[0].facts = facts.finish();
+    let text = crate::codec::encode(&program, None).expect("encodes");
+    assert!(text.contains("\"second\":7") && text.contains("\"value\":-3"), "{text}");
+    let back = crate::codec::decode(&text).expect("decodes");
+    assert_eq!(back.modules[0].facts, program.modules[0].facts);
+    assert!(crate::codec::decode(&text.replace("\"second\":7", "\"second\":-9")).is_err());
+}
+
+/// The verifier a frontend's HIR meets refuses a value used where its
+/// definition does not dominate it.
+#[test]
+fn the_verifier_refuses_a_use_its_definition_does_not_dominate() {
+    let mut function = difference();
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Add, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]));
+    function.values.push(Value { id: 4, r#type: 1 });
+    let error = crate::verify::verify(&program(function)).unwrap_err();
+    assert!(error.0.contains("uses value 3") && error.0.contains("does not dominate"), "{}", error.0);
+}
+
+/// What the language says of unrolling a loop is `!llvm.loop` on its back
+/// edge's terminator: a count, none, or all.
+#[test]
+fn an_unroll_of_a_terminator_is_loop_metadata() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let text = |copies| {
+        let mut program = program(difference());
+        let mut facts = Builder::new("test");
+        facts.state(Subject::Terminator { function: 1, block: 1 }, Fact::Unroll(copies));
+        program.modules[0].facts = facts.finish();
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        llrm_mir::print::module(&emitted.module)
+    };
+    let counted = text(4);
+    assert!(counted.contains("ret i16 %2, !llvm.loop !"), "{counted}");
+    assert!(counted.contains("\"llvm.loop.unroll.count\", i32 4"), "{counted}");
+    assert!(text(0).contains("llvm.loop.unroll.disable"));
+    assert!(text(u32::MAX).contains("llvm.loop.unroll.full"));
+}
+
+/// A load the language says reads what nothing writes after initialisation
+/// is `!invariant.load`.
+#[test]
+fn an_invariant_load_is_its_metadata() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::IndirectPlace;
+    use llrm_mir::facts::Fact;
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    let load = Instruction::new(2, Op::Load, vec![4], vec![Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile: false, origin: None, allocation: None, member: None })]);
+    function.blocks[0].instructions.insert(0, load);
+    function.values.iter_mut().find(|one| one.id == 1).expect("a parameter").r#type = 2;
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "pointer", TypeKind::Pointer, 2));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Invariant);
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("!invariant.load !"), "{text}");
+}
+
+/// A fact of a block the function lacks is refused.
+#[test]
+fn a_fact_of_a_terminator_the_function_lacks_is_refused() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Terminator { function: 1, block: 9 }, Fact::Unroll(2));
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).unwrap_err().0.contains("terminator the module lacks"));
+}
+
+/// What a language lets a pass do to a floating operation reaches the
+/// instruction as its fast-math flags: `-on` and alternate math were stated
+/// nowhere, so no float fold could ask.
+#[test]
+fn floating_freedoms_are_fast_math_flags() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::Fact;
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 2 }];
+    let add = Instruction::new(1, Op::Fadd, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    let block = Block::new(1, vec![add], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(2, "double", TypeKind::Float, 8));
+    let mut facts = Builder::new("test");
+    for fact in [Fact::Reassoc, Fact::NoNaNs, Fact::NoInfs, Fact::NoSignedZeros, Fact::AllowReciprocal] {
+        facts.state(Subject::Instruction { function: 1, id: 1 }, fact);
+    }
+    program.modules[0].facts = facts.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("= fadd reassoc nnan ninf nsz arcp double %0, %1"), "{text}");
+}
+
+/// A condition the language promises holds is `llvm.assume` of its test.
+#[test]
+fn an_assume_is_an_llvm_assume_of_its_condition() {
+    let mut function = difference();
+    let check = Instruction::new(2, Op::Assume, vec![], vec![Operand::value_ref(3)]);
+    function.blocks[0].instructions.push(check);
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("icmp ne i16 %2, 0") && text.contains("call void @llvm.assume(i1 %3)"), "{text}");
+}
+
+/// An assume has one condition and no result; the dominance rule is the
+/// verifier's for every operand.
+#[test]
+fn an_assume_of_no_condition_or_with_a_result_is_refused() {
+    let with = |results: Vec<i64>, operands: Vec<Operand>| {
+        let mut function = difference();
+        if !results.is_empty() {
+            function.values.push(Value { id: 4, r#type: 1 });
+        }
+        function.blocks[0].instructions.push(Instruction::new(2, Op::Assume, results, operands));
+        crate::verify::verify(&program(function))
+    };
+    let ok = with(vec![], vec![Operand::value_ref(3)]);
+    assert!(ok.is_ok(), "{ok:?}");
+    assert!(with(vec![], vec![]).unwrap_err().0.contains("assume 2 takes one condition"));
+    assert!(with(vec![4], vec![Operand::value_ref(3)]).unwrap_err().0.contains("has 1 results, expected 0"));
+    // Before the value it asks about is made.
+    let mut function = difference();
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Assume, vec![], vec![Operand::value_ref(3)]));
+    assert!(crate::verify::verify(&program(function)).unwrap_err().0.contains("does not dominate"));
+}
+
+/// An assumption made of a comparison is made on the comparison's `i1`, not
+/// on its widened result tested again: a reader that runs before
+/// instcombine would otherwise see `icmp ne (sext c), 0` and nothing.
+#[test]
+fn an_assume_of_a_comparison_is_made_on_its_own_truth() {
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.insert(0, Instruction::new(2, Op::Lt, vec![4], vec![Operand::value_ref(1), Operand::value_ref(2)]));
+    function.blocks[0].instructions.insert(1, Instruction::new(3, Op::Assume, vec![], vec![Operand::value_ref(4)]));
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("%2 = icmp slt i16 %0, %1\n  %3 = sext i1 %2 to i16\n  call void @llvm.assume(i1 %2)"), "{text}");
+}
+
+/// A callable that returns twice is a declaration with the attribute, which
+/// the inliner and anything that keeps a value across a call reads; it is
+/// no fact, so the facts builder cannot drop it.
+#[test]
+fn a_callable_that_returns_twice_is_declared_so() {
+    use crate::model::{CallAbi, CallDistance, Callable, FloatReturn, StackCleanup};
+    let mut function = difference();
+    let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(1)]);
+    call.callee = Some("B$TWICE".to_owned());
+    function.values.push(Value { id: 4, r#type: 1 });
+    function.blocks[0].instructions.push(call);
+    function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
+    function.calls = vec![CallAbi { instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    let mut program = program(function);
+    let callable = |returns_twice| Callable { id: 1, name: "B$TWICE".to_owned(), result_type: Some(1), parameter_types: vec![1], by_value: vec![true], segmented: vec![false], arrays: vec![false], defined: false, returns_twice, symbol: None };
+    program.modules[0].callables.push(callable(true));
+    let text = llrm_mir::print::module(&emit(&program).remove(0).module);
+    assert!(text.contains("declare") && text.contains("returns_twice") && text.contains("@B$TWICE"), "{text}");
+    // It crosses the wire, and a callable that does not says nothing of it.
+    let text = crate::codec::encode(&program, None).expect("encodes");
+    assert!(text.contains("\"returns_twice\":true"), "{text}");
+    assert!(crate::codec::decode(&text).expect("decodes").modules[0].callables[0].returns_twice);
+    program.modules[0].callables[0] = callable(false);
+    assert!(!crate::codec::encode(&program, None).expect("encodes").contains("returns_twice"));
+    assert!(!llrm_mir::print::module(&emit(&program).remove(0).module).contains("returns_twice"));
+}
+
+/// A pointer the frontend says is at a fixed address is a pointer in the
+/// fixed-address space; whether its accesses are ordered is the access's
+/// own promise, `volatile`, which the frontend states and lowering keeps.
+#[test]
+fn a_fixed_address_pointer_is_in_the_fixed_space() {
+    use crate::model::{AddressKind, IndirectPlace};
+    for (volatile, word) in [(false, "load"), (true, "load volatile")] {
+        let mut pointer = Type::new(2, "device", TypeKind::Pointer, 4);
+        pointer.address = AddressKind::Fixed;
+        let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 1 }];
+        let at = Operand::IndirectPlace(IndirectPlace { base: 1, offset: 0, r#type: 1, volatile, origin: None, allocation: None, member: None });
+        let load = Instruction::new(1, Op::Load, vec![2], vec![at]);
+        let block = Block::new(1, vec![load], Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new()));
+        let mut function = Function::new(1, "f", 1, values, Vec::new(), vec![block], 1);
+        function.parameters = vec![1];
+        let mut program = program(function);
+        program.modules[0].types.push(pointer);
+        let emitted = emit(&program).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains("p4:32:16:16:16") && text.contains("(ptr addrspace(4) %0)") && text.contains(&format!("{word} i16, ptr addrspace(4) %0")), "{text}");
+    }
+}
+
+/// A function that stores its parameter in place 1 and loads it twice, once
+/// through the place and once through a member of an aggregate: what a fact
+/// stated once of the place or the member must reach.
+fn two_loads(member: Option<crate::model::Member>) -> Program {
+    use crate::model::{Place, Storage};
+    let place = |id, name, ty, extent, offset| Place { extent: Some(extent), ..Place::new(id, name, ty, Storage::Local, offset) };
+    let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }, Value { id: 3, r#type: 1 }];
+    let place_ref = || Operand::place_ref(1);
+    let projected = Operand::ProjectedPlace(crate::model::ProjectedPlace { place: 2, indices: Vec::new(), offset: 0, r#type: 1, member });
+    let instructions = vec![
+        Instruction::new(1, Op::Store, vec![], vec![place_ref(), Operand::value_ref(1)]),
+        Instruction::new(2, Op::Load, vec![2], vec![place_ref()]),
+        Instruction::new(3, Op::Load, vec![3], vec![projected]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(3)], Vec::new()));
+    let mut function = Function::new(1, "f", 1, values, vec![place(1, "x", 1, 2, 0), place(2, "e", 3, 4, 2)], vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.push(Type::new(3, "pair", TypeKind::Opaque, 4));
+    program
+}
+
+fn stated_text(mut program: Program, facts: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> String {
+    let mut stated = crate::facts::Builder::new("test");
+    for (subject, fact) in facts {
+        stated.state(subject, fact);
+    }
+    program.modules[0].facts = stated.finish();
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    llrm_mir::print::module(&emitted.module)
+}
+
+/// A range stated once of a place is on every load of it, and an alignment on
+/// every access; the store has no range. Nothing was stated of the loads.
+#[test]
+fn a_fact_of_a_place_reaches_every_access_of_it() {
+    use crate::facts::Subject;
+    use llrm_mir::facts::{Bounds, Fact};
+    let text = stated_text(two_loads(None), vec![(Subject::Place { function: 1, place: 1 }, Fact::Range(Bounds { lo: 0, hi: 1 })), (Subject::Place { function: 1, place: 1 }, Fact::Align(2))]);
+    let loads: Vec<&str> = text.lines().filter(|one| one.contains("load i16")).collect();
+    assert_eq!(loads.len(), 2, "{text}");
+    // The load of the place has both; the load of the projection is another place's access.
+    assert!(loads.iter().any(|one| one.contains("!range") && one.contains("align 2")), "{text}");
+    assert_eq!(loads.iter().filter(|one| one.contains("!range")).count(), 1, "{text}");
+    assert!(text.lines().any(|one| one.contains("store i16") && one.contains("align 2") && !one.contains("!range")), "{text}");
+}
+
+/// A range stated once of a member of an aggregate type is on every load of that
+/// member, reached through a place or a pointer; an access that is not that member has none.
+#[test]
+fn a_fact_of_a_member_reaches_every_access_of_it() {
+    use crate::facts::Subject;
+    use crate::model::Member;
+    use llrm_mir::facts::{Bounds, Fact};
+    let range = (Subject::Field { owner: 3, offset: 0 }, Fact::Range(Bounds { lo: 0, hi: 2 }));
+    let reached = stated_text(two_loads(Some(Member { owner: 3, offset: 0 })), vec![range]);
+    assert_eq!(reached.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count(), 1, "{reached}");
+    let other = stated_text(two_loads(Some(Member { owner: 3, offset: 2 })), vec![range]);
+    assert_eq!(other.lines().filter(|one| one.contains("!range")).count(), 0, "{other}");
+    let unnamed = stated_text(two_loads(None), vec![range]);
+    assert_eq!(unnamed.lines().filter(|one| one.contains("!range")).count(), 0, "{unnamed}");
+}
+
+/// A fact of a place or a member the module lacks is refused.
+#[test]
+fn a_fact_of_a_place_or_member_the_module_lacks_is_refused() {
+    use crate::facts::{Builder, Subject};
+    use llrm_mir::facts::{Bounds, Fact};
+    for subject in [Subject::Place { function: 1, place: 9 }, Subject::Place { function: 9, place: 1 }, Subject::Field { owner: 9, offset: 0 }, Subject::Field { owner: 3, offset: 4 }] {
+        let mut program = two_loads(None);
+        let mut facts = Builder::new("test");
+        facts.state(subject, Fact::Range(Bounds { lo: 0, hi: 1 }));
+        program.modules[0].facts = facts.finish();
+        assert!(crate::verify::verify(&program).unwrap_err().0.contains("the module lacks"), "{subject:?}");
+    }
+}
+
+/// A member and the subjects cross the wire; an access that names none writes as before.
+#[test]
+fn members_and_their_facts_survive_the_codec() {
+    use crate::facts::{Builder, Subject};
+    use crate::model::Member;
+    use llrm_mir::facts::{Bounds, Fact};
+    let mut program = two_loads(Some(Member { owner: 3, offset: 0 }));
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Field { owner: 3, offset: 0 }, Fact::Range(Bounds { lo: 0, hi: 2 }));
+    facts.state(Subject::Place { function: 1, place: 1 }, Fact::Align(2));
+    program.modules[0].facts = facts.finish();
+    let text = crate::codec::encode(&program, None).expect("encodes");
+    assert!(text.contains("\"member\":{\"offset\":0,\"owner\":3}") || text.contains("\"member\":{\"owner\":3,\"offset\":0}"), "{text}");
+    let back = crate::codec::decode(&text).expect("decodes");
+    assert_eq!(back.modules[0].facts, program.modules[0].facts);
+    assert_eq!(back, program);
+    let plain = crate::codec::encode(&two_loads(None), None).expect("encodes");
+    assert!(!plain.contains("member"), "{plain}");
+}
+
+/// Blocks only RESUME reaches were emitted in id order after the entry's,
+/// so a use came before a definition that dominates it: `ON ERROR GOTO h:
+/// REDIM g(5): ERROR 5: PRINT UBOUND(g)`, whose UBOUND reads the rank in a
+/// block numbered after the one using it, was refused with "value 6 used
+/// before its definition".
+#[test]
+fn a_block_only_resume_reaches_follows_its_dominators() {
+    let program = crate::codec::decode(include_str!("fixtures/resumed_out_of_order.json")).expect("decodes");
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }

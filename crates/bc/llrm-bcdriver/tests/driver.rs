@@ -6,7 +6,7 @@ use std::rc::Rc;
 use llrm_omf::omf::{self, Record};
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/omf").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(name)
 }
 
 fn records(name: &str) -> Vec<Rc<Record>> {
@@ -105,7 +105,7 @@ fn a_refusal_writes_nothing() {
     let out = std::env::temp_dir().join(format!("bcdriver-refusal-{}", std::process::id()));
     std::fs::create_dir_all(&out).expect("made");
     // Refused: INTO is unmodelled.
-    let refused = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions/arridx-bounds-p-g2.obj");
+    let refused = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/arridx-bounds-p-g2.obj");
     assert!(refused.exists());
     let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), refused]
         .iter()
@@ -142,10 +142,10 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
     }
 }
 
-/// FPDEEP's main once the pipeline has run, linked against its runtime, as
-/// MIR text.
-fn fpdeep() -> String {
-    let found = llrm_omf::module::load(&fixture("fpdeep-q-o.obj")).expect("reads").expect("an object");
+/// FPDEEP's main from `name` once the pipeline has run, linked against its
+/// runtime, as MIR text.
+fn fpdeep(name: &str) -> String {
+    let found = llrm_omf::module::load(&fixture(name)).expect("reads").expect("an object");
     let raised = llrm_bc::raise(&found, &llrm_core::abi::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
     let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_x86_code16::Dos::default())).and_then(|one| one.with_runtime(raised.runtime)).unwrap();
     llrm_transforms::pipeline::applied(&mut program, &llrm_transforms::pipeline::Applied::default()).unwrap();
@@ -154,27 +154,31 @@ fn fpdeep() -> String {
 }
 
 /// FPDEEP's `FOR i = 1 TO 3` around its PRINTs is copied out, each trip
-/// printing its own `i`; the old route's unroll test. Refused before as
-/// "contains call and code would grow".
+/// printing its own `i`; the old route's unroll test. QB's build was copied
+/// out, PDS's and VB's was not: their dead `ptrtoint` of `i`'s global made
+/// every PRINT a possible write of it, so `i` was reloaded after each and the
+/// loop stayed rolled with its float chains computed at run time.
 #[test]
 fn fpdeep_copies_out_its_print_loop() {
-    let main = fpdeep();
-    assert!(!main.contains(" phi "), "{main}");
-    for i in 1..=3 {
-        assert!(main.contains(&format!("@llrm.qb.B$PSI2(i16 {i})")), "{main}");
+    for name in ["fpdeep-q-o.obj", "fpdeep-p-g2.obj", "fpdeep-v-g3.obj"] {
+        let main = fpdeep(name);
+        assert!(!main.contains(" phi "), "{name}\n{main}");
+        for i in 1..=3 {
+            assert!(main.contains(&format!("@llrm.qb.B$PSI2(i16 {i})")), "{name} {i}\n{main}");
+        }
     }
 }
 
 /// Every FPDEEP number is exact, so it prints constants and computes no
 /// float arithmetic; the old route's floatbounds, floatfold and literal
-/// tests.
+/// tests. The prints are those of QB's build, in order, the array's
+/// elements and CLNG(q * 1024) among them.
 #[test]
 fn fpdeep_prints_constants_and_computes_no_float() {
-    let main = fpdeep();
-    for n in [144, 6, 512, 784, 14, 768, 3600, 30, 896] {
-        assert!(main.contains(&format!("@llrm.qb.B$PEI4(i16 0, i16 {n})")), "{n}\n{main}");
-    }
-    assert!(!["fmul", "fdiv", "fadd", "fsub"].iter().any(|op| main.contains(&format!(" {op} "))), "{main}");
+    let main = fpdeep("fpdeep-q-o.obj");
+    let printed: Vec<&str> = main.lines().filter_map(|line| line.split("@llrm.qb.B$PEI4(i16 0, i16 ").nth(1)).map(|rest| rest.trim_end_matches(')')).collect();
+    assert_eq!(printed, ["144", "6", "512", "784", "14", "768", "3600", "30", "896", "144", "6"], "{main}");
+    assert!(!["fmul", "fdiv", "fadd", "fsub", "load float", "load double"].iter().any(|op| main.contains(&format!(" {op} "))), "{main}");
 }
 
 /// ON ERROR's landing stub, its inline helper and ERR's word are the
@@ -218,8 +222,36 @@ fn a_module_without_a_handler_keeps_no_statement_rows() {
 #[test]
 fn data_emission_adds_is_laid_out() {
     for name in ["erlnum-q-o.obj", "erlnum-v-g3.obj"] {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/regressions").join(name);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions").join(name);
         let data = std::fs::read(path).expect("reads");
         llrm_bcdriver::compiled(&data, "386", name).unwrap_or_else(|why| panic!("{name}: {why}"));
+    }
+}
+
+/// The recompiled `name`'s code after its header, decoded in order.
+fn instructions(name: &str) -> Vec<iced_x86::Instruction> {
+    let records = recompiled(name);
+    let (_, code_name, _) = omf::code_segment(&records).expect("code");
+    let (_, image) = segment(&records, &code_name);
+    let decoded: Vec<iced_x86::Instruction> = iced_x86::Decoder::with_ip(16, &image[0x30..], 0x30, iced_x86::DecoderOptions::NONE).into_iter().collect();
+    assert!(!decoded.iter().any(iced_x86::Instruction::is_invalid), "{name}: the code decodes");
+    decoded
+}
+
+/// PRESSX retained an unconditional jump to its exit immediately after loop elimination.
+#[test]
+fn pressx_has_no_jump_to_the_following_instruction() {
+    for insn in instructions("pressx-p-g2.obj") {
+        if insn.mnemonic() == iced_x86::Mnemonic::Jmp && matches!(insn.op0_kind(), iced_x86::OpKind::NearBranch16 | iced_x86::OpKind::NearBranch32) {
+            assert_ne!(insn.near_branch_target(), insn.next_ip(), "{insn}");
+        }
+    }
+}
+
+/// FPCSE's removed loop still took three unconditional jumps through its old block layout.
+#[test]
+fn a_removed_floating_loop_is_emitted_in_execution_order() {
+    for tag in ["p-g2", "q-o", "v-g3"] {
+        assert!(!instructions(&format!("fpcse-{tag}.obj")).iter().any(|insn| insn.mnemonic() == iced_x86::Mnemonic::Jmp), "{tag}");
     }
 }

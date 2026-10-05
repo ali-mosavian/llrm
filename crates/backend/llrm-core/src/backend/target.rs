@@ -15,7 +15,6 @@ use crate::abi::machine::{self, Machine};
 use crate::support::hash::IndexMap;
 
 use crate::model::ir::{self, Loc, Operation, Semantics};
-use crate::model::mir;
 use crate::support::pyset::PySet;
 
 // ---------------------------------------------------------------- registers
@@ -23,10 +22,8 @@ use crate::support::pyset::PySet;
 pub static ADDRESSING: LazyLock<BTreeSet<Register>> =
     LazyLock::new(|| BTreeSet::from([Register::BX, Register::BP, Register::SI, Register::DI]));
 // `[bx+si]`: a word base and a word index are each confined to their half.
-pub static WORD_BASES: LazyLock<BTreeSet<Register>> =
-    LazyLock::new(|| BTreeSet::from([Register::BX]));
-pub static WORD_INDEXES: LazyLock<BTreeSet<Register>> =
-    LazyLock::new(|| BTreeSet::from([Register::SI, Register::DI]));
+pub static WORD_BASES: LazyLock<BTreeSet<Register>> = LazyLock::new(|| llrm_x86_code16::word_bases().into_iter().collect());
+pub static WORD_INDEXES: LazyLock<BTreeSet<Register>> = LazyLock::new(|| llrm_x86_code16::WORD_INDEXES.into());
 
 /// Where an operand has to live: one register, or any of a set.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -110,6 +107,29 @@ pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
             out.insert(Occurrence::new("dest", 1), Register::EDI);
         }
     }
+    // A string move reads cx cells from si to es:di, leaving si and di past
+    // them and cx empty; a single move has no count. The last two sources
+    // are the segments: the source's, which the instruction names as an
+    // override (fs where it is a value), and es.
+    if what.op == Operation::Copy && matches!(what.sources.len(), 4 | 5) {
+        let first = what.sources.len() - 4;
+        if first == 1 {
+            out.insert(Occurrence::new("source", 0), Register::ECX);
+        }
+        out.insert(Occurrence::new("source", first), Register::ESI);
+        out.insert(Occurrence::new("source", first + 1), Register::EDI);
+        if matches!(what.sources[first + 2], Loc::Held(_)) {
+            out.insert(Occurrence::new("source", first + 2), Register::FS);
+        }
+        if matches!(what.sources[first + 3], Loc::Held(_)) {
+            out.insert(Occurrence::new("source", first + 3), Register::ES);
+        }
+        out.insert(Occurrence::new("dest", 1), Register::ESI);
+        out.insert(Occurrence::new("dest", 2), Register::EDI);
+        if first == 1 {
+            out.insert(Occurrence::new("dest", 3), Register::ECX);
+        }
+    }
     // Port I/O moves al; a port not written as an immediate is dx.
     if what.op == Operation::Barrier && matches!(what.name.as_deref(), Some("in" | "out")) {
         if !matches!(what.sources[0], Loc::Imm(_)) {
@@ -145,20 +165,6 @@ const _COUNTED: [&str; 8] = ["shl", "sal", "shr", "sar", "rol", "ror", "rcl", "r
 
 fn _root(register: Register) -> Register {
     ir::root(register)
-}
-
-/// A shift whose count is a register takes it in cl and says so.
-///
-/// A funnel shift counts from cl and from nowhere else.
-pub fn _shifted(what: &Semantics) -> bool {
-    if what.op == Operation::Funnel {
-        return what.sources.len() == 3 && matches!(what.sources[2], Loc::Reg(_));
-    }
-    ["shl", "shr", "sar", "rol", "ror", "rcl", "rcr"].contains(&what.name.as_deref().unwrap_or(""))
-        && what
-            .sources
-            .iter()
-            .any(|one| matches!(one, Loc::Reg(reg) if _root(reg.register) == Register::ECX))
 }
 
 /// Whether this is an x87 operation, which shares no register with the rest.
@@ -201,6 +207,12 @@ pub fn popped_width(place: &Loc) -> Option<u32> {
         Loc::Reg(reg) if reg.register == Register::CS => None,
         other => pushed_width(other),
     }
+}
+
+/// Whether an x87 comparison reaches the flags through AX: `fnstsw ax; sahf`
+/// follows it, so nothing may live in AX across it.
+pub fn status_through_ax(what: &Semantics) -> bool {
+    what.op == Operation::Compare && what.sources.iter().any(|one| matches!(one, Loc::St(_)) || matches!(one, Loc::Held(held) if held.width == 10))
 }
 
 /// The register a two-address instruction reads and writes as one.
@@ -284,7 +296,7 @@ pub fn writes(what: &Semantics) -> IndexMap<Register, Need> {
 
 // Every register a value may be placed in: `mir.TRACKED`, what the raise
 // follows.
-pub const AVAILABLE: [Register; 6] = mir::TRACKED;
+pub const AVAILABLE: [Register; 6] = llrm_x86_code16::GENERAL;
 
 // What this may hand out for an operand that reaches memory, which is not
 // what the encoding permits: bp is a legal base and also the frame pointer.
@@ -425,6 +437,9 @@ pub struct Segments {
     /// The one that reaches the data group while `data` holds something
     /// else: the stack's, where the stack lives in the data group.
     pub through: Option<Register>,
+    /// The selector stride a huge pointer takes per carried 64K, as a shift:
+    /// the machine's (`Machine::huge_shift`), where it states one.
+    pub huge_shift: Option<u32>,
 }
 
 impl Segments {
@@ -448,6 +463,7 @@ impl Segments {
                 .collect(),
             data: register(&segments.data),
             through: segments.stack_is_data.then(|| register(&segments.stack)),
+            huge_shift: machine.huge_shift(),
         }
     }
 }
@@ -576,6 +592,60 @@ pub fn name_of(register: Register) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The allocator's bases are the encodable ones less the frame register: a new frame rule changes one place.
+    #[test]
+    fn test_the_allocators_bases_are_the_encodable_ones_but_the_frame() {
+        let encodable: BTreeSet<Register> = llrm_x86_code16::ENCODABLE_BASES.into_iter().collect();
+        let held: BTreeSet<Register> = encodable.iter().copied().filter(|&one| one != llrm_x86_code16::FRAME).collect();
+        assert_eq!(*WORD_BASES, held);
+        assert!(crate::backend::select::_WORD_BASES.iter().all(|one| encodable.contains(one)));
+    }
+
+    /// x86 arithmetic is two-address: the spill model charges the copy of a first operand that stays live.
+    #[test]
+    fn test_the_machine_says_its_arithmetic_is_two_address() {
+        use llrm_mir::target::Machine;
+        assert!(llrm_x86_code16::Dos::default().two_address());
+    }
+
+    /// The spill model counts the registers an address may use as the allocator restricts to.
+    #[test]
+    fn test_the_spill_models_address_registers_are_the_allocators() {
+        use llrm_mir::target::Machine;
+        let restricted: BTreeSet<Register> = WORD_BASES.union(&WORD_INDEXES).copied().collect();
+        assert_eq!(llrm_x86_code16::Dos::default().address_registers(), restricted.len() as i64);
+    }
+
+    /// A string move reads cx cells from ds:si to es:di and leaves si, di
+    /// and cx past them: the rep form pins all three and both segments (the
+    /// source's as an fs override), the single one has no count.
+    #[test]
+    fn test_a_string_move_names_its_registers() {
+        let held = |value: u32| Loc::Held(ir::Held { value, width: 2 });
+        let repeated = semantics(
+            Operation::Copy,
+            "movsw",
+            vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6), held(7)],
+            vec![held(1), held(2), held(3), held(4), held(8)],
+        );
+        let wanted = requirements(&repeated);
+        let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
+        assert_eq!((at("source", 0), at("source", 1), at("source", 2)), (Some(Register::ECX), Some(Register::ESI), Some(Register::EDI)));
+        assert_eq!((at("source", 3), at("source", 4)), (Some(Register::FS), Some(Register::ES)));
+        assert_eq!((at("dest", 1), at("dest", 2), at("dest", 3)), (Some(Register::ESI), Some(Register::EDI), Some(Register::ECX)));
+        let single = semantics(
+            Operation::Copy,
+            "movsw",
+            vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)],
+            vec![held(2), held(3), reg(Register::DS, 2), held(8)],
+        );
+        let wanted = requirements(&single);
+        let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
+        assert_eq!((at("source", 0), at("source", 1), at("source", 2), at("source", 3)), (Some(Register::ESI), Some(Register::EDI), None, Some(Register::ES)));
+        assert_eq!(at("dest", 3), None);
+        assert!(reads(&repeated).contains_key(&Register::ECX) && writes(&repeated).contains_key(&Register::ECX));
+    }
 
     fn reg(register: Register, width: u32) -> Loc {
         Loc::Reg(ir::Reg { register, width })

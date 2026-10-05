@@ -1,0 +1,138 @@
+reason = "Shrink-wrapped callee-saved registers on merged main"
+blessed = "2026-10-05"
+
+[bas.O2]
+instructions = 95905
+memory_operands = 12675
+code_bytes = 256
+data_bytes = 8719
+bss_bytes = 0
+kernel_ms = 1.3654
+
+[bas.Os]
+instructions = 88097
+memory_operands = 13059
+code_bytes = 250
+data_bytes = 8719
+bss_bytes = 0
+kernel_ms = 1.262
+
+[c.O2]
+instructions = 79519
+memory_operands = 12674
+code_bytes = 158
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.139
+
+[c.Os]
+instructions = 71711
+memory_operands = 13058
+code_bytes = 149
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.0358
+
+[nib.O2]
+instructions = 83606
+memory_operands = 12672
+code_bytes = 143
+data_bytes = 4608
+bss_bytes = 0
+kernel_ms = 1.1177
+
+[nib.Os]
+instructions = 75798
+memory_operands = 13056
+code_bytes = 136
+data_bytes = 4608
+bss_bytes = 0
+kernel_ms = 1.0145
+
+[ow.O2]
+instructions = 88353
+memory_operands = 18947
+code_bytes = 213
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.2564
+
+[ow.Os]
+instructions = 88861
+memory_operands = 19204
+code_bytes = 204
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.2632
+
+[bcc.O2]
+instructions = 97059
+memory_operands = 17155
+code_bytes = 180
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.3734
+
+[bcc.Os]
+instructions = 93216
+memory_operands = 17155
+code_bytes = 172
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.3222
+
+[tc.O2]
+instructions = 99623
+memory_operands = 51981
+code_bytes = 225
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.4068
+
+[tc.Os]
+instructions = 116255
+memory_operands = 56076
+code_bytes = 220
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.6286
+
+[tcpp.O2]
+instructions = 103465
+memory_operands = 17413
+code_bytes = 199
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.458
+
+[tcpp.Os]
+instructions = 99367
+memory_operands = 17413
+code_bytes = 191
+data_bytes = 0
+bss_bytes = 4608
+kernel_ms = 1.4033
+
+[bc.O2]
+instructions = 145768
+memory_operands = 53033
+code_bytes = 338
+data_bytes = 7
+bss_bytes = 8716
+kernel_ms = 2.0304
+
+[pds71.O2]
+instructions = 145522
+memory_operands = 53035
+code_bytes = 338
+data_bytes = 7
+bss_bytes = 8716
+kernel_ms = 2.0246
+
+[vbdos.O2]
+instructions = 145556
+memory_operands = 53045
+code_bytes = 344
+data_bytes = 7
+bss_bytes = 8716
+kernel_ms = 2.0225
