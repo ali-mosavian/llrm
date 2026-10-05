@@ -194,6 +194,9 @@ static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
         ("leave", 6),
         ("rep_stos", 5),
         ("rep_stos_cell", 5),
+        // Intel's 80386 table: REP MOVS is 8+4n.
+        ("rep_movs", 8),
+        ("rep_movs_cell", 4),
         // GCC's i386 table: x87 loads/stores eight units, arithmetic
         // 23/27/88. Memory arithmetic includes both components.
         ("x87_load", 8),
@@ -244,6 +247,9 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
         // the value and count before `rep stos`; then restores ES.
         fill: costs["rep_stos"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 2 * costs["mov_ri"],
         fill_cell: costs["rep_stos_cell"],
+        copy: costs["rep_movs"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 3 * costs["mov_ri"],
+        copy_cell: costs["rep_movs_cell"],
+        direction: 2 * costs["alu_rr"],
     }
 }
 

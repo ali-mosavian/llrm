@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::pointerfacts::offsets;
-use llrm_mir::callgraph::{CallGraph, direct_only};
+use llrm_mir::callgraph::{CallGraph, direct_calls, direct_only};
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -47,7 +47,7 @@ struct Plan {
 /// The promotions of every function of `module` that has them, callees first; the functions changed.
 pub fn promoted(module: &mut Module, layout: &DataLayout, costs: &OperationCosts, size: bool) -> Vec<GlobalId> {
     let only = direct_only(module);
-    let (sites, refused) = call_sites(module);
+    let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let callees = memory::callees(module);
     let mut changed = BTreeSet::new();
     for id in CallGraph::new(module).bottom_up() {
@@ -63,33 +63,6 @@ pub fn promoted(module: &mut Module, layout: &DataLayout, costs: &OperationCosts
         }
     }
     changed.into_iter().collect()
-}
-
-/// Every direct call of each function, and the functions some call of which is not one plain call.
-fn call_sites(module: &Module) -> (BTreeMap<GlobalId, Vec<(GlobalId, InstId)>>, BTreeSet<GlobalId>) {
-    let mut sites: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>> = BTreeMap::new();
-    let mut refused = BTreeSet::new();
-    for (caller, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
-        for (_, inst) in function.walk() {
-            let instruction = function.instruction(inst);
-            let Some(callee) = memory::callee(&module.context, function, inst) else { continue };
-            match &instruction.opcode {
-                Opcode::Call(_) => {
-                    let declared = module.global(callee).function().map_or(0, |one| one.parameters().len());
-                    if instruction.operands.len() == declared + 1 {
-                        sites.entry(callee).or_default().push((caller, inst));
-                    } else {
-                        refused.insert(callee);
-                    }
-                }
-                Opcode::Invoke(_) => {
-                    refused.insert(callee);
-                }
-                _ => {}
-            }
-        }
-    }
-    (sites, refused)
 }
 
 fn words(layout: &DataLayout, module: &Module, ty: TypeId) -> i64 {

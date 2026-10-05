@@ -827,6 +827,43 @@ fn test_repeated_allocated_address_copies_use_one_clean_67h_base() {
     }
 }
 
+/// A frame cell has two address components, its fixed BP and the dynamic base the allocator gave it.
+/// Widening the base to a 32-bit address would drop BP: Nib's sum_three wrote its locals through
+/// `[eax+si]`. The shape of the test above, each access a frame cell.
+#[test]
+fn test_a_frame_cell_keeps_its_bp_when_its_base_copies_are_unified() {
+    let owner = insn(
+        1,
+        Some((1, 3)),
+        Some(sem(Operation::Move, "mov", vec![rl(Register::DX, 2)], vec![Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(6), 2) })])),
+        vec![1],
+        vec![],
+    );
+    let mut insns = vec![Arc::new(owner)];
+    for (index, register) in [Register::BX, Register::SI, Register::DI, Register::BX].into_iter().enumerate() {
+        let index = index as i64 + 2;
+        let value = u32::try_from(index).unwrap();
+        let copy = insn(index, Some((index, index)), Some(sem(Operation::Move, "mov", vec![rl(register, 2)], vec![rl(Register::DX, 2)])), vec![value], vec![1]);
+        let cell = Mem { through: register, base: Some(Held { value, width: 2 }), ..Mem::new(frame(-8), 2) };
+        let load = insn(index, Some((index, index)), Some(sem(Operation::Move, "mov", vec![rl(Register::AX, 2)], vec![Loc::Mem(cell)])), vec![30 + value], vec![value]);
+        insns.extend([Arc::new(copy), Arc::new(load)]);
+    }
+    let input = body("secondary-base", 1, vec![block(1, insns, vec![])]);
+
+    let result = secondary_bases(&input, "386").unwrap().insns();
+
+    assert!(!result.iter().any(|one| one.what.as_ref().unwrap().name.as_deref() == Some("movzx")), "a frame cell's base was widened");
+    for one in result.iter().filter(|one| one.what.as_ref().unwrap().name.as_deref() == Some("mov")) {
+        for source in &one.what.as_ref().unwrap().sources {
+            if let Loc::Mem(cell) = source {
+                if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_some() {
+                    assert_eq!(cell.base.unwrap().width, 2, "{cell:?}");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn test_loaded_scaled_add_skips_metadata_only_anchors() {
     // Matmul retained `load; shl; add` when metadata anchors separated it.

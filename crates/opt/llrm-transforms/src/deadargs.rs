@@ -3,9 +3,9 @@
 //! call. Promotion and the constants propagated into a body leave them: a length every caller passes
 //! as 12, folded into the body, is still pushed at every call.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use llrm_mir::callgraph::direct_only;
+use llrm_mir::callgraph::{direct_calls, direct_only};
 use llrm_mir::context::GlobalId;
 use llrm_mir::memory;
 use llrm_mir::module::{GlobalKind, InstId, Module, Operand};
@@ -14,22 +14,7 @@ use llrm_mir::opcode::Opcode;
 /// The functions of `module` that lost a parameter, and the functions that call them.
 pub fn removed(module: &mut Module) -> Vec<GlobalId> {
     let only = direct_only(module);
-    let mut sites: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>> = BTreeMap::new();
-    let mut refused = BTreeSet::new();
-    for (caller, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
-        for (_, inst) in function.walk() {
-            let Some(callee) = memory::callee(&module.context, function, inst) else { continue };
-            match &function.instruction(inst).opcode {
-                Opcode::Call(_) if function.instruction(inst).operands.len() == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1 => {
-                    sites.entry(callee).or_default().push((caller, inst));
-                }
-                Opcode::Call(_) | Opcode::Invoke(_) => {
-                    refused.insert(callee);
-                }
-                _ => {}
-            }
-        }
-    }
+    let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let mut changed = BTreeSet::new();
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };

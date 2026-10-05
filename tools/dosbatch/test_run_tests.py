@@ -29,6 +29,29 @@ class HeaderTests(unittest.TestCase):
         self.assertEqual(self.read("PRINT 1\n' known: #9\n"), {})
 
 
+class ConfigurationTests(unittest.TestCase):
+    def test_one_header_is_each_configuration_it_names(self):
+        """idioms.bas was fifteen copies of a file that differed in its header line."""
+        got = run_tests.configurations({"flags": "-O2 --cpu 486 | -Os", "dialect": "qb45 pds71"})
+        self.assertEqual([(label, flags, dialect) for label, flags, dialect in got], [
+            (" [-O2 --cpu 486, qb45]", ["-O2", "--cpu", "486"], "qb45"),
+            (" [-O2 --cpu 486, pds71]", ["-O2", "--cpu", "486"], "pds71"),
+            (" [-Os, qb45]", ["-Os"], "qb45"),
+            (" [-Os, pds71]", ["-Os"], "pds71"),
+        ])
+
+    def test_a_header_with_one_of_each_is_one_unlabelled_configuration(self):
+        self.assertEqual(run_tests.configurations({"flags": "-Os"}), [("", ["-Os"], "qb45")])
+        self.assertEqual(run_tests.configurations({}), [("", run_tests.DEFAULT_FLAGS, "qb45")])
+
+    def test_each_configuration_is_a_program_of_its_own(self):
+        """A second configuration that breaks must be reported by name, not hidden behind the first."""
+        source = Path("t/p.c")
+        found = [run_tests.Program(source, flags, None, dialect, label=label) for label, flags, dialect in run_tests.configurations({"flags": "-O2 | -O2 -fbroken"})]
+        self.assertEqual([one.name for one in found], ["t/p.c [-O2]", "t/p.c [-O2 -fbroken]"])
+        self.assertEqual(found[1].flags, ["-O2", "-fbroken"])
+
+
 class ExampleTests(unittest.TestCase):
     def test_a_mask_hides_only_what_varies(self):
         """ticker prints its busy-loop count, a machine speed: 2483958 spins one run, another the next."""
