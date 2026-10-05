@@ -1,4 +1,4 @@
-reason = "Nib/C: a far pointer parameter every call fills from a global is passed as its offset (address-space narrowing). lru c -Os +7 instructions, -23 bytes: -Os now shares -1 and 0 in a register (the freed es/fs)"
+reason = "Shrink-wrapped callee-saved registers on merged main"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -15,7 +15,7 @@ memory_operands = 13059
 code_bytes = 250
 data_bytes = 8719
 bss_bytes = 0
-kernel_ms = 1.2625
+kernel_ms = 1.262
 
 [c.O2]
 instructions = 79519
@@ -31,7 +31,7 @@ memory_operands = 13058
 code_bytes = 149
 data_bytes = 0
 bss_bytes = 4608
-kernel_ms = 1.0362
+kernel_ms = 1.0358
 
 [nib.O2]
 instructions = 83606
@@ -47,7 +47,7 @@ memory_operands = 13056
 code_bytes = 136
 data_bytes = 4608
 bss_bytes = 0
-kernel_ms = 1.0148
+kernel_ms = 1.0145
 
 [ow.O2]
 instructions = 88353
