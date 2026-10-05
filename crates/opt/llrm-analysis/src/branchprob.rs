@@ -15,7 +15,9 @@
 //!   `x < 0` and `x <= 0` on integers but truth values and one-bit
 //!   tests, and `x == y` on floats; `isnan` is all but never;
 //! - a successor that calls, where the other does not, is not taken (67%);
-//! - a successor that returns, where the other does not, is not taken (66%).
+//! - a successor that returns, where the other does not, is not taken (66%): 98% where it returns a
+//!   negative number, 71% null, 65% another constant (GCC's `PRED_NEGATIVE_RETURN`, `PRED_NULL_RETURN`,
+//!   `PRED_CONST_RETURN`).
 //!
 //! Frequencies are relative to the entry's 1. A loop header runs
 //! 1 / (1 - p) times per entry, `p` the probability of coming back round,
@@ -75,6 +77,10 @@ const OPCODE: (f64, f64) = (20.0, 12.0);
 const ORDERED: (f64, f64) = ((1024 * 1024 - 1) as f64, 1.0);
 const CALL: (f64, f64) = (67.0, 33.0);
 const RETURN: (f64, f64) = (66.0, 34.0);
+// GCC's predict.def: a path that returns a constant, rather than computing a result, is the exception.
+const NEGATIVE_RETURN: (f64, f64) = (2.0, 98.0);
+const NULL_RETURN: (f64, f64) = (29.0, 71.0);
+const CONST_RETURN: (f64, f64) = (35.0, 65.0);
 /// MachineBlockPlacement's `StaticLikelyProb`: how likely an edge must be
 /// before placement trades the shorter layout for it.
 pub const LIKELY: f64 = 0.8;
@@ -187,6 +193,15 @@ fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarat
         return (Heuristic::Call, weights);
     }
     let returns = |at: i64| function.terminator(cfg::block(at)).is_some_and(|last| function.instruction(last).opcode == Opcode::Ret);
+    if successors.len() == 2 && successors.iter().filter(|&&at| returns(at)).count() == 1 {
+        let (leaving, staying) = if returns(successors[0]) { (0, 1) } else { (1, 0) };
+        // What the returning block returns, when it does nothing else: a constant says it is an error or a flag.
+        let odds = returned(context, function, cfg::block(successors[leaving])).unwrap_or(RETURN.swap());
+        let mut weights = vec![0.0; 2];
+        weights[leaving] = odds.0;
+        weights[staying] = odds.1;
+        return (Heuristic::Return, weights);
+    }
     if let Some(weights) = split(&|at| !returns(at), RETURN) {
         return (Heuristic::Return, weights);
     }
@@ -299,6 +314,25 @@ fn compared_as(predicate: IntPredicate, (a, wide): (u128, u32), (b, _): (u128, u
     }
 }
 
+/// The odds of reaching a block that returns a constant and does nothing else: GCC's `PRED_NEGATIVE_RETURN`,
+/// `PRED_NULL_RETURN` and `PRED_CONST_RETURN`. None where it returns a computed value, or anything but the return.
+fn returned(context: &Context, function: &Function, block: BlockId) -> Option<(f64, f64)> {
+    let instructions = function.block(block).instructions();
+    let [only] = instructions else { return None };
+    let instruction = function.instruction(*only);
+    let (Opcode::Ret, [Operand::Constant(value)]) = (&instruction.opcode, instruction.operands.as_slice()) else { return None };
+    let constant = context.get(*value);
+    match constant.kind {
+        ConstantKind::Null => Some(NULL_RETURN),
+        ConstantKind::Int(bits) => {
+            let width = context.types.int_bits(constant.ty).filter(|&width| (1..=64).contains(&width))?;
+            let negative = bits >> (width - 1) & 1 == 1;
+            Some(if negative && width > 1 { NEGATIVE_RETURN } else { CONST_RETURN })
+        }
+        _ => None,
+    }
+}
+
 trait Swap {
     fn swap(self) -> Self;
 }
@@ -348,7 +382,7 @@ fn compared(context: &Context, declarations: &Declarations, function: &Function,
             };
             // A flag is no quantity: BASIC's `IF a AND b` tests a 0/-1 truth
             // value against 0, `x AND 1` one bit; neither says how often.
-            if flag(context, function, *compared) {
+            if flag(context, declarations, function, *compared) {
                 return None;
             }
             // Nor is a three-way compare's sign: of its result only equality
@@ -379,8 +413,8 @@ fn compared(context: &Context, declarations: &Declarations, function: &Function,
 /// Whether `operand` has at most one bit that can be set: a truth value,
 /// or a one-bit mask. No known-bits analysis answers it, so these are the
 /// two forms: the first BASIC's, the second LLVM's `(x & pow2)`.
-fn flag(context: &Context, function: &Function, operand: Operand) -> bool {
-    truth(function, operand, 4) || single_bit(context, function, operand)
+fn flag(context: &Context, declarations: &Declarations, function: &Function, operand: Operand) -> bool {
+    truth(context, declarations, function, operand, 4) || single_bit(context, function, operand)
 }
 
 /// Whether `operand` is `x & 2^n`, as LLVM's zero heuristic leaves
@@ -406,17 +440,25 @@ fn three_way(context: &Context, declarations: &Declarations, function: &Function
     Facts::of(&info.attrs).three_way_compare() || declared.is_some_and(|one| Facts::of(&one.attrs).three_way_compare())
 }
 
-/// Whether `operand` is provably 0 or all ones, or 0 or 1: a compare, one
-/// widened, or bitwise logic of those, `depth` operations deep.
-fn truth(function: &Function, operand: Operand, depth: u32) -> bool {
+/// Whether `operand` is provably 0 or all ones, or 0 or 1: a compare, one widened, bitwise logic of
+/// those, `depth` operations deep, or the result of a call whose `range` says so (a routine that
+/// returns a truth value as an integer, as Nib's bool is a byte).
+fn truth(context: &Context, declarations: &Declarations, function: &Function, operand: Operand, depth: u32) -> bool {
     let Operand::Value(value) = operand else { return false };
     let ValueDef::Instruction(inst) = function.value(value).def else { return false };
     let instruction = function.instruction(inst);
     match &instruction.opcode {
         Opcode::ICmp(_) | Opcode::FCmp(_) => true,
-        Opcode::Cast(CastOp::SExt | CastOp::ZExt) => instruction.operands.first().is_some_and(|one| truth(function, *one, depth)),
+        Opcode::Cast(CastOp::SExt | CastOp::ZExt) => instruction.operands.first().is_some_and(|one| truth(context, declarations, function, *one, depth)),
         Opcode::Binary(BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) if depth > 0 => {
-            instruction.operands.iter().all(|one| truth(function, *one, depth - 1))
+            instruction.operands.iter().all(|one| truth(context, declarations, function, *one, depth - 1))
+        }
+        Opcode::Call(info) | Opcode::Invoke(info) => {
+            let bits = |ty| context.types.int_bits(ty);
+            let callee = llrm_mir::memory::callee(context, function, inst);
+            // Stated, at the call or on the callee.
+            let attributes: Vec<_> = info.return_attrs.iter().chain(callee.and_then(|one| declarations.get(one.0 as usize)).and_then(|one| one.function()).iter().flat_map(|one| one.return_attrs.iter())).cloned().collect();
+            Facts::of_typed(&attributes, bits, true).range().is_some_and(|found| found.hi - found.lo <= 1)
         }
         _ => false,
     }
