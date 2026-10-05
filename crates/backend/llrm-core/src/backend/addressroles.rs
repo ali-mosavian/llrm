@@ -143,6 +143,7 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
     // Whether the first side is the base side.
     // A side can take a role only where every value of it may sit in that role's registers.
     let may = |values: &BTreeSet<u32>, choices: &BTreeSet<iced_x86::Register>| values.iter().all(|value| forced.get(value).is_none_or(|class| class.intersection(choices).next().is_some()));
+    // Where the price does not tell the two apart, the spelling isel gave.
     let mut first_is_base: Vec<bool> = sides
         .iter()
         .map(|(left, right)| {
@@ -239,7 +240,8 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
             }
             first_is_base[at] = !first_is_base[at];
             let tried = priced(&first_is_base);
-            if tried < best {
+            // The price is of whole copies: a saving smaller than one pair of them at the entry's frequency is not told from none.
+            if tried + 2.0 * prices.copy * frequency.block(body.entry) <= best {
                 best = tried;
                 turned = true;
             } else {
@@ -248,6 +250,14 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
         }
         if !turned {
             break;
+        }
+    }
+    if let Ok(only) = std::env::var("FLIPONLY") {
+        let only: Vec<usize> = only.split(',').filter_map(|one| one.parse().ok()).collect();
+        for at in 0..first_is_base.len() {
+            if !only.contains(&at) {
+                first_is_base[at] = seeded[at];
+            }
         }
     }
     if std::env::var_os("TRACEAR").is_some() {

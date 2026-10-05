@@ -49,8 +49,8 @@ pub fn machine<'a>(
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
-        Box::new(coalesce::Coalescer::new(None, segments)),
         Box::new(crate::backend::addressroles::AddressRoles { segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
+        Box::new(coalesce::Coalescer::new(None, segments)),
         Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)?),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
@@ -96,7 +96,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
     let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
     if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
-        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body), !matches!(stage.as_str(), "AddressRoles" | "RegAlloc"));
+        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body), !matches!(stage.as_str(), "AddressRoles" | "Coalescer" | "coalesce" | "RegAlloc"));
         let peak = found.iter().filter_map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { Some(live - registers) } else { None }).max().unwrap_or(0);
         let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
         llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());
