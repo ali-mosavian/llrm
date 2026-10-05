@@ -1,4 +1,4 @@
-reason = "Shrink-wrapped callee-saved registers: SI/DI saved where first needed, not at every entry"
+reason = "Shrink-wrapped callee-saved registers on merged main"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -15,7 +15,7 @@ memory_operands = 106009
 code_bytes = 416
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.491
+kernel_ms = 4.4908
 
 [c.O2]
 instructions = 230365
@@ -31,7 +31,7 @@ memory_operands = 40926
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.1128
+kernel_ms = 3.1122
 
 [nib.O2]
 instructions = 237970
@@ -47,7 +47,7 @@ memory_operands = 80023
 code_bytes = 311
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.69
+kernel_ms = 3.6894
 
 [ow.O2]
 instructions = 217955

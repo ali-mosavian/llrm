@@ -1,4 +1,4 @@
-reason = "Shrink-wrapped callee-saved registers: SI/DI saved where first needed, not at every entry"
+reason = "Shrink-wrapped callee-saved registers on merged main"
 blessed = "2026-10-05"
 
 [bas.O2]
