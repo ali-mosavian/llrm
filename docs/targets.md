@@ -92,8 +92,8 @@ behind the calling-convention and address-form descriptions, not into patterns.
 ## Measured state
 
 - `llrm_x86_code16` is named on 65 lines outside its crate: 20 in production
-  code, 45 in tests. The MIR crates use it in tests only but depend on it as a
-  normal dependency.
+  code, 45 in tests. The MIR crates use it in tests only, and already take it as a
+  dev-dependency.
 - `llrm_mir::target::Machine` and `DataLayout` are the seam MIR passes read.
   Those passes name no register; what remains in them is address-space numbers
   and 16-bit literals. `Machine` itself carries code16 notions
@@ -314,7 +314,7 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | # | PR | Moves |
 |---|---|---|
 | 0 | this document and the reviews | none |
-| 1 | MIR crates take code16 as a dev-dependency | manifests |
+| 1 | withdrawn: the MIR crates already take code16 as a dev-dependency (manifests checked) | none |
 | 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged | no code16 or iced in the BC lifter's model crate |
 | 3 | `llrm-driver` and `trait Target`; `--target` flag, default code16; `Profile::target()` builds through it; `llrm-core` reads `GENERAL`, `PRESERVED`, `FRAME`, bases, indexes, bitness from it; metric baseline | production uses to ~0 in `llrm-core` |
 | 4 | generated code per target: `llrm-iselgen`, hooks resolved at generation, `CONSTRUCTORS` into the `.isel` header, generators run from the target's `build.rs` | `build.rs`, `matcher.rs`, `peephole.rs` |
