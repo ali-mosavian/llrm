@@ -89,10 +89,6 @@ pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Res
     let homed = _frame_homes(body, &apart);
     let copied = _through_copies(_stable_loads(body, &wide), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
     for (value, cell) in copied {
-        // A frame cell read in place is a fold the allocator takes only of a value it keeps (#441): its own home path.
-        if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
-            continue;
-        }
         frame_loads.entry(value).or_insert(cell);
     }
     let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
