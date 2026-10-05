@@ -53,7 +53,7 @@ pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>, exposed: &BTree
             || load.defines != [value]
             || users.get(&value).copied().unwrap_or(0) != 1
             || exposed.contains(&value)
-            || !_plain(load)
+            || !_plain_load(load)
         {
             continue;
         }
@@ -153,6 +153,11 @@ pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>, exposed: &BTree
         out[load_at] = Arc::new(anchored);
     }
     out
+}
+
+/// A load a compare may take as its memory operand: plain, or one made again where it is read (a stable cell).
+fn _plain_load(one: &Insn) -> bool {
+    _plain(&Insn { rematerialized: false, ..one.clone() })
 }
 
 fn _plain(one: &Insn) -> bool {
@@ -279,6 +284,26 @@ mod tests {
             vec![loaded],
         );
         [Arc::new(load), Arc::new(compare)]
+    }
+
+    /// queens c's `_place`: both arguments made again as loads, the second of them just before `cmp bx, ax`.
+    /// The compare did not take it as its operand because the load was made again where it is read.
+    #[test]
+    fn test_a_load_made_again_is_the_compares_memory_operand() {
+        let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 2);
+        let [load, compare] = widened(5, &cell, Vec::new());
+        let mut plain = (*load).clone();
+        plain.what = Some(Semantics { name: Some("mov".to_owned()), op: Operation::Move, ..plain.what.clone().unwrap() });
+        plain.rematerialized = true;
+        let compare = {
+            let mut one = (*compare).clone();
+            one.what = Some(Semantics { sources: vec![Loc::Held(Held { value: 5, width: 2 }), Loc::Held(Held { value: 6, width: 2 })], ..one.what.clone().unwrap() });
+            one.uses = vec![5, 6];
+            Arc::new(one)
+        };
+        let users: IndexMap<u32, i64> = [(5, 1), (6, 1)].into_iter().collect();
+        let result = selected(&[Arc::new(plain), compare], &users, &BTreeSet::new());
+        assert_eq!(result[1].what.as_ref().unwrap().sources, vec![Loc::Mem(cell), Loc::Held(Held { value: 6, width: 2 })]);
     }
 
     fn branch(name: &str) -> Arc<Insn> {
