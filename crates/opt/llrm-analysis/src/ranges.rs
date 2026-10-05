@@ -280,6 +280,19 @@ pub fn _operand(unit: &Unit, operand: Operand, known: &IndexMap<ValueId, Interva
     Some(singleton(&fact.n, width))
 }
 
+/// What the program states of `value` alone: a parameter's `range`, or the
+/// `!range` or `range` of the load or call that makes it.
+pub fn declared(unit: &Unit, value: ValueId) -> Option<Interval> {
+    match unit.function.value(value).def {
+        ValueDef::Argument(_) => declared_argument(unit, value),
+        ValueDef::Instruction(inst) => _computed(unit, inst, &IndexMap::default(), &IndexMap::default()).filter(|_| {
+            let op = unit.function.instruction(inst);
+            matches!(op.opcode, Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_))
+        }),
+        _ => None,
+    }
+}
+
 /// The interval a `range` attribute states, if it is one that does not wrap
 /// past the signed bounds: `[lower, upper)` at the type's width.
 fn stated(unit: &Unit, attribute: &Attribute) -> Option<Interval> {

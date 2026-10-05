@@ -14,6 +14,7 @@ pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
+pub mod difference;
 pub mod consts;
 pub mod effects;
 pub mod floatbounds;

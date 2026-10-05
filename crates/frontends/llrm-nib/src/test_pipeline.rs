@@ -61,3 +61,33 @@ fn test_the_stack_base_is_the_one_start_links() {
     let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("crates/frontends/llrm-nib/src/runtime/start.asm")).unwrap();
     assert!(start.contains(&format!(".stack {}", crate::compile::STACK_BASE)));
 }
+
+/// The listing's innermost loops, each as the lines from the label a later
+/// jump goes back to through that jump, any with no call in them.
+fn _innermost_loops(function: &str) -> Vec<Vec<&str>> {
+    let lines: Vec<&str> = function.lines().collect();
+    let mut found = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        let Some(target) = line.split_whitespace().last().filter(|_| line.trim_start().starts_with('j')) else { continue };
+        let Some(head) = lines[..at].iter().position(|one| one.trim_end() == format!("{target}:")) else { continue };
+        if lines[head..=at].iter().all(|one| !one.contains("call")) {
+            found.push(lines[head..=at].to_vec());
+        }
+    }
+    found
+}
+
+/// Nib's `a[hi]` check ahead of `for j in lo..hi` bounds every index in it:
+/// quicksort's partition tested `j` and `i` against the length on every
+/// trip (3 compare-and-branch pairs against C's none), 245,433 executed
+/// instructions against C's 163,105 (#453).
+#[test]
+fn test_a_partition_loop_has_no_bounds_check_in_it() {
+    let function = _nib("partition", "partition", "_partition");
+    let loops = _innermost_loops(&function);
+    assert!(!loops.is_empty(), "premise: the loop is found\n{function}");
+    for body in loops {
+        let checks: Vec<_> = body.iter().filter(|one| one.trim_start().starts_with("jae ") || one.trim_start().starts_with("jb ")).collect();
+        assert!(checks.is_empty(), "{checks:?} in {body:#?}");
+    }
+}

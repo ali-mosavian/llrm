@@ -271,3 +271,63 @@ fn test_an_exit_carrying_another_value_keeps_its_test() {
     let printed = folded(&zipped("").replace("%sb = phi i16 [ %s, %checkb ]", "%sb = phi i16 [ %i, %checkb ]"), LENGTHS);
     assert!(printed.contains("icmp ult i16 %i, %lb"), "{printed}");
 }
+
+/// Nib's `for j in lo..hi: a[j]` after `a[hi]` passed: `hi` below the
+/// length, `lo` below `hi` as signed numbers and maybe negative, a length
+/// the frontend stated at most 32768. Failing, 99 stands for the panic.
+const SLICE_LOOP: &str = "@cell = global i16 10
+
+define i16 @f(i16 %lo, i16 %hi) {
+entry:
+  %len = load i16, ptr @cell, !range !0
+  %order = icmp slt i16 %lo, %hi
+  br i1 %order, label %first, label %done
+first:
+  %fits = icmp ult i16 %hi, %len
+  br i1 %fits, label %pre, label %crash
+pre:
+  br label %head
+head:
+  %j = phi i16 [ %lo, %pre ], [ %next, %body ]
+  %s = phi i16 [ 0, %pre ], [ %t, %body ]
+  %more = icmp slt i16 %j, %hi
+  br i1 %more, label %check, label %done
+check:
+  %inside = icmp ult i16 %j, %len
+  br i1 %inside, label %body, label %crash
+body:
+  %t = add i16 %s, %j
+  %next = add nsw i16 %j, 1
+  br label %head
+done:
+  %r = phi i16 [ 0, %entry ], [ %s, %head ]
+  ret i16 %r
+crash:
+  ret i16 99
+}
+
+!0 = !{i16 0, i16 -32768}
+";
+
+/// quicksort's `j` loop tested `j <u len` on every trip: with the length at
+/// most 32768, `lo <u len` once settles it for each `j` from `lo` below
+/// `hi`, which entry proved below `len`. It cost 8 instructions a trip.
+#[test]
+fn test_a_slice_loop_checks_its_start_not_every_trip() {
+    let before = parsed(&format!("{DOS}{SLICE_LOOP}"));
+    assert!(llrm_mir::print::module(&before).contains("icmp ult i16 %j, %len"), "premise: the check is in the loop");
+    let printed = folded(SLICE_LOOP, &[&[0, 5], &[2, 9], &[-1, 4], &[3, 3], &[5, 2]]);
+    assert!(!printed.contains("icmp ult i16 %j, %len"), "{printed}");
+    // Taken before the loop: the loop's branch on it is a constant.
+    assert!(printed.contains("icmp ult i16 %lo, %len") && printed.contains("br i1 true, label %body"), "{printed}");
+}
+
+/// A store before the check keeps it in the loop: a crash taken before the
+/// loop would skip that store on the first trip. Its test is still made once.
+#[test]
+fn test_a_slice_loop_that_stores_before_its_check_keeps_the_branch_in_the_loop() {
+    let text = format!("@seen = global i16 0\n\n{}", SLICE_LOOP.replace("check:\n", "check:\n  store i16 %j, ptr @seen\n"));
+    let printed = folded(&text, &[&[0, 5], &[2, 9], &[-1, 4], &[3, 3], &[5, 2]]);
+    assert!(!printed.contains("icmp ult i16 %j, %len"), "{printed}");
+    assert!(printed.contains("br i1 %0, label %body"), "{printed}");
+}

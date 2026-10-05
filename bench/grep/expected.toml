@@ -1,41 +1,41 @@
-reason = "own frames are the default in every dialect: bas is the old basown, bas -O2 vs bc instructions -66.9% to -75.9%"
+reason = "own frames are the default in every dialect: bas is the old basown; the stack check is gated by -fsanitize=stack"
 blessed = "2026-10-05"
 
 [c.O2]
 code_bytes = 564
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3413.0043
+kernel_ms = 3413.0045
 
 [c.Os]
 code_bytes = 534
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3412.8731
+kernel_ms = 3412.8717
 
 [nib.O2]
-code_bytes = 1736
+code_bytes = 1733
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4512.1701
+kernel_ms = 4512.1713
 
 [nib.Os]
 code_bytes = 1628
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4511.1187
+kernel_ms = 4511.1184
 
 [bas.O2]
 code_bytes = 1011
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2015
+kernel_ms = 3887.202
 
 [bas.Os]
 code_bytes = 992
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2018
+kernel_ms = 3887.2022
 
 [ow.O2]
 code_bytes = 544
