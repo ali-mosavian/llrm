@@ -536,10 +536,10 @@ fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Functi
         let node = declared.node(MetadataNode { distinct: false, operands: Vec::new() });
         function.annotate(call, kind, node);
     }
+    function.erase(found.effect).expect("an effect has no result");
     if let Stored::Copy(copy) = &found.stored {
         function.erase(copy.load).expect("its only user is the store");
     }
-    function.erase(found.effect).expect("an effect has no result");
 
     // The exit's phis take each counter's exit value from the one trip.
     for phi in edges::phis(function, found.exit) {
@@ -642,8 +642,9 @@ fn _copied(unit: &Unit, one: InstId, other: InstId) -> Option<(InstId, Operand, 
 /// writes trail the reads: `d <= 0` going up, `d >= 0` going down. Any other
 /// overlap makes each trip read what an earlier one wrote: a smear, no copy.
 fn _overlap(unit: &Unit, load: InstId, store: InstId, from: &induction::Recurrence, to: &induction::Recurrence, proof: &CountedLoop, bytes: &BigInt, descending: bool) -> Option<How> {
-    if let (Some(read), Some(written)) = (MemRef::of(unit, load), MemRef::of(unit, store))
-        && !llrm_analysis::regions::overlapping(&read, &written, None, None, unit.program).unwrap_or(true)
+    let references = unit.annotated().ok();
+    if let Some((read, written)) = references.as_ref().and_then(|found| found.get(&load).zip(found.get(&store)))
+        && !llrm_analysis::regions::overlapping(read, written, None, None, unit.program).unwrap_or(true)
     {
         return Some(How::Apart);
     }
