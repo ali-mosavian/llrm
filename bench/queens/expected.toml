@@ -1,4 +1,4 @@
-reason = "Nib: unexported functions take the fields they read through a pointer (argument promotion); a dead frame-slot load is removed. sieve bas -Os +8 instructions: a register the allocator now spends"
+reason = "Nib: argument promotion, dead arguments gone, parameter ranges stamped to a fixed point (queens' bounds checks fold); dead frame-slot loads removed. Worse: lru nib -Os +1 instruction, sieve bas -Os +8: allocator shifts in unrelated copies"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 105996
 code_bytes = 437
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.4364
+kernel_ms = 4.4361
 
 [bas.Os]
 instructions = 336158
@@ -15,7 +15,7 @@ memory_operands = 106009
 code_bytes = 416
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.4913
+kernel_ms = 4.4907
 
 [c.O2]
 instructions = 230365
@@ -31,23 +31,23 @@ memory_operands = 40926
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.1128
+kernel_ms = 3.1124
 
 [nib.O2]
-instructions = 277796
-memory_operands = 76499
-code_bytes = 366
+instructions = 237970
+memory_operands = 55304
+code_bytes = 259
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.706
+kernel_ms = 3.1747
 
 [nib.Os]
-instructions = 277225
+instructions = 276673
 memory_operands = 80023
-code_bytes = 320
+code_bytes = 312
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.6985
+kernel_ms = 3.6905
 
 [ow.O2]
 instructions = 217955

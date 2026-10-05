@@ -22,10 +22,13 @@ pub mod floatfold;
 pub mod floatloop;
 pub mod argpromotion;
 pub mod calleepop;
+pub mod deadargs;
 #[cfg(test)]
 mod calleepop_tests;
 #[cfg(test)]
 mod argpromotion_tests;
+#[cfg(test)]
+mod deadargs_tests;
 pub mod globalopt;
 pub mod fold;
 pub mod splitcopy;

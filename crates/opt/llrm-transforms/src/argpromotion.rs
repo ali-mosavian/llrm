@@ -17,7 +17,9 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
 use llrm_mir::memory;
-use llrm_mir::module::{GlobalKind, InstId, MetadataId, Module, Operand};
+use llrm_mir::dominators::DominatorTree;
+use llrm_mir::loops::LoopInfo;
+use llrm_mir::module::{GlobalKind, InstId, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::{Type, TypeId};
@@ -172,13 +174,36 @@ fn planned(module: &Module, layout: &DataLayout, callees: &memory::Callees, id: 
     let (before, after) = (words(layout, module, function.value(value).ty), fields.iter().map(|one| words(layout, module, one.ty)).sum::<i64>());
     let extra = (after - before) * costs.argument;
     let loads = fields.len() as i64 * costs.load;
-    let recursive = !passed_on.is_empty();
-    let entering = calls.iter().filter(|&&(caller, inst)| !(caller == id && passed_on.contains(&inst))).count() as i64;
-    let each_self = calls.len() as i64 - entering;
-    let delta = entering * (loads + extra) + each_self * extra - loads;
-    // A recursive function loads once per call, and the first call is the only one that loads now.
-    let worth = if recursive && !size { extra <= loads } else { delta <= 0 };
+    // What each call comes to: the loads it makes (none where it passes its own on, or where a loop of
+    // the caller leaves them to be hoisted, which only clocks credit) and the words it pushes more.
+    let delta: i64 = calls
+        .iter()
+        .map(|&(caller, inst)| {
+            let passes_on = caller == id && passed_on.contains(&inst);
+            let own = if passes_on || (!size && hoistable(module, caller, inst, parameter)) { 0 } else { loads };
+            if size { own + extra } else { own + extra - loads }
+        })
+        .sum::<i64>()
+        - if size { loads } else { 0 };
+    // A recursive function is entered mostly by its own calls: each saves what it loaded, and the first
+    // call's loads are paid once.
+    let worth = if !size && !passed_on.is_empty() { extra <= loads } else { delta <= 0 };
     worth.then_some(Plan { parameter, fields, passed_on, steps })
+}
+
+/// Whether call `inst` of `caller` is in a loop its pointer argument at `parameter` does not change in.
+fn hoistable(module: &Module, caller: GlobalId, inst: InstId, parameter: usize) -> bool {
+    let Some(function) = module.global(caller).function() else { return false };
+    let Some(block) = function.parent(inst) else { return false };
+    let loops = LoopInfo::new(function, &DominatorTree::new(function));
+    let Some(held) = loops.loop_of(block) else { return false };
+    match function.instruction(inst).operands[parameter] {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(def) => function.parent(def).is_none_or(|at| !held.blocks.contains(&at)),
+            ValueDef::Argument(_) => true,
+        },
+        _ => true,
+    }
 }
 
 /// `plan` made: the function's parameter replaced, each call's argument too. The functions changed.

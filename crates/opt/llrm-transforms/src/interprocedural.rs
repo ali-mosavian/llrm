@@ -558,9 +558,21 @@ pub fn optimized<E: From<String>>(
     }
     // What its callers pass bounds each parameter of a body only they call: stated as a range, which
     // the body's own proofs then read.
-    for (at, id) in llrm_analysis::parameter_ranges::stamp(program, &unexported) {
-        edited(&mut modules[at], &[id]);
-        reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-range.")?;
+    for round in 0..4 {
+        let stamped = llrm_analysis::parameter_ranges::stamp(program, &unexported);
+        if stamped.is_empty() {
+            break;
+        }
+        for (at, id) in stamped {
+            edited(&mut modules[at], &[id]);
+            reoptimised(&mut program.modules[at], &mut modules[at], id, &format!("ipa-range{round}."))?;
+        }
+    }
+    // What the constants and ranges left unread is not pushed.
+    for at in 0..count {
+        for id in crate::deadargs::removed(&mut program.modules[at]) {
+            edited(&mut modules[at], &[id]);
+        }
     }
     // Propagation may have left a body doing less than it states.
     stamped_all(program, modules).map_err(E::from)?;

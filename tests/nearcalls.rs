@@ -67,3 +67,12 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
     // The descriptor's words were read through the pointer: its length at +0, its data pointer at +4.
     assert!(!body.contains("es:[bx+4]") && !body.contains("[bx+4]"), "{asm}");
 }
+
+/// Queens' `safe(q, row, col)` read `q[r]` for `r < row` under a bounds check on the slice's length,
+/// 12, which only reached it as a field of the descriptor. Promoted, the length is a constant the
+/// callers pass and the check folds against `row`'s range; the constant is then no argument at all.
+#[test]
+fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them() {
+    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions"]);
+    assert!(!asm.contains("N$EBND") && !asm.contains("pushw 12"), "{asm}");
+}
