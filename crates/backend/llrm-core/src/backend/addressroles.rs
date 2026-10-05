@@ -143,8 +143,9 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
     // Whether the first side is the base side.
     // A side can take a role only where every value of it may sit in that role's registers.
     let may = |values: &BTreeSet<u32>, choices: &BTreeSet<iced_x86::Register>| values.iter().all(|value| forced.get(value).is_none_or(|class| class.intersection(choices).next().is_some()));
-    // Where the price does not tell the two apart, the side with the lowest value number is the base side.
-    let mut first_is_base: Vec<bool> = sides.iter().map(|_| true).collect();
+    // Where the price does not tell the two apart, the base register goes to the side with fewer values, then to the one
+    // with the lowest value number.
+    let mut first_is_base: Vec<bool> = sides.iter().map(|(left, right)| left.len() <= right.len()).collect();
     // What one set of base values costs, in clocks or bytes at this level: a value BX does not survive a call with is
     // saved and restored at each such call, and two values live at once that only BX will hold cost a copy each way
     // where they meet.
@@ -227,6 +228,10 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
             }
             first_is_base[at] = !first_is_base[at];
             let tried = priced(&first_is_base);
+            if std::env::var_os("TRACEAR3").is_some() {
+                let (bases, indexes) = sets(&first_is_base);
+                eprintln!("AR3 {} comp {at} base-first {} priced {tried} (bases {:?} -> {} ; indexes {:?} -> {}) best {best}", body.name, first_is_base[at], bases, pressure(&bases, word_base, 1), indexes, pressure(&indexes, word_index, 2));
+            }
             // The price is of whole copies: a saving smaller than one pair of them at the entry's frequency is not told from none.
             if tried + 2.0 * prices.copy * frequency.block(body.entry) <= best {
                 best = tried;
