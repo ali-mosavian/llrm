@@ -43,7 +43,7 @@ pub fn machine<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(crate::backend::addressroles::AddressRoles { segments: segments.clone() }),
+        Box::new(crate::backend::addressroles::AddressRoles { segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
@@ -51,6 +51,7 @@ pub fn machine<'a>(
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None, segments)),
+        Box::new(crate::backend::addressroles::AddressRoles { segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
         Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)?),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),

@@ -90,6 +90,9 @@ impl Weights<'_> {
 #[derive(Clone, Copy, Debug)]
 pub struct Prices {
     pub load: f64,
+    /// A store to a slot, and a copy between registers.
+    pub store: f64,
+    pub copy: f64,
     /// A jump: a branch's price on the machine, as the bridge block's last instruction takes it.
     pub jump: f64,
     /// By block frequency (clocks); not where the price is code bytes, which a loop's trips do not multiply.
@@ -99,14 +102,14 @@ pub struct Prices {
 impl Prices {
     /// One clock a load and a jump, by block frequency: for a test that prices nothing in particular.
     pub fn clocks() -> Self {
-        Self { load: 1.0, jump: 1.0, by_frequency: true }
+        Self { load: 1.0, store: 1.0, copy: 1.0, jump: 1.0, by_frequency: true }
     }
 
     /// The level `profile` compiles for: its machine's byte costs at -Os, its clocks otherwise.
     pub fn of(profile: &crate::backend::cpu::Profile) -> Self {
         let machine = profile.target();
         let costs = if profile.size { machine.size_costs() } else { machine.costs() };
-        Self { load: costs.load as f64, jump: costs.branch as f64, by_frequency: !profile.size }
+        Self { load: costs.load as f64, store: costs.store as f64, copy: costs.r#move as f64, jump: costs.branch as f64, by_frequency: !profile.size }
     }
 }
 
