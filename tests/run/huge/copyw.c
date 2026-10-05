@@ -1,4 +1,4 @@
-/* 40000 words (80000 bytes) in __huge memory, past 64K: copied, scrolled up and scrolled down.
+/* 40000 words (80000 bytes) in __huge memory, past 64K: copied, scrolled up and scrolled down; the kernel returns the sum of the three weighted sums.
    A huge pointer carries into its selector, so no `rep movs` may stand for these loops. */
 extern void report(long value);
 
@@ -13,15 +13,21 @@ static long weigh(void)
     return t;
 }
 
-int main(void)
+long bench_copyw(void)
 {
+    long t;
     unsigned short i;
     for (i = 0; i < 40000u; ++i) a[i] = i * 3 + 1;
     for (i = 0; i < 40000u; ++i) b[i] = a[i];
-    report(weigh());
+    t = weigh();
     for (i = 0; i < 39000u; ++i) b[i] = b[i + 1000];
-    report(weigh());
+    t += weigh();
     for (i = 39000u; i-- > 0;) b[i + 1000] = b[i];
-    report(weigh());
+    return t + weigh();
+}
+
+int main(void)
+{
+    report(bench_copyw());
     return 0;
 }

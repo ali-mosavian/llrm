@@ -140,7 +140,10 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
     let corpus = root.join("tests/run/huge");
     let mut stems: Vec<String> = std::fs::read_dir(&corpus).unwrap().flatten().filter_map(|one| {
         let path = one.path();
-        (path.extension()? == "nib").then(|| path.file_stem().unwrap().to_string_lossy().into_owned())
+        // copyw and fillw are 16-bit words past 64K, which BASIC can only index as two columns (a subscript is at
+        // most 32767): their loops differ by construction. tests/run holds all three and compares their output.
+        let stem = path.file_stem()?.to_string_lossy().into_owned();
+        (path.extension()? == "nib" && !["copyw", "fillw"].contains(&stem.as_str())).then_some(stem)
     }).collect();
     stems.sort();
     assert!(stems.len() >= 5, "premise: the corpus is found: {stems:?}");
