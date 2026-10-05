@@ -143,21 +143,8 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
     // Whether the first side is the base side.
     // A side can take a role only where every value of it may sit in that role's registers.
     let may = |values: &BTreeSet<u32>, choices: &BTreeSet<iced_x86::Register>| values.iter().all(|value| forced.get(value).is_none_or(|class| class.intersection(choices).next().is_some()));
-    // Where the price does not tell the two apart, the spelling isel gave.
-    let mut first_is_base: Vec<bool> = sides
-        .iter()
-        .map(|(left, right)| {
-            let (mut as_written, mut reversed) = (0usize, 0usize);
-            for (base, index) in &pairs {
-                if left.contains(base) {
-                    as_written += 1;
-                } else if right.contains(base) && left.contains(index) {
-                    reversed += 1;
-                }
-            }
-            as_written >= reversed
-        })
-        .collect();
+    // Where the price does not tell the two apart, the side with the lowest value number is the base side.
+    let mut first_is_base: Vec<bool> = sides.iter().map(|_| true).collect();
     // What one set of base values costs, in clocks or bytes at this level: a value BX does not survive a call with is
     // saved and restored at each such call, and two values live at once that only BX will hold cost a copy each way
     // where they meet.
@@ -250,6 +237,13 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
         }
         if !turned {
             break;
+        }
+    }
+    if let Ok(force) = std::env::var("FORCEFLIP") {
+        for at in force.split(',').filter_map(|one| one.parse::<usize>().ok()) {
+            if at < first_is_base.len() {
+                first_is_base[at] = !seeded[at];
+            }
         }
     }
     if let Ok(only) = std::env::var("FLIPONLY") {
