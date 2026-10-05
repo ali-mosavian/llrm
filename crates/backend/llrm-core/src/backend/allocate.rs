@@ -1454,7 +1454,7 @@ impl RegAlloc {
         let segments = self.segments.clone();
         let data_free = !datagroup::names_data_segment(&body, &segments);
         if crate::support::debug::enabled("regclass") {
-            let skip: BTreeSet<u32> = self.pinned.keys().copied().collect();
+            let skip = crate::backend::ssaspill::untouchable(&body);
             let found = crate::backend::regclass::violations(&body, &segments, &skip);
             let crowded = found.iter().filter(|one| matches!(one.why, crate::backend::regclass::Why::Crowded { .. })).count();
             llrm_support::debug!("regclass", "{}: {} points do not fit entering RegAlloc ({} crowded, {} unmatched)", body.name, found.len(), crowded, found.len() - crowded);

@@ -275,13 +275,19 @@ pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>) -> 
         for (position, one) in block.insns.iter().enumerate().rev() {
             // Two states per instruction: after it (what is live, its results among them) and before it (what it reads
             // is live, its results not yet): a result takes the register of an operand that dies.
+            // The copies of one phi edge are one parallel copy: a point at its ends, not between its copies.
+            let grouped = |other: Option<&std::sync::Arc<crate::model::lir::Insn>>| one.group.is_some() && other.is_some_and(|other| other.group == one.group);
+            let (inside_after, inside_before) = (grouped(block.insns.get(position + 1)), grouped(position.checked_sub(1).and_then(|at| block.insns.get(at))));
             let after = live.clone();
             let mut before = live.clone();
             for value in &one.defines {
                 before.remove(value);
             }
             before.extend(one.uses.iter().copied().filter(|value| !skip.contains(value)));
-            for (state, acting_values) in [(&after, &one.defines), (&before, &one.uses)] {
+            for (state, acting_values, inside) in [(&after, &one.defines, inside_after), (&before, &one.uses, inside_before)] {
+                if inside {
+                    continue;
+                }
                 for (name, file) in files {
                     let members: Vec<u32> = state.iter().copied().filter(|value| in_file(*value, file, name == "general")).collect();
                     if members.len() > file.len() {

@@ -399,3 +399,20 @@ fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
     let spilled = phases[0].transform(body).expect("spills");
     assert_eq!(found(&spilled), Vec::new());
 }
+
+/// Twelve phi copies on one edge were scored once each, before and after: PhiElimination turned SsaSpill's 39 crowded
+/// points into 87 on PLASMABLOBS with no new pressure. A copy group is one parallel point.
+#[test]
+fn test_a_copy_group_is_one_point_not_one_per_copy() {
+    let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
+    let mut spilled = phases[0].transform(body).expect("spills");
+    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &ssaspill::untouchable(body)).len();
+    let separate = found(&spilled);
+    let first = crate::backend::regclass::violations(&spilled, &target::BUILT_IN, &ssaspill::untouchable(&spilled)).remove(0);
+    let block = spilled.blocks.iter_mut().find(|block| block.at == first.block).expect("its block");
+    for one in block.insns.iter_mut().skip(first.position.saturating_sub(3)).take(8) {
+        std::sync::Arc::make_mut(one).group = Some(1);
+    }
+    let grouped = found(&spilled);
+    assert!(grouped < separate, "{grouped} points with eight instructions in one group, {separate} apart");
+}
