@@ -3051,9 +3051,11 @@ impl Selector<'_, '_, '_> {
             Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. } => Loc::Reg(Reg { register: Register::SS, width: 2 }),
             _ => Loc::Reg(Reg { register: Register::DS, width: 2 }),
         };
-        let destination_segment = match to {
-            Pointer::Far { selector, .. } => Loc::Held(selector),
-            _ => self.near_selector(to, volatile, at, out),
+        // A near destination's selector is made just ahead of the first move, so that it is
+        // live across nothing else.
+        let mut destination_segment = match to {
+            Pointer::Far { selector, .. } => Some(Loc::Held(selector)),
+            _ => None,
         };
         // Each step: a string move (its cells moved, how many, none for one) or, downward, the
         // step from the last byte of the tail to the last dword.
@@ -3114,28 +3116,29 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             let (si_after, di_after) = (self.fresh_held(2), self.fresh_held(2));
-            let what = match count {
+            let counted = count.map(|count| match count {
+                Loc::Held(held) => held,
+                other => {
+                    let held = self.fresh_held(2);
+                    put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
+                    held
+                }
+            });
+            let destination_segment = destination_segment.get_or_insert_with(|| self.near_selector(to, volatile, at, out)).clone();
+            let what = match counted {
                 None => semantics(
                     Operation::Copy,
                     name,
                     vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after)],
-                    vec![Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment.clone()],
+                    vec![Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment],
                 ),
-                Some(count) => {
-                    let counted = match count {
-                        Loc::Held(held) => held,
-                        other => {
-                            let held = self.fresh_held(2);
-                            put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
-                            held
-                        }
-                    };
+                Some(counted) => {
                     let emptied = self.fresh_held(2);
                     semantics(
                         Operation::Copy,
                         name,
                         vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after), Loc::Held(emptied)],
-                        vec![Loc::Held(counted), Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment.clone()],
+                        vec![Loc::Held(counted), Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment],
                     )
                 }
             };
@@ -3277,9 +3280,10 @@ impl Selector<'_, '_, '_> {
                 through
             }
         };
-        let segment = match pointer {
-            Pointer::Far { selector, .. } => Loc::Held(selector),
-            _ => self.near_selector(pointer, volatile, at, out),
+        // A near selector is made just ahead of the first store, live across nothing else.
+        let mut segment = match pointer {
+            Pointer::Far { selector, .. } => Some(Loc::Held(selector)),
+            _ => None,
         };
         for (stored, count, width) in parts {
             let name = match width {
@@ -3288,24 +3292,25 @@ impl Selector<'_, '_, '_> {
                 _ => "stosd",
             };
             let stepped = self.fresh_held(2);
+            let count = count.map(|count| match count {
+                Loc::Held(held) => held,
+                other => {
+                    let held = self.fresh_held(2);
+                    put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
+                    held
+                }
+            });
+            let segment = segment.get_or_insert_with(|| self.near_selector(pointer, volatile, at, out)).clone();
             let what = match count {
                 // One store needs neither a count nor REP.
-                None => semantics(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped)], vec![Loc::Held(stored), Loc::Held(through), segment.clone()]),
+                None => semantics(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped)], vec![Loc::Held(stored), Loc::Held(through), segment]),
                 Some(count) => {
-                    let count = match count {
-                        Loc::Held(held) => held,
-                        other => {
-                            let held = self.fresh_held(2);
-                            put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
-                            held
-                        }
-                    };
                     let emptied = self.fresh_held(2);
                     semantics(
                         Operation::Fill,
                         name,
                         vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped), Loc::Held(emptied)],
-                        vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through), segment.clone()],
+                        vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through), segment],
                     )
                 }
             };

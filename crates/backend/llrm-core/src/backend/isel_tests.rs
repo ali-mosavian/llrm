@@ -3858,6 +3858,27 @@ define i16 @f(i16 %n) addrspace(1) {{
     assert_eq!(dynamic.iter().filter(|one| one.starts_with("rep movs")).count(), 2, "{dynamic:?}");
 }
 
+/// A near destination's selector was made ahead of the count's shift and mask, so
+/// it was live across them and took a general register: QCport's console.c grew
+/// a spill. It is made just before the first move.
+#[test]
+fn test_a_near_selector_is_made_after_the_count_is_prepared() {
+    let text = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f(i16 %n) addrspace(1) {
+  %a = alloca [70 x i8]
+  %b = alloca [70 x i8]
+  store i16 3, ptr %a
+  call void @llvm.memcpy.p0.p0.i16(ptr %b, ptr %a, i16 %n, i1 false)
+  %v = load i16, ptr %b
+  ret i16 %v
+}
+";
+    let lines = listing(text, "f");
+    let at = |found: &dyn Fn(&String) -> bool| lines.iter().position(found).unwrap_or_else(|| panic!("{lines:?}"));
+    let (counted, selected, moved) = (at(&|one| one.starts_with("and ")), at(&|one| one.ends_with(", ss")), at(&|one| one.starts_with("rep movs")));
+    assert!(counted < selected && selected < moved, "{lines:?}");
+}
+
 /// A far source is read through fs, loaded with its selector.
 #[test]
 fn test_a_long_memcpy_from_a_far_pointer_reads_through_fs() {
