@@ -26,7 +26,7 @@ use crate::analysis::loops::{self, Loop};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::{liveness, select, spiller};
-use crate::backend::peephole::{_lanes, Lanes};
+use crate::backend::peephole::{self, _lanes, Lanes};
 use crate::backend::target;
 use crate::support::hash::IndexMap;
 use crate::model::ir::{self, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -412,7 +412,10 @@ fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering:
     for at in &one.body {
         for insn in &body.blocks[index[at]].insns {
             let effect = liveness::effect(insn)?;
-            if effect.writes.is_disjoint(&lanes) {
+            // A `rep movs` steps si and di only if it runs: a conditional write, but one
+            // that makes the register unfit to hold its value from one trip to the next.
+            let may_write = peephole::_register_effects(insn, true, false).map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
+            if may_write.is_disjoint(&lanes) {
                 continue;
             }
             let what = insn.what.as_ref()?;
@@ -793,5 +796,46 @@ mod tests {
         assert_eq!(reloads(&out), 0, "the reload stays: the test does not reach the fold");
         let said = crate::backend::verify::verify(&out, false);
         assert!(said.is_empty(), "{said:?}");
+    }
+
+    /// `for (...) copy(a, b)` with `mov di, a` in the loop: `rep movsd` leaves di past the
+    /// cells it moved, so a hoisted `mov di, a` ran once and every later trip copied to
+    /// the wrong place (tests/run/c/es_across_copy printed 15054 for 186450).
+    #[test]
+    fn test_a_register_a_string_move_advances_is_not_loop_invariant() {
+        let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+        let copy = Semantics {
+            name: Some("movsd".to_owned()),
+            dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0)), reg(Register::SI), reg(Register::DI), reg(Register::CX)],
+            sources: vec![reg(Register::CX), reg(Register::SI), reg(Register::DI), reg(Register::DS), reg(Register::ES)],
+            ..Semantics::new(Operation::Copy)
+        };
+        let body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(
+                    0x10,
+                    vec![
+                        made(0x10, Operation::Move, "mov", vec![reg(Register::SI)], vec![word(8)]),
+                        made(0x11, Operation::Move, "mov", vec![reg(Register::DI)], vec![word(4)]),
+                        made(0x12, Operation::Move, "mov", vec![reg(Register::CX)], vec![word(50)]),
+                        made(0x12, Operation::Move, "mov", vec![reg(Register::BX)], vec![word(7)]),
+                        Arc::new(Insn::new(0x13, Some((0x13, 0x14)), Some(copy), vec![], vec![])),
+                        Arc::new(Insn::new(0x15, Some((0x15, 0x16)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
+                    ],
+                    vec![0x10, 0x20],
+                ),
+                block(0x20, vec![Arc::new(Insn { reads_complete: true, ..(*made(0x20, Operation::Return, "ret", vec![], vec![])).clone() })], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let out = super::hoisted(&body, &BTreeSet::new());
+        let in_loop = out.blocks.iter().find(|one| one.at == 0x10).expect("the loop");
+        let sets = |register: Register| in_loop.insns.iter().any(|one| matches!(one.what.as_ref().map(|what| what.dests.as_slice()), Some([Loc::Reg(reg)]) if reg.register == register));
+        assert!(!sets(Register::BX), "premise: an invariant constant leaves the loop");
+        assert!(sets(Register::DI) && sets(Register::SI), "the loop sets si and di");
     }
 }

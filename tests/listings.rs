@@ -166,3 +166,22 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
     assert!(differ.is_empty(), "{} of {} differ:\n{}", differ.len(), programs.len(), differ.join("\n"));
     assert!(carried.is_empty(), "an inner loop carries:\n{}", carried.join("\n"));
 }
+
+/// Scroll's loop saved ES, set it to DS and restored it around each of its
+/// four string ops (16 instructions a trip), and began each backward copy
+/// with `sub si, 3` after the `mov si, K` (#493, #494). In all three
+/// languages the loop holds only the string ops' own setup.
+#[test]
+fn test_scroll_loop_sets_no_segment_and_steps_no_start() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let languages = kernels(&root.join("bench/scroll"), "scroll", "BENCHSCROLL");
+    for (language, loops) in &languages {
+        let strings: Vec<_> = loops.iter().filter(|(one, _)| one.iter().any(|line| line.starts_with("rep "))).collect();
+        assert_eq!(strings.len(), 1, "premise: {language} has one loop of string ops: {loops:?}");
+        let body = &strings[0].0;
+        assert_eq!(body.iter().filter(|line| line.starts_with("rep ")).count(), 4, "premise: {language}: {body:?}");
+        let segment = body.iter().filter(|line| line.contains("es") && (line.starts_with("push") || line.starts_with("pop") || line.starts_with("mov es"))).count();
+        let stepped = body.iter().filter(|line| line.starts_with("sub ") && line.ends_with(", 3")).count();
+        assert_eq!((segment, stepped), (0, 0), "{language}:\n{}", body.join("\n"));
+    }
+}

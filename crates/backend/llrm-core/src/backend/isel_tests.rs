@@ -746,6 +746,57 @@ define i16 @f(ptr %a, ptr %b, i16 %n) addrspace(1) {{
     assert!(refused.is_err(), "a memmove of no proved direction was selected");
 }
 
+/// A backward move of constant addresses and a length of whole dwords stepped
+/// `mov si, K` then `sub si, 3` (and the same for di): the start is one
+/// `mov si, K-3`.
+#[test]
+fn test_a_backward_memmove_of_constant_addresses_starts_at_its_last_dword() {
+    let text = "@a = internal global [3840 x i8] zeroinitializer
+@b = internal global [3840 x i8] zeroinitializer
+declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f() addrspace(1) {
+  call void @llvm.memmove.p0.p0.i16(ptr @a, ptr @b, i16 3840, i1 false), !llrm.backward !0
+  ret i16 0
+}
+!0 = !{}
+";
+    let lines = listing(text, "f");
+    assert!(lines.contains(&"std".to_owned()), "premise: a backward string move: {lines:?}");
+    let starts = |register: &str| lines.iter().filter(|one| one.starts_with(&format!("mov {register}, offset")) && one.ends_with("+3836")).count();
+    assert_eq!((starts("si"), starts("di")), (1, 1), "{lines:?}");
+    assert!(!lines.iter().any(|one| one.starts_with("sub si") || one.starts_with("sub di")), "{lines:?}");
+}
+
+/// Every near string op saved ES, set it to DS and restored it
+/// (`push es / push ds / pop es / ... / pop es`), 16 instructions a trip of
+/// scroll's loop. DGROUP is a constant any op reads: set once ahead of the
+/// loop, and nothing saved, for the C convention keeps no ES.
+#[test]
+fn test_near_string_ops_set_es_once_and_save_none() {
+    let text = "@a = internal global [3840 x i8] zeroinitializer
+@b = internal global [3840 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+define i16 @f(i16 %n) addrspace(1) {
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %0 ], [ %next, %loop ]
+  call void @llvm.memcpy.p0.p0.i16(ptr @a, ptr @b, i16 3840, i1 false)
+  call void @llvm.memcpy.p0.p0.i16(ptr @b, ptr @a, i16 3840, i1 false)
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %n
+  br i1 %done, label %out, label %loop
+out:
+  ret i16 0
+}
+";
+    let lines = listing(text, "f");
+    let (head, body) = lines.split_at(lines.iter().position(|one| one.starts_with("L0_") && one != "L0_0:").expect("the loop label"));
+    assert_eq!(body.iter().filter(|one| one.starts_with("rep movsd")).count(), 2, "premise: two string moves in the loop: {lines:?}");
+    assert!(!lines.iter().any(|one| one == "push es" || one == "push ds"), "ES saved: {lines:?}");
+    assert!(!body.iter().any(|one| one.contains(" es") || one.contains("DGROUP")), "ES set inside the loop: {lines:?}");
+    assert!(head.iter().any(|one| one == "pop es" || one.starts_with("mov es,")), "ES set ahead of the loop: {lines:?}");
+}
+
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest
 /// first; beyond that `rep stosd` through es:di, the tail by `stosw` and
 /// `stosb`, as the old route's `_fill`.
@@ -787,14 +838,11 @@ define i16 @f() addrspace(1) {{
             "push di",
             "L0_0:",
             "lea di, [bp-70]",
-            "push es",
-            "push ss",
-            "pop es",
+            "mov es, ss",
             "mov eax, 16843009",
             "mov cx, 17",
             "rep stosd",
             "stosw",
-            "pop es",
             "mov ax, word ptr [bp-70]",
             "pop di",
             "leave",
