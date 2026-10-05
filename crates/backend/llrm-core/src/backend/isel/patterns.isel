@@ -288,7 +288,7 @@ pattern extend for sext=movsx zext=movzx
   emit $x86 r <- s
 end
 
-pattern pointer_cast for ptrtoint=mov inttoptr=mov
+pattern pointer_cast for ptrtoint=mov inttoptr=mov addrspacecast=mov
   match $mir(x)
   when same_width(x)
   let r = result

@@ -205,7 +205,7 @@ fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Uns
         // An i1 is a byte holding 0 or 1, as LLVM stores one.
         Type::Int(1) => Ok(1),
         Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
-        Type::Pointer(space @ (0 | 2)) => Ok(layout.pointer(*space).bits / 8),
+        Type::Pointer(space @ (0 | 2 | llrm_mir::types::NEAR_STACK)) => Ok(layout.pointer(*space).bits / 8),
         // An x87 register holds any float, extended.
         Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
@@ -313,7 +313,8 @@ fn refuse<T>(what: impl Into<String>) -> Result<T, Unselected> {
 /// `scale` multiplies it in the 67h form, `[ebx+esi*4]`.
 enum Pointer {
     Frame { disp: i64, index: Option<Held>, scale: i64 },
-    Based { base: Held, index: Option<Held>, scale: i64, offset: i64 },
+    /// `segment` is the register a stack pointer is read through; none, DS.
+    Based { base: Held, index: Option<Held>, scale: i64, offset: i64, segment: Option<Register> },
     /// A near global's symbol, a displacement from it, and a register
     /// holding a variable one, times `scale`: a scaled one is a dword index.
     /// A second register `plus`, added unscaled, makes the `[bx+si+symbol]` form.
@@ -1521,11 +1522,13 @@ impl Selector<'_, '_, '_> {
         if let Some(&(base, selector)) = self.fars.get(&value) {
             return Ok(Pointer::Far { selector, base, index: None, scale: 1, offset: 0 });
         }
-        if !matches!(self.types().get(ty), Type::Pointer(0)) {
-            return refuse(format!("an access through a {}", self.types().display(ty)));
-        }
+        let segment = match self.types().get(ty) {
+            Type::Pointer(llrm_mir::types::NEAR_DATA) => None,
+            Type::Pointer(llrm_mir::types::NEAR_STACK) => Some(Register::SS),
+            _ => return refuse(format!("an access through a {}", self.types().display(ty))),
+        };
         let width = self.width(ty)?;
-        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, scale: 1, offset: 0 })
+        Ok(Pointer::Based { base: Held { value: self.value(value), width }, index: None, scale: 1, offset: 0, segment })
     }
 
     /// Where `value` points, if it is an address an access folds: an
@@ -1745,7 +1748,7 @@ impl Selector<'_, '_, '_> {
         }
         // A constant address plus the sum: the sum is the base.
         if let Pointer::Absolute { offset: start } = pointer {
-            let indexed = Pointer::Based { base: sum, index: None, scale: 1, offset: start + offset as i64 };
+            let indexed = Pointer::Based { base: sum, index: None, scale: 1, offset: start + offset as i64, segment: None };
             if self.only_addressed(address) {
                 self.pointers.insert(address, indexed);
             } else {
@@ -1760,7 +1763,7 @@ impl Selector<'_, '_, '_> {
         let chained = self.chained(address);
         if self.only_addressed(address) || chained {
             let indexed = match pointer.moved(offset as i64) {
-                Pointer::Based { base, index: None, offset, .. } => Some(Pointer::Based { base, index: Some(sum), scale: 1, offset }),
+                Pointer::Based { base, index: None, offset, segment, .. } => Some(Pointer::Based { base, index: Some(sum), scale: 1, offset, segment }),
                 _ if chained && !self.only_addressed(address) => None,
                 Pointer::Frame { disp, index: None, .. } => Some(Pointer::Frame { disp, index: Some(sum), scale: 1 }),
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset }),
@@ -1777,11 +1780,11 @@ impl Selector<'_, '_, '_> {
         // A base and an index already, and a third register: the two are added,
         // and the displacement stays the access's, `[sum+index+disp]`.
         if self.only_addressed(address)
-            && let Pointer::Based { base, index: Some(index), scale: 1, offset: start } = pointer
+            && let Pointer::Based { base, index: Some(index), scale: 1, offset: start, segment } = pointer
         {
             let both = Held { value: self.fresh(), width };
             out.push(insn(at, semantics(Operation::Binary, "add", vec![Loc::Held(both)], vec![Loc::Held(base), Loc::Held(index)])));
-            self.pointers.insert(address, Pointer::Based { base: both, index: Some(sum), scale: 1, offset: start + offset as i64 });
+            self.pointers.insert(address, Pointer::Based { base: both, index: Some(sum), scale: 1, offset: start + offset as i64, segment });
             return Ok(());
         }
         let start = match pointer {
@@ -2021,8 +2024,8 @@ impl Selector<'_, '_, '_> {
         let wide = Held { value: self.value(index), width: 4 };
         let (scaled, base) = match pointer {
             Pointer::Frame { disp, index: None, .. } => (Pointer::Frame { disp, index: Some(wide), scale }, None),
-            Pointer::Based { base, index: None, offset, .. } if root.is_some_and(|root| self.promotable(root)) => {
-                (Pointer::Based { base: Held { width: 4, ..base }, index: Some(wide), scale, offset }, Some(base))
+            Pointer::Based { base, index: None, offset, segment, .. } if root.is_some_and(|root| self.promotable(root)) => {
+                (Pointer::Based { base: Held { width: 4, ..base }, index: Some(wide), scale, offset, segment }, Some(base))
             }
             Pointer::Far { selector, base: Some(base), index: None, offset, .. } if root.is_some_and(|root| self.promotable(root)) => {
                 (Pointer::Far { selector, base: Some(Held { width: 4, ..base }), index: Some(wide), scale, offset }, Some(base))
@@ -2241,11 +2244,20 @@ impl Selector<'_, '_, '_> {
             Pointer::Global { space, index, offset, base, scale: 1, plus } => Mem { disp_width: 2, base, index: plus, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Global { space, index, offset, base, scale, .. } => Mem { disp_width: 2, index: base, scale, ..Mem::new(Some(Addr { index, ..Addr::new(space, offset) }), width) },
             Pointer::Absolute { offset } => Mem { disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset & 0xFFFF)), width) },
-            Pointer::Based { base, index: None, offset, .. } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
-            // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
-            Pointer::Based { base, index: Some(index), scale, offset } => {
-                Mem { base: Some(base), index: Some(index), scale, offset, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Literal, offset)), width) }
+            Pointer::Based { base, index: None, offset, segment: None, .. } => Mem { base: Some(base), offset, ..Mem::new(None, width) },
+            // Through the stack segment: the override is the address's.
+            Pointer::Based { base, index: None, offset, segment: Some(segment), .. } => {
+                Mem { base: Some(base), offset, disp_width: 2, ..Mem::new(Some(Addr { segment, ..Addr::new(Space::Literal, offset) }), width) }
             }
+            // An indexed cell's displacement is a literal, as a based cell's is in addressforms.
+            Pointer::Based { base, index: Some(index), scale, offset, segment } => Mem {
+                base: Some(base),
+                index: Some(index),
+                scale,
+                offset,
+                disp_width: 2,
+                ..Mem::new(Some(Addr { segment: segment.unwrap_or(Addr::new(Space::Literal, offset).segment), ..Addr::new(Space::Literal, offset) }), width)
+            },
             Pointer::Far { selector, base, index, scale, offset } => Mem {
                 offset,
                 scale,
@@ -2361,6 +2373,12 @@ impl Selector<'_, '_, '_> {
                     out.push(mov(selector, segment));
                     (Some(offset), selector)
                 }
+                (CastOp::AddrSpaceCast, Type::Pointer(llrm_mir::types::NEAR_STACK)) => {
+                    let offset = self.held(operand, from, at, out)?;
+                    let selector = self.fresh_held(2);
+                    out.push(mov(selector, Loc::Reg(Reg { register: Register::SS, width: 2 })));
+                    (Some(offset), selector)
+                }
                 (CastOp::AddrSpaceCast, Type::Pointer(2)) => (None, self.held(operand, from, at, out)?),
                 // Far and huge pointers are the same two words.
                 (CastOp::AddrSpaceCast, Type::Pointer(space)) if self.layout.is_pair(space) => {
@@ -2396,7 +2414,7 @@ impl Selector<'_, '_, '_> {
         let (offset, selector) = self.far(operand, at, out)?;
         match (op, self.types().get(to).clone()) {
             (CastOp::AddrSpaceCast, Type::Pointer(2)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector))),
-            (CastOp::AddrSpaceCast, Type::Pointer(0)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset))),
+            (CastOp::AddrSpaceCast, Type::Pointer(0 | llrm_mir::types::NEAR_STACK)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset))),
             (CastOp::PtrToInt, Type::Int(32)) => {
                 let joined = Held { value: self.value(result), width: 4 };
                 self.joined(joined, offset, selector, at, out);
@@ -3029,14 +3047,14 @@ impl Selector<'_, '_, '_> {
         // The source is read through its own segment, the destination's is es.
         let source_segment = match from {
             Pointer::Far { selector, .. } => Loc::Held(selector),
-            Pointer::Frame { .. } => Loc::Reg(Reg { register: Register::SS, width: 2 }),
+            Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. } => Loc::Reg(Reg { register: Register::SS, width: 2 }),
             _ => Loc::Reg(Reg { register: Register::DS, width: 2 }),
         };
         let es = Loc::Reg(Reg { register: Register::ES, width: 2 });
         let destination_segment = match to {
             Pointer::Far { selector, .. } => Loc::Held(selector),
             _ => {
-                let source = if matches!(to, Pointer::Frame { .. }) { Register::SS } else { Register::DS };
+                let source = if matches!(to, Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. }) { Register::SS } else { Register::DS };
                 put(semantics(Operation::Push, "push", vec![], vec![es.clone()]), out);
                 put(semantics(Operation::Push, "push", vec![], vec![Loc::Reg(Reg { register: source, width: 2 })]), out);
                 put(semantics(Operation::Pop, "pop", vec![es.clone()], vec![]), out);
@@ -3268,7 +3286,7 @@ impl Selector<'_, '_, '_> {
             Pointer::Far { selector, .. } => Loc::Held(selector),
             _ => {
                 let segment = Loc::Reg(Reg { register: Register::ES, width: 2 });
-                let source = if matches!(pointer, Pointer::Frame { .. }) { Register::SS } else { Register::DS };
+                let source = if matches!(pointer, Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. }) { Register::SS } else { Register::DS };
                 put(semantics(Operation::Push, "push", vec![], vec![segment.clone()]), out);
                 put(semantics(Operation::Push, "push", vec![], vec![Loc::Reg(Reg { register: source, width: 2 })]), out);
                 put(semantics(Operation::Pop, "pop", vec![segment.clone()], vec![]), out);
@@ -3546,7 +3564,7 @@ impl Pointer {
     fn moved(self, by: i64) -> Pointer {
         match self {
             Pointer::Frame { disp, index, scale } => Pointer::Frame { disp: disp + by, index, scale },
-            Pointer::Based { base, index, scale, offset } => Pointer::Based { base, index, scale, offset: offset + by },
+            Pointer::Based { base, index, scale, offset, segment } => Pointer::Based { base, index, scale, offset: offset + by, segment },
             Pointer::Global { space, index, offset, base, scale, plus } => Pointer::Global { space, index, offset: offset + by, base, scale, plus },
             Pointer::Far { selector, base, index, scale, offset } => Pointer::Far { selector, base, index, scale, offset: offset + by },
             Pointer::Absolute { offset } => Pointer::Absolute { offset: offset + by },

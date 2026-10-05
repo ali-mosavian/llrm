@@ -1,4 +1,4 @@
-reason = "Shrink-wrapped callee-saved registers on merged main"
+reason = "Nib: a far pointer to a local array is a stack pointer read through ss: (near-stack narrowing). queens -O2 +2,441 instructions: place's [bx+si] saves SI on every non-leaf call; -3,701 memory operands, -15 bytes; odds #487"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -15,7 +15,7 @@ memory_operands = 106009
 code_bytes = 416
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.4908
+kernel_ms = 4.4912
 
 [c.O2]
 instructions = 230365
@@ -31,23 +31,23 @@ memory_operands = 40926
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.1122
+kernel_ms = 3.1128
 
 [nib.O2]
-instructions = 237970
-memory_operands = 55304
-code_bytes = 259
+instructions = 240411
+memory_operands = 51603
+code_bytes = 243
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.1747
+kernel_ms = 3.2073
 
 [nib.Os]
-instructions = 276593
-memory_operands = 80023
-code_bytes = 311
+instructions = 272457
+memory_operands = 75888
+code_bytes = 304
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.6894
+kernel_ms = 3.6349
 
 [ow.O2]
 instructions = 217955
