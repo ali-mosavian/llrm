@@ -59,6 +59,7 @@ pub mod rmw;
 pub mod exactaddress;
 pub mod executed;
 pub mod schedule;
+pub mod shrinkwrap;
 pub mod select;
 pub mod spiller;
 pub mod ssarepair;

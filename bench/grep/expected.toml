@@ -1,41 +1,41 @@
-reason = "grep.nib -O2 1692 -> 1687: a 16-byte copy loop is rep movs"
+reason = "Shrink-wrapped callee-saved registers: SI/DI saved where first needed, not at every entry"
 blessed = "2026-10-05"
 
 [bas.O2]
 code_bytes = 1008
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2005
+kernel_ms = 3887.2016
 
 [bas.Os]
 code_bytes = 989
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2011
+kernel_ms = 3887.2013
 
 [c.O2]
 code_bytes = 564
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3413.0037
+kernel_ms = 3413.004
 
 [c.Os]
 code_bytes = 534
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3412.8726
+kernel_ms = 3412.8724
 
 [nib.O2]
-code_bytes = 1687
+code_bytes = 1686
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4511.4995
+kernel_ms = 4511.4887
 
 [nib.Os]
-code_bytes = 1587
+code_bytes = 1586
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4510.4552
+kernel_ms = 4510.4549
 
 [ow.O2]
 code_bytes = 544
