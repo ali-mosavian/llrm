@@ -421,20 +421,19 @@ fn _pays(unit: &Unit, callees: &Callees, chain: &[BlockId], header: BlockId, pro
 /// movs` in dwords, `.1` where it runs down, beats one a few loads and stores.
 fn _cheaper(each: i64, known: Option<i64>, most: Option<i64>, costs: &OperationCosts, size: bool, moved: Option<(i64, bool)>) -> bool {
     let trips = if size { 1 } else { known.unwrap_or_else(|| most.unwrap_or(i64::MAX).min(profit::UNKNOWN_TRIPS)) };
+    // Isel expands a few cells, whatever the target is tuned for, to stores, and a few bytes of a copy to loads and stores.
     let Some((bytes, backward)) = moved else {
         let string = costs.fill + trips * costs.fill_cell;
         let fill = match known {
-            Some(count) if count <= 16 => string.min(count * costs.store),
+            Some(count) if count <= 16 => count * costs.store,
             _ => string,
         };
         return trips * each > fill;
     };
-    let length = trips * bytes;
-    let string = costs.copy + (length + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 };
-    // Few bytes are loads and stores through registers, as isel expands a memcpy.
-    let pairs = length / 4 + i64::from((length % 4).count_ones());
-    let copy = match known {
-        Some(_) if !size && pairs <= 8 => string.min(pairs * (costs.load + costs.store)),
+    let string = costs.copy + (trips * bytes + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 };
+    let pairs = known.map(|count| count * bytes).map(|length| length / 4 + i64::from((length % 4).count_ones()));
+    let copy = match pairs {
+        Some(pairs) if pairs <= 8 => pairs * (costs.load + costs.store),
         _ => string,
     };
     trips * each > copy

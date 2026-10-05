@@ -103,18 +103,6 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
             };
             return Some(costs.fill + cells * costs.fill_cell);
         }
-        Opcode::Call(_) | Opcode::Invoke(_) if callee(context, function, one).and_then(|id| callees.get(&id)).is_some_and(|summary| summary.copy) => {
-            // `rep movsd` of the bytes in dwords, and a backward move's `std` and `cld`.
-            let bytes = match instruction.operands[2] {
-                Operand::Constant(id) => match context.get(id).kind {
-                    ConstantKind::Int(count) => i64::try_from(count).expect("a byte count"),
-                    _ => 4 * UNKNOWN_TRIPS,
-                },
-                _ => 4 * UNKNOWN_TRIPS,
-            };
-            let backward = instruction.metadata.iter().any(|(kind, _)| kind == llrm_mir::intrinsics::BACKWARD);
-            return Some(costs.copy + (bytes + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 });
-        }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,
         Opcode::Ret | Opcode::Resume | Opcode::Unreachable => costs.return_,
         Opcode::Br => costs.branch,

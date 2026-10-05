@@ -436,4 +436,8 @@ fn a_copy_is_priced_against_its_loop() {
     let forward = super::_cheaper(1, Some(40), None, &speed, false, Some((2, false)));
     let backward = super::_cheaper(1, Some(40), None, &speed, false, Some((2, true)));
     assert!(!(backward && !forward), "running down is dearer, never cheaper");
+    // Seven known words under -Os: isel makes four loads and four stores of them, as large as
+    // they are, so the loop of ~20 bytes stays. Priced as `rep movs` it grew lru.nib by 39 bytes.
+    let size = llrm_x86_code16::Dos::default().size_costs();
+    assert!(!super::_cheaper(20, Some(7), None, &size, true, Some((2, false))));
 }
