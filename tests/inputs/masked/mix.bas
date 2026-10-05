@@ -1,0 +1,10 @@
+DEFINT A-Z
+DECLARE FUNCTION Mix& (n AS INTEGER)
+PRINT Mix&(30000)
+FUNCTION Mix& (n AS INTEGER)
+    DIM t AS LONG
+    FOR i = 1 TO n
+        t = t + ASC(CHR$(i AND 255)) + LEN(CHR$(i AND 127))
+    NEXT
+    Mix& = t
+END FUNCTION

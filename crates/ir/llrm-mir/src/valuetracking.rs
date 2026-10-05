@@ -63,6 +63,53 @@ fn _sign_bits(context: &Context, function: &Function, operand: Operand, depth: u
     }
 }
 
+/// The bits of an integer proven zero, one bit per position: the zero half
+/// of LLVM's `computeKnownBits`. A value wider than 128 bits proves none.
+pub fn known_zero(context: &Context, function: &Function, operand: Operand) -> u128 {
+    _known_zero(context, function, operand, 0)
+}
+
+fn _known_zero(context: &Context, function: &Function, operand: Operand, depth: u32) -> u128 {
+    let Some(width) = function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty)).filter(|&width| width <= 128) else { return 0 };
+    let all = if width == 128 { u128::MAX } else { (1_u128 << width) - 1 };
+    let constant = |operand: Operand| match operand {
+        Operand::Constant(id) => match context.get(id).kind {
+            ConstantKind::Int(bits) => Some(bits & all),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(bits) = constant(operand) {
+        return !bits & all;
+    }
+    let Operand::Value(value) = operand else { return 0 };
+    let ValueDef::Instruction(inst) = function.value(value).def else { return 0 };
+    if depth == DEPTH {
+        return 0;
+    }
+    let instruction = function.instruction(inst);
+    let operands = &instruction.operands;
+    let of = |operand: Operand| _known_zero(context, function, operand, depth + 1);
+    let from = |operand: Operand| function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty)).unwrap_or(width);
+    let amount = |operand: Operand| constant(operand).filter(|&count| count < u128::from(width)).map(|count| count as u32);
+    match instruction.opcode {
+        Opcode::Binary(BinaryOp::And) => of(operands[0]) | of(operands[1]),
+        Opcode::Binary(BinaryOp::Or | BinaryOp::Xor) => of(operands[0]) & of(operands[1]),
+        Opcode::Cast(CastOp::ZExt) => of(operands[0]) | (all & !((1_u128 << from(operands[0])) - 1)),
+        Opcode::Cast(CastOp::Trunc) => of(operands[0]) & all,
+        Opcode::Binary(BinaryOp::LShr) => match amount(operands[1]) {
+            Some(count) => ((of(operands[0]) >> count) | (all & !(all >> count))) & all,
+            None => 0,
+        },
+        Opcode::Binary(BinaryOp::Shl) => match amount(operands[1]) {
+            Some(count) => ((of(operands[0]) << count) | ((1_u128 << count) - 1)) & all,
+            None => 0,
+        },
+        Opcode::Select => of(operands[1]) & of(operands[2]),
+        _ => 0,
+    }
+}
+
 /// The object `pointer` points into, through every GEP and address space
 /// cast, and how far into it when every step is constant: LLVM's
 /// `getUnderlyingObject` and `GetPointerBaseWithConstantOffset` in one.

@@ -1635,7 +1635,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
         "blocks.nib",
         "fn mix(a: u16, b: u8) -> u16:\n    let mut high: u8 = 0\n    unsafe:\n        \
          asm(cx=a, dx=a, al=b, ah=7, out=(bx=let sum, ch=high), clobbers=[flags]):\n            \
-         mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high)\n\n\
+         mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high) + (a ^ 77) * 3 + (a >> 1) * 5 + (a << 3)\n\n\
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n",
     );
@@ -1717,7 +1717,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = "fn mix(a: u16, b: u8) -> u16:\n    let mut high: u8 = 0\n    unsafe:\n        \
          asm(cx=a, dx=a, al=b, ah=7, out=(bx=let sum, ch=high), clobbers=[flags]):\n            \
-         mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high)\n\n\
+         mov bx, cx\n            add bx, dx\n            add bl, al\n        return sum + a + u16(high) + (a ^ 77) * 3 + (a >> 1) * 5 + (a << 3)\n\n\
          fn five() -> u16:\n    return 5\n\n\
          fn main() -> i16:\n    return i16(mix(3, 4) + mix(five(), 9))\n";
     assert!(source.contains("asm("), "the shape that was refused");

@@ -90,6 +90,8 @@ fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTre
         || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
+        || _nonnegative_sext(context, function, inst)
+        || _masked_extension(context, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
         || _duplicate_phi(function, inst)
@@ -358,6 +360,45 @@ fn _offset_scaled(context: &mut Context, function: &mut Function, inst: InstId) 
     true
 }
 
+/// `sext x` where `x`'s sign bit is known zero is `zext x`, as InstCombine's
+/// `visitSExt`: `zext` has the cheaper selection and folds with masks.
+fn _nonnegative_sext(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::SExt) {
+        return false;
+    }
+    let source = instruction.operands[0];
+    let Some(width) = function.operand_type(context, source).and_then(|ty| context.types.int_bits(ty)).filter(|&width| width <= 128) else { return false };
+    if llrm_mir::valuetracking::known_zero(context, function, source) >> (width - 1) & 1 == 0 {
+        return false;
+    }
+    _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![source]);
+    true
+}
+
+/// `zext(and x, 2^k-1)` of a byte or word mask, the mask read by nothing
+/// else, is `zext(trunc x)`: x86 reads the low part of a register for free,
+/// where the `and` copies the register and masks it.
+fn _masked_extension(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::ZExt) || !_single_use(function, instruction.operands[0]) {
+        return false;
+    }
+    let Some(made) = _definition(function, instruction.operands[0]) else { return false };
+    let Some((BinaryOp::And, left, right, wide)) = _binary(context, function, made) else { return false };
+    let Some((value, mask)) = _value_and_constant(context, BinaryOp::And, left, right) else { return false };
+    let low = mask.trailing_ones();
+    if !matches!(low, 8 | 16) || low >= wide || mask != (1_u128 << low) - 1 {
+        return false;
+    }
+    let narrow = context.types.int(low);
+    let cut = function.create_instruction(Opcode::Cast(CastOp::Trunc), narrow, vec![value], Flags::default(), None);
+    function.insert(cut, Position::Before(inst)).expect("a placed instruction");
+    let cut = Operand::Value(function.instruction(cut).result.expect("a value"));
+    _replace(function, inst, Opcode::Cast(CastOp::ZExt), vec![cut]);
+    true
+}
+
 /// Two integer casts that are one, or none: `trunc(ext x)` is `x`, a
 /// narrower `trunc x` or a narrower `ext x`; `trunc(trunc x)` is one
 /// `trunc`; an extension of a like extension, or `sext` of a `zext`, whose
@@ -375,6 +416,19 @@ fn _cast_pair(context: &mut Context, function: &mut Function, inst: InstId) -> b
     let bits = |operand: Operand| function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty));
     let result = Operand::Value(function.instruction(inst).result.expect("a value"));
     let (Some(from), Some(to)) = (bits(source), bits(result)) else { return false };
+    // `zext(trunc x)` where the bits `trunc` drops are known zero reads `x`.
+    if (inner, outer) == (CastOp::Trunc, CastOp::ZExt) && from <= 128 {
+        let kept = bits(middle).unwrap_or(from);
+        let dropped = (u128::MAX >> (128 - from)) & !(u128::MAX >> (128 - kept));
+        if llrm_mir::valuetracking::known_zero(context, function, source) & dropped == dropped {
+            if to == from {
+                _forward(function, inst, source);
+            } else {
+                _replace(function, inst, Opcode::Cast(if to > from { CastOp::ZExt } else { CastOp::Trunc }), vec![source]);
+            }
+            return true;
+        }
+    }
     let op = match (inner, outer) {
         (CastOp::ZExt | CastOp::SExt, CastOp::Trunc) if to == from => {
             _forward(function, inst, source);
