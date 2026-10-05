@@ -285,6 +285,26 @@ define i8 @f() {{
     assert_eq!(result(&text("%at = getelementptr i8, ptr %to, i16 1\n  %v = load i8, ptr %at")), Ok(Val::Poison));
 }
 
+/// A pattern fill stores its cell little-endian, once per count: a dword
+/// read back as two words is its halves.
+#[test]
+fn a_pattern_fill_stores_its_cell_little_endian() {
+    let text = |read: &str| {
+        format!(
+            "declare void @llvm.experimental.memset.pattern.p0.i32.i16(ptr, i32, i16, i1)
+define i16 @f() {{
+  %to = alloca [3 x i32]
+  call void @llvm.experimental.memset.pattern.p0.i32.i16(ptr %to, i32 305419896, i16 3, i1 false)
+  {read}
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(result(&text("%v = load i16, ptr %to")), int(0x5678, 16));
+    assert_eq!(result(&text("%at = getelementptr i16, ptr %to, i16 5\n  %v = load i16, ptr %at")), int(0x1234, 16));
+}
+
 /// Runs `@g` of `text` checked on `arguments`.
 fn range_run(text: &str, arguments: Vec<Val>) -> Result<Val, Trap> {
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n@cell = global i16 5\n{text}")).unwrap_or_else(|error| panic!("{error}"));

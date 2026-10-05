@@ -45,12 +45,17 @@ use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedA
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 
 use crate::counting::{self, Seeds};
+use crate::profit::{self, OperationCosts};
 use crate::edges;
 use crate::lcssa::{arms, from_arms, operations};
 
-pub struct Fill;
+/// `size`: priced in code bytes, as under `-Os`.
+pub struct Fill {
+    pub size: bool,
+}
 
 impl FunctionPass for Fill {
     fn name(&self) -> &'static str {
@@ -58,7 +63,7 @@ impl FunctionPass for Fill {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        if filled(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if filled(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared, self.size) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -214,11 +219,12 @@ fn _adjacent(unit: &Unit, open: Vec<_Cell>) -> Vec<(Vec<_Cell>, u32, u32)> {
 }
 
 /// `function` with every such loop's body made one fill; whether any was.
-pub fn filled(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, declared: &mut Declared) -> bool {
+pub fn filled(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, declared: &mut Declared, size: bool) -> bool {
+    let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let mut changed = false;
     'again: loop {
         for loop_ in cfg::Shape::of(function).loops {
-            let found = _fill(&Unit::within(context, layout, function, outer), callees, &loop_);
+            let found = _fill(&Unit::within(context, layout, function, outer), callees, &loop_, &costs, size);
             if let Some(found) = found {
                 _filled(context, declared, function, &found);
                 changed = true;
@@ -252,10 +258,12 @@ struct _Found {
 enum Byte {
     Operand(Operand),
     Number(u128),
+    /// A cell of this many bytes, which no one byte repeats: `memset.pattern`.
+    Pattern(Operand, u32),
 }
 
 /// The fill `loop_` is, if it is one.
-fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop) -> Option<_Found> {
+fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, size: bool) -> Option<_Found> {
     let function = unit.function;
     let header = cfg::block(loop_.header);
     let successors = function.successors(header);
@@ -294,8 +302,16 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop) -> Option<_Found> {
     let walk = induction::recurrences(unit, loop_, &counters);
     let formula = walk.values.get(&address).filter(|one| one.pointer.is_some())?;
     let width = formula.width();
+    // A huge pointer carries into its selector: `rep stos` through es:di wraps at 64K.
+    if unit.layout.carries(unit.space(pointer)?) {
+        return None;
+    }
     let stride = formula.step.known()?;
     if stride != bytes || proof.width() != width || unit.layout.pointer(unit.space(pointer)?).index_bits != width {
+        return None;
+    }
+    // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its setup.
+    if matches!(byte, Byte::Pattern(..)) && !_pays(unit, callees, &chain, header, &proof, costs, size) {
         return None;
     }
     // Trips of a byte never wrap the index; wider cells need a promise.
@@ -330,6 +346,36 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop) -> Option<_Found> {
     Some(_Found { proof, header, first: chain[0], latch, exit, effect, pointer, byte, bytes, left, memset })
 }
 
+/// Whether the one fill is cheaper than the loop for its trips, the proven
+/// count or the profit model's estimate: `rep stos` pays its setup and each
+/// cell, and a count of few cells is stores. Under `size` it is the code bytes
+/// of the loop against the fill's.
+fn _pays(unit: &Unit, callees: &Callees, chain: &[BlockId], header: BlockId, proof: &CountedLoop, costs: &OperationCosts, size: bool) -> bool {
+    let function = unit.function;
+    let each: i64 = std::iter::once(&header)
+        .chain(chain)
+        .flat_map(|&block| operations(function, block))
+        // In bytes the loop's counter work is the step and its branch: the phi is a register, the address an operand, the test the step's flags.
+        .filter(|&inst| !size || !matches!(function.instruction(inst).opcode, Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)))
+        .map(|inst| profit::operation(unit.context, unit.layout, function, callees, inst, costs).unwrap_or(costs.add))
+        .sum();
+    let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
+    let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
+    _cheaper(each, known, most, costs, size)
+}
+
+/// Whether a fill beats a loop of `each` per trip, over `known` trips or, where
+/// there are none, up to `most` of them.
+fn _cheaper(each: i64, known: Option<i64>, most: Option<i64>, costs: &OperationCosts, size: bool) -> bool {
+    let trips = if size { 1 } else { known.unwrap_or_else(|| most.unwrap_or(i64::MAX).min(profit::UNKNOWN_TRIPS)) };
+    let string = costs.fill + trips * costs.fill_cell;
+    let fill = match known {
+        Some(count) if count <= 16 => string.min(count * costs.store),
+        _ => string,
+    };
+    trips * each > fill
+}
+
 /// `llvm.memset` for pointers of `space` and lengths `width` bits wide,
 /// declared where the module has none.
 fn _memset(context: &mut Context, declared: &mut Declared, space: u32, width: u32) -> (GlobalId, TypeId) {
@@ -339,12 +385,23 @@ fn _memset(context: &mut Context, declared: &mut Declared, space: u32, width: u3
     (declared.declare(&format!("llvm.memset.p{space}.i{width}"), ty), ty)
 }
 
+/// `llvm.experimental.memset.pattern` of cells of type `cell` for pointers of
+/// `space` and counts `width` bits wide, declared where the module has none.
+fn _pattern(context: &mut Context, declared: &mut Declared, space: u32, cell: TypeId, width: u32) -> (GlobalId, TypeId) {
+    let bits = context.types.int_bits(cell).expect("an integer cell");
+    let types = &mut context.types;
+    let (void, pointer, count, flag) = (types.void(), types.ptr(space), types.int(width), types.int(1));
+    let ty = types.intern(Type::Function { returns: void, parameters: vec![pointer, cell, count, flag], variadic: false });
+    (declared.declare(&format!("llvm.experimental.memset.pattern.p{space}.i{bits}.i{width}"), ty), ty)
+}
+
 /// The loop made one trip that fills.
 fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Function, found: &_Found) {
     let width = found.proof.width();
     let mut seeds = Seeds { context, function, at: found.effect, width };
     let trips = induction::trips(&found.proof, &mut |kind, args| seeds.computed(kind, args)).expect("a pre-tested proof");
-    let count = if found.bytes == BigInt::from(1) { trips.clone() } else { seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(found.bytes.clone(), width)]) };
+    let cells = matches!(found.byte, Byte::Pattern(..));
+    let count = if found.bytes == BigInt::from(1) || cells { trips.clone() } else { seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(found.bytes.clone(), width)]) };
     let finals = found
         .left
         .iter()
@@ -355,13 +412,20 @@ fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Functi
         .collect::<IndexMap<_, _>>();
     let count = seeds.operand(&count);
     let finals = finals.into_iter().map(|(value, sum)| (value, seeds.operand(&sum))).collect::<IndexMap<_, _>>();
-    let (callee, function_type) = _memset(seeds.context, declared, found.memset.0, found.memset.1);
+    let (callee, function_type) = match found.byte {
+        Byte::Pattern(value, _) => {
+            let cell = seeds.function.operand_type(seeds.context, value).expect("a typed cell");
+            _pattern(seeds.context, declared, found.memset.0, cell, found.memset.1)
+        }
+        _ => _memset(seeds.context, declared, found.memset.0, found.memset.1),
+    };
     let ty = seeds.context.types.ptr(0);
     let callee = Operand::Constant(seeds.context.constant(Constant { ty, kind: ConstantKind::Global(callee) }));
     let off = counting::constant(seeds.context, &BigInt::from(0), 1);
     let byte = match found.byte {
         Byte::Operand(byte) => byte,
         Byte::Number(byte) => counting::constant(seeds.context, &BigInt::from(byte), 8),
+        Byte::Pattern(value, _) => value,
     };
     let void = seeds.context.types.void();
     let info = CallInfo { function_type, calling_convention: 0, return_attrs: Vec::new(), argument_attrs: vec![Vec::new(); 4], attrs: Vec::new(), tail: Default::default() };
@@ -435,7 +499,11 @@ fn _stored(unit: &Unit, callees: &Callees, effect: InstId, still: &induction::In
     if width == 8 {
         return Some((pointer, Byte::Operand(value), bytes));
     }
-    Some((pointer, Byte::Number(_repeated(unit, value, width)?), bytes))
+    if let Some(byte) = _repeated(unit, value, width) {
+        return Some((pointer, Byte::Number(byte), bytes));
+    }
+    // LLVM's memset_pattern16: the cell is a word or dword; the stored value need not be a constant.
+    matches!(width, 16 | 32).then_some((pointer, Byte::Pattern(value, width / 8), bytes))
 }
 
 /// The header phi `inst` steps, if it is one's step: a constant added, the

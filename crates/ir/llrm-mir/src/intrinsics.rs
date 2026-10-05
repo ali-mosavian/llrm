@@ -24,6 +24,9 @@ pub enum Intrinsic {
     /// nearest, ties to even.
     LRint,
     MemSet,
+    /// `llvm.experimental.memset.pattern`: its first argument's cells, as many
+    /// as the third says and as wide as the second, each become the second.
+    MemSetPattern,
     /// `llvm.memcpy`: as many bytes from its second argument to its first as
     /// its third says, byte for byte. A byte the source never wrote stays
     /// only that byte undefined; the two do not overlap.
@@ -219,7 +222,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 33] = [
+const TABLE: [Spec; 34] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -265,6 +268,15 @@ const TABLE: [Spec; 33] = [
         overloads: &[Kind::Pointer, Kind::Int],
         returns: Slot::Void,
         parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Int(8), &[]), (Slot::Any(1), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "write")],
+    },
+    Spec {
+        name: "llvm.experimental.memset.pattern",
+        intrinsic: Intrinsic::MemSetPattern,
+        overloads: &[Kind::Pointer, Kind::Int, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &[]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
         attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "write")],
     },
