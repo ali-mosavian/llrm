@@ -555,3 +555,48 @@ b3:
     let out = checked(text, &inputs);
     assert_eq!(out.matches("phi").count(), 1, "{out}");
 }
+
+/// `zext i32 (trunc i8 (and i16 x, 255))` kept the `and`, then the `trunc`,
+/// then extended: `and dx,0FFh; movzx edx,dl`. The `trunc` drops bits the
+/// mask cleared, so the `zext` reads the mask; that mask is a byte read.
+#[test]
+fn test_a_mask_then_trunc_then_zext_reads_the_low_part_once() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %t = trunc i16 %m to i8\n  %r = zext i8 %t to i32\n  ret i32 %r\n}\n";
+    let (before, _) = simplified(text);
+    assert!(printed(&before).contains("and i16 %x, 255") && printed(&before).contains("trunc i16"), "premise: the mask and the trunc are there");
+    let after = checked(text, &singles(&edges(16)));
+    assert_eq!(after, "define i32 @f(i16 %x) {\nb0:\n  %0 = trunc i16 %x to i8\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n}\n");
+}
+
+/// A `sext` of a masked value, whose sign bit the mask cleared, is a
+/// `zext`: `movsx edx,dx` after the mask in the QB loop.
+#[test]
+fn test_a_sign_extension_of_a_masked_value_is_a_zero_extension() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %r = sext i16 %m to i32\n  ret i32 %r\n}\n";
+    assert!(!checked(text, &singles(&edges(16))).contains("sext"));
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 32768\n  %r = sext i16 %m to i32\n  ret i32 %r\n}\n");
+}
+
+/// The mask stays where it is read twice, or keeps more than a byte or word.
+#[test]
+fn test_a_mask_that_is_not_a_low_part_or_is_shared_stays() {
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 511\n  %r = zext i16 %m to i32\n  ret i32 %r\n}\n");
+    unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %z = zext i16 %m to i32\n  %w = zext i16 %m to i32\n  %r = add i32 %z, %w\n  ret i32 %r\n}\n");
+}
+
+/// A mask of a width the layout does not compute natively stays: the byte
+/// narrowing was hard-coded, whatever the target's `n`.
+#[test]
+fn test_a_mask_narrows_only_to_a_native_width() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %r = zext i16 %m to i32\n  ret i32 %r\n}\n";
+    let run = |layout: &str| {
+        let mut module = parsed(text);
+        module.datalayout = Some(layout.to_owned());
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(super::Algebraic);
+        passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        printed(&module)
+    };
+    assert!(run("n8:16:32").contains("trunc i16 %x to i8"));
+    assert!(!run("n16:32").contains("trunc"));
+}
