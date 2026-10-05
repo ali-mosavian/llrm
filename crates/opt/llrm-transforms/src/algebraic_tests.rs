@@ -583,3 +583,20 @@ fn test_a_mask_that_is_not_a_low_part_or_is_shared_stays() {
     unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 511\n  %r = zext i16 %m to i32\n  ret i32 %r\n}\n");
     unchanged("define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %z = zext i16 %m to i32\n  %w = zext i16 %m to i32\n  %r = add i32 %z, %w\n  ret i32 %r\n}\n");
 }
+
+/// A mask of a width the layout does not compute natively stays: the byte
+/// narrowing was hard-coded, whatever the target's `n`.
+#[test]
+fn test_a_mask_narrows_only_to_a_native_width() {
+    let text = "define i32 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %r = zext i16 %m to i32\n  ret i32 %r\n}\n";
+    let run = |layout: &str| {
+        let mut module = parsed(text);
+        module.datalayout = Some(layout.to_owned());
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(super::Algebraic);
+        passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        printed(&module)
+    };
+    assert!(run("n8:16:32").contains("trunc i16 %x to i8"));
+    assert!(!run("n16:32").contains("trunc"));
+}

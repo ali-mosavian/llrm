@@ -72,7 +72,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
-                round |= _rewritten(context, function, &recurrences, inst);
+                round |= _rewritten(context, layout, function, &recurrences, inst);
             }
         }
         round |= _reassociated_recurrences(function);
@@ -85,13 +85,13 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
 }
 
 /// The first rule that rewrites `inst`.
-fn _rewritten(context: &mut Context, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
+fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Function, recurrences: &BTreeSet<ValueId>, inst: InstId) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
         || _nonnegative_sext(context, function, inst)
-        || _masked_extension(context, function, inst)
+        || _masked_extension(context, layout, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
         || _duplicate_phi(function, inst)
@@ -376,10 +376,10 @@ fn _nonnegative_sext(context: &mut Context, function: &mut Function, inst: InstI
     true
 }
 
-/// `zext(and x, 2^k-1)` of a byte or word mask, the mask read by nothing
-/// else, is `zext(trunc x)`: x86 reads the low part of a register for free,
-/// where the `and` copies the register and masks it.
-fn _masked_extension(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+/// `zext(and x, 2^k-1)`, the mask read by nothing else and `k` a native
+/// integer width, is `zext(trunc x)`: a native narrow value is a register's
+/// low part, where the `and` copies the register and masks it.
+fn _masked_extension(context: &mut Context, layout: &DataLayout, function: &mut Function, inst: InstId) -> bool {
     let instruction = function.instruction(inst);
     if instruction.opcode != Opcode::Cast(CastOp::ZExt) || !_single_use(function, instruction.operands[0]) {
         return false;
@@ -388,7 +388,7 @@ fn _masked_extension(context: &mut Context, function: &mut Function, inst: InstI
     let Some((BinaryOp::And, left, right, wide)) = _binary(context, function, made) else { return false };
     let Some((value, mask)) = _value_and_constant(context, BinaryOp::And, left, right) else { return false };
     let low = mask.trailing_ones();
-    if !matches!(low, 8 | 16) || low >= wide || mask != (1_u128 << low) - 1 {
+    if !layout.legal_integer(low) || low >= wide || mask != (1_u128 << low) - 1 {
         return false;
     }
     let narrow = context.types.int(low);
