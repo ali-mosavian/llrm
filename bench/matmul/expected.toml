@@ -1,18 +1,18 @@
-reason = "Nib: argument promotion, dead arguments gone, parameter ranges stamped to a fixed point (queens' bounds checks fold); dead frame-slot loads removed. Worse: lru nib -Os +1 instruction, sieve bas -Os +8: allocator shifts in unrelated copies"
+reason = "Nib: an unexported procedure only called directly is entered by a near call (call/ret, 4-byte frame offset), as C's static"
 blessed = "2026-10-05"
 
 [bas.O2]
-instructions = 3589
-memory_operands = 2136
-code_bytes = 2794
+instructions = 3590
+memory_operands = 2137
+code_bytes = 2797
 data_bytes = 15
 bss_bytes = 0
 kernel_ms = 0.063
 
 [bas.Os]
-instructions = 9198
-memory_operands = 5042
-code_bytes = 477
+instructions = 9199
+memory_operands = 5043
+code_bytes = 480
 data_bytes = 15
 bss_bytes = 0
 kernel_ms = 0.138
@@ -36,7 +36,7 @@ kernel_ms = 0.0797
 [nib.O2]
 instructions = 2465
 memory_operands = 1344
-code_bytes = 2291
+code_bytes = 2295
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0351
@@ -44,7 +44,7 @@ kernel_ms = 0.0351
 [nib.Os]
 instructions = 6414
 memory_operands = 2073
-code_bytes = 285
+code_bytes = 289
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0893
