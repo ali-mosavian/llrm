@@ -888,6 +888,11 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
                 writes.extend(_lanes(*register));
             }
         }
+        // `rep` counts its register down to where it stops, which Iced calls a
+        // conditional write: a hoisted `mov cx, n` was run once, not per trip.
+        if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
+            writes.extend(_lanes(Register::ECX));
+        }
     }
     Some((reads, writes))
 }

@@ -1500,6 +1500,7 @@ static PROGRAM: _Record = _Record {
             entries: _default(args, "entries", Vec::new())?,
             preserved: _default(args, "preserved", Vec::new())?,
             constant_segment: _default(args, "constant_segment", None)?,
+            stack_check: None,
         })
     },
 };

@@ -189,7 +189,12 @@ fn is_fill_of(module: &Module, layout: Option<&DataLayout>, function: &Function,
     let (Opcode::Call(_), Some(layout)) = (&instruction.opcode, layout) else { return false };
     let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return false };
     let ConstantKind::Global(callee) = module.context.get(callee).kind else { return false };
-    let memset = module.global(callee).name.as_deref().and_then(Intrinsic::named) == Some(Intrinsic::MemSet);
+    let kind = module.global(callee).name.as_deref().and_then(Intrinsic::named);
+    let memset = matches!(kind, Some(Intrinsic::MemSet | Intrinsic::MemSetPattern));
+    let cell = match (kind, instruction.operands.get(1).and_then(|&value| function.operand_type(&module.context, value))) {
+        (Some(Intrinsic::MemSetPattern), Some(ty)) => u128::from(layout.alloc_size(&module.context.types, ty)),
+        _ => 1,
+    };
     let length = match instruction.operands.get(2) {
         Some(&Operand::Constant(id)) => match module.context.get(id).kind {
             ConstantKind::Int(bits) => bits,
@@ -197,5 +202,5 @@ fn is_fill_of(module: &Module, layout: Option<&DataLayout>, function: &Function,
         },
         _ => return false,
     };
-    memset && at.index == 0 && length >= u128::from(layout.alloc_size(&module.context.types, ty))
+    memset && at.index == 0 && length * cell >= u128::from(layout.alloc_size(&module.context.types, ty))
 }

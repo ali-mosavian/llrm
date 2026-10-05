@@ -52,7 +52,32 @@ pub struct Emitted {
 }
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
-    program.modules.iter().map(|one| emit_module(one, program, &program.promises)).collect()
+    program
+        .modules
+        .iter()
+        .map(|one| {
+            let mut emitted = emit_module(one, program, &program.promises);
+            if program.stack_check.is_some() {
+                check_stack(&mut emitted.module);
+            }
+            emitted
+        })
+        .collect()
+}
+
+/// Every function the module defines checks the stack on entry, but one that runs on a stack of its
+/// own making: an interrupt handler's, a naked one's.
+fn check_stack(module: &mut Module) {
+    for global in &mut module.globals {
+        if global.linkage == Linkage::AvailableExternally {
+            continue;
+        }
+        let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
+        let naked = function.attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == "naked"));
+        if !function.is_declaration() && !naked && function.calling_convention != llrm_mir::opcode::X86_INTR {
+            function.attrs.push(Fact::StackCheck.carrier());
+        }
+    }
 }
 
 /// The runtime `emitted` links against, as `promises` states it: the

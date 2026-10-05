@@ -17,8 +17,13 @@ extrn FBSS_LAST:byte
 
 .code
 .data
+stack_bottom label byte
         db 16384 dup (?)
 stack_top label byte
+; The lowest SP a checked function may reach (-fsanitize=stack): Open Watcom's `_STACKLOW`, here the
+; stack's bottom plus 256 for the handler's frames and an interrupt.
+public _STACKLOW
+_STACKLOW dw 0
 .data?
 BSS_FIRST label byte
 .stack 256
@@ -38,6 +43,9 @@ start:
     mov ss, ax
     mov sp, offset stack_top
     sti
+    mov ax, offset DGROUP:stack_bottom + 256
+    mov _STACKLOW, ax
+    mov ax, @data
 ifndef NOZERO                      ; the tests build one that does not, to see dirty memory
     mov es, ax
     mov di, offset DGROUP:BSS_FIRST

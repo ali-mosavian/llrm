@@ -18,10 +18,20 @@ fn fill(text: &str, inputs: &[&[i128]]) -> (String, bool) {
     let callees = llrm_mir::memory::callees(&module);
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = filled(context, &layout, &callees, function, &outer, &mut declared);
+    let changed = filled(context, &layout, &callees, function, &outer, &mut declared, false);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     (after, changed)
+}
+
+/// `text` under the pass manager, which declares what fill calls: its
+/// printed form, run as before.
+fn managed_fill(text: &str, inputs: &[&[i128]]) -> String {
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut module = before.clone();
+    let after = managed(&mut module, Fill { size: false });
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+    after
 }
 
 fn kept(text: &str, inputs: &[&[i128]]) {
@@ -108,11 +118,24 @@ fn a_loop_with_a_volatile_store_is_kept() {
     kept(&looped("i8", "%n", body, "%e"), TRIPS);
 }
 
-/// `rep stosw` of a word whose bytes differ is isel's, no memset.
+/// A word whose bytes differ stayed a loop, `rep stosw` being isel's alone:
+/// each of its trips cost a store. It is one pattern fill of the cells.
 #[test]
-fn a_word_of_two_bytes_is_kept() {
+fn a_word_of_two_bytes_is_one_pattern_fill() {
     let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
-    kept(&looped("i16", "10", body, "0"), &[&[0, 0], &[0, 9]]);
+    let text = looped("i16", "10", body, "0");
+    assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
+    let after = managed_fill(&text, &[&[0, 0], &[0, 9], &[0, 10]]);
+    assert!(after.contains("call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 4660, i16 10, i1 false)"), "{after}");
+}
+
+/// A loop-invariant word that is no constant is a pattern too, counted in
+/// cells: a count of `%n` is not doubled.
+#[test]
+fn an_invariant_word_is_one_pattern_fill() {
+    let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 %q, ptr %p\n";
+    let after = managed_fill(&looped("i16", "%n", body, "%e"), &[&[0, 7], &[1, 7], &[40, 4660], &[-5, 3]]);
+    assert!(after.contains("call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 %q, i16 %1, i1 false)"), "{after}");
 }
 
 #[test]
@@ -128,7 +151,7 @@ fn an_undeclared_memset_is_declared() {
     let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
     let before = parsed(&format!("{DOS}{}", looped("i8", "%n", body, "%e").replace(MEMSET, "")));
     let mut module = before.clone();
-    let text = managed(&mut module, Fill);
+    let text = managed(&mut module, Fill { size: false });
     assert!(text.contains("declare void @llvm.memset.p0.i16(ptr") && text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 65"), "{text}");
     assert_eq!(results(&module, TRIPS), results(&before, TRIPS));
 }
@@ -253,4 +276,48 @@ fn stores_that_are_not_one_fill_are_kept() {
     unchanged("  store i16 0, ptr %a\n  store i16 257, ptr %p2\n");
     unchanged("  store i16 0, ptr %a\n  %x = load i8, ptr %p2\n  store i16 0, ptr %p2\n");
     unchanged("  store i16 0, ptr %a\n  store i16 0, ptr %p2\n  store i8 9, ptr %p2\n");
+}
+
+/// A pattern fill set against a loop under the DOS target's own costs: a
+/// loop that costs less a trip than `rep stos` costs once stays a loop, on
+/// the 486's clocks and under -Os' bytes; one that costs more is filled.
+#[test]
+fn a_fill_is_priced_against_its_loop() {
+    use llrm_mir::target::Machine;
+    let dos = llrm_x86_code16::Dos::default();
+    let (speed, size) = (dos.costs(), dos.size_costs());
+    assert!(!super::_cheaper(10, None, Some(1), &speed, false), "premise: a short unknown loop does not pay its setup");
+    assert!(super::_cheaper(10, Some(1000), None, &speed, false));
+    assert!(!super::_cheaper(1, None, None, &size, true));
+    assert!(super::_cheaper(size.fill + 1, None, None, &size, true));
+}
+
+/// A fill through a huge pointer reached isel as a count of 32 bits it
+/// refused, failing a Nib build; `rep stos` would wrap at 64K besides. It
+/// stays a loop, whose pointer carries.
+#[test]
+fn a_fill_through_a_huge_pointer_is_kept() {
+    let text = "@big = addrspace(3) global [40000 x i16] zeroinitializer
+
+define i16 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = getelementptr inbounds [40000 x i16], ptr addrspace(3) @big, i32 0, i32 %i
+  store i16 4660, ptr addrspace(3) %p
+  %next = add i32 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}
+";
+    assert!(text.contains("store i16 4660"), "premise: a loop of word stores");
+    kept(text, &[&[0], &[1], &[300]]);
 }

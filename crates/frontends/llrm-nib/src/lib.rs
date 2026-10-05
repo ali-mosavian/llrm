@@ -43,6 +43,8 @@ pub struct Frontend {
     pub unchecked_bounds: bool,
     /// `-g`: source lines and debug information.
     pub debug: bool,
+    /// Each function compares SP with the runtime's limit on entry: `-fsanitize=stack`.
+    pub checked_stack: bool,
 }
 
 pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {

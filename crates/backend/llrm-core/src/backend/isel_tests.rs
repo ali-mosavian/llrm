@@ -8,7 +8,7 @@ use crate::backend::masm;
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16\"\n";
 
 fn qb() -> HirAbi {
-    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default() }
+    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default(), stack_check: None }
 }
 
 fn parsed(text: &str) -> llrm_mir::Module {
@@ -29,7 +29,7 @@ fn assembled(text: &str) -> String {
 fn borland() -> HirAbi {
     use crate::abi::runtime::{EVERY, Reg};
     let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
-    HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect() }
+    HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(), stack_check: None }
 }
 
 /// The module's text as `cpu` prices it, for BASIC's runtime.
@@ -687,6 +687,30 @@ define i16 @f() addrspace(1) {
     assert!(moves.iter().any(|one| one.contains("dword ptr")), "{moves:?}");
     assert!(moves.iter().any(|one| one.contains("byte ptr")), "{moves:?}");
     assert!(!listing(text, "f").iter().any(|one| one.starts_with("rep")), "{moves:?}");
+}
+
+/// A pattern fill of a word or dword is `rep stosw` or `rep stosd` of its
+/// cells; two cells are stores. Its count in cells is never doubled.
+#[test]
+fn test_a_pattern_fill_is_stores_or_rep_stos_of_its_cell() {
+    let text = |bits: u32, count: u32| {
+        format!(
+            "declare void @llvm.experimental.memset.pattern.p0.i{bits}.i16(ptr, i{bits}, i16, i1)
+define i16 @f() addrspace(1) {{
+  %a = alloca [{count} x i{bits}]
+  call void @llvm.experimental.memset.pattern.p0.i{bits}.i16(ptr %a, i{bits} 4660, i16 {count}, i1 false)
+  %v = load i16, ptr %a
+  ret i16 %v
+}}
+"
+        )
+    };
+    let word = listing(&text(16, 40), "f");
+    assert!(word.contains(&"mov cx, 40".to_owned()) && word.contains(&"rep stosw".to_owned()), "{word:?}");
+    let dword = listing(&text(32, 40), "f");
+    assert!(dword.contains(&"mov cx, 40".to_owned()) && dword.contains(&"rep stosd".to_owned()), "{dword:?}");
+    let few = listing(&text(16, 2), "f");
+    assert!(!few.iter().any(|one| one.starts_with("rep")) && few.iter().filter(|one| one.starts_with("mov word ptr [bp")).count() == 2, "{few:?}");
 }
 
 /// A memset expands as LLVM's getMemset does: up to 16 stores, widest

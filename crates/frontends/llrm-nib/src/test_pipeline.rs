@@ -36,7 +36,7 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 #[test]
 fn test_a_frame_larger_than_the_start_stack_adds_a_stack_segment() {
     let (listing, object) = _stack_of("bigframe").unwrap();
-    assert!(listing.contains(".stack 4620"), "{listing}");
+    assert!(listing.contains(".stack 4618"), "{listing}");
     assert!(object.windows(5).any(|one| one == b"STACK"));
 }
 
@@ -90,4 +90,24 @@ fn test_a_partition_loop_has_no_bounds_check_in_it() {
         let checks: Vec<_> = body.iter().filter(|one| one.trim_start().starts_with("jae ") || one.trim_start().starts_with("jb ")).collect();
         assert!(checks.is_empty(), "{checks:?} in {body:#?}");
     }
+}
+
+/// `-fsanitize=stack` compares with the word and calls the routine `runtime/stack.toml` names, and
+/// both exist in the runtime: a description naming a symbol start-up never fills would compare with zero.
+#[test]
+fn test_the_stack_check_names_what_the_nib_runtime_defines() {
+    use crate::test_nib_frontend as nib;
+
+    let check = crate::compile::stack_check();
+    let runtime = |name: &str| std::fs::read_to_string(format!("{}/src/runtime/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert!(runtime("dos.asm").contains(&format!("public {}", check.limit)) && runtime("start.asm").contains(&format!("mov {}, ax", check.limit)));
+    assert!(runtime("errors.nib").contains(&format!("@export(name=\"{}\")", check.handler)));
+    // The limit sits the reserve `stack_to_add` leaves above the stack's bottom.
+    assert!(runtime("start.asm").contains(&format!("add ax, {}", llrm_core::backend::stackusage::STACK_RESERVE)));
+    let mut program = nib::parsed(&nib::fixture("sum.nib"));
+    program.stack_check = Some(llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check });
+    let sum = _procedure(&nib::listing(&program, "sum", &nib::O2()), "_sum");
+    assert!(sum.contains("cmp sp, word ptr FOO") && sum.contains("call far ptr BAR") && !sum.contains("N$OSLO"), "{sum}");
+    let plain = _procedure(&nib::listing(&nib::parsed(&nib::fixture("sum.nib")), "sum", &nib::O2()), "_sum");
+    assert!(!plain.contains("cmp sp"), "{plain}");
 }

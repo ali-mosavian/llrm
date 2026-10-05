@@ -44,6 +44,13 @@ pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::dri
     Ok(compiled)
 }
 
+/// What Nib's runtime says of its stack: `runtime/stack.toml`, the word start-up fills and the
+/// panic it calls.
+pub fn stack_check() -> model::StackCheck {
+    let row = toml::Value::Table(include_str!("runtime/stack.toml").parse().expect("stack.toml parses"));
+    model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
+}
+
 /// The stack `runtime/start.asm` reserves; the object's own adds to it.
 pub const STACK_BASE: i64 = 4096;
 

@@ -731,10 +731,12 @@ impl MemRef {
         let Opcode::Call(_) = instruction.opcode else { return None };
         let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)?;
         let name = unit.globals.get(callee.0 as usize)?.name.as_deref()?;
-        if Intrinsic::named(name) != Some(Intrinsic::MemSet) {
-            return None;
-        }
-        let width = u32::try_from(unit.int_constant(instruction.operands[2])?).ok().filter(|&one| one > 0)?;
+        let cell = match Intrinsic::named(name)? {
+            Intrinsic::MemSet => 1,
+            Intrinsic::MemSetPattern => unit.int_bits(instruction.operands[1])? / 8,
+            _ => return None,
+        };
+        let width = u32::try_from(unit.int_constant(instruction.operands[2])?).ok()?.checked_mul(cell).filter(|&one| one > 0)?;
         let volatile = unit.int_constant(instruction.operands[3])? != 0;
         Some(Self { volatile, ..Self::at(unit, instruction.operands[0], width) })
     }

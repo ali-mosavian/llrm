@@ -87,6 +87,7 @@ impl Fact {
             | Fact::NoCallback
             | Fact::Cold
             | Fact::ThreeWayCompare
+            | Fact::StackCheck
             | Fact::Dereferenceable(_)
             | Fact::Align(_)
             | Fact::Initializes(_)
