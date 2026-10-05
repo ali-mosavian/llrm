@@ -1,4 +1,4 @@
-reason = "Nib: an unexported procedure only called directly is entered by a near call (call/ret, 4-byte frame offset), as C's static"
+reason = "Nib: argument promotion, dead arguments gone, parameter ranges to a fixed point (queens' bounds checks fold); dead frame-slot loads removed. sieve bas -Os +8 instructions: one outer-loop reload where the allocator no longer uses bp (inner loops identical)"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 113692
 code_bytes = 563
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.0373
+kernel_ms = 3.0368
 
 [bas.Os]
 instructions = 215430
@@ -15,39 +15,39 @@ memory_operands = 113705
 code_bytes = 506
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 2.8966
+kernel_ms = 2.896
 
 [c.O2]
-instructions = 163105
-memory_operands = 60242
-code_bytes = 324
+instructions = 161743
+memory_operands = 58880
+code_bytes = 318
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.1773
+kernel_ms = 2.1586
 
 [c.Os]
-instructions = 149115
-memory_operands = 60242
-code_bytes = 283
+instructions = 147753
+memory_operands = 58880
+code_bytes = 277
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.9907
+kernel_ms = 1.972
 
 [nib.O2]
-instructions = 185643
-memory_operands = 78339
-code_bytes = 523
+instructions = 184154
+memory_operands = 68246
+code_bytes = 455
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.4812
+kernel_ms = 2.4607
 
 [nib.Os]
-instructions = 181795
-memory_operands = 85199
-code_bytes = 457
+instructions = 180433
+memory_operands = 83837
+code_bytes = 448
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.435
+kernel_ms = 2.4162
 
 [ow.O2]
 instructions = 239036
