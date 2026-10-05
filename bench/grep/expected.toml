@@ -5,37 +5,37 @@ blessed = "2026-10-05"
 code_bytes = 1008
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2014
+kernel_ms = 3887.2017
 
 [bas.Os]
 code_bytes = 989
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.202
+kernel_ms = 3887.2018
 
 [c.O2]
 code_bytes = 564
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3413.0033
+kernel_ms = 3413.0036
 
 [c.Os]
 code_bytes = 534
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3412.873
+kernel_ms = 3412.8726
 
 [nib.O2]
-code_bytes = 1629
+code_bytes = 1632
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4510.8237
+kernel_ms = 4510.8239
 
 [nib.Os]
-code_bytes = 1531
+code_bytes = 1528
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4510.8535
+kernel_ms = 4510.8539
 
 [ow.O2]
 code_bytes = 544
