@@ -212,3 +212,97 @@ fn _word_address_roles(
 
 pub(crate) const _SEGMENT_OPERANDS: [Operation; 3] = [Operation::Move, Operation::Push, Operation::Pop];
 
+
+/// A point of a body at which the values live cannot all sit in registers their classes allow.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Violation {
+    pub block: i64,
+    pub position: usize,
+    pub file: &'static str,
+    pub why: Why,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Why {
+    /// More values live than the file has registers.
+    Crowded { live: usize, registers: usize },
+    /// Values an instruction acts on, which no assignment gives distinct registers of their classes.
+    Unmatched(Vec<u32>),
+}
+
+/// Whether every value of `wanted` can take a distinct register of its own set: a bipartite matching.
+fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
+    fn place(at: usize, wanted: &[(u32, BTreeSet<Register>)], taken: &mut IndexMap<Register, usize>, seen: &mut BTreeSet<Register>) -> bool {
+        for register in &wanted[at].1 {
+            if !seen.insert(*register) {
+                continue;
+            }
+            let holder = taken.get(register).copied();
+            if holder.is_none_or(|other| place(other, wanted, taken, seen)) {
+                taken.insert(*register, at);
+                return true;
+            }
+        }
+        false
+    }
+    let mut taken: IndexMap<Register, usize> = IndexMap::default();
+    (0..wanted.len()).all(|at| place(at, wanted, &mut taken, &mut BTreeSet::new()))
+}
+
+/// The points of `body` at which the values live do not fit the registers their classes allow, per register file:
+/// the general registers and the segment registers. A body with none can be coloured, with copies where a value
+/// waits in another class's register; one with some cannot, whatever the allocator does. `skip` names the values
+/// another pass places (x87, pinned, inputs).
+pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>) -> Vec<Violation> {
+    let confined = classes(body, &BTreeSet::new(), segments);
+    let (_, live_out) = crate::backend::allocate::live(body);
+    let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
+    let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
+    let files: [(&'static str, &BTreeSet<Register>); 2] = [("general", &general), ("selector", &selectors)];
+    let in_file = |value: u32, file: &BTreeSet<Register>, general_file: bool| match confined.get(&value) {
+        Some(class) => class.iter().any(|one| file.contains(&crate::backend::allocate::_whole(*one))),
+        None => general_file,
+    };
+    let class_in = |value: u32, file: &BTreeSet<Register>| -> BTreeSet<Register> {
+        match confined.get(&value) {
+            Some(class) => class.iter().map(|one| crate::backend::allocate::_whole(*one)).filter(|one| file.contains(one)).collect(),
+            None => file.clone(),
+        }
+    };
+    let mut out = Vec::new();
+    for block in &body.blocks {
+        let mut live: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| !skip.contains(value)).collect();
+        for (position, one) in block.insns.iter().enumerate().rev() {
+            // Two states per instruction: after it (what is live, its results among them) and before it (what it reads
+            // is live, its results not yet): a result takes the register of an operand that dies.
+            let after = live.clone();
+            let mut before = live.clone();
+            for value in &one.defines {
+                before.remove(value);
+            }
+            before.extend(one.uses.iter().copied().filter(|value| !skip.contains(value)));
+            for (state, acting_values) in [(&after, &one.defines), (&before, &one.uses)] {
+                for (name, file) in files {
+                    let members: Vec<u32> = state.iter().copied().filter(|value| in_file(*value, file, name == "general")).collect();
+                    if members.len() > file.len() {
+                        out.push(Violation { block: block.at, position, file: name, why: Why::Crowded { live: members.len(), registers: file.len() } });
+                        continue;
+                    }
+                    let acting: Vec<(u32, BTreeSet<Register>)> = acting_values
+                        .iter()
+                        .copied()
+                        .filter(|value| members.contains(value))
+                        .collect::<BTreeSet<u32>>()
+                        .into_iter()
+                        .map(|value| (value, class_in(value, file)))
+                        .collect();
+                    if !matched(&acting) {
+                        out.push(Violation { block: block.at, position, file: name, why: Why::Unmatched(acting.iter().map(|(value, _)| *value).collect()) });
+                    }
+                }
+            }
+            live = before;
+        }
+    }
+    out
+}

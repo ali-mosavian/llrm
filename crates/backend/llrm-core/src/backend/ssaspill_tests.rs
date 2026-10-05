@@ -388,3 +388,14 @@ fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
     let done = crate::backend::executed::executed(&spilled).expect("a reducible body");
     assert!(done.jumps < 8.0, "{} jumps executed", done.jumps);
 }
+
+/// Six far pointers live in a loop against three segment registers: the points that do not fit are found, and SsaSpill
+/// leaves none.
+#[test]
+fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
+    let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
+    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &ssaspill::untouchable(body));
+    assert!(!found(&body).is_empty(), "premise: the body asks for more selectors than there are registers");
+    let spilled = phases[0].transform(body).expect("spills");
+    assert_eq!(found(&spilled), Vec::new());
+}

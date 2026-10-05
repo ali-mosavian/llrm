@@ -94,6 +94,10 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
     let transformed =
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
     let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
+    if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
+        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body));
+        llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit", body.name, found.len());
+    }
     let now = body.owned_bytes();
     if now != owned {
         let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));
