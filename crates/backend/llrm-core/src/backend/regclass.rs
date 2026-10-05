@@ -276,8 +276,15 @@ pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>) -> 
             // Two states per instruction: after it (what is live, its results among them) and before it (what it reads
             // is live, its results not yet): a result takes the register of an operand that dies.
             // The copies of one phi edge are one parallel copy: a point at its ends, not between its copies.
+            if one.defines.is_empty() && one.uses.is_empty() && one.what.as_ref().is_none_or(|what| what.name.as_deref().is_none_or(str::is_empty)) {
+                continue;
+            }
+            // An instruction that does nothing (a placeholder left where a copy was made unnecessary) does not end the group.
+            let real = |other: &&std::sync::Arc<crate::model::lir::Insn>| !(other.defines.is_empty() && other.uses.is_empty() && other.what.as_ref().is_none_or(|what| what.name.as_deref().is_none_or(str::is_empty)));
             let grouped = |other: Option<&std::sync::Arc<crate::model::lir::Insn>>| one.group.is_some() && other.is_some_and(|other| other.group == one.group);
-            let (inside_after, inside_before) = (grouped(block.insns.get(position + 1)), grouped(position.checked_sub(1).and_then(|at| block.insns.get(at))));
+            let next = block.insns.iter().skip(position + 1).find(real);
+            let previous = block.insns.iter().take(position).rev().find(real);
+            let (inside_after, inside_before) = (grouped(next), grouped(previous));
             let after = live.clone();
             let mut before = live.clone();
             for value in &one.defines {

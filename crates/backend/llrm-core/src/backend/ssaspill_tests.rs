@@ -444,3 +444,22 @@ fn test_memory_phi_arguments_share_their_results_slot() {
     let (shared, apart) = (stores(true), stores(false));
     assert!(shared < apart, "{shared} memory operands with shared slots, {apart} without");
 }
+
+/// TwoAddress leaves an empty instruction where it made a phi copy unnecessary; it split the edge's copy group, and
+/// the points between the copies counted again: SPHEREMAPLASMA read 61 after PhiElimination and 91 after TwoAddress
+/// with the same pressure.
+#[test]
+fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
+    let (body, _) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
+    let eliminated = crate::backend::phielim::eliminated(&body).expect("eliminates");
+    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &ssaspill::untouchable(body)).len();
+    let mut split = eliminated.clone();
+    for block in &mut split.blocks {
+        let Some(first) = block.insns.iter().position(|one| one.group.is_some()) else { continue };
+        let blank = std::sync::Arc::new(crate::model::lir::Insn::new(block.insns[first].at, Some((block.insns[first].at, block.insns[first].at)), None, Vec::new(), Vec::new()));
+        let mut insns = block.insns.clone();
+        insns.insert(first + 1, blank);
+        *block = block.with_insns(insns);
+    }
+    assert_eq!(found(&split), found(&eliminated));
+}

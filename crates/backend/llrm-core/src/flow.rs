@@ -96,7 +96,9 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
     let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
     if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
         let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body));
-        llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit", body.name, found.len());
+        let peak = found.iter().filter_map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { Some(live - registers) } else { None }).max().unwrap_or(0);
+        let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
+        llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());
     }
     let now = body.owned_bytes();
     if now != owned {
