@@ -82,8 +82,19 @@ pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Res
     let constants = _through_copies(_constants(body, &wide), values, &copies);
     let addresses = _through_copies(_addresses(body, &wide), values, &copies);
     let extensions = _extensions(body, values);
-    let mut frame_loads = _through_copies(_stable_loads(body, &wide), values, &copies);
+    let mut frame_loads = _stable_loads(body, values);
     frame_loads.extend(_frame_loads(body, values));
+    // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
+    let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
+    let homed = _frame_homes(body, &apart);
+    let copied = _through_copies(_stable_loads(body, &wide), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
+    for (value, cell) in copied {
+        // A frame cell read in place is a fold the allocator takes only of a value it keeps (#441): its own home path.
+        if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
+            continue;
+        }
+        frame_loads.entry(value).or_insert(cell);
+    }
     let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
     let frame_homes = _frame_homes(body, &unloaded);
     let mut rebuilt = frame_loads.clone();
@@ -182,9 +193,6 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32) 
             }
             // A rebuilt value's cell reads as well as a slot does.
             if !rebuilt.is_empty() {
-                if std::env::var_os("TRACEFOLD").is_some() && one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("cmp")) {
-                    eprintln!("TF {} cmp uses {:?} rebuilt {:?} fold {:?}", _name(&one), one.uses, rebuilt_values, folded_source(&one, &rebuilt_values));
-                }
                 if let Some(folded) = _source(&one, &rebuilt_values, &mut cells)? {
                     one = folded;
                 }
@@ -1648,10 +1656,6 @@ pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Optio
 }
 
 /// Fold one untied spill source into arithmetic or a comparison.
-fn _name(one: &Insn) -> String {
-    format!("{:?}", one.defines)
-}
-
 fn _source<F: CellOf>(one: &Insn, values: &BTreeSet<u32>, frame: &mut F) -> Result<Option<Arc<Insn>>, Error> {
     let Some(right) = folded_source(one, values) else {
         return Ok(None);
@@ -3075,6 +3079,18 @@ mod tests {
             assert_eq!(positions[1], positions[0] + 1);
             assert!(!insns.iter().any(|one| one.spill_reload));
         }
+    }
+
+    /// `mov v1, [global]` read back into `v2`, which is read once more: v2 is the load made again, not a slot.
+    #[test]
+    fn test_a_copy_of_a_global_load_is_made_again_not_stored() {
+        let cell = crate::model::ir::Mem { addr: Some(crate::model::ir::Addr::new(Space::Segment, 0)), ..crate::model::ir::Mem::new(None, 2) };
+        let load = insn(0, (0, 0), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), &[1], &[]);
+        let body = _body(vec![load, _move(2, 1, None, 0x10), _add(21, 2, 0x12), _add(22, 1, 0x14)]);
+        let mut frame = Frame::new(0);
+        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+        assert_eq!(frame.size(), 0, "a slot for a copy of a load");
+        assert!(!done.insns().iter().any(|one| one.spill_store || one.spill_reload));
     }
 
     #[test]
