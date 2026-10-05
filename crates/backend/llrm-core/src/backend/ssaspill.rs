@@ -38,15 +38,10 @@ const EXIT: i64 = 1 << 20;
 thread_local! {
     static CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_PHIS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-    static MEMORY_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread chose a phi to live in memory: what tells a caller a route without them is a different route.
-pub fn memory_phis_made() -> usize {
-    MEMORY_MADE.with(std::cell::Cell::get)
 }
 
 /// `run` with no phi taken into memory on this thread: every phi the registers cannot hold arrives in one and is stored.
+#[cfg(test)]
 pub fn without_memory_phis<T>(run: impl FnOnce() -> T) -> T {
     let before = MEMORY_PHIS.with(|one| one.replace(false));
     let done = run();
@@ -529,10 +524,10 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
         .stored
         .iter()
         .copied()
-        .filter(|value| !remakes.contains_key(value))
+        .filter(|value| !remakes.contains_key(value) && !result.shared.contains_key(value))
         .filter(|value| leaving.get(value).copied().unwrap_or(0.0) < home.get(value).map_or(f64::INFINITY, |at| frequency.block(*at)))
         .collect();
-    let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &result.memory, &result.moves, &at_leaves, &remakes, frame)?;
+    let spilled = written(body, &result.edits, &result.across, &result.left, &result.stored, &result.memory, &result.shared, &result.moves, &at_leaves, &remakes, frame)?;
     let held: IndexMap<i64, BTreeSet<u32>> = result.edits.iter().map(|(at, edit)| (*at, edit.w_in.clone())).collect();
     Ok(Some(without_dead_remakes(ssarepair::repaired(&spilled, &result.stored, &held), &selectors)))
 }
@@ -627,14 +622,11 @@ fn simulated_with(
     let mut memory: BTreeSet<u32> = BTreeSet::new();
     for _ in 0..if MEMORY_PHIS.with(std::cell::Cell::get) { 4 } else { 0 } {
         let probe = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
-        let more = memory_phis(body, &probe, machine, skip, weights);
+        let more = memory_phis(body, flow, remakes, &probe, machine, skip, weights);
         if more.is_subset(&memory) {
             break;
         }
         memory.extend(more);
-    }
-    if !memory.is_empty() {
-        MEMORY_MADE.with(|count| count.set(count.get() + 1));
     }
     let mut result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
     // A loop header keeps a value its back edge must reload only while those
@@ -788,6 +780,8 @@ struct Simulated {
     stored: BTreeSet<u32>,
     /// Phi results that live in their slot: what each in-edge hands them is stored there, `(argument, result)`.
     memory: BTreeSet<u32>,
+    /// An argument that shares its phi result's slot: stored where it is defined, and no code on the edge.
+    shared: IndexMap<u32, u32>,
     moves: IndexMap<(i64, i64), Vec<(u32, u32)>>,
 }
 
@@ -805,6 +799,7 @@ impl Simulated {
         }
         self.stored.extend(other.stored);
         self.memory.extend(other.memory);
+        self.shared.extend(other.shared);
         for (edge, values) in other.moves {
             self.moves.entry(edge).or_default().extend(values);
         }
@@ -846,6 +841,7 @@ fn simulated(
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
+    let shared = shared_slots(body, flow, remakes, &wanted, memory);
     let mut edits: IndexMap<i64, Edits> = IndexMap::default();
     let mut stored: BTreeSet<u32> = BTreeSet::new();
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
@@ -1020,6 +1016,7 @@ fn simulated(
                 .flat_map(|next| next.phis.iter())
                 .filter(|phi| memory.contains(&phi.result))
                 .flat_map(|phi| phi.incoming.iter().filter(|(from, value)| from == at && *value != phi.result).map(|(_, value)| *value))
+                .filter(|value| !shared.contains_key(value))
                 .collect();
             while !machine.fits(&held, &handed, if stored_through.iter().any(|value| !held.contains(value)) { k.saturating_sub(1) } else { k }) {
                 let victim = held.iter().filter(|value| !handed.contains(*value)).max_by_key(|value| (!hot(value), flow.next_use(*at, end, **value), **value)).copied();
@@ -1061,6 +1058,11 @@ fn simulated(
             for phi in by_at[to].phis.iter().filter(|phi| memory.contains(&phi.result)) {
                 for (from, value) in phi.incoming.iter().filter(|(from, _)| *from == block.at) {
                     let _ = from;
+                    if shared.get(value) == Some(&phi.result) {
+                        stored.insert(phi.result);
+                        stored.insert(*value);
+                        continue;
+                    }
                     if *value != phi.result && !moves.get(&(block.at, *to)).is_some_and(|list| list.contains(&(*value, phi.result))) {
                         moves.entry((block.at, *to)).or_default().push((*value, phi.result));
                         stored.insert(phi.result);
@@ -1072,43 +1074,45 @@ fn simulated(
             }
         }
     }
-    Simulated { edits, across, left, stored, memory: memory.clone(), moves }
+    Simulated { edits, across, left, stored, memory: memory.clone(), shared, moves }
 }
 
 /// The phis of `first` whose results the block does not take into registers, that can be stored through instead:
 /// result and arguments in this file, none of the arguments another such phi's result (the stores would need an order),
 /// and the result read somewhere.
-fn memory_phis(body: &LirBody, first: &Simulated, machine: &Machine<'_>, skip: &BTreeSet<u32>, weights: &Weights<'_>) -> BTreeSet<u32> {
+fn memory_phis(body: &LirBody, flow: &Flow, remakes: &IndexMap<u32, Arc<Insn>>, first: &Simulated, machine: &Machine<'_>, skip: &BTreeSet<u32>, weights: &Weights<'_>) -> BTreeSet<u32> {
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
     let read: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.uses.iter().copied()).chain(body.blocks.iter().flat_map(|block| block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)))).collect();
-    // How often each value is read, per block.
-    let mut reads: IndexMap<u32, IndexMap<i64, usize>> = IndexMap::default();
+    let mut reads: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
-                *reads.entry(*value).or_default().entry(block.at).or_default() += 1;
+                *reads.entry(*value).or_default() += weights.block(block.at);
             }
         }
     }
+    let home: IndexMap<u32, i64> = flow.defines.iter().flat_map(|(at, made)| made.keys().map(move |value| (*value, *at))).collect();
     let mut chosen: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
         let Some(edit) = first.edits.get(&block.at) else { continue };
-        // Only the phis that crowd the block's top: the others arrive in a register and are stored, which costs no more.
+        // What the block's parallel copy cannot hold in registers must be in memory; the price picks which.
         let arriving: BTreeSet<u32> = edit.w_in.iter().copied().chain(block.arrives().into_iter().filter(|value| wanted(*value))).collect();
-        // And one register stays free for an argument loaded to be stored.
-        let k = machine.general.len();
-        let mut crowd = arriving.len().saturating_sub(k);
-        // The surplus is the phis whose memory form costs least: a load at each read, a store on each in-edge.
+        let mut crowd = arriving.len().saturating_sub(machine.general.len());
         let mut eligible: Vec<(f64, u32)> = block
             .phis
             .iter()
             .filter(|phi| wanted(phi.result) && read.contains(&phi.result) && phi.incoming.iter().all(|(_, value)| wanted(*value)))
             .map(|phi| {
-                // A confined value is reloaded into one of its few registers, which costs the others their place.
-                let dear = if machine.confined.get(&phi.result).is_some_and(|class| class.len() < machine.general.len()) { 2.0 } else { 1.0 };
-                let loads: f64 = reads.get(&phi.result).map_or(0.0, |blocks| blocks.iter().map(|(at, times)| weights.block(*at) * *times as f64 * dear).sum());
-                let stores: f64 = phi.incoming.iter().filter(|(_, value)| *value != phi.result).map(|(from, _)| weights.edge(*from, block.at)).sum();
-                (loads + stores, phi.result)
+                // A load at each read, a store on each in-edge, or at the definition of an argument that shares the slot.
+                let one = BTreeSet::from([phi.result]);
+                let shared = shared_slots(body, flow, remakes, &wanted, &one);
+                let stores: f64 = phi
+                    .incoming
+                    .iter()
+                    .filter(|(_, value)| *value != phi.result)
+                    .map(|(from, value)| if shared.contains_key(value) { home.get(value).map_or(0.0, |at| weights.block(*at)) } else { weights.edge(*from, block.at) })
+                    .sum();
+                (reads.get(&phi.result).copied().unwrap_or(0.0) + stores, phi.result)
             })
             .collect();
         eligible.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -1130,6 +1134,40 @@ fn memory_phis(body: &LirBody, first: &Simulated, machine: &Machine<'_>, skip: &
             chosen.remove(&result);
         }
     }
+}
+
+/// The arguments of the memory phis in `memory` that share their result's slot: stored where they are defined, which
+/// leaves the phi no code on the edge. A value shares only where it is dead whenever another member of the web is
+/// defined; any other argument is stored on its edge.
+fn shared_slots(body: &LirBody, flow: &Flow, remakes: &IndexMap<u32, Arc<Insn>>, wanted: &dyn Fn(u32) -> bool, memory: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+    let mut shared: IndexMap<u32, u32> = IndexMap::default();
+    if memory.is_empty() {
+        return shared;
+    }
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let phi_block: IndexMap<u32, i64> = body.blocks.iter().flat_map(|block| block.phis.iter().map(move |phi| (phi.result, block.at))).collect();
+    // Whether `x` is live where `y` is defined.
+    let live_at_def = |x: u32, y: u32| -> bool {
+        if let Some(at) = phi_block.get(&y) {
+            return flow.live_in[at].contains(&x) || by_at[at].phis.iter().any(|phi| phi.result == x);
+        }
+        flow.defines.iter().find_map(|(at, made)| made.get(&y).map(|position| (*at, *position))).is_some_and(|(at, position)| flow.live_after(at, position, x))
+    };
+    let apart = |x: u32, y: u32| !live_at_def(x, y) && !live_at_def(y, x);
+    let mut webs: IndexMap<u32, Vec<u32>> = IndexMap::default();
+    for block in &body.blocks {
+        for phi in block.phis.iter().filter(|phi| memory.contains(&phi.result)) {
+            let web = webs.entry(phi.result).or_insert_with(|| vec![phi.result]);
+            for (_, value) in &phi.incoming {
+                let alone = !shared.contains_key(value) && *value != phi.result && !remakes.contains_key(value) && wanted(*value) && !memory.contains(value);
+                if alone && web.iter().all(|member| apart(*member, *value)) {
+                    shared.insert(*value, phi.result);
+                    web.push(*value);
+                }
+            }
+        }
+    }
+    shared
 }
 
 /// What reloading `value` at its first register uses costs, within one trip of the loop
@@ -1234,6 +1272,7 @@ fn written(
     left: &IndexMap<(i64, i64), Vec<u32>>,
     stored: &BTreeSet<u32>,
     memory: &BTreeSet<u32>,
+    shared: &IndexMap<u32, u32>,
     moves: &IndexMap<(i64, i64), Vec<(u32, u32)>>,
     at_leaves: &BTreeSet<u32>,
     remakes: &IndexMap<u32, Arc<Insn>>,
@@ -1241,10 +1280,16 @@ fn written(
 ) -> Result<LirBody, String> {
     let widths = widths_through_phis(body, stored);
     let mut cells: IndexMap<u32, crate::model::ir::Mem> = IndexMap::default();
-    for value in stored.iter().filter(|value| !remakes.contains_key(*value)) {
+    for value in stored.iter().filter(|value| !remakes.contains_key(*value) && !shared.contains_key(*value)) {
         let width = widths.get(value).copied().unwrap_or(2);
         // Its own keys: a later phase that spills a value with the same number (after phi elimination and coalescing renamed things) must not be handed this slot.
         cells.insert(*value, frame.cell(("ssaspill", i64::from(*value)), width).map_err(|error| error.to_string())?);
+    }
+    // An argument that shares a phi result's slot: the same cell.
+    for (value, result) in shared {
+        if let Some(cell) = cells.get(result).cloned() {
+            cells.insert(*value, cell);
+        }
     }
     let in_memory = |value: &u32| stored.contains(value) && !remakes.contains_key(value);
     let reload = |beside: &Insn, value: u32| match remakes.get(&value) {

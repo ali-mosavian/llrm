@@ -3952,14 +3952,12 @@ b0:
     assert!(body.iter().any(|line| line.contains(", ss")), "{body:?}");
 }
 
-/// catalog.nib's `find` at -Os: a loop with one phi too many for the registers. Taking it into memory stores it on
-/// both in-edges where a register phi is stored once at the top, and the object grew by 6 bytes (#491). The
-/// function costs what the cheaper of the routes costs, with memory phis or without.
+/// catalog.nib's `find` at -Os: a loop with one phi too many for the registers. Against a register phi stored once at
+/// the top, a memory phi stores on both in-edges: the object grew by 6 bytes (#491). The price keeps the register phi.
 #[test]
-fn test_a_function_a_memory_phi_makes_larger_is_built_without_one() {
+fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
     let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/findloop.ll")).unwrap();
     let with = sized_with(assemble::Candidates::SpillerOnly, &text);
     let without = crate::backend::ssaspill::without_memory_phis(|| sized_with(assemble::Candidates::SpillerOnly, &text));
-    assert!(with > without, "premise: memory phis make it larger ({with} against {without})");
-    assert!(sized_with(assemble::Candidates::Both, &text) <= without);
+    assert_eq!(with, without);
 }
