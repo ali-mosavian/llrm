@@ -3032,7 +3032,8 @@ impl Selector<'_, '_, '_> {
         };
         let top = |this: &mut Self, pointer: Pointer, out: &mut Vec<Arc<Insn>>| -> Held {
             match (constant, counted) {
-                (Some(length), _) => through(this, pointer.moved(length - 1), out),
+                // A tail of no bytes starts at the last dword's own first byte: no step to take.
+                (Some(length), _) => through(this, pointer.moved(length - 1 - if length >= 4 && length % 4 == 0 { 3 } else { 0 }), out),
                 (None, Some(counted)) => {
                     let (start, end, last) = (through(this, pointer, out), this.fresh_held(2), this.fresh_held(2));
                     let imm = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
@@ -3050,16 +3051,11 @@ impl Selector<'_, '_, '_> {
             Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. } => Loc::Reg(Reg { register: Register::SS, width: 2 }),
             _ => Loc::Reg(Reg { register: Register::DS, width: 2 }),
         };
-        let es = Loc::Reg(Reg { register: Register::ES, width: 2 });
-        let destination_segment = match to {
-            Pointer::Far { selector, .. } => Loc::Held(selector),
-            _ => {
-                let source = if matches!(to, Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. }) { Register::SS } else { Register::DS };
-                put(semantics(Operation::Push, "push", vec![], vec![es.clone()]), out);
-                put(semantics(Operation::Push, "push", vec![], vec![Loc::Reg(Reg { register: source, width: 2 })]), out);
-                put(semantics(Operation::Pop, "pop", vec![es.clone()], vec![]), out);
-                es.clone()
-            }
+        // A near destination's selector is made just ahead of the first move, so that it is
+        // live across nothing else.
+        let mut destination_segment = match to {
+            Pointer::Far { selector, .. } => Some(Loc::Held(selector)),
+            _ => None,
         };
         // Each step: a string move (its cells moved, how many, none for one) or, downward, the
         // step from the last byte of the tail to the last dword.
@@ -3082,10 +3078,14 @@ impl Selector<'_, '_, '_> {
             }
             (Some(length), true) => {
                 parts.extend((0..length % 4).map(|_| ("movsb", None)));
+                // With no tail the start is already the last dword's first byte.
+                if length % 4 != 0 && length >= 4 {
+                    parts.push(("back", None));
+                }
                 match length / 4 {
                     0 => {}
-                    1 => parts.extend([("back", None), ("movsd", None)]),
-                    bulk => parts.extend([("back", None), ("movsd", Some(imm(bulk, 2)))]),
+                    1 => parts.push(("movsd", None)),
+                    bulk => parts.push(("movsd", Some(imm(bulk, 2)))),
                 }
             }
             (None, false) => {
@@ -3116,28 +3116,29 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             let (si_after, di_after) = (self.fresh_held(2), self.fresh_held(2));
-            let what = match count {
+            let counted = count.map(|count| match count {
+                Loc::Held(held) => held,
+                other => {
+                    let held = self.fresh_held(2);
+                    put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
+                    held
+                }
+            });
+            let destination_segment = destination_segment.get_or_insert_with(|| self.near_selector(to, volatile, at, out)).clone();
+            let what = match counted {
                 None => semantics(
                     Operation::Copy,
                     name,
                     vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after)],
-                    vec![Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment.clone()],
+                    vec![Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment],
                 ),
-                Some(count) => {
-                    let counted = match count {
-                        Loc::Held(held) => held,
-                        other => {
-                            let held = self.fresh_held(2);
-                            put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
-                            held
-                        }
-                    };
+                Some(counted) => {
                     let emptied = self.fresh_held(2);
                     semantics(
                         Operation::Copy,
                         name,
                         vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after), Loc::Held(emptied)],
-                        vec![Loc::Held(counted), Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment.clone()],
+                        vec![Loc::Held(counted), Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment],
                     )
                 }
             };
@@ -3146,9 +3147,6 @@ impl Selector<'_, '_, '_> {
         }
         if backward {
             put(semantics(Operation::Nothing, "cld", vec![], vec![]), out);
-        }
-        if !matches!(to, Pointer::Far { .. }) {
-            put(semantics(Operation::Pop, "pop", vec![Loc::Reg(Reg { register: Register::ES, width: 2 })], vec![]), out);
         }
         Ok(())
     }
@@ -3282,16 +3280,10 @@ impl Selector<'_, '_, '_> {
                 through
             }
         };
-        let segment = match pointer {
-            Pointer::Far { selector, .. } => Loc::Held(selector),
-            _ => {
-                let segment = Loc::Reg(Reg { register: Register::ES, width: 2 });
-                let source = if matches!(pointer, Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. }) { Register::SS } else { Register::DS };
-                put(semantics(Operation::Push, "push", vec![], vec![segment.clone()]), out);
-                put(semantics(Operation::Push, "push", vec![], vec![Loc::Reg(Reg { register: source, width: 2 })]), out);
-                put(semantics(Operation::Pop, "pop", vec![segment.clone()], vec![]), out);
-                segment
-            }
+        // A near selector is made just ahead of the first store, live across nothing else.
+        let mut segment = match pointer {
+            Pointer::Far { selector, .. } => Some(Loc::Held(selector)),
+            _ => None,
         };
         for (stored, count, width) in parts {
             let name = match width {
@@ -3300,33 +3292,47 @@ impl Selector<'_, '_, '_> {
                 _ => "stosd",
             };
             let stepped = self.fresh_held(2);
+            let count = count.map(|count| match count {
+                Loc::Held(held) => held,
+                other => {
+                    let held = self.fresh_held(2);
+                    put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
+                    held
+                }
+            });
+            let segment = segment.get_or_insert_with(|| self.near_selector(pointer, volatile, at, out)).clone();
             let what = match count {
                 // One store needs neither a count nor REP.
-                None => semantics(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped)], vec![Loc::Held(stored), Loc::Held(through), segment.clone()]),
+                None => semantics(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped)], vec![Loc::Held(stored), Loc::Held(through), segment]),
                 Some(count) => {
-                    let count = match count {
-                        Loc::Held(held) => held,
-                        other => {
-                            let held = self.fresh_held(2);
-                            put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
-                            held
-                        }
-                    };
                     let emptied = self.fresh_held(2);
                     semantics(
                         Operation::Fill,
                         name,
                         vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped), Loc::Held(emptied)],
-                        vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through), segment.clone()],
+                        vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through), segment],
                     )
                 }
             };
             put(what, out);
             through = stepped;
         }
-        if !matches!(pointer, Pointer::Far { .. }) {
-            put(semantics(Operation::Pop, "pop", vec![Loc::Reg(Reg { register: Register::ES, width: 2 })], vec![]), out);
-        }
+    }
+
+    /// The selector a near pointer's string op addresses through: its
+    /// segment register's value, held like a far pointer's so that the
+    /// allocator places it in ES, hoists it and saves ES only where it is live.
+    fn near_selector(&mut self, pointer: Pointer, volatile: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Loc {
+        // The stack's segment need not be DGROUP; DGROUP is a constant, made again wherever read.
+        let from = if matches!(pointer, Pointer::Frame { .. } | Pointer::Based { segment: Some(_), .. }) {
+            Loc::Reg(Reg { register: Register::SS, width: 2 })
+        } else {
+            let (space, index) = crate::hir::symbols::DGROUP;
+            Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
+        };
+        let selector = self.fresh_held(2);
+        out.push(Arc::new(Insn { volatile, ..insn_of(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![from])) }));
+        Loc::Held(selector)
     }
 
     /// `cmp` of a comparison's operands, a constant second; the predicate

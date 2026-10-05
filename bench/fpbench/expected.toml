@@ -1,18 +1,18 @@
-reason = "Nib: a far pointer to a local array is a stack pointer read through ss: (near-stack narrowing). queens -O2 +2,441 instructions: place's [bx+si] saves SI on every non-leaf call; -3,701 memory operands, -15 bytes; odds #487"
+reason = "a near string op's ES is a held DGROUP, set once and saved by none; a constant backward start is one mov (#493, #494)"
 blessed = "2026-10-05"
 
 [bas.O2]
-instructions = 20259
+instructions = 20257
 memory_operands = 5245
-code_bytes = 2559
+code_bytes = 2557
 data_bytes = 67
 bss_bytes = 0
 kernel_ms = 0.2812
 
 [bas.Os]
-instructions = 21769
+instructions = 21767
 memory_operands = 5124
-code_bytes = 721
+code_bytes = 719
 data_bytes = 23
 bss_bytes = 0
 kernel_ms = 0.3015
