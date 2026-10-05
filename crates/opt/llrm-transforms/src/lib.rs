@@ -20,9 +20,12 @@ pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
 pub mod floatloop;
+pub mod argpromotion;
 pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;
+#[cfg(test)]
+mod argpromotion_tests;
 pub mod globalopt;
 pub mod fold;
 pub mod splitcopy;

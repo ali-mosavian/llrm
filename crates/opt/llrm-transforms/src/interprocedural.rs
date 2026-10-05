@@ -452,6 +452,19 @@ pub fn optimized<E: From<String>>(
         }
     }
 
+    // A pointer a body only reads through is given as the fields it reads, before what its callers pass
+    // is propagated: a length or a segment now crosses the call as a value.
+    let (priced, bytes) = match loose {
+        Some(clocks) if rate > 0 => (clocks, false),
+        _ => (costs, true),
+    };
+    for at in 0..count {
+        for id in crate::argpromotion::promoted(&mut program.modules[at], &program.layout, priced, bytes) {
+            edited(&mut modules[at], &[id]);
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "promote.")?;
+        }
+    }
+
     let mut return_round = 0;
 
     // Materialize every newly constant result.
