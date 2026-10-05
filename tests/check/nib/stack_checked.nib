@@ -1,0 +1,17 @@
+# RUN: llrm-nib %s -O2 -fsanitize=stack -S -o /dev/stdout
+# -fsanitize=stack: a function compares SP with the runtime's N$OSLO once its frame is allocated
+# and calls the panic N$ESTK out of line, last. No other function of the module is a leaf with a
+# frame within the red zone, so every one checks.
+# CHECK-LABEL: _deep proc
+# CHECK: cmp sp, word ptr N$OSLO
+# CHECK-NEXT: jb
+# CHECK: call far ptr N$ESTK
+# CHECK-NEXT: _deep endp
+fn deep(n: i16) -> i16:
+    if n == 0:
+        return 0
+    return 1 + deep(n - 1)
+
+fn main() -> i16:
+    print(deep(3))
+    return 0

@@ -241,6 +241,9 @@ facts! {
         // is greater, nothing about how often. LLVM knows strcmp's by name
         // (LibFunc); here the language states it of the routine.
         ThreeWayCompare three_way_compare "threeway" on [Callable];
+        // Of a routine: it compares SP with its runtime's stack limit on entry
+        // (`-fsanitize=stack`). The runtime's description says where the limit is.
+        StackCheck stack_check "stackcheck" on [Callable];
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];

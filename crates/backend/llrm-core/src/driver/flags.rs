@@ -77,6 +77,9 @@ pub struct Sanitize {
     /// `signed-integer-overflow`, or `-ftrapv`: integer arithmetic and
     /// narrowing.
     pub signed_integer_overflow: bool,
+    /// `stack`: each procedure's entry compares SP with the runtime's limit. Not part of
+    /// `undefined`, as gcc's `-fstack-check` is not.
+    pub stack: bool,
 }
 
 impl Sanitize {
@@ -87,8 +90,9 @@ impl Sanitize {
                 "bounds" => self.bounds = on,
                 "integer-divide-by-zero" => self.integer_divide_by_zero = on,
                 "signed-integer-overflow" => self.signed_integer_overflow = on,
-                "undefined" => *self = Self { bounds: on, integer_divide_by_zero: on, signed_integer_overflow: on },
-                _ => return Err(format!("unknown sanitizer {name}; choose bounds, integer-divide-by-zero, signed-integer-overflow or undefined")),
+                "stack" => self.stack = on,
+                "undefined" => *self = Self { bounds: on, integer_divide_by_zero: on, signed_integer_overflow: on, stack: self.stack },
+                _ => return Err(format!("unknown sanitizer {name}; choose bounds, integer-divide-by-zero, signed-integer-overflow, stack or undefined")),
             }
         }
         Ok(())

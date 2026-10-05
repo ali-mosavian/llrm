@@ -1,0 +1,10 @@
+# flags: -O2 -fsanitize=stack
+# A recursion that fits runs unchanged under -fsanitize=stack.
+fn deep(n: i16) -> i16:
+    if n == 0:
+        return 0
+    return 1 + deep(n - 1)
+
+fn main() -> i16:
+    print(deep(100))
+    return 0

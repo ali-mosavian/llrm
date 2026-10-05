@@ -208,6 +208,7 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
         interrupt: None,
         size: false,
         entry: 0,
+        stack_check: None,
     }
 }
 

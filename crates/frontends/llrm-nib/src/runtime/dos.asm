@@ -13,6 +13,7 @@ public N$OSIV
 public N$OCHN
 public N$OVEC
 public N$OTOP
+public N$OSLO
 public N$OPSP
 public BSS_LAST
 public FBSS_LAST
@@ -31,6 +32,9 @@ FBSS_END ends
 ; memory block the heap grows. Startup sets both.
 N$OTOP dw 0
 N$OPSP dw 0
+; The lowest SP a checked function may reach (-fsanitize=stack): the stack's bottom plus the
+; reserve the panic, DOS and an interrupt use below it. Startup sets it.
+N$OSLO dw 0
 
 ; Each vector the program replaced, and what it entered before, which
 ; N$OVEC puts back. A vector replaced past the last entry is not.

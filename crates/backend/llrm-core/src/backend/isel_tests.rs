@@ -8,7 +8,7 @@ use crate::backend::masm;
 const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16\"\n";
 
 fn qb() -> HirAbi {
-    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default() }
+    HirAbi { runtime: crate::hir::model::RuntimeProfile::Qb45, objects: Default::default(), preserved: Default::default(), stack_check: None }
 }
 
 fn parsed(text: &str) -> llrm_mir::Module {
@@ -29,7 +29,7 @@ fn assembled(text: &str) -> String {
 fn borland() -> HirAbi {
     use crate::abi::runtime::{EVERY, Reg};
     let clobbered = [Reg::Ax, Reg::Bx, Reg::Cx, Reg::Dx, Reg::Es, Reg::Flags];
-    HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect() }
+    HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: EVERY.iter().copied().filter(|one| !clobbered.contains(one)).collect(), stack_check: None }
 }
 
 /// The module's text as `cpu` prices it, for BASIC's runtime.

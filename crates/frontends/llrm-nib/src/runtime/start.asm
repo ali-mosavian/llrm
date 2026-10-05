@@ -9,6 +9,7 @@ extrn BSS_LAST:byte
 extrn FBSS_LAST:byte
 extrn N$OTOP:word
 extrn N$OPSP:word
+extrn N$OSLO:word
 extrn N$OSIV:far
 extrn N$OVEC:far
 
@@ -43,6 +44,11 @@ start:
     mov ss, ax
     add sp, dx
     sti
+    ; The stack is the last of DGROUP before the heap, so it starts where the near bss ends.
+    ; Nothing below the limit but the panic's frames, DOS and an interrupt.
+    mov ax, offset DGROUP:BSS_LAST
+    add ax, 512
+    mov N$OSLO, ax
     ; Statics without an initializer are in _BSS, which the EXE does not
     ; store: they hold whatever the last program left there until zeroed.
     mov di, offset DGROUP:BSS_FIRST

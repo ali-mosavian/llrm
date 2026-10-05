@@ -748,6 +748,8 @@ pub struct HirAbi {
     pub objects: std::collections::BTreeMap<String, String>,
     /// The registers a call no runtime contract describes keeps.
     pub preserved: BTreeSet<runtime::Reg>,
+    /// The runtime's stack limit and overflow handler, where the program checks its stack.
+    pub stack_check: Option<model::StackCheck>,
 }
 
 impl HirAbi {
@@ -758,6 +760,7 @@ impl HirAbi {
             runtime: program.runtime,
             objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect(),
             preserved: program.preserved.iter().map(|one| runtime::Reg::from_value(one)).collect::<Result<_, _>>()?,
+            stack_check: program.stack_check.clone(),
         })
     }
 }
@@ -774,6 +777,10 @@ pub fn registers(name: &str) -> Option<Registers> {
 }
 
 impl crate::backend::assemble::Abi for HirAbi {
+    fn stack_check(&self) -> Option<&model::StackCheck> {
+        self.stack_check.as_ref()
+    }
+
     fn registers(&self, callee: &str) -> Option<Registers> {
         if let Some(block) = asm_call(callee) {
             return block.ok().map(|(_, registers)| registers);

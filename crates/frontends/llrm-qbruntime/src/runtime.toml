@@ -1042,6 +1042,34 @@ size = 4
 [layout.vbdos]
 form = "far"
 
+# What `-fsanitize=stack` compares and calls, per runtime. `limit` is the data-group word holding
+# the lowest SP the runtime allows, `handler` the far routine entered when SP falls below it, and
+# `entry` the runtime's own frame entry that checks (BC's /D calls it in place of B$ENRA, which
+# does not check). `red_zone` is the bytes below the limit the runtime promises nothing else uses
+# beyond its handler: 0 where that is not measured, so no leaf goes unchecked.
+# Source: rt\rtenexit.asm in BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB, disassembled: B$ENRD
+# does `mov ax,sp; sub ax,cx; jc E; sub ax,HDR; jc E; cmp ax,[b$pendchk]; jc E`, E being
+# `push bp; mov bp,sp; jmp B$ERR_OSS` ("Out of stack space", the fatal 9007h of messages.inc),
+# and falls into B$ENRA.
+
+[stack.qb45]
+limit = "b$pendchk"
+handler = "B$ERR_OSS"
+entry = "B$ENRD"
+red_zone = 0
+
+[stack.pds71]
+limit = "b$pendchk"
+handler = "B$ERR_OSS"
+entry = "B$ENRD"
+red_zone = 0
+
+[stack.vbdos]
+limit = "b$pendchk"
+handler = "B$ERR_OSS"
+entry = "B$ENRD"
+red_zone = 0
+
 # `parameters`: `string` is a descriptor's address, `int` a word. `result`
 # is a word, or a `view`: a string made of a `length` and a `data` address,
 # which the runtime allocates a temporary descriptor for. `check` raises

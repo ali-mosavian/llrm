@@ -94,13 +94,16 @@ fn far_zero_data_is_stored_unless_the_startup_zeroes_it() {
 #[test]
 fn sanitizers_take_gccs_names() {
     let sanitize = |arguments: &[&str]| parsed(arguments).unwrap().sanitize;
-    let all = Sanitize { bounds: true, integer_divide_by_zero: true, signed_integer_overflow: true };
+    let all = Sanitize { bounds: true, integer_divide_by_zero: true, signed_integer_overflow: true, stack: false };
     assert_eq!(sanitize(&[]), Sanitize::default());
     assert_eq!(sanitize(&["-fsanitize=undefined"]), all);
     assert_eq!(sanitize(&["-fsanitize=bounds,integer-divide-by-zero"]), Sanitize { signed_integer_overflow: false, ..all });
     assert_eq!(sanitize(&["-fsanitize=undefined", "-fno-sanitize=bounds"]), Sanitize { bounds: false, ..all });
     assert_eq!(sanitize(&["-ftrapv"]), Sanitize { signed_integer_overflow: true, ..Sanitize::default() });
     assert!(parsed(&["-fsanitize=address"]).is_err());
+    // A check that costs code on every call is asked for by name, never by `undefined`.
+    assert!(sanitize(&["-fsanitize=stack"]).stack && !sanitize(&["-fsanitize=undefined"]).stack && !sanitize(&[]).stack);
+    assert!(!sanitize(&["-fsanitize=stack", "-fno-sanitize=stack"]).stack);
 }
 
 /// `-fstack-usage` and `-Wstack-usage=N` were no options: the stack a program

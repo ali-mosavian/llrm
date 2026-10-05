@@ -66,8 +66,20 @@ impl From<std::io::Error> for CompileError {
 /// C through the rich MIR: translated to HIR, then compiled by the driver,
 /// which writes each stage to `dump` or where `LLRM_MIR_STAGES` names.
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options) -> Result<masm::Module, CompileError> {
+    selected_checking(text, module, dump, codegen, None)
+}
+
+/// What C's runtime says of its stack: `stack.toml`, Open Watcom's `_STACKLOW` and
+/// `__STKOVERFLOW`, which `__STK` compares and enters.
+pub fn stack_check() -> llrm_core::hir::model::StackCheck {
+    let row = toml::Value::Table(include_str!("stack.toml").parse().expect("stack.toml parses"));
+    llrm_core::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
+}
+
+/// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
+pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
     let unit = hir::unit(&stream::parse(text))?;
-    let program = translate::program(&unit, module)?;
+    let program = llrm_core::hir::model::Program { stack_check, ..translate::program(&unit, module)? };
     let mut options = codegen.clone();
     if let Some(dump) = dump {
         fs::create_dir_all(dump)?;
@@ -202,7 +214,7 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
-        let built = selected(&text, module, args.dump.as_deref(), &args.codegen)?;
+        let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(stack_check))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
             fs::write(&output, omfwrite::written(&built, name)?)?;
@@ -244,6 +256,25 @@ mod tests {
             })
             .expect("a loop");
         lines[top..back].iter().map(|one| (*one).to_owned()).collect()
+    }
+
+    /// `-fsanitize=stack` compares with the word and calls the routine `stack.toml` names, and the C
+    /// start-up the tests link defines both: a description naming a word start-up never fills would
+    /// compare with zero. The default build checks nothing.
+    #[test]
+    fn the_stack_check_names_what_the_c_runtime_defines() {
+        let root = Path::new(env!("LLRM_ROOT"));
+        let check = super::stack_check();
+        let runtime = |name: &str| std::fs::read_to_string(root.join("tools/loops/runtime").join(name)).unwrap();
+        assert!(runtime("crt.asm").contains(&format!("public {}", check.limit)) && runtime("crt.asm").contains(&format!("mov {}, ax", check.limit)));
+        assert!(runtime("ext.asm").contains(&format!("public {}", check.handler)));
+        let text = std::fs::read_to_string(root.join("tests/fixtures/c/anims.cgs")).unwrap();
+        let options = llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
+        let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check).unwrap()).unwrap();
+        let named = llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check };
+        let checked = listing(Some(named));
+        assert!(checked.contains("cmp sp, word ptr FOO") && checked.contains("call far ptr BAR") && !checked.contains("_STACKLOW"), "{checked}");
+        assert!(!listing(None).contains("cmp sp"));
     }
 
     /// The innermost loop's counting: its steps by a constant and its compares.

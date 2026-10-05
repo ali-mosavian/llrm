@@ -91,6 +91,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &Seg
         requests: BTreeSet::new(),
         frames: BTreeMap::new(),
         line_numbers: BTreeMap::new(),
+        stack_check: None,
     };
     let family = match found_module::family(&records) {
         Family::Quickbasic => RuntimeProfile::Qb45,
