@@ -32,6 +32,7 @@ const COVERAGE: &[(&str, Shown)] = &[
     ("nocallback", Unread("ow-frontend-contract: stated by the QB runtime table; a test of globalsaa reading it is owed")),
     ("cold", By(&["test_a_frontend_cold_block_stays_cold_in_the_rich_mir"])),
     ("threeway", Unread("qcport-rich: a pass that folds a compare of a three-way result")),
+    ("stackcheck", By(&["the_limit_and_handler_come_from_the_runtime_description", "test_a_small_leaf_the_callers_check_covers_goes_unchecked"])),
     ("dereferenceable", By(&["test_a_reference_parameter_is_dereferenceable"])),
     ("align", Unread("ow-frontend-contract: valuetracking reads a data object's Align (tested in llrm-mir); a pass-level test through a load fold or hoist is owed")),
     ("initializes", By(&["facts_of_a_call_argument_are_its_call_site_attributes", "a_call_filling_a_buffer_kills_its_earlier_fill"])),

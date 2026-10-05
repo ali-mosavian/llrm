@@ -50,7 +50,7 @@ fn moved(what: &crate::model::ir::Semantics) -> i64 {
 }
 
 /// Bytes `procedure` has on the stack at its deepest: not counting what it calls.
-fn frame(procedure: &masm::Procedure) -> i64 {
+pub fn frame(procedure: &masm::Procedure) -> i64 {
     let (enter, _) = masm::_frame_parts(procedure);
     let entry: i64 = enter
         .iter()
@@ -68,7 +68,11 @@ fn frame(procedure: &masm::Procedure) -> i64 {
             _ => 0,
         })
         .sum();
-    // What its call sites have pushed when they call, the deepest.
+    (if procedure.far { 4 } else { 2 }) + entry + procedure.entry + outgoing(procedure)
+}
+
+/// What `procedure`'s call sites have pushed when they call, the deepest.
+pub fn outgoing(procedure: &masm::Procedure) -> i64 {
     let mut peak = 0;
     for block in &procedure.body.blocks {
         let mut held = 0_i64;
@@ -85,7 +89,27 @@ fn frame(procedure: &masm::Procedure) -> i64 {
             }
         }
     }
-    (if procedure.far { 4 } else { 2 }) + entry + procedure.entry + peak
+    peak
+}
+
+/// Drops the stack check of each procedure that cannot take SP below the limit by more than the
+/// runtime's red zone, given every other procedure checks:
+///
+/// - it is a leaf (no call, no inline code), so nothing below it is checked either way;
+/// - only the module's own direct calls enter it (`entered_directly`: internal, address not
+///   taken), so its caller is a checked procedure, or a leaf that calls nothing;
+/// - its caller held SP at or above the limit after its own frame, then pushed at most the
+///   module's deepest `outgoing` and the return address before this frame, so this frame and
+///   that push stay within `red_zone` bytes below the limit.
+pub fn elide_checks(procedures: &mut [masm::Procedure], entered_directly: &dyn Fn(&str) -> bool) {
+    let pushed = procedures.iter().map(outgoing).max().unwrap_or(0);
+    for procedure in procedures.iter_mut() {
+        let Some(check) = &procedure.stack_check else { continue };
+        let leaf = procedure.callees.is_empty() && procedure.body.insns().iter().all(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Call));
+        if leaf && !procedure.public && entered_directly(&procedure.name) && frame(procedure) + pushed <= check.red_zone {
+            procedure.stack_check = None;
+        }
+    }
 }
 
 /// What the runtime's routines, DOS and an interrupt use below the program's

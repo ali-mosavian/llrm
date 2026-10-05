@@ -302,6 +302,13 @@ pub fn stack_externs(procedures: &[Procedure], names: &mut IndexMap<(Space, i64)
     externs
 }
 
+/// Whether a procedure, by its symbol, is entered only by the direct calls `module`'s own
+/// functions make: its address is taken nowhere (`callgraph::addressed`).
+pub fn entered_directly<'a>(module: &'a llrm_mir::Module, names: &'a IndexMap<(Space, i64), String>) -> impl Fn(&str) -> bool + 'a {
+    let addressed: BTreeSet<&String> = llrm_mir::callgraph::addressed(module).iter().filter_map(|id| names.get(&(Space::Segment, i64::from(id.0)))).collect();
+    move |name| !addressed.contains(&name.to_owned())
+}
+
 /// The block number the overflow call takes: past every instruction's.
 pub fn cold_at(body: &lir::LirBody) -> i64 {
     body.blocks.iter().map(|block| block.at).chain(body.insns().into_iter().map(|one| one.at)).max().unwrap_or(0) + 1

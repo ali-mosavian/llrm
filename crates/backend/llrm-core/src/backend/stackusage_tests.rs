@@ -99,3 +99,38 @@ fn test_the_stack_to_add_is_what_the_chain_needs_beyond_the_base() {
     assert_eq!(stack_to_add(&one(6010), 0x800), Ok(4 + 6010 + STACK_RESERVE - 0x800));
     assert!(stack_to_add(&one(0xF000), 0x800).unwrap_err().contains("bytes of stack"));
 }
+
+fn checked(mut one: Procedure, red_zone: i64) -> Procedure {
+    one.public = false;
+    one.stack_check = Some(crate::backend::masm::StackCheck { limit: "LIM".into(), handler: "HAND".into(), red_zone, entry: None });
+    one
+}
+
+/// A leaf that calls nothing.
+fn leaf(name: &str, reserve: i64) -> Procedure {
+    let body = LirBody::new(name, 0, vec![LirBlock::new(0, vec![insn(0, Operation::Return, "ret", vec![])])], IndexMap::default(), IndexMap::default());
+    Procedure { body, ..procedure(name, reserve, 0, &[]) }
+}
+
+/// What `elide_checks` leaves checked, by name, of procedures all entered directly.
+fn kept(mut procedures: Vec<Procedure>, direct: bool) -> Vec<String> {
+    super::elide_checks(&mut procedures, &|_| direct);
+    procedures.into_iter().filter(|one| one.stack_check.is_some()).map(|one| one.name).collect()
+}
+
+/// A check costs a compare and a branch at every call; a leaf the caller's check already covers
+/// needs none. Far return 4 + bp 2 + 8 locals = 14, and the caller's widest push is 6: 20 <= 32, not <= 19.
+/// What is not provably covered keeps it: a leaf past the red zone, one whose address is taken, one
+/// the world calls, any caller, and everything where the runtime states no red zone.
+#[test]
+fn test_a_small_leaf_the_callers_check_covers_goes_unchecked() {
+    let main = || checked(procedure("main", 4, 3, &["small"]), 32);
+    assert_eq!(kept(vec![main(), checked(leaf("small", 8), 32)], true), ["main"]);
+    assert_eq!(kept(vec![main(), checked(leaf("small", 8), 32)], false), ["main", "small"], "its address is taken");
+    assert_eq!(kept(vec![main(), checked(leaf("big", 40), 32)], true), ["main", "big"], "past the red zone");
+    assert_eq!(kept(vec![main(), checked(leaf("small", 8), 19)], true), ["main", "small"], "with the caller's push, 1 byte past");
+    assert_eq!(kept(vec![main(), checked(leaf("small", 8), 0)], true), ["main", "small"], "no red zone stated");
+    let published = Procedure { public: true, ..checked(leaf("small", 8), 32) };
+    assert_eq!(kept(vec![main(), published], true), ["main", "small"], "called from outside");
+    assert_eq!(kept(vec![checked(procedure("outer", 0, 0, &["small"]), 32), checked(leaf("small", 8), 32)], true), ["outer"]);
+}
