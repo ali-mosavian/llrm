@@ -102,6 +102,85 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
     out
 }
 
+/// `classes`, with a phi's result and arguments, and the two sides of a phi edge's copy, taking one class: they are
+/// one value once the coalescer has merged them. A value that only a phi or such a copy reads, as one a loop reads
+/// through its header phi is, has no class of its own.
+pub fn classes_through_webs(body: &LirBody, segments: &Segments) -> Classes {
+    let mut out = classes(body, &BTreeSet::new(), segments);
+    let (mut selecting, mut numeric): (BTreeSet<u32>, BTreeSet<u32>) = (BTreeSet::new(), BTreeSet::new());
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let Some(what) = &one.what else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            match place {
+                Loc::Mem(cell) => {
+                    selecting.extend(cell.selector.map(|selector| selector.value));
+                    numeric.extend(cell.base.map(|base| base.value));
+                    numeric.extend(cell.index.map(|index| index.value));
+                }
+                Loc::Held(held) if held.width != 2 || !_SEGMENT_OPERANDS.contains(&what.op) => {
+                    numeric.insert(held.value);
+                }
+                _ => {}
+            }
+        }
+    }
+    let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
+    _through_webs(body, &selecting, &numeric, &selectors, &mut out);
+    out
+}
+
+fn _through_webs(body: &LirBody, selecting: &BTreeSet<u32>, numeric: &BTreeSet<u32>, selectors: &BTreeSet<Register>, out: &mut Classes) {
+    let mut web: IndexMap<u32, u32> = IndexMap::default();
+    fn find(web: &mut IndexMap<u32, u32>, value: u32) -> u32 {
+        let up = *web.entry(value).or_insert(value);
+        if up == value {
+            return value;
+        }
+        let top = find(web, up);
+        web.insert(value, top);
+        top
+    }
+    for phi in body.blocks.iter().flat_map(|block| &block.phis) {
+        for (_, value) in &phi.incoming {
+            let (one, other) = (find(&mut web, phi.result), find(&mut web, *value));
+            web.insert(one, other);
+        }
+    }
+    for one in body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.group.is_some()) {
+        if let ([into], [from]) = (one.defines.as_slice(), one.uses.as_slice()) {
+            let (a, b) = (find(&mut web, *into), find(&mut web, *from));
+            web.insert(a, b);
+        }
+    }
+    let mut members: IndexMap<u32, Vec<u32>> = IndexMap::default();
+    for value in web.keys().copied().collect::<Vec<_>>() {
+        let top = find(&mut web, value);
+        members.entry(top).or_default().push(value);
+    }
+    for list in members.values().filter(|list| list.len() > 1) {
+        let mut class: Option<BTreeSet<Register>> = None;
+        for value in list {
+            if let Some(mine) = out.get(value) {
+                class = Some(match class {
+                    Some(so_far) => so_far.intersection(mine).copied().collect(),
+                    None => mine.clone(),
+                });
+            }
+        }
+        if list.iter().any(|value| selecting.contains(value)) && !list.iter().any(|value| numeric.contains(value)) {
+            class = Some(match class {
+                Some(so_far) => so_far.intersection(selectors).copied().collect(),
+                None => selectors.clone(),
+            });
+        }
+        if let Some(class) = class {
+            for value in list {
+                out.insert(*value, class.clone());
+            }
+        }
+    }
+}
+
 /// Choose BX versus SI/DI for commutative `[word+word]` graphs.
 fn _word_address_roles(
     pairs: &[(u32, u32)],
@@ -254,7 +333,7 @@ fn matched(wanted: &[(u32, BTreeSet<Register>)]) -> bool {
 /// waits in another class's register; one with some cannot, whatever the allocator does. `skip` names the values
 /// another pass places (x87, pinned, inputs).
 pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>) -> Vec<Violation> {
-    let confined = classes(body, &BTreeSet::new(), segments);
+    let confined = classes_through_webs(body, segments);
     let (_, live_out) = crate::backend::allocate::live(body);
     let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
     let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
@@ -318,4 +397,57 @@ pub fn violations(body: &LirBody, segments: &Segments, skip: &BTreeSet<u32>) -> 
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::ir::{Addr, Mem, Semantics};
+    use crate::model::lir::{LirBlock, Phi};
+
+    /// A far pointer's segment that a loop reads only through its header phi: FADETOCOLOR's selectors had no class of
+    /// their own after SsaSpill and counted among the general registers (3 over, 63 points after PhiElimination)
+    /// while they sat in selector registers.
+    #[test]
+    fn test_a_segment_only_a_phi_reads_has_the_class_of_its_web() {
+        let (entry_segment, segment, base, loaded) = (1, 2, 3, 4);
+        let cell = Mem {
+            base: Some(Held { value: base, width: 2 }),
+            selector: Some(Held { value: segment, width: 2 }),
+            ..Mem::new(Some(Addr { segment: Register::ES, ..Addr::new(Space::Far, 0) }), 2)
+        };
+        let semantics = |op, name: &str, dests, sources, target| Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let make = |at, defines: Vec<u32>, uses: Vec<u32>, what| Arc::new(Insn::new(at, None, Some(what), defines, uses));
+        let entry = LirBlock {
+            at: 0,
+            insns: vec![
+                make(1, vec![entry_segment], vec![], semantics(Operation::Move, "mov", vec![held(entry_segment)], vec![Loc::Imm(crate::model::ir::Imm { value: 1, width: 2, address: None })], None)),
+                make(2, vec![base], vec![], semantics(Operation::Move, "mov", vec![held(base)], vec![Loc::Imm(crate::model::ir::Imm { value: 2, width: 2, address: None })], None)),
+                make(3, vec![], vec![], semantics(Operation::Jump, "jmp", vec![], vec![], Some(1))),
+            ],
+            succ: vec![1],
+            phis: vec![],
+            cold: false,
+        };
+        let looped = LirBlock {
+            at: 1,
+            insns: vec![
+                make(4, vec![loaded], vec![base, segment], semantics(Operation::Move, "mov", vec![held(loaded)], vec![Loc::Mem(cell)], None)),
+                make(5, vec![], vec![], semantics(Operation::Branch, "jne", vec![], vec![], Some(1))),
+            ],
+            succ: vec![1, 2],
+            phis: vec![Phi { result: segment, incoming: vec![(0, entry_segment), (1, segment)] }],
+            cold: false,
+        };
+        let exit = LirBlock { at: 2, insns: vec![make(6, vec![], vec![loaded], semantics(Operation::Return, "ret", vec![], vec![], None))], succ: vec![], phis: vec![], cold: false };
+        let body = LirBody::new("f", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
+        let segments = &target::BUILT_IN;
+        assert!(classes(&body, &BTreeSet::new(), segments).get(&entry_segment).is_none(), "premise: it has no class of its own");
+        let webs = classes_through_webs(&body, segments);
+        assert_eq!(webs.get(&entry_segment), webs.get(&segment));
+        assert!(webs.get(&entry_segment).is_some());
+    }
 }
