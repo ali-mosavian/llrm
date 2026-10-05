@@ -429,3 +429,18 @@ fn test_phis_that_do_not_fit_live_in_memory() {
     let most = found.iter().map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { live - registers } else { usize::MAX }).max().unwrap_or(0);
     assert!(most <= 1, "{most} values over the registers at the worst point");
 }
+
+/// A memory phi's argument that is dead where its web is defined shares the result's slot: it is stored where it is
+/// made and the back edge carries no store. Without sharing every argument was stored on its edge, a store for each
+/// of sixteen carried values each trip.
+#[test]
+fn test_memory_phi_arguments_share_their_results_slot() {
+    let stores = |share: bool| {
+        let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
+        let spilled = if share { phases[0].transform(body) } else { ssaspill::without_shared_slots(|| phases[0].transform(body)) }.expect("spills");
+        let eliminated = crate::backend::phielim::eliminated(&spilled).expect("eliminates");
+        crate::backend::executed::executed(&eliminated).map(|done| done.memory).expect("estimates")
+    };
+    let (shared, apart) = (stores(true), stores(false));
+    assert!(shared < apart, "{shared} memory operands with shared slots, {apart} without");
+}

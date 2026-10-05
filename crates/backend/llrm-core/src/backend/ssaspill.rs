@@ -38,6 +38,16 @@ const EXIT: i64 = 1 << 20;
 thread_local! {
     static CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_PHIS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static SHARED_SLOTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `run` with no phi web sharing a slot on this thread: every argument is stored on its edge.
+#[cfg(test)]
+pub fn without_shared_slots<T>(run: impl FnOnce() -> T) -> T {
+    let before = SHARED_SLOTS.with(|one| one.replace(false));
+    let done = run();
+    SHARED_SLOTS.with(|one| one.set(before));
+    done
 }
 
 /// `run` with no phi taken into memory on this thread: every phi the registers cannot hold arrives in one and is stored.
@@ -1116,13 +1126,28 @@ fn memory_phis(body: &LirBody, flow: &Flow, remakes: &IndexMap<u32, Arc<Insn>>, 
             })
             .collect();
         eligible.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        for (_, result) in eligible {
-            if crowd == 0 {
-                break;
-            }
-            chosen.insert(result);
-            crowd -= 1;
+        eligible.truncate(crowd);
+        // The register form spills each at the top and makes room for it at the copy by evicting what the block
+        // reads last, as the choice of what it holds at its top does: a store and the eviction's reloads.
+        let top = weights.block(block.at);
+        let mut held: Vec<(i64, u32)> = edit
+            .w_in
+            .iter()
+            .copied()
+            .filter(|value| !block.arrives().contains(value))
+            .map(|value| (flow.uses[&block.at].get(&value).and_then(|list| list.first()).map_or(FAR, |first| *first as i64).min(flow.from_top[&block.at].get(&value).copied().unwrap_or(FAR)), value))
+            .collect();
+        held.sort_unstable_by(|a, b| b.cmp(a));
+        // Past what it can evict the register form has no room: those are memory phis, whatever they cost.
+        let forced = eligible.len().saturating_sub(held.len());
+        chosen.extend(eligible.iter().take(forced).map(|(_, result)| *result));
+        let rest = &eligible[forced..];
+        let evicting: f64 = held.iter().take(rest.len()).map(|(near, _)| if *near < EXIT { top } else { 0.0 }).sum();
+        let memory_cost: f64 = rest.iter().map(|(cost, result)| cost - reads.get(result).copied().unwrap_or(0.0)).sum();
+        if memory_cost < rest.len() as f64 * top + evicting {
+            chosen.extend(rest.iter().map(|(_, result)| *result));
         }
+        let _ = &mut crowd;
     }
     let phis: IndexMap<u32, &crate::model::lir::Phi> = body.blocks.iter().flat_map(|block| block.phis.iter()).map(|phi| (phi.result, phi)).collect();
     loop {
@@ -1141,7 +1166,7 @@ fn memory_phis(body: &LirBody, flow: &Flow, remakes: &IndexMap<u32, Arc<Insn>>, 
 /// defined; any other argument is stored on its edge.
 fn shared_slots(body: &LirBody, flow: &Flow, remakes: &IndexMap<u32, Arc<Insn>>, wanted: &dyn Fn(u32) -> bool, memory: &BTreeSet<u32>) -> IndexMap<u32, u32> {
     let mut shared: IndexMap<u32, u32> = IndexMap::default();
-    if memory.is_empty() {
+    if memory.is_empty() || !SHARED_SLOTS.with(std::cell::Cell::get) {
         return shared;
     }
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
