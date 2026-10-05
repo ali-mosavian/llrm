@@ -58,6 +58,12 @@ pub fn summary(body: &LirBody, cpu: &Profile) -> String {
     }
 }
 
+/// What a body costs to run, one unit for an instruction and one for a memory operand: what `executed` counts, as the
+/// number the allocator and the route choice compare alternatives by. `None` where there is no finite estimate.
+pub fn work(body: &LirBody) -> Option<f64> {
+    executed(body).map(|done| done.instructions + done.memory)
+}
+
 /// `None` for control flow with no finite profile-free estimate.
 pub fn executed(body: &LirBody) -> Option<Executed> {
     let graph = &body.blocks;
