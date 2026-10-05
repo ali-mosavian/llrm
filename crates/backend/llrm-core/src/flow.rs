@@ -91,6 +91,14 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
     let body = if std::env::var_os("LLRM_STRIP_META").is_some() { without_meta(body) } else { body };
+    if std::env::var("TRACEL").is_ok_and(|name| name == body.name) && stage == "regalloc" {
+        for block in &body.blocks {
+            eprintln!("L @{} succ {:?} phis {:?}", block.at, block.succ, block.phis.iter().map(|p| (p.result, p.incoming.clone())).collect::<Vec<_>>());
+            for (n, insn) in block.insns.iter().enumerate() {
+                eprintln!("L   {n}: {:?} <- {:?} {:?} g{:?} {}", insn.defines, insn.uses, insn.what.as_ref().and_then(|w| w.name.clone()), insn.group, insn.what.as_ref().map(|w| w.dests.iter().chain(&w.sources).filter_map(|p| if let crate::model::ir::Loc::Mem(c) = p { Some(format!("[b{:?} i{:?}]", c.base.map(|h| h.value), c.index.map(|h| h.value))) } else { None }).collect::<Vec<_>>().join(" ")).unwrap_or_default());
+            }
+        }
+    }
     let owned = body.owned_bytes();
     let transformed =
         crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;

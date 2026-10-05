@@ -509,14 +509,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
-    let oriented_early;
-    let (body, confined) = if std::env::var_os("EARLYROLES").is_some() {
-        oriented_early = crate::backend::addressroles::oriented(body, segments, prices);
-        let classes = regclass::classes(&oriented_early, segments);
-        (&oriented_early, classes)
-    } else {
-        (body, regclass::open_classes(body, segments))
-    };
+    let confined = regclass::open_classes(body, segments);
     let skip = untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();

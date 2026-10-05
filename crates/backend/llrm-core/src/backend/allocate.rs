@@ -1552,7 +1552,7 @@ impl RegAlloc {
             }
             for candidate in _retainable_bases(&body, &spilled) {
                 let keep = BTreeSet::from([candidate]);
-                candidates.push((body.clone(), reloads.clone(), keep.clone(), keep));
+                candidates.push((crate::backend::addressroles::oriented(&body, &segments, crate::backend::ssaspill::Prices::of(&cpu), &keep), reloads.clone(), keep.clone(), keep));
             }
             // Splitting is priced one value at a time, against registers its
             // pieces may later lose; the whole output without it is the check.
@@ -2867,7 +2867,7 @@ mod tests {
             vec![2, 3, 4],
         );
         let body = body_of("shared-index", 0, vec![_frame_load(1, 1, 4), _frame_load(2, 2, 6), index, read, write]);
-        let body = crate::backend::addressroles::oriented(&body, &target::BUILT_IN, crate::backend::ssaspill::Prices::clocks());
+        let body = crate::backend::addressroles::oriented(&body, &target::BUILT_IN, crate::backend::ssaspill::Prices::clocks(), &BTreeSet::new());
 
         let assignment = allocated(&body, None).expect("allocates");
         assert!(assignment.spilled.is_empty(), "{assignment:?}");
@@ -2898,7 +2898,7 @@ mod tests {
         };
         let read = _load(4, 3, cell, vec![1, 2]);
         let body = body_of("call-crossing-base", 0, vec![_frame_load(1, 1, 4), call, index, read]);
-        let body = crate::backend::addressroles::oriented(&body, &target::BUILT_IN, crate::backend::ssaspill::Prices::clocks());
+        let body = crate::backend::addressroles::oriented(&body, &target::BUILT_IN, crate::backend::ssaspill::Prices::clocks(), &BTreeSet::new());
 
         let found = classes(&body, &target::BUILT_IN);
 

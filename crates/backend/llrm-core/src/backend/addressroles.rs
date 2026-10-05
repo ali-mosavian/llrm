@@ -35,13 +35,15 @@ impl LIRTransform for AddressRoles {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        Ok(oriented(&body, &self.segments, self.prices))
+        Ok(oriented(&body, &self.segments, self.prices, &BTreeSet::new()))
     }
 }
 
 /// `body` with every word pair's base and index fields in the roles chosen for them.
-pub fn oriented(body: &LirBody, segments: &Segments, prices: Prices) -> LirBody {
-    let chosen = chosen_roles(body, segments, prices);
+/// `prefer_indexes` are values a trial wants out of the base register where their component allows: the allocator tries
+/// a body so oriented when it spilled a base it could have kept.
+pub fn oriented(body: &LirBody, segments: &Segments, prices: Prices, prefer_indexes: &BTreeSet<u32>) -> LirBody {
+    let chosen = chosen_roles(body, segments, prices, prefer_indexes);
     let reversed = |cell: &Mem| -> bool {
         let (Some(base), Some(index)) = (cell.base, cell.index) else { return false };
         if base.width != 2 || index.width != 2 || cell.scale != 1 {
@@ -80,7 +82,7 @@ pub fn oriented(body: &LirBody, segments: &Segments, prices: Prices) -> LirBody 
 }
 
 /// Each value of a word pair: true where it is the base. Where a component cannot be split in two sides it is absent.
-fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap<u32, bool> {
+fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices, prefer_indexes: &BTreeSet<u32>) -> IndexMap<u32, bool> {
     let mut pairs: Vec<(u32, u32)> = Vec::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
@@ -213,12 +215,64 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
         }
         (bases, indexes)
     };
+    // A copy between two values the roles would give different registers stays a copy: the coalescer cannot merge them.
+    let mut copies: Vec<(u32, u32, f64)> = Vec::new();
+    for block in &body.blocks {
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            if let ([Loc::Held(into)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) {
+                if what.op == crate::model::ir::Operation::Move && into.width == 2 && from.width == 2 && into.value != from.value {
+                    copies.push((into.value, from.value, frequency.block(block.at)));
+                }
+            }
+        }
+    }
+    // Copies the coalescer would merge into webs.
+    let webs: Vec<Vec<(u32, u32, f64)>> = {
+        let mut parent: IndexMap<u32, u32> = IndexMap::default();
+        fn find(parent: &mut IndexMap<u32, u32>, value: u32) -> u32 {
+            let up = *parent.entry(value).or_insert(value);
+            if up == value {
+                return value;
+            }
+            let top = find(parent, up);
+            parent.insert(value, top);
+            top
+        }
+        for (into, from, _) in &copies {
+            let (one, other) = (find(&mut parent, *into), find(&mut parent, *from));
+            parent.insert(one, other);
+        }
+        let mut grouped: IndexMap<u32, Vec<(u32, u32, f64)>> = IndexMap::default();
+        for edge in &copies {
+            let top = find(&mut parent, edge.0);
+            grouped.entry(top).or_default().push(*edge);
+        }
+        grouped.into_values().collect()
+    };
     let priced = |first_is_base: &[bool]| -> f64 {
         let (bases, indexes) = sets(first_is_base);
-        if std::env::var_os("CLOBBERONLY").is_some() {
-            return bases.iter().filter_map(|value| live.get(value)).map(|interval| across(interval, word_base)).sum();
+        let base_side: BTreeSet<u32> = bases.iter().copied().collect();
+        let index_side: BTreeSet<u32> = indexes.iter().copied().collect();
+        // A web with members the roles put in different registers keeps copies: as many as the fewer sides' runs.
+        let mut apart = 0.0;
+        for edges in &webs {
+            let (mut base_runs, mut index_runs, mut base_seen, mut index_seen) = (0.0, 0.0, false, false);
+            for (into, from, runs) in edges {
+                if base_side.contains(into) || base_side.contains(from) {
+                    base_runs += runs;
+                    base_seen = true;
+                }
+                if index_side.contains(into) || index_side.contains(from) {
+                    index_runs += runs;
+                    index_seen = true;
+                }
+            }
+            if base_seen && index_seen {
+                apart += prices.copy * f64::min(base_runs, index_runs);
+            }
         }
-        crowd(&bases, &indexes)
+        crowd(&bases, &indexes) + apart
     };
     // A component turns over where the other roles cost less, by the price: one that does not is left as isel spelled it.
     let mut best = priced(&first_is_base);
@@ -236,7 +290,7 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
                 eprintln!("AR3 {} comp {at} base-first {} priced {tried} (bases {:?} -> {} ; indexes {:?} -> {}) best {best}", body.name, first_is_base[at], bases, pressure(&bases, word_base, 1), indexes, pressure(&indexes, word_index, 2));
             }
             // The price is of whole copies: a saving smaller than one pair of them at the entry's frequency is not told from none.
-            if tried + 2.0 * prices.copy * frequency.block(body.entry) <= best {
+            if tried < best {
                 best = tried;
                 turned = true;
             } else {
@@ -245,6 +299,15 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
         }
         if !turned {
             break;
+        }
+    }
+    for (at, (left, right)) in sides.iter().enumerate() {
+        let wanted_out = |values: &BTreeSet<u32>| values.iter().any(|value| prefer_indexes.contains(value));
+        let first = if wanted_out(left) && !wanted_out(right) { Some(false) } else if wanted_out(right) && !wanted_out(left) { Some(true) } else { None };
+        if let Some(first) = first {
+            if possible(at, first) {
+                first_is_base[at] = first;
+            }
         }
     }
     if let Ok(force) = std::env::var("FORCEFLIP") {
@@ -260,6 +323,12 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
             if !only.contains(&at) {
                 first_is_base[at] = seeded[at];
             }
+        }
+    }
+    if std::env::var_os("TRACEAR4").is_some() {
+        for (left, right) in &sides {
+            let size = |values: &BTreeSet<u32>| -> i64 { values.iter().filter_map(|value| live.get(value)).map(|interval| interval.size()).sum() };
+            eprintln!("AR4 {} {:?} size {} vs {:?} size {}", body.name, left, size(left), right, size(right));
         }
     }
     if std::env::var_os("TRACEAR").is_some() {
