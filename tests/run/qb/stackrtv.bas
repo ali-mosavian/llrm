@@ -1,15 +1,15 @@
 ' flags: -O2 --cpu 486 -fsanitize=stack
 ' dialect: vbdos
 ' mask: [0-9A-F]{4}:[0-9A-F]{4}
-' Same through the runtime's checking frame entry, B$ENRD.
-DECLARE FUNCTION Deep% (n AS INTEGER)
+' Unbounded recursion in a procedure the runtime frames (its local STRING needs the runtime's frame)
+' enters the runtime's checking entry B$ENRD under -fsanitize=stack: the same fatal "Out of stack
+' space" as an own frame's check, not a crash.
+DECLARE SUB Deep (n AS INTEGER)
 PRINT "start"
-PRINT Deep%(30000)
+Deep 30000
 PRINT "unreachable"
-FUNCTION Deep% (n AS INTEGER)
-  IF n = 0 THEN
-    Deep% = 0
-  ELSE
-    Deep% = 1 + Deep%(n - 1)
-  END IF
-END FUNCTION
+SUB Deep (n AS INTEGER)
+  DIM t AS STRING
+  t = "x"
+  IF n > 0 THEN Deep n - 1
+END SUB

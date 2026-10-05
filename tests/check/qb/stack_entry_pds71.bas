@@ -1,17 +1,15 @@
 ' RUN: llrm-qb %s --dialect pds71 --runtime pds71 -fsanitize=stack -S -o /dev/stdout
-' A procedure the runtime frames enters through its checking entry, B$ENRD, as BC /D does,
-' and carries no check of its own.
-' CHECK-LABEL: DEEP proc
+' A procedure the runtime frames (a local STRING needs its handle) enters through the checking
+' entry, B$ENRD, as BC /D does, and carries no check of its own, and no shell of its own: the entry builds the frame.
+' CHECK-LABEL: S proc
+' CHECK-NOT: push bp
 ' CHECK-NOT: b$pendchk
 ' CHECK: call far ptr B$ENRD
 ' CHECK-NOT: B$ENRA
-' CHECK: DEEP endp
-DECLARE FUNCTION Deep% (n AS INTEGER)
-PRINT Deep%(3)
-FUNCTION Deep% (n AS INTEGER)
-  IF n = 0 THEN
-    Deep% = 0
-  ELSE
-    Deep% = 1 + Deep%(n - 1)
-  END IF
-END FUNCTION
+' CHECK: S endp
+S
+SUB S
+  DIM t AS STRING
+  t = "x"
+  PRINT t
+END SUB

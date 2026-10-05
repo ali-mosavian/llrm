@@ -1,21 +1,21 @@
-reason = "Nib gets a start-up program, so kernel_ms"
-blessed = "2026-10-04"
+reason = "range stamps on parameters of internal bodies (#453): queens -O2 memory operands 85,834 -> 80,083, bytes 383 -> 377; instructions +2,480 and kernel 3.8237 -> 3.8568 ms are layout: the same far call to safe, which main already executed as push cs / call near, gets jwlink's trailing nop instead of a ds: prefix because an offset moved (executed 3,584 times); arg-promotion's near calls for internal bodies remove it"
+blessed = "2026-10-05"
 
 [bas.O2]
-instructions = 453678
-memory_operands = 165571
-code_bytes = 428
+instructions = 332599
+memory_operands = 106548
+code_bytes = 440
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 6.1212
+kernel_ms = 4.4435
 
 [bas.Os]
-instructions = 457768
-memory_operands = 165571
-code_bytes = 415
+instructions = 336710
+memory_operands = 106561
+code_bytes = 419
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 6.176
+kernel_ms = 4.4987
 
 [c.O2]
 instructions = 230365
@@ -34,36 +34,18 @@ bss_bytes = 0
 kernel_ms = 3.1128
 
 [nib.O2]
-instructions = 286620
-memory_operands = 85834
-code_bytes = 383
+instructions = 289100
+memory_operands = 80083
+code_bytes = 377
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.8234
 
 [nib.Os]
-instructions = 289633
-memory_operands = 88806
-code_bytes = 334
+instructions = 288530
+memory_operands = 83607
+code_bytes = 331
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.864
-
-[basown.O2]
-instructions = 332599
-memory_operands = 106548
-code_bytes = 440
-data_bytes = 15
-bss_bytes = 0
-kernel_ms = 4.4435
-
-[basown.Os]
-instructions = 336710
-memory_operands = 106561
-code_bytes = 419
-data_bytes = 15
-bss_bytes = 0
-kernel_ms = 4.4987
 
 [ow.O2]
 instructions = 217955

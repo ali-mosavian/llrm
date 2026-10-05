@@ -3,7 +3,7 @@
 //! hold yet is refused whole with the reason: a function is left declared,
 //! a data object an external global, so what refers to them still verifies.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
@@ -52,14 +52,11 @@ pub struct Emitted {
 }
 
 pub fn emit(program: &model::Program) -> Vec<Emitted> {
-    // A procedure that frames itself zeroes locals with its own stores; its
-    // frame holds garbage.
-    let zeroed = program.zeroed_locals && program.frames == model::Frames::Runtime;
     program
         .modules
         .iter()
         .map(|one| {
-            let mut emitted = emit_module(one, program.array_order, zeroed, &program.promises, program.runtime);
+            let mut emitted = emit_module(one, program, &program.promises);
             if program.stack_check.is_some() {
                 check_stack(&mut emitted.module);
             }
@@ -333,8 +330,8 @@ struct Tables<'h> {
     tags: Tags,
     /// The aliasing class tag of an access as a type, by its id.
     classes: HashMap<i64, MetadataId>,
-    /// Whether a frame starts zeroed.
-    zeroed: bool,
+    /// The functions whose frames start zeroed.
+    zeroed: HashSet<i64>,
     layout: DataLayout,
     types: HashMap<i64, &'h model::Type>,
     callables: HashMap<&'h str, &'h model::Callable>,
@@ -435,7 +432,12 @@ fn loop_node(module: &mut Module, copies: u32) -> MetadataId {
     this
 }
 
-fn emit_module<'h>(hir: &'h model::Module, array_order: model::ArrayOrder, zeroed: bool, promises: &'h model::RuntimePromises, runtime: model::RuntimeProfile) -> Emitted {
+fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &'h model::RuntimePromises) -> Emitted {
+    let (array_order, runtime) = (program.array_order, program.runtime);
+    // A procedure that frames itself zeroes locals with its own stores; its
+    // frame holds garbage. The runtime's frame is zeroed, and a value read
+    // before it is written is zero.
+    let zeroed: HashSet<i64> = hir.functions.iter().filter(|one| program.zeroed_locals && !hir.frames_itself(program.frames, one)).map(|one| one.id).collect();
     let nounwind = promises.nounwind.as_slice();
     let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
     let mut refused = Vec::new();
@@ -1093,7 +1095,7 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             tables.callees.insert(name, reference);
         }
     }
-    if tables.zeroed && !tables.callees.contains_key(MEMSET) {
+    if tables.zeroed.contains(&function.id) && !tables.callees.contains_key(MEMSET) {
         let groups = frame_groups(&mut module.context.types, tables, function)?;
         if groups.iter().any(|group| !matches!(module.context.types.get(group.ty), Type::Int(_) | Type::Float(_) | Type::Pointer(_))) {
             let ty = memset_type(&mut module.context.types);
@@ -1626,7 +1628,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             self.b.call(ty, callee, &[list], "");
             self.passed = Some(self.b.load(pointer, list, false, ""));
         }
-        if !self.tables.zeroed {
+        if !self.tables.zeroed.contains(&self.function.id) {
             return Ok(());
         }
         for (group, object) in groups.iter().zip(self.objects.clone()) {

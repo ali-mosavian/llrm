@@ -301,14 +301,15 @@ fn _basic_segment_classes(data: &[u8], code: &str) -> Result<Vec<u8>, String> {
     Ok(rewritten.iter().flat_map(omf::Record::emit).collect())
 }
 
-/// Remove the native shell when B$ENRA/B$EXSA own the whole frame.
+/// Remove the native shell when the runtime's entry and B$EXSA own the whole frame.
 ///
 /// The shared MASM model supplies a C-shaped BP shell whenever a body
 /// addresses BP or calls anything. B$ENRA itself saves BP, SI and DI, and
 /// B$EXSA restores them, so this source-ABI exception stays in the frontend.
 pub fn _basic_listing(procedure: &masm::Procedure, number: usize) -> Result<Vec<masm::Item>, String> {
     let listing = masm::listing(procedure, number).map_err(|error| error.0)?;
-    let runtime_frame = procedure.callees.values().any(|callee| callee.name == "B$ENRA");
+    // Whichever entry the runtime states: B$ENRA, or the checking B$ENRD, which builds the same frame.
+    let runtime_frame = procedure.entry != 0;
     let module_body = procedure.name == "$QB$MAIN";
     if !runtime_frame && !module_body {
         return Ok(listing);

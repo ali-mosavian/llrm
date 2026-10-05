@@ -439,8 +439,8 @@ fn quickr_procedures_frame_and_zero_fill_themselves() {
     assert!(!own.contains("B$ENRA") && !own.contains("B$EXSA"), "{own}");
     // The HIR's own stores zero the locals; no inline rep stosw.
     assert!(!own.contains("0f3h,0abh"), "{own}");
-    // VBDOS keeps the runtime's frame.
-    assert!(procedure_listing(source, "vbdos", "S").contains("B$ENRA"));
+    // So does VBDOS, unless asked for the runtime's.
+    assert!(!procedure_listing(source, "vbdos", "S").contains("B$ENRA"));
 }
 
 #[test]

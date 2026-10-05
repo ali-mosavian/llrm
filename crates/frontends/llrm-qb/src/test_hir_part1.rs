@@ -298,7 +298,7 @@ fn test_implicit_module_end_uses_cenp_not_explicit_end_entry() {
 /// effects had been mistaken for encoded ES operands of the call.
 #[test]
 fn test_runtime_entry_reserves_the_complete_live_local_extent() {
-    let source = parsed(&fixture("runtime-frame-stack.bas"));
+    let source = parsed_runtime_frames(&fixture("runtime-frame-stack.bas"));
     let listing = listing(&source);
     let procedure = between(&listing, "REPORT proc far", "REPORT endp");
 

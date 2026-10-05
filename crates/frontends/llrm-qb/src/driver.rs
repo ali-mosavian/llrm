@@ -54,9 +54,8 @@ pub struct Frontend {
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation: `--array-merging`.
     pub array_merging: bool,
-    /// Procedures frame themselves where the runtime needs no frame, not
-    /// only where the dialect does so by default: `--own-frames`.
-    pub own_frames: bool,
+    /// Every procedure uses the runtime's frame entry and exit: `--runtime-frames`.
+    pub runtime_frames: bool,
     /// Errors in a module handler report their BASIC line: `--error-lines`.
     pub error_lines: bool,
     pub includes: Vec<PathBuf>,
@@ -79,7 +78,7 @@ impl Frontend {
             alternate_math: false,
             whole_program: false,
             array_merging: false,
-            own_frames: false,
+            runtime_frames: false,
             error_lines: false,
             includes: Vec::new(),
         }
@@ -111,7 +110,7 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<qbfront::driver::Args,
             alternate_math: frontend.alternate_math,
             whole_program: frontend.whole_program,
             array_merging: frontend.array_merging,
-            own_frames: frontend.own_frames,
+            runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
         },
         debug: frontend.debug,
