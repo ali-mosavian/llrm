@@ -215,6 +215,9 @@ fn chosen_roles(body: &LirBody, segments: &Segments, prices: Prices) -> IndexMap
     };
     let priced = |first_is_base: &[bool]| -> f64 {
         let (bases, indexes) = sets(first_is_base);
+        if std::env::var_os("CLOBBERONLY").is_some() {
+            return bases.iter().filter_map(|value| live.get(value)).map(|interval| across(interval, word_base)).sum();
+        }
         crowd(&bases, &indexes)
     };
     // A component turns over where the other roles cost less, by the price: one that does not is left as isel spelled it.
