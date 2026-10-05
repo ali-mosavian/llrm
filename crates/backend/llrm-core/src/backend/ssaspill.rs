@@ -38,15 +38,10 @@ const EXIT: i64 = 1 << 20;
 thread_local! {
     static CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_PHIS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-    static MEMORY_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread chose a phi to live in memory: what tells a caller a route without them is a different route.
-pub fn memory_phis_made() -> usize {
-    MEMORY_MADE.with(std::cell::Cell::get)
 }
 
 /// `run` with no phi taken into memory on this thread: every phi the registers cannot hold arrives in one and is stored.
+#[cfg(test)]
 pub fn without_memory_phis<T>(run: impl FnOnce() -> T) -> T {
     let before = MEMORY_PHIS.with(|one| one.replace(false));
     let done = run();
@@ -633,9 +628,6 @@ fn simulated_with(
         }
         memory.extend(more);
     }
-    if !memory.is_empty() {
-        MEMORY_MADE.with(|count| count.set(count.get() + 1));
-    }
     let mut result = simulated(body, flow, machine, skip, remakes, order, &dropped, &room, frequency, headers, admit, &memory);
     // A loop header keeps a value its back edge must reload only while those
     // reloads run at most half as often as reloads at its first uses inside one trip.
@@ -1081,15 +1073,6 @@ fn simulated(
 fn memory_phis(body: &LirBody, first: &Simulated, machine: &Machine<'_>, skip: &BTreeSet<u32>, weights: &Weights<'_>) -> BTreeSet<u32> {
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
     let read: BTreeSet<u32> = body.insns().iter().flat_map(|one| one.uses.iter().copied()).chain(body.blocks.iter().flat_map(|block| block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)))).collect();
-    // How often each value is read, per block.
-    let mut reads: IndexMap<u32, IndexMap<i64, usize>> = IndexMap::default();
-    for block in &body.blocks {
-        for one in &block.insns {
-            for value in &one.uses {
-                *reads.entry(*value).or_default().entry(block.at).or_default() += 1;
-            }
-        }
-    }
     let mut chosen: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
         let Some(edit) = first.edits.get(&block.at) else { continue };
@@ -1098,18 +1081,15 @@ fn memory_phis(body: &LirBody, first: &Simulated, machine: &Machine<'_>, skip: &
         // And one register stays free for an argument loaded to be stored.
         let k = machine.general.len();
         let mut crowd = arriving.len().saturating_sub(k);
-        // The surplus is the phis whose memory form costs least: a load at each read, a store on each in-edge.
+        // Against the register phi spilled once at the top, whose reads reload as well: a memory phi pays where its
+        // stores on the in-edges cost less than that one store, and the surplus is the phis it pays most for.
+        let top = weights.block(block.at);
         let mut eligible: Vec<(f64, u32)> = block
             .phis
             .iter()
             .filter(|phi| wanted(phi.result) && read.contains(&phi.result) && phi.incoming.iter().all(|(_, value)| wanted(*value)))
-            .map(|phi| {
-                // A confined value is reloaded into one of its few registers, which costs the others their place.
-                let dear = if machine.confined.get(&phi.result).is_some_and(|class| class.len() < machine.general.len()) { 2.0 } else { 1.0 };
-                let loads: f64 = reads.get(&phi.result).map_or(0.0, |blocks| blocks.iter().map(|(at, times)| weights.block(*at) * *times as f64 * dear).sum());
-                let stores: f64 = phi.incoming.iter().filter(|(_, value)| *value != phi.result).map(|(from, _)| weights.edge(*from, block.at)).sum();
-                (loads + stores, phi.result)
-            })
+            .map(|phi| (phi.incoming.iter().filter(|(_, value)| *value != phi.result).map(|(from, _)| weights.edge(*from, block.at)).sum::<f64>() - top, phi.result))
+            .filter(|(gain, _)| *gain < 0.0)
             .collect();
         eligible.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         for (_, result) in eligible {
