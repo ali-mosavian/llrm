@@ -182,6 +182,9 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32) 
             }
             // A rebuilt value's cell reads as well as a slot does.
             if !rebuilt.is_empty() {
+                if std::env::var_os("TRACEFOLD").is_some() && one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("cmp")) {
+                    eprintln!("TF {} cmp uses {:?} rebuilt {:?} fold {:?}", _name(&one), one.uses, rebuilt_values, folded_source(&one, &rebuilt_values));
+                }
                 if let Some(folded) = _source(&one, &rebuilt_values, &mut cells)? {
                     one = folded;
                 }
@@ -1645,6 +1648,10 @@ pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Optio
 }
 
 /// Fold one untied spill source into arithmetic or a comparison.
+fn _name(one: &Insn) -> String {
+    format!("{:?}", one.defines)
+}
+
 fn _source<F: CellOf>(one: &Insn, values: &BTreeSet<u32>, frame: &mut F) -> Result<Option<Arc<Insn>>, Error> {
     let Some(right) = folded_source(one, values) else {
         return Ok(None);
