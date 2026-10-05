@@ -32,8 +32,7 @@ built here), and BC refuses the VBDOS-style `FUNCTION f (a AS INTEGER) AS LONG` 
 program a reference cannot build has no row, and the geomean covers the programs both sides have (`n=`).
 BCC runs at `-3`, llrm and Open Watcom at 486.
 
-Every BASIC program is also built with `llrm-qb --own-frames` (a plain frame for the runtime's `B$ENRA`/`B$EXSA`) and recorded as
-`[basown.O2]` beside `[bas.O2]`, against the same BC references. Recursion pays for the runtime frame on every call: fib 14.9 ms against 5.0.
+BASIC is built on own frames, the default: no `B$ENRA`/`B$EXSA` where the runtime needs no frame. Recursion paid for the runtime's frame on every call (fib 14.9 ms against 5.0); `--runtime-frames` brings it back and is not benchmarked.
 
 ## Timed-only: grep
 

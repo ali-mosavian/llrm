@@ -214,7 +214,7 @@ b0:
 
 const BYTES: &[&[i128]] = &[&[0, 0], &[0, 3], &[0, 6], &[0, 7]];
 
-/// QuickrBASIC's zeroed locals, and every dialect's under `--own-frames`,
+/// Every dialect's zeroed locals
 /// were zeroed a word store at a time: qbdemo's PLASMA grew 38 of them where
 /// B$ENRA had cleared the frame, 10% more code over the program.
 #[test]

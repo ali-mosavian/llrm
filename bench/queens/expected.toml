@@ -2,20 +2,20 @@ reason = "range stamps on parameters of internal bodies (#453): queens -O2 memor
 blessed = "2026-10-05"
 
 [bas.O2]
-instructions = 453678
-memory_operands = 165571
-code_bytes = 428
+instructions = 332599
+memory_operands = 106548
+code_bytes = 440
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 6.1212
+kernel_ms = 4.4435
 
 [bas.Os]
-instructions = 457768
-memory_operands = 165571
-code_bytes = 415
+instructions = 336710
+memory_operands = 106561
+code_bytes = 419
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 6.176
+kernel_ms = 4.4987
 
 [c.O2]
 instructions = 230365
@@ -46,22 +46,6 @@ memory_operands = 83607
 code_bytes = 331
 data_bytes = 0
 bss_bytes = 0
-
-[basown.O2]
-instructions = 332599
-memory_operands = 106548
-code_bytes = 440
-data_bytes = 15
-bss_bytes = 0
-kernel_ms = 4.4435
-
-[basown.Os]
-instructions = 336710
-memory_operands = 106561
-code_bytes = 419
-data_bytes = 15
-bss_bytes = 0
-kernel_ms = 4.4987
 
 [ow.O2]
 instructions = 217955

@@ -176,8 +176,8 @@ a local STRING, for which VBDOS's `B$ENRA` reserves a string handle. An
 inline frame has no runtime stack check, and `B$EXSA` no longer polls events
 when such a procedure returns.
 
-The other dialects keep the runtime's frame. `--own-frames` gives them these
-frames too.
+Every dialect frames this way. `--runtime-frames` keeps the runtime's frame in
+every procedure, as a debug option.
 
 ### Private procedures
 
