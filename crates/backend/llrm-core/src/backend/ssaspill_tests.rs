@@ -379,15 +379,12 @@ fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {
     assert!(wrong.is_empty(), "loads of another width than their register: {wrong:?}");
 }
 
-/// Six far pointers each read once per trip. Priced in clocks, a selector is loaded at the loop's entry
-/// (the trips repeat what it saves); priced in bytes, the entry load is a load more than the one read in
-/// the loop it replaces, and is left out: 42 instructions rather than 44 (the level's price, not the pass's).
+/// Six far pointers read in a 32-trip loop. A selector the back edge reloaded went into a block of its own with a
+/// jump, which ran each trip: 32 jumps executed. It is read where it is used instead (the same load, no jump).
 #[test]
-fn test_a_loop_entry_load_is_priced_by_the_level() {
-    let size = |by_frequency: bool| {
-        let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
-        ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 3.0, by_frequency }).expect("spills").insns().len()
-    };
-    let (clocks, bytes) = (size(true), size(false));
-    assert!(bytes < clocks, "{bytes} instructions priced in bytes, {clocks} in clocks");
+fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
+    let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
+    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices { load: 3.0, by_frequency: true }).expect("spills");
+    let done = crate::backend::executed::executed(&spilled).expect("a reducible body");
+    assert!(done.jumps < 8.0, "{} jumps executed", done.jumps);
 }

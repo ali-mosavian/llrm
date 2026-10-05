@@ -572,7 +572,7 @@ fn simulated_in(
         return attempt(false);
     }
     let (with, without) = (attempt(true), attempt(false));
-    if traffic(&with, &weights, prices) < traffic(&without, &weights, prices) { with } else { without }
+    if traffic(&with, &weights, prices, &BTreeSet::new()) < traffic(&without, &weights, prices, &BTreeSet::new()) { with } else { without }
 }
 
 /// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.
@@ -628,13 +628,36 @@ fn simulated_with(
     // Dropping what a loop evicts leaves the loop's registers short of use: a value is let back in
     // where the loop then moves less to and from memory.
     if machine.file == File::Selector {
-        let mut best = traffic(&result, weights, prices);
+        // An edge from a branch to a join that needs code is bridged by a block of its own, and a jump.
+        let mut preds: IndexMap<i64, usize> = IndexMap::default();
+        for block in &body.blocks {
+            for to in &block.succ {
+                *preds.entry(*to).or_default() += 1;
+            }
+        }
+        let critical: BTreeSet<(i64, i64)> = body.blocks.iter().filter(|block| block.succ.len() > 1).flat_map(|block| block.succ.iter().filter(|to| preds.get(*to).is_some_and(|count| *count > 1)).map(move |to| (block.at, *to))).collect();
+        let mut best = traffic(&result, weights, prices, &critical);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
             let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
-            let moved = traffic(&tried, weights, prices);
+            let moved = traffic(&tried, weights, prices, &critical);
+            if moved < best {
+                best = moved;
+                result = tried;
+                dropped = trial;
+            }
+        }
+        // And a value a loop's back edge reloads on a bridge is read where it is used instead, if that moves less.
+        let bridged: Vec<(i64, u32)> = result.across.iter().filter(|(edge, _)| critical.contains(edge) && place[&edge.0] >= place[&edge.1]).flat_map(|((_, to), values)| values.iter().map(move |value| (*to, *value))).collect();
+        for (header, value) in bridged {
+            let mut trial = dropped.clone();
+            if !trial.entry(header).or_default().insert(value) {
+                continue;
+            }
+            let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit);
+            let moved = traffic(&tried, weights, prices, &critical);
             if moved < best {
                 best = moved;
                 result = tried;
@@ -646,13 +669,14 @@ fn simulated_with(
 }
 
 /// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
-fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices) -> f64 {
+fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>) -> f64 {
     let blocks: f64 = result
         .edits
         .iter()
         .map(|(at, edit)| weights.block(*at) * prices.load * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
         .sum();
-    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * prices.load * values.len() as f64).sum();
+    // A bridged edge takes its jump as well.
+    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * prices.load * (values.len() + usize::from(critical.contains(&(*from, *to)))) as f64).sum();
     blocks + edges
 }
 
