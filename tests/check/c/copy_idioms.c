@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -O2 --cpu 486 -fno-inline-functions -S -o /dev/stdout
+// RUN: llrm-c %s {-O2 | -Os} --cpu 486 -fno-inline-functions -S -o /dev/stdout
 // Loops people write that are one string move, and look-alikes that are not.
 // CHECK-LABEL: _copy proc
 // CHECK: rep movsd
