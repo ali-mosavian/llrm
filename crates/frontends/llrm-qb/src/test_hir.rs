@@ -37,6 +37,12 @@ pub(super) fn parsed(source: &Path) -> Program {
     parsed_as(source, "vbdos", "vbdos")
 }
 
+/// `parsed` with every procedure on the runtime's frame, as BC frames them.
+pub(super) fn parsed_runtime_frames(source: &Path) -> Program {
+    let frontend = qb_driver::Frontend { runtime_frames: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+    qb_driver::parsed(source, &frontend, None).unwrap_or_else(|error| panic!("{}: {error}", source.display()))
+}
+
 pub(super) fn fixture(name: &str) -> PathBuf {
     root().join("crates/frontends/qbfront/fixtures").join(name)
 }

@@ -2021,7 +2021,7 @@ fn test_a_module_compiles_through_the_rich_mir() {
 fn test_the_runtime_frame_zeroes_the_locals() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "zeroed.bas", b"DECLARE SUB Report (n AS LONG)\nCALL Report(1)\nSUB Report (n AS LONG)\nDIM buffer AS STRING * 4096\nDIM counts(3) AS INTEGER\nbuffer = \"X\"\ncounts(n) = 1\nPRINT buffer; counts(1)\nEND SUB\n");
-    let program = parsed_as(&source, "qb45", "qb45");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend { runtime_frames: true, ..qb_driver::Frontend::new("qb45", "qb45") }, None).expect("parses");
     let module = qb_compile::assembled(&program, None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let report = between(&text, "REPORT proc", "endp");
@@ -2286,7 +2286,7 @@ d = cd(x)\r\nIF d < 50 THEN POKE x, d ELSE POKE x, f3(y - k)\r\nNEXT x\r\nNEXT y
 fn test_the_listing_is_the_code_the_object_holds() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "shell.bas", b"DECLARE SUB Keep (x AS INTEGER)\nSUB Keep (x AS INTEGER)\nx = x + 1\nEND SUB\n");
-    let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
+    let program = qb_driver::parsed(&source, &qb_driver::Frontend { runtime_frames: true, ..qb_driver::Frontend::new("vbdos", "vbdos") }, None).expect("parses");
     let codegen = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let text = llrm_core::driver::basic::text(&module).unwrap();

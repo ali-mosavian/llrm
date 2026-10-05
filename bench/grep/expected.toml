@@ -1,17 +1,5 @@
-reason = "Nib's loop bounds checks proved from the view length's range and the first-trip test (#453)"
+reason = "own frames are the default in every dialect: bas is the old basown"
 blessed = "2026-10-05"
-
-[bas.O2]
-code_bytes = 1011
-data_bytes = 113
-bss_bytes = 0
-kernel_ms = 3887.202
-
-[bas.Os]
-code_bytes = 992
-data_bytes = 113
-bss_bytes = 0
-kernel_ms = 3887.2022
 
 [c.O2]
 code_bytes = 564
@@ -37,13 +25,13 @@ data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4511.1184
 
-[basown.O2]
+[bas.O2]
 code_bytes = 1011
 data_bytes = 113
 bss_bytes = 0
 kernel_ms = 3887.202
 
-[basown.Os]
+[bas.Os]
 code_bytes = 992
 data_bytes = 113
 bss_bytes = 0

@@ -1,21 +1,5 @@
-reason = "Nib gets a start-up program, so kernel_ms"
-blessed = "2026-10-04"
-
-[bas.O2]
-instructions = 609598
-memory_operands = 163316
-code_bytes = 327
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 8.3507
-
-[bas.Os]
-instructions = 690595
-memory_operands = 163309
-code_bytes = 313
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 9.4316
+reason = "own frames are the default in every dialect: bas is the old basown, bas -O2 vs bc instructions -66.9% to -75.9%"
+blessed = "2026-10-05"
 
 [c.O2]
 instructions = 569021
@@ -49,7 +33,7 @@ data_bytes = 0
 bss_bytes = 80400
 kernel_ms = 9.3436
 
-[basown.O2]
+[bas.O2]
 instructions = 609549
 memory_operands = 163285
 code_bytes = 374
@@ -57,7 +41,7 @@ data_bytes = 13
 bss_bytes = 0
 kernel_ms = 8.35
 
-[basown.Os]
+[bas.Os]
 instructions = 690586
 memory_operands = 163312
 code_bytes = 322

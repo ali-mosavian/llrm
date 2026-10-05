@@ -1,10 +1,11 @@
 ' RUN: llrm-qb %s -O2 --cpu 486 -S -o /dev/stdout
 ' A bound a dominating DIM or REDIM states is that value: a constant, or the
 ' variable it was handed, also across a call. LBOUND and UBOUND read the
-' descriptor and called B$LBND/B$UBND where it might be unallocated.
+' descriptor and called B$LBND/B$UBND where it might be unallocated. No load reads the
+' frame: the entry's stores zero the descriptor, as own frames do.
 ' CHECK-LABEL: FIXED proc
 ' CHECK-NOT: BND
-' CHECK-NOT: ptr [bp
+' CHECK-NOT: {{, [a-z]*word ptr \[bp}}
 ' CHECK: mov ax, 9912
 ' CHECK-LABEL: STATED proc
 ' CHECK: B$RDIM

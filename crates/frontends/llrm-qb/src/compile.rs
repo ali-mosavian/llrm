@@ -278,16 +278,11 @@ fn _header(program: &model::Program) -> Result<Vec<u8>, CompileError> {
     Ok(out)
 }
 
-/// Under `Frames::Own` a procedure frames itself, its HIR zeroing what locals
-/// need it, where the runtime needs no frame of its own: no error lands in it
-/// (the runtime reaches a handler or RESUME target through its frame chain),
-/// and no local STRING asks B$ENRA for a VBDOS string handle. The runtime's
-/// stack check goes with it.
+/// Under `Frames::Own` a procedure frames itself where the runtime needs no
+/// frame of its own (`Module::frames_itself`). The runtime's stack check goes
+/// with it.
 pub(super) fn _inline_frame(program: &model::Program, module: &model::Module, function: &model::Function) -> bool {
-    program.frames == model::Frames::Own
-        && !module.lands_errors(function)
-        && function.external_entries.is_empty()
-        && _temporary_string_slots(module, function) == 0
+    module.frames_itself(program.frames, function)
 }
 
 /// A module-internal procedure that frames itself is called near, as the C
@@ -324,20 +319,6 @@ fn _near_procedures(program: &model::Program) -> model::Program {
         }
     }
     program
-}
-
-/// Count frame-owned dynamic STRING descriptors for B$ENRA.
-///
-/// Runtime-produced descriptors live on the runtime temporary chain and do
-/// not request entries in the procedure-local handle block. The count is a
-/// property of typed frame places, not expression-result liveness.
-fn _temporary_string_slots(module: &model::Module, function: &model::Function) -> i64 {
-    let types: IndexMap<i64, &model::Type> = module.types.iter().map(|one| (one.id, one)).collect();
-    function
-        .places
-        .iter()
-        .filter(|place| place.storage == model::Storage::Local && types[&place.r#type].name == "string")
-        .count() as i64
 }
 
 fn _parsed_target(name: &str, prefix: &str, message: &str) -> Result<i64, CompileError> {
@@ -408,7 +389,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         .functions
         .iter()
         .map(|function| {
-            let frame = if _inline_frame(program, module, function) { basic::Frame::Own } else { basic::Frame::Runtime { strings: _temporary_string_slots(module, function) } };
+            let frame = if _inline_frame(program, module, function) { basic::Frame::Own } else { basic::Frame::Runtime { strings: module.local_strings(function) } };
             (function.name.clone(), frame)
         })
         .collect();
