@@ -476,6 +476,24 @@ pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
 
 /// `body` spilled, or None where there was nothing to spill and nothing to simplify.
 fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<Option<LirBody>, String> {
+    let plain = changed_with(original, frame, segments, prices, false)?;
+    let simple = ssarepair::simplified(original);
+    let body = simple.as_ref().unwrap_or(original);
+    if crate::analysis::loops::loops(&body.blocks, Some(body.entry)).is_empty() {
+        return Ok(plain);
+    }
+    // Whether a loop's entry loads what the loop reads is judged by what the whole body then runs, as every other choice
+    // between two bodies is: the spiller's own tally of loads leaves out what a held value displaces.
+    let entering = changed_with(original, frame, segments, prices, true)?;
+    let ran = |one: &LirBody| crate::backend::executed::executed(one).map(|done| done.instructions + done.memory);
+    Ok(match (&plain, &entering) {
+        (Some(without), Some(with)) if ran(with).zip(ran(without)).is_some_and(|(with, without)| with < without) => entering,
+        _ => plain,
+    })
+}
+
+/// `changed`, with a loop's entry loading what the loop reads (that no predecessor ends with) or not.
+pub(crate) fn changed_with(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices, entering: bool) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
@@ -505,7 +523,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
             selectors.extend(kept.keys().copied().filter(|value| machine.registered(*value)));
         }
         let bridged: BTreeSet<(i64, i64)> = result.across.keys().copied().collect();
-        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices, &bridged);
+        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices, &bridged, entering);
         result.merge(one);
     }
     if result.stored.is_empty() {
@@ -595,14 +613,10 @@ fn simulated_in(
     loops: &[crate::analysis::loops::Loop],
     prices: Prices,
     bridged: &BTreeSet<(i64, i64)>,
+    entering: bool,
 ) -> Simulated {
     let weights = Weights { frequency, by_frequency: prices.by_frequency };
-    let attempt = |admit: bool| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged, admit);
-    if machine.file != File::Selector {
-        return attempt(false);
-    }
-    let (with, without) = (attempt(true), attempt(false));
-    if traffic(&with, &weights, prices, &BTreeSet::new()) < traffic(&without, &weights, prices, &BTreeSet::new()) { with } else { without }
+    simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged, entering)
 }
 
 /// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.

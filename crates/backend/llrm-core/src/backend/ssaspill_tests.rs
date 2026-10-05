@@ -462,4 +462,23 @@ fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
         *block = block.with_insns(insns);
     }
     assert_eq!(found(&split), found(&eliminated));
+/// quicksort c's `_sort`, with its loops' entries loading what they read: the spiller's own tally of loads called that
+/// cheaper, and the body ran more instructions and memory operands (+10% and +16% in the emulator). Judged by what the
+/// body then runs, the entry is left to the loop.
+#[test]
+fn test_a_loop_entry_that_runs_more_is_not_taken() {
+    let (body, _) = before_phase(Calls::C, "sortloop.ll", "_sort", "486", "SsaSpill");
+    let ran = |one: &Option<crate::model::lir::LirBody>| {
+        let one = one.as_ref().expect("spills");
+        let done = crate::backend::executed::executed(one).expect("a reducible body");
+        done.instructions + done.memory
+    };
+    let (plain, entering) = (
+        ssaspill::changed_with(&body, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks(), false).expect("spills"),
+        ssaspill::changed_with(&body, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks(), true).expect("spills"),
+    );
+    assert!(ran(&entering) > ran(&plain), "premise: the entry loads run more ({} against {})", ran(&entering), ran(&plain));
+    let chosen = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks()).expect("spills");
+    let chosen = Some(chosen);
+    assert!(ran(&chosen) <= ran(&plain), "the body runs {} against {}", ran(&chosen), ran(&plain));
 }
