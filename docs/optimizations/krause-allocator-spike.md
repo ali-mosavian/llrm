@@ -98,8 +98,8 @@ are mostly not crowded, they are clobbered.
 After merging main (the suite is now 255 bodies, run by
 `LLRM_DEBUG=exact` over `find bench -name '*.c' -o -name '*.bas'`): 85 have
 nonzero greedy cost. On 66 the search finished and greedy is optimal on 65.
-On the 19 it could not finish it found nothing cheaper on 14 and a slightly
-cheaper allocation on 5 (`SUMTHREE%`, `_bench_grep`, `_bench_huge`,
+On the 19 it could not finish it found nothing cheaper on 13 and a slightly
+cheaper allocation on 6 (`SUMTHREE%`, `_bench_grep`, `_bench_huge`,
 `nbody_fixed` twice), each under 12%.
 
 The proved gap is `LRUUSE` (QB, 15 values): greedy spills #7 and #19 for
