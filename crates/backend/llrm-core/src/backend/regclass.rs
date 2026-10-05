@@ -34,7 +34,29 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
 /// edge's copy also join, and address classes are read through webs. An allocator cannot take that, the two sides being
 /// values of their own, and SsaSpill does not price it yet.
 pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool) -> Classes {
-    collected(body, prefer_indexes, segments, optimistic, &mut Vec::new())
+    collected(body, prefer_indexes, segments, optimistic, Pairs::Positional, &mut Vec::new())
+}
+
+/// The classes with each word address pair's roles chosen, not read from how the operand is spelled: what
+/// `AddressRoles` writes into the operands.
+pub fn decided_roles(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments) -> Classes {
+    collected(body, prefer_indexes, segments, false, Pairs::Decide, &mut Vec::new())
+}
+
+/// The classes the operands force, with every word address pair's roles left open.
+pub fn unpaired_classes(body: &LirBody, segments: &Segments) -> Classes {
+    collected(body, &BTreeSet::new(), segments, false, Pairs::Skip, &mut Vec::new())
+}
+
+/// What `collected` does with a word address pair.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Pairs {
+    /// The operand's own base and index.
+    Positional,
+    /// Choose the roles per component.
+    Decide,
+    /// Leave both open.
+    Skip,
 }
 
 /// How an instruction names a value that confines it.
@@ -61,11 +83,11 @@ pub struct Use {
 /// share no register is one the classes leave with none.
 pub fn confining_uses(body: &LirBody, segments: &Segments) -> Vec<Use> {
     let mut uses = Vec::new();
-    collected(body, &BTreeSet::new(), segments, false, &mut uses);
+    collected(body, &BTreeSet::new(), segments, false, Pairs::Positional, &mut uses);
     uses
 }
 
-fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool, uses: &mut Vec<Use>) -> Classes {
+fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool, pairs: Pairs, uses: &mut Vec<Use>) -> Classes {
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
@@ -120,7 +142,7 @@ fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments
                     if let Some(index) = cell.index {
                         numeric.insert(index.value);
                         if index.width == 2 {
-                            if cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
+                            if pairs != Pairs::Positional && cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
                                 word_pairs.push((cell.base.expect("checked").value, index.value));
                             } else {
                                 restrict(&mut out, index.value, &target::WORD_INDEXES, Role::Index, false);
@@ -152,7 +174,9 @@ fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments
             }
         }
     }
-    _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments);
+    if pairs == Pairs::Decide {
+        _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments);
+    }
     _through_webs(body, &selecting, &numeric, &selectors, optimistic, &mut out);
     out
 }
