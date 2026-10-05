@@ -1,4 +1,4 @@
-reason = "Nib: an unexported procedure only called directly is entered by a near call (call/ret, 4-byte frame offset), as C's static"
+reason = "Nib: unexported functions take the fields they read through a pointer (argument promotion); a dead frame-slot load is removed. sieve bas -Os +8 instructions: a register the allocator now spends"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -23,7 +23,7 @@ memory_operands = 164102
 code_bytes = 1251
 data_bytes = 68
 bss_bytes = 96
-kernel_ms = 14.89
+kernel_ms = 14.8899
 
 [c.Os]
 instructions = 1187194
