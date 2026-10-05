@@ -35,7 +35,7 @@ use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
 use crate::{
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
+    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
     promote, rotate, unroll, unswitch, window,
 };
 
@@ -180,6 +180,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(floatloop::FloatLoop),
         Box::new(hoist::Hoist),
         Box::new(loopmotion::LoopMotion),
+        // Before gvn: a far pointer cast from a near one is read as the near one.
+        Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
         Box::new(gvn::Gvn),
         // Ordinary scalar write-through promotion remains after memory GVN.
