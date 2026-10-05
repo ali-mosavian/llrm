@@ -777,6 +777,24 @@ mod tests {
         );
     }
 
+    /// A string op's segment operand was a general value, so a selector made for
+    /// it crowded the general registers: examples/logfile.nib grew a spill (+2 bytes,
+    /// +2 memory operands). It is confined to the segment registers, as a far
+    /// access's selector is.
+    #[test]
+    fn test_a_string_ops_segment_operand_is_confined_to_a_segment_register() {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Insn, LirBlock, LirBody};
+
+        let held = |value| Loc::Held(ir::Held { value, width: 2 });
+        let copy = semantics(Operation::Copy, "movsd", vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)], vec![held(1), held(2), Loc::Reg(ir::Reg { register: Register::DS, width: 2 }), held(3)]);
+        let body = LirBody::new("string", 0x10, vec![LirBlock::new(0x10, vec![Arc::new(Insn::new(0x10, Some((0x10, 0x11)), Some(copy), vec![5, 6], vec![1, 2, 3]))])], IndexMap::default(), IndexMap::default());
+        let classes = crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN);
+        assert_eq!(classes.get(&3), Some(&BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()));
+        assert!(!classes.contains_key(&1), "premise: the offsets stay general");
+    }
+
     /// nbody's FLD pointer was allocated to AX, which cannot address 16-bit memory.
     #[test]
     fn test_x87_memory_operands_still_need_address_registers() {

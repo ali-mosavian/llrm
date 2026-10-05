@@ -38,6 +38,17 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
             let Some(what) = &one.what else {
                 continue;
             };
+            // A string op's segment operands are selectors, as a far access's are.
+            let segments: &[Loc] = match (what.op, what.sources.len()) {
+                (Operation::Copy, 4 | 5) => &what.sources[what.sources.len() - 2..],
+                (Operation::Fill, 3 | 4) => &what.sources[what.sources.len() - 1..],
+                _ => &[],
+            };
+            for place in segments {
+                if let Loc::Held(held) = place {
+                    selecting.insert(held.value);
+                }
+            }
             for place in what.dests.iter().chain(&what.sources) {
                 if let Loc::Mem(cell) = place {
                     if let Some(selector) = cell.selector {
@@ -48,7 +59,7 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
                     }
                 }
                 if let Loc::Held(held) = place {
-                    if held.width != 2 || !_SEGMENT_OPERANDS.contains(&what.op) {
+                    if (held.width != 2 || !_SEGMENT_OPERANDS.contains(&what.op)) && !segments.iter().any(|one| matches!(one, Loc::Held(other) if other.value == held.value)) {
                         numeric.insert(held.value);
                     }
                 }
