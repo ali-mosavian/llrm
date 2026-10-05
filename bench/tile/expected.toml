@@ -1,4 +1,4 @@
-reason = "Nib/C: a far pointer parameter every call fills from a global is passed as its offset (address-space narrowing). lru c -Os +7 instructions, -23 bytes: -Os now shares -1 and 0 in a register (the freed es/fs)"
+reason = "Nib: a far pointer to a local array is a stack pointer read through ss: (address-space narrowing, second space). queens -O2 +2,521 instructions: place's indexed ss:[bx+si] saves SI at every call; -3,701 memory operands, -15 bytes"
 blessed = "2026-10-05"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 1000
 code_bytes = 178
 data_bytes = 8205
 bss_bytes = 0
-kernel_ms = 0.5364
+kernel_ms = 0.5365
 
 [bas.Os]
 instructions = 9156
@@ -15,7 +15,7 @@ memory_operands = 1000
 code_bytes = 178
 data_bytes = 8205
 bss_bytes = 0
-kernel_ms = 0.5364
+kernel_ms = 0.5365
 
 [c.O2]
 instructions = 7156
