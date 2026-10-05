@@ -21,7 +21,8 @@ use iced_x86::Register;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals as ranges;
-use crate::backend::allocate::{self, Classes, _whole};
+use crate::backend::allocate::{self, _whole};
+use crate::backend::regclass::{self, Classes};
 use crate::backend::frame::Frame;
 use crate::backend::target::{self, Segments};
 use crate::backend::{spiller, splitkit, ssarepair, twoaddr};
@@ -460,7 +461,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
-    let confined = allocate::classes(body, &BTreeSet::new(), segments);
+    let confined = regclass::classes(body, &BTreeSet::new(), segments);
     let skip = untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();

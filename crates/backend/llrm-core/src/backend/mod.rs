@@ -63,6 +63,7 @@ pub mod shrinkwrap;
 pub mod select;
 pub mod spiller;
 pub mod ssarepair;
+pub mod regclass;
 pub mod ssaspill;
 pub mod spillforward;
 pub mod spillplacement;

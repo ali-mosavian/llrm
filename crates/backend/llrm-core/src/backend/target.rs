@@ -772,7 +772,7 @@ mod tests {
 
         assert!(!requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
-            crate::backend::allocate::classes(&body, &BTreeSet::new(), &BUILT_IN)[&2],
+            crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN)[&2],
             BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()
         );
     }
