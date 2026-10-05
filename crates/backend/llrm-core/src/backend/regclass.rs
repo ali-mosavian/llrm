@@ -34,16 +34,52 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
 /// edge's copy also join, and address classes are read through webs. An allocator cannot take that, the two sides being
 /// values of their own, and SsaSpill does not price it yet.
 pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool) -> Classes {
+    collected(body, prefer_indexes, segments, optimistic, &mut Vec::new())
+}
+
+/// How an instruction names a value that confines it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Role {
+    Byte,
+    Base,
+    Index,
+}
+
+/// One read of a value that confines it: where it is read, and the registers that read allows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Use {
+    pub block: usize,
+    pub insn: usize,
+    pub value: u32,
+    pub class: BTreeSet<Register>,
+    pub role: Role,
+    /// The instruction writes the value there, rather than reads it.
+    pub defining: bool,
+}
+
+/// Every read that confines a value on its own, a byte operand or an address base or index. A value whose uses
+/// share no register is one the classes leave with none.
+pub fn confining_uses(body: &LirBody, segments: &Segments) -> Vec<Use> {
+    let mut uses = Vec::new();
+    collected(body, &BTreeSet::new(), segments, false, &mut uses);
+    uses
+}
+
+fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, optimistic: bool, uses: &mut Vec<Use>) -> Classes {
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
     let bytes: BTreeSet<Register> = BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]);
 
-    for block in &body.blocks {
-        for one in &block.insns {
+    for (at, block) in body.blocks.iter().enumerate() {
+        for (position, one) in block.insns.iter().enumerate() {
             let Some(what) = &one.what else {
                 continue;
+            };
+            let mut restrict = |out: &mut Classes, value: u32, choices: &BTreeSet<Register>, role: Role, defining: bool| {
+                uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
+                _restrict(out, value, choices);
             };
             // A string op's segment operands are selectors, as a far access's are.
             let segments: &[Loc] = match (what.op, what.sources.len()) {
@@ -78,7 +114,7 @@ pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &S
                             } else {
                                 &*target::ADDRESSING
                             };
-                            _restrict(&mut out, base.value, registers);
+                            restrict(&mut out, base.value, registers, Role::Base, false);
                         }
                     }
                     if let Some(index) = cell.index {
@@ -87,9 +123,9 @@ pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &S
                             if cell.base.is_some_and(|base| base.width == 2) && cell.scale == 1 {
                                 word_pairs.push((cell.base.expect("checked").value, index.value));
                             } else {
-                                _restrict(&mut out, index.value, &target::WORD_INDEXES);
+                                restrict(&mut out, index.value, &target::WORD_INDEXES, Role::Index, false);
                                 if let Some(base) = cell.base {
-                                    _restrict(&mut out, base.value, &target::WORD_BASES);
+                                    restrict(&mut out, base.value, &target::WORD_BASES, Role::Base, false);
                                 }
                             }
                         }
@@ -97,7 +133,7 @@ pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &S
                 }
                 if let Loc::Held(held) = place {
                     if held.width == 1 {
-                        _restrict(&mut out, held.value, &bytes);
+                        restrict(&mut out, held.value, &bytes, Role::Byte, what.dests.contains(place));
                     }
                 }
             }

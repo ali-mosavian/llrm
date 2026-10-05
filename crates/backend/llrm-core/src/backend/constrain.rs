@@ -326,6 +326,112 @@ pub fn distinct_roles(body: &LirBody, floor: u32) -> LirBody {
     body.with_blocks(blocks)
 }
 
+/// `body` with no value whose reads need registers that share none.
+///
+/// A value read as a byte (ax..dx) and as the index of a frame array (si, di)
+/// has no register to sit in: `trunc` reads the low byte of its word in place.
+/// The reads that fit the most others keep the value; each of the rest reads a
+/// copy of its own, live across that instruction alone. A write is not moved.
+pub fn distinct_classes(body: &LirBody, floor: u32, segments: &target::Segments) -> LirBody {
+    let uses = regclass::confining_uses(body, segments);
+    let mut by_value: IndexMap<u32, Vec<&regclass::Use>> = IndexMap::default();
+    for one in &uses {
+        by_value.entry(one.value).or_default().push(one);
+    }
+    // Which (block, instruction, value, role) reads take a copy.
+    let mut peeled: BTreeSet<(usize, usize, u32, u8)> = BTreeSet::new();
+    for (value, all) in &by_value {
+        let common = |chosen: &[&regclass::Use]| chosen.iter().fold(None::<BTreeSet<Register>>, |had, one| Some(had.map_or_else(|| one.class.clone(), |had| had.intersection(&one.class).copied().collect())));
+        if common(all).is_none_or(|class| !class.is_empty()) {
+            continue;
+        }
+        // Classes by how many reads share them, the most first.
+        let mut classes: Vec<(&BTreeSet<Register>, usize)> = Vec::new();
+        for one in all {
+            match classes.iter_mut().find(|(class, _)| **class == one.class) {
+                Some((_, count)) => *count += 1,
+                None => classes.push((&one.class, 1)),
+            }
+        }
+        classes.sort_by_key(|(class, count)| (std::cmp::Reverse(*count), class.len()));
+        let mut kept = classes[0].0.clone();
+        for (class, _) in &classes[1..] {
+            let both: BTreeSet<Register> = kept.intersection(class).copied().collect();
+            if !both.is_empty() {
+                kept = both;
+            }
+        }
+        for one in all.iter().filter(|one| !one.defining && kept.intersection(&one.class).next().is_none()) {
+            peeled.insert((one.block, one.insn, *value, one.role as u8));
+        }
+    }
+    if peeled.is_empty() {
+        return body.clone();
+    }
+    // The widest any instruction names a value at: a phi's result has no defining operand.
+    let mut widest: IndexMap<u32, u32> = IndexMap::default();
+    for held in body.insns().iter().filter_map(|one| one.what.as_ref()).flat_map(|what| what.dests.iter().chain(&what.sources)).flat_map(ir::values) {
+        let wide = widest.entry(held.value).or_default();
+        *wide = (*wide).max(held.width);
+    }
+    let mut fresh = _next_value(body).max(floor);
+    let mut blocks = Vec::new();
+    for (at, block) in body.blocks.iter().enumerate() {
+        let mut insns: Vec<Arc<Insn>> = Vec::new();
+        for (position, one) in block.insns.iter().enumerate() {
+            let here: Vec<&(usize, usize, u32, u8)> = peeled.range((at, position, 0, 0)..=(at, position, u32::MAX, u8::MAX)).collect();
+            let (Some(what), false) = (&one.what, here.is_empty()) else {
+                insns.push(Arc::clone(one));
+                continue;
+            };
+            let mut copies: IndexMap<u32, Held> = IndexMap::default();
+            for (_, _, value, _) in &here {
+                let wide = widest[value];
+                copies.entry(*value).or_insert_with(|| {
+                    fresh += 1;
+                    Held { value: fresh - 1, width: wide }
+                });
+            }
+            let is = |value: u32, role: regclass::Role| here.iter().any(|(_, _, peeled, kind)| *peeled == value && *kind == role as u8);
+            let swap = |held: Held, role: regclass::Role| -> Held {
+                match copies.get(&held.value) {
+                    Some(copy) if is(held.value, role) => Held { value: copy.value, width: held.width },
+                    _ => held,
+                }
+            };
+            let cell = |place: &Loc| -> Loc {
+                match place {
+                    Loc::Mem(cell) => Loc::Mem(Mem { base: cell.base.map(|one| swap(one, regclass::Role::Base)), index: cell.index.map(|one| swap(one, regclass::Role::Index)), ..cell.clone() }),
+                    other => other.clone(),
+                }
+            };
+            let dests: Vec<Loc> = what.dests.iter().map(&cell).collect();
+            let sources: Vec<Loc> = what
+                .sources
+                .iter()
+                .map(|place| match cell(place) {
+                    Loc::Held(held) => Loc::Held(swap(held, regclass::Role::Byte)),
+                    other => other,
+                })
+                .collect();
+            for (value, copy) in &copies {
+                insns.push(_move(one, *copy, Loc::Held(Held { value: *value, width: copy.width })));
+            }
+            let mut made = (**one).clone();
+            made.what = Some(Semantics { dests, sources, ..what.clone() });
+            made.uses.extend(copies.values().map(|copy| copy.value));
+            let mut named: BTreeSet<u32> = BTreeSet::new();
+            if let Some(now) = &made.what {
+                named.extend(now.dests.iter().chain(&now.sources).flat_map(ir::values).map(|held| held.value));
+            }
+            made.uses.retain(|used| copies.contains_key(used).then(|| named.contains(used)).unwrap_or(true));
+            insns.push(Arc::new(made));
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    body.with_blocks(blocks)
+}
+
 /// Where each value the body's instructions require has to live.
 pub fn required(body: &LirBody) -> IndexMap<u32, Register> {
     let mut out: IndexMap<u32, Register> = IndexMap::default();
@@ -977,5 +1083,28 @@ mod tests {
 
         assert_eq!(split, body);
         assert!(opened.is_empty());
+    }
+
+    /// `a[i] = (char)i` into a frame array: `trunc` reads the low byte of the index in place, so one
+    /// value needed a byte register (ax..dx) and si or di at once, and the allocator refused the body
+    /// ("value may be in no register", #498). The byte read takes a word copy of its own.
+    #[test]
+    fn test_a_byte_read_of_a_frame_index_reads_a_copy() {
+        let cell = Mem { index: Some(Held { value: 1, width: 2 }), through: Register::BP, ..Mem::new(Some(Addr::new(Space::Frame, -70)), 1) };
+        let body = _body(vec![
+            Insn::new(0x10, Some((0x10, 0x12)), Some(semantics(Operation::Move, "mov", vec![held(1, 2)], vec![imm(0, 2)])), vec![1], vec![]),
+            Insn::new(0x12, Some((0x12, 0x14)), Some(semantics(Operation::Move, "mov", vec![held(2, 1)], vec![held(1, 1)])), vec![2], vec![1]),
+            Insn::new(0x14, Some((0x14, 0x17)), Some(semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(2, 1)])), vec![], vec![1, 2]),
+        ]);
+        let stuck = |body: &LirBody| {
+            let found = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN);
+            found.values().filter(|class| target::order(Some(*class), &target::BUILT_IN).is_empty()).count()
+        };
+        assert_eq!(stuck(&body), 1, "premise: the value has no register");
+        let got = super::distinct_classes(&body, 3, &target::BUILT_IN);
+        assert_eq!(stuck(&got), 0);
+        let insns = got.insns();
+        assert_eq!(insns.len(), 4, "one copy");
+        assert!(insns[1].defines.len() == 1 && insns[1].uses == [1], "the copy reads the index");
     }
 }
