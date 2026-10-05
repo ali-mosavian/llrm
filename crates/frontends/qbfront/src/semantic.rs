@@ -406,9 +406,8 @@ pub struct Options {
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
-    /// Procedures frame themselves where the runtime needs no frame, as
-    /// the dialect may by default.
-    pub own_frames: bool,
+    /// Every procedure uses the runtime's frame entry and exit.
+    pub runtime_frames: bool,
     /// Errors in code without a landing pad, as a module handler's, report
     /// their BASIC line: a statement-table row, 4 bytes, per line.
     pub error_lines: bool,
@@ -9801,7 +9800,7 @@ impl Compiler {
 
     /// Whether procedures frame themselves where the runtime needs no frame.
     fn own_frames(&self) -> bool {
-        self.dialect.own_frames() || self.options.own_frames
+        !self.options.runtime_frames
     }
 
     fn fail<T>(&self, message: impl Into<String>) -> Result<T, SemanticError> {

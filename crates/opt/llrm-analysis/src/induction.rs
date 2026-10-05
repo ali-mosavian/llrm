@@ -1270,6 +1270,64 @@ pub fn basics(unit: &Unit, loop_: &Loop) -> IndexMap<ValueId, Affine> {
     out
 }
 
+/// What a header phi proves that advances by at most one a trip where a
+/// counter advances by one without wrapping, from the counter's own start:
+/// `start <= follower <= counter`, signed, wherever the header dominates.
+/// Where the follower advances is a branch, `i = i + 1` on some ways round
+/// and `i` on the others (quicksort's partition index), the counter still
+/// leads: `i + 1 <= j + 1`, which the counter's step does not wrap.
+pub fn followers(unit: &Unit, loop_: &Loop) -> Vec<(ValueId, ValueId, AffineOperand)> {
+    let function = unit.function;
+    let header = cfg::block(loop_.header);
+    let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return Vec::new() };
+    let counters = basics(unit, loop_);
+    let within = |inst: InstId| function.parent(inst).is_some_and(|block| loop_.body.contains(&cfg::id(block)));
+    let mut found = Vec::new();
+    // `value` is `follower` or `follower + 1`, or a phi of such values.
+    fn advances(unit: &Unit, within: &dyn Fn(InstId) -> bool, follower: ValueId, value: Operand, depth: u32) -> bool {
+        let function = unit.function;
+        let Operand::Value(value) = value else { return false };
+        if value == follower {
+            return true;
+        }
+        let Some(inst) = defining(function, value).filter(|&inst| within(inst)) else { return false };
+        let op = function.instruction(inst);
+        match (&op.opcode, &op.operands[..]) {
+            (Opcode::Binary(BinaryOp::Add), [one, other]) => {
+                let one_step = |left: &Operand, right: &Operand| *left == Operand::Value(follower) && unit.int_constant(*right).is_some_and(|bits| bits == 1);
+                one_step(one, other) || one_step(other, one)
+            }
+            (Opcode::Phi, arms) if depth < 4 => arms.chunks(2).all(|pair| advances(unit, within, follower, pair[0], depth + 1)),
+            _ => false,
+        }
+    }
+    for (&counter, affine) in &counters {
+        let (AffineOperand::Const(step), Some(phi)) = (&affine.step, defining(function, counter)) else { continue };
+        if step.n != BigInt::from(1) {
+            continue;
+        }
+        // The counter's step does not wrap.
+        let Some(Operand::Value(update)) = incoming(function, phi, cfg::block(latch)) else { continue };
+        let Some(update) = defining(function, update) else { continue };
+        if !llrm_mir::facts::Facts::of_flags(function.instruction(update).flags).no_signed_wrap() {
+            continue;
+        }
+        for &inst in function.block(header).instructions() {
+            let phi = function.instruction(inst);
+            if phi.opcode != Opcode::Phi {
+                break;
+            }
+            let Some(result) = phi.result.filter(|&result| result != counter && !counters.contains_key(&result) && unit.int_bits(Operand::Value(result)) == Some(step.width)) else { continue };
+            let (around, into): (Vec<_>, Vec<_>) = phi.operands.chunks(2).partition(|pair| matches!(pair[1], Operand::Block(from) if loop_.body.contains(&cfg::id(from))));
+            let starts_at_counter = !into.is_empty() && into.iter().all(|pair| term(unit, pair[0]).as_ref() == Some(&affine.start));
+            if starts_at_counter && !around.is_empty() && around.iter().all(|pair| advances(unit, &within, result, pair[0], 0)) {
+                found.push((result, counter, affine.start.clone()));
+            }
+        }
+    }
+    found
+}
+
 /// A pointer phi at a loop's header stepped by constant bytes: a
 /// `getelementptr` of it with constant indices, the same on every latch.
 #[derive(Clone, Debug, PartialEq)]

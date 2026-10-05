@@ -147,9 +147,11 @@ fn procedures(program: &Program, at: usize) -> Vec<GlobalId> {
     defined(program).filter(|&(one, _)| one == at).map(|(_, id)| id).collect()
 }
 
-/// Defined procedures no outside code calls: every caller is in the program.
+/// Defined procedures no outside code calls: every caller is in the program,
+/// and a call through a pointer is not one, so none has its address taken.
 fn unexported(program: &Program) -> BTreeSet<Defined> {
-    defined(program).filter(|&(at, id)| !program.exports.exported(program.modules[at].global(id))).collect()
+    let addressed: BTreeSet<Defined> = program.modules.iter().enumerate().flat_map(|(at, module)| llrm_mir::callgraph::addressed(module).into_iter().filter_map(move |id| program.definition(at, id))).collect();
+    defined(program).filter(|&one @ (at, id)| !program.exports.exported(program.modules[at].global(id)) && !addressed.contains(&one)).collect()
 }
 
 /// The calls to inline: those `costs` admits and, tuned for size, those `loose` (the clocks) does too,
@@ -540,6 +542,12 @@ pub fn optimized<E: From<String>>(
         if !changed && !inlined {
             break;
         }
+    }
+    // What its callers pass bounds each parameter of a body only they call: stated as a range, which
+    // the body's own proofs then read.
+    for (at, id) in llrm_analysis::parameter_ranges::stamp(program, &unexported) {
+        edited(&mut modules[at], &[id]);
+        reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-range.")?;
     }
     // Propagation may have left a body doing less than it states.
     stamped_all(program, modules).map_err(E::from)?;

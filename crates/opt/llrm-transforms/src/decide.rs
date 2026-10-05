@@ -38,6 +38,8 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::ranges;
 use llrm_analysis::graph::loops;
+use llrm_analysis::guards;
+use llrm_analysis::induction::{self, Scev};
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -134,9 +136,29 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
                 answer = Some(one == taken);
             }
         }
+        if answer.is_none() {
+            answer = _implied(unit, block, last);
+        }
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)
+}
+
+/// Whether the compare `last` branches on holds or fails there, by what the
+/// guards over `block` and the loops holding it prove of its two sides.
+fn _implied(unit: &Unit, block: BlockId, last: InstId) -> Option<bool> {
+    let function = unit.function;
+    let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied() else { return None };
+    let (_, compare) = unit.defining(Operand::Value(condition))?;
+    let (Opcode::ICmp(predicate), [left, right]) = (&compare.opcode, &compare.operands[..]) else { return None };
+    let width = unit.int_bits(*left)?;
+    let (left, right) = (induction::term(unit, *left)?, induction::term(unit, *right)?);
+    let (left, right) = (Scev::of(&left, width), Scev::of(&right, width));
+    let at = cfg::id(block);
+    if guards::holds_given(unit, at, &[], *predicate, &left, &right) {
+        return Some(true);
+    }
+    guards::holds_given(unit, at, &[], predicate.inverse(), &left, &right).then_some(false)
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.

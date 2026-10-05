@@ -493,3 +493,86 @@ no:
         assert_eq!(!has(&module, "yes"), decided, "{attribute}: {}", printed(&module));
     }
 }
+
+/// quicksort's `a[i]` in the swap, `i` the partition index that follows the
+/// counter `j`: with `lo <u len` taken before the loop and `j < hi < len`, `i`
+/// is below `len`, and its check was kept, 3 instructions on each swap.
+const PARTITION_CHECK: &str = "@cell = global i16 10
+
+define i16 @f(i16 %lo, i16 %hi, i16 %pivot) {
+entry:
+  %len = load i16, ptr @cell, !range !0
+  %ordered = icmp slt i16 %lo, %hi
+  br i1 %ordered, label %first, label %done
+first:
+  %hi_ok = icmp ult i16 %hi, %len
+  %lo_ok = icmp ult i16 %lo, %len
+  %both = and i1 %hi_ok, %lo_ok
+  br i1 %both, label %head, label %crash
+head:
+  %j = phi i16 [ %lo, %first ], [ %next, %join ]
+  %i = phi i16 [ %lo, %first ], [ %kept, %join ]
+  %more = icmp slt i16 %j, %hi
+  br i1 %more, label %body, label %done
+body:
+  %small = icmp slt i16 %j, %pivot
+  br i1 %small, label %check, label %join
+check:
+  %i_ok = icmp ult i16 %i, %len
+  br i1 %i_ok, label %step, label %crash
+step:
+  %up = add i16 %i, 1
+  br label %join
+join:
+  %kept = phi i16 [ %up, %step ], [ %i, %body ]
+  %next = add nsw i16 %j, 1
+  br label %head
+done:
+  %r = phi i16 [ 0, %entry ], [ %i, %head ]
+  ret i16 %r
+crash:
+  ret i16 99
+}
+
+!0 = !{i16 0, i16 -32768}
+";
+
+#[test]
+fn test_an_index_that_follows_the_counter_is_below_the_length_the_loop_was_checked_against() {
+    let mut module = parsed(&format!("{DOS}{PARTITION_CHECK}"));
+    let before = results(&module, INPUTS);
+    assert!(printed(&module).contains("br i1 %i_ok"), "premise: the check is in the loop");
+    assert!(decide(&mut module));
+    let after = printed(&module);
+    assert!(!after.contains("br i1 %i_ok"), "{after}");
+    assert_eq!(results(&module, INPUTS), before);
+}
+
+/// Where the counter may be negative the check stays: `lo` is not known below `len`.
+#[test]
+fn test_an_index_from_an_unchecked_start_keeps_its_check() {
+    let mut module = parsed(&format!("{DOS}{}", PARTITION_CHECK.replace("  %both = and i1 %hi_ok, %lo_ok\n  br i1 %both,", "  br i1 %hi_ok,")));
+    decide(&mut module);
+    assert!(printed(&module).contains("br i1 %i_ok"), "{}", printed(&module));
+}
+
+const INPUTS: &[&[i128]] = &[&[0, 5, 3], &[2, 9, 6], &[-1, 4, 2], &[3, 3, 1], &[5, 2, 0], &[0, 9, 20], &[1, 9, -3]];
+
+/// A parameter's stated range settles a compare against a number beyond it:
+/// queens' `row` is 0 to 7, its check against a length of 12 never fails.
+#[test]
+fn test_a_compare_a_parameters_range_settles_is_decided() {
+    let text = "define i16 @f(i16 range(i16 0, 8) %row) {
+b:
+  %fits = icmp ult i16 %row, 12
+  br i1 %fits, label %ok, label %crash
+ok:
+  ret i16 %row
+crash:
+  ret i16 99
+}
+";
+    let mut module = parsed(&format!("{DOS}{text}"));
+    assert!(decide(&mut module));
+    assert!(!printed(&module).contains("br i1 %fits"), "{}", printed(&module));
+}

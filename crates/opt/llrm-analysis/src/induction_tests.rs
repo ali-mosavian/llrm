@@ -1963,3 +1963,53 @@ b3:
     let maxima = parsed.counted(false).into_iter().map(|proof| proof.maximum).collect::<Vec<_>>();
     assert_eq!(maxima, vec![Some(BigInt::from(3))]);
 }
+
+/// quicksort's partition: `i` starts where the counter `j` does and goes
+/// up by one on the ways that swap (`step`), by `by` there.
+fn partition(by: u32, flags: &str) -> Parsed {
+    Parsed::new(&format!(
+        "define i16 @f(i16 %lo, i16 %hi, i16 %pivot) {{
+entry:
+  br label %head
+head:
+  %j = phi i16 [ %lo, %entry ], [ %next, %join ]
+  %i = phi i16 [ %lo, %entry ], [ %kept, %join ]
+  %more = icmp slt i16 %j, %hi
+  br i1 %more, label %body, label %done
+body:
+  %small = icmp slt i16 %j, %pivot
+  br i1 %small, label %step, label %keep
+step:
+  %up = add i16 %i, {by}
+  br label %join
+keep:
+  br label %join
+join:
+  %kept = phi i16 [ %up, %step ], [ %i, %keep ]
+  %next = add {flags} i16 %j, 1
+  br label %head
+done:
+  ret i16 %i
+}}
+"
+    ))
+}
+
+/// The follower `i` of the counter `j`, which starts at `lo` too, stays
+/// between them: the check `a[i]` after `a[j]` had was kept for it.
+#[test]
+fn test_a_phi_that_follows_the_counter_stays_between_its_start_and_it() {
+    let parsed = partition(1, "nsw");
+    let found = followers(&parsed.unit(), &parsed.only_loop());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].0, found[0].1), (parsed.value("i"), parsed.value("j")));
+}
+
+/// A counter that may wrap, or a follower that may pass it, proves no order.
+#[test]
+fn test_a_follower_that_may_pass_its_counter_proves_nothing() {
+    let wrapping = partition(1, "");
+    assert!(followers(&wrapping.unit(), &wrapping.only_loop()).is_empty(), "j + 1 may wrap");
+    let fast = partition(2, "nsw");
+    assert!(followers(&fast.unit(), &fast.only_loop()).is_empty(), "i + 2 may pass j + 1");
+}

@@ -203,6 +203,11 @@ fn surveyed(compiler: &Compiler) -> Survey {
                     }
                     _ => None,
                 };
+                // The frame's entry zeroing (`zero_locals`) names every local aggregate, a
+                // descriptor included, and reads nothing.
+                if one.op == "store" && one.tag.is_none() && matches!(one.operands.as_slice(), [_, Operand::Constant(_, Number::Integer(0))]) {
+                    continue;
+                }
                 for operand in &one.operands {
                     for value in read(operand).into_iter().filter(|value| Some(*value) != allowed) {
                         refused.extend(pointers.get(&value));

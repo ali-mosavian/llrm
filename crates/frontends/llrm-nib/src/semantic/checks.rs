@@ -10,14 +10,20 @@ use super::*;
 
 impl FunctionCompiler<'_> {
     /// Checks each of `indices` against the view `descriptor`'s dimensions.
-    pub(super) fn check_view_bounds(&mut self, descriptor: u32, indices: &[hir::Operand], span: Span) -> Result<(), Diagnostic> {
+    /// A view is within one segment, so a dimension of `element_width`-byte
+    /// elements is at most 65535 / `element_width`: stated of its load.
+    pub(super) fn check_view_bounds(&mut self, descriptor: u32, indices: &[hir::Operand], element_width: u32, span: Span) -> Result<(), Diagnostic> {
         if self.unsafe_depth > 0 || self.unchecked_bounds {
             return Ok(());
         }
         for (axis, index) in indices.iter().enumerate() {
             let dim = self.value(TypeName::U16);
             let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8), type_id: U16, inbounds: false, member: None };
-            self.emit("load", vec![dim], vec![place], None);
+            let load = self.emit("load", vec![dim], vec![place], None);
+            if element_width > 1 {
+                let most = i64::from(65535 / element_width);
+                self.stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(load) }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: most }));
+            }
             self.check_bounds(index, hir::Operand::Value(dim), span)?;
         }
         Ok(())
