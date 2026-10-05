@@ -1,4 +1,4 @@
-reason = "range stamps on parameters of internal bodies (#453): queens -O2 memory operands 85,834 -> 80,083, bytes 383 -> 377; instructions +2,480 are jwlink's trailing nop on one far-call (place executes fewer)"
+reason = "range stamps on parameters of internal bodies (#453): queens -O2 memory operands 85,834 -> 80,083, bytes 383 -> 377; instructions +2,480 and kernel 3.8237 -> 3.8568 ms are layout: the same far call to safe, which main already executed as push cs / call near, gets jwlink's trailing nop instead of a ds: prefix because an offset moved (executed 3,584 times); arg-promotion's near calls for internal bodies remove it"
 blessed = "2026-10-05"
 
 [bas.O2]
