@@ -214,7 +214,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     }
     let source = source.ok_or("the following arguments are required: source")?;
     let bound = llrm_driver::target(&flags, Some(&["x86-code16", "x86-code32"]))?;
-    let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: bound.target.default_cpu().to_owned(), ..bound.target.machine() })?;
+    let machine = flags.machine(bound.target.machine())?;
     Ok(Args {
         source,
         dump,

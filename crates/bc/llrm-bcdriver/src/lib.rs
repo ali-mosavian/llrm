@@ -160,7 +160,7 @@ fn header(found: &found_module::Module, records: &[Rc<omf::Record>], code_segmen
 /// several. A library is the runtime, which is not recompiled.
 pub fn main(argv: &[String]) -> i32 {
     let mut inputs = Vec::new();
-    let (mut output, mut manifest, mut cpu) = (None, None, "386".to_owned());
+    let (mut output, mut manifest, mut cpu) = (None, None, machine::BASIC.cpu.clone());
     let mut arguments = argv.iter();
     while let Some(one) = arguments.next() {
         match one.as_str() {

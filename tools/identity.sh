@@ -7,7 +7,7 @@
 #   tools/identity.sh KIND BASE_BIN NEW_BIN [--target TARGET]
 #
 # KIND: nib    llrm-nib over examples/, tests/run/nib, bench/, at -O2 and -Os, procedure segments
-#       c      llrm-c over bench/ and tests/run/c, at -O2 --cpu 486
+#       c      llrm-c over bench/ and tests/run/c, at -O2
 #       qcport llrm-c over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
 #              Borland headers it builds with (neither is in this repository)
 # TARGET is passed to the compiler (default: its own, code16).
@@ -41,7 +41,7 @@ nib)
         ls examples/*.nib tests/run/nib/*.nib bench/*/*.nib bench/parity/*/*.nib 2>/dev/null | sed "s|\$| $level --procedure-segments|"
     done ;;
 c)
-    ls bench/*/*.c tests/run/c/*.c | sed 's|$| -O2 --cpu 486|' ;;
+    ls bench/*/*.c tests/run/c/*.c | sed 's|$| -O2|' ;;
 qcport)
     : "${QCPORT:?QCPORT names the QCport src directory}" "${QCPORT_INC:?QCPORT_INC names its Borland include directory}"
     includes=""; for d in host render model game sound ui qgl; do includes="$includes -I $QCPORT/$d"; done
