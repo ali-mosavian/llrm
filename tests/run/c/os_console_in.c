@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 // stdin: conin.dat
 /* The OS layer's console follows redirection: standard input is conin.dat ("Q", "ab", CR LF), standard output a
    file. A key is read without waiting once one is ready, a line is `read` on the standard input handle, and a
