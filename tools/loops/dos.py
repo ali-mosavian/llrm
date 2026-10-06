@@ -62,11 +62,11 @@ def link_c(obj: Path, exe: Path, work: Path) -> None:
 def link_nib(obj: Path, exe: Path, work: Path, opt: str) -> None:
     """As tools/nib-build.sh links, with the corpus's externals beside."""
     parts = {}
-    _, sources = dosbatch.nib_runtime("x86-code16")
+    _, sources = dosbatch.nib_runtime(dosbatch.REAL_MODE)
     for part, source in zip(("start", "dos"), sources):
         parts[part] = work / f"N{part.upper()}.OBJ"
         if not parts[part].exists():
-            assemble(ROOT / source, parts[part], *dosbatch.nib_defines("x86-code16"))
+            assemble(ROOT / source, parts[part], *dosbatch.nib_defines(dosbatch.REAL_MODE))
     ext = work / "EXT.OBJ"
     if not ext.exists():
         assemble(HERE / "runtime" / "ext.asm", ext)

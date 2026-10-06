@@ -172,6 +172,10 @@ def nib_runtime(target: str) -> tuple[Path, list[str]]:
     return directory, [str((directory / name).relative_to(ROOT)) for name in names]
 
 
+# The 16-bit target the loop corpus and the C helpers build for.
+REAL_MODE = "x86-code16"
+
+
 def nib_defines(target: str) -> tuple[str, ...]:
     """What the assembler is told of `target`'s OS layer (`llrm-nib --os-layer defines`): `SYMBOL=value` each."""
     return tuple(subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split())
@@ -188,7 +192,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
 
 def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:
     """A C object for the 16-bit target, linked as it says."""
-    link_target("x86-code16", obj, exe, work, listing, after, before)
+    link_target(REAL_MODE, obj, exe, work, listing, after, before)
 
 
 @dataclass
