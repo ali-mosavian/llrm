@@ -26,7 +26,6 @@ Known departures today, each to be removed:
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
 | `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
 | `llrm-core` `select::emit`: the mode it encodes and decodes in is a thread-local set at the two compile entries from the target's `object.bitness` (`select::encoding_in`), read by ~14 passes that price code or read register effects (`peephole::_register_effects` decodes emitted bytes, 30 uses) | a target fact held as ambient state; two targets compiling on one thread at once would share it | the effects read from the forms' `reads`/`writes` columns, so nothing decodes, and the mode passed where the encoder is asked (the encoder PR); issue #581 |
-| `llrm-core` `flow.rs`: `LoopSlots` is dropped where `FrameRegisters.slot != 2` | its slots are words and it parks BP at word width | a `LoopSlots` that reads the slot width and frame register (code32 session, next) |
 
 ## Principle: a target is description
 

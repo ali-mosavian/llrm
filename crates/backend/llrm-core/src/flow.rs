@@ -75,7 +75,7 @@ pub fn machine_with<'a>(
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect(), Rc::clone(classes))?),
         // Once spill traffic is final: which slots a loop still reaches.
-        Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
+        Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
@@ -83,11 +83,6 @@ pub fn machine_with<'a>(
     ];
     if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
-    }
-    // Its slots are words of 2 bytes and it parks BP at that width: a target whose stack slot is
-    // wider has no such slots.
-    if registers.slot != 2 {
-        phases.retain(|phase| phase.class_name() != "LoopSlots");
     }
     Ok(phases)
 }
