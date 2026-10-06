@@ -2,3 +2,11 @@
 writer = "omf"
 bitness = 16
 header = [".model medium", ".386"]
+
+# How a C test is linked (tools/dosbatch): the start-up, the program, the externals, any
+# extras, then the last object, as jwlink's `file` lines; paths from the repository root.
+[link]
+format = ["format", "dos"]
+first = ["tools/loops/runtime/crt.asm"]
+last = ["tools/loops/runtime/ext.asm"]
+final = ["tools/loops/runtime/zend.asm"]

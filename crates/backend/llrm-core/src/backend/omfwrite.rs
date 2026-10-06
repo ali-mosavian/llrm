@@ -1183,7 +1183,7 @@ mod tests {
                 Encoded::Label(masm::Label { name: "elsewhere".into() }),
             ];
             let labels = _trampolined(&mut items, 16).unwrap();
-            (items.iter().map(_length).sum::<usize>(), labels["far"])
+            (items.iter().map(|item| _length(item, 16)).sum::<usize>(), labels["far"])
         };
         // 2 for the `je` short, the piece, a 3-byte `jmp`, and the 300 bytes: 2 + 20 + 3 + 300.
         assert_eq!(layout(20, "far"), (2 + 20 + 3 + 300, 2 + 20 + 3 + 300));
@@ -1391,7 +1391,7 @@ mod tests {
         let what = semantics(Operation::Move, "mov", vec![Loc::Reg(ir::Reg { register: Register::CX, width: 2 })], vec![Loc::Mem(cell)]);
         let names = IndexMap::from_iter([((Space::Segment, 3), "S%".to_owned())]);
 
-        let piece = _encoded(&what, &names).unwrap();
+        let piece = _encoded(&what, &names, 16).unwrap();
 
         let [fixup] = piece.fixups.as_slice() else { panic!("{:?}", piece.fixups) };
         assert_eq!((fixup.loc, fixup.at + 4, field(&piece.code, fixup.at, fixup.loc)), (OFFSET32, piece.code.len(), 1280));

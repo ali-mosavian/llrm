@@ -2093,7 +2093,7 @@ fn _settled(place: &Loc, held: &IndexMap<u32, Register>) -> Result<Loc, Unplaced
             let Some(register) = held.get(&base.value) else {
                 return Ok(place.clone());
             };
-            let placed = target::named(*register, 2);
+            let placed = target::named(*register, i64::from(base.width).max(2));
             if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
                 return Ok(Loc::Mem(Mem { through: Register::BP, index_through: placed, ..cell.clone() }));
             }

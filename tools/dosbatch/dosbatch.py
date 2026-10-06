@@ -16,6 +16,7 @@ import re
 import json
 import threading
 import shutil
+import tomllib
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass
@@ -99,16 +100,49 @@ def assemble(source: Path, obj: Path, *defines: str) -> None:
     _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
 
 
-def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:
-    """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline."""
-    crt, ext, end = work / "CRT.OBJ", work / "EXT.OBJ", work / "ZEND.OBJ"
-    with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
-        if not crt.exists() or not ext.exists() or not end.exists():
-            assemble(C_RUNTIME / "crt.asm", crt)
-            assemble(C_RUNTIME / "ext.asm", ext)
-            assemble(C_RUNTIME / "zend.asm", end)
+def ow_root() -> Path:
+    """The Open Watcom tree wccq is built from (toolchain/owshim/build.sh): OWROOT, else the cached one."""
+    if os.environ.get("OWROOT"):
+        return Path(os.environ["OWROOT"])
+    commit = (ROOT / "toolchain" / "owshim" / "ow-commit").read_text().strip()
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "llrm" / f"open-watcom-v2-{commit}"
+
+
+def target_link(target: str) -> dict:
+    """How `target` links a C program: the `[link]` of its `object.toml` (crates/target/llrm-<target>)."""
+    crate = ROOT / "crates" / "target" / ("llrm-" + target)
+    with open(crate / "src" / "machines" / "object.toml", "rb") as text:
+        return tomllib.load(text)["link"]
+
+
+def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> tuple[Path, ...]:
+    """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
+    `target` says; the files its executable needs beside it (an extender's loader)."""
+    link = target_link(target)
+    fill = lambda text: text.replace("{ow}", str(ow_root()))  # noqa: E731
+    made = work / target
+    made.mkdir(exist_ok=True)
+
+    def objects(names: list[str]) -> list[Path]:
+        out = []
+        for name in names:
+            path = made / (Path(name).stem.upper() + ".OBJ")
+            with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
+                if not path.exists():
+                    assemble(ROOT / name, path)
+            out.append(path)
+        return out
+
+    first, last, final = objects(link["first"]), objects(link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []
-    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, "format", "dos", "name", str(exe), "file", str(crt), "file", str(obj), "file", str(ext), *after, "file", str(end)])
+    files = lambda paths: [word for one in paths for word in ("file", str(one))]  # noqa: E731
+    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, *link["format"], "name", str(exe), *map(fill, link.get("options", [])), *files(first), "file", str(obj), *files(last), *after, *files(final)])
+    return (Path(fill(link["loader"])),) if "loader" in link else ()
+
+
+def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:
+    """A C object for the 16-bit target, linked as it says."""
+    link_target("x86-code16", obj, exe, work, listing, after, before)
 
 
 @dataclass
