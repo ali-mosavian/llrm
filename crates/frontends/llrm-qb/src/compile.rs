@@ -13,7 +13,7 @@ use llrm_core::support::hash::IndexMap;
 
 use super::abi::AbiError;
 use llrm_core::driver::{self, basic::{self, written_basic}};
-use llrm_core::backend::{masm, omfwrite};
+use llrm_core::backend::{masm, objbuild};
 use llrm_core::hir::{self, model};
 use llrm_core::objectfile::module::Space;
 use llrm_core::support::pyrepr::{self, Repr};
@@ -473,7 +473,7 @@ pub fn object_bytes(
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<Vec<u8>, CompileError> {
-    let module = omfwrite::live(&assembled(program, observer, codegen)?)
+    let module = objbuild::live(&assembled(program, observer, codegen)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
     Ok(written_basic(&module, _header(program)?, &name)?)

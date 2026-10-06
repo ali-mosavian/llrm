@@ -20,7 +20,7 @@ use super::compile as nib;
 use super::driver;
 use super::nibstages;
 use llrm_core::backend::masm;
-use llrm_core::backend::omfwrite::CodeLayout;
+use llrm_core::backend::objbuild::CodeLayout;
 use llrm_core::driver::{self as codegen, flags::{self, Flags}};
 
 fn usage() -> String {
@@ -229,6 +229,7 @@ mod tests {
         fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> { self.0.address_forms(costs, address_stall) }
         fn cost_model(&self) -> llrm_target::CostModel { self.0.cost_model() }
         fn conventions(&self) -> &'static [&'static str] { self.0.conventions() }
+        fn calling(&self) -> &'static llrm_target::calling::Calling { self.0.calling() }
         fn object(&self) -> llrm_target::object::ObjectFormat { self.0.object() }
     }
 

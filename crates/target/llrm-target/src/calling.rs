@@ -32,7 +32,9 @@ pub struct Aggregate {
     pub style: String,
     /// The sizes, in bytes, of a struct returned in a register.
     pub in_register_bytes: Vec<i64>,
+    /// `after-arguments`: pushed past the last argument; `register`: held in `pointer_register`.
     pub pointer: String,
+    pub pointer_register: Option<String>,
     pub pointer_returned: String,
     pub pointer_popped_by: String,
 }
@@ -41,11 +43,26 @@ pub struct Aggregate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Convention {
     pub name: String,
+    /// The calling convention MIR names this one by (`cdecl`, `watcall`); the file's first answers
+    /// MIR's `ccc` as well.
+    pub cc: Option<String>,
     /// What a byte argument takes on the stack, and the least a cell holds.
     pub slot_bytes: i64,
     pub order: Order,
     pub cleanup: Cleanup,
     pub argument_registers: Vec<String>,
+    /// The pairs an i64 argument takes, low register first.
+    pub wide_pairs: Vec<[String; 2]>,
+    /// Whether a register an argument skipped is free for a later one.
+    pub backfill: bool,
+    /// What a call's arguments in registers are the callee's to change; everything else it keeps.
+    pub arguments_clobbered: bool,
+    /// The same for the registers a result leaves in.
+    pub results_clobbered: bool,
+    /// The convention a variadic call uses in place of this one: it moves the arguments, not the symbol.
+    pub variadic: Option<String>,
+    /// How a symbol is written in each object format, `*` standing for its name.
+    pub symbol: BTreeMap<String, String>,
     pub return_address_bytes: i64,
     /// Where the first argument lies from the frame register, past the saved frame register and
     /// the return address.
@@ -75,7 +92,15 @@ pub struct Calling {
     pub conventions: Vec<Convention>,
 }
 
-const KEYS: [&str; 22] = [
+const KEYS: [&str; 30] = [
+    "cc",
+    "wide_pairs",
+    "backfill",
+    "arguments_clobbered",
+    "results_clobbered",
+    "variadic",
+    "symbol",
+    "aggregate_pointer_register",
     "slot_bytes",
     "order",
     "cleanup",
@@ -112,7 +137,8 @@ impl Calling {
             if let Some(like) = one.remove("like") {
                 let like = like.as_str().ok_or_else(|| format!("calling.toml: {name}.like is not a name"))?;
                 let base = stated.iter().find(|(one, _)| one.as_str() == like).ok_or_else(|| format!("calling.toml: {name} is like {like}, which is not given before it"))?;
-                for (key, value) in &base.1 {
+                // Each states the cc MIR names it by; it is not inherited.
+                for (key, value) in base.1.iter().filter(|(key, _)| key.as_str() != "cc") {
                     one.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
@@ -138,6 +164,38 @@ impl Calling {
     pub fn named(&self, name: &str) -> Option<&Convention> {
         self.conventions.iter().find(|one| one.name == name)
     }
+
+    /// The convention MIR's `cc` names: the file's first answers `ccc`, whose `cc` is 0.
+    pub fn by_cc(&self, cc: &str) -> Option<&Convention> {
+        self.conventions.iter().find(|one| one.cc.as_deref() == Some(cc))
+    }
+}
+
+/// What an argument is to a convention's registers: a word of at most a slot, an i64, or what
+/// travels in memory whatever it is (a float, a struct by value).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Kind {
+    Word,
+    Wide,
+    Memory(i64),
+}
+
+/// Where one argument goes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Place {
+    Registers(Vec<String>),
+    /// By its bytes from the first stack argument, which is the lowest.
+    Stack(i64),
+}
+
+/// Where a call's arguments go and what they take.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Placement {
+    pub places: Vec<Place>,
+    /// The registers the arguments use, in the order they were given.
+    pub used: Vec<String>,
+    /// The bytes the arguments take on the stack.
+    pub stack_bytes: i64,
 }
 
 impl Convention {
@@ -190,12 +248,41 @@ impl Convention {
                 style: text("aggregate")?,
                 in_register_bytes: names_as_integers(table.get("aggregate_in_register_bytes"), &at("aggregate_in_register_bytes"))?,
                 pointer: text("aggregate_pointer")?,
+                pointer_register: table.contains_key("aggregate_pointer_register").then(|| text("aggregate_pointer_register")).transpose()?,
                 pointer_returned: text("aggregate_pointer_returned")?,
                 pointer_popped_by: text("aggregate_pointer_popped_by")?,
             }),
         };
+        let flag = |key: &str| -> Result<bool, String> { table.get(key).map_or(Ok(false), |one| one.as_bool().ok_or_else(|| format!("{} is not true or false", at(key)))) };
+        let wide_pairs = match table.get("wide_pairs") {
+            None => Vec::new(),
+            Some(pairs) => pairs
+                .as_array()
+                .ok_or_else(|| format!("{} is not a list", at("wide_pairs")))?
+                .iter()
+                .map(|pair| {
+                    let names: Vec<Option<&str>> = pair.as_array().map_or(Vec::new(), |pair| pair.iter().map(toml::Value::as_str).collect());
+                    match names[..] {
+                        [Some(low), Some(high)] => Ok([low.to_owned(), high.to_owned()]),
+                        _ => Err(format!("{}: a pair is [low, high]", at("wide_pairs"))),
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        };
+        let mut symbol = BTreeMap::new();
+        for (format, pattern) in table.get("symbol").map_or(Ok(&toml::Table::new()), |one| one.as_table().ok_or_else(|| format!("{} is not a table", at("symbol"))))? {
+            let pattern = pattern.as_str().filter(|pattern| pattern.contains('*')).ok_or_else(|| format!("{}.{format} is a pattern with a `*` for the name", at("symbol")))?;
+            symbol.insert(format.clone(), pattern.to_owned());
+        }
         Ok(Self {
             name: name.to_owned(),
+            cc: table.contains_key("cc").then(|| text("cc")).transpose()?,
+            wide_pairs,
+            backfill: flag("backfill")?,
+            arguments_clobbered: flag("arguments_clobbered")?,
+            results_clobbered: flag("results_clobbered")?,
+            variadic: table.contains_key("variadic").then(|| text("variadic")).transpose()?,
+            symbol,
             slot_bytes: integer("slot_bytes")?,
             order,
             cleanup,
@@ -221,6 +308,71 @@ impl Convention {
     pub fn result_registers(&self, width: i64) -> Option<&[String]> {
         let by_width = self.results.iter().filter_map(|(class, registers)| Some((class.parse::<i64>().ok()?, registers)));
         by_width.filter(|(bytes, _)| *bytes >= width).min_by_key(|(bytes, _)| *bytes).map(|(_, registers)| registers.as_slice())
+    }
+
+    /// Where `arguments` go: each takes the first register free, an i64 the first pair with both
+    /// free; the first that fits no register, and all after it, go on the stack, each at least a
+    /// slot. Without `backfill`, a register passed over is not free for a later argument.
+    pub fn place(&self, arguments: &[Kind]) -> Placement {
+        let mut free: Vec<bool> = vec![true; self.argument_registers.len()];
+        let at = |name: &String| self.argument_registers.iter().position(|one| one == name);
+        let mut places = Vec::new();
+        let mut used = Vec::new();
+        let (mut stack, mut spilled) = (0, false);
+        for &kind in arguments {
+            let found = if spilled {
+                None
+            } else {
+                match kind {
+                    Kind::Word => free.iter().position(|&one| one).map(|first| vec![first]),
+                    Kind::Wide => self.wide_pairs.iter().find_map(|pair| {
+                        let both = pair.iter().map(at).collect::<Option<Vec<_>>>()?;
+                        both.iter().all(|&index| free[index]).then_some(both)
+                    }),
+                    Kind::Memory(_) => None,
+                }
+            };
+            match found {
+                Some(registers) => {
+                    if !self.backfill {
+                        let first = *registers.iter().min().expect("a register");
+                        free[..first].fill(false);
+                    }
+                    for &index in &registers {
+                        free[index] = false;
+                        used.push(self.argument_registers[index].clone());
+                    }
+                    places.push(Place::Registers(registers.into_iter().map(|index| self.argument_registers[index].clone()).collect()));
+                }
+                None => {
+                    spilled = true;
+                    places.push(Place::Stack(stack));
+                    let bytes = match kind {
+                        Kind::Word => self.slot_bytes,
+                        Kind::Wide => self.slot_bytes * self.wide_slots,
+                        Kind::Memory(bytes) => bytes.max(self.slot_bytes),
+                    };
+                    stack += (bytes + self.slot_bytes - 1) / self.slot_bytes * self.slot_bytes;
+                }
+            }
+        }
+        Placement { places, used, stack_bytes: stack }
+    }
+
+    /// The registers a call changes that the callee does not keep: what the convention clobbers,
+    /// the registers it passed arguments in where those are the callee's, and those it returned a
+    /// result of `width` bytes in where those are.
+    pub fn clobbers(&self, used: &[String], result_width: Option<i64>) -> Vec<String> {
+        let mut out = self.clobbered.clone();
+        if self.arguments_clobbered {
+            out.extend(used.iter().cloned());
+        }
+        if self.results_clobbered {
+            out.extend(result_width.and_then(|width| self.result_registers(width)).into_iter().flatten().cloned());
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// The registers kept for the caller that a value may be held in: all but the frame register.
@@ -273,5 +425,61 @@ mod tests {
         let error = Calling::parse(&ONE.replace("wide_slots = 2", "wide_slots = 2\nred_zone = 128")).unwrap_err();
         assert_eq!(error, "calling.toml: c.red_zone: no such key");
         assert!(Calling::parse(&ONE.replace("left-to-right", "sideways")).unwrap_err().contains("not right-to-left or left-to-right"));
+    }
+
+    /// Open Watcom's flat register convention, as `wcc386 -3r` emits it (read from its disassembly).
+    const WATCALL: &str = "[w]\nslot_bytes = 4\norder = \"right-to-left\"\ncleanup = \"callee\"\nargument_registers = [\"eax\", \"edx\", \"ebx\", \"ecx\"]\nwide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\nbackfill = true\narguments_clobbered = true\nresults_clobbered = true\nreturn_address_bytes = 4\nfirst_argument_offset = 8\nframe = \"ebp\"\nstack = \"esp\"\npreserved = [\"ebx\", \"ecx\", \"edx\", \"esi\", \"edi\", \"ebp\"]\nclobbered = [\"eax\", \"flags\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 2\nvariadic_float = \"double\"\n[w.result]\n4 = [\"eax\"]\n8 = [\"eax\", \"edx\"]\n";
+
+    fn registers(names: &[&str]) -> Place {
+        Place::Registers(names.iter().map(|one| (*one).to_owned()).collect())
+    }
+
+    /// `wcc386` put `(int a, i64 b, int c)` in EAX, EBX:ECX and EDX: the pair EDX:EBX does not exist,
+    /// and EDX stayed free for `c`. A rule that took the next two registers in a row gave b EDX:EBX.
+    #[test]
+    fn an_i64_takes_a_fixed_pair_and_a_register_passed_over_stays_free() {
+        let calling = Calling::parse(WATCALL).unwrap();
+        let w = calling.native();
+        let placed = w.place(&[Kind::Word, Kind::Wide, Kind::Word]);
+        assert_eq!(placed.places, [registers(&["eax"]), registers(&["ebx", "ecx"]), registers(&["edx"])]);
+        assert_eq!(placed.stack_bytes, 0);
+        // `(i64, i64)`: EAX:EDX, then EBX:ECX.
+        assert_eq!(w.place(&[Kind::Wide, Kind::Wide]).places, [registers(&["eax", "edx"]), registers(&["ebx", "ecx"])]);
+    }
+
+    /// `wcc386` sent `(int, double, int)` to EAX and two stack cells: the first argument that fits no
+    /// register sends every later one to the stack, though EDX was free. Also `(int, int, int, i64)`:
+    /// only ECX was left, so the i64 went to the stack.
+    #[test]
+    fn the_first_argument_that_fits_no_register_sends_the_rest_to_the_stack() {
+        let calling = Calling::parse(WATCALL).unwrap();
+        let w = calling.native();
+        let placed = w.place(&[Kind::Word, Kind::Memory(8), Kind::Word]);
+        assert_eq!(placed.places, [registers(&["eax"]), Place::Stack(0), Place::Stack(8)]);
+        assert_eq!(placed.stack_bytes, 12);
+        let placed = w.place(&[Kind::Word, Kind::Word, Kind::Word, Kind::Wide]);
+        assert_eq!((placed.places[3].clone(), placed.stack_bytes), (Place::Stack(0), 8));
+        // Six words: four in registers, the fifth lowest on the stack.
+        let six = w.place(&[Kind::Word; 6]);
+        assert_eq!((six.places[4].clone(), six.places[5].clone(), six.stack_bytes), (Place::Stack(0), Place::Stack(4), 8));
+    }
+
+    /// A call changes EAX, the registers its arguments went in and EDX for an i64 result, and keeps
+    /// the rest: `wcc386` held a value in ECX across `h2(i64, int)` and one in EDX across `h1(int)`.
+    #[test]
+    fn a_call_changes_the_registers_of_its_arguments_and_results_only() {
+        let calling = Calling::parse(WATCALL).unwrap();
+        let w = calling.native();
+        let used = w.place(&[Kind::Word]).used;
+        assert_eq!(w.clobbers(&used, Some(4)), ["eax", "flags"]);
+        let used = w.place(&[Kind::Wide, Kind::Word]).used;
+        assert_eq!(w.clobbers(&used, Some(8)), ["eax", "ebx", "edx", "flags"]);
+    }
+
+    #[test]
+    fn a_convention_is_found_by_the_cc_mir_names_it_by() {
+        let calling = Calling::parse(&format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n")).unwrap();
+        assert_eq!(calling.by_cc("cdecl").map(|one| one.name.as_str()), Some("c"));
+        assert!(calling.by_cc("pascal").is_none());
     }
 }

@@ -3,7 +3,7 @@
 //! Port of `qbopt/backend/asm.py`. LLVM's `MCAssembler`: how long each
 //! instruction is, where each therefore lands, which branches can shrink now
 //! that everything is closer, and where each fixup ended up. `select` is the
-//! code emitter above it and `omfwrite` the object writer below.
+//! code emitter above it and `objbuild` the object writer below.
 //!
 //! An assembler does not allocate. Handed `assignment=None` this remaps
 //! nothing, which is the right answer for a body whose registers are already
@@ -28,7 +28,7 @@ pub struct Laid {
     /// relocated displacement, so the fixup that names it can be moved.
     pub relocations: Vec<(i64, i64)>,
     /// Fixups that belonged to an instruction this body no longer contains.
-    /// Reported rather than silently omitted: omfwrite refuses a fixup it
+    /// Reported rather than silently omitted: objbuild refuses a fixup it
     /// cannot place, and can only tell the two apart if told which were
     /// meant to go.
     pub dropped: BTreeSet<i64>,

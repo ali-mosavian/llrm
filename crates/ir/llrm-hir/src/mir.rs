@@ -836,10 +836,12 @@ fn function_type(types: &mut Types, returns: TypeId, parameters: Vec<TypeId>) ->
 /// The calling convention and code address space an ABI gives: BASIC's
 /// when the callee pops its arguments, C's when the caller does; a far
 /// procedure's code in address space 1, as its pointers are.
-fn convention(spaces: &AddressSpaces, cleanup: model::StackCleanup, distance: model::CallDistance) -> Emit<(u32, u32)> {
-    let convention = match cleanup {
-        model::StackCleanup::Callee => llrm_mir::opcode::BASIC,
-        model::StackCleanup::Caller => 0,
+fn convention(spaces: &AddressSpaces, cleanup: model::StackCleanup, distance: model::CallDistance, named: Option<&str>) -> Emit<(u32, u32)> {
+    let convention = match (named, cleanup) {
+        // The target's own, by the `cc` its description gives it.
+        (Some(name), _) => llrm_mir::opcode::CONVENTIONS.iter().find(|(spelled, _)| spelled.strip_suffix("cc") == Some(name)).map(|(_, number)| *number).ok_or_else(|| format!("no calling convention {name:?}"))?,
+        (None, model::StackCleanup::Callee) => llrm_mir::opcode::BASIC,
+        (None, model::StackCleanup::Caller) => 0,
     };
     let space = match distance {
         model::CallDistance::Near => spaces.near,
@@ -889,7 +891,7 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
         model::FunctionLinkage::External => Linkage::External,
     };
     let abi = match &function.abi {
-        Some(abi) => convention(&tables.spaces, abi.cleanup, abi.distance)?,
+        Some(abi) => convention(&tables.spaces, abi.cleanup, abi.distance, abi.convention.as_deref())?,
         None => (0, tables.spaces.far),
     };
     let global = module.add_function(&function.name, ty, linkage)?;
@@ -1170,7 +1172,7 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
         }
         let abi = match function.calls.iter().find(|one| one.instruction == instruction.id) {
             Some(site) => {
-                let abi = convention(&tables.spaces, site.cleanup, site.distance)?;
+                let abi = convention(&tables.spaces, site.cleanup, site.distance, site.convention.as_deref())?;
                 passed(site, instruction.operands.len()).ok_or_else(|| format!("a call to {callee} pushing {:?}", site.order))?;
                 abi
             }
@@ -1226,7 +1228,7 @@ fn declare_runtime(module: &mut Module, tables: &mut Tables, name: &str, words: 
     if tables.callees.contains_key(name) {
         return Ok(());
     }
-    let abi = convention(&tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far)?;
+    let abi = convention(&tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far, None)?;
     let types = &mut module.context.types;
     let (void, word) = (types.void(), types.int(16));
     let ty = function_type(types, void, vec![word; words]);
@@ -2200,7 +2202,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             Op::Call if instruction.callee.is_none() => {
                 let site = self.function.calls.iter().find(|one| one.instruction == instruction.id).ok_or("an indirect call without its ABI")?;
-                let (convention, _) = convention(&self.tables.spaces, site.cleanup, site.distance)?;
+                let (convention, _) = convention(&self.tables.spaces, site.cleanup, site.distance, site.convention.as_deref())?;
                 let operands = self.operands(instruction)?;
                 let [callee, ref arguments @ ..] = operands[..] else { return Err("an indirect call of nothing".to_owned()) };
                 let through = self.answer(instruction);
@@ -2245,7 +2247,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     // Falling through, not by an error: "RESUME without
                     // error", raised as ERROR raises it, which the runtime
                     // places at this call.
-                    let (convention, _) = convention(&self.tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far)?;
+                    let (convention, _) = convention(&self.tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far, None)?;
                     let number = self.b.int(16, handling::RESUME_WITHOUT_ERROR);
                     let (void, word) = (self.b.context.types.void(), self.b.context.types.int(16));
                     let ty = function_type(&mut self.b.context.types, void, vec![word]);
@@ -2389,7 +2391,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             TerminatorKind::Return if self.outlined.is_some() => {
                 // The module handler run to the module's end is "No
                 // RESUME", raised with trapping off: it ends the program.
-                let (convention, _) = convention(&self.tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far)?;
+                let (convention, _) = convention(&self.tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far, None)?;
                 let (void, word) = (self.b.context.types.void(), self.b.context.types.int(16));
                 let ty = function_type(&mut self.b.context.types, void, vec![word]);
                 let raise = Value::Constant(self.tables.callees[handling::RAISE]);

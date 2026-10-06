@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use super::{hir, stream, translate};
 
 use llrm_core::backend::{
-    masm, omfwrite,
+    masm, objbuild,
 };
 use llrm_core::driver::flags::{self, Flags};
 
@@ -20,7 +20,7 @@ use llrm_core::driver::flags::{self, Flags};
 pub enum CompileError {
     Unsupported(hir::Unsupported),
     Io(std::io::Error),
-    Emission(omfwrite::Error),
+    Emission(objbuild::Error),
 }
 
 impl fmt::Display for CompileError {
@@ -45,15 +45,15 @@ impl From<String> for CompileError {
     }
 }
 
-impl From<omfwrite::Error> for CompileError {
-    fn from(error: omfwrite::Error) -> Self {
+impl From<objbuild::Error> for CompileError {
+    fn from(error: objbuild::Error) -> Self {
         Self::Emission(error)
     }
 }
 
 impl From<masm::Unprintable> for CompileError {
     fn from(error: masm::Unprintable) -> Self {
-        Self::Emission(omfwrite::Error::Unprintable(error))
+        Self::Emission(objbuild::Error::Unprintable(error))
     }
 }
 
@@ -273,7 +273,7 @@ pub fn main(argv: &[String]) -> i32 {
         let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
-            let bytes = omfwrite::written(&built, name)?;
+            let bytes = objbuild::written(&built, name)?;
             llrm_core::support::debug::timed("write output", || fs::write(&output, bytes))?;
         } else {
             fs::write(&output, masm::text(&built)?)?;
@@ -1000,7 +1000,7 @@ mod tests {
         let argv: Vec<String> = ["-m32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
-        let bytes = llrm_core::backend::omfwrite::written(&built, "x.c").unwrap();
+        let bytes = llrm_core::backend::objbuild::written(&built, "x.c").unwrap();
         let (mut at, mut out) = (0, Vec::new());
         while at < bytes.len() {
             let length = usize::from(u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]));

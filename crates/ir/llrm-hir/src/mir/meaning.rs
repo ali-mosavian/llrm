@@ -40,7 +40,7 @@ fn declares(module: &mut Module, global: GlobalId, meaning: &Meaning) -> bool {
 
 /// The runtime's error routine, `B$SERR(number)`, as the module calls it, declared where it is not.
 fn raiser(module: &mut Module, spaces: &llrm_target::layout::AddressSpaces) -> Option<(GlobalId, TypeId, u32)> {
-    let (conv, space) = convention(spaces, model::StackCleanup::Callee, model::CallDistance::Far).ok()?;
+    let (conv, space) = convention(spaces, model::StackCleanup::Callee, model::CallDistance::Far, None).ok()?;
     let name = format!("{RUNTIME}B$SERR");
     let global = match module.named(&name) {
         Some(one) => one,

@@ -8,7 +8,6 @@
 1 crates/backend/llrm-core/src/backend/classes.rs
 1 crates/backend/llrm-core/src/backend/copyprop.rs
 7 crates/backend/llrm-core/src/backend/datagroup.rs
-1 crates/backend/llrm-core/src/backend/division.rs
 1 crates/backend/llrm-core/src/backend/ehprepare.rs
 1 crates/backend/llrm-core/src/backend/exactaddress.rs
 5 crates/backend/llrm-core/src/backend/floatalloc.rs
@@ -23,7 +22,7 @@
 5 crates/backend/llrm-core/src/backend/loopslots.rs
 2 crates/backend/llrm-core/src/backend/machinedce.rs
 11 crates/backend/llrm-core/src/backend/masm.rs
-8 crates/backend/llrm-core/src/backend/omfwrite.rs
+3 crates/backend/llrm-core/src/backend/objbuild.rs
 1 crates/backend/llrm-core/src/backend/parcopy.rs
 9 crates/backend/llrm-core/src/backend/peep/guards.rs
 4 crates/backend/llrm-core/src/backend/peep/make.rs

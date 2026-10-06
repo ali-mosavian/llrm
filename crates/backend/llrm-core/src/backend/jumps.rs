@@ -18,7 +18,7 @@ use crate::analysis::loops::{self as loopy, Loop};
 use crate::analysis::frequency::Frequency;
 use llrm_analysis::branchprob;
 use crate::backend::layout::_OPPOSITE;
-use crate::backend::omfwrite::{SHORT_JUMP, short_reaches};
+use crate::backend::objbuild::{SHORT_JUMP, short_reaches};
 use crate::backend::{cpu, machinedce, masm, select};
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
