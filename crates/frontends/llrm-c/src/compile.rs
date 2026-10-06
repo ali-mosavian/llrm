@@ -926,6 +926,15 @@ mod tests {
         assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "mov eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
     }
 
+    /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and cdecl32's next
+    /// argument, and the callee's read of it, lay a dword apart.
+    #[test]
+    fn test_code32_pushes_narrow_arguments_as_dwords() {
+        let lines = flat_listing("args");
+        assert!(lines.iter().filter(|line| line.starts_with("push ")).all(|line| line.split_whitespace().nth(1).is_some_and(|operand| operand.starts_with('e') || operand.starts_with("offset"))), "{lines:#?}");
+        assert!(lines.contains(&"add esp, 8".to_owned()), "{lines:#?}");
+    }
+
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
     /// addressed `[base+index]` with no segment, selector or 16-bit register.
     #[test]
