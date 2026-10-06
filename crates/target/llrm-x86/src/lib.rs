@@ -3,6 +3,42 @@
 
 pub mod select;
 
+/// A calling convention's registers as the x86 family names them: the architecture's, the same in every x86 target.
+pub mod calling {
+    use iced_x86::Register;
+    use llrm_target::calling::Convention;
+
+    /// `name` (`ebx`, `si`, `st0`), as the family spells it.
+    pub fn register(name: &str) -> Register {
+        static NAMES: std::sync::LazyLock<std::collections::HashMap<String, Register>> = std::sync::LazyLock::new(|| Register::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect());
+        *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
+    }
+
+    /// The register a frame's cells are addressed through.
+    pub fn frame(convention: &Convention) -> Register {
+        register(&convention.frame)
+    }
+
+    pub fn stack(convention: &Convention) -> Register {
+        register(&convention.stack)
+    }
+
+    /// Each register kept for the caller that a value may be held in: its full register and the one pushed.
+    pub fn callee_saved(convention: &Convention) -> Vec<(Register, Register)> {
+        convention.callee_saved().into_iter().map(|kept| (register(&kept.full), register(&kept.pushed))).collect()
+    }
+
+    /// The registers a result `width` bytes wide leaves in, low part first.
+    pub fn results(convention: &Convention, width: u32) -> Vec<Register> {
+        convention.result_registers(i64::from(width)).expect("calling.toml states a result for every width").iter().map(|name| register(name)).collect()
+    }
+
+    /// Where the first argument lies from the frame register.
+    pub fn first_argument_offset(convention: &Convention, far: bool) -> i64 {
+        if far { convention.first_argument_offset_far.unwrap_or(convention.first_argument_offset) } else { convention.first_argument_offset }
+    }
+}
+
 /// The x86 general register file's views, in the order iced and the manuals list them: the architecture's, the
 /// same in every x86 target.
 pub mod registers {

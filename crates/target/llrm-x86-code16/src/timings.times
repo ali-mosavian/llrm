@@ -7,7 +7,7 @@
 # entries are solid, divide entries the roughest, K5 the least certain column.
 # Where a cost depends on the operand (idiv) the figure is for a 32 bit
 # register operand. Legacy approximate rankings, partly recalled from timing
-# tables, not uniformly verified; audited bounds live in backend/timing.rs, see
+# tables, not uniformly verified; audited bounds are the `smul_*` and `sdiv_*` rows below, see
 # docs/measurement/timing-audit.md. Correct them in place.
 #
 # The 386 column is Intel's 80386 table (POP m is five clocks, Jcc is 7+m taken
@@ -96,6 +96,17 @@ x87_div_m              96   73   39   38   62   58   24   30
 x87_control_load        8    4    8   10    6    6   42    6
 x87_control_store       8    3    2    4    6    4    1    6
 jcc_not_taken           3    1    1    1    1    1    1    1   # Intel's 80386 table: Jcc is 7+m taken, 3 not.
+
+# Audited bounds of the signed multiply and divide (docs/measurement/timing-audit.md), where a CPU has them:
+# the least and most clocks by operand width in bytes (`w2`, `w4`), and where the P5 prices the full product
+# of a word differently (`smul_full_w2`). Read by backend/timing.rs; the divide has one figure.
+smul_min_w2             9   13   10    -    -    -    -    -
+smul_max_w2            22   26   10    -    -    -    -    -
+smul_min_w4             9   13   10    -    -    -    -    -
+smul_max_w4            38   42   10    -    -    -    -    -
+smul_full_w2            -    -   11    -    -    -    -    -
+sdiv_w2                27   27   30    -    -    -    -    -
+sdiv_w4                43   43   46    -    -    -    -    -
 
 [latency]
 alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg

@@ -14,6 +14,12 @@ pub use timings::ARCHS;
 /// Real mode's data layout and address spaces: `machines/datalayout.toml`.
 pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
 
+/// The calling conventions: `calling.toml`.
+static CALLING: std::sync::LazyLock<llrm_target::calling::Calling> = std::sync::LazyLock::new(|| llrm_target::calling::Calling::parse(include_str!("machines/calling.toml")).expect("calling.toml parses"));
+
+/// Their names, the first being the language's own.
+static CONVENTIONS: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| CALLING.names());
+
 /// `DATALAYOUT_TOML`, parsed once.
 static LAYOUT: std::sync::LazyLock<llrm_target::layout::Layout> = std::sync::LazyLock::new(|| llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("real mode's datalayout.toml parses"));
 
@@ -96,7 +102,7 @@ impl llrm_target::Target for Code16 {
     }
 
     fn conventions(&self) -> &'static [&'static str] {
-        &["cdecl16", "pascal16", "interrupt16", "qb45", "pds71", "vbdos"]
+        &CONVENTIONS
     }
 
     fn physical_addresses(&self) -> Vec<(String, u64)> {
@@ -123,18 +129,18 @@ impl llrm_target::Target for Code16 {
         Some(llrm_target::os::Layer { directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/shared/dos/x86-code16"), text: include_str!("../../../../runtime/shared/dos/x86-code16/os.toml"), facts: llrm_x86::DOS_FACTS })
     }
 
-    /// A byte is pushed as a word.
+    /// A byte is pushed as a word: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
-        2
+        CALLING.native().slot_bytes
     }
 
     fn frame_register(&self) -> iced_x86::Register {
-        FRAME
+        llrm_x86::calling::frame(CALLING.native())
     }
 
     /// Past BP and a 2-byte return address, or a 4-byte far one.
     fn first_argument_offset(&self, far: bool) -> i64 {
-        if far { 6 } else { 4 }
+        llrm_x86::calling::first_argument_offset(CALLING.native(), far)
     }
 
     fn object(&self) -> llrm_target::object::ObjectFormat {
@@ -142,18 +148,16 @@ impl llrm_target::Target for Code16 {
     }
 
     fn stack_pointer(&self) -> iced_x86::Register {
-        iced_x86::Register::SP
+        llrm_x86::calling::stack(CALLING.native())
     }
 
     /// A Borland caller keeps SI and DI, not their upper halves.
     fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> {
-        PRESERVED.to_vec()
+        llrm_x86::calling::callee_saved(CALLING.native())
     }
 
-    /// A dword leaves in DX:AX and an i64 in EDX:EAX, so both name EAX and EDX.
     fn results(&self, width: u32) -> Vec<iced_x86::Register> {
-        use iced_x86::Register::{EAX, EDX};
-        if matches!(width, 4 | 8) { vec![EAX, EDX] } else { vec![EAX] }
+        llrm_x86::calling::results(CALLING.native(), width)
     }
 }
 
@@ -166,6 +170,18 @@ mod tests {
 
     /// isel read these as literals: a 2-byte slot, BP, the first argument at
     /// [bp+4] (near) or [bp+6] (far), a dword result in DX:AX and an i64 in EDX:EAX.
+    /// The conventions a program may name are `calling.toml`'s, the language's own first; BASIC's are Pascal's.
+    #[test]
+    fn test_calling_toml_gives_the_conventions_their_names() {
+        assert_eq!(Code16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16"]);
+        let pascal = CALLING.named("pascal16").unwrap();
+        for name in ["qb45", "pds71", "vbdos"] {
+            assert_eq!(CALLING.named(name).unwrap().cleanup, llrm_target::calling::Cleanup::Callee);
+            assert_eq!((CALLING.named(name).unwrap().order, CALLING.named(name).unwrap().slot_bytes), (pascal.order, pascal.slot_bytes));
+        }
+        assert_eq!(CALLING.named("interrupt16").unwrap().return_address_bytes, 6);
+    }
+
     #[test]
     fn test_code16_answers_the_literals_isel_had() {
         assert_eq!((Code16.stack_slot_bytes(), Code16.frame_register()), (2, iced_x86::Register::BP));

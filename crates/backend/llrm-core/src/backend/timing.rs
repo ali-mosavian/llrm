@@ -12,6 +12,11 @@ pub struct Clocks {
     pub maximum: i64,
 }
 
+/// The price a CPU states for `key`, or none where its description has none.
+fn stated(profile: &targets::Profile, key: &str) -> Option<i64> {
+    profile.cost(key).ok()
+}
+
 pub fn signed_multiply<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     width: i64,
@@ -20,27 +25,14 @@ pub fn signed_multiply<'a>(
     if ![2, 4].contains(&width) {
         return Ok(None);
     }
-    match targets::profile(cpu)?.name.as_str() {
-        "386" => {
-            return Ok(Some(Clocks {
-                minimum: 9,
-                maximum: if width == 2 { 22 } else { 38 },
-            }));
+    let profile = targets::profile(cpu)?;
+    let of = |what: &str| stated(profile, &format!("smul_{what}_w{width}"));
+    if let (Some(minimum), Some(maximum)) = (of("min"), of("max")) {
+        // Where the CPU prices the full product of a word apart, that figure is both bounds.
+        if let Some(clocks) = stated(profile, "smul_full_w2").filter(|_| full && width == 2) {
+            return Ok(Some(Clocks { minimum: clocks, maximum: clocks }));
         }
-        "486" => {
-            return Ok(Some(Clocks {
-                minimum: 13,
-                maximum: if width == 2 { 26 } else { 42 },
-            }));
-        }
-        "P5" => {
-            let clocks = if full && width == 2 { 11 } else { 10 };
-            return Ok(Some(Clocks {
-                minimum: clocks,
-                maximum: clocks,
-            }));
-        }
-        _ => {}
+        return Ok(Some(Clocks { minimum, maximum }));
     }
     Ok(None)
 }
@@ -52,27 +44,8 @@ pub fn signed_divide<'a>(
     if ![2, 4].contains(&width) {
         return Ok(None);
     }
-    let clocks = match targets::profile(cpu)?.name.as_str() {
-        "386" | "486" => {
-            if width == 2 {
-                27
-            } else {
-                43
-            }
-        }
-        "P5" => {
-            if width == 2 {
-                30
-            } else {
-                46
-            }
-        }
-        _ => return Ok(None),
-    };
-    Ok(Some(Clocks {
-        minimum: clocks,
-        maximum: clocks,
-    }))
+    let profile = targets::profile(cpu)?;
+    Ok(stated(profile, &format!("sdiv_w{width}")).map(|clocks| Clocks { minimum: clocks, maximum: clocks }))
 }
 
 #[cfg(test)]

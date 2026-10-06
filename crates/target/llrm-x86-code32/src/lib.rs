@@ -21,6 +21,12 @@ pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
 /// `DATALAYOUT_TOML`, parsed once.
 static LAYOUT: LazyLock<llrm_target::layout::Layout> = LazyLock::new(|| llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("flat datalayout.toml parses"));
 
+/// The calling conventions: `calling.toml`.
+static CALLING: LazyLock<llrm_target::calling::Calling> = LazyLock::new(|| llrm_target::calling::Calling::parse(include_str!("machines/calling.toml")).expect("calling.toml parses"));
+
+/// Their names, the first being the language's own.
+static CONVENTIONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| CALLING.names());
+
 /// The flat target's layout.
 pub fn layout() -> llrm_target::layout::Layout {
     LAYOUT.clone()
@@ -54,7 +60,7 @@ impl llrm_target::Target for Code32 {
     }
 
     fn conventions(&self) -> &'static [&'static str] {
-        &["cdecl32"]
+        &CONVENTIONS
     }
 
     fn physical_addresses(&self) -> Vec<(String, u64)> {
@@ -85,18 +91,18 @@ impl llrm_target::Target for Code32 {
         LAYOUT.clone()
     }
 
-    /// An argument takes a dword at least.
+    /// An argument takes a dword at least: `calling.toml`'s.
     fn stack_slot_bytes(&self) -> i64 {
-        4
+        CALLING.native().slot_bytes
     }
 
     fn frame_register(&self) -> Register {
-        EBP
+        llrm_x86::calling::frame(CALLING.native())
     }
 
-    /// Past EBP and the 4-byte return address: [ebp+8]; there is no far call.
-    fn first_argument_offset(&self, _far: bool) -> i64 {
-        8
+    /// Past EBP and the return address; there is no far call.
+    fn first_argument_offset(&self, far: bool) -> i64 {
+        llrm_x86::calling::first_argument_offset(CALLING.native(), far)
     }
 
     /// Flat: no segments, one model.
@@ -105,12 +111,12 @@ impl llrm_target::Target for Code32 {
     }
 
     fn stack_pointer(&self) -> Register {
-        ESP
+        llrm_x86::calling::stack(CALLING.native())
     }
 
-    /// cdecl32 keeps EBX, ESI and EDI whole.
+    /// What cdecl32 keeps, but the frame register.
     fn callee_saved(&self) -> Vec<(Register, Register)> {
-        vec![(EBX, EBX), (ESI, ESI), (EDI, EDI)]
+        llrm_x86::calling::callee_saved(CALLING.native())
     }
 
     fn march(&self, name: &str) -> Option<&'static str> {
@@ -157,9 +163,8 @@ impl llrm_target::Target for Code32 {
         llrm_target::described
     }
 
-    /// A dword leaves in EAX and an i64 in EDX:EAX.
     fn results(&self, width: u32) -> Vec<Register> {
-        if width == 8 { vec![EAX, EDX] } else { vec![EAX] }
+        llrm_x86::calling::results(CALLING.native(), width)
     }
 }
 
@@ -196,6 +201,16 @@ mod tests {
         assert!(layout.datalayout.starts_with("e-p:32:32"));
         let spaces = layout.spaces;
         assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, None, None, Ok(0)));
+    }
+
+    /// The calling.toml was never read, and its aggregate and promotion keys sat inside the result table
+    /// (a table opened above them): read, each is the convention's.
+    #[test]
+    fn test_calling_toml_states_cdecl32_at_the_top_of_its_table() {
+        let one = CALLING.native();
+        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("cdecl32", &["cdecl32"][..]));
+        assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
+        assert_eq!((one.promotion.as_str(), one.wide_slots, one.results.keys().cloned().collect::<Vec<_>>()), ("slot", 2, vec!["1", "2", "4", "8", "float", "pointer"].into_iter().map(String::from).collect::<Vec<_>>()));
     }
 
     /// The aggregate return was marked provisional while the C ABI was open: it is Open Watcom's flat ABI
