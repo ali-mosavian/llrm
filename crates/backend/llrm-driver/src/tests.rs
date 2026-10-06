@@ -22,7 +22,7 @@ fn no_flag_is_the_default_target() {
 #[test]
 fn an_unknown_target_is_refused_with_the_known_ones() {
     let error = target(&flags(&["--target", "arm64"]), &["x86-code16"]).err().unwrap();
-    assert_eq!(error, "unknown target arm64; choose x86-code16");
+    assert_eq!(error, "unknown target arm64; choose x86-code16, x86-code32");
 }
 
 /// A frontend built for one target does not take another's flag.
@@ -39,4 +39,13 @@ fn a_target_is_bound_to_its_own_selector() {
     assert_eq!(bound.selection.name, "x86-code16");
     let options = bound.options(&flags(&[]), bound.target.machine());
     assert_eq!(options.selection.name, bound.target.name());
+}
+
+/// code32 is registered, flat, and bound to the selector made from its own
+/// directory.
+#[test]
+fn code32_is_a_flat_target_with_its_own_selector() {
+    let bound = target(&flags(&["--target", "x86-code32"]), &["x86-code32"]).unwrap();
+    assert_eq!(bound.selection.name, "x86-code32");
+    assert_eq!(bound.target.machine().addressing, llrm_target::machine::Addressing::Flat);
 }
