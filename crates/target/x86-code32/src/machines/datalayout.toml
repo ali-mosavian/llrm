@@ -1,0 +1,35 @@
+# x86-code32: flat. CS = DS = SS, base 0, 4 GB limit. ES = DS is a fact the
+# target or OS states (string ops read it); FS and GS are never assumed.
+
+# LLVM syntax. One pointer type; i64 is two dwords; x87 long double is 80 bits.
+datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+
+# Legal scalar widths: the legalizer widens or narrows the rest. i64 narrows
+# to two dwords, low first (legality, file next to this).
+legal_integers = [8, 16, 32]
+
+# `near` and `far` collapse: one linear space and no pair or selector space.
+[[address_space]]
+number = 0
+kind = "linear"
+pointer_bits = 32
+index_bits = 32
+names = ["near", "far", "stack", "data", "fixed"]
+
+# String operations read and write through ES; the target states it equals DS.
+string_segment = "ds"
+
+# Address forms per (mode, address size): base + index*scale + displacement.
+[[address_form]]
+address_bits = 32
+base = "base"
+index = "index"
+scales = [1, 2, 4, 8]
+displacement = { bits = [0, 8, 32] }
+# A form with no base takes only an index and disp32, or disp32 alone
+# (absolute). Encoding limits the forms inherit: EBP as a base has no
+# displacement-free form (disp8 of 0), and ESP as a base needs a SIB byte; the
+# encoder prices both, `bytes` come from it.
+absolute = true
+# Cost: the `lea` and memory-form keys of `timings`; no per-form surcharge is
+# described until it is measured.

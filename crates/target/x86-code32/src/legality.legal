@@ -1,0 +1,46 @@
+# x86-code32 legalizer table: the action per (op, type), on a 486 or later.
+# Draft; schema per docs/targets.md's legalizer: key is the full type tuple,
+# type ranges allowed.
+#   legal    selected as is
+#   widen    to the named type
+#   narrow   to halves of the named type, low first
+#   lower    to generic ops
+#   libcall  to the named helper
+#   unsupported
+#
+# op                    type            action
+G_ADD,G_SUB,G_AND,G_OR,G_XOR  i8,i16,i32  legal
+G_ADD,G_SUB                   i64        narrow:i32   # add/adc, sub/sbb
+G_AND,G_OR,G_XOR              i64        narrow:i32
+G_MUL                         i8,i16,i32 legal
+G_MUL                         i64        lower        # one mul and two imul
+G_SDIV,G_UDIV,G_SREM,G_UREM   i8,i16,i32 legal
+# Helper names and their convention are the per-target helper table's (not
+# code16's inline 16-bit blobs); one helper per (signedness, op).
+G_SDIV,G_UDIV,G_SREM,G_UREM   i64        libcall:helper_table
+G_SHL,G_LSHR,G_ASHR           i8,i16,i32 legal          # amount i8
+G_SHL,G_LSHR,G_ASHR           i64, amount i8 const  narrow:i32  # shld/shrd
+G_SHL,G_LSHR,G_ASHR           i64, amount not const  unsupported  # as code16
+G_ICMP                        i1 <- i8,i16,i32,p0  legal
+G_ICMP                        i1 <- i64  narrow:i32
+G_SEXT,G_ZEXT,G_ANYEXT        i1,i8,i16 -> i16,i32 (wider)  legal  # movsx, movzx
+G_SEXT,G_ZEXT                 i1..i32 -> i64 narrow:i32
+G_TRUNC                       i16,i32 -> i1,i8,i16 (narrower)  legal
+G_TRUNC                       i64 -> i1..i32  narrow:i32  # the low half
+G_LOAD,G_STORE                i8,i16,i32,p0,f32,f64,f80 via p0  legal
+G_LOAD,G_STORE                i64 p0     narrow:i32
+G_PTR_ADD                     p0,i32     legal         # address forms or lea
+G_PTRTOINT,G_INTTOPTR         p0,i32     legal         # no-ops
+G_BRCOND                      i1         legal
+G_SELECT                      i8,i16,i32,p0  lower  # branch: no cmov before P6
+G_FADD,G_FSUB,G_FMUL,G_FDIV   f32,f64,f80 legal         # x87
+G_SITOFP                      i16,i32 -> f32,f64,f80  legal   # fild
+G_SITOFP                      i64 -> f32,f64,f80  custom  # pair to an 8-byte temp, fild (as code16)
+G_FPTOSI                      f32,f64,f80 -> i16,i32  custom  # fistp needs fnstcw/fldcw to truncate (no fisttp before SSE3)
+G_FPTOSI                      -> i64    unsupported
+G_FCMP                        i1 <- f32,f64,f80  legal
+G_UITOFP,G_FPTOUI             i32,f64   lower
+# Structural ops with no choice to make.
+G_CONSTANT,G_FRAME_INDEX,G_GLOBAL_VALUE,G_PHI,G_BR  i8,i16,i32,p0  legal
+G_CONSTANT                    i64        narrow:i32
+G_MEMCPY,G_MEMSET             p0,i32     lower         # rep movs / stos, ES = DS
