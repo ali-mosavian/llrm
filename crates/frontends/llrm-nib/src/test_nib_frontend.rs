@@ -199,7 +199,7 @@ pub(crate) fn O2() -> Options {
 
 /// `program` compiled to an object.
 fn object_of(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: llrm_core::backend::objbuild::CodeLayout) -> Result<Vec<u8>, String> {
-    nib_compile::object(&nib_compile::assembled(program, entry, options, &crate::Frontend::default().os)?, source, layout)
+    nib_compile::object(&nib_compile::assembled(program, entry, options, &crate::Frontend::default().os)?, source, layout, llrm_target::object::Format::Omf)
 }
 
 fn types(program: &model::Program) -> std::collections::BTreeMap<&str, &model::Type> {

@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn a_format_the_target_does_not_list_is_refused_naming_what_it_writes() {
         let real = ObjectFormat::parse("formats = [\"omf\"]\ndefault = \"omf\"\nbitness = 16\nheader = []\n").unwrap();
-        assert_eq!(real.choose("x86-code16", None), Ok(Format::Omf));
-        assert_eq!(real.choose("x86-code16", Some(Format::Elf)).unwrap_err(), "x86-code16 cannot write elf; it writes omf");
+        assert_eq!(real.choose("x86-m16", None), Ok(Format::Omf));
+        assert_eq!(real.choose("x86-m16", Some(Format::Elf)).unwrap_err(), "x86-m16 cannot write elf; it writes omf");
     }
 }
