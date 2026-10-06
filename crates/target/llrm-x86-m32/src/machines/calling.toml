@@ -22,6 +22,7 @@ variadic = "cdecl32"
 return_address_bytes = 4
 first_argument_offset = 8
 frame = "ebp"
+frame_optional = true
 stack = "esp"
 preserved = ["ebx", "ecx", "edx", "esi", "edi", "ebp"]
 clobbered = ["eax", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
@@ -67,6 +68,7 @@ return_address_bytes = 4
 first_argument_offset = 8
 # The frame register: a cell is addressed through it, and no value is held in it.
 frame = "ebp"
+frame_optional = true
 stack = "esp"
 preserved = ["ebx", "esi", "edi", "ebp"]
 clobbered = ["eax", "ecx", "edx", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]

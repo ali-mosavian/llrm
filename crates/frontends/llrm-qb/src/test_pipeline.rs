@@ -20,7 +20,7 @@ fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
     let program =
         qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
-    qb_compile::object_bytes(&program, Path::new("MOD.BAS"), None, &llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone())).unwrap();
+    qb_compile::object_bytes(&program, Path::new("MOD.BAS"), None, &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())).unwrap();
 }
 
 mod decided_tests {

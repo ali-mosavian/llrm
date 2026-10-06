@@ -15,7 +15,7 @@ fn object() -> Vec<Rc<omf::Record>> {
 /// tests/fixtures/c/`name`.cgs compiled as the CLI compiles it.
 fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };

@@ -8,7 +8,7 @@ use crate::context::{ConstantKind, Context, GlobalId};
 use crate::facts::Facts;
 use crate::datalayout::DataLayout;
 use crate::module::{Function, GlobalKind, GlobalValue, InstId, Module, Operand, ValueDef};
-use crate::opcode::{Attribute, Opcode};
+use crate::opcode::{Attribute, BinaryOp, Opcode};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Effects {
@@ -164,6 +164,15 @@ pub fn only_value(context: &Context, callees: &Callees, function: &Function, ins
         Opcode::Call(_) => call_returns(context, callees, function, inst) && of(context, callees, function, inst) == Effects::NONE,
         ref opcode => pure_operation(opcode),
     }
+}
+
+/// Work that stores nothing, reads nothing and cannot trap: `only_value` less loads, allocas, calls
+/// and the divisions, which trap.
+pub fn speculatable(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
+    let op = function.instruction(inst);
+    let traps = matches!(op.opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::UDiv | BinaryOp::SRem | BinaryOp::URem));
+    let reads = matches!(op.opcode, Opcode::Load { .. } | Opcode::Alloca { .. } | Opcode::Call(_));
+    !traps && !reads && only_value(context, callees, function, inst)
 }
 
 /// Whether `opcode` is an operation, a plain load among them, whose only effect is its value.

@@ -74,6 +74,9 @@ fn facts() -> Regex {
     Regex::new(&format!("(?i)(?:{})", parts.join("|"))).expect("the facts pattern")
 }
 
+/// The one place that names the targets built in, which is its job (docs/targets.md, the first principle).
+const REGISTRY: &str = "crates/backend/llrm-driver/src/lib.rs";
+
 fn is_test_file(path: &Path) -> bool {
     // `path` is relative to the root: the root itself may sit under a `target/`.
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
@@ -96,7 +99,7 @@ fn files(root: &Path, directory: &str, into: &mut Vec<PathBuf>) {
     assert!(listed.status.success(), "git ls-files: {}", String::from_utf8_lossy(&listed.stderr));
     for line in String::from_utf8_lossy(&listed.stdout).lines() {
         let path = root.join(line);
-        if matches!(path.extension().and_then(|ext| ext.to_str()), Some("rs" | "py" | "sh")) && !is_test_file(path.strip_prefix(root).unwrap()) {
+        if matches!(path.extension().and_then(|ext| ext.to_str()), Some("rs" | "py" | "sh")) && !is_test_file(path.strip_prefix(root).unwrap()) && line != REGISTRY {
             into.push(path);
         }
     }

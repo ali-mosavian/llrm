@@ -41,7 +41,7 @@ EXAMPLES = ROOT / "examples"
 BENCH = ROOT / "bench"
 DEFAULT_FLAGS = ["-O2"]
 KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "stdin", "mask", "targets")
-FLAT = "x86-m32"
+FLAT = dosbatch.linkrecipe.named(32)
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
 COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
@@ -209,8 +209,8 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
 
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
-    target = dosbatch.target_of(program.flags, "x86-m16")
-    if program.source.suffix == ".nib" and target != "x86-m16":
+    target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+    if program.source.suffix == ".nib" and target != dosbatch.REAL_MODE:
         exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
         done = subprocess.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], capture_output=True, text=True, timeout=300)
         if done.returncode != 0 or not obj.exists():
@@ -240,7 +240,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         return problem
     if program.source.suffix == ".c":
         exe = work / f"{stem}.exe"
-        target = dosbatch.target_of(program.flags, "x86-m16")
+        target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
         try:
             loaders = dosbatch.link_target(target, obj, exe, work)
             dosbatch.check_loads(exe)
