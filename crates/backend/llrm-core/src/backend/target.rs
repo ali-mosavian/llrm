@@ -291,10 +291,10 @@ impl Segments {
 }
 
 /// The built-in machine's.
-pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&machine::BUILT_IN));
+pub static BUILT_IN: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BUILT_IN));
 
 /// The segment registers of `machine::BASIC`.
-pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&machine::BASIC));
+pub static BASIC: LazyLock<Segments> = LazyLock::new(|| Segments::of(&llrm_x86_m16::machine::BASIC));
 
 /// Whether `one` needs the data segment register to hold the data group: it
 /// calls, returns, traps or is opaque; it is an x87 instruction, whose
@@ -559,8 +559,8 @@ mod tests {
         assert_eq!(BUILT_IN.selectors, [Register::ES, Register::FS, Register::GS]);
         assert_eq!((BUILT_IN.data, BUILT_IN.through), (Register::DS, None));
         let joined = crate::abi::machine::Machine {
-            segments: machine::BUILT_IN.segments.clone().map(|segments| crate::abi::machine::Segments { stack_is_data: true, ..segments }),
-            ..machine::BUILT_IN.clone()
+            segments: llrm_x86_m16::machine::BUILT_IN.segments.clone().map(|segments| crate::abi::machine::Segments { stack_is_data: true, ..segments }),
+            ..llrm_x86_m16::machine::BUILT_IN.clone()
         };
         let joined = Segments::of(&joined);
         assert_eq!(joined.selectors, [Register::ES, Register::FS, Register::GS, Register::DS]);

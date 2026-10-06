@@ -112,12 +112,8 @@ def ow_root() -> Path:
 
 
 def target_modes() -> dict[str, int]:
-    """Each target's gcc `-m` number, from its `datalayout.toml` (`mode`): the one place that says."""
-    modes = {}
-    for crate in sorted((ROOT / "crates" / "target").glob("llrm-x86-m*")):
-        with open(crate / "src" / "machines" / "datalayout.toml", "rb") as text:
-            modes[crate.name.removeprefix("llrm-")] = tomllib.load(text)["mode"]
-    return modes
+    """Each target's gcc `-m` number (tools/linkrecipe.py)."""
+    return linkrecipe.modes()
 
 
 def m_flag(target: str) -> str:
@@ -191,7 +187,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
 
 
 # The 16-bit target the loop corpus and the C helpers build for.
-REAL_MODE = "x86-m16"
+REAL_MODE = linkrecipe.named(16)
 
 _COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
 
