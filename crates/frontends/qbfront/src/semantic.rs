@@ -411,6 +411,9 @@ pub struct Options {
     /// Errors in code without a landing pad, as a module handler's, report
     /// their BASIC line: a statement-table row, 4 bytes, per line.
     pub error_lines: bool,
+    /// The most bytes the target's data segment holds, which the near-data and frame budgets are: none where
+    /// there are no segments, and no budget.
+    pub segment_bytes: Option<usize>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2489,10 +2492,11 @@ impl Compiler {
             if matches!(storage, "local" | "parameter") {
                 self.data_offset += descriptor_extent;
             }
-            if matches!(storage, "local" | "parameter") && self.data_offset > 65536 {
+            if matches!(storage, "local" | "parameter") && self.beyond_segment(self.data_offset) {
                 return self.fail(format!(
-                    "{} descriptor exceeds the 64 KiB near-data budget",
-                    declaration.name
+                    "{} descriptor exceeds the {} KiB near-data budget",
+                    declaration.name,
+                    self.segment_kib()
                 ));
             }
             self.variables.insert(
@@ -2541,12 +2545,13 @@ impl Compiler {
             );
             (id, extent, Some(element))
         };
-        if storage == "static" && extent > 65536
-            || storage != "static" && self.data_offset + extent > 65536
+        if storage == "static" && self.beyond_segment(extent)
+            || storage != "static" && self.beyond_segment(self.data_offset + extent)
         {
             return self.fail(format!(
-                "{} exceeds the 64 KiB near-data budget",
-                declaration.name
+                "{} exceeds the {} KiB near-data budget",
+                declaration.name,
+                self.segment_kib()
             ));
         }
         // A word array lies at an even offset, so no element read crosses
@@ -2637,10 +2642,11 @@ impl Compiler {
                 self.static_shapes
                     .insert(descriptor, records.iter().map(|(low, high)| (constant(*low), constant(*high))).collect());
             }
-            if self.data_offset > 65536 {
+            if self.beyond_segment(self.data_offset) {
                 return self.fail(format!(
-                    "{} descriptor exceeds the 64 KiB near-data budget",
-                    declaration.name
+                    "{} descriptor exceeds the {} KiB near-data budget",
+                    declaration.name,
+                    self.segment_kib()
                 ));
             }
             Some(descriptor)
@@ -8771,8 +8777,8 @@ impl Compiler {
     fn compiler_temporary(&mut self, prefix: &str, type_id: u32) -> Result<u32, SemanticError> {
         let extent = self.width(type_id);
         let storage = self.implicit_storage;
-        if storage != "static" && self.data_offset + extent > 65536 {
-            return self.fail("temporary exceeds the 64 KiB frame budget");
+        if storage != "static" && self.beyond_segment(self.data_offset + extent) {
+            return self.fail(format!("temporary exceeds the {} KiB frame budget", self.segment_kib()));
         }
         let (offset, symbol) = if storage == "static" {
             let symbol = self.next_data;
@@ -8815,8 +8821,8 @@ impl Compiler {
 
     fn owned_string_temporary(&mut self) -> Result<u32, SemanticError> {
         let extent = self.width(STRING);
-        if self.data_offset + extent > 65536 {
-            return self.fail("STRING argument temporary exceeds the 64 KiB storage budget");
+        if self.beyond_segment(self.data_offset + extent) {
+            return self.fail(format!("STRING argument temporary exceeds the {} KiB storage budget", self.segment_kib()));
         }
         let storage = self.implicit_storage;
         let id = self.next_place;
@@ -9801,6 +9807,16 @@ impl Compiler {
     /// Whether procedures frame themselves where the runtime needs no frame.
     fn own_frames(&self) -> bool {
         !self.options.runtime_frames
+    }
+
+    /// Whether `bytes` is more than the target's data segment holds; never where it has none.
+    fn beyond_segment(&self, bytes: usize) -> bool {
+        self.options.segment_bytes.is_some_and(|most| bytes > most)
+    }
+
+    /// The segment's size for a message.
+    fn segment_kib(&self) -> usize {
+        self.options.segment_bytes.map_or(0, |bytes| bytes / 1024)
     }
 
     fn fail<T>(&self, message: impl Into<String>) -> Result<T, SemanticError> {

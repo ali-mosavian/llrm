@@ -40,7 +40,7 @@ pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::dri
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
     let mut compiled = llrm_core::driver::compiled(&public, options)?.swap_remove(0);
-    compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, os.stack_base, llrm_core::backend::stackusage::stack_limit(options.arch.layout().segment_bytes()))?;
+    compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, os.stack_base, os.stack_reserve, llrm_core::backend::stackusage::stack_limit(options.arch.layout().segment_bytes()), &*options.arch)?;
     Ok(compiled)
 }
 
