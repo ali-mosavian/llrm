@@ -19,7 +19,7 @@ jobs=""
 for level in O2 Os; do
     dos="$(tr a-z A-Z <<< "$level")"
     "$BIN/llrm-c" -$level -I inc twice.c -o "twice$level.obj"
-    { echo "format dos"; echo "option quiet"; echo "name T$dos.EXE"; echo "file '$BC/lib/C0M.OBJ'"
+    { python3 "$ROOT/tools/linkrecipe.py" x86-m16 format; echo "option quiet"; echo "name T$dos.EXE"; echo "file '$BC/lib/C0M.OBJ'"
       echo "file 'twice$level.obj'"; for l in MATHM CM; do echo "library '$BC/lib/$l.LIB'"; done; } > "$level.lnk"
     "$BIN/jwlink" "@$level.lnk" > "$level.link" 2>&1
     jobs+=":ms 20000\nmount w $W\nw:\nT$dos > T$dos.OUT\n.\n"
