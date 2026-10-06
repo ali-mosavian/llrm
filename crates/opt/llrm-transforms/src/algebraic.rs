@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::memory::Unit;
-use llrm_analysis::{cfg, induction};
+use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -68,6 +68,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
     let mut changed = false;
     loop {
         let mut round = _whole_fixed(context, layout, function, &outer);
+        round |= _unsigned_divisions(context, layout, function, &outer, &facts);
         round |= _divisions(context, layout, function, &outer, &facts);
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
@@ -92,6 +93,7 @@ fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Functio
         || _cast_pair(context, function, inst)
         || _narrowed_binary(context, function, inst)
         || _nonnegative_sext(context, function, inst)
+        || _unsigned_power_of_two(context, function, inst)
         || _masked_extension(context, layout, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
@@ -942,6 +944,57 @@ fn _whole_fixed(context: &mut Context, layout: &DataLayout, function: &mut Funct
         _replace(function, inst, Opcode::Binary(op), vec![x, by]);
     }
     !whole.is_empty()
+}
+
+/// `udiv` and `urem` by a power of two: a logical shift and a mask, which the division unit has no part in.
+fn _unsigned_power_of_two(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let Some((op @ (BinaryOp::UDiv | BinaryOp::URem), left, right, width)) = _binary(context, function, inst) else { return false };
+    let Some(divisor) = _integer(context, right).filter(|&divisor| divisor.is_power_of_two() && divisor > 1 && width <= 128 && divisor < 1 << (width - 1).min(127)) else { return false };
+    if op == BinaryOp::UDiv {
+        let count = _constant(context, function, inst, u128::from(divisor.trailing_zeros()));
+        _replace(function, inst, Opcode::Binary(BinaryOp::LShr), vec![left, count]);
+    } else {
+        let low = _constant(context, function, inst, divisor - 1);
+        _replace(function, inst, Opcode::Binary(BinaryOp::And), vec![left, low]);
+    }
+    true
+}
+
+/// `sdiv` and `srem` of a dividend proved non-negative, by a positive constant, are `udiv` and `urem`: the same
+/// value without the bias a negative dividend would need, and a division the unsigned forms of selection price
+/// by their own rules. The proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the dividend's clear
+/// sign bit.
+fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>) -> bool {
+    let candidates: Vec<(llrm_mir::module::BlockId, InstId, u32)> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)))
+        .filter_map(|(block, inst)| Some((block, inst, _width(context, function, inst).filter(|&width| layout.legal_integer(width))?)))
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+    let unit = Unit::within(context, layout, function, outer);
+    let scoped = ranges::scoped(&unit).unwrap_or_default();
+    let registers = unit.registers().into_owned();
+    let made: Vec<(InstId, BinaryOp)> = candidates
+        .into_iter()
+        .filter_map(|(block, inst, width)| {
+            let operands = &function.instruction(inst).operands;
+            let fact = consts::_operand(&unit, operands[1], facts, None)?;
+            let divisor = BigInt::from(consts::masked(&fact.n, width));
+            let positive = fact.width >= width && divisor.sign() == num_bigint::Sign::Plus && divisor < BigInt::from(1u8) << (width - 1);
+            let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
+            let proved = ranges::_operand(&unit, operands[0], &scope, &registers).filter(|interval| interval.width == width).is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
+                || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
+            let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) { BinaryOp::UDiv } else { BinaryOp::URem };
+            (positive && proved).then_some((inst, op))
+        })
+        .collect();
+    for &(inst, op) in &made {
+        let operands = function.instruction(inst).operands.clone();
+        _replace(function, inst, Opcode::Binary(op), operands);
+    }
+    !made.is_empty()
 }
 
 /// Divide by a positive power of two, biasing a negative dividend to

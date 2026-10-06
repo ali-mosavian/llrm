@@ -185,7 +185,7 @@ fn test_other_divisions_stay() {
         }
     }
     unchanged("define i16 @f(i16 %x, i16 %y) {\nb0:\n  %r = sdiv i16 %x, %y\n  ret i16 %r\n}\n");
-    unchanged(&unary(16, "  %r = udiv i16 %x, 4\n  ret i16 %r\n"));
+    unchanged(&unary(16, "  %r = udiv i16 %x, 6\n  ret i16 %r\n"));
 }
 
 /// A division by one is the dividend, a remainder by one is zero: no power-of-two
@@ -662,4 +662,57 @@ fn test_a_compare_narrows_for_a_loop_carried_source_or_a_dying_extension() {
     assert!(bare(&simplified(&text("%p")).1).contains("icmp ult i8 %p, 100"));
     // An argument is not: the extension stays its compare's operand.
     assert!(bare(&simplified(&text("%x")).1).contains("icmp ult i32 %w, 100"));
+}
+
+/// `udiv` and `urem` by a power of two are a logical shift and a mask. Selection had them as `div`, with the
+/// divisor in a register and EDX cleared: forty clocks on a 486 for one.
+#[test]
+fn test_unsigned_power_division_is_a_shift_and_a_mask() {
+    for (width, divisor) in [(32_u32, 2_i128), (32, 8), (32, 65536), (16, 4), (16, 16384), (8, 2)] {
+        for (op, shown) in [("udiv", "lshr"), ("urem", "and")] {
+            let text = unary(width, &format!("  %r = {op} i{width} %x, {divisor}\n  ret i{width} %r\n"));
+            let done = checked(&text, &singles(&edges(width)));
+            assert!(done.contains(shown) && !done.contains(op), "{done}");
+        }
+    }
+}
+
+/// A dividend proved non-negative needs no bias: `sdiv` and `srem` of it are `udiv` and `urem` (a shift and a
+/// mask by a power of two). The bias was five instructions where one did.
+#[test]
+fn test_a_signed_division_of_a_non_negative_dividend_is_unsigned() {
+    let ranged = |op: &str, divisor: &str| format!("define i32 @f(i32 range(i32 0, 100000) %x) {{\nb0:\n  %r = {op} i32 %x, {divisor}\n  ret i32 %r\n}}\n");
+    let inputs: Vec<Vec<i128>> = [0, 1, 7, 8, 9, 10, 99, 100, 99999].iter().map(|&one| vec![one]).collect();
+    for (op, divisor, shown) in [("sdiv", "10", "udiv"), ("srem", "10", "urem"), ("sdiv", "8", "lshr"), ("srem", "8", "and")] {
+        let done = checked(&ranged(op, divisor), &inputs);
+        assert!(done.contains(shown) && !done.contains(op), "{done}");
+    }
+}
+
+/// What a branch proves reaches the division: `rest > 0` holds in the loop that divides `rest` by ten.
+#[test]
+fn test_a_branch_that_proves_a_dividend_positive_makes_its_division_unsigned() {
+    let text = "define i32 @f(i32 %x) {
+b0:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %q = sdiv i32 %x, 10
+  ret i32 %q
+
+b2:
+  ret i32 0
+}
+";
+    let done = checked(text, &singles(&edges(32)));
+    assert!(done.contains("udiv") && !done.contains("sdiv"), "{done}");
+}
+
+/// Not where the dividend may be negative, or the divisor is not a positive constant.
+#[test]
+fn test_a_signed_division_of_an_unknown_sign_stays_signed() {
+    unchanged(&unary(32, "  %r = sdiv i32 %x, 10\n  ret i32 %r\n"));
+    unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
+    unchanged("define i32 @f(i32 range(i32 0, 100) %x, i32 %d) {\nb0:\n  %r = sdiv i32 %x, %d\n  ret i32 %r\n}\n");
 }
