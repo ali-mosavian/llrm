@@ -102,26 +102,50 @@ pub fn on_edge(
     known: &IndexMap<ValueId, Interval>,
     facts: Option<&IndexMap<ValueId, Known>>,
 ) -> Result<Option<IndexMap<ValueId, Interval>>, String> {
+    Ok(edge_delta(unit, block, successor, known, facts)?.map(|delta| applied(known, delta)))
+}
+
+/// `known` with `delta`'s intervals in place of its own.
+fn applied(known: &IndexMap<ValueId, Interval>, delta: IndexMap<ValueId, Interval>) -> IndexMap<ValueId, Interval> {
+    let mut result = known.clone();
+    result.extend(delta);
+    result
+}
+
+/// What `on_edge` changes of `known`, and only that: `None` where the edge is impossible. A caller
+/// that holds `known` narrows it in place, without a copy of every value it knows per edge.
+fn edge_delta(
+    unit: &Unit,
+    block: BlockId,
+    successor: BlockId,
+    known: &IndexMap<ValueId, Interval>,
+    facts: Option<&IndexMap<ValueId, Known>>,
+) -> Result<Option<IndexMap<ValueId, Interval>>, String> {
     let successors = unit.function.successors(block);
     if !successors.contains(&successor) {
         return Err("not a successor".to_owned());
     }
     let empty = IndexMap::default();
     let facts = facts.unwrap_or(&empty);
-    let result = known.clone();
     if successors.len() != 2 {
-        return Ok(Some(result));
+        return Ok(Some(IndexMap::default()));
     }
     let Some((condition, taken)) = branch(unit, block) else {
-        return Ok(Some(result));
+        return Ok(Some(IndexMap::default()));
     };
-    Ok(narrowed(unit, condition, successor == taken, known, facts))
+    Ok(narrowed_delta(unit, condition, successor == taken, known, facts))
 }
 
 /// What `known` becomes where `condition`, an `icmp`, is `holds`; `None`
 /// where it cannot be.
 fn narrowed(unit: &Unit, condition: Operand, holds: bool, known: &IndexMap<ValueId, Interval>, facts: &IndexMap<ValueId, Known>) -> Option<IndexMap<ValueId, Interval>> {
-    let result = known.clone();
+    narrowed_delta(unit, condition, holds, known, facts).map(|delta| applied(known, delta))
+}
+
+/// What `narrowed` changes of `known`: the intervals it sets, none where it sets none; `None` where
+/// the condition cannot hold. Everything it reads is of `known` as it was.
+fn narrowed_delta(unit: &Unit, condition: Operand, holds: bool, known: &IndexMap<ValueId, Interval>, facts: &IndexMap<ValueId, Known>) -> Option<IndexMap<ValueId, Interval>> {
+    let result = IndexMap::default();
     let Some((_, compare)) = unit.defining(condition) else {
         return Some(result);
     };
@@ -542,6 +566,7 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
+    let positions: BTreeMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     let shape = unit.shape();
     let assumed = unit.assumptions();
     let edges_above = dominated_edges_with(unit, facts)?;
@@ -622,22 +647,32 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         // Everything the branch edges above `at` and the assumes narrow `known` to there.
         let scope_at = |at: i64, known: &IndexMap<ValueId, Interval>| -> Result<IndexMap<ValueId, Interval>, String> {
             let mut scoped = known.clone();
-            for block in &graph {
-                for &successor in &block.succ {
-                    let parents = predecessors.get(&successor).ok_or_else(|| successor.to_string())?;
-                    if parents.len() == 1
-                        && parents.contains(&block.at)
-                        && shape.dominance.dominates(successor, at)
-                        && let Some(narrowed) = on_edge(unit, cfg::block(block.at), cfg::block(successor), &scoped, Some(&facts))?
-                    {
-                        scoped = narrowed;
+            // The edges into a block with no other way in, from a block that dominates `at`: those of
+            // the dominator chain of `at`, in the order of the blocks' layout, each narrowing in place.
+            let mut chain = Vec::new();
+            let mut above = Some(at);
+            while let Some(one) = above {
+                if let Some(parents) = predecessors.get(&one).filter(|parents| parents.len() == 1)
+                    && let Some(&from) = parents.iter().next().and_then(|parent| positions.get(parent))
+                {
+                    for (index, &successor) in graph[from].succ.iter().enumerate() {
+                        if successor == one {
+                            chain.push((from, index, successor));
+                        }
                     }
+                }
+                above = shape.dominance.immediate(one);
+            }
+            chain.sort_unstable();
+            for (from, _, successor) in chain {
+                if let Some(delta) = edge_delta(unit, cfg::block(graph[from].at), cfg::block(successor), &scoped, Some(&facts))? {
+                    scoped.extend(delta);
                 }
             }
             // What the blocks above it assume.
             for condition in assumed.above(&shape, at) {
-                if let Some(narrower) = narrowed(unit, condition, true, &scoped, facts) {
-                    scoped = narrower;
+                if let Some(delta) = narrowed_delta(unit, condition, true, &scoped, facts) {
+                    scoped.extend(delta);
                 }
             }
             loop {

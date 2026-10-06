@@ -28,7 +28,7 @@ pub fn call_clobbers(contract: &runtime::Contract, segments: &Segments) -> BTree
 pub fn call_keeps(contract: &runtime::Contract) -> Vec<Register> {
     let names = _names();
     let clobbered = _named_clobbers(&names, &runtime::disturbs(contract));
-    target::AVAILABLE.into_iter().filter(|register| !clobbered.contains(register)).collect()
+    llrm_x86_code16::GENERAL.into_iter().filter(|register| !clobbered.contains(register)).collect()
 }
 
 fn _named_clobbers(names: &IndexMap<Register, BTreeSet<String>>, disturbed: &BTreeSet<runtime::Reg>) -> BTreeSet<Register> {
@@ -41,12 +41,12 @@ pub fn call_clobbered_high(contract: &runtime::Contract, segments: &Segments) ->
         return BTreeSet::new();
     }
     let whole: BTreeSet<Register> = call_clobbers(contract, segments).into_iter().map(ir::root).collect();
-    target::AVAILABLE.into_iter().filter(|register| !whole.contains(&ir::root(*register))).collect()
+    llrm_x86_code16::GENERAL.into_iter().filter(|register| !whole.contains(&ir::root(*register))).collect()
 }
 
 /// Each allocatable register by the names runtime.py's own Reg enum uses.
 fn _names() -> IndexMap<Register, BTreeSet<String>> {
-    target::AVAILABLE
+    llrm_x86_code16::GENERAL
         .into_iter()
         .chain([Register::ES])
         .map(|register| {

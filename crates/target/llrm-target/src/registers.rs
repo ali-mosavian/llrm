@@ -47,6 +47,11 @@ pub fn allocatable(registers: &[Register]) -> usize {
     registers.iter().filter(|one| one.is("gpr") && one.root == one.name).count()
 }
 
+/// The roots of class `class`, in file order.
+pub fn of_class<'a>(registers: &'a [Register], class: &str) -> Vec<&'a str> {
+    registers.iter().filter(|one| one.is(class) && one.root == one.name).map(|one| one.name.as_str()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

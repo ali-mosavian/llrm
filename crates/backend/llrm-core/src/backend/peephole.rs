@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock};
 use iced_x86::{Decoder, DecoderOptions, FlowControl, Mnemonic, OpAccess, OpKind, Register, RflagsBits};
 use crate::support::hash::{IndexMap, IndexSet};
 
+use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::peep::{self, walk::Facts};
@@ -75,17 +76,18 @@ pub struct Peephole {
     /// The registers a callee keeps for its caller, whole: a run of stores may
     /// not share them.
     pub saved: Vec<Register>,
+    pub classes: Rc<RegisterClasses>,
 }
 
 impl Peephole {
     /// With the 16-bit x86 rules: what the tests of this crate are written for.
     #[cfg(test)]
     pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
-        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES, llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect())
+        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES, llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect(), RegisterClasses::code16())
     }
 
-    pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules, saved: Vec<Register>) -> Result<Self, String> {
-        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved })
+    pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules, saved: Vec<Register>, classes: Rc<RegisterClasses>) -> Result<Self, String> {
+        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved, classes })
     }
 
     /// Drop only synthetic reservations when no added stack storage remains.
@@ -148,7 +150,7 @@ impl LIRTransform for Peephole {
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
         let body = regthrash::thrashed(phielim::unsplit(&body));
-        let body = frame_copies(&body, &self.cpu)?;
+        let body = frame_copies(&body, &self.cpu, &self.classes)?;
         let body = copyprop::forwarded(&body);
         let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
@@ -218,7 +220,7 @@ pub fn popped_arguments(body: &LirBody, cpu: &Profile) -> Result<LirBody, String
 /// allocation, physical liveness can prove that a same-width register is
 /// dead across a particular pair.  Two MOVs then avoid the temporary stack
 /// traffic without changing flags, stack depth, or either frame address.
-pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
+pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>, classes: &RegisterClasses) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
     let forms = ["push_m", "pop_m", "mov_rm", "mov_mr"];
     if !forms.iter().all(|form| profile.prices(form)) {
@@ -288,8 +290,10 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
                 }
                 _ => continue,
             };
-            let scratch = target::AVAILABLE
-                .into_iter()
+            let scratch = classes
+                .available
+                .iter()
+                .copied()
                 .filter(|register| {
                     _lanes(target::named(*register, i64::from(source.width))).is_subset(&dead_after[&id(&popped)])
                 })

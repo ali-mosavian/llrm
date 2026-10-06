@@ -2305,7 +2305,7 @@ fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame, classes: &Regist
         sources: what.sources.iter().map(swap).collect(),
         ..what.clone()
     };
-    if !_encodable(&made)? {
+    if !_encodable(&made, classes)? {
         return Ok(None);
     }
     Ok(Some(_with(one, |insn| {
@@ -2316,15 +2316,17 @@ fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame, classes: &Regist
 }
 
 /// Whether this form exists, asked of the one place that knows.
-fn _encodable(what: &Semantics) -> Result<bool, Error> {
+fn _encodable(what: &Semantics, classes: &RegisterClasses) -> Result<bool, Error> {
     let mut taken: IndexMap<u32, Register> = IndexMap::default();
     let rows: IndexMap<u32, Vec<Register>> = [1_u32, 2, 4]
         .into_iter()
         .map(|width| {
             (
                 width,
-                target::AVAILABLE
-                    .into_iter()
+                classes
+                    .available
+                    .iter()
+                    .copied()
                     .filter(|one| target::WIDTHS.get(&target::named(*one, i64::from(width))) == Some(&i64::from(width)))
                     .collect(),
             )

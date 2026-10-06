@@ -316,7 +316,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         if phase.class_name() == "PhiElimination" {
             in_ssa = false;
         }
-        body = flow::checked(body, phase.as_mut(), in_ssa).map_err(|error| match error {
+        body = flow::checked(body, phase.as_mut(), in_ssa, target.classes).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;

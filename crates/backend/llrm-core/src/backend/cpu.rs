@@ -23,6 +23,8 @@ pub struct Profile {
     pub prefix_cost: i64,
     pub partial_register_stall: i64,
     pub register_capacity: i64,
+    /// The operand size an instruction has without a prefix, in bytes.
+    pub operand_bytes: i64,
     pub call_register_capacity: i64,
     // Preferred forms only; the complete legal set is `address_forms`.
     pub address_scales: BTreeSet<i64>,
@@ -91,6 +93,7 @@ impl Profile {
             prefix_cost,
             partial_register_stall,
             register_capacity: arch.register_capacity(),
+            operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),

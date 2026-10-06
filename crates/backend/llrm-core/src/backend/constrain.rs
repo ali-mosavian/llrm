@@ -334,8 +334,8 @@ pub fn distinct_roles(body: &LirBody, floor: u32) -> LirBody {
 /// has no register to sit in: `trunc` reads the low byte of its word in place.
 /// The reads that fit the most others keep the value; each of the rest reads a
 /// copy of its own, live across that instruction alone. A write is not moved.
-pub fn distinct_classes(body: &LirBody, floor: u32, segments: &target::Segments) -> LirBody {
-    let uses = regclass::confining_uses(body, segments);
+pub fn distinct_classes(body: &LirBody, floor: u32, segments: &target::Segments, registers: &RegisterClasses) -> LirBody {
+    let uses = regclass::confining_uses(body, segments, registers);
     let mut by_value: IndexMap<u32, Vec<&regclass::Use>> = IndexMap::default();
     for one in &uses {
         by_value.entry(one.value).or_default().push(one);
@@ -761,7 +761,7 @@ mod tests {
         let mut frame = Frame::new(0);
         let (spilled, _) = spiller::spilled(&split, &BTreeSet::from([2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).unwrap();
         let assignment = allocated(&spilled, &merged(&pins, &required(&spilled, &crate::backend::classes::RegisterClasses::code16())));
-        let placed = allocate::applied(&spilled, &assignment).unwrap();
+        let placed = allocate::applied(&spilled, &assignment, &crate::backend::classes::RegisterClasses::code16()).unwrap();
         let insns = placed.insns();
         let call_index = insns.iter().position(|one| what(one).op == Operation::Call).unwrap();
         let store = &insns[call_index + 1];
@@ -791,7 +791,7 @@ mod tests {
             let mut call = _insn(semantics(Operation::Call, "call", vec![], vec![]), &[], &[1], 0x108);
             call.requires = registers.iter().map(|register| (value, *register)).collect();
             let (body, pins) = constrained(&_body(vec![constant, call]), None, &crate::backend::classes::RegisterClasses::code16());
-            let placed = allocate::applied(&body, &allocated(&body, &pins)).unwrap();
+            let placed = allocate::applied(&body, &allocated(&body, &pins), &crate::backend::classes::RegisterClasses::code16()).unwrap();
             let zeros: BTreeSet<Register> = placed
                 .insns()
                 .iter()
@@ -831,7 +831,7 @@ mod tests {
         let Some(Loc::Mem(cell)) = what(&result).sources.last() else { panic!("not memory") };
         assert_eq!(cell.base.unwrap().value, result.uses[0]);
         assert_eq!(pins[&result.uses[0]], Register::SI);
-        let placed = allocate::applied(&got, &allocated(&got, &pins)).unwrap();
+        let placed = allocate::applied(&got, &allocated(&got, &pins), &crate::backend::classes::RegisterClasses::code16()).unwrap();
         let emitted = select::emit(what(placed.insns().last().unwrap()), 0, None, false, false, None);
         assert!(emitted.is_some());
         assert_eq!(emitted.unwrap().code, [0xDE, 0x34]); // fidiv word [si]
@@ -1067,12 +1067,12 @@ mod tests {
         let insns = split.insns();
         let copies: Vec<_> =
             insns.iter().filter(|one| what(one).name.as_deref() == Some("mov") && one.uses == vec![1]).collect();
-        let confined = crate::backend::regclass::classes(&split, &BTreeSet::new(), &target::BUILT_IN);
+        let confined = crate::backend::regclass::classes(&split, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
 
         assert_eq!(opened, BTreeSet::from([1]));
         assert_eq!(copies.len(), 2);
         assert!(!confined.contains_key(&1));
-        assert!(copies.iter().all(|one| confined[&one.defines[0]].is_subset(&target::ADDRESSING)));
+        assert!(copies.iter().all(|one| confined[&one.defines[0]].is_subset(&crate::backend::classes::RegisterClasses::code16().addressing)));
     }
 
     /// A base and far selector sharing one value cannot be partially renamed.
@@ -1099,11 +1099,11 @@ mod tests {
             Insn::new(0x14, Some((0x14, 0x17)), Some(semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(2, 1)])), vec![], vec![1, 2]),
         ]);
         let stuck = |body: &LirBody| {
-            let found = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN);
-            found.values().filter(|class| target::order(Some(*class), &target::BUILT_IN).is_empty()).count()
+            let found = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+            found.values().filter(|class| target::order(Some(*class), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).is_empty()).count()
         };
         assert_eq!(stuck(&body), 1, "premise: the value has no register");
-        let got = super::distinct_classes(&body, 3, &target::BUILT_IN);
+        let got = super::distinct_classes(&body, 3, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         assert_eq!(stuck(&got), 0);
         let insns = got.insns();
         assert_eq!(insns.len(), 4, "one copy");
