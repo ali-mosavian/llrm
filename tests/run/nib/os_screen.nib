@@ -1,0 +1,13 @@
+# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# The OS layer's text screen is the colour text memory: a cell written reads back, and is put back.
+import os
+
+fn main() -> i16:
+    unsafe:
+        let screen = os.text_screen()
+        let saved = screen[0]
+        screen[0] = 65
+        print(screen[0])
+        screen[0] = saved
+        print(screen[0] == saved)
+    return 0

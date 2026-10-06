@@ -111,4 +111,3 @@
 8 tools/loops/quality.py
 1 tools/loops/run.py
 3 tools/msp430.py
-1 tools/nib-build.sh

@@ -7,11 +7,12 @@ extrn _main:far
 extrn N$EDIV:far
 extrn BSS_LAST:byte
 extrn FBSS_LAST:byte
-extrn N$OTOP:word
-extrn N$OPSP:word
-extrn N$OSLO:word
-extrn N$OSIV:far
-extrn N$OVEC:far
+extrn _llrm_os_top:word
+extrn _llrm_os_psp:word
+extrn _llrm_os_stack_low:word
+extrn _llrm_os_set_vector:far
+extrn _llrm_os_restore_vectors:far
+extrn _llrm_os_exit:far
 
 .code
 .data
@@ -48,7 +49,7 @@ start:
     ; Nothing below the limit but the panic's frames, DOS and an interrupt.
     mov ax, offset DGROUP:BSS_LAST
     add ax, 512
-    mov N$OSLO, ax
+    mov _llrm_os_stack_low, ax
     ; Statics without an initializer are in _BSS, which the EXE does not
     ; store: they hold whatever the last program left there until zeroed.
     mov di, offset DGROUP:BSS_FIRST
@@ -88,11 +89,11 @@ far_cleared:
     mov bx, bp
     mov ax, DGROUP
     mov es, ax
-    mov N$OPSP, bx
+    mov _llrm_os_psp, bx
     ; The near heap starts where the stack ends, the image's last byte in
     ; DGROUP. The program keeps only its image; the heap grows the block.
     mov ax, sp
-    mov N$OTOP, ax
+    mov _llrm_os_top, ax
     add ax, 15
     shr ax, 4
     mov dx, DGROUP
@@ -100,8 +101,8 @@ far_cleared:
     add ax, dx
     mov es, bx
     mov bx, ax
-    mov ah, 4ah
-    int 21h
+    mov ah, DOS_RESIZE
+    int DOS_INT
     push ds
     pop es
     ; Division by zero, and a quotient too wide, fault to INT 0: the panic
@@ -110,18 +111,15 @@ far_cleared:
     push cs
     push offset divide_fault
     push 0
-    call far ptr N$OSIV
+    call far ptr _llrm_os_set_vector
     push cs
     push offset break_handler
     push 23h
-    call far ptr N$OSIV
+    call far ptr _llrm_os_set_vector
     add sp, 12
     call far ptr _main
     push ax
-    call far ptr N$OVEC
-    pop ax
-    mov ah, 4ch
-    int 21h
+    call far ptr _llrm_os_exit
 
 divide_fault:
     mov ax, DGROUP
@@ -135,7 +133,7 @@ break_handler:
     push ax
     mov ax, DGROUP
     mov ds, ax
-    call far ptr N$OVEC
+    call far ptr _llrm_os_restore_vectors
     pop ax
     pop ds
     stc
