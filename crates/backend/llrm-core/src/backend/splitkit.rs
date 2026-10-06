@@ -1288,7 +1288,7 @@ mod tests {
             intervals::Segment { start: slot(0, 0) + 1, end: slot(0, 2) },
             intervals::Segment { start: slot(0x20, 1), end: index.span[&0x20].1 },
         ];
-        let masks = Vec::new();
+        let masks = crate::backend::allocate::Masks::default();
         let occupied = super::Occupied { segments: IndexMap::from_iter([(Register::EAX, taken)]), masks: &masks };
         let regions = super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[Register::AX], &occupied, 2);
         let first = regions.first().expect("a region");
@@ -1308,7 +1308,7 @@ mod tests {
         let live = crate::backend::allocate::live(&body);
         let slot = |position: i64| index.span[&0].0 + intervals::PER_INSN * (position + 1);
         let taken = vec![intervals::Segment { start: slot(3), end: slot(5) }];
-        let masks = Vec::new();
+        let masks = crate::backend::allocate::Masks::default();
         let occupied = super::Occupied { segments: IndexMap::from_iter([(Register::EAX, taken)]), masks: &masks };
         let got = super::local(&body, 3, &index, &(&live.0, &live.1), &[Register::AX], &occupied, 2).expect("a split");
         assert_eq!(got.spans.get(&0), Some(&vec![(0, 3)]));
