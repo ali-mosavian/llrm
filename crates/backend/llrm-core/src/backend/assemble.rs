@@ -104,6 +104,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
                     size: cpu.size,
                     entry: 0,
                     stack_check: function.attrs.iter().any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck)).then(|| abi.stack_check().cloned()).flatten(),
+                    registers: target.arch.frame_registers(),
                 };
                 let overhead = masm::return_overhead_bytes(&procedure).map_err(|error| error.to_string())? as i64;
                 let body = jumps::duplicated_returns(procedure.body.clone(), overhead);
@@ -288,7 +289,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling, target.selection.rules())? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling, target.selection.rules(), &target.arch.frame_registers())? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;

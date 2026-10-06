@@ -1138,7 +1138,7 @@ fn test_affine_address_word_lea_keeps_a_flag_still_read() {
 
 /// What the epilogue saves: the convention's preserved registers.
 fn saved() -> Vec<Register> {
-    crate::backend::masm::SAVED.keys().copied().collect()
+    llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect()
 }
 
 /// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
@@ -1196,7 +1196,7 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
     }
 }
 
-/// Which scratch register a run may take is the convention's fact (`masm::SAVED`): where it
+/// Which scratch register a run may take is the convention's fact (`Target::callee_saved`): where it
 /// preserves BX, a run takes BX only if the body already names it (so its epilogue saves it),
 /// else it would push and pop a register to save a byte.
 #[test]
