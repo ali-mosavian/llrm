@@ -420,6 +420,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-x86"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-x86-code16"
 version = "0.1.0"
 dependencies = [
@@ -428,6 +432,7 @@ dependencies = [
  "llrm-mir",
  "llrm-support",
  "llrm-target",
+ "llrm-x86",
  "num-bigint",
  "num-traits",
  "rustc-hash",
