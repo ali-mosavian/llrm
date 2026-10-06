@@ -9,6 +9,9 @@
 //! 31 in 32; and `branchprob::propagated` turns them into frequencies.
 
 use std::collections::BTreeSet;
+use std::rc::Rc;
+
+use crate::model::lir::BlockOdds;
 
 use llrm_analysis::branchprob;
 
@@ -16,19 +19,68 @@ use crate::analysis::loops;
 use crate::model::lir::{LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
+/// What the last `Frequency::of` was asked, and its answer.
+struct Held {
+    entry: i64,
+    shape: Vec<(i64, Vec<i64>)>,
+    odds: BlockOdds,
+    trips: Vec<(i64, i64)>,
+    answer: Rc<Frequency>,
+}
+
+impl Held {
+    fn of(body: &LirBody, answer: &Rc<Frequency>) -> Self {
+        Self {
+            entry: body.entry,
+            shape: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
+            odds: body.odds.clone(),
+            trips: body.loop_trip_counts.clone(),
+            answer: Rc::clone(answer),
+        }
+    }
+
+    fn is_of(&self, body: &LirBody) -> bool {
+        self.entry == body.entry
+            && self.shape.len() == body.blocks.len()
+            && self.shape.iter().zip(&body.blocks).all(|((at, succ), block)| *at == block.at && *succ == block.succ)
+            && self.odds == body.odds
+            && self.trips == body.loop_trip_counts
+    }
+}
+
+thread_local! {
+    static LAST: std::cell::RefCell<Option<Held>> = const { std::cell::RefCell::new(None) };
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many frequencies this thread has worked out, for a test that asking again of one shape does not.
+pub fn built() -> usize {
+    BUILT.with(std::cell::Cell::get)
+}
+
 pub struct Frequency {
     block: IndexMap<i64, f64>,
     taken: IndexMap<(i64, i64), f64>,
 }
 
 impl Frequency {
-    /// `body`'s blocks' frequencies.
-    pub fn of(body: &LirBody) -> Self {
-        Self::over(body, &body.blocks)
+    /// `body`'s blocks' frequencies. They depend on the blocks' shape, the odds and the trip counts
+    /// and on no instruction, so the last answer stands for every body of that shape: a rewrite that
+    /// only inserts instructions (a spill, a reload) asks the same question again and again.
+    pub fn of(body: &LirBody) -> Rc<Self> {
+        LAST.with(|last| {
+            if let Some(held) = last.borrow().as_ref().filter(|held| held.is_of(body)) {
+                return Rc::clone(&held.answer);
+            }
+            let answer = Rc::new(Self::over(body, &body.blocks));
+            *last.borrow_mut() = Some(Held::of(body, &answer));
+            answer
+        })
     }
 
     /// `blocks`, a later arrangement of `body`'s, on `body`'s odds and trips.
     pub fn over(body: &LirBody, blocks: &[LirBlock]) -> Self {
+        BUILT.with(|built| built.set(built.get() + 1));
         let mut taken = IndexMap::default();
         for block in blocks {
             for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
@@ -89,6 +141,24 @@ mod tests {
     }
 
     /// entry 1 -> loop 2 (back to 2, out to 3) -> 3.
+    /// A spill or a reload inserts instructions and leaves the blocks as they were: asked again, the
+    /// frequencies are not worked out again (3 builds per rebuild of the allocator's facts, 8% of
+    /// compiling `d_faces`, #559). A block's successors or odds changing is a new question.
+    #[test]
+    fn test_the_same_blocks_are_not_worked_out_twice() {
+        let body = counted(Some(5), 124.0 / 128.0);
+        let before = super::built();
+        let first = Frequency::of(&body);
+        let more = body.with_blocks(body.blocks.iter().map(|one| one.with_insns(vec![insn(one.at, Operation::Move, "mov"), one.insns[0].clone()])).collect());
+        let again = Frequency::of(&more);
+        assert_eq!(super::built() - before, 1, "a second question of the same blocks was worked out");
+        assert_eq!(first.block(2), again.block(2));
+        let mut moved = body.clone();
+        moved.odds.taken.insert((2, 2), 1);
+        Frequency::of(&moved);
+        assert_eq!(super::built() - before, 2, "other odds were answered from the old frequencies");
+    }
+
     fn counted(trips: Option<i64>, stay: f64) -> LirBody {
         let blocks = vec![
             block(1, "jmp", Operation::Jump, vec![2]),
