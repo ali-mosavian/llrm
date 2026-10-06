@@ -650,31 +650,60 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
     })?;
     let mut result = known.cloned().unwrap_or_default();
     result.extend(direct.iter().map(|(name, one)| (name.clone(), Summary { captures: BTreeSet::new(), ..one.clone() })));
-    // Callees before callers, so that a body that is in no cycle is visited once: its callees'
-    // summaries are final. Only a cycle of calls iterates to a fixed point.
+    // A worklist, callees first. A body is visited again only when a summary it reads changed: a
+    // callee's, or, where it calls something unknown, an entry's (`_callbacks`). So a body in no cycle
+    // is visited once, and a cycle iterates only as long as it changes.
     let edges = procedures
         .iter()
         .enumerate()
         .map(|(at, (_, procedure))| (at, procedure.calls.values().filter_map(|target| procedures.get_index_of(target)).collect::<BTreeSet<_>>()))
         .collect();
     let graph = llrm_mir::callgraph::CallGraph::from_edges(edges);
-    for (mut members, cyclic) in graph.bottom_up_components() {
-        members.sort_unstable();
-        loop {
-            llrm_support::debug::counted("summaries rounds", false);
-            let _round = llrm_support::debug::span("summaries round");
-            let mut changed = false;
-            for &at in &members {
-                llrm_support::debug::counted("summaries rounds", true);
-                let (name, procedure) = procedures.get_index(at).expect("a member of the graph");
-                let made = _summarized(at, procedure, &direct[name], &result, &graph, procedures)?;
-                if made != result[name] {
-                    result.insert(name.clone(), made);
-                    changed = true;
-                }
+    let order: Vec<usize> = graph
+        .bottom_up_components()
+        .into_iter()
+        .flat_map(|(mut members, _)| {
+            members.sort_unstable();
+            members
+        })
+        .collect();
+    let mut rank = vec![0; procedures.len()];
+    for (at, one) in order.iter().enumerate() {
+        rank[*one] = at;
+    }
+    let entries: Vec<usize> = procedures
+        .values()
+        .next()
+        .and_then(|one| one.unit.globals_aa)
+        .map(|found| found.entries().iter().filter_map(|name| procedures.get_index_of(name)).collect())
+        .unwrap_or_default();
+    let mut readers: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); procedures.len()];
+    for (at, (_, procedure)) in procedures.iter().enumerate() {
+        for target in procedure.calls.values().filter_map(|target| procedures.get_index_of(target)) {
+            readers[target].insert(at);
+        }
+        let unknown = call_sites(&procedure.unit).iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(&procedure.unit, &result, target)).is_none());
+        if unknown {
+            for &entry in &entries {
+                readers[entry].insert(at);
             }
-            if !cyclic || !changed {
-                break;
+        }
+    }
+    let mut queued = vec![true; procedures.len()];
+    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = (0..procedures.len()).map(std::cmp::Reverse).collect();
+    while let Some(std::cmp::Reverse(first)) = work.pop() {
+        let at = order[first];
+        queued[at] = false;
+        llrm_support::debug::counted("summaries rounds", true);
+        let (name, procedure) = procedures.get_index(at).expect("a member of the graph");
+        let made = _summarized(at, procedure, &direct[name], &result, &graph, procedures)?;
+        if made != result[name] {
+            result.insert(name.clone(), made);
+            for &reader in &readers[at] {
+                if !queued[reader] {
+                    queued[reader] = true;
+                    work.push(std::cmp::Reverse(rank[reader]));
+                }
             }
         }
     }

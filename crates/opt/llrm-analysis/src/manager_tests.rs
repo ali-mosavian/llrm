@@ -240,3 +240,40 @@ fn summaries_read_each_bodys_shape_from_its_manager() {
     analyses.get::<Summaries>(&module);
     assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_some());
 }
+
+/// A body that calls something unknown may call back into any entry, so its summary reads each
+/// entry's. Solved callees-first, `@p` was visited before `@entry` had @h's store from its callee,
+/// and never again: QCport's `dl` and `savegame` came out other than before (#394).
+#[test]
+fn a_body_calling_the_unknown_is_summarized_again_when_an_entry_changes() {
+    let module = parsed(
+        "@g = internal global i16 0
+
+declare void @ext()
+
+define internal void @p() {
+entry:
+  call void @ext()
+  ret void
+}
+
+define void @entry() {
+entry:
+  call void @h()
+  ret void
+}
+
+define internal void @h() {
+entry:
+  store i16 1, ptr @g
+  ret void
+}
+",
+    );
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let found = analyses.get::<Summaries>(&module);
+    let summaries = Result::as_ref(&*found).expect("summarized");
+    let reaches_g = |name: &str| summaries[name].unknown_write || summaries[name].writes.iter().any(|one| one.object.kind == crate::memory::MemoryKind::Global);
+    assert!(reaches_g("entry"), "the entry writes @g through @h");
+    assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
+}
