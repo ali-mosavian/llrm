@@ -5,7 +5,7 @@ use llrm_target::os::Interface;
 use llrm_target::Target;
 
 fn targets() -> Vec<Box<dyn Target>> {
-    vec![Box::new(llrm_x86_code16::Code16), Box::new(llrm_x86_code32::Code32)]
+    vec![Box::new(llrm_x86_m16::M16), Box::new(llrm_x86_m32::M32)]
 }
 
 fn source(target: &dyn Target, field: &str) -> String {

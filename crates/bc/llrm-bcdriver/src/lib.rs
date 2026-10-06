@@ -99,7 +99,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &Seg
         Family::Vbdos => RuntimeProfile::Vbdos,
         other => return Err(format!("a {other:?} object")),
     };
-    basic::lifted(module, runtime, &object, family, layout, &llrm_driver::code16_options(machine.clone()), name)
+    basic::lifted(module, runtime, &object, family, layout, &llrm_driver::m16_options(machine.clone()), name)
 }
 
 /// Each data segment the object had, in its order, holding its objects in
@@ -191,7 +191,7 @@ pub fn main(argv: &[String]) -> i32 {
         eprintln!("llrm-omf --rich: OBJ... [LIB...] -o OUT [--manifest M] [-march=CPU]");
         return 2;
     };
-    let machine = llrm_driver::target(&flags, Some(&["x86-code16"])).and_then(|bound| flags.machine(&*bound.target, machine::BASIC.clone()));
+    let machine = llrm_driver::target(&flags, Some(&["x86-m16"])).and_then(|bound| flags.machine(&*bound.target, machine::BASIC.clone()));
     let machine = match machine {
         Ok(machine) => machine,
         Err(why) => {

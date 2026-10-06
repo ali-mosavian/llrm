@@ -68,8 +68,8 @@ pub fn selector(name: &str) -> Option<&'static Compiled> {
 
 /// The selector built for 16-bit x86, which the tests of this crate use.
 #[cfg(test)]
-pub(crate) fn code16() -> &'static Compiled {
-    &selectors::x86_code16::SELECTOR
+pub(crate) fn m16() -> &'static Compiled {
+    &selectors::x86_m16::SELECTOR
 }
 
 /// The instruction a pattern matched: its operands, a commutative

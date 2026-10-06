@@ -14,7 +14,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::peep::{self, walk::Facts};
-use llrm_x86_code16::instructions;
+use llrm_x86_m16::instructions;
 use crate::backend::{
     affine, copyprop, copysink, liveness, machinecse, machinedce, phielim, regthrash, select, sharedstores, spillforward, storecombine,
     target,
@@ -83,7 +83,7 @@ impl Peephole {
     /// With the 16-bit x86 rules: what the tests of this crate are written for.
     #[cfg(test)]
     pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
-        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES, llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect(), RegisterClasses::code16())
+        Self::with_rules(frame, cpu, &peep::targets::x86_m16::RULES, llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect(), RegisterClasses::m16())
     }
 
     pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules, saved: Vec<Register>, classes: Rc<RegisterClasses>) -> Result<Self, String> {

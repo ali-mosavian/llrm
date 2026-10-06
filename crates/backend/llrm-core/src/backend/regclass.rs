@@ -513,7 +513,7 @@ mod tests {
         let exit = LirBlock { at: 2, insns: vec![make(6, vec![], vec![loaded], semantics(Operation::Return, "ret", vec![], vec![], None))], succ: vec![], phis: vec![], cold: false };
         let body = LirBody::new("f", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
         let segments = &target::BUILT_IN;
-        let webs = classes(&body, &BTreeSet::new(), segments, &crate::backend::classes::RegisterClasses::code16());
+        let webs = classes(&body, &BTreeSet::new(), segments, &crate::backend::classes::RegisterClasses::m16());
         assert_eq!(webs.get(&entry_segment), webs.get(&segment));
         assert!(webs.get(&entry_segment).is_some());
     }

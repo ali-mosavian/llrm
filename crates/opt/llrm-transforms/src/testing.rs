@@ -119,7 +119,7 @@ pub struct Tuned {
 
 impl llrm_mir::target::Machine for Tuned {
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
-        self.spaces.unwrap_or_else(llrm_x86_code16::spaces)
+        self.spaces.unwrap_or_else(llrm_x86_m16::spaces)
     }
 
     fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {

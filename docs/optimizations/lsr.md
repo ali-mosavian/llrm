@@ -49,7 +49,7 @@ over a block prove, as LLVM's `isLoopEntryGuardedByCond` does.
 The pass prices; it does not know the machine. The facts it prices from each
 have one home:
 
-- The target (`llrm-x86-code16`) holds the registers a value may take and the
+- The target (`llrm-x86-m16`) holds the registers a value may take and the
   ones a C callee keeps. `Machine::kept_across` says how many a call to a
   named callee keeps, from its ABI contract, and `Machine::multiply_by` what
   a multiply by a constant costs, from the backend's shift and add chains.

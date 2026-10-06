@@ -54,7 +54,7 @@ b0:
   ret i16 %v
 }
 ";
-    let spaces = Some(llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_code16::spaces() });
+    let spaces = Some(llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_m16::spaces() });
     let after = managed_on(&mut parsed(&format!("{HEAD}{text}")), InferAddressSpaces, Tuned { spaces, ..Tuned::default() });
     assert!(after.contains("load i16, ptr addrspace(6)") && !after.contains("addrspace(5)"), "{after}");
 }

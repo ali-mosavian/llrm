@@ -1,0 +1,87 @@
+// m16's own peephole groups, beside the family's (llrm-x86): real mode's word pushes, its far pointers and its dword-as-word moves.
+
+meta bare_push = clobbers requires delivers defines uses symbol spread
+meta narrowable = clobbers clobbers_high requires delivers group symbol frame_adjust
+
+// The far loads, each named by the segment register it writes.
+set far_loads = op(Move) & fixed()
+
+// Two adjacent immediate word pushes have one dword's stack layout.
+group pushes
+    walk window skip meta
+
+rule dword_push
+    match   push h:imm16 ; push l:imm16
+    when    free(@0, bare_push), free(@1, bare_push), joins_no_larger(h, l)
+    rewrite @0: push dword(h, l) ; drop @1
+
+
+// `mov r,[m]; mov es,[m+2]`, in either order, is `les r,[m]` (and FS, GS,
+// DS). One instruction reads both words before it writes either register,
+// so the register written first may not reach the word read second.
+group far_loads
+    walk window skip inert
+
+rule far_load
+    match   mov o:reg16, lo:mem16 ; mov g:reg16, hi:mem16
+    when    free(@0, dropped), free(@1, dropped), fixed_by(far_loads, g), !segment(o), next_word(lo, hi),
+            !addresses(hi, o), encodable($0)
+    rewrite @0: far_loads[g] o, g, dword_cell(lo) {defines: joined_defines(@0, @1), uses: joined_uses_all(@0, @1)}
+
+rule far_load_segment_first
+    match   mov g:reg16, hi:mem16 ; mov o:reg16, lo:mem16
+    when    free(@0, dropped), free(@1, dropped), fixed_by(far_loads, g), !segment(o), next_word(lo, hi),
+            !segment_of(lo, g), encodable($0)
+    rewrite @0: far_loads[g] o, g, dword_cell(lo) {defines: joined_defines(@0, @1), uses: joined_uses_all(@0, @1)}
+
+
+// Write only the live low word of a register-only dword move. Memory
+// sources are left alone: narrowing an access can change volatility or
+// faults.
+group narrowed_moves
+    walk each
+
+rule narrowed_register
+    match   mov d:reg32, s:reg32
+    when    free(@0, narrowable), !empty(upper(d)), dead(@0, upper(d)), encodable($0)
+    rewrite @0: =@0 low_word(d), low_word(s)
+
+rule narrowed_immediate
+    match   mov d:reg32, s:sym32
+    when    free(@0, narrowable), !empty(upper(d)), dead(@0, upper(d)), encodable($0)
+    rewrite @0: =@0 low_word(d), low_word(s)
+
+
+// Two word pushes of one dword's halves, the high first, as one dword
+// push: both leave the same four bytes, the low at the lower address. A
+// half may be pushed from memory or from a single-use load nothing changes
+// before the push.
+group paired_pushes
+    walk window
+
+rule paired_words
+    match   push h:mem16 ; push l:mem16
+    when    free(@0, pushed_word), free(@1, pushed_word), above(h, l), same_registers(h, l), !stack_based(l)
+    rewrite @1: =@1 dword_cell(l)
+
+rule paired_loaded_high
+    match   push hv:held16 ; push l:mem16 ; def hv: mov hv, h:mem16
+    when    free(@0, pushed_value), used_once(hv), free(@1, pushed_word),
+            free(@2, loaded_word), defines_only(@2, hv), !stack_based(h), unchanged(@2, @0),
+            above(h, l), same_registers(h, l), !stack_based(l)
+    rewrite @1: =@1 dword_cell(l) ; drop @2
+
+rule paired_loaded_low
+    match   push h:mem16 ; push lv:held16 ; def lv: mov lv, l:mem16
+    when    free(@0, pushed_word), free(@1, pushed_value), used_once(lv),
+            free(@2, loaded_word), defines_only(@2, lv), !stack_based(l), unchanged(@2, @0),
+            above(h, l), same_registers(h, l)
+    rewrite @1: =@1 dword_cell(l) {uses: @2.uses, call: @2.call, symbol: @2.symbol} ; drop @2
+
+rule paired_loads
+    match   push hv:held16 ; push lv:held16 ; def hv: mov hv, h:mem16 ; def lv: mov lv, l:mem16
+    when    free(@0, pushed_value), used_once(hv), free(@1, pushed_value), used_once(lv),
+            free(@2, loaded_word), defines_only(@2, hv), !stack_based(h), unchanged(@2, @0),
+            free(@3, loaded_word), defines_only(@3, lv), !stack_based(l), unchanged(@3, @0),
+            above(h, l), same_registers(h, l)
+    rewrite @1: =@1 dword_cell(l) {uses: @3.uses, call: @3.call, symbol: @3.symbol} ; drop @2 ; drop @3

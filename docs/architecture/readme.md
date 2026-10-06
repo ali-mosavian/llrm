@@ -473,7 +473,7 @@ flowchart TD
     Analysis --> Mir
     Core["llrm-core<br/>driver, isel, machine phases, OMF writing"] --> Trans
     Core --> Mir
-    Core --> Target["llrm-x86-code16<br/>target description and costs"]
+    Core --> Target["llrm-x86-m16<br/>target description and costs"]
     Core --> Obj["llrm-omf<br/>OMF records, modules, CodeView"]
     Target --> Mir
 ```

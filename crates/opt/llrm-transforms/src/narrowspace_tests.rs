@@ -6,7 +6,7 @@ use crate::narrowspace::narrowed;
 use crate::testing::{parsed, printed};
 
 fn run(text: &str) -> String {
-    on(text, llrm_x86_code16::spaces())
+    on(text, llrm_x86_m16::spaces())
 }
 
 fn on(text: &str, spaces: llrm_mir::spaces::Spaces) -> String {
@@ -111,7 +111,7 @@ b0:
 /// narrowed to the data space's near pointer, read through DS.
 #[test]
 fn a_target_names_the_space_of_the_stack_a_parameter_narrows_to() {
-    let spaces = llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_code16::spaces() };
+    let spaces = llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_m16::spaces() };
     let after = on(&format!("{CALLEE}define i16 @top() {{
 b0:
   %s = alloca [16 x i16]

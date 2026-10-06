@@ -1,0 +1,235 @@
+//! The flat 32-bit x86 target: CS = DS = SS, base 0, 4 GB, one 32-bit pointer.
+//! Its descriptions are the files beside this one; this answers what they
+//! cannot say.
+
+use iced_x86::Register::{self, EAX, EBP, EBX, EDI, EDX, ESI, ESP};
+use std::sync::LazyLock;
+
+use llrm_mir::target::{AddressForm, OperationCosts};
+use llrm_target::machine::Machine;
+use llrm_target::CostModel;
+
+/// Flat DOS under an extender, and the PC ports it shares.
+pub const DOS32: &str = concat!(include_str!("machines/dos32.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
+
+/// The processors flat code is priced for: the columns of `timings.times`.
+pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());
+
+/// The data layout and address spaces: `machines/datalayout.toml`.
+pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
+
+/// `DATALAYOUT_TOML`, parsed once.
+static LAYOUT: LazyLock<llrm_target::layout::Layout> = LazyLock::new(|| llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("flat datalayout.toml parses"));
+
+/// The calling conventions: `calling.toml`.
+static CALLING: LazyLock<llrm_target::calling::Calling> = LazyLock::new(|| llrm_target::calling::Calling::parse(include_str!("machines/calling.toml")).expect("calling.toml parses"));
+
+/// Their names, the first being the language's own.
+static CONVENTIONS: LazyLock<Vec<&'static str>> = LazyLock::new(|| CALLING.names());
+
+/// The flat target's layout.
+pub fn layout() -> llrm_target::layout::Layout {
+    LAYOUT.clone()
+}
+
+/// The flat 32-bit x86 target as `llrm-driver` names it.
+pub struct M32;
+
+/// The registers and the address forms the descriptions state.
+static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> = LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+
+/// How flat operations are priced from the instruction forms: `opcosts.txt`.
+static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses"));
+
+/// The CPUs' timings: `timings.times`.
+static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses"));
+
+static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses"));
+
+impl llrm_target::Target for M32 {
+    fn name(&self) -> &'static str {
+        "x86-m32"
+    }
+
+    fn machine(&self) -> Machine {
+        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses")
+    }
+
+    fn cpus(&self) -> &'static [&'static str] {
+        &CPUS
+    }
+
+    fn conventions(&self) -> &'static [&'static str] {
+        &CONVENTIONS
+    }
+
+    fn physical_addresses(&self) -> Vec<(String, u64)> {
+        llrm_x86::physical_addresses()
+    }
+
+    fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
+        match language {
+            "nib" => Some(llrm_target::runtime::Description {
+                directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/nib/x86-m32"),
+                text: include_str!("../../../../runtime/nib/x86-m32/nib.toml"),
+                files: &[("stack.toml", include_str!("../../../../runtime/nib/x86-m32/stack.toml"))],
+            }),
+            "c" => Some(llrm_target::runtime::Description {
+                directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/c/x86-m32"),
+                text: include_str!("../../../../runtime/c/x86-m32/c.toml"),
+                files: &[("stack.toml", include_str!("../../../../runtime/c/x86-m32/stack.toml"))],
+            }),
+            _ => None,
+        }
+    }
+
+    fn os_layer(&self) -> Option<llrm_target::os::Layer> {
+        Some(llrm_target::os::Layer { directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/shared/dos/m32"), text: include_str!("../../../../runtime/shared/dos/m32/os.toml"), facts: llrm_x86::DOS_FACTS })
+    }
+
+    fn layout(&self) -> llrm_target::layout::Layout {
+        LAYOUT.clone()
+    }
+
+    /// An argument takes a dword at least: `calling.toml`'s.
+    fn stack_slot_bytes(&self) -> i64 {
+        CALLING.native().slot_bytes
+    }
+
+    fn frame_register(&self) -> Register {
+        llrm_x86::calling::frame(CALLING.native())
+    }
+
+    /// Past EBP and the return address; there is no far call.
+    fn first_argument_offset(&self, far: bool) -> i64 {
+        llrm_x86::calling::first_argument_offset(CALLING.native(), far)
+    }
+
+    /// Flat: no segments, one model.
+    fn object(&self) -> llrm_target::object::ObjectFormat {
+        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("flat object.toml parses")
+    }
+
+    fn stack_pointer(&self) -> Register {
+        llrm_x86::calling::stack(CALLING.native())
+    }
+
+    /// What cdecl32 keeps, but the frame register.
+    fn callee_saved(&self) -> Vec<(Register, Register)> {
+        llrm_x86::calling::callee_saved(CALLING.native())
+    }
+
+    fn march(&self, name: &str) -> Option<&'static str> {
+        TIMINGS.march(name)
+    }
+
+    fn marches(&self) -> Vec<&'static str> {
+        TIMINGS.marches()
+    }
+
+    fn registers_text(&self) -> String {
+        include_str!("registers.regs").to_owned()
+    }
+
+    fn forms_text(&self) -> String {
+        llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
+    }
+
+    fn operand_bytes(&self) -> i64 {
+        4
+    }
+
+    fn default_cpu(&self) -> &'static str {
+        TIMINGS.default_cpu().expect("timings.times states a default CPU")
+    }
+
+    fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> {
+        TIMINGS.cpu(name).cloned()
+    }
+
+    fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> OperationCosts {
+        OPCOSTS.operations(price, prefix)
+    }
+
+    fn register_capacity(&self) -> i64 {
+        llrm_target::registers::allocatable(&REGISTERS) as i64
+    }
+
+    fn address_forms(&self, _: &OperationCosts, _: i64) -> Vec<AddressForm> {
+        ADDRESS_FORMS.clone()
+    }
+
+    fn cost_model(&self) -> CostModel {
+        llrm_target::described
+    }
+
+    fn results(&self, width: u32) -> Vec<Register> {
+        llrm_x86::calling::results(CALLING.native(), width)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use llrm_target::Target;
+
+    use super::*;
+
+    /// Flat code indexes by dwords natively: one form, no prefix, any scale.
+    #[test]
+    fn test_m32_has_one_native_dword_address_form() {
+        let forms = M32.address_forms(&OperationCosts::default(), 0);
+        assert_eq!(forms.len(), 1);
+        assert!(!forms[0].secondary && forms[0].index_width == 4 && forms[0].scales == std::collections::BTreeSet::from([1, 2, 4, 8]));
+        let model = (M32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: M32.register_capacity(), call_registers: M32.callee_saved().len() as i64, address_forms: forms.clone(), operations: OperationCosts::default(), spaces: layout().spaces.roles });
+        assert_eq!((model.registers(), model.call_registers()), (6, 3));
+        assert_eq!(model.address_forms(), forms);
+    }
+
+    #[test]
+    fn test_dos32_is_a_flat_machine_with_the_pc_ports() {
+        let machine = M32.machine();
+        assert_eq!(machine.addressing, llrm_target::machine::Addressing::Flat);
+        assert!(machine.segments.is_none());
+        assert!(!machine.ports.is_empty());
+    }
+
+    /// One address space of 32-bit pointers: `near` and `far` are space 0, an unmarked
+    /// dword pointer is near, and the pair kinds are none.
+    #[test]
+    fn test_m32_layout_is_one_32_bit_space() {
+        let layout = M32.layout();
+        assert!(layout.datalayout.starts_with("e-p:32:32"));
+        let spaces = layout.spaces;
+        assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, None, None, Ok(0)));
+    }
+
+    /// The calling.toml was never read, and its aggregate and promotion keys sat inside the result table
+    /// (a table opened above them): read, each is the convention's.
+    #[test]
+    fn test_calling_toml_states_cdecl32_at_the_top_of_its_table() {
+        let one = CALLING.native();
+        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("cdecl32", &["cdecl32"][..]));
+        assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
+        assert_eq!((one.promotion.as_str(), one.wide_slots, one.results.keys().cloned().collect::<Vec<_>>()), ("slot", 2, vec!["1", "2", "4", "8", "float", "pointer"].into_iter().map(String::from).collect::<Vec<_>>()));
+    }
+
+    /// The aggregate return was marked provisional while the C ABI was open: it is Open Watcom's flat ABI
+    /// with this one stated difference, and the description says so.
+    #[test]
+    fn test_the_c_abi_is_open_watcoms_with_one_stated_difference() {
+        let text = include_str!("machines/calling.toml");
+        assert!(!text.to_lowercase().contains("provisional"), "the aggregate rule is decided");
+        assert!(text.contains("Open Watcom's 386 flat ABI") && text.contains("THE DIFFERENCE FROM OPEN WATCOM") && text.contains("aggregate = \"hidden-pointer\""));
+    }
+
+    /// cdecl32 (calling.toml): EBP and ESP frame, EBX/ESI/EDI kept whole, first argument at [ebp+8].
+    #[test]
+    fn test_m32_answers_cdecl32() {
+        let frame = M32.frame_registers();
+        assert_eq!((M32.object().bitness, M32.object().header), (32, vec![".386".to_owned(), ".model flat".to_owned()]));
+        assert_eq!((frame.pointer, frame.stack), (EBP, ESP));
+        assert_eq!(frame.saved, [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
+        assert_eq!((M32.stack_slot_bytes(), M32.first_argument_offset(false)), (4, 8));
+        assert_eq!([4, 8].map(|width| M32.results(width)), [vec![EAX], vec![EAX, EDX]]);
+    }
+}

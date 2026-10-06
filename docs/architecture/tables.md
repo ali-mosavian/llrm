@@ -40,7 +40,7 @@ Peephole rules and the Nib grammar wait until these land.
 
 ## Done
 
-- 3, peephole rules: `crates/target/llrm-x86-code16/src/isel/peephole.peep`, compiled by `llrm-peepgen` into
+- 3, peephole rules: `crates/target/llrm-x86-m16/src/isel/peephole.peep`, compiled by `llrm-peepgen` into
   one decision automaton per group over `x86.instr`. `constants` (a
   register-contents dataflow) and `tested` (moves an instruction across a
   block edge) are not window rewrites and stay code, as do the passes the

@@ -6,7 +6,7 @@ Machine facts, from llrm's target description:
 - REGISTERS, CALL_REGISTERS: `register_capacity` and `call_register_capacity`
   (crates/backend/llrm-core/src/backend/cpu.rs), the same for 386 to Core.
 - PARTNERS: the native address form's `partners`
-  (crates/target/llrm-x86-code16/src/target.rs): bx or bp with si or di, so
+  (crates/target/llrm-x86-m16/src/target.rs): bx or bp with si or di, so
   one index register pairs with at most two bases.
 - SEGMENTS: ES, FS and GS, the segment registers a 386 or later has free.
 

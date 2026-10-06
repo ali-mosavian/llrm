@@ -64,7 +64,7 @@ mod unwind;
 
 pub use matcher::{Compiled, selector};
 #[cfg(test)]
-pub(crate) use matcher::code16;
+pub(crate) use matcher::m16;
 mod wide;
 
 /// Where a function's parameters arrive and its result leaves, as its
