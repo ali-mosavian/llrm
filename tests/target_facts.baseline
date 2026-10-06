@@ -21,7 +21,7 @@
 5 crates/backend/llrm-core/src/backend/loopslots.rs
 2 crates/backend/llrm-core/src/backend/machinedce.rs
 9 crates/backend/llrm-core/src/backend/masm.rs
-3 crates/backend/llrm-core/src/backend/objbuild.rs
+2 crates/backend/llrm-core/src/backend/objbuild.rs
 1 crates/backend/llrm-core/src/backend/parcopy.rs
 9 crates/backend/llrm-core/src/backend/peep/guards.rs
 4 crates/backend/llrm-core/src/backend/peep/make.rs

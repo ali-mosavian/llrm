@@ -381,7 +381,7 @@ fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Re
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        objbuild::_data(&mut segments[index], index, items, &mut symbols);
+        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
     }
     if module.stack > 0 {
         let mut stack = objbuild::Segment::new("STACK", Role::Stack, true);
@@ -875,7 +875,7 @@ fn laid_out(module: &Module, segment: &Segment, names: &IndexMap<(Space, i64), S
 fn size_of(datum: &masm::Datum) -> i64 {
     match datum {
         masm::Datum::Bytes(bytes) => bytes.len() as i64,
-        masm::Datum::Pointer(pointer) => if pointer.far { 4 } else { 2 },
+        masm::Datum::Pointer(pointer) => i64::from(pointer.bytes),
         masm::Datum::SegmentWord(_) => 2,
         masm::Datum::Fill(fill) => fill.size,
         _ => 0,
