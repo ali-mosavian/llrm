@@ -75,14 +75,15 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_code16::Code16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_code16::Code16), conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_code16::Code16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_code16::Code16), conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime"), llrm_target::Target::os_layer(&llrm_x86_code16::Code16).expect("real mode has an OS layer")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
     }
 }
 
-/// What a target's OS layer says of Nib's runtime (`runtime/nib/nib.toml` of its crate).
+/// What a target's OS layer and Nib's runtime description (`runtime/nib/nib.toml` of its crate) say.
 #[derive(Clone, Debug)]
 pub struct Os {
-    /// `std.os` and `os`: the module the runtime's routines call the operating system through.
+    /// `std.os` and `os`: the module the runtime's routines call the operating system through,
+    /// rendered from the OS layer's interface.
     pub module: String,
     /// What `-fsanitize=stack` compares and calls.
     pub stack: llrm_core::hir::model::StackCheck,
@@ -96,7 +97,7 @@ pub struct Os {
     /// The directory the description is in, and the assembly files it names there.
     pub directory: String,
     pub start: String,
-    pub dos: String,
+    pub implementation: String,
 }
 
 impl Frontend {
@@ -121,35 +122,34 @@ impl Frontend {
 }
 
 impl Os {
-    /// What the target's OS layer says of Nib's runtime; a target without one is refused.
+    /// What the target's OS layer and Nib's runtime description say; a target without either is refused.
     pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
-        Self::of(target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?)
+        Self::of(
+            target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?,
+            target.os_layer().ok_or_else(|| format!("target {} has no OS layer", target.name()))?,
+        )
     }
 
-    pub fn of(description: llrm_target::runtime::Description) -> Result<Self, String> {
+    pub fn of(description: llrm_target::runtime::Description, layer: llrm_target::os::Layer) -> Result<Self, String> {
         let table = description.table()?;
-        let text = |key: &str| description.string(key);
-        let file = |key: &str| -> Result<String, String> { let name = text(key)?; description.file(&name).map(str::to_owned).ok_or(format!("the runtime description names {name}, which is not shipped")) };
+        let layer_table = layer.table()?;
+        let file = |key: &str| -> Result<String, String> { let name = description.string(key)?; description.file(&name).map(str::to_owned).ok_or(format!("the runtime description names {name}, which is not shipped")) };
         let stack = toml::Value::Table(file("stack")?.parse().map_err(|error: toml::de::Error| error.to_string())?);
+        let mut defines = layer.defines()?;
+        for entry in table.get("assembler_defines").and_then(|one| one.as_array()).into_iter().flatten() {
+            let (field, symbol) = entry.as_str().and_then(|one| one.split_once(':')).ok_or("assembler_defines are \"field:SYMBOL\"")?;
+            let value = table.get(field).and_then(|one| one.as_integer()).ok_or_else(|| format!("{field} is not an integer"))?;
+            defines.push((symbol.to_owned(), value));
+        }
         Ok(Self {
-            module: file("os")?,
+            module: layer.nib_module()?,
             stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
             stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
-            far_bss: table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
-            defines: table
-                .get("assembler_defines")
-                .and_then(|one| one.as_array())
-                .into_iter()
-                .flatten()
-                .map(|entry| {
-                    let (field, symbol) = entry.as_str().and_then(|one| one.split_once(':')).ok_or("assembler_defines are \"field:SYMBOL\"")?;
-                    let value = table.get(field).and_then(|one| one.as_integer()).ok_or_else(|| format!("{field} is not an integer"))?;
-                    Ok((symbol.to_owned(), value))
-                })
-                .collect::<Result<_, String>>()?,
-            directory: description.directory.to_owned(),
-            start: text("start")?,
-            dos: text("dos")?,
+            far_bss: layer_table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
+            defines,
+            directory: layer.directory.to_owned(),
+            start: layer.string("start")?,
+            implementation: layer.string("implementation")?,
         })
     }
 }

@@ -1,6 +1,15 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
+/// What 16-bit x86 addressing (the ModRM byte without an address-size prefix) is made of: `[base+index+disp]`
+/// with a base from BX or BP and an index from SI or DI. The architecture's, the same in every 16-bit target.
+pub mod addressing16 {
+    use iced_x86::Register;
+
+    pub const BASES: [Register; 2] = [Register::BX, Register::BP];
+    pub const INDEXES: [Register; 2] = [Register::SI, Register::DI];
+}
+
 /// The bytes of the encodings the selector prices for size, where an operand of other than
 /// the target's default size (`operand`) takes the 66h prefix.
 pub mod encoding {
@@ -45,6 +54,9 @@ pub mod instructions {
         format!("{FAMILY}\n{own}")
     }
 }
+
+/// What DOS gives a program (function numbers, the extender's calls), shared by the targets that run under it.
+pub const DOS_FACTS: &str = include_str!("../os/dos.toml");
 
 /// The physical addresses `platform.toml` names, each by its name.
 pub fn physical_addresses() -> Vec<(String, u64)> {

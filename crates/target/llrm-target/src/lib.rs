@@ -5,6 +5,7 @@ pub mod addressing;
 pub mod layout;
 pub mod machine;
 pub mod object;
+pub mod os;
 pub mod opcosts;
 pub mod registers;
 pub mod runtime;
@@ -162,6 +163,11 @@ pub trait Target {
 
     /// The OS layer a language's runtime is built on here, if the target has one for it.
     fn runtime(&self, _language: &str) -> Option<runtime::Description> {
+        None
+    }
+
+    /// The OS layer every language's runtime on this target calls: the one interface, implemented here.
+    fn os_layer(&self) -> Option<os::Layer> {
         None
     }
 

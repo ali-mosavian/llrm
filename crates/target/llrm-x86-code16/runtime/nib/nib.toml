@@ -1,14 +1,7 @@
-# Nib's runtime on real-mode DOS: the OS layer the language's runtime (llrm-nib/src/runtime/*.nib)
-# is built on. Each field names a file in this directory.
+# Nib's runtime on real-mode DOS: what the language asks of the target's OS layer (../../os/dos).
+# Each field naming a file names one in this directory.
 
-# `std.os` and `os`: what only assembly reaches.
-os = "os.nib"
-# The start-up and the operating-system routines `os` declares, assembled and linked in.
-start = "start.asm"
-dos = "dos.asm"
 # What `-fsanitize=stack` compares and calls.
 stack = "stack.toml"
 # The stack start.asm reserves; the object's own adds to it.
 stack_base = 4096
-# start.asm zeroes the far uninitialised data, as it does the near.
-far_bss = true

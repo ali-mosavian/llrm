@@ -175,6 +175,10 @@ dependencies = [
  "llrm-mir",
  "llrm-nib",
  "llrm-qb",
+ "llrm-target",
+ "llrm-x86",
+ "llrm-x86-code16",
+ "llrm-x86-code32",
  "regex",
  "serde_json",
  "tempfile",
@@ -437,6 +441,7 @@ dependencies = [
 name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
+ "iced-x86",
  "toml",
 ]
 

@@ -1592,7 +1592,7 @@ to its descriptor:
 | V view | `N$VCPY` copy, `N$VCMP` compare | `&string` views, and owned strings compared through views of them |
 | D dict | `N$DRES` room for one more entry | dicts |
 | E error | `N$EBND` bounds, `N$ESHF` shift, `N$ECNV` conversion, `N$EKEY` key, `N$EDIV` divide fault | panics |
-| O system | `N$OOPN` open, `N$OCRE` create, `N$OREA` read, `N$OWRI` write, `N$OCLO` close, `N$OEXT` exit, `N$OMEM` more memory, `N$OGIV` get and `N$OSIV` set an interrupt vector, `N$OVEC` put them back, `N$OCHN` enter a handler | DOS, in assembly |
+| O system | `_llrm_os_<op>`: the OS layer's interface, one symbol per operation (`crates/target/llrm-target/os/interface.toml`) | the target's OS, in assembly |
 
 The heap is DGROUP after the stack, taken from DOS (`INT 21h` function
 `4Ah`) a kilobyte or more at a time, up to DGROUP's 64 KB. Free blocks wait

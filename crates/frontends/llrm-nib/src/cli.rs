@@ -126,10 +126,11 @@ pub fn main(argv: &[String]) -> i32 {
         match field.as_str() {
             "directory" => println!("{}", os.directory),
             "start" => println!("{}", os.start),
-            "dos" => println!("{}", os.dos),
+            "implementation" => println!("{}", os.implementation),
+            "module" => print!("{}", os.module),
             "defines" => println!("{}", os.defines.iter().map(|(symbol, value)| format!("{symbol}={value}")).collect::<Vec<_>>().join(" ")),
             _ => {
-                eprintln!("llrm-nib: error: --os-layer takes directory, start, dos or defines");
+                eprintln!("llrm-nib: error: --os-layer takes directory, start, implementation, module or defines");
                 return 2;
             }
         }

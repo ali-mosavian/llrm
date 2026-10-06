@@ -34,7 +34,7 @@
 3 crates/backend/llrm-core/src/backend/regalloc_input.rs
 4 crates/backend/llrm-core/src/backend/regclass.rs
 7 crates/backend/llrm-core/src/backend/schedule.rs
-56 crates/backend/llrm-core/src/backend/select.rs
+54 crates/backend/llrm-core/src/backend/select.rs
 1 crates/backend/llrm-core/src/backend/sharedstores.rs
 6 crates/backend/llrm-core/src/backend/spiller.rs
 1 crates/backend/llrm-core/src/backend/spillforward.rs
@@ -111,4 +111,3 @@
 8 tools/loops/quality.py
 1 tools/loops/run.py
 3 tools/msp430.py
-1 tools/nib-build.sh

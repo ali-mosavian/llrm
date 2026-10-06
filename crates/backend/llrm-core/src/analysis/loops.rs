@@ -120,12 +120,19 @@ fn shaped<N: Node, T: Clone>(
     computed
 }
 
-/// Each block's dominators as bits over the sorted block addresses; naming
-/// them as sets costs more than finding them.
+/// The dominator tree over the sorted block addresses, with a preorder interval for each block: `a`
+/// dominates `b` where `b` is in `a`'s interval. Naming every block's dominators as bits is quadratic.
 pub struct Dominance {
     ats: Vec<i64>,
-    doms: Vec<Bits>,
+    /// The immediate dominator's slot; the entry's own, and unreachable blocks', is `NONE`.
+    idom: Vec<u32>,
+    /// Preorder numbers over the dominator tree; `NONE` for a block the entry does not reach.
+    enter: Vec<u32>,
+    /// The last preorder number inside the block's subtree.
+    last: Vec<u32>,
 }
+
+const NONE: u32 = u32::MAX;
 
 impl Dominance {
     fn slot(&self, at: i64) -> Option<usize> {
@@ -134,19 +141,33 @@ impl Dominance {
 
     /// Whether the entry reaches `at`: only then does anything dominate it.
     pub fn reachable(&self, at: i64) -> bool {
-        self.slot(at).is_some_and(|slot| !self.doms[slot].is_empty())
+        self.slot(at).is_some_and(|slot| self.enter[slot] != NONE)
     }
 
     pub fn dominates(&self, dominator: i64, at: i64) -> bool {
         match (self.slot(dominator), self.slot(at)) {
-            (Some(dominator), Some(at)) => self.doms[at].contains(dominator),
+            (Some(dominator), Some(at)) => self.enter[at] != NONE && self.enter[dominator] <= self.enter[at] && self.enter[at] <= self.last[dominator],
             _ => false,
         }
     }
 
     fn named(&self) -> BTreeMap<i64, BTreeSet<i64>> {
-        let ats = &self.ats;
-        ats.iter().zip(&self.doms).map(|(at, set)| (*at, set.iter().map(|one| ats[one]).collect())).collect()
+        (0..self.ats.len())
+            .map(|slot| {
+                let mut above = BTreeSet::new();
+                if self.enter[slot] != NONE {
+                    let mut at = slot as u32;
+                    loop {
+                        above.insert(self.ats[at as usize]);
+                        if self.idom[at as usize] == NONE {
+                            break;
+                        }
+                        at = self.idom[at as usize];
+                    }
+                }
+                (self.ats[slot], above)
+            })
+            .collect()
     }
 }
 
@@ -160,72 +181,112 @@ pub fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Rc<Dominance> {
     )
 }
 
+/// Cooper, Harvey and Kennedy's iteration over reverse postorder, on the blocks the entry reaches.
 fn _dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
+    let ats = blocks.iter().map(Node::at).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+    let count = ats.len();
+    let mut found = Dominance { ats, idom: vec![NONE; count], enter: vec![NONE; count], last: vec![NONE; count] };
     if blocks.is_empty() {
-        return Dominance { ats: Vec::new(), doms: Vec::new() };
+        return found;
     }
     let start = entry.unwrap_or_else(|| blocks[0].at());
-    let indexed = blocks.iter().map(|block| (block.at(), block)).collect::<BTreeMap<_, _>>();
-    let mut reachable = BTreeSet::new();
-    let mut pending = vec![start];
-    while let Some(at) = pending.pop() {
-        if !indexed.contains_key(&at) || reachable.contains(&at) {
-            continue;
-        }
-        reachable.insert(at);
-        pending.extend(indexed[&at].succ().iter().copied());
-    }
-    let every = reachable.clone();
-    let preds = predecessors(&blocks.iter().filter(|block| reachable.contains(&block.at())).collect::<Vec<_>>());
-
-    // The fixed point runs on bit sets over the distinct block addresses.
-    let ats = blocks.iter().map(Node::at).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>();
-    let slot = |at: &i64| ats.binary_search(at).expect("a block address");
-    let mut all = Bits::new(ats.len());
-    for at in &every {
-        all.insert(slot(at));
-    }
-    let empty = Bits::new(ats.len());
-    let mut doms = vec![empty.clone(); ats.len()];
+    let Some(start) = found.slot(start) else { return found };
+    // Each address's successors, as slots; a later block of one address replaces an earlier one's.
+    let mut successors: Vec<Vec<u32>> = vec![Vec::new(); count];
     for block in blocks {
-        doms[slot(&block.at())] = if reachable.contains(&block.at()) { all.clone() } else { empty.clone() };
+        let from = found.slot(block.at()).expect("a block address");
+        successors[from] = block.succ().iter().filter_map(|to| found.slot(*to)).map(|to| to as u32).collect();
     }
-    if indexed.contains_key(&start) {
-        let mut own = empty.clone();
-        own.insert(slot(&start));
-        doms[slot(&start)] = own;
-    }
-    let reaching = |at: i64| preds[&at].iter().map(slot).collect::<Vec<_>>();
-    let reaching = blocks
-        .iter()
-        .map(|block| {
-            if block.at() == start || !reachable.contains(&block.at()) { Vec::new() } else { reaching(block.at()) }
-        })
-        .collect::<Vec<_>>();
 
+    // Postorder by an explicit stack.
+    let mut order = Vec::new();
+    let mut seen = vec![false; count];
+    let mut stack = vec![(start, 0_usize)];
+    seen[start] = true;
+    while let Some(&(at, next)) = stack.last() {
+        if let Some(&to) = successors[at].get(next) {
+            stack.last_mut().expect("nonempty").1 += 1;
+            if !seen[to as usize] {
+                seen[to as usize] = true;
+                stack.push((to as usize, 0));
+            }
+        } else {
+            order.push(at);
+            stack.pop();
+        }
+    }
+    let mut number = vec![NONE; count];
+    for (index, &at) in order.iter().enumerate() {
+        number[at] = index as u32;
+    }
+    let mut predecessors: Vec<Vec<u32>> = vec![Vec::new(); count];
+    for &at in &order {
+        for &to in &successors[at] {
+            predecessors[to as usize].push(at as u32);
+        }
+    }
+
+    let mut idom = vec![NONE; count];
+    idom[start] = start as u32;
     let mut changing = true;
     while changing {
         changing = false;
-        for (block, reaching) in blocks.iter().zip(&reaching) {
-            if block.at() == start || !reachable.contains(&block.at()) {
+        for &at in order.iter().rev() {
+            if at == start {
                 continue;
             }
-            let mut now = match reaching.split_first() {
-                Some((first, rest)) => rest.iter().fold(doms[*first].clone(), |mut shared, one| {
-                    shared.intersect_with(&doms[*one]);
-                    shared
-                }),
-                None => empty.clone(),
-            };
-            let at = slot(&block.at());
-            now.insert(at);
-            if now != doms[at] {
-                doms[at] = now;
+            let mut now = NONE;
+            for &from in &predecessors[at] {
+                if idom[from as usize] == NONE {
+                    continue;
+                }
+                now = if now == NONE {
+                    from
+                } else {
+                    let (mut one, mut other) = (now, from);
+                    while one != other {
+                        while number[one as usize] < number[other as usize] {
+                            one = idom[one as usize];
+                        }
+                        while number[other as usize] < number[one as usize] {
+                            other = idom[other as usize];
+                        }
+                    }
+                    one
+                };
+            }
+            if now != idom[at] {
+                idom[at] = now;
                 changing = true;
             }
         }
     }
-    Dominance { ats, doms }
+    idom[start] = NONE;
+
+    // Preorder intervals of the tree.
+    let mut children: Vec<Vec<u32>> = vec![Vec::new(); count];
+    for &at in order.iter().rev() {
+        if idom[at] != NONE {
+            children[idom[at] as usize].push(at as u32);
+        }
+    }
+    let mut clock = 0;
+    let mut walk = vec![(start, 0_usize)];
+    found.enter[start] = 0;
+    clock += 1;
+    while let Some(&(at, next)) = walk.last() {
+        if let Some(&child) = children[at].get(next) {
+            walk.last_mut().expect("nonempty").1 += 1;
+            found.enter[child as usize] = clock;
+            clock += 1;
+            walk.push((child as usize, 0));
+        } else {
+            found.last[at] = clock - 1;
+            walk.pop();
+        }
+    }
+    found.idom = idom;
+    found
 }
 
 /// One natural loop: where control comes back to, and what is inside.

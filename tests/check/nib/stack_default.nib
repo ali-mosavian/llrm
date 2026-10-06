@@ -1,7 +1,7 @@
 # RUN: llrm-nib %s -O2 -S -o /dev/stdout
 # The default build checks nothing: no limit word, no panic.
 # CHECK-LABEL: _deep proc
-# CHECK-NOT: N$OSLO
+# CHECK-NOT: _llrm_os_stack_low
 # CHECK-NOT: N$ESTK
 # CHECK: _deep endp
 fn deep(n: i16) -> i16:

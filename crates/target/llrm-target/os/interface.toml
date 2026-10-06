@@ -1,0 +1,89 @@
+# The OS layer's interface: what every target's operating system gives every language's runtime.
+# One symbol per operation, `<symbol_prefix><name>`, in the target's C convention; a target's
+# `os.toml` says which groups it implements, its pointer kind and its convention, and the
+# languages' bindings (os.nib, a C header) are rendered from this file, never written by hand.
+#
+# A result below zero is an error: minus its code, the code being the number `[errors]` gives it
+# where it names the condition and the operating system's own otherwise.
+#
+# Types: `path` and `bytes` and `bytes_mut` are data pointers (far where the target has far data,
+# flat otherwise); `heap` is a pointer into the program's near data; the rest are integers.
+
+symbol_prefix = "_llrm_os_"
+
+[errors]
+not_found = 2
+path_not_found = 3
+denied = 5
+
+# What every target has.
+[[op]]
+group = "core"
+name = "open"
+doc = "A handle to an existing file; mode 0 reads, 1 writes, 2 both."
+args = [["name", "path"], ["mode", "u8"]]
+returns = "i16"
+
+[[op]]
+group = "core"
+name = "create"
+doc = "A handle to a new, empty file."
+args = [["name", "path"]]
+returns = "i16"
+
+[[op]]
+group = "core"
+name = "read"
+doc = "Bytes read, in one call, which moves at most i32 max."
+args = [["handle", "i16"], ["data", "bytes_mut"], ["count", "usize"]]
+returns = "i32"
+
+[[op]]
+group = "core"
+name = "write_file"
+doc = "Bytes written, as read."
+args = [["handle", "i16"], ["data", "bytes"], ["count", "usize"]]
+returns = "i32"
+
+[[op]]
+group = "core"
+name = "close"
+doc = "0 on success."
+args = [["handle", "i16"]]
+returns = "i16"
+
+[[op]]
+group = "core"
+name = "exit"
+doc = "Ends the program with `code`."
+args = [["code", "u8"]]
+returns = "void"
+
+[[op]]
+group = "core"
+name = "more"
+doc = "`bytes` more of the heap, right after the last grant or in a new arena the target chains, or null."
+args = [["bytes", "usize"]]
+returns = "heap"
+
+# Interrupt vectors: a target that has them (real mode).
+[[op]]
+group = "vectors"
+name = "vector"
+doc = "The handler interrupt `number` enters."
+args = [["number", "u8"]]
+returns = "handler"
+
+[[op]]
+group = "vectors"
+name = "set_vector"
+doc = "Makes interrupt `number` enter `handler`; the program's exit puts back what it replaced."
+args = [["number", "u8"], ["handler", "handler"]]
+returns = "void"
+
+[[op]]
+group = "vectors"
+name = "chain"
+doc = "Enters `handler` as its interrupt would, and comes back."
+args = [["handler", "handler"]]
+returns = "void"

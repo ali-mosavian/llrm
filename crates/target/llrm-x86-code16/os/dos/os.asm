@@ -1,20 +1,20 @@
 .model medium
 .386
 
-public N$OOPN
-public N$OCRE
-public N$OREA
-public N$OWRI
-public N$OCLO
-public N$OEXT
-public N$OMEM
-public N$OGIV
-public N$OSIV
-public N$OCHN
-public N$OVEC
-public N$OTOP
-public N$OSLO
-public N$OPSP
+public _llrm_os_open
+public _llrm_os_create
+public _llrm_os_read
+public _llrm_os_write_file
+public _llrm_os_close
+public _llrm_os_exit
+public _llrm_os_more
+public _llrm_os_vector
+public _llrm_os_set_vector
+public _llrm_os_chain
+public _llrm_os_restore_vectors
+public _llrm_os_top
+public _llrm_os_stack_low
+public _llrm_os_psp
 public BSS_LAST
 public FBSS_LAST
 
@@ -30,28 +30,28 @@ FBSS_END ends
 .data
 ; The near heap's end, a DGROUP offset, and the program's PSP, whose
 ; memory block the heap grows. Startup sets both.
-N$OTOP dw 0
-N$OPSP dw 0
+_llrm_os_top dw 0
+_llrm_os_psp dw 0
 ; The lowest SP a checked function may reach (-fsanitize=stack): the stack's bottom plus the
 ; reserve the panic, DOS and an interrupt use below it. Startup sets it.
-N$OSLO dw 0
+_llrm_os_stack_low dw 0
 
 ; Each vector the program replaced, and what it entered before, which
-; N$OVEC puts back. A vector replaced past the last entry is not.
+; _llrm_os_restore_vectors puts back. A vector replaced past the last entry is not.
 SAVED equ 16
 saved_count dw 0
 saved_number db SAVED dup (0)
 saved_old dd SAVED dup (0)
 
 .code
-; N$OMEM(bytes: u16) -> *near mut u8: `bytes` more of DGROUP at the heap's end, or
+; _llrm_os_more(bytes: u16) -> *near mut u8: `bytes` more of DGROUP at the heap's end, or
 ; 0 when DGROUP's 64 KB or DOS's memory runs out.
-N$OMEM proc far
+_llrm_os_more proc far
     push bp
     mov bp, sp
     push bx
     push es
-    mov bx, N$OTOP
+    mov bx, _llrm_os_top
     add bx, [bp+6]
     jc short refused
     cmp bx, 0fff0h
@@ -60,15 +60,15 @@ N$OMEM proc far
     add ax, 15
     shr ax, 4
     mov bx, DGROUP
-    sub bx, N$OPSP
+    sub bx, _llrm_os_psp
     add bx, ax
-    mov es, N$OPSP
-    mov ah, 4ah
-    int 21h
+    mov es, _llrm_os_psp
+    mov ah, DOS_RESIZE
+    int DOS_INT
     jc short refused
-    mov ax, N$OTOP
+    mov ax, _llrm_os_top
     mov bx, [bp+6]
-    add N$OTOP, bx
+    add _llrm_os_top, bx
     jmp short grown
 refused:
     xor ax, ax
@@ -77,43 +77,43 @@ grown:
     pop bx
     pop bp
     retf
-N$OMEM endp
+_llrm_os_more endp
 
 ; The DOS file calls. Each returns what DOS does, or when DOS sets carry,
 ; its error code negated.
 
-; N$OOPN(name: *far char, mode: u8) -> i16: a handle to an existing file.
-N$OOPN proc far
+; _llrm_os_open(name: *far char, mode: u8) -> i16: a handle to an existing file.
+_llrm_os_open proc far
     push bp
     mov bp, sp
     push ds
     lds dx, [bp+6]
     mov al, [bp+10]
-    mov ah, 3dh
+    mov ah, DOS_OPEN
     jmp short called
-N$OOPN endp
+_llrm_os_open endp
 
-; N$OCRE(name: *far char) -> i16: a handle to a new, empty file.
-N$OCRE proc far
+; _llrm_os_create(name: *far char) -> i16: a handle to a new, empty file.
+_llrm_os_create proc far
     push bp
     mov bp, sp
     push ds
     lds dx, [bp+6]
     xor cx, cx
-    mov ah, 3ch
+    mov ah, DOS_CREATE
     jmp short called
-N$OCRE endp
+_llrm_os_create endp
 
-; N$OREA(handle: i16, data: *far mut u8, count: u16) -> i32: bytes read, or the error code negated: a count
+; _llrm_os_read(handle: i16, data: *far mut u8, count: u16) -> i32: bytes read, or the error code negated: a count
 ; to 65535 and a sign take 17 bits, so the result is DX:AX.
-N$OREA proc far
-    mov ah, 3fh
+_llrm_os_read proc far
+    mov ah, DOS_READ
     jmp short transfer
-N$OREA endp
+_llrm_os_read endp
 
-; N$OWRI(handle: i16, data: *far u8, count: u16) -> i32: bytes written, as N$OREA.
-N$OWRI proc far
-    mov ah, 40h
+; _llrm_os_write_file(handle: i16, data: *far u8, count: u16) -> i32: bytes written, as _llrm_os_read.
+_llrm_os_write_file proc far
+    mov ah, DOS_WRITE
 transfer::
     push bp
     mov bp, sp
@@ -122,7 +122,7 @@ transfer::
     mov bx, [bp+6]
     lds dx, [bp+8]
     mov cx, [bp+12]
-    int 21h
+    int DOS_INT
     pop bx
     jc short failed
     xor dx, dx
@@ -134,21 +134,23 @@ transferred:
     pop ds
     pop bp
     retf
-N$OWRI endp
+_llrm_os_write_file endp
 
-; N$OCLO(handle: i16) -> i16
-N$OCLO proc far
+; _llrm_os_close(handle: i16) -> i16
+_llrm_os_close proc far
     push bp
     mov bp, sp
     push ds
     push bx
     mov bx, [bp+6]
-    mov ah, 3eh
-    int 21h
+    mov ah, DOS_CLOSE
+    int DOS_INT
     pop bx
+    jc short checked
+    xor ax, ax                     ; DOS leaves AX undefined on success
     jmp short checked
 called::
-    int 21h
+    int DOS_INT
 checked::
     jnc short done
     neg ax
@@ -156,32 +158,32 @@ done:
     pop ds
     pop bp
     retf
-N$OCLO endp
+_llrm_os_close endp
 
 ; Interrupt vectors, for handlers the program installs. A handler is
 ; entered with interrupts off and leaves by iret.
 
-; N$OGIV(number: u8) -> extern "interrupt16" fn(): what interrupt `number`
+; _llrm_os_vector(number: u8) -> extern "interrupt16" fn(): what interrupt `number`
 ; enters now.
-N$OGIV proc far
+_llrm_os_vector proc far
     push bp
     mov bp, sp
     push bx
     push es
     mov al, [bp+6]
-    mov ah, 35h
-    int 21h
+    mov ah, DOS_GET_VECTOR
+    int DOS_INT
     mov ax, bx
     mov dx, es
     pop es
     pop bx
     pop bp
     retf
-N$OGIV endp
+_llrm_os_vector endp
 
-; N$OSIV(number: u8, handler: extern "interrupt16" fn()): makes interrupt
+; _llrm_os_set_vector(number: u8, handler: extern "interrupt16" fn()): makes interrupt
 ; `number` enter `handler`, the first time keeping the one it replaces.
-N$OSIV proc far
+_llrm_os_set_vector proc far
     push bp
     mov bp, sp
     push bx
@@ -200,8 +202,8 @@ keep:
     cmp si, SAVED
     je short install
     mov saved_number[si], al
-    mov ah, 35h
-    int 21h
+    mov ah, DOS_GET_VECTOR
+    int DOS_INT
     shl si, 2
     mov word ptr saved_old[si], bx
     mov word ptr saved_old[si+2], es
@@ -210,19 +212,19 @@ install:
     push ds
     lds dx, [bp+8]
     mov al, [bp+6]
-    mov ah, 25h
-    int 21h
+    mov ah, DOS_SET_VECTOR
+    int DOS_INT
     pop ds
     pop es
     pop si
     pop bx
     pop bp
     retf
-N$OSIV endp
+_llrm_os_set_vector endp
 
-; N$OVEC: puts back every vector N$OSIV replaced, the last first. Every
+; _llrm_os_restore_vectors: puts back every vector _llrm_os_set_vector replaced, the last first. Every
 ; exit path calls it.
-N$OVEC proc far
+_llrm_os_restore_vectors proc far
     push ds
     push si
     mov ax, DGROUP
@@ -237,8 +239,8 @@ restore:
     shl si, 2
     push ds
     lds dx, saved_old[si]
-    mov ah, 25h
-    int 21h
+    mov ah, DOS_SET_VECTOR
+    int DOS_INT
     pop ds
     pop si
     jmp short restore
@@ -246,27 +248,27 @@ restored:
     pop si
     pop ds
     retf
-N$OVEC endp
+_llrm_os_restore_vectors endp
 
-; N$OCHN(handler: extern "interrupt16" fn()): enters `handler` as its
+; _llrm_os_chain(handler: extern "interrupt16" fn()): enters `handler` as its
 ; interrupt would, flags pushed, and comes back.
-N$OCHN proc far
+_llrm_os_chain proc far
     push bp
     mov bp, sp
     pushf
     call dword ptr [bp+6]
     pop bp
     retf
-N$OCHN endp
+_llrm_os_chain endp
 
-; N$OEXT(code: u8): restores the vectors and ends the program.
-N$OEXT proc far
+; _llrm_os_exit(code: u8): restores the vectors and ends the program.
+_llrm_os_exit proc far
     push bp
     mov bp, sp
-    call far ptr N$OVEC
+    call far ptr _llrm_os_restore_vectors
     mov al, [bp+6]
-    mov ah, 4ch
-    int 21h
-N$OEXT endp
+    mov ah, DOS_EXIT
+    int DOS_INT
+_llrm_os_exit endp
 
 end
