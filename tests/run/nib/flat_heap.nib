@@ -1,0 +1,31 @@
+# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# The heap's free lists: strings and vectors grown, dropped in an order that leaves holes, and
+# reused, so a block's list links are read back after its neighbours were written.
+fn build(n: i16) -> string:
+    let mut s = ""
+    for i in 0..n:
+        s = s + "ab"
+    return s
+
+fn main() -> i16:
+    let mut keep: vec[string] = []
+    for round in 0..40:
+        let a = build(round + 1)
+        let b = build(round * 3 + 2)
+        let c = build(7)
+        keep.push(a.copy())
+        if round % 3 == 0:
+            keep.push(c.copy())
+    let mut total: i16 = 0
+    for i in 0..keep.len:
+        total += i16(keep[i].len)
+    print(total)
+    print(keep.len)
+    let mut v: vec[i32] = []
+    for i in 0..500:
+        v.push(i32(i) * 1000)
+    let mut sum: i32 = 0
+    for i in 0..v.len:
+        sum += v[i]
+    print(sum)
+    return 0
