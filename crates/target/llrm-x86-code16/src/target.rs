@@ -151,27 +151,19 @@ pub fn costs(arch: &str) -> OperationCosts {
     DESCRIPTION.operations(&|kind| timings::COST[kind][at], timings::PREFIX[at])
 }
 
-/// Real mode runs a dword operation under the 66h operand-size prefix.
-fn prefix_bytes(width: i64) -> i64 {
-    i64::from(width == 4)
-}
-
-/// Bytes of `op r, r` on `width`-byte registers: `mov`, `add`, `sub` and the rest of the
-/// two-register forms are the opcode and ModRM.
+/// Bytes of `op r, r` on `width`-byte registers; a dword runs under the 66h prefix.
 pub fn register_bytes(width: i64) -> i64 {
-    prefix_bytes(width) + 2
+    llrm_x86::encoding::register_bytes(width, 2)
 }
 
-/// Bytes of a shift of a `width`-byte register by `count`: `D1` for one, `C1` with a byte
-/// count otherwise.
+/// Bytes of a shift of a `width`-byte register by `count`.
 pub fn shift_bytes(count: i64, width: i64) -> i64 {
-    prefix_bytes(width) + if count == 1 { 2 } else { 3 }
+    llrm_x86::encoding::shift_bytes(count, width, 2)
 }
 
-/// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate where `number`
-/// fits one, else the operand's width.
+/// Bytes of `imul r, r, number` on `width`-byte registers.
 pub fn imul_immediate_bytes(number: i64, width: i64) -> i64 {
-    prefix_bytes(width) + 2 + if (-128..=127).contains(&number) { 1 } else { width }
+    llrm_x86::encoding::imul_immediate_bytes(number, width, 2)
 }
 
 #[cfg(test)]

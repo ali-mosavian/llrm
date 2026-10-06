@@ -85,6 +85,10 @@ impl llrm_target::Target for Code32 {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }
 
+    fn operand_bytes(&self) -> i64 {
+        4
+    }
+
     fn default_cpu(&self) -> &'static str {
         TIMINGS.default_cpu().expect("timings.times states a default CPU")
     }

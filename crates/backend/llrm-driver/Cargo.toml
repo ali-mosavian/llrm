@@ -9,5 +9,6 @@ description = "The one place that names targets: --target picks one"
 llrm-core = { workspace = true }
 iced-x86 = { workspace = true }
 llrm-target = { workspace = true }
+llrm-x86 = { workspace = true }
 llrm-x86-code16 = { workspace = true }
 llrm-x86-code32 = { workspace = true }

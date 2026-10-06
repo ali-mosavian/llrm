@@ -122,6 +122,9 @@ pub trait Target {
     /// The target's instruction forms: the family's and its own, in `x86.instr`'s format.
     fn forms_text(&self) -> String;
 
+    /// The operand size an instruction has without a size prefix, in bytes.
+    fn operand_bytes(&self) -> i64;
+
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 

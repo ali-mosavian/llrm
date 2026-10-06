@@ -39,6 +39,10 @@ impl llrm_target::Target for Code16 {
         instructions::TEXT.clone()
     }
 
+    fn operand_bytes(&self) -> i64 {
+        2
+    }
+
     fn default_cpu(&self) -> &'static str {
         timings::TABLE.default_cpu().expect("timings.times states a default CPU")
     }
