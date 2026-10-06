@@ -132,6 +132,11 @@ impl Mem {
             && (self.addr.is_some() || self.offset == other.offset)
     }
 
+    /// `self` is the word above `low`: the cell two bytes on, however either is spelled.
+    pub fn word_above(&self, low: &Self) -> bool {
+        self.same_place(&Self { addr: low.addr.map(|addr| addr.plus(2)), offset: if low.addr.is_some() { low.offset } else { low.offset + 2 }, ..low.clone() })
+    }
+
     pub const fn new(addr: Option<Addr>, width: u32) -> Self {
         Self {
             addr,
