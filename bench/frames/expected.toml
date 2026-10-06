@@ -1,21 +1,19 @@
-reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
+reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
 blessed = "2026-10-06"
 
 [bas.O2]
-instructions = 5091082
-memory_operands = 930246
-code_bytes = 328
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 68.9223
-
-[bas.Os]
-instructions = 5121082
+instructions = 4952188
 memory_operands = 930246
 code_bytes = 323
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 69.3225
+
+[bas.Os]
+instructions = 4982188
+memory_operands = 930246
+code_bytes = 318
+data_bytes = 13
+bss_bytes = 0
 
 [c.O2]
 instructions = 4562091

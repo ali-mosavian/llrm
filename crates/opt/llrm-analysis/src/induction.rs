@@ -155,6 +155,14 @@ impl CountedLoop {
         self.test == IntPredicate::Ne && self.bound == AffineOperand::constant(0, self.width())
     }
 
+    /// The header's unsigned values only rise from a constant start to the
+    /// bound, or stay at the start, and never pass the width's largest: a unit
+    /// step tested before each trip by `ult`. Its zero extension is a counter
+    /// of the wider width.
+    pub fn rises_unsigned(&self) -> bool {
+        !self.posttested && !self.stepped && self.test == IntPredicate::Ult && self.step == BigInt::from(1) && matches!(self.start, AffineOperand::Const(_))
+    }
+
     /// The signed values the header's counter takes on a trip, lowest first.
     pub fn span(&self) -> Option<(BigInt, BigInt)> {
         let (first, last) = (self.first.as_ref()?, self.last.as_ref()?);
@@ -1907,8 +1915,8 @@ impl Walk<'_> {
                 let from = unit.int_bits(op.operands[0])?;
                 self.rec(found, op.operands[0], from).filter(|_| from > width).map(|of| of.truncated(width))
             }
-            // The header runs once more than the body, on the trip that leaves: past what the count proves.
-            Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) if at != self.loop_.header => self.extended(found, op, cast),
+            // The header runs once more than the body, on the trip that leaves: `extended` proves that one too.
+            Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) => self.extended(found, op, cast, at == self.loop_.header),
             Opcode::Binary(BinaryOp::SDiv) if at != self.loop_.header => self.quotient(op),
             _ => None,
         }
@@ -1916,7 +1924,7 @@ impl Walk<'_> {
 
     /// A narrow recurrence extended, as a wide one: only where the counted-loop
     /// proof shows the narrow value cannot wrap on any trip.
-    fn extended(&self, found: &Users, op: &Instruction, cast: CastOp) -> Option<Recurrence> {
+    fn extended(&self, found: &Users, op: &Instruction, cast: CastOp, in_header: bool) -> Option<Recurrence> {
         let unit = self.unit;
         let wide = unit.int_bits(Operand::Value(op.result?))?;
         let width = unit.int_bits(op.operands[0])?;
@@ -1925,7 +1933,9 @@ impl Walk<'_> {
             return None;
         }
         let (raw_start, raw_step) = (of.start.constant.clone(), of.step.constant.clone());
-        let count = trip_count(unit, self.loop_, &self.facts).filter(|count| *count != BigInt::from(0))?;
+        let Some(count) = trip_count(unit, self.loop_, &self.facts).filter(|count| *count != BigInt::from(0)) else {
+            return self.ascending(&raw_start, &raw_step, width, wide).filter(|_| cast == CastOp::ZExt).map(|(start, step)| Recurrence { pointer: None, start, step });
+        };
         let step = _as_signed(&raw_step, width);
         if step == BigInt::from(0) {
             return None;
@@ -1942,11 +1952,20 @@ impl Walk<'_> {
             }
             (raw_start, _as_signed(&raw_step, width), BigInt::from(0), mask + 1)
         };
-        let final_value = &initial + (&count - 1) * &stride;
+        let last = if in_header { count } else { &count - 1 };
+        let final_value = &initial + last * &stride;
         if initial < low || initial >= high || final_value < low || final_value >= high {
             return None;
         }
         Some(Recurrence { pointer: None, start: Scev::constant(initial, wide), step: Scev::constant(stride, wide) })
+    }
+
+    /// A narrow unit-step counter that a symbolic bound ends with `ult`: its
+    /// header values run from the start to the bound, or stay at the start, so
+    /// none passes the width's largest and its zero extension is the wide counter.
+    fn ascending(&self, start: &BigInt, step: &BigInt, width: u32, wide: u32) -> Option<(Scev, Scev)> {
+        let ended = counted(self.unit, self.loop_, Some(&self.facts), false).into_iter().any(|proof| proof.rises_unsigned() && proof.width() == width && proof.start == AffineOperand::constant(start.clone(), width));
+        (ended && *step == BigInt::from(1)).then(|| (Scev::constant(start.clone(), wide), Scev::constant(1, wide)))
     }
 
     /// Exact signed division of a non-wrapping counter is another recurrence.

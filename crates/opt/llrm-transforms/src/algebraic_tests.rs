@@ -600,3 +600,66 @@ fn test_a_mask_narrows_only_to_a_native_width() {
     assert!(run("n8:16:32").contains("trunc i16 %x to i8"));
     assert!(!run("n16:32").contains("trunc"));
 }
+
+/// C's `unsigned short i; i < 8` on a 32-bit `int`: `slt (zext i), 8`. Left
+/// wide, no trip count, unroll or count-to-zero saw the loop (code32 crc ran
+/// 832 instructions to code16's 477).
+#[test]
+fn test_a_compare_of_an_extension_is_a_compare_of_its_source() {
+    let wide = |cast: &str, test: &str, constant: i64| format!("define i1 @f(i16 %x) {{\nb0:\n  %w = {cast} i16 %x to i32\n  %r = icmp {test} i32 %w, {constant}\n  ret i1 %r\n}}\n");
+    let inputs = singles(&edges(16));
+    // A constant in the source's range: its width, unsigned for a zext.
+    assert!(checked(&wide("zext", "slt", 8), &inputs).contains("icmp ult i16 %x, 8"));
+    assert!(checked(&wide("zext", "ule", 65535), &inputs).contains("icmp ule i16 %x, -1"));
+    assert!(checked(&wide("sext", "slt", -3), &inputs).contains("icmp slt i16 %x, -3"));
+    assert!(checked(&wide("sext", "eq", 100), &inputs).contains("icmp eq i16 %x, 100"));
+    // Outside it, the answer is decided.
+    assert!(checked(&wide("zext", "ult", 65536), &inputs).contains("ret i1 true"));
+    assert!(checked(&wide("zext", "slt", -1), &inputs).contains("ret i1 false"));
+    assert!(checked(&wide("zext", "ne", 70000), &inputs).contains("ret i1 true"));
+    assert!(checked(&wide("sext", "sgt", 40000), &inputs).contains("ret i1 false"));
+    // Unsigned order of a `sext` against a constant stays wide.
+    unchanged(&wide("sext", "ult", 8));
+}
+
+/// `i < limit`, both `unsigned short` (sieve): the pair compares narrow.
+#[test]
+fn test_a_compare_of_two_extensions_is_a_compare_of_their_sources() {
+    for (cast, test, narrow) in [("zext", "slt", "ult"), ("zext", "uge", "uge"), ("sext", "slt", "slt"), ("sext", "ult", "ult")] {
+        let text = format!("define i1 @f(i16 %x, i16 %y) {{\nb0:\n  %a = {cast} i16 %x to i32\n  %b = {cast} i16 %y to i32\n  %r = icmp {test} i32 %a, %b\n  ret i1 %r\n}}\n");
+        let inputs = edges(16).iter().flat_map(|&a| edges(16).into_iter().map(move |b| vec![a, b])).collect::<Vec<_>>();
+        assert!(checked(&text, &inputs).contains(&format!("icmp {narrow} i16 %x, %y")), "{cast} {test}");
+    }
+    unchanged("define i1 @f(i16 %x, i8 %y) {\nb0:\n  %a = zext i16 %x to i32\n  %b = zext i8 %y to i32\n  %r = icmp ult i32 %a, %b\n  ret i1 %r\n}\n");
+}
+
+/// `(unsigned short)(m + i)` computed in `int`: `trunc (add (zext m), i)`.
+/// The conversion and the wide add stayed in sieve's inner loop, a
+/// `mov`/`movzx` pair a trip beside code16's `add`.
+#[test]
+fn test_a_truncated_sum_with_an_extension_of_its_width_is_narrow() {
+    for op in ["add", "sub", "mul", "and", "or", "xor"] {
+        let text = format!("define i16 @f(i16 %m, i32 %i) {{\nb0:\n  %w = zext i16 %m to i32\n  %s = {op} i32 %w, %i\n  %r = trunc i32 %s to i16\n  ret i16 %r\n}}\n");
+        let inputs = edges(16).iter().flat_map(|&a| [0, 5, -9, 70000].map(move |b| vec![a, b])).collect::<Vec<_>>();
+        let after = checked(&text, &inputs);
+        assert!(after.contains(&format!("{op} i16 %m")) && !after.contains("zext") && !after.contains(&format!("{op} i32")), "{op}\n{after}");
+    }
+    // Two uses of the wide sum keep it.
+    unchanged("define i16 @f(i16 %m, i32 %i) {\nb0:\n  %w = zext i16 %m to i32\n  %s = add i32 %w, %i\n  %r = trunc i32 %s to i16\n  %t = trunc i32 %s to i8\n  %u = zext i8 %t to i16\n  %v = add i16 %r, %u\n  ret i16 %v\n}\n");
+}
+
+/// A byte compared where the extension lives on for an address (grep's
+/// `c == '|'` before `class[c]`) stays wide: narrowed it grew grep by 24
+/// bytes. A counter's compare narrows whatever else reads the extension.
+#[test]
+fn test_a_compare_narrows_for_a_loop_carried_source_or_a_dying_extension() {
+    let text = |source: &str| {
+        format!(
+            "define i32 @f(i8 %x) {{\nb0:\n  br label %b1\n\nb1:\n  %p = phi i8 [ %x, %b0 ], [ %q, %b1 ]\n  %w = zext i8 {source} to i32\n  %c = icmp ult i32 %w, 100\n  %q = add i8 %p, 1\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i32 %w\n}}\n"
+        )
+    };
+    // The phi is carried round the loop: narrow, though `%w` lives on.
+    assert!(bare(&simplified(&text("%p")).1).contains("icmp ult i8 %p, 100"));
+    // An argument is not: the extension stays its compare's operand.
+    assert!(bare(&simplified(&text("%x")).1).contains("icmp ult i32 %w, 100"));
+}
