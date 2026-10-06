@@ -72,16 +72,19 @@ pub struct Peephole {
     pub cpu: Profile,
     /// The rule groups of the target, which its driver binds.
     pub rules: &'static peep::Rules,
+    /// The registers a callee keeps for its caller, whole: a run of stores may
+    /// not share them.
+    pub saved: Vec<Register>,
 }
 
 impl Peephole {
     /// With the 16-bit x86 rules.
     pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
-        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES)
+        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES, llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect())
     }
 
-    pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules) -> Result<Self, String> {
-        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules })
+    pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules, saved: Vec<Register>) -> Result<Self, String> {
+        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved })
     }
 
     /// Drop only synthetic reservations when no added stack storage remains.
@@ -160,7 +163,7 @@ impl LIRTransform for Peephole {
         let body = secondary_bases(&body, &self.cpu)?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
-        let body = sharedstores::shared(&body, &self.cpu, &crate::backend::masm::SAVED.keys().copied().collect::<Vec<_>>());
+        let body = sharedstores::shared(&body, &self.cpu, &self.saved);
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;

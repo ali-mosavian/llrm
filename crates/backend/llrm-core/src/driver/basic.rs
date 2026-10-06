@@ -806,6 +806,7 @@ fn procedure(
         size: false,
         entry,
         stack_check,
+        registers: target.arch.frame_registers(),
     };
     Ok((procedure, machined.landing, statics))
 }

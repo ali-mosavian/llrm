@@ -214,6 +214,8 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
         size: false,
         entry: 0,
         stack_check: None,
+        // The statement table is BASIC's, which is code16's.
+        registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16),
     }
 }
 
