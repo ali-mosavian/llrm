@@ -957,7 +957,7 @@ pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
     let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return Vec::new() };
     match unit.tbaa {
         Some(tree) => tree.of_tag(unit.metadata, *tag).to_vec(),
-        None => llrm_mir::tbaa::Tbaa::of(unit.metadata).of_tag(unit.metadata, *tag).to_vec(),
+        None => llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag),
     }
 }
 

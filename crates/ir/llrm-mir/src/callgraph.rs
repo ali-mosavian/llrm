@@ -234,6 +234,18 @@ impl<N: Copy + Ord> CallGraph<N> {
         })
     }
 
+    /// The strongly connected components, callees before their callers, each with whether it is
+    /// a cycle: what a bottom-up solver visits, iterating only within a cycle.
+    pub fn bottom_up_components(&self) -> Vec<(Vec<N>, bool)> {
+        let mut out: BTreeMap<usize, (Vec<N>, bool)> = BTreeMap::new();
+        for (&node, &(component, cyclic)) in self.components() {
+            if self.callees.contains_key(&node) {
+                out.entry(component).or_insert_with(|| (Vec::new(), cyclic)).0.push(node);
+            }
+        }
+        out.into_values().collect()
+    }
+
     /// Whether `function` can call itself: it is in a cycle of calls.
     pub fn recursive(&self, function: N) -> bool {
         self.components().get(&function).is_some_and(|one| one.1)
