@@ -197,47 +197,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-bc"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "llrm-analysis",
- "llrm-bcmachine",
- "llrm-hir",
- "llrm-mir",
- "llrm-omf",
- "llrm-qbruntime",
- "llrm-target",
- "llrm-x86-m16",
-]
-
-[[package]]
 name = "llrm-bcdriver"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-bc",
- "llrm-bcmachine",
  "llrm-core",
  "llrm-driver",
  "llrm-mir",
  "llrm-omf",
  "llrm-transforms",
+ "llrm-x86-bc",
+ "llrm-x86-bcmachine",
  "llrm-x86-m16",
-]
-
-[[package]]
-name = "llrm-bcmachine"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "llrm-lir",
- "llrm-omf",
- "llrm-qbruntime",
- "llrm-support",
- "llrm-target",
- "llrm-x86-m16",
- "toml",
 ]
 
 [[package]]
@@ -272,7 +243,6 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-analysis",
- "llrm-bcmachine",
  "llrm-elf32",
  "llrm-elf64",
  "llrm-hir",
@@ -286,6 +256,7 @@ dependencies = [
  "llrm-target",
  "llrm-transforms",
  "llrm-x86",
+ "llrm-x86-bcmachine",
  "llrm-x86-m16",
  "llrm-x86-m32",
  "num-bigint",
@@ -489,6 +460,35 @@ dependencies = [
  "llrm-lir",
  "llrm-support",
  "llrm-target",
+ "toml",
+]
+
+[[package]]
+name = "llrm-x86-bc"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-analysis",
+ "llrm-hir",
+ "llrm-mir",
+ "llrm-omf",
+ "llrm-qbruntime",
+ "llrm-target",
+ "llrm-x86-bcmachine",
+ "llrm-x86-m16",
+]
+
+[[package]]
+name = "llrm-x86-bcmachine"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-lir",
+ "llrm-omf",
+ "llrm-qbruntime",
+ "llrm-support",
+ "llrm-target",
+ "llrm-x86-m16",
  "toml",
 ]
 

@@ -27,8 +27,12 @@ fn refuse<T>(what: impl Into<String>) -> R<T> {
 }
 
 /// The unit as a HIR program of one module.
+<<<<<<< HEAD
 pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Calling, profile: &crate::compile::Profile) -> R<h::Program> {
     let convention = calling.named(&profile.convention).ok_or_else(|| Unsupported(format!("calling.toml has no {}", profile.convention)))?;
+=======
+pub fn program(unit: &hir::Unit, name: &str, convention: &llrm_target::calling::Convention) -> R<h::Program> {
+>>>>>>> origin/main
     let mut types = Types::new(unit);
     let objects = objects(unit)?;
     let mut keys: HashMap<Key, i64> = HashMap::new();
@@ -2091,7 +2095,11 @@ mod tests {
 
     fn raised(fixture: &str) -> Module {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
+<<<<<<< HEAD
         let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
+=======
+        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap();
+>>>>>>> origin/main
         let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
@@ -2188,7 +2196,11 @@ mod tests {
     /// `fixture`'s HIR program.
     fn program_of(fixture: &str) -> llrm_core::hir::model::Program {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
+<<<<<<< HEAD
         super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap()
+=======
+        super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap()
+>>>>>>> origin/main
     }
 
     /// llrm-c's HIR had never met the verifier, and failed it on 22 of the
@@ -2213,7 +2225,11 @@ mod tests {
             .iter()
             .filter_map(|fixture| {
                 let text = std::fs::read_to_string(root.join(fixture)).unwrap();
+<<<<<<< HEAD
                 let program = super::program(&hir::unit(&stream::parse(&text)).ok()?, "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).ok()?;
+=======
+                let program = super::program(&hir::unit(&stream::parse(&text)).ok()?, "test", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).ok()?;
+>>>>>>> origin/main
                 llrm_core::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
             })
             .collect();

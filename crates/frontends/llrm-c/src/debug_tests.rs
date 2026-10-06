@@ -64,7 +64,11 @@ fn c_lines_are_the_main_files() {
 fn bit_field_members_round_trip_through_the_codec_and_others_are_unchanged() {
     let hir = |name: &str| {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
+<<<<<<< HEAD
         super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), name, llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap()
+=======
+        super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), name, llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap()
+>>>>>>> origin/main
     };
     let plain = llrm_core::hir::codec::encode(&hir("debug"), None).unwrap();
     assert!(!plain.contains("bit_start") && plain.contains("\"members\""), "premise: debug members, none a bit field");
@@ -91,7 +95,11 @@ fn c_bit_fields_read_with_their_width_and_first_bit() {
 #[test]
 fn a_debug_member_with_half_a_bit_field_is_refused() {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debugbf.cgs")).expect("reads");
+<<<<<<< HEAD
     let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debugbf", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
+=======
+    let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debugbf", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap();
+>>>>>>> origin/main
     assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
     let member = program.modules[0].debug.as_mut().unwrap().types.iter_mut().flat_map(|one| &mut one.members).find(|one| one.bit_width.is_some()).expect("premise: a bit field");
     member.bit_width = None;

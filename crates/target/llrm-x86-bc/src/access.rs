@@ -10,7 +10,7 @@
 //! offset from a far pointer, which MIR's 16-bit far index cannot hold.
 
 use iced_x86::Register;
-use llrm_bcmachine::model::ir::nodes::Node;
+use llrm_x86_bcmachine::model::ir::nodes::Node;
 use llrm_mir::CastOp;
 
 use crate::emit::{Emit, Emitter, Var};

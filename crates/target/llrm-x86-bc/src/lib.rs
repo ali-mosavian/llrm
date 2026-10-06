@@ -32,10 +32,10 @@ pub fn segment(spaces: &llrm_mir::spaces::Spaces) -> u32 {
 }
 
 use llrm_target::machine::Machine;
-use llrm_bcmachine::frontends::bc::blocks::has_header;
-use llrm_bcmachine::frontends::bc::extent::BodyKind;
-use llrm_bcmachine::objectfile::module::{self as found_module, Family};
-use llrm_bcmachine::objectfile::omf;
+use llrm_x86_bcmachine::frontends::bc::blocks::has_header;
+use llrm_x86_bcmachine::frontends::bc::extent::BodyKind;
+use llrm_x86_bcmachine::objectfile::module::{self as found_module, Family};
+use llrm_x86_bcmachine::objectfile::omf;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::program::SegmentLayout;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module, Type};
