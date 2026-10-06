@@ -15,7 +15,8 @@ fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     assert!(String::from_utf8_lossy(&linker.stdout).contains("JWlink"));
 }
 
-/// The real-mode OS layer assembled in `dir` as start.obj and os.obj, told its description's defines.
+/// The real-mode OS layer assembled in `dir` as start.obj and os.obj, and Nib's start-up hook as init.obj, told
+/// their descriptions' defines.
 fn os_layer_objects(bin: &Path, dir: &Path) {
     let layer = |field: &str| {
         let done = Command::new(bin.join("llrm-nib")).args(["--os-layer", field]).output().unwrap();
@@ -24,8 +25,8 @@ fn os_layer_objects(bin: &Path, dir: &Path) {
     };
     let directory = layer("directory");
     let defines: Vec<String> = layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
-    for (field, object) in [("start", "start.obj"), ("implementation", "os.obj")] {
-        let source = format!("{directory}/{}", layer(field));
+    for (field, object) in [("start", "start.obj"), ("implementation", "os.obj"), ("language_file", "init.obj")] {
+        let source = if field == "language_file" { layer(field) } else { format!("{directory}/{}", layer(field)) };
         let done = Command::new(bin.join("jwasm")).args(["-q", "-c", "-Cp", "-Zg", "-omf"]).args(&defines).arg(format!("-Fo{object}")).arg(source).current_dir(dir).status().unwrap();
         assert!(done.success(), "{field}");
     }
@@ -98,7 +99,7 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-omf", "-Fofault.obj", "fault.asm"]);
     let slice = root.join("tests/fixtures/nib/port/c7e7588fa1/slice.nib");
     run(&bin.join("llrm-nib"), &[slice.to_str().unwrap(), "-o", "slice.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "init.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nSLICE\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -130,7 +131,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     )
     .unwrap();
     run(&bin.join("llrm-nib"), &["frame.nib", "-o", "frame.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "FRAME.EXE", "file", "start.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &["format", "dos", "name", "FRAME.EXE", "file", "start.obj", "file", "init.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nFRAME\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
