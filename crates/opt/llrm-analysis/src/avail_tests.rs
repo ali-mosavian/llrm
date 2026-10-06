@@ -480,3 +480,17 @@ pad:
         assert_eq!(removed.contains(&site(&unit, "b0", 1)), dead, "{handler}");
     }
 }
+
+/// Each load the loop lost was compared with every earlier load, one by one, though most are of one
+/// address (#560). Loads of one address are compared once.
+#[test]
+fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
+    let before_loop: String = (0..20).map(|at| format!("  %a{at} = load i16, ptr {CELL}\n")).collect();
+    let in_loop: String = (0..20).map(|at| format!("  %b{at} = load i16, ptr {CELL}\n")).collect();
+    let parsed = Parsed::new(&format!("define i16 @f(i1 %c) {{\nb0:\n{before_loop}  br label %b1\n\nb1:\n{in_loop}  store i16 0, ptr {OTHER}\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %b0\n}}\n"));
+    let unit = parsed.unit();
+    let before = same_runs();
+    let found = forwarded(&unit, &Calls::default());
+    assert_eq!(found.len(), 39, "every load but the first is served");
+    assert!(same_runs() - before <= 20, "{} comparisons for 20 loads of one address", same_runs() - before);
+}
