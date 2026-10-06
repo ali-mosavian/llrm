@@ -88,7 +88,6 @@ class BuildError(Exception):
 
 
 _RUNTIME_LOCK = threading.Lock()
-C_RUNTIME = ROOT / "tools" / "loops" / "runtime"
 
 
 def _host(command: list[str]) -> None:
@@ -170,10 +169,12 @@ def link_files(source: Path, names: Iterable[str], target: str) -> list[Path]:
     return out
 
 
-def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] = ()) -> tuple[Path, ...]:
+def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] | None = None) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
     `target` says; the files its executable needs beside it (an extender's loader)."""
     link = target_link(target)
+    if defines is None:
+        defines = os_defines(target, "c")
     fill = lambda text: text.replace("{ow}", str(ow_root()))  # noqa: E731
     made = work / target
     made.mkdir(exist_ok=True)
@@ -188,29 +189,53 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     return (Path(fill(link["loader"])),) if "loader" in link else ()
 
 
-def nib_runtime(target: str) -> tuple[Path, list[str]]:
-    """The directory of `target`'s Nib OS layer, and the start-up and OS routines it names (`llrm-nib --os-layer`)."""
-    directory = Path(subprocess.run([str(BIN / "llrm-nib"), m_flag(target), "--os-layer", "directory"], capture_output=True, text=True, check=True).stdout.strip())
-    names = [subprocess.run([str(BIN / "llrm-nib"), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip() for field in ("start", "implementation")]
-    return directory, [str((directory / name).relative_to(ROOT)) for name in names]
-
-
 # The 16-bit target the loop corpus and the C helpers build for.
 REAL_MODE = "x86-code16"
 
+_COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
 
-def nib_defines(target: str) -> tuple[str, ...]:
-    """What the assembler is told of `target`'s OS layer (`llrm-nib --os-layer defines`): `SYMBOL=value` each."""
-    return tuple(subprocess.run([str(BIN / "llrm-nib"), m_flag(target), "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split())
+
+def os_layer(target: str, field: str, language: str) -> str:
+    """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`)."""
+    return subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def os_defines(target: str, language: str) -> tuple[str, ...]:
+    """What the assembler is told of `target`'s OS layer and `language`'s description: `SYMBOL=value` each."""
+    return tuple(os_layer(target, "defines", language).split())
+
+
+def os_start(target: str, language: str) -> list[str]:
+    """The files that start a `language` program on `target`: the layer's start-up, then the language's own hook."""
+    directory = Path(os_layer(target, "directory", language))
+    hook = os_layer(target, "language_file", language)
+    return [str((directory / os_layer(target, "start", language)).relative_to(ROOT))] + ([hook] if hook else [])
+
+
+def c_include(target: str, work: Path) -> Path:
+    """A directory of `work` holding the OS layer's C header for `target` as llrm_os.h (`llrm-c --os-layer header`)."""
+    directory = work / f"{target}-include"
+    directory.mkdir(exist_ok=True)
+    header = os_layer(target, "header", "c") + "\n"
+    if not (directory / "llrm_os.h").exists() or (directory / "llrm_os.h").read_text() != header:
+        (directory / "llrm_os.h").write_text(header)
+    return directory
+
+
+def c_support(target: str, work: Path) -> list[Path]:
+    """The objects of C's externals (`report`, the link recipe's `last`) and the OS layer's operations (`final`) they call, made in
+    `work`: for a build with another compiler's start-up, which brings neither."""
+    link = target_link(target)
+    defines = os_defines(target, "c")
+    return [runtime_object(name, work / (Path(name).stem.upper() + ".OBJ"), defines) for name in (*link["last"], *link["final"])]
 
 
 def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level: str, foreign: tuple[Path, ...]) -> tuple[Path, ...]:
     """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer name, linked as the target says."""
-    _, (start, implementation) = nib_runtime(target)
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
     _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
-    return link_target(target, obj, exe, work, runtime=([start], [implementation]), objects_after=(runtime, *foreign), defines=nib_defines(target))
+    return link_target(target, obj, exe, work, runtime=(os_start(target, "nib"), []), objects_after=(runtime, *foreign), defines=os_defines(target, "nib"))
 
 
 def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:

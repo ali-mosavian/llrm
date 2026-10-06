@@ -46,8 +46,8 @@ class LinkTests(unittest.TestCase):
         """`link: @c-runtime` reached the compiler as a file name in bench (llrm-c: wccq failed on .../@c-runtime):
         only run_tests resolved it. Every reader resolves it here."""
         source = Path("bench/parity/parity/parity.nib")
-        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-code16"), [dosbatch.ROOT / "tools/loops/runtime/ext.asm"])
-        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-code32"), [dosbatch.ROOT / "crates/target/llrm-x86-code32/runtime/ext.asm"])
+        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-code16"), [dosbatch.ROOT / "runtime/c/x86-code16/ext.asm"])
+        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-code32"), [dosbatch.ROOT / "runtime/c/x86-code32/ext.asm"])
         self.assertEqual(dosbatch.link_files(source, ["geometry.c"], "x86-code32"), [Path("bench/parity/parity/geometry.c")])
         for target in ("x86-code16", "x86-code32"):
             self.assertTrue(all(one.exists() for one in dosbatch.link_files(source, ["@c-runtime"], target)))

@@ -21,7 +21,7 @@ use llrm_support::pyrepr::{self, Repr};
 pub mod flag;
 mod root;
 
-pub use root::{ROOT, root};
+pub use root::root;
 
 /// One physical register operand, at the instruction's width.
 ///

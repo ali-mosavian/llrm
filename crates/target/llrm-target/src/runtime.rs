@@ -25,6 +25,27 @@ impl Description {
         self.text.parse().map_err(|error: toml::de::Error| error.to_string())
     }
 
+    /// What the assembler is told of the description: `assembler_defines = ["field:SYMBOL"]`, each
+    /// field an integer or a string of the description, as `SYMBOL` and its value.
+    pub fn defines(&self) -> Result<Vec<(String, String)>, String> {
+        let table = self.table()?;
+        table
+            .get("assembler_defines")
+            .and_then(|one| one.as_array())
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                let (field, symbol) = entry.as_str().and_then(|one| one.split_once(':')).ok_or("assembler_defines are \"field:SYMBOL\"")?;
+                let value = match table.get(field) {
+                    Some(toml::Value::Integer(number)) => number.to_string(),
+                    Some(toml::Value::String(text)) => text.clone(),
+                    _ => return Err(format!("{field} is not an integer or a string")),
+                };
+                Ok((symbol.to_owned(), value))
+            })
+            .collect()
+    }
+
     /// The string field `key` of the description.
     pub fn string(&self, key: &str) -> Result<String, String> {
         self.table()?.get(key).and_then(|one| one.as_str()).map(str::to_owned).ok_or_else(|| format!("the runtime description has no string {key}"))

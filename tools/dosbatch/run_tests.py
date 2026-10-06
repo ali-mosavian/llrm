@@ -152,6 +152,9 @@ def first_difference(want: list[str], got: list[str]) -> str:
 def compile_one(program: Program, obj: Path) -> str | None:
     tool, *rest = COMPILERS[program.source.suffix]
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
+    if program.source.suffix == ".c":
+        target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+        dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
     done = subprocess.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)],
                           capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not obj.exists():

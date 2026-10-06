@@ -3,6 +3,11 @@
 .386
 .model flat
 
+extrn _llrm_os_open:near
+extrn _llrm_os_read:near
+extrn _llrm_os_write_file:near
+extrn _llrm_os_exit:near
+
 .data
 digits  db 12 dup (?)
 inhandle dd 0FFFFFFFFh
@@ -15,13 +20,12 @@ public __STKOVERFLOW
 ; Open Watcom's stack overflow (clib stk086.asm `__STKOVERFLOW`): the message and exit status 1,
 ; which a checked function enters (-fsanitize=stack). On stdout, which a test captures.
 __STKOVERFLOW proc
-    mov edx, offset stkmsg
-    mov ecx, 17
-    mov ebx, 1
-    mov ah, 40h
-    int 21h
-    mov ax, 4C01h
-    int 21h
+    push 17
+    push offset stkmsg
+    push 1
+    call _llrm_os_write_file
+    push 1
+    call _llrm_os_exit
 __STKOVERFLOW endp
 
 ; void report(long v)
@@ -56,12 +60,13 @@ more:
     dec edi
     mov byte ptr [edi], '-'
 unsigned:
-    mov edx, edi
     mov ecx, offset digits + 12
     sub ecx, edi
-    mov ebx, 1
-    mov ah, 40h
-    int 21h
+    push ecx
+    push edi
+    push 1
+    call _llrm_os_write_file
+    add esp, 12
     pop edi
     pop ebx
     pop ebp
@@ -74,27 +79,27 @@ public _input_read
 _input_read proc
     push ebp
     mov ebp, esp
-    push ebx
     cmp inhandle, 0FFFFFFFFh
     jne opened
-    mov ax, 3D00h
-    mov edx, offset inname
-    int 21h
-    jc failed
-    movzx eax, ax
+    push 0
+    push offset inname
+    call _llrm_os_open
+    add esp, 8
+    movsx eax, ax
+    test eax, eax
+    js failed
     mov inhandle, eax
 opened:
-    mov ebx, inhandle
-    mov ecx, dword ptr [ebp+12]
-    mov edx, dword ptr [ebp+8]
-    mov ah, 3Fh
-    int 21h
-    jnc done
+    push dword ptr [ebp+12]
+    push dword ptr [ebp+8]
+    push inhandle
+    call _llrm_os_read
+    add esp, 12
+    test eax, eax
+    jns done
 failed:
     xor eax, eax
 done:
-    movzx eax, ax
-    pop ebx
     pop ebp
     ret
 _input_read endp
