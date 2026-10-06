@@ -3337,3 +3337,42 @@ fn test_a_rep_in_flat_mode_writes_ecx_whole() {
     let (_, writes) = _register_effects(32, &repeated_fill("stosd", 4, Register::EDI, Register::ECX, Register::EAX), true, false).expect("encodes");
     assert!((0..4).all(|lane| writes.contains(&(Register::ECX, lane))), "{writes:?}");
 }
+
+/// Each pass of the peephole assembled the text of an instruction and decoded it, for every instruction of the body, again:
+/// `_decoded` was 8% of compiling matmul (#560). An instruction is decoded once however many passes ask of it, and another
+/// at the same place is not taken for it.
+#[test]
+fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
+    let what = sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
+    let before = decodes();
+    let first = _decoded(16, &what).expect("encodes");
+    for _ in 0..5 {
+        assert_eq!(_decoded(16, &what).expect("encodes"), first);
+    }
+    assert_eq!(decodes() - before, 1, "decoded again for each ask");
+    // The same instruction in 32-bit code is asked of again, not answered with the 16-bit code's.
+    let before = decodes();
+    _decoded(32, &what).expect("encodes");
+    assert_eq!(decodes() - before, 1, "a 32-bit ask was answered from the 16-bit one");
+    // Another instruction, even if it came to stand where this one was, is its own.
+    let other = sem(Operation::Binary, "sub", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
+    assert_ne!(_decoded(16, &other).expect("encodes"), first);
+}
+
+/// A memory operand is equal to another that is spelled through another register: `Mem`'s equality leaves out the
+/// encoding fields. The first answer was given for the second (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
+#[test]
+fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() {
+    let through = |register| {
+        let cell = Mem { through: register, offset: 2, base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) };
+        sem(Operation::Move, "mov", vec![rl(Register::ES, 2)], vec![Loc::Mem(cell)])
+    };
+    // One place in memory, the second instruction put where the first was (as a body's rewrite does).
+    let mut place = through(Register::BX);
+    assert_eq!(place, through(Register::SI), "the semantics are equal: the encoding fields take no part");
+    let first = _decoded(16, &place).expect("encodes");
+    place = through(Register::SI);
+    let second = _decoded(16, &place).expect("encodes");
+    assert_ne!(first, second, "[si+2] decoded as [bx+2]");
+    assert_eq!(second[0].memory_base(), Register::SI);
+}
