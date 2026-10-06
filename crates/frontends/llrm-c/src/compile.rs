@@ -460,6 +460,20 @@ mod tests {
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
     }
 
+    /// The 386 front end records `sum.c` as the committed flat stream: `flat=1` in INIT, int and
+    /// pointers 4 bytes. (Its source path is the machine's, so that line is not compared.)
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_the_386_wccq_records_the_committed_flat_stream() {
+        let dir = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32");
+        let recorded = super::recorded_for(&dir.join("sum.c"), &[], false, &[], true).expect("the 386 wccq records sum.c");
+        let committed = std::fs::read_to_string(dir.join("sum.cgs")).unwrap();
+        let body = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).map(str::to_owned).collect::<Vec<_>>();
+        assert!(recorded.starts_with("INIT ") && recorded.lines().next().unwrap().ends_with(" flat=1"), "{recorded}");
+        assert_eq!(body(&recorded), body(&committed));
+    }
+
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
@@ -890,5 +904,36 @@ mod tests {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
         let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }));
         assert!(built.is_ok(), "{:?}", built.err());
+    }
+
+    /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it, selected for `--target x86-code32`.
+    fn flat_listing(fixture: &str) -> Vec<String> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
+        let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
+        llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
+    }
+
+    /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [ebp+8] and [ebp+12],
+    /// the result in EAX, EBP the frame. It listed `bp`, `[bp+4]` and a DX:AX result, and
+    /// never reached the allocator, before the target stated them.
+    #[test]
+    fn test_code32_lists_add_as_flat_cdecl32() {
+        let lines = flat_listing("add");
+        assert_eq!(&lines[..2], [".386", ".model flat"]);
+        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_add proc near").skip(1).take_while(|line| *line != "_add endp").map(String::as_str).collect();
+        assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "mov eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
+    }
+
+    /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
+    /// addressed `[base+index]` with no segment, selector or 16-bit register.
+    #[test]
+    fn test_code32_lists_a_loop_over_int_pointers() {
+        let lines = flat_listing("sum");
+        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
+        assert!(body.contains(&"mov edx, dword ptr [ebx+ecx]") && body.contains(&"add ecx, 4"), "{body:#?}");
+        assert!(body.iter().all(|line| !line.contains(" bp") && !line.contains("[bx") && !line.contains("es:") && !line.contains("far")), "{body:#?}");
+        assert_eq!(body.last(), Some(&"ret"));
     }
 }

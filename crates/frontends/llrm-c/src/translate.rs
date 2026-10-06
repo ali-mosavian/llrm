@@ -97,7 +97,6 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
         promises,
         preserved: preserved.iter().map(|one| one.value().to_owned()).collect(),
         constant_segment: Some("CONST".to_owned()),
-        target: if unit.flat { h::TargetProfile::I386Flat32 } else { h::TargetProfile::I386RealMode },
         ..h::Program::new(h::Dialect::C, h::RuntimeProfile::Freestanding, vec![module])
     })
 }
