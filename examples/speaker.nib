@@ -1,3 +1,4 @@
+# targets: x86-code16   (inline assembly: 16-bit only)
 # A tune on the PC speaker. Inline assembly programs the timer's channel 2
 # (ports 43h and 42h) and gates it to the speaker (port 61h); the BIOS tick
 # count, 18.2 a second, times each note. A key stops the tune early.
