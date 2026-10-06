@@ -364,12 +364,18 @@ impl<'u> Types<'u> {
     fn c(&mut self, type_: &str) -> R<i64> {
         let type_ = self.unit.canonical_type(type_);
         let big = |flag| if self.unit.target & flag != 0 { 4 } else { 2 };
-        if self.flat && matches!(type_.as_str(), "TY_LONG_POINTER" | "TY_HUGE_POINTER" | "TY_LONG_CODE_PTR") {
+        // A far code pointer is a far call; a far or huge data pointer is near where the target
+        // has one address space, with a warning.
+        if self.flat && type_ == "TY_LONG_CODE_PTR" {
             return refuse(format!("{type_} in flat code"));
         }
+        if self.flat && matches!(type_.as_str(), "TY_LONG_POINTER" | "TY_HUGE_POINTER") {
+            self.unit.warn_near();
+        }
         let shape = match type_.as_str() {
-            "TY_POINTER" | "TY_CODE_PTR" | "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" if self.flat => Shape::Pointer(4),
-            "TY_POINTER" => Shape::Pointer(big(hir::BIG_DATA)),
+            "TY_POINTER" | "TY_CODE_PTR" | "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" | "TY_LONG_POINTER" | "TY_HUGE_POINTER" if self.flat => Shape::Pointer(4),
+            // An unmarked pointer is the target's near one, whatever model the front end was told.
+            "TY_POINTER" => Shape::Pointer(2),
             "TY_CODE_PTR" => Shape::Pointer(big(hir::BIG_CODE)),
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => Shape::Pointer(2),
             "TY_HUGE_POINTER" => Shape::Huge,
@@ -384,7 +390,7 @@ impl<'u> Types<'u> {
             },
         };
         let class = match type_.as_str() {
-            "TY_POINTER" if !self.flat => Some(if self.unit.target & hir::BIG_DATA != 0 { "pointer4" } else { "pointer2" }),
+            "TY_POINTER" if !self.flat => Some("pointer2"),
             other => classes_for(self.flat, other),
         };
         Ok(self.of(shape, Some(class.unwrap_or(CHAR))))
