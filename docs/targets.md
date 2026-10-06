@@ -24,7 +24,7 @@ Known departures today, each to be removed:
 |---|---|---|
 | `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists | code16's registers read directly | PR 19 (a register-class description the allocator receives) |
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
-| `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
+| `llrm-core` `select.rs`, `objbuild.rs`: x86 instruction encoding and the layout of an object, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
 | `llrm-core` `select.rs` encoder and `peephole::_register_effects`: x86 encoding, and register effects read by decoding the emitted bytes, in `llrm-core` | the encoder and the effects belong in the x86 family layer; the mode they run in is the body's (`LirBody::bits`, set by isel from the target's `object.bitness`) | the encoder PR (code32-prep, D); #581 |
 
 ## Principle: a target is description
@@ -157,7 +157,7 @@ Watcom object that returns such a struct is the one call that does not match.
   translates them to HIR. A 32-bit front end is a second `wccq` from `bld/cc/386`
   (the tree is cached); it gates the skeleton.
 - No `-m` flag and no writer interface: `compile.rs:220-222` calls
-  `omfwrite::written` or `masm::text`.
+  `objbuild::written` or `masm::text`.
 
 ## Classes
 
@@ -265,10 +265,10 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | Assumption | Anchor | Becomes |
 |---|---|---|
 | OMF 16 writer called directly | `compile.rs:220`, `nib/compile.rs:78`, `driver/basic.rs:362` | `ObjectWriter` |
-| OMF constants, DGROUP/STACK/`_TEXT` names, USE16 attributes | `omfwrite.rs:27-62,462` | inside the OMF writer |
+| OMF constants, DGROUP/STACK/`_TEXT` names, USE16 attributes | `llrm-omf/src/write.rs` | inside the OMF writer |
 | MASM header `.model medium`, `dd/dw` pointers, `proc far` | `masm.rs:166-217,535` | `Listing` syntax per target |
 | CodeView 16-bit records | `codeview.rs`, `cvwrite.rs` | debug writer per format; code32 refuses `-g` first |
-| Jump relaxation with rel8/rel16 reach | `omfwrite.rs:673`, `jumps.rs:21` | `branch_forms()` |
+| Jump relaxation with rel8/rel16 reach | `objbuild.rs:673`, `jumps.rs:21` | `branch_forms()` |
 | `Space::{Group,Segment,Far}` in the model the backend shares | `datagroup.rs`, `globals.rs`, `masm.rs` | relocation kinds the format interprets |
 
 ### Drivers and frontends
@@ -353,7 +353,7 @@ of a value's uses). `select.rs` is the encoder after selection, not a selector.
 | post-passes in order: `unread_halves_dropped`, `combined` (`farload`, `comparefold`, `rmw`, peephole arguments, `dword_pairs`), `widen` (`exact_sums`, `addressforms::promote`, which allocates ids after `next`), `rooted` | after selection | stay x86 family; far parts code16 |
 | `farcall.rs` | first machine phase | code16 |
 | `selects.rs`, `ehprepare.rs`, `nearcode.rs` | MIR pre-passes | stay MIR |
-| `unwind.rs`, `masm`, `frame`, `prologue`, `omfwrite` | other | unchanged |
+| `unwind.rs`, `masm`, `frame`, `prologue`, `objbuild` | other | unchanged |
 | `lower_int64.rs` | data (helper blobs), name is stale | per-target helper table |
 | `pointers.rs` | dead (only its own tests use it) | left as is: nothing is dropped from code16 |
 
