@@ -46,7 +46,7 @@ fn joined_width(body: &LirBody, value: u32) -> u32 {
 fn test_a_value_only_phis_name_is_spilled_at_its_full_width() {
     let (body, _) = before_phase(Calls::C, "phiwidth.ll", "_f", "486", "SsaSpill");
     let mut frame = Frame::new(0);
-    let spilled = ssaspill::spilled(&body, &mut frame, &target::BUILT_IN, Prices::clocks()).expect("spills");
+    let spilled = ssaspill::spilled(&body, &mut frame, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), Prices::clocks()).expect("spills");
     let stores: Vec<(u32, u32)> = spilled
         .insns()
         .iter()
@@ -218,7 +218,7 @@ fn test_spill_code_survives_empty_blocks() {
     for (fixture, name) in [("tilesum.ll", "_tile_sum"), ("matmul.ll", "_bench_matmul"), ("hotstore.ll", "_f"), ("trivialphi.ll", "_bench_shellsort")] {
         let (body, _) = before_phase(Calls::C, fixture, name, "486", "SsaSpill");
         let split = with_empty_edge_blocks(&body);
-        let spilled = ssaspill::spilled(&split, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks()).unwrap_or_else(|why| panic!("{fixture}: {why}"));
+        let spilled = ssaspill::spilled(&split, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), Prices::clocks()).unwrap_or_else(|why| panic!("{fixture}: {why}"));
         reloads += spilled.insns().iter().filter(|one| one.spill_reload).count();
         reloads_follow_stores(&spilled).unwrap_or_else(|why| panic!("{fixture}: {why}"));
     }
@@ -233,7 +233,7 @@ fn test_a_bridge_keeps_every_blocks_frequency() {
     let (mut body, _) = before_phase(Calls::C, "phiwidth.ll", "_f", "486", "SsaSpill");
     let had: BTreeSet<i64> = body.blocks.iter().map(|block| block.at).collect();
     // Where the bridge goes, then that edge stated as the likely one.
-    let first = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks()).expect("spills");
+    let first = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), Prices::clocks()).expect("spills");
     // phiwidth's loop-closing edge was bridged to reload a remade load; the add takes the load's cell now,
     // and the edge needs no code. Where a body does bridge an edge, the bridge's odds are stated too.
     if let Some(bridge) = first.blocks.iter().find(|block| !had.contains(&block.at)) {
@@ -242,7 +242,7 @@ fn test_a_bridge_keeps_every_blocks_frequency() {
         let to = bridge.succ[0];
         body.odds.taken.insert((from.at, to), (0.9 * crate::model::lir::BlockOdds::CERTAIN) as u32);
     }
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks()).expect("spills");
+    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), Prices::clocks()).expect("spills");
     let (before, after) = (crate::analysis::frequency::Frequency::of(&body), crate::analysis::frequency::Frequency::of(&spilled));
     for at in had {
         let (was, is) = (before.block(at), after.block(at));
@@ -293,7 +293,7 @@ fn test_a_value_is_dead_when_nothing_reads_it_not_when_its_distance_is_unsettled
         .collect();
     blocks.reverse();
     let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks()).expect("spills");
+    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), Prices::clocks()).expect("spills");
     assert!(spilled.insns().iter().all(|one| !one.spill_store && !one.spill_reload), "one value in a six-register machine was spilled");
 }
 
@@ -384,7 +384,7 @@ fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {
 #[test]
 fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
     let (body, _) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
-    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, Prices::clocks()).expect("spills");
+    let spilled = ssaspill::spilled(&body, &mut Frame::new(0), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), Prices::clocks()).expect("spills");
     let done = crate::backend::executed::executed(&spilled).expect("a reducible body");
     assert!(done.jumps < 8.0, "{} jumps executed", done.jumps);
 }

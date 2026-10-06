@@ -316,6 +316,7 @@ pub enum Stage {
 }
 
 use crate::backend::regclass::{classes, Classes};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass::_SEGMENT_OPERANDS;
 
 /// A plain move into one value; whether anything reads it is the caller's.
@@ -502,8 +503,9 @@ pub fn allocate(
     preferred: Option<&IndexMap<u32, Register>>,
     cpu: ProfileOrName<'_>,
     segments: &Segments,
+    classes: &RegisterClasses,
 ) -> Result<Assignment, Error> {
-    Ok(_allocated(body, pinned, unspillable, protected, preferred, cpu, segments, None)?.0)
+    Ok(_allocated(body, pinned, unspillable, protected, preferred, cpu, segments, classes, None)?.0)
 }
 
 /// `allocate`, splitting and spilling as it goes, as LLVM's greedy allocator
@@ -517,10 +519,11 @@ pub fn rewritten(
     protected: Option<&BTreeSet<u32>>,
     cpu: ProfileOrName<'_>,
     segments: &Segments,
+    classes: &RegisterClasses,
     frame: &mut Frame,
     splitting: bool,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
-    _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)))
+    _allocated(body, pinned, unspillable, protected, None, cpu, segments, classes, Some((frame, splitting)))
 }
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
@@ -582,6 +585,7 @@ fn _allocated(
     preferred: Option<&IndexMap<u32, Register>>,
     cpu: ProfileOrName<'_>,
     segments: &Segments,
+    classes: &RegisterClasses,
     rewrite: Option<(&mut Frame, bool)>,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     let splitting = rewrite.as_ref().is_some_and(|(_, splitting)| *splitting);
@@ -893,7 +897,7 @@ fn _allocated(
                             union.get_mut(&_whole(register)).expect("a placed value is in its register").retain(|other| other != one);
                         }
                     }
-                    let (spilt, mut made) = spiller::spilled_from(&body, &chosen, Some(frame), floor)?;
+                    let (spilt, mut made) = spiller::spilled_from(&body, &chosen, Some(frame), floor, classes)?;
                     body = spilt;
                     // A value the spiller keeps (a load from its own home
                     // cell) is now as short as a reload, and is placed as one.
@@ -918,7 +922,7 @@ fn _allocated(
         floor = floor.max(splitkit::_next_value(&body));
         facts = Facts::of(&body, profile, segments, &unspillable, protected);
         placing = None;
-        for (one, register) in constrain::required(&body) {
+        for (one, register) in constrain::required(&body, classes) {
             fixed.entry(one).or_insert(register);
         }
         wanted = _wanted(&facts.hints, &fixed);
@@ -1429,6 +1433,7 @@ pub struct RegAlloc {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
     pub segments: Segments,
+    pub classes: Rc<RegisterClasses>,
 }
 
 impl RegAlloc {
@@ -1439,8 +1444,9 @@ impl RegAlloc {
         frame: Option<Rc<RefCell<Frame>>>,
         cpu: ProfileOrName<'_>,
         segments: &Segments,
+        classes: &Rc<RegisterClasses>,
     ) -> Result<Self, String> {
-        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone() })
+        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone(), classes: Rc::clone(classes) })
     }
 
     /// Assign; where that spills, make the spill real and assign again.
@@ -1496,7 +1502,7 @@ impl RegAlloc {
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });
-        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned));
+        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
         body = constrained_body;
         let clash: BTreeSet<u32> = fixed
             .keys()
@@ -1513,7 +1519,7 @@ impl RegAlloc {
             body.blocks.iter().flat_map(|block| &block.insns).filter(|one| _unread_move(one)).map(ranges::key).collect();
         body = spiller::_remove_abandoned(&body, &abandoned);
         self.pinned = prefer.clone();
-        self.pinned.extend(constrain::required(&body));
+        self.pinned.extend(constrain::required(&body, &self.classes));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
         // A value read once, from a cell that holds, by an instruction that takes the cell: never held in a register.
         // Once per body, before the candidates: every trial starts from the body with those reads placed.
@@ -1523,7 +1529,7 @@ impl RegAlloc {
             let read_at_use = spiller::_folded_reads(&body, &wanted);
             if !read_at_use.is_empty() {
                 let floor = splitkit::_next_value(&body);
-                let (moved, made) = spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor)?;
+                let (moved, made) = spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor, &self.classes)?;
                 body = moved;
                 reloads.extend(made);
             }
@@ -1533,10 +1539,10 @@ impl RegAlloc {
         // it goes; the one whose output costs least is kept.
         let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
             let mut pins = prefer.clone();
-            pins.extend(constrain::required(candidate));
+            pins.extend(constrain::required(candidate, &self.classes));
             let before = last_resorts();
             let (got, out, spilled) =
-                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
+                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &self.classes, &mut frame.borrow_mut(), splitting)?;
             Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
         let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
@@ -2254,7 +2260,7 @@ mod tests {
         let body = _one_block(insns);
         let frame = Rc::new(RefCell::new(frames::of(&body, None, "", None).expect("a frame")));
         let mut phase =
-            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386"), &target::BUILT_IN).expect("a cpu");
+            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates");
         assert!(!frame.borrow().slots.is_empty());
     }
@@ -2262,7 +2268,7 @@ mod tests {
     fn _through_regalloc(body: LirBody, pinned: &[(u32, Register)]) -> LirBody {
         let pinned = pins(pinned);
         let frame = frames::of(&body, None, "", None).expect("a frame");
-        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386"), &target::BUILT_IN).expect("a cpu");
+        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates")
     }
 
@@ -2275,7 +2281,7 @@ mod tests {
     }
 
     fn allocated(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> Result<Assignment, Error> {
-        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN)
+        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16())
     }
 
     fn registers(places: &[Loc]) -> Vec<Register> {
@@ -2357,7 +2363,7 @@ mod tests {
     #[test]
     fn test_a_soft_preference_changes_free_register_order_without_becoming_a_pin() {
         let preferred = pins(&[(1, Register::EDX)]);
-        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into(), &target::BUILT_IN)
+        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16())
             .expect("allocates");
         assert_eq!(one.r#where[&1], Register::EDX);
         let overlap = Insn::new(
@@ -2375,6 +2381,7 @@ mod tests {
             Some(&preferred),
             "386".into(),
             &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::code16(),
         )
         .expect("allocates");
         assert_ne!(kept.r#where[&1], Register::EDX);
@@ -2405,6 +2412,7 @@ mod tests {
             Some(&pins(&[(1, Register::EDX)])),
             "386".into(),
             &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::code16(),
         )
         .expect("allocates");
         assert_eq!(got.r#where[&1], Register::EDX, "{:?}", got.r#where);
@@ -2441,8 +2449,8 @@ mod tests {
             vec![2],
             vec![2, 3],
         ));
-        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into(), &target::BUILT_IN).expect("allocates");
-        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into(), &target::BUILT_IN)
+        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
+        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16())
             .expect("allocates");
         assert_eq!(_whole(got.r#where[&1]), _whole(got.r#where[&2]), "{:?}", got.r#where);
     }
@@ -2463,8 +2471,8 @@ mod tests {
         insns.push(last);
         let body = _one_block(insns);
 
-        let on_386 = allocate(&body, None, None, None, None, "386".into(), &target::BUILT_IN).expect("allocates");
-        let on_core = allocate(&body, None, None, None, None, "Core".into(), &target::BUILT_IN).expect("allocates");
+        let on_386 = allocate(&body, None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
+        let on_core = allocate(&body, None, None, None, None, "Core".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
 
         assert!(!on_386.spilled.contains(&7), "{on_386:?}");
         assert_eq!(on_core.spilled, values(&[7]), "{on_core:?}");
@@ -2750,7 +2758,7 @@ mod tests {
             (1..8).collect(),
         ));
         let pinned: IndexMap<u32, Register> = (1..7).zip(target::AVAILABLE).collect();
-        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN);
+        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         let message = unplaced(got);
         assert!(message.contains("7 values that cannot be spilled are live at one point"), "{message}");
     }
@@ -2888,7 +2896,7 @@ mod tests {
             Insn::new(6, Some((6, 7)), Some(semantics(Operation::Push, "push", vec![], vec![one])), vec![], vec![1]);
         let body = body_of("call", 0, vec![before.clone(), call.clone(), after.clone()]);
         let si = pins(&[(1, Register::SI)]);
-        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into(), &target::BUILT_IN).expect("allocates");
+        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
         assert!(assigned.spilled.is_empty() && assigned.r#where[&1] == Register::SI);
 
         let surviving = body_of("call", 0, vec![before, Insn { defines: vec![], ..call }, after]);
@@ -3052,7 +3060,7 @@ mod tests {
             Insn::new(0, Some((0, 3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![1], vec![]);
         call.delivers = vec![(Held { value: 1, width: 2 }, Register::AX)];
         let (narrow, pinned) = narrowed(&body_of("dead result", 0, vec![call]), &pins(&[(1, Register::EAX)]));
-        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned));
+        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned), &crate::backend::classes::RegisterClasses::code16());
         let insns = lowered.insns();
         assert_eq!(insns.len(), 1);
         assert!(insns[0].defines.is_empty());

@@ -76,7 +76,7 @@ fn test_signed_word_extension_uses_explicit_operands() {
     let instruction = decoded(&made(emitted(&what)).code, 0);
     assert_eq!(instruction.code(), Code::Movsx_r32_rm16);
     assert!(instruction.op0_register() == Register::EBX && instruction.op1_register() == Register::SI);
-    assert!(target::requirements(&what).is_empty());
+    assert!(crate::backend::classes::RegisterClasses::code16().requirements(&what).is_empty());
 }
 
 #[test]
@@ -432,10 +432,10 @@ fn test_a_funnel_shift_is_two_address_in_its_low_half() {
 
 #[test]
 fn test_a_funnel_shift_by_a_register_takes_its_count_in_cl() {
-    let dynamic = target::reads(&funnel_of(rg(Register::CL, 1), "shrd"));
+    let dynamic = target::reads(&funnel_of(rg(Register::CL, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16());
     assert!(dynamic.get(&Register::ECX).is_some_and(|need| need.fixed() == Some(Register::ECX)));
-    assert!(!target::reads(&funnel_of(imm(16, 1), "shrd")).contains_key(&Register::EAX));
-    assert!(target::writes(&funnel_of(imm(16, 1), "shrd")).is_empty(), "shrd writes only what it names");
+    assert!(!target::reads(&funnel_of(imm(16, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16()).contains_key(&Register::EAX));
+    assert!(target::writes(&funnel_of(imm(16, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16()).is_empty(), "shrd writes only what it names");
 }
 
 #[test]
