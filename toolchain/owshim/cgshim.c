@@ -326,7 +326,7 @@ cg_init_info BEInit( cg_switches sw, cg_target_switches tsw, uint size, proc_rev
         exit( 1 );
     }
     Target = tsw;
-    emit( "INIT sw=0x%x target=0x%x size=%u rev=0x%x", (unsigned)sw, (unsigned)tsw, size, (unsigned)rev );
+    emit( "INIT sw=0x%x target=0x%x size=%u rev=0x%x%s", (unsigned)sw, (unsigned)tsw, size, (unsigned)rev, LLRM_FLAT ? " flat=1" : "" );
     info.revision = II_REVISION;
     info.target = II_TARG_8086;
     return( info );
