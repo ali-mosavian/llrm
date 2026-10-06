@@ -10,9 +10,12 @@ pub mod parse;
 
 pub use parse::{Form, Operand, Side, CONDITIONS};
 
-pub const TEXT: &str = include_str!("x86.instr");
+/// The forms real mode adds to the family's.
+pub const OWN: &str = include_str!("x86.instr");
 
-pub static FORMS: LazyLock<Vec<Form>> = LazyLock::new(|| parse::parse(TEXT).expect("x86.instr parses"));
+pub static TEXT: LazyLock<String> = LazyLock::new(|| llrm_x86::instructions::joined(OWN));
+
+pub static FORMS: LazyLock<Vec<Form>> = LazyLock::new(|| parse::parse(&TEXT).expect("x86.instr parses"));
 
 static CODES: LazyLock<HashMap<String, Code>> = LazyLock::new(|| Code::values().map(|code| (format!("{code:?}"), code)).collect());
 
@@ -67,5 +70,15 @@ mod tests {
     fn a_malformed_line_is_refused_with_its_line() {
         let error = parse::parse("add binary rm/^0,rmx 16 alu_rr - Add_rm{w}_r{w}").unwrap_err();
         assert_eq!(error, "x86.instr:1: operand `rmx` is not made of the kinds r m i a s");
+    }
+
+    /// Splitting `x86.instr` into the family's rows and code16's must lose and
+    /// repeat none of the 70 it had.
+    #[test]
+    fn the_family_and_real_mode_rows_are_the_70_there_were() {
+        let rows = |text: &str| text.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()).count();
+        assert_eq!(rows(&TEXT), 70);
+        assert_eq!(rows(llrm_x86::instructions::FAMILY) + rows(OWN), 70);
+        assert!(forms("les").next().is_some() && forms("call").next().is_some());
     }
 }
