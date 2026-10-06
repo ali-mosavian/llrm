@@ -815,8 +815,9 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
     if std::env::var_os("LLRM_CHECK_COLORS").is_some() {
         let whole = _existing_colors_by(body, frame, true);
         assert!(found.0 == whole.0, "{}: the slot colors differ from working them out whole", body.name);
-        // The values the callers ask of are the body's: the homes' own pseudo-values are not among them.
-        assert!(found.1.iter().all(|(value, interval)| whole.1.get(value) == Some(interval)), "{}: an interval differs from working it out whole", body.name);
+        // What is asked of a value is where it is live (`slots::fits` overlaps segments). Its weight is not read, and
+        // counts a value an instruction names twice once more than the body made of the homes does.
+        assert!(found.1.iter().all(|(value, interval)| whole.1.get(value).is_some_and(|other| other.segments == interval.segments)), "{}: where a value is live differs from working it out whole", body.name);
         assert!(found.1.len() == whole.1.len(), "{}: a value has no interval where working it out whole gives one", body.name);
     }
     found
