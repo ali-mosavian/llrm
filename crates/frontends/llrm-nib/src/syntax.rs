@@ -79,9 +79,11 @@ pub enum TypeName {
     Function {
         type_id: u32,
     },
-    /// `*far [mut] T` or `*near [mut] T`: its width, 4 or 2, and its HIR type.
+    /// `*far [mut] T` or `*near [mut] T`: whether it is a far one, its width in bytes (the
+    /// target's: 2 and 4 in real mode, 4 and 4 flat), and its HIR type.
     Pointer {
         type_id: u32,
+        far: bool,
         width: u8,
         mutable: bool,
     },

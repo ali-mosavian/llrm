@@ -37,14 +37,43 @@ pub use lexer::lex;
 pub use parser::parse;
 
 /// What a build asks of the frontend beyond the source.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Frontend {
+    /// The data layout and address spaces of the target the program is for: how many bytes a
+    /// near and a far pointer are, which the language's `*near` and `*far` mean there.
+    pub layout: llrm_target::layout::Layout,
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
     pub unchecked_bounds: bool,
     /// `-g`: source lines and debug information.
     pub debug: bool,
     /// Each function compares SP with the runtime's limit on entry: `-fsanitize=stack`.
     pub checked_stack: bool,
+}
+
+impl Default for Frontend {
+    /// For real mode, where the language began: a caller that knows its target sets `layout`.
+    fn default() -> Self {
+        Self { layout: llrm_x86_code16::layout(), unchecked_bounds: false, debug: false, checked_stack: false }
+    }
+}
+
+/// The bytes of the two pointers the language has.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Sizes {
+    pub near: u32,
+    pub far: u32,
+    /// Whether the near and the far pointer reach different spaces: a near one reaches only the
+    /// data group.
+    pub segmented: bool,
+}
+
+impl Frontend {
+    /// The pointers' sizes: what the datalayout says of the near and the far space.
+    pub fn sizes(&self) -> Sizes {
+        let layout = llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");
+        let bytes = |space: u32| layout.pointer(space).bits / 8;
+        Sizes { near: bytes(self.layout.spaces.near), far: bytes(self.layout.spaces.far), segmented: self.layout.spaces.near != self.layout.spaces.far }
+    }
 }
 
 pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {

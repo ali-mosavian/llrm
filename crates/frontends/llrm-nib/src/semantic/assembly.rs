@@ -126,15 +126,15 @@ impl FunctionCompiler<'_> {
         } else {
             self.expression(value, None)?
         };
-        if matches!(typed.type_name, TypeName::Pointer { width: 2, .. }) && part == Part::Word {
+        if matches!(typed.type_name, TypeName::Pointer { far: false, .. }) && part == Part::Word {
             return required(typed, span);
         }
-        let fits = (is_integer(typed.type_name) || typed.type_name == TypeName::Char) && width(typed.type_name) == width(target);
+        let fits = (is_integer(typed.type_name) || typed.type_name == TypeName::Char) && width(self.types.sizes, typed.type_name) == width(self.types.sizes, target);
         if !fits {
             let near = if part == Part::Word { " or a near pointer" } else { "" };
             return Err(Diagnostic::new(
                 span,
-                format!("{name} takes a {}-bit integer{near}, not {}", 8 * width(target), type_name_text(typed.type_name)),
+                format!("{name} takes a {}-bit integer{near}, not {}", 8 * width(self.types.sizes, target), type_name_text(typed.type_name)),
             ));
         }
         let from = typed.type_name;

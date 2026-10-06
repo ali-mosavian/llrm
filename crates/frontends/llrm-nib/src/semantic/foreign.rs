@@ -158,13 +158,13 @@ impl TypeRegistry {
         let name = self.foreign_name(abi, function);
         let id = self.pointer_type(name.clone(), type_id(function), 0, true);
         self.foreign_functions.insert(name, id);
-        Ok(TypeName::Pointer { type_id: id, width: 4, mutable: false })
+        Ok(TypeName::Pointer { type_id: id, far: true, width: self.pointer_width(true), mutable: false })
     }
 
     /// `extern "abi" fn(A) -> R`, when it is registered.
     pub(super) fn foreign_function_of(&self, abi: Abi, function: TypeName) -> Option<TypeName> {
         let type_id = *self.foreign_functions.get(&self.foreign_name(abi, function))?;
-        Some(TypeName::Pointer { type_id, width: 4, mutable: false })
+        Some(TypeName::Pointer { type_id, far: true, width: self.pointer_width(true), mutable: false })
     }
 
     fn foreign_name(&self, abi: Abi, function: TypeName) -> String {
