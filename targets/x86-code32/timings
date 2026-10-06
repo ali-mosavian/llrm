@@ -1,0 +1,49 @@
+# x86-code32 prices, clocks, per CPU. Keys are the cost keys of the forms; a
+# key absent here is the target having no such form (no far call, no segment
+# load). Values are code16's `timings.rs` 486 and P5 columns for the forms
+# both have. call_near and ret_near are NOT from there: 3/5 (486) and 1/2 (P5)
+# are recalled, to be checked against the i486 data sheet and Agner Fog's
+# tables before any measurement uses them. `prefix` is paid by 16-bit forms
+# here, by 32-bit forms in code16.
+#
+# key        486 P5
+prefix       1   1
+alu_rr       1   1
+alu_ri       1   1
+alu_rm       2   2
+alu_mr       3   3
+mov_rr       1   1
+mov_rm       1   1
+mov_mr       1   1
+mov_ri       1   1
+shift_ri     2   1
+shift_r1     3   1
+movzx        3   3
+cdq          3   2
+lea          2   1
+imul_r32     26  10
+imul_m32     27  11
+mul_r32      26  10
+idiv_r32     43  46
+idiv_m32     44  47
+push_r       1   1
+push_m       4   2
+push_i       1   1
+pop_r        4   1
+pop_m        6   1
+leave        5   2
+jmp_short    3   1
+jcc          3   1
+call_near    3   1
+ret_near     5   2
+ret_pop      5   2
+rep_stos     7   9
+rep_stos_cell 4  1
+rep_movs     12  13
+rep_movs_cell 3  1
+x87_load     3   1
+x87_exchange 4   1
+x87_store    8   2
+x87_add      8   3
+x87_mul      16  3
+x87_div      73  39

@@ -1,0 +1,40 @@
+# x86-code32 registers, one per line, `-` for none. Draft: the schema is
+# docs/targets.md's "registers" row; it moves into the crate at PR 20.
+#
+#   name     the register
+#   bits     width
+#   root     the full register it is a view of (itself for a root)
+#   lane     bit offset inside the root
+#   classes  comma separated, as below
+#
+# Classes: gpr (allocatable value), byte (has an 8-bit view), base (an address
+# base: any GPR), index (an address index: any GPR but ESP), frame, stack.
+# Kind letter `r` is gpr, `s` is x87. Allocation order is file order: the
+# cdecl32 caller-saved registers first, then the callee-saved ones.
+# ES, FS and GS are never described: nothing allocates a selector.
+#
+# name  bits root lane classes
+eax     32   eax  0    gpr,byte,base,index
+ecx     32   ecx  0    gpr,byte,base,index
+edx     32   edx  0    gpr,byte,base,index
+ebx     32   ebx  0    gpr,byte,base,index
+esi     32   esi  0    gpr,base,index
+edi     32   edi  0    gpr,base,index
+ebp     32   ebp  0    frame,base,index
+esp     32   esp  0    stack,base
+ax      16   eax  0    -
+cx      16   ecx  0    -
+dx      16   edx  0    -
+bx      16   ebx  0    -
+si      16   esi  0    -
+di      16   edi  0    -
+bp      16   ebp  0    -
+sp      16   esp  0    -
+al      8    eax  0    -
+cl      8    ecx  0    -
+dl      8    edx  0    -
+bl      8    ebx  0    -
+ah      8    eax  8    -
+ch      8    ecx  8    -
+dh      8    edx  8    -
+bh      8    ebx  8    -

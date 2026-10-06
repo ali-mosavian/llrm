@@ -1,0 +1,24 @@
+# cdecl32: the C convention of every 32-bit x86 C compiler on DOS and Windows.
+
+[cdecl32]
+slot_bytes = 4
+# Arguments are pushed right to left, so the first is lowest.
+order = "right-to-left"
+cleanup = "caller"
+# All arguments in memory.
+argument_registers = []
+# Return address 4 bytes: the first argument is at [esp+4] on entry.
+return_address_bytes = 4
+first_argument_offset = 4
+preserved = ["ebx", "esi", "edi", "ebp"]
+clobbered = ["eax", "ecx", "edx"]
+# Integers and pointers of at most 32 bits; i64 in edx:eax, low in eax;
+# floats in st(0). A struct is returned through a hidden first argument.
+[cdecl32.result]
+int = ["eax"]
+i64 = ["eax", "edx"]
+pointer = ["eax"]
+float = ["st0"]
+aggregate = "hidden-pointer"
+# char and short arguments are widened to a slot.
+promotion = "slot"
