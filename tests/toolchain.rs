@@ -370,3 +370,15 @@ fn test_code32_block_operations_are_rep_string_instructions_without_segments() {
     let real = listing("x86-code16");
     assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
+
+/// The Zed extension is built apart from the workspace, so nothing compiled it: a refactor moved its
+/// library path to a file that is not there, and it carries no way to name the project's target to nib-lsp.
+/// Its manifest's library exists, and it passes the `initialization_options` setting to the server.
+#[test]
+fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_target() {
+    let zed = Path::new(env!("CARGO_MANIFEST_DIR")).join("editors/zed");
+    let manifest = std::fs::read_to_string(zed.join("Cargo.toml")).unwrap();
+    let library = manifest.lines().find_map(|line| line.trim().strip_prefix("path = \"")).and_then(|rest| rest.strip_suffix('"')).expect("a library path");
+    let source = std::fs::read_to_string(zed.join(library)).unwrap_or_else(|_| panic!("{library} is not in editors/zed"));
+    assert!(source.contains("fn language_server_initialization_options") && source.contains("settings.initialization_options"));
+}
