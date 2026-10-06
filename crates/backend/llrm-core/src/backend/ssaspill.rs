@@ -639,8 +639,8 @@ fn simulated_in(
     let by_trips = Weights { frequency, by_frequency: true };
     let tied = std::cell::Cell::new(false);
     let cheaper = |tried: &Simulated, kept: &Simulated| {
-        let (now, then) = (traffic(tried, &weights, prices, &none, remakes), traffic(kept, &weights, prices, &none, remakes));
-        let by_clocks = now == then && traffic(tried, &by_trips, prices, &none, remakes) < traffic(kept, &by_trips, prices, &none, remakes);
+        let (now, then) = (traffic(body.bits, tried, &weights, prices, &none, remakes), traffic(body.bits, kept, &weights, prices, &none, remakes));
+        let by_clocks = now == then && traffic(body.bits, tried, &by_trips, prices, &none, remakes) < traffic(body.bits, kept, &by_trips, prices, &none, remakes);
         tied.set(tied.get() || (by_clocks && !prices.by_frequency));
         now < then || by_clocks
     };
@@ -739,13 +739,13 @@ fn simulated_with(
         // The jump a bridge on a loop's back edge takes runs every trip, unless another file's values already bring the bridge;
         // and what a loop that fits its registers does not hold, it need not bridge to hold.
         let critical: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().filter(|edge| place[&edge.0] >= place[&edge.1] && !bridged.contains(edge) && room.get(&edge.1).is_some_and(|peak| *peak > machine.general.len())).collect();
-        let mut best = traffic(&result, weights, prices, &critical, remakes);
+        let mut best = traffic(body.bits, &result, weights, prices, &critical, remakes);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
             let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit, &memory);
-            let moved = traffic(&tried, weights, prices, &critical, remakes);
+            let moved = traffic(body.bits, &tried, weights, prices, &critical, remakes);
             if moved < best {
                 best = moved;
                 result = tried;
@@ -757,8 +757,8 @@ fn simulated_with(
 }
 
 /// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
-fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>, remakes: &IndexMap<u32, Arc<Insn>>) -> f64 {
-    let price = |values: &mut dyn Iterator<Item = &u32>| -> f64 { values.map(|value| reload_price(*value, remakes, prices)).sum() };
+fn traffic(bits: u32, result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>, remakes: &IndexMap<u32, Arc<Insn>>) -> f64 {
+    let price = |values: &mut dyn Iterator<Item = &u32>| -> f64 { values.map(|value| reload_price(bits, *value, remakes, prices)).sum() };
     let blocks: f64 = result
         .edits
         .iter()
@@ -778,7 +778,7 @@ fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: 
 
 /// What reading `value` from memory costs: a load by `prices`; where the code is what counts (-Os), the bytes the
 /// load that makes it again encodes to, in a selector register and with its address registers as they will be.
-fn reload_price(value: u32, remakes: &IndexMap<u32, Arc<Insn>>, prices: Prices) -> f64 {
+fn reload_price(bits: u32, value: u32, remakes: &IndexMap<u32, Arc<Insn>>, prices: Prices) -> f64 {
     if prices.by_frequency {
         return prices.load;
     }
@@ -790,7 +790,7 @@ fn reload_price(value: u32, remakes: &IndexMap<u32, Arc<Insn>>, prices: Prices) 
             held.entry(used.value).or_insert(Register::BX);
         }
     }
-    crate::backend::select::emit(what, 0, None, false, false, Some(&held)).map_or(prices.load, |code| code.code.len() as f64)
+    crate::backend::select::emit_in(bits, what, 0, None, false, false, Some(&held)).map_or(prices.load, |code| code.code.len() as f64)
 }
 
 /// The values of `values` that are made again rather than stored and loaded:

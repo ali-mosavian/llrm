@@ -25,7 +25,7 @@ Known departures today, each to be removed:
 | `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists | code16's registers read directly | PR 19 (a register-class description the allocator receives) |
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
 | `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
-| `llrm-core` `select::emit`: the mode it encodes and decodes in is a thread-local set at the two compile entries from the target's `object.bitness` (`select::encoding_in`), read by ~14 passes that price code or read register effects (`peephole::_register_effects` decodes emitted bytes, 30 uses) | a target fact held as ambient state; two targets compiling on one thread at once would share it | the effects read from the forms' `reads`/`writes` columns, so nothing decodes, and the mode passed where the encoder is asked (the encoder PR); issue #581 |
+| `llrm-core` `select.rs` encoder and `peephole::_register_effects`: x86 encoding, and register effects read by decoding the emitted bytes, in `llrm-core` | the encoder and the effects belong in the x86 family layer; the mode they run in is the body's (`LirBody::bits`, set by isel from the target's `object.bitness`) | the encoder PR (code32-prep, D); #581 |
 
 ## Principle: a target is description
 

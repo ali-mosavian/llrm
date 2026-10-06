@@ -71,7 +71,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
             recipes.insert(id(&one), Some((Lanes::new(), Vec::new())));
             continue;
         }
-        let Some(effects) = _register_effects(&one, true, false) else {
+        let Some(effects) = _register_effects(body.bits, &one, true, false) else {
             recipes.insert(id(&one), None);
             continue;
         };
@@ -197,13 +197,13 @@ pub fn forwarded(body: &LirBody) -> LirBody {
             if !source_lanes.iter().zip(&candidate_lanes).all(|(left, right)| equal(facts, *left, *right)) {
                 return None;
             }
-            let before_effects = _register_effects(&Insn { what: Some(changed.clone()), ..(**one).clone() }, true, false)?;
+            let before_effects = _register_effects(body.bits, &Insn { what: Some(changed.clone()), ..(**one).clone() }, true, false)?;
             if candidate_lanes.iter().any(|lane| before_effects.1.contains(lane)) {
                 return None;
             }
             let proposed = put(candidate);
-            select::emit(&proposed, 0, None, false, false, None)?;
-            let after_effects = _register_effects(&Insn { what: Some(proposed.clone()), ..(**one).clone() }, true, false)?;
+            select::emit_in(body.bits, &proposed, 0, None, false, false, None)?;
+            let after_effects = _register_effects(body.bits, &Insn { what: Some(proposed.clone()), ..(**one).clone() }, true, false)?;
             let expected_reads: Lanes =
                 before_effects.0.iter().filter(|lane| !source_lanes.contains(lane)).copied().chain(candidate_lanes.iter().copied()).collect();
             (after_effects.1 == before_effects.1 && after_effects.0 == expected_reads).then_some(proposed)

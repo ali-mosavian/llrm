@@ -43,7 +43,7 @@ fn _empty(one: &Insn) -> bool {
 /// bytes. Anything whose register effects cannot be read, or which writes
 /// memory the displacement alone does not name, ends every fact: the write
 /// could be to any slot.
-fn _held(one: &Insn, facts: Facts) -> (Facts, bool) {
+fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool) {
     if _empty(one) {
         return (facts, false);
     }
@@ -60,7 +60,7 @@ fn _held(one: &Insn, facts: Facts) -> (Facts, bool) {
         // and a block ending in one is otherwise the end of every fact.
         return (facts, false);
     }
-    let Some(effects) = _register_effects(one, false, false) else {
+    let Some(effects) = _register_effects(bits, one, false, false) else {
         return (Facts::default(), false);
     };
     let writes = effects.1;
@@ -160,7 +160,7 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
         changing = false;
         for (at, facts) in &into {
             if let Some(facts) = facts {
-                let leaving = _transfer(blocks[at], facts.clone()).1;
+                let leaving = _transfer(body.bits, blocks[at], facts.clone()).1;
                 if outof.get(at) != Some(&leaving) {
                     outof.insert(*at, leaving);
                     changing = true;
@@ -194,11 +194,11 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
 }
 
 /// The reloads `facts` makes redundant in `block`, and the facts after it.
-fn _transfer(block: &LirBlock, facts: Facts) -> (Vec<usize>, Facts) {
+fn _transfer(bits: u32, block: &LirBlock, facts: Facts) -> (Vec<usize>, Facts) {
     let mut facts = facts;
     let mut redundant = Vec::new();
     for one in &block.insns {
-        let (after, drop) = _held(one, facts);
+        let (after, drop) = _held(bits, one, facts);
         facts = after;
         if drop {
             redundant.push(id(one));
@@ -211,7 +211,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
     let into = _available(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let redundant: HashSet<usize> = _transfer(block, into[&block.at].clone()).0.into_iter().collect();
+        let redundant: HashSet<usize> = _transfer(body.bits, block, into[&block.at].clone()).0.into_iter().collect();
         if redundant.is_empty() {
             blocks.push(block.clone());
             continue;
