@@ -202,6 +202,9 @@ pub struct Program {
     pub data: Vec<DataObject>,
     /// `-g`: what a debugger names and how it reads it.
     pub debug: Option<llrm_core::hir::model::Debug>,
+    /// The bytes of each word of a buffer's or view's descriptor: the target's near pointer, which the
+    /// descriptor places' field type is.
+    pub descriptor_word: u32,
 }
 
 impl Program {
@@ -320,9 +323,12 @@ impl Program {
             }
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
-        out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":5,\"target\":\"i386-real-mode\",\"zeroed_locals\":false}\n",
-        );
+        write!(out, "]}}],\"runtime\":\"freestanding\"").unwrap();
+        // Only when the target's word is not real mode's: programs read as they always have.
+        if self.descriptor_word != 2 {
+            write!(out, ",\"descriptor_word\":{}", self.descriptor_word).unwrap();
+        }
+        out.push_str(",\"schema\":5,\"target\":\"i386-real-mode\",\"zeroed_locals\":false}\n");
         out
     }
 }

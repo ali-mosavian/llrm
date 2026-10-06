@@ -147,6 +147,12 @@ pub trait Target {
     /// gives them; the first is the one a language's own functions use.
     fn conventions(&self) -> &'static [&'static str];
 
+    /// The machine's physical addresses by name (the text screen's video memory): one fact, which a
+    /// target's address space turns into the pointer it has.
+    fn physical_addresses(&self) -> Vec<(String, u64)> {
+        Vec::new()
+    }
+
     /// The OS layer a language's runtime is built on here, if the target has one for it.
     fn runtime(&self, _language: &str) -> Option<runtime::Description> {
         None

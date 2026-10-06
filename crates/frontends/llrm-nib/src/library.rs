@@ -55,13 +55,13 @@ const OPERATIONS: [Operation; 3] = [
 
 /// `Hashable` for `module`'s own structs and enums, as their fields' methods
 /// combine; a type that defines its own keeps it.
-pub fn derived(module: &Module) -> Result<Vec<Function>, Diagnostic> {
+pub fn derived(module: &Module, near_bytes: u32) -> Result<Vec<Function>, Diagnostic> {
     let defines = |type_: &str, method: &str| module.functions.iter().any(|one| one.name == format!("{type_}.{method}"));
     let mut functions = Vec::new();
     for one in module.structs.iter().filter(|one| one.generics.is_empty() && one.bits.is_none()) {
         let mut out = String::new();
         if !defines(&one.name, "hash") {
-            out.push_str("fn SELF.hash(self: &SELF) -> u16:\n    let mut hash: u16 = 0\n");
+            out.push_str("fn SELF.hash(self: &SELF) -> usize:\n    let mut hash: usize = 0\n");
             for field in &one.fields {
                 out.push_str(&format!("    hash = hash * 31 + self.{}.hash()\n", field.name));
             }
@@ -72,19 +72,19 @@ pub fn derived(module: &Module) -> Result<Vec<Function>, Diagnostic> {
             let all = if fields.is_empty() { "true".to_owned() } else { fields.join(" && ") };
             out.push_str(&format!("fn SELF.eq(self: &SELF, other: &SELF) -> bool:\n    return {all}\n\n"));
         }
-        functions.extend(for_type(&out, &one.name)?);
+        functions.extend(for_type(&out, &one.name, near_bytes)?);
     }
     for one in module.enums.iter().filter(|one| one.generics.is_empty()) {
         let mut out = String::new();
         let payload_free = one.variants.iter().all(|variant| variant.fields.is_empty());
         if !defines(&one.name, "hash") {
             if payload_free {
-                out.push_str("fn SELF.hash(self: SELF) -> u16:\n    return u16(self)\n\n");
+                out.push_str("fn SELF.hash(self: SELF) -> usize:\n    return usize(self)\n\n");
             } else {
-                out.push_str("fn SELF.hash(self: &SELF) -> u16:\n    match self:\n");
+                out.push_str("fn SELF.hash(self: &SELF) -> usize:\n    match self:\n");
                 for (index, variant) in one.variants.iter().enumerate() {
                     let (pattern, values) = variant_pattern(variant, "value");
-                    out.push_str(&format!("        {pattern}:\n            let mut hash: u16 = {index}\n"));
+                    out.push_str(&format!("        {pattern}:\n            let mut hash: usize = {index}\n"));
                     for value in values {
                         out.push_str(&format!("            hash = hash * 31 + {value}.hash()\n"));
                     }
@@ -110,7 +110,7 @@ pub fn derived(module: &Module) -> Result<Vec<Function>, Diagnostic> {
                 out.push('\n');
             }
         }
-        functions.extend(for_type(&out, &one.name)?);
+        functions.extend(for_type(&out, &one.name, near_bytes)?);
     }
     Ok(functions)
 }
@@ -124,8 +124,8 @@ fn variant_pattern(variant: &Variant, prefix: &str) -> (String, Vec<String>) {
 
 /// `source`'s methods of `SELF`, made methods of `type_`: a module's type
 /// is named with dots the parser would not take.
-fn for_type(source: &str, type_: &str) -> Result<Vec<Function>, Diagnostic> {
-    let mut module = parse(lex(source)?)?;
+fn for_type(source: &str, type_: &str, near_bytes: u32) -> Result<Vec<Function>, Diagnostic> {
+    let mut module = crate::parser::parse_for(lex(source)?, near_bytes)?;
     desugar(&mut module)?;
     let renamed = |annotation: &mut TypeAnnotation| {
         if let TypeAnnotation::Value(TypeSpec::Named(name)) = annotation {
@@ -144,8 +144,8 @@ fn for_type(source: &str, type_: &str) -> Result<Vec<Function>, Diagnostic> {
 }
 
 /// The library's methods.
-pub fn functions() -> Result<Vec<Function>, Diagnostic> {
-    let mut library = parse(lex(&source())?)?;
+pub fn functions(near_bytes: u32) -> Result<Vec<Function>, Diagnostic> {
+    let mut library = crate::parser::parse_for(lex(&source())?, near_bytes)?;
     desugar(&mut library)?;
     for function in &mut library.functions {
         // A header cannot spell `checked_to[i8]`.
@@ -213,7 +213,7 @@ fn protocols() -> String {
             // A float hashes its bits, -0.0 those of 0.0, which it equals.
             let words = if type_ == "f64" { "words[0] ^ words[1]" } else { "words[0]" };
             out.push_str(&format!(
-                "fn {type_}.hash(self: {type_}) -> u16:\n\
+                "fn {type_}.hash(self: {type_}) -> usize:\n\
                  \x20   let mut value: {type_} = self == 0.0 ? 0.0 : self\n\
                  \x20   unsafe:\n\
                  \x20       let place: *far mut {type_} = &mut value\n\
@@ -222,8 +222,8 @@ fn protocols() -> String {
             ));
         } else {
             // A 32-bit value folds its high word into the low one.
-            let hashed = if wide(type_) { "u16(self ^ (self >> 16))" } else { "u16(self)" };
-            out.push_str(&format!("fn {type_}.hash(self: {type_}) -> u16:\n    return {hashed}\n\n"));
+            let hashed = if wide(type_) { "usize(self ^ (self >> 16))" } else { "usize(self)" };
+            out.push_str(&format!("fn {type_}.hash(self: {type_}) -> usize:\n    return {hashed}\n\n"));
         }
         out.push_str(&format!(
             "fn {type_}.eq(self: {type_}, other: {type_}) -> bool:\n    return self == other\n\n"
@@ -235,10 +235,10 @@ fn protocols() -> String {
         }
     }
     out.push_str(
-        "fn string.hash(self: &string) -> u16:\n\
-         \x20   let mut hash: u16 = 5381\n\
+        "fn string.hash(self: &string) -> usize:\n\
+         \x20   let mut hash: usize = 5381\n\
          \x20   for c in self:\n\
-         \x20       hash = hash * 33 ^ u16(c)\n\
+         \x20       hash = hash * 33 ^ usize(c)\n\
          \x20   return hash\n\n\
          fn string.eq(self: &string, other: &string) -> bool:\n    return self == other\n\n\
          fn string.cmp(self: &string, other: &string) -> i8:\n    return self < other ? -1 : self > other ? 1 : 0\n\n",

@@ -1,4 +1,4 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
+reason = "textfill nib reaches the screen through os.text_screen() (the OS layer builds the pointer from the platform's physical address once): executed instructions 40017 -> 30025, code bytes 113 -> 111 at -O2 and 112 -> 110 at -Os (#605)"
 blessed = "2026-10-06"
 
 [bas.O2]
@@ -34,20 +34,18 @@ bss_bytes = 0
 kernel_ms = 0.5348
 
 [nib.O2]
-instructions = 40017
+instructions = 30025
 memory_operands = 8000
-code_bytes = 113
+code_bytes = 111
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.5358
 
 [nib.Os]
-instructions = 40017
+instructions = 30025
 memory_operands = 8000
-code_bytes = 112
+code_bytes = 110
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.5358
 
 [ow.O2]
 instructions = 52028

@@ -371,6 +371,64 @@ fn test_code32_block_operations_are_rep_string_instructions_without_segments() {
     assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 
+/// A program the repository ships as an example or a benchmark compiles without a warning for each
+/// target it runs on (`# targets:` names the ones it does not): a warning there is a lesson the
+/// example teaches wrongly, and the flat targets' warnings (far and huge are near, usize narrowing)
+/// would otherwise go unseen in a corpus nobody reads the stderr of.
+#[test]
+fn test_the_examples_and_benchmarks_compile_without_warnings() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let mut files = Vec::new();
+    for source in ["examples", "bench"] {
+        let mut pending = vec![root.join(source)];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|one| one == "nib") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    assert!(files.len() > 40, "{} programs found", files.len());
+    let warned = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for (at, file) in files.iter().enumerate() {
+            let (warned, object) = (&warned, scratch.path().join(format!("p{at}.obj")));
+            scope.spawn(move || {
+                let text = std::fs::read_to_string(file).unwrap();
+                let header = text.lines().take_while(|line| line.starts_with('#')).find_map(|line| line.trim_start_matches('#').trim().strip_prefix("targets:"));
+                let targets: Vec<&str> = header.map_or(vec!["x86-code16", "x86-code32"], |list| list.split_whitespace().take(1).collect());
+                for target in targets {
+                    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(file).args(["--target", target, "-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+                    let stderr = String::from_utf8_lossy(&done.stderr);
+                    // A program that needs a library (link:) or refuses on a target is not this test's business.
+                    if done.status.success() && stderr.contains("warning") {
+                        warned.lock().unwrap().push(format!("{} [{target}]: {}", file.strip_prefix(root).unwrap().display(), stderr.lines().next().unwrap_or("")));
+                    }
+                }
+            });
+        }
+    });
+    let warned = warned.into_inner().unwrap();
+    assert!(warned.is_empty(), "{}", warned.join("\n"));
+}
+
+/// The Zed extension is built apart from the workspace, so nothing compiled it: a refactor moved its
+/// library path to a file that is not there, and it carries no way to name the project's target to nib-lsp.
+/// Its manifest's library exists, and it passes the `initialization_options` setting to the server.
+#[test]
+fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_target() {
+    let zed = Path::new(env!("CARGO_MANIFEST_DIR")).join("editors/zed");
+    let manifest = std::fs::read_to_string(zed.join("Cargo.toml")).unwrap();
+    let library = manifest.lines().find_map(|line| line.trim().strip_prefix("path = \"")).and_then(|rest| rest.strip_suffix('"')).expect("a library path");
+    let source = std::fs::read_to_string(zed.join(library)).unwrap_or_else(|_| panic!("{library} is not in editors/zed"));
+    assert!(source.contains("fn language_server_initialization_options") && source.contains("settings.initialization_options"));
+}
+
 /// start.asm and dos.asm each named a constant of their own (the stack, the heap's arena) beside the
 /// description's; the assembler is now told the description's fields, and a target that lists none is told none.
 #[test]

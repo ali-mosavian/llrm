@@ -3,9 +3,9 @@
 # half-built Table, its name and every entry so far, is dropped on that path.
 
 enum LoadError:
-    no_equals(line: u16)
-    bad_number(line: u16)
-    repeated(line: u16)
+    no_equals(line: usize)
+    bad_number(line: usize)
+    repeated(line: usize)
 
 struct Entry:
     key: string
@@ -31,7 +31,7 @@ fn Table.has(self: &Table, key: &string) -> bool:
             return true
     return false
 
-fn parse_line(text: &string, line: u16) -> Result[Entry, LoadError]:
+fn parse_line(text: &string, line: usize) -> Result[Entry, LoadError]:
     for at in 0..text.len:
         if text[at] == '=':
             match number(&text[at + 1:text.len]):
@@ -45,8 +45,8 @@ fn parse_line(text: &string, line: u16) -> Result[Entry, LoadError]:
 # Stops at a line reading `end`: what came before it is the table.
 fn load(name: &string, text: &string) -> Result[Table, LoadError]:
     let mut table = Table(name=name.copy(), entries=[])
-    let mut start: u16 = 0
-    let mut line: u16 = 1
+    let mut start: usize = 0
+    let mut line: usize = 1
     for at in 0..text.len + 1:
         if at < text.len && text[at] != '\n':
             continue

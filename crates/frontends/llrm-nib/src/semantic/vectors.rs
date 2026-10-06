@@ -199,9 +199,17 @@ impl FunctionCompiler<'_> {
                 continue;
             };
             let item = match end {
-                Some(_) => ElementType::Scalar(
-                    self.expression_type_hint(iterable).unwrap_or(TypeName::I16),
-                ),
+                // A range's variable is the common type of its bounds, as the loop makes it: a
+                // literal start takes the end's (`0..xs.len` is a usize, not an i16).
+                Some(end) => {
+                    let (start, stop) = (self.expression_type_hint(iterable), self.expression_type_hint(end));
+                    let one = match (start, stop) {
+                        (Some(start), Some(stop)) => self.rules.common(start, stop).unwrap_or(start),
+                        (Some(one), None) | (None, Some(one)) => one,
+                        (None, None) => TypeName::I16,
+                    };
+                    ElementType::Scalar(one)
+                }
                 None => self.iterated_item(iterable)?,
             };
             let scope = self

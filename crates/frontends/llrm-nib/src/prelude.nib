@@ -31,7 +31,7 @@ fn zip[A, B](left: &[A], right: &[B]) -> iter[(&A, &B)]:
 # that satisfies one.
 
 protocol Hashable:
-    fn hash(self: &Self) -> u16
+    fn hash(self: &Self) -> usize
     fn eq(self: &Self, other: &Self) -> bool
 
 protocol Ordered:
