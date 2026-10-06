@@ -49,7 +49,7 @@ mod enums;
 mod patterns;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
-    parse_after(tokens, 0, &BTreeMap::new(), 2)
+    parse_after(tokens, 0, &BTreeMap::new(), 2, &BTreeMap::new())
 }
 
 /// The module, its fixed-point types numbered after the `fixed_before`
@@ -57,12 +57,14 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
 /// declaration. `imported` holds the public constants of the modules it
 /// imports, folded, each by its path here: `alias.NAME`. The target's near pointer is `near_bytes`
 /// wide: `usize` and `isize` are the integers that wide, and `NEAR_BYTES` the constant.
-pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<String, Expr>, near_bytes: u32) -> Result<Module, Diagnostic> {
+pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<String, Expr>, near_bytes: u32, seeded: &BTreeMap<String, Expr>) -> Result<Module, Diagnostic> {
     let mut parser = Parser::new(tokens, fixed_before);
     parser.seeded = 2;
     parser.fixed_types.insert("usize".to_owned(), TypeName::usize(near_bytes));
     parser.fixed_types.insert("isize".to_owned(), TypeName::Word { bytes: near_bytes as u8, signed: true });
     let mut imported = imported.clone();
+    // What the target says of the machine: its physical addresses, as constants.
+    imported.extend(seeded.iter().map(|(name, value)| (name.clone(), value.clone())));
     imported.insert("NEAR_BYTES".to_owned(), Expr::Integer(i64::from(near_bytes), Span::new(1, 1, 1)));
     parser.module_constants(&imported)?;
     parser.module().map(|mut module| {

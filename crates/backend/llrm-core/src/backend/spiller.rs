@@ -1521,13 +1521,14 @@ impl CellOf for _Cells {
 /// static uses cannot say so: sum_three's loop-invariant base had one use,
 /// inside the loop, and `add di,[slot]` moved it on every trip -- 330 for
 /// 1110.
-fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
+pub(crate) fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
     use crate::backend::allocate;
 
-    let (_live_in, live_out) = allocate::live(body);
+    // Only what leaves each block is read: rows, not the sets of every block's entry and exit.
+    let rows = allocate::live_rows(body);
     let mut out: BTreeSet<(usize, u32)> = BTreeSet::new();
     for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = live_out[&block.at].clone();
+        let mut alive: BTreeSet<u32> = rows.leaving(block.at).collect();
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
             let one = &block.insns[index as usize];
@@ -1771,6 +1772,16 @@ pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Optio
 /// `folded_source_in` for the values `among` says are spilled, so that a caller that asks of one value at
 /// a time builds no set to ask with.
 pub fn folded_source_among(one: &Insn, among: &dyn Fn(u32) -> bool, tied: bool) -> Option<Held> {
+    let (left, right) = folded_pair(one, tied)?;
+    if !among(right.value) || one.uses.iter().any(|value| among(*value) && *value != left.value && *value != right.value) {
+        return None;
+    }
+    Some(right)
+}
+
+/// The two values `one` could fold the second of into the first's operation, whichever are spilled: what
+/// `folded_source_among` finds before it asks which are. The second is the only value that can fold.
+pub fn folded_pair(one: &Insn, tied: bool) -> Option<(Held, Held)> {
     if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
         return None;
     }
@@ -1797,16 +1808,10 @@ pub fn folded_source_among(one: &Insn, among: &dyn Fn(u32) -> bool, tied: bool) 
         }
         _ => return None,
     };
-    if !widths.contains(&left.width)
-        || right.width != left.width
-        || !among(right.value)
-        || left.value == right.value
-        || one.defines.contains(&right.value)
-        || one.uses.iter().any(|value| among(*value) && *value != left.value && *value != right.value)
-    {
+    if !widths.contains(&left.width) || right.width != left.width || left.value == right.value || one.defines.contains(&right.value) {
         return None;
     }
-    Some(right)
+    Some((left, right))
 }
 
 /// Fold one untied spill source into arithmetic or a comparison.

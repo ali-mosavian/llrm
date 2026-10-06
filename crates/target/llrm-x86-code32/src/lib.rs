@@ -49,6 +49,10 @@ impl llrm_target::Target for Code32 {
         &["cdecl32"]
     }
 
+    fn physical_addresses(&self) -> Vec<(String, u64)> {
+        llrm_x86::physical_addresses()
+    }
+
     fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
         (language == "nib").then_some(llrm_target::runtime::Description {
             directory: concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/nib"),
@@ -169,6 +173,15 @@ mod tests {
         assert!(layout.datalayout.starts_with("e-p:32:32"));
         let spaces = layout.spaces;
         assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, None, None, Ok(0)));
+    }
+
+    /// The aggregate return was marked provisional while the C ABI was open: it is Open Watcom's flat ABI
+    /// with this one stated difference, and the description says so.
+    #[test]
+    fn test_the_c_abi_is_open_watcoms_with_one_stated_difference() {
+        let text = include_str!("machines/calling.toml");
+        assert!(!text.to_lowercase().contains("provisional"), "the aggregate rule is decided");
+        assert!(text.contains("Open Watcom's 386 flat ABI") && text.contains("THE DIFFERENCE FROM OPEN WATCOM") && text.contains("aggregate = \"hidden-pointer\""));
     }
 
     /// cdecl32 (calling.toml): EBP and ESP frame, EBX/ESI/EDI kept whole, first argument at [ebp+8].
