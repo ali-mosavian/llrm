@@ -22,6 +22,8 @@ use crate::model::passes::LIRTransform;
 /// Every phase between instruction selection and emission, in order, with the
 /// spiller in front of the allocator or left out.
 #[cfg(test)]
+/// The machine phases for real mode's rules, which the tests of the phases are written for.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,
