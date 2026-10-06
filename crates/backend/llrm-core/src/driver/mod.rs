@@ -35,17 +35,23 @@ pub struct Options {
     pub stack_usage: bool,
     /// `-Wstack-usage=N`: warn of each entry that can reach more than N bytes.
     pub stack_limit: Option<i64>,
-    /// The target's instruction selector, which `llrm-driver` binds to it; the
-    /// 16-bit x86 one unless it is handed another.
+    /// The target's instruction selector, which `llrm-driver` binds to it.
     pub selection: &'static crate::backend::isel::Compiled,
     /// The target `selection` is for.
     pub arch: std::rc::Rc<dyn llrm_target::Target>,
 }
 
 impl Options {
-    /// For `machine` at -O2, the stages written where `LLRM_MIR_STAGES` names.
-    pub fn of(machine: Machine) -> Self {
-        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None, selection: crate::backend::isel::code16(), arch: std::rc::Rc::new(llrm_x86_code16::Code16) }
+    /// For `machine` on the target `arch` with its selector, at -O2, the stages
+    /// written where `LLRM_MIR_STAGES` names.
+    pub fn new(machine: Machine, arch: std::rc::Rc<dyn llrm_target::Target>, selection: &'static crate::backend::isel::Compiled) -> Self {
+        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None, selection, arch }
+    }
+
+    /// For 16-bit x86, which the tests of this crate are written for.
+    #[cfg(test)]
+    pub fn code16(machine: Machine) -> Self {
+        Self::new(machine, std::rc::Rc::new(llrm_x86_code16::Code16), crate::backend::isel::code16())
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -193,7 +199,7 @@ pub fn entry_row(number: usize, entry: i64) -> (i64, i64, String, i64) {
 
 /// OF_STA's table: each row a statement's offset and BASIC line, ended by
 /// a zero word, as a procedure of inline data.
-pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
+pub fn statement_table(rows: &[(i64, i64, String, i64)], registers: llrm_target::FrameRegisters) -> masm::Procedure {
     let mut code: Vec<masm::InlinePart> = Vec::new();
     for (_procedure, _order, label, line) in rows {
         code.push(masm::InlinePart::Fixup("offset".into(), label.clone(), 0));
@@ -214,8 +220,7 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)]) -> masm::Procedure {
         size: false,
         entry: 0,
         stack_check: None,
-        // The statement table is BASIC's, which is code16's.
-        registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16),
+        registers,
     }
 }
 

@@ -115,7 +115,7 @@ fn test_stack_usage_options_reach_the_driver() {
         let argv = vec![argument.to_owned()];
         assert!(flags.take(&argv, &mut 0).unwrap(), "{argument}");
     }
-    let options = flags.driver(crate::abi::machine::BUILT_IN.clone());
+    let options = flags.driver(crate::abi::machine::BUILT_IN.clone(), std::rc::Rc::new(llrm_x86_code16::Code16), crate::backend::isel::code16());
     assert!(options.stack_usage);
     assert_eq!(options.stack_limit, Some(512));
     assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());

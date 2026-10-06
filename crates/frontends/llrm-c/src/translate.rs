@@ -2206,7 +2206,7 @@ mod tests {
     fn test_the_driver_refuses_what_the_verifier_refuses() {
         let mut program = program_of("bytes.cgs");
         let machine = llrm_core::abi::machine::BUILT_IN.clone();
-        let options = llrm_core::driver::Options::of(machine);
+        let options = llrm_driver::code16_options(machine);
         assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module.types.iter().find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1).map(|one| one.id).expect("a byte type");

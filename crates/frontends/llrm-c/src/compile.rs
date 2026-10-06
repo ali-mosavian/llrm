@@ -244,7 +244,7 @@ mod tests {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("{}/tests/fixtures/c/{fixture}.cgs", env!("LLRM_ROOT")));
         let text = std::fs::read_to_string(path).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, fixture, None, &llrm_core::driver::Options::of(machine)).unwrap();
+        let built = super::selected(&text, fixture, None, &llrm_driver::code16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
         let (top, back) = lines
@@ -270,7 +270,7 @@ mod tests {
         assert!(runtime("crt.asm").contains(&format!("public {}", check.limit)) && runtime("crt.asm").contains(&format!("mov {}, ax", check.limit)));
         assert!(runtime("ext.asm").contains(&format!("public {}", check.handler)));
         let text = std::fs::read_to_string(root.join("tests/fixtures/c/anims.cgs")).unwrap();
-        let options = llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
+        let options = llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
         let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check).unwrap()).unwrap();
         let named = llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check };
         let checked = listing(Some(named));
@@ -323,7 +323,7 @@ mod tests {
     fn emitted(path: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
         let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t").unwrap();
-        let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+        let options = llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone());
         let (mir, _) = llrm_core::driver::emitted(&program, &options).unwrap();
         llrm_mir::print::module(&mir.modules[0])
     }
@@ -331,7 +331,7 @@ mod tests {
     /// tests/fixtures/c/`path`.cgs compiled.
     fn compiles(path: &str) {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
-        let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+        let options = llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone());
         super::selected(&text, "t", None, &options).unwrap_or_else(|error| panic!("{path}: {error}"));
     }
 
@@ -373,7 +373,7 @@ mod tests {
     /// `name`'s listing of `function`, compiled from tests/fixtures/c/`name`.cgs.
     fn listing_of(name: &str, function: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).unwrap();
-        let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone());
+        let options = llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone());
         let built = super::selected(&text, name, None, &options).unwrap_or_else(|error| panic!("{error:?}"));
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         let start = listing.find(&format!("{function} proc")).expect("the function");
@@ -412,7 +412,7 @@ mod tests {
     #[test]
     fn test_register_convention_is_refused() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regs.cgs");
-        match super::selected(&std::fs::read_to_string(path).unwrap(), "regs", None, &llrm_core::driver::Options::of(llrm_core::abi::machine::BUILT_IN.clone())) {
+        match super::selected(&std::fs::read_to_string(path).unwrap(), "regs", None, &llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone())) {
             Err(CompileError::Unsupported(refused)) => {
                 assert!(refused.to_string().contains("_twice has a register calling convention"), "{refused}");
             }
@@ -452,7 +452,7 @@ mod tests {
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_core::driver::Options::of(machine)).unwrap();
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::code16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         let lines: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -473,7 +473,7 @@ mod tests {
     fn selected_body(fixture: &str, function: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_core::driver::Options::of(machine)).unwrap();
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::code16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
@@ -549,7 +549,7 @@ mod tests {
     fn test_code_addresses_in_data_are_called_through() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/codeptrs.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "codeptrs", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "codeptrs", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
         assert!(lines.contains(&"dw _twice") && lines.iter().any(|one| one.starts_with("dd _show")), "{asm}");
@@ -565,7 +565,7 @@ mod tests {
     fn test_a_local_array_initializer_is_copied() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/arrayinit.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "arrayinit", None, &llrm_core::driver::Options::of(machine));
+        let built = super::selected(&text, "arrayinit", None, &llrm_driver::code16_options(machine));
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
@@ -577,7 +577,7 @@ mod tests {
     fn test_inline_code_reads_and_writes_its_frame_places() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "inlinecode", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "inlinecode", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let body = |name: &str| -> Vec<String> {
             let from = asm.find(&format!("{name} proc")).expect("the procedure");
@@ -621,7 +621,7 @@ mod tests {
     fn test_a_far_pointer_constant_keeps_its_segment() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farconst.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "farconst", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "farconst", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_ticks proc").expect("_ticks");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -638,7 +638,7 @@ mod tests {
     fn test_an_integer_made_a_far_pointer_is_not_in_dgroup() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farnull.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "farnull", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "farnull", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_put proc").expect("_put");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -653,7 +653,7 @@ mod tests {
     fn test_near_data_is_reached_through_ds_alone() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/nearviads.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "nearviads", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "nearviads", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_paint proc").expect("_paint");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -668,7 +668,7 @@ mod tests {
     fn test_a_far_pointer_to_a_local_is_in_the_stack_segment() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/localfar.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "localfar", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "localfar", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_caller proc").expect("_caller");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -683,7 +683,7 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/popargs.cgs")).unwrap();
         let cleanups = |level: Level| {
             let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-            let options = llrm_core::driver::Options { pipeline: level.options(), ..llrm_core::driver::Options::of(machine) };
+            let options = llrm_core::driver::Options { pipeline: level.options(), ..llrm_driver::code16_options(machine) };
             let built = super::selected(&text, "popargs", None, &options).expect("selects");
             let asm = llrm_core::backend::masm::text(&built).unwrap();
             let from = asm.find("_caller proc").expect("_caller");
@@ -701,7 +701,7 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/halve.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
         let directory = std::env::temp_dir().join(format!("llrm-c-norecurse-{}", std::process::id()));
-        super::selected(&text, "halve", Some(&directory), &llrm_core::driver::Options::of(machine)).expect("selects");
+        super::selected(&text, "halve", Some(&directory), &llrm_driver::code16_options(machine)).expect("selects");
         let mut stages = std::fs::read_dir(&directory).unwrap().flatten().map(|one| one.path()).filter(|one| one.extension().is_some_and(|ext| ext == "ll")).collect::<Vec<_>>();
         stages.sort_by_key(|one| one.file_name().map(std::ffi::OsStr::to_owned));
         let last = std::fs::read_to_string(stages.last().expect("a stage")).unwrap();
@@ -716,7 +716,7 @@ mod tests {
     fn test_fabs_is_the_instruction() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/fabs.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "fabs", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "fabs", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_halfabs proc").expect("_halfabs");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -729,7 +729,7 @@ mod tests {
     fn test_spill_slots_sit_above_a_big_frame_array() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/spillnear.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "spillnear", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "spillnear", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_spills proc").expect("_spills");
         let far: Vec<&str> = asm[from..]
@@ -748,7 +748,7 @@ mod tests {
     #[test]
     fn test_stores_a_callee_reads_through_its_argument_stay() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/argread.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, "argread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn test_an_array_read_by_index_keeps_its_initializer() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/indexread.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, "indexread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
@@ -788,7 +788,7 @@ mod tests {
     fn test_conversions_in_a_row_switch_the_rounding_mode_once() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/truncs.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "truncs", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "truncs", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_truncs proc").expect("_truncs");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -802,7 +802,7 @@ mod tests {
     fn test_both_arms_of_an_if_else_come_before_the_return() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/diamond.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "diamond", None, &llrm_core::driver::Options::of(machine)).expect("selects");
+        let built = super::selected(&text, "diamond", None, &llrm_driver::code16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_diamond proc").expect("_diamond");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -815,7 +815,7 @@ mod tests {
     #[test]
     fn test_a_float_argument_is_read_from_its_own_cell() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, "paramremat", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_summed proc").expect("_summed");
@@ -826,7 +826,7 @@ mod tests {
     /// The listing of each function in `fixture`, `-Os` on a 486.
     fn listed(fixture: &str, functions: &[&str]) -> Vec<Vec<String>> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"))).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, fixture, None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         functions
@@ -867,7 +867,7 @@ mod tests {
     fn test_floats_crowding_a_compare_before_its_branches_spill() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/x87crowd.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "x87crowd", None, &llrm_core::driver::Options::of(machine));
+        let built = super::selected(&text, "x87crowd", None, &llrm_driver::code16_options(machine));
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
@@ -876,7 +876,7 @@ mod tests {
     #[test]
     fn test_a_void_function_is_selected() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }));
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }));
         assert!(built.is_ok(), "{:?}", built.err());
     }
 }

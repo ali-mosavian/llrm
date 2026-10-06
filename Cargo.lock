@@ -215,6 +215,7 @@ dependencies = [
  "llrm-bc",
  "llrm-bcmachine",
  "llrm-core",
+ "llrm-driver",
  "llrm-mir",
  "llrm-omf",
  "llrm-transforms",

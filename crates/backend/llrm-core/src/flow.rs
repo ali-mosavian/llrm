@@ -21,6 +21,7 @@ use crate::model::passes::LIRTransform;
 
 /// Every phase between instruction selection and emission, in order, with the
 /// spiller in front of the allocator or left out.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,

@@ -55,7 +55,7 @@ mod tests {
     use llrm_core::support::pyjson::{self, Json};
 
     fn options() -> llrm_core::driver::Options {
-        llrm_core::driver::Options { dump: None, ..llrm_core::driver::Options::of(crate::compile::machine()) }
+        llrm_core::driver::Options { dump: None, ..llrm_driver::code16_options(crate::compile::machine()) }
     }
 
     #[test]

@@ -48,7 +48,8 @@ pub struct Registers {
 }
 
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
-/// selector.
+/// selector: what the tests of this crate are written for.
+#[cfg(test)]
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
     assembled_by(module, abi, code, cpu, segments, isel::code16(), &llrm_x86_code16::Code16)
 }

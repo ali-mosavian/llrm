@@ -27,8 +27,16 @@ pub struct Bound {
 impl Bound {
     /// The driver's options for `machine`, selecting with this target's selector.
     pub fn options(&self, flags: &Flags, machine: Machine) -> Options {
-        Options { selection: self.selection, arch: Rc::clone(&self.target), ..flags.driver(machine) }
+        flags.driver(machine, Rc::clone(&self.target), self.selection)
     }
+}
+
+/// The options of the frontends that are built for 16-bit x86 only (BASIC, Nib, BC
+/// objects) and of the tests of those: the one place that names it for them.
+pub fn code16_options(machine: Machine) -> Options {
+    let target: Rc<dyn Target> = Rc::new(llrm_x86_code16::Code16);
+    let selection = isel::selector(target.name()).expect("the 16-bit selector is built");
+    Options::new(machine, target, selection)
 }
 
 /// The target `flags` name, or the default; refused if it is not built in or

@@ -99,7 +99,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &Seg
         Family::Vbdos => RuntimeProfile::Vbdos,
         other => return Err(format!("a {other:?} object")),
     };
-    basic::lifted(module, runtime, &object, family, layout, &driver::Options::of(machine.clone()), name)
+    basic::lifted(module, runtime, &object, family, layout, &llrm_driver::code16_options(machine.clone()), name)
 }
 
 /// Each data segment the object had, in its order, holding its objects in

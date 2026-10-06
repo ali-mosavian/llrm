@@ -78,7 +78,8 @@ pub struct Peephole {
 }
 
 impl Peephole {
-    /// With the 16-bit x86 rules.
+    /// With the 16-bit x86 rules: what the tests of this crate are written for.
+    #[cfg(test)]
     pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
         Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES, llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect())
     }

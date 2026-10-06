@@ -8,6 +8,7 @@ description = "The rich route for BC objects: raised, optimized, selected and wr
 [dependencies]
 llrm-bc = { workspace = true }
 llrm-core = { workspace = true }
+llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-transforms = { workspace = true }

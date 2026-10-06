@@ -166,7 +166,7 @@ fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
 pub(crate) fn level(name: &str) -> Options {
     let mut flags = llrm_core::driver::flags::Flags::default();
     flags.take(&[format!("-{name}")], &mut 0).expect("a level");
-    flags.driver(nib_compile::machine())
+    { let bound = llrm_driver::target(&flags, &["x86-code16"]).unwrap(); bound.options(&flags, nib_compile::machine()) }
 }
 
 /// -Os with no inlining: the function under test stays a function, as it does where more than
@@ -1288,7 +1288,7 @@ fn test_any_integer_operand_converts_to_a_float() {
         "floats.nib",
         "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
-    let options = llrm_core::driver::Options::of(nib_compile::machine());
+    let options = llrm_driver::code16_options(nib_compile::machine());
     let module = nib_compile::assembled(&parsed(&source), "main", &options).unwrap_or_else(|error| panic!("{error}"));
     let text = masm::text(&module).expect("prints");
     let mixed = between(&text, "MIXED proc far", "MIXED endp");
@@ -1315,7 +1315,7 @@ fn test_an_unsigned_integer_converts_to_its_value() {
          @export(\"cdecl16\")\nfn long(x: u32) -> f64:\n    return f64(x)\n",
     );
     let program = parsed(&source);
-    let options = llrm_core::driver::Options::of(nib_compile::machine());
+    let options = llrm_driver::code16_options(nib_compile::machine());
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     for (name, width, bits, value) in [("byte", 8, 0xff, 255.0), ("word", 16, 0xffff, 65535.0), ("long", 32, 0xffff_ffff, 4294967295.0_f64)] {
@@ -1722,7 +1722,7 @@ fn test_inline_assembly_outputs_survive_unrolling() {
 /// `source` through the rich MIR, as masm.
 fn rich(directory: &tempfile::TempDir, name: &str, source: &str) -> String {
     let program = parsed(&written(directory, name, source));
-    let module = nib_compile::assembled(&program, "main", &llrm_core::driver::Options::of(nib_compile::machine())).unwrap_or_else(|error| panic!("{error}"));
+    let module = nib_compile::assembled(&program, "main", &llrm_driver::code16_options(nib_compile::machine())).unwrap_or_else(|error| panic!("{error}"));
     masm::text(&module).expect("prints")
 }
 
@@ -1869,7 +1869,7 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
 fn test_a_program_compiles_through_the_rich_mir() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "twice.nib", "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n");
-    let module = nib_compile::assembled(&parsed(&source), "main", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
+    let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::code16_options(nib_compile::machine())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
     assert_eq!(
@@ -1890,7 +1890,7 @@ fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
-        let module = nib_compile::assembled(&parsed(&source), "main", &llrm_core::driver::Options::of(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
+        let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine() })).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
     };
     assert_eq!((calls("486"), calls("386")), (4, 0));
@@ -1995,7 +1995,7 @@ fn test_a_reference_lets_its_field_load_leave_the_loop() {
     let directory = tempfile::tempdir().unwrap();
     let source = "struct V:\n    mut a: i16\n    b: i16\n\nfn sum(v: &V, n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += v.b\n    return s\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "refsum.nib", source));
-    let module = nib_compile::assembled(&program, "sum", &llrm_core::driver::Options::of(nib_compile::machine())).expect("assembles");
+    let module = nib_compile::assembled(&program, "sum", &llrm_driver::code16_options(nib_compile::machine())).expect("assembles");
     let asm = masm::text(&module).expect("prints");
     let from = asm.find("_sum proc").expect("the function");
     let body: Vec<&str> = asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).collect();
@@ -2056,7 +2056,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     };
     // Unrolled, the 4-trip loop is gone and there is nothing to count.
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), unroll: false, peel: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
 }
@@ -2090,7 +2090,7 @@ fn test_mir_infers_what_a_nib_function_touches() {
         }
     }
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let module = &mir.modules[0];
@@ -2112,7 +2112,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_total proc near\n", "_total endp");
@@ -2138,7 +2138,7 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let program = parsed(&written(&directory, "zeroed.nib", source));
     assert!(!program.zeroed_locals, "the premise: the program says its frames are not zeroed");
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let module = nib_compile::assembled(&program, "main", &options).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_f proc near\n", "_f endp");
@@ -2194,7 +2194,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     for optimize in [false, true] {
         let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
-        let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+        let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
         let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
         llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
         let score = interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
@@ -2226,7 +2226,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2263,7 +2263,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2300,7 +2300,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2337,7 +2337,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2377,7 +2377,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2413,7 +2413,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_core::driver::Options::of(nib_compile::machine()) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine()) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2432,7 +2432,7 @@ fn test_a_far_pointer_literal_stores_at_its_segment_and_offset() {
     let mut program = parsed(&written(&directory, "poke.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions[0].linkage = llrm_core::hir::model::FunctionLinkage::External;
-    let options = llrm_core::driver::Options::of(nib_compile::machine());
+    let options = llrm_driver::code16_options(nib_compile::machine());
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "poke", vec![], 1_000);
