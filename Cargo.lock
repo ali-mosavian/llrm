@@ -274,6 +274,7 @@ dependencies = [
  "llrm-support",
  "llrm-target",
  "llrm-transforms",
+ "llrm-x86",
  "llrm-x86-code16",
  "num-bigint",
  "num-traits",
@@ -290,8 +291,10 @@ dependencies = [
 name = "llrm-driver"
 version = "0.1.0"
 dependencies = [
+ "iced-x86",
  "llrm-core",
  "llrm-target",
+ "llrm-x86",
  "llrm-x86-code16",
  "llrm-x86-code32",
 ]
