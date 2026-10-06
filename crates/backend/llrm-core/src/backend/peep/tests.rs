@@ -98,15 +98,17 @@ fn a_selector_carries_the_rules_of_its_directory() {
     assert!(selector.rules().far_loads.is_some() && selector.rules().zero_jcc.contains("je"));
 }
 
-/// The groups of `groups.list` are the groups code16 has and a target with no
+/// The groups of `groups.list` are the groups the targets have between them and a target with no
 /// rules has none: one list names them for the struct, `NONE` and the checks.
 #[test]
 fn the_rule_groups_come_from_one_list() {
     let mut present = super::targets::x86_code16::RULES.present();
+    present.extend(super::targets::x86_code32::RULES.present());
     present.sort_unstable();
+    present.dedup();
     let mut all = super::Rules::GROUPS.to_vec();
     all.sort_unstable();
     assert_eq!(present, all);
     assert!(super::Rules::NONE.present().is_empty());
-    assert_eq!(super::Rules::GROUPS.len(), 17);
+    assert_eq!(super::Rules::GROUPS.len(), 18);
 }

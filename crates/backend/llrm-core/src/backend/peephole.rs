@@ -166,6 +166,7 @@ impl LIRTransform for Peephole {
         let body = secondary_bases(&body, &self.cpu)?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
+        let body = narrowed_arithmetic(self.rules, &body);
         let body = sharedstores::shared(&body, &self.cpu, &self.saved);
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
@@ -1702,6 +1703,11 @@ pub fn borrows(rules: &peep::Rules, body: &LirBody) -> LirBody {
 pub fn doubled(rules: &peep::Rules, body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
     cpu.doubling()?;
     Ok(peep::rewritten(rules.doubled, body, &Facts::new(body, Some(cpu))))
+}
+
+/// A dword operation and the `movzx` of its word, as the word operation where the register's upper half is zero (`peephole.peep`).
+pub fn narrowed_arithmetic(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.narrowed_arithmetic, body, &Facts::new(body, None))
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {

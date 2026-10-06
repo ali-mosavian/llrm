@@ -15,6 +15,7 @@ far_loads body
 increments body
 borrows body
 doubled body
+narrowed_arithmetic body
 zero_compares body
 memory_arguments insns
 paired_pushes insns
