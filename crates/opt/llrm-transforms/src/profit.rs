@@ -294,6 +294,12 @@ pub fn pressure_adjusted(
     }
 }
 
+/// What `function` costs at `frequency` under `costs` and `room`: the one
+/// price a motion is judged by, with the motion and without it.
+pub fn motion_price(context: &Context, layout: &DataLayout, outer: &Outer, function: &Function, costs: &OperationCosts, room: Room, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
+    pressure_adjusted(context, layout, function, outer.callees(), costs, room, &|inst| spill::kept_across(outer, context, function, inst), frequency, &llrm_analysis::liveness::live(function))
+}
+
 #[cfg(test)]
 #[path = "profit_tests.rs"]
 mod tests;

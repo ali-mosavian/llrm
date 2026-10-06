@@ -34,7 +34,7 @@ use llrm_analysis::alias::PointsTo;
 use llrm_analysis::manager::{Pointers, Registers};
 use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
-use llrm_analysis::{cfg, liveness, ssa};
+use llrm_analysis::{cfg, ssa};
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
@@ -155,7 +155,7 @@ fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &Operat
     let crossing = numbered(unit.function, false)?;
     let price = |one: &Function| {
         let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
-        profit::pressure_adjusted(unit.context, unit.layout, one, outer.callees(), costs, room, &|inst| crate::spill::kept_across(outer, unit.context, one, inst), &frequency, &liveness::live(one))
+        profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
     };
     let chosen = if !room.priced() {
         crossing

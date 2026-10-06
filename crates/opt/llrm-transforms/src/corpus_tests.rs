@@ -83,7 +83,7 @@ fn hoist_keeps_every_corpus_module_verifying_and_settles() {
                 let mut declared = llrm_mir::passes::Declared::of(&module);
                 let (context, function) = function_mut(&mut module, id);
                 let mut unit = llrm_mir::passes::Unit { context, layout: &layout, function, metadata: &metadata, declared: &mut declared };
-                if !crate::hoist::hoisted(&mut unit, &mut llrm_mir::passes::Analyses::new(std::rc::Rc::clone(&outer))) {
+                if !crate::hoist::hoisted(&mut unit, &mut llrm_mir::passes::Analyses::new(std::rc::Rc::clone(&outer)), false) {
                     break;
                 }
                 assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "hoist: {name}");
