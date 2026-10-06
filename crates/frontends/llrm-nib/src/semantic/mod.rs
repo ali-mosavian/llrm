@@ -1589,6 +1589,7 @@ fn program(
         facts: stated.finish(),
         data: literals.data,
         debug,
+        descriptor_word: frontend.sizes().near,
     };
     Ok(program)
 }
