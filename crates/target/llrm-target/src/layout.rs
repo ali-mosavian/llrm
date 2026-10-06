@@ -38,9 +38,16 @@ pub struct Layout {
     /// LLVM's datalayout string.
     pub datalayout: String,
     pub spaces: AddressSpaces,
+    /// The most bytes a data segment holds (`spaces.segment_bytes`); none where segments are not.
+    pub segment_bytes: Option<usize>,
 }
 
 impl AddressSpaces {
+    /// Whether `far` is the `near` space: the target is flat, and a far or huge pointer is a near one.
+    pub fn far_is_near(&self) -> bool {
+        self.far == self.near
+    }
+
     /// The selector-alone space, or why the target has none.
     pub fn segment_space(&self) -> Result<u32, String> {
         self.segment.ok_or_else(|| "this target has no selector address space".to_owned())
@@ -68,7 +75,7 @@ impl AddressSpaces {
 
 impl Layout {
     /// `text`, a `datalayout.toml`: `datalayout`, `[spaces]` (`near`, `far`, and
-    /// `data` and `stack`, the optional `segment`, `huge`, `fixed`) and `[pointers]` (a width in bytes
+    /// `data` and `stack`, the optional `segment`, `huge`, `fixed`, `segment_bytes`) and `[pointers]` (a width in bytes
     /// to `"near"` or `"far"`).
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
@@ -93,8 +100,13 @@ impl Layout {
                 },
             );
         }
+        let segment_bytes = match spaces.get("segment_bytes") {
+            None => None,
+            Some(one) => Some(one.as_integer().and_then(|one| usize::try_from(one).ok()).filter(|one| *one > 0).ok_or("spaces.segment_bytes is not a positive size")?),
+        };
         Ok(Self {
             datalayout,
+            segment_bytes,
             spaces: AddressSpaces { near: required("near")?, far: required("far")?, data: required("data")?, stack: required("stack")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")?, unmarked },
         })
     }
@@ -113,6 +125,14 @@ mod tests {
         assert_eq!((flat.spaces.near, flat.spaces.far, flat.spaces.segment, flat.spaces.huge, flat.spaces.fixed), (0, 0, None, None, None));
         assert_eq!(flat.spaces.unmarked(4), Ok(0));
         assert!(flat.spaces.unmarked(2).is_err());
+    }
+
+    /// The segment size was the compiler's own 64K, cutting a flat program's large array in two.
+    #[test]
+    fn a_segment_size_is_the_layouts_and_a_flat_one_has_none() {
+        assert_eq!(Layout::parse(FLAT).unwrap().segment_bytes, None);
+        assert_eq!(Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 65536\n")).unwrap().segment_bytes, Some(65536));
+        assert!(Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 0\n")).unwrap_err().contains("segment_bytes"));
     }
 
     #[test]

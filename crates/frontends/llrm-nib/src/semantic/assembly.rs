@@ -12,7 +12,7 @@ impl FunctionCompiler<'_> {
     pub(super) fn asm_statement(&mut self, asm: &Asm) -> Result<(), Diagnostic> {
         self.require_unsafe("inline assembly", asm.span)?;
         let lines: Vec<&str> = asm.lines.iter().map(|(text, _)| text.as_str()).collect();
-        let code = inline_asm::assembled(&lines)
+        let code = inline_asm::assembled(&lines, self.types.code_bits)
             .map_err(|refused| Diagnostic::new(asm.lines[refused.line].1, refused.message))?;
 
         // Each word register's input: whole, or its bytes.

@@ -44,6 +44,8 @@ pub struct Frontend {
     pub layout: llrm_target::layout::Layout,
     /// The bytes an argument takes on the stack at least: the target's stack slot.
     pub slot: u32,
+    /// The bits of the target's code (its `object.toml`): what inline assembly is assembled for.
+    pub bits: u32,
     /// The calling conventions the target defines, the first its programs' own.
     pub conventions: Vec<String>,
     /// The target's OS layer under Nib's runtime.
@@ -54,12 +56,17 @@ pub struct Frontend {
     pub debug: bool,
     /// Each function compares SP with the runtime's limit on entry: `-fsanitize=stack`.
     pub checked_stack: bool,
+    /// Warn where `far` or `huge` is written for a target where far is near (`-Wno-distance` turns
+    /// it off, for the runtime, which writes `*far` for the targets that have one).
+    pub warn_distance: bool,
+    /// What the last compile warned of, for the caller to print.
+    pub warnings: std::rc::Rc<std::cell::RefCell<Vec<Diagnostic>>>,
 }
 
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_distance: true, warnings: Default::default() }
     }
 }
 
@@ -120,7 +127,7 @@ impl Frontend {
     pub fn sizes(&self) -> Sizes {
         let layout = llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");
         let bytes = |space: u32| layout.pointer(space).bits / 8;
-        Sizes { near: bytes(self.layout.spaces.near), far: bytes(self.layout.spaces.far), segmented: self.layout.spaces.near != self.layout.spaces.far, slot: self.slot }
+        Sizes { near: bytes(self.layout.spaces.near), far: bytes(self.layout.spaces.far), segmented: !self.layout.spaces.far_is_near(), slot: self.slot }
     }
 }
 

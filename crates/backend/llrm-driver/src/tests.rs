@@ -68,6 +68,7 @@ fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
     assert_eq!((real.register_capacity, real.call_register_capacity), (6, 2));
     assert_eq!((flat.register_capacity, flat.call_register_capacity), (6, 3));
     assert_eq!(flat.name, real.name);
+    assert_eq!((real.operand_bytes, flat.operand_bytes), (2, 4));
 }
 
 /// A flat target's profile prices its own forms: a near call and return, no 66h on a
@@ -125,6 +126,26 @@ fn a_targets_pins_come_from_its_own_forms() {
     let flat = RegisterClasses::of(&llrm_x86_code32::Code32).requirements(&store);
     assert_eq!(real.len(), 4, "{real:?}");
     assert!(flat.is_empty(), "{flat:?}");
+}
+
+/// A flat target's registers are its own, not real mode's: six values, ebp the frame.
+#[test]
+fn a_targets_registers_come_from_its_description() {
+    use iced_x86::Register;
+    use llrm_core::backend::classes::RegisterClasses;
+
+    let flat = RegisterClasses::of(&llrm_x86_code32::Code32);
+    assert_eq!(flat.available, [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI]);
+    assert_eq!(flat.frame, Register::EBP);
+}
+
+/// -Os prices a shift-and-add multiply by its bytes, and the 66h prefix is for the size that is
+/// not the target's default. A flat dword was priced as real mode's: a prefix on every one.
+#[test]
+fn a_flat_dword_has_no_operand_size_prefix_in_the_size_prices() {
+    use llrm_x86::encoding::{register_bytes, shift_bytes};
+    assert_eq!((register_bytes(4, 4), shift_bytes(3, 4, 4)), (2, 3));
+    assert_eq!((register_bytes(4, 2), shift_bytes(3, 4, 2)), (3, 4));
 }
 
 /// A frontend that lists no targets takes every registered one: the list was a second, hand-kept

@@ -29,7 +29,6 @@ pub const CALLER_POPS: i64 = 0x80;
 pub const FAR_CALL: i64 = 0x4;
 pub const INTERRUPT: i64 = 0x8;
 // cg_target_switches (x86swi.h)
-pub const BIG_DATA: i64 = 0x2;
 pub const BIG_CODE: i64 = 0x4;
 
 /// Borland headers expose these as compiler intrinsics, while their callable
@@ -302,9 +301,17 @@ pub struct Unit {
     pub switches: i64,
     /// Recorded by the 386 front end: flat, `int` and every pointer 4 bytes.
     pub flat: bool,
+    /// What the translation warned of, each once: the caller prints it.
+    pub warnings: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 
 impl Unit {
+    /// Warns that far and huge pointers are near on a target with one address space (the front end
+    /// gives both the same type, so it cannot say which was written).
+    pub fn warn_near(&self) {
+        self.warnings.borrow_mut().insert("warning: __far and __huge pointers are near on this target: it has one address space".to_owned());
+    }
+
     /// Whether the symbol is in DGROUP, reached through DS.
     pub fn grouped(&self, symbol: &Symbol) -> bool {
         if symbol.imported() && symbol.segment < 0 {

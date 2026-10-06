@@ -190,6 +190,10 @@ impl LiteralPool {
 struct TypeRegistry {
     /// The bytes of a near and of a far pointer on the target.
     sizes: crate::Sizes,
+    /// Where `far` or `huge` was written and meant near, once each place; `None` where not warned.
+    warnings: Option<std::rc::Rc<std::cell::RefCell<Vec<crate::Diagnostic>>>>,
+    /// The bits of the target's code.
+    code_bits: u32,
     /// The convention the language's own functions have here: the target's first.
     native: Abi,
     /// The names of the conventions the target defines: any other is refused.
@@ -289,11 +293,13 @@ impl TypeRegistry {
 
     /// The language's types, its pointers `sizes` bytes wide, its own functions in the
     /// convention `native` and the conventions the target defines `conventions`.
-    fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>) -> Self {
+    fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>, bits: u32) -> Self {
         Self {
             sizes,
+            code_bits: bits,
             native,
             conventions,
+            warnings: None,
             types: vec![
                 plain_type(VOID, "void", "void", 0, None, "none"),
                 plain_type(BOOL, "bool", "boolean", 1, Some(false), "none"),
@@ -615,6 +621,7 @@ impl TypeRegistry {
                 [TypeAnnotation::Value(target)] => {
                     let target = self.resolve_element(target, span)?;
                     let distance = name[1..].split(' ').next().expect("a distance");
+                    self.warn_distance(distance, span);
                     Ok(ElementType::Scalar(self.raw_pointer(target, distance, name.ends_with(" mut"))))
                 }
                 _ => Err(Diagnostic::new(span, "a raw pointer takes one target type")),
@@ -1361,7 +1368,8 @@ fn program(
     facts: Option<&RefCell<Vec<Fact>>>,
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
-    let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone());
+let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
+    types.warnings = frontend.warn_distance.then(|| frontend.warnings.clone());
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;

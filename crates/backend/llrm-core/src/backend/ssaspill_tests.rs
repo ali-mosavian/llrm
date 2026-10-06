@@ -351,7 +351,7 @@ fn most_live(body: &LirBody, member: impl Fn(u32) -> bool) -> usize {
 fn test_selectors_live_at_once_fit_the_segment_registers() {
     let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
     let selectors = |body: &LirBody| {
-        let classes = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN);
+        let classes = crate::backend::regclass::classes(body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         most_live(body, |value| classes.get(&value).is_some_and(|class| class.iter().all(|one| target::BUILT_IN.selectors.contains(one))))
     };
     assert!(selectors(&body) > target::BUILT_IN.selectors.len(), "premise: more selectors live than registers");
@@ -394,7 +394,7 @@ fn test_a_loop_s_back_edge_reload_does_not_cost_a_jump_per_trip() {
 #[test]
 fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
     let (body, mut phases) = before_phase(Calls::C, "selectorloop.ll", "_f", "486", "SsaSpill");
-    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &ssaspill::untouchable(body));
+    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), &ssaspill::untouchable(body));
     assert!(!found(&body).is_empty(), "premise: the body asks for more selectors than there are registers");
     let spilled = phases[0].transform(body).expect("spills");
     assert_eq!(found(&spilled), Vec::new());
@@ -406,7 +406,7 @@ fn test_ssaspill_leaves_no_point_the_classes_cannot_hold() {
 fn test_a_copy_group_is_one_point_not_one_per_copy() {
     let (body, _) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
     let eliminated = crate::backend::phielim::eliminated(&body).expect("eliminates");
-    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &ssaspill::untouchable(body)).len();
+    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), &ssaspill::untouchable(body)).len();
     let grouped = found(&eliminated);
     let mut apart = eliminated.clone();
     for block in &mut apart.blocks {
@@ -425,7 +425,7 @@ fn test_phis_that_do_not_fit_live_in_memory() {
     let (body, mut phases) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
     let spilled = phases[0].transform(body).expect("spills");
     let eliminated = crate::backend::phielim::eliminated(&spilled).expect("eliminates");
-    let found = crate::backend::regclass::violations(&eliminated, &target::BUILT_IN, &ssaspill::untouchable(&eliminated));
+    let found = crate::backend::regclass::violations(&eliminated, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), &ssaspill::untouchable(&eliminated));
     let most = found.iter().map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { live - registers } else { usize::MAX }).max().unwrap_or(0);
     assert!(most <= 1, "{most} values over the registers at the worst point");
 }
@@ -452,7 +452,7 @@ fn test_memory_phi_arguments_share_their_results_slot() {
 fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
     let (body, _) = before_phase(Calls::C, "phiwide.ll", "_f", "486", "SsaSpill");
     let eliminated = crate::backend::phielim::eliminated(&body).expect("eliminates");
-    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &ssaspill::untouchable(body)).len();
+    let found = |body: &LirBody| crate::backend::regclass::violations(body, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), &ssaspill::untouchable(body)).len();
     let mut split = eliminated.clone();
     for block in &mut split.blocks {
         let Some(first) = block.insns.iter().position(|one| one.group.is_some()) else { continue };

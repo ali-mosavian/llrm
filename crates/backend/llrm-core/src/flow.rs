@@ -68,12 +68,12 @@ pub fn machine_with<'a>(
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
-        Box::new(coalesce::Coalescer::new(None, segments)),
+        Box::new(coalesce::Coalescer::new(None, segments, classes)),
         Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
-        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect())?),
+        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect(), Rc::clone(classes))?),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
         // Scheduling may only move fully allocated machine occurrences.
@@ -109,7 +109,7 @@ pub enum Checked {
 }
 
 /// Run one machine phase and verify what it returned.
-pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Result<LirBody, Checked> {
+pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classes: &crate::backend::classes::RegisterClasses) -> Result<LirBody, Checked> {
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
@@ -119,7 +119,7 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Res
         crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
     let body = crate::support::debug::timed("lir verify", || verified(transformed, &stage, in_ssa)).map_err(Checked::Malformed)?;
     if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
-        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body));
+        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, classes,  &crate::backend::ssaspill::untouchable(&body));
         let peak = found.iter().filter_map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { Some(live - registers) } else { None }).max().unwrap_or(0);
         let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
         llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());
@@ -215,7 +215,7 @@ mod tests {
         let returned = ir::Semantics { name: Some("ret".into()), ..ir::Semantics::new(Operation::Return) };
         let block = LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 4)), Some(jump), vec![], vec![])), Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![]))]);
         let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false) else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false, &crate::backend::classes::RegisterClasses::code16()) else {
             panic!("the gate let three source bytes go");
         };
         assert_eq!(said, "DropsBytes: lost source bytes [0x1 0x2 0x3], gained []");
@@ -233,7 +233,7 @@ mod tests {
         let mut body =
             LirBody::new("phase", 1, vec![LirBlock::new(1, vec![Arc::new(source)])], IndexMap::default(), IndexMap::default());
         body.inputs = BTreeSet::from([1]);
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false) else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false, &crate::backend::classes::RegisterClasses::code16()) else {
             panic!("the gate let a lost definition through");
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");

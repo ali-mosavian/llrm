@@ -89,7 +89,15 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let unit = hir::unit(&stream::parse(text))?;
-        Ok(llrm_core::hir::model::Program { stack_check, ..translate::program(&unit, module)? })
+        // The front end was picked by the shim's flat flag; the target says what flat is.
+        if unit.flat != codegen.arch.layout().spaces.far_is_near() {
+            return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
+        }
+        let program = translate::program(&unit, module)?;
+        for warning in unit.warnings.borrow().iter() {
+            eprintln!("{module}: {warning}");
+        }
+        Ok(llrm_core::hir::model::Program { stack_check, ..program })
     })?;
     let mut options = codegen.clone();
     if let Some(dump) = dump {
@@ -1040,7 +1048,8 @@ mod tests {
     fn test_code32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
         let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
-        assert!(body.contains(&"mov edx, dword ptr [ebx+ecx]") && body.contains(&"add ecx, 4"), "{body:#?}");
+        // Which registers is the target's allocation order, not this test's concern.
+        assert!(body.iter().any(|line| line.starts_with("mov e") && line.contains("dword ptr [e") && line.contains("+e")) && body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
         assert!(body.iter().all(|line| !line.contains(" bp") && !line.contains("[bx") && !line.contains("es:") && !line.contains("far")), "{body:#?}");
         assert_eq!(body.last(), Some(&"ret"));
     }

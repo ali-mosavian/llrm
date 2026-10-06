@@ -655,7 +655,7 @@ fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), Stri
         Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), classes: crate::backend::classes::RegisterClasses::code16(), prices: crate::backend::ssaspill::Prices::clocks(), run: Default::default() }),
         Box::new(PhiElimination),
         Box::new(TwoAddress),
-        Box::new(Coalescer::new(None, segments)),
+        Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::code16())),
         Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::code16())?),
         Box::new(ParallelCopy),
     ];
@@ -758,4 +758,17 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     let done = allocated(4, &shape, "386");
     assert!(done.is_ok(), "{done:?}");
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
+}
+
+/// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
+/// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
+#[test]
+fn test_dense_liveness_is_what_the_sorted_sets_gave() {
+    for seed in 0..200 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            assert_eq!(crate::backend::allocate::live(&body), crate::backend::allocate::live_reference(&body), "seed {seed}");
+        }
+    }
 }
