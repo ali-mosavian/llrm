@@ -382,6 +382,8 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
     };
     assert_eq!(defines("x86-code32"), "STACK_BYTES=16384 HEAP_BYTES=16777216");
     assert_eq!(defines("x86-code16"), "");
+}
+
 /// The identity gate is an instrument: a build compared with itself must say SAME of every
 /// program, and a build whose output differs must be reported DIFF with a failing exit, or a
 /// change that moved a target's code would pass the gate silently.
