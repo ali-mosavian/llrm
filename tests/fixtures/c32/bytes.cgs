@@ -1,0 +1,61 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "bytes.c" main=1
+- DBSrcCue f1 1 1
+SYM y1 name="bytes" base="bytes" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+TYPE T26 size=70 align=1
+SYM y3 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 T26
+SYM y4 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INTEGER
+l4 BENewLabel
+l5 BENewLabel
+n6 CGFEName y4 TY_INTEGER
+n7 CGInteger 0 TY_INTEGER
+n8 CGAssign n6 n7 TY_INTEGER
+- CGDone n8
+- CGControl O_LABEL n0 l4
+n9 CGFEName y4 TY_INTEGER
+n10 CGUnary O_POINTS n9 TY_INTEGER
+n11 CGInteger 70 TY_INTEGER
+n12 CGCompare O_LT n10 n11 TY_INTEGER
+- CGControl O_IF_FALSE n12 l5
+n13 CGFEName y3 T26
+n14 CGFEName y4 TY_INTEGER
+n15 CGUnary O_POINTS n14 TY_INTEGER
+n16 CGBinary O_PLUS n13 n15 TY_POINTER
+n17 CGFEName y4 TY_INTEGER
+n18 CGUnary O_POINTS n17 TY_INTEGER
+n19 CGUnary O_CONVERT n18 TY_INT_1
+n20 CGAssign n16 n19 TY_INT_1
+- CGDone n20
+n21 CGFEName y4 TY_INTEGER
+n22 CGInteger 1 TY_INTEGER
+n23 CGPostGets O_PLUS n21 n22 TY_INTEGER
+- CGDone n23
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+n24 CGFEName y3 T26
+n25 CGInteger 3 TY_INTEGER
+n26 CGBinary O_PLUS n24 n25 TY_POINTER
+n27 CGUnary O_POINTS n26 TY_INT_1
+n28 CGUnary O_CONVERT n27 TY_INTEGER
+n29 CGTempName t3 TY_INTEGER
+n30 CGAssign n29 n28 TY_INTEGER
+- CGDone n30
+n31 CGTempName t3 TY_INTEGER
+n32 CGUnary O_POINTS n31 TY_INTEGER
+- CGReturn n32 TY_INTEGER
+STOP
+FINI

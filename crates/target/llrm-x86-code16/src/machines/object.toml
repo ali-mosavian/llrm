@@ -1,0 +1,4 @@
+# x86-code16: OMF with 16-bit records, and the listing's MASM header.
+writer = "omf"
+bitness = 16
+header = [".model medium", ".386"]

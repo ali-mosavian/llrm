@@ -144,7 +144,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
         debug,
         far_bss: BTreeSet::new(),
         stack: 0,
-        header: arch.listing_header(),
+        object: arch.object(),
     })
 }
 

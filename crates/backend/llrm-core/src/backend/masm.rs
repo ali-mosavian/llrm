@@ -155,8 +155,8 @@ pub struct Module {
     /// Bytes of the linker's stack this module adds to the others' (OMF stack
     /// segments concatenate): where its call graph is the whole program's.
     pub stack: i64,
-    /// The lines the listing opens with: the target's instruction set and model.
-    pub header: Vec<String>,
+    /// The target's object format: the listing's header, the writer's mode.
+    pub object: llrm_target::object::ObjectFormat,
 }
 
 impl Module {
@@ -174,7 +174,7 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
 
 /// `module`'s text, each procedure's items as `listed` gives them.
 pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>) -> Result<String, Unprintable> {
-    let mut out: Vec<String> = module.header.iter().cloned().chain([String::new()]).collect();
+    let mut out: Vec<String> = module.object.header.iter().cloned().chain([String::new()]).collect();
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     if module.stack > 0 {
         out.push(format!(".stack {}", module.stack));
@@ -338,7 +338,8 @@ fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     let roots = _roots(&procedure.body);
     let saved = saved_of(procedure);
-    let reserve = procedure.reserve + (procedure.reserve & 1);
+    let slot = procedure.registers.slot;
+    let reserve = (procedure.reserve + slot - 1) / slot * slot;
     // Inline code is bytes this printer cannot read, so it may address the frame.
     let framed = reserve != 0
         || roots.contains(&Register::EBP)
@@ -566,13 +567,17 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
 /// target has them, which is BP and SP where it is real mode.
 fn spelled(item: Item, registers: &llrm_target::FrameRegisters) -> Item {
     let register = |one: Register| registers.spelled(one);
+    // A frame place with no register is addressed through the frame register.
+    let framed = |through: Register, addr: Option<Addr>, index: Register| {
+        if through == Register::None && index == Register::None && addr.is_some_and(|addr| addr.space == Space::Frame) { registers.pointer } else { register(through) }
+    };
     let place = |loc: &Loc| match loc {
         Loc::Reg(one) if register(one.register) != one.register => {
             let spelled = register(one.register);
             Loc::Reg(ir::Reg { register: spelled, width: spelled.size() as u32 })
         }
-        Loc::Mem(cell) => Loc::Mem(ir::Mem { through: register(cell.through), index_through: register(cell.index_through), ..cell.clone() }),
-        Loc::Address(address) => Loc::Address(ir::Address { through: register(address.through), index: register(address.index), ..address.clone() }),
+        Loc::Mem(cell) => Loc::Mem(ir::Mem { through: framed(cell.through, cell.addr, cell.index_through), index_through: register(cell.index_through), ..cell.clone() }),
+        Loc::Address(address) => Loc::Address(ir::Address { through: framed(address.through, address.addr, address.index), index: register(address.index), ..address.clone() }),
         other => other.clone(),
     };
     match item {
@@ -868,8 +873,8 @@ pub fn _operand(r#where: &Loc, names: &IndexMap<(Space, i64), String>) -> Result
             }
         }
         Loc::Mem(cell) => _memory(cell, names)?,
-        Loc::Address(ir::Address { addr: Some(address), index: Register::None, .. }) => {
-            let text = _memory(&ir::Mem::new(Some(*address), 2), names)?;
+        Loc::Address(ir::Address { addr: Some(address), index: Register::None, through, .. }) => {
+            let text = _memory(&ir::Mem { through: *through, ..ir::Mem::new(Some(*address), 2) }, names)?;
             text.strip_prefix("word ptr ").map_or(text.clone(), str::to_owned)
         }
         Loc::Address(ir::Address { through, index, scale, offset, .. }) => {
@@ -1160,7 +1165,7 @@ mod tests {
     #[test]
     fn test_a_listing_opens_with_its_targets_header() {
         let module = Module {
-            header: vec![".386".to_owned(), ".model flat".to_owned()],
+            object: llrm_target::object::ObjectFormat { writer: "omf".into(), bitness: 32, header: vec![".386".to_owned(), ".model flat".to_owned()] },
             code: "T_TEXT".into(),
             names: no_names(),
             externs: Vec::new(),
@@ -1184,12 +1189,25 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
         let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
-        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new() };
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4 };
         let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 4, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(has(&lines, "push ebp") && has(&lines, "mov ebp, esp") && has(&lines, "sub esp, 4"), "{lines:?}");
         assert!(lines.iter().any(|one| one.contains("[ebp+6]")), "{lines:?}");
         assert!(!lines.iter().any(|one| one.contains("[bp") || one.contains(" bp") || one.contains(" sp")), "{lines:?}");
+    }
+
+    /// The frame's reserve was rounded to a word: a flat target keeps its stack in dwords, and
+    /// `sub esp, 70` left the next push misaligned.
+    #[test]
+    fn test_the_reserve_is_a_multiple_of_the_targets_slot() {
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
+        let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
+        let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4 };
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 70, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers };
+        let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(has(&lines, "sub esp, 72"), "{lines:?}");
     }
 
     /// SI and DI were pushed and popped whole: an operand-size prefix on every save

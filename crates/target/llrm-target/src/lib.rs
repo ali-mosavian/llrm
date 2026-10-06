@@ -4,6 +4,7 @@
 pub mod addressing;
 pub mod layout;
 pub mod machine;
+pub mod object;
 pub mod opcosts;
 pub mod registers;
 pub mod timings;
@@ -135,12 +136,12 @@ pub trait Target {
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
 
-    /// The lines a listing opens with: its instruction set and memory model.
-    fn listing_header(&self) -> Vec<String>;
+    /// The object file and listing this target writes.
+    fn object(&self) -> object::ObjectFormat;
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
-        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved() }
+        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes() }
     }
 }
 
@@ -153,6 +154,8 @@ pub struct FrameRegisters {
     pub stack: iced_x86::Register,
     /// Each callee-saved register by its full register and the one pushed.
     pub saved: Vec<(iced_x86::Register, iced_x86::Register)>,
+    /// The bytes the stack is kept a multiple of.
+    pub slot: i64,
 }
 
 impl FrameRegisters {
