@@ -22,6 +22,20 @@ def recipe(target: str) -> dict:
         return tomllib.load(text)
 
 
+def modes() -> dict[str, int]:
+    """Each target's gcc `-m` number, from its `datalayout.toml`: the one place that says."""
+    found = {}
+    for crate in sorted((ROOT / "crates" / "target").glob("llrm-x86-m*")):
+        with open(crate / "src" / "machines" / "datalayout.toml", "rb") as text:
+            found[crate.name.removeprefix("llrm-")] = tomllib.load(text)["mode"]
+    return found
+
+
+def named(mode: int) -> str:
+    """The target `-m<mode>` names."""
+    return next(name for name, one in modes().items() if one == mode)
+
+
 def assembler(target: str) -> str:
     """The flag that makes the assembler write `target`'s object format."""
     return ASSEMBLER[recipe(target)["default"]]

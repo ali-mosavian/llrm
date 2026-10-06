@@ -39,6 +39,12 @@ pub fn m16_options(machine: Machine) -> Options {
     Options::new(machine, target, selection)
 }
 
+/// BASIC's machine: real mode's, with its stack in the data group, which its programs run on.
+pub fn m16_machine() -> Machine {
+    use llrm_target::Target;
+    llrm_x86_m16::M16.machine().with_stack_in_data()
+}
+
 /// The target `flags` name by its `-m` number (its `datalayout.toml` says which), or the default;
 /// refused if none is built in or the frontend does not build for it: `supported` lists the
 /// names of the ones it does, `None` any.

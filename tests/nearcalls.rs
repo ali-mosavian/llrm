@@ -29,13 +29,13 @@ fn near_down(asm: &str, down: &str, up: &str) {
 
 #[test]
 fn test_c_enters_a_static_function_near() {
-    let asm = compiled("llrm-c", "near.c", "static int down(int n) { return n ? down(n - 1) + n : 0; }\nint up(int n) { return down(n); }\n", &[]);
+    let asm = compiled("llrm-c", "near.c", "static int down(int n) { return n ? n - down(n - 1) : 0; }\nint up(int n) { return down(n); }\n", &[]);
     near_down(&asm, "_down", "_up");
 }
 
 #[test]
 fn test_nib_enters_an_unexported_function_near() {
-    let source = "fn down(n: i16) -> i16:\n    if n == 0:\n        return 0\n    return down(n - 1) + n\n\n@export(\"cdecl16\")\nfn up(n: i16) -> i16:\n    return down(n)\n\nfn main() -> i16:\n    print(up(3))\n    return 0\n";
+    let source = "fn down(n: i16) -> i16:\n    if n == 0:\n        return 0\n    return n - down(n - 1)\n\n@export(\"cdecl16\")\nfn up(n: i16) -> i16:\n    return down(n)\n\nfn main() -> i16:\n    print(up(3))\n    return 0\n";
     near_down(&compiled("llrm-nib", "near.nib", source, &[]), "_down", "_up");
 }
 
@@ -52,7 +52,7 @@ fn test_basic_enters_a_module_internal_procedure_near() {
 /// loads nothing through the pointer, and its callers pass the fields.
 #[test]
 fn test_c_passes_the_field_a_static_function_reads_through_its_struct_pointer() {
-    let source = "struct P { int *data; int len; };\nstatic int sum(const struct P *p, int n) { int len = p->len; return n ? sum(p, n - 1) + len : len; }\nint up(struct P *p) { return sum(p, 3); }\n";
+    let source = "struct P { int *data; int len; };\nstatic int sum(const struct P *p, int n) { int len = p->len; return n ? len - sum(p, n - 1) : len; }\nint up(struct P *p) { return sum(p, 3); }\n";
     let asm = compiled("llrm-c", "promote.c", source, &[]);
     let body = procedure(&asm, "_sum");
     assert!(!body.contains("ptr [bx+") && !body.contains("ptr [si+") && body.contains("ret 4"), "{asm}");

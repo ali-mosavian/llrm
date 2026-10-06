@@ -85,6 +85,8 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
         context: &mut *unit.context,
         layout: unit.layout,
         function: &mut candidate,
+        // A specialised copy: its calls to the original are not calls to itself.
+        id: None,
         metadata: unit.metadata,
         declared: &mut *unit.declared,
     });

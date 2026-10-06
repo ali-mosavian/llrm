@@ -31,7 +31,23 @@ class LinkRecipeTests(unittest.TestCase):
         finally:
             linkrecipe.ROOT = saved
 
+    def test_a_target_is_found_by_the_mode_its_datalayout_declares(self):
+        """run_tests named its flat target `x86-m32` itself: a target is found by the number its description declares."""
+        saved = linkrecipe.ROOT
+        try:
+            linkrecipe.ROOT = self.tree('writer = "omf"\nbitness = 32\nheader = []\n[link]\nformat = []\n')
+            machines = linkrecipe.ROOT / "crates" / "target" / "llrm-x86-test" / "src" / "machines"
+            (linkrecipe.ROOT / "crates" / "target" / "llrm-x86-m7").mkdir()
+            (linkrecipe.ROOT / "crates" / "target" / "llrm-x86-m7" / "src").mkdir()
+            (linkrecipe.ROOT / "crates" / "target" / "llrm-x86-m7" / "src" / "machines").mkdir()
+            (linkrecipe.ROOT / "crates" / "target" / "llrm-x86-m7" / "src" / "machines" / "datalayout.toml").write_text("mode = 7\n")
+            self.assertEqual(linkrecipe.named(7), "x86-m7")
+            self.assertEqual(linkrecipe.modes(), {"x86-m7": 7})
+        finally:
+            linkrecipe.ROOT = saved
+
     def test_the_real_targets_link_as_they_say(self):
+        self.assertEqual((linkrecipe.named(16), linkrecipe.named(32)), ("x86-m16", "x86-m32"))
         self.assertEqual(linkrecipe.link("x86-m16", "format"), ["format", "dos"])
         self.assertEqual(linkrecipe.link("x86-m32", "format"), ["format", "os2", "le"])
         self.assertEqual(linkrecipe.ld_emulation("x86-m32"), "elf_i386")

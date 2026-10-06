@@ -51,7 +51,7 @@ fn pos_reads_the_cursor_column() {
 /// "runtime call B$STR4 has no complete stack-cleanup contract".
 #[test]
 fn str_of_every_numeric_type_compiles() {
-    let codegen = llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     for dialect in DIALECTS {
         for (type_name, routine) in [("LONG", "B$STI4"), ("SINGLE", "B$STR4"), ("DOUBLE", "B$STR8")] {
             let program = parsed(&format!("DIM r AS {type_name}\nr = 1.5\nPRINT STR$(r)\n"), dialect).expect("parses");
