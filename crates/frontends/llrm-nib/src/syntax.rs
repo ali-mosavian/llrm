@@ -183,6 +183,8 @@ pub struct Module {
 /// A foreign calling convention (section 15).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abi {
+    /// `"c"`: the target's C convention, which its description names (cdecl16, cdecl32).
+    C,
     Cdecl16,
     /// The same convention on the flat target: stack arguments in dwords, EAX results.
     Cdecl32,
@@ -257,6 +259,7 @@ impl Adapter {
 impl Abi {
     pub fn named(name: &str) -> Option<Self> {
         match name {
+            "c" => Some(Self::C),
             "cdecl16" => Some(Self::Cdecl16),
             "cdecl32" => Some(Self::Cdecl32),
             "pascal16" => Some(Self::Pascal16),
@@ -267,6 +270,7 @@ impl Abi {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::C => "c",
             Self::Cdecl16 => "cdecl16",
             Self::Cdecl32 => "cdecl32",
             Self::Pascal16 => "pascal16",
@@ -278,13 +282,13 @@ impl Abi {
     /// The object symbol of `name`: C's `_name`, Pascal's and BASIC's `NAME`.
     pub fn symbol(self, name: &str) -> String {
         match self {
-            Self::Cdecl16 | Self::Cdecl32 | Self::Interrupt16 => format!("_{name}"),
+            Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Interrupt16 => format!("_{name}"),
             Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
         }
     }
 
     pub fn callee_cleans(self) -> bool {
-        !matches!(self, Self::Cdecl16 | Self::Cdecl32)
+        !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32)
     }
 
     /// Where a float result goes, in the HIR's words: BASIC's through a

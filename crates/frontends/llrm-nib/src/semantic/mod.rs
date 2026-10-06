@@ -291,6 +291,15 @@ impl TypeRegistry {
         u8::try_from(if far { self.sizes.far } else { self.sizes.near }).expect("a pointer is under 256 bytes")
     }
 
+    /// The field alignment a struct packs to: `@repr("c")` without `pack=` is the target's, its stack slot.
+    fn effective_pack(&self, pack: Option<u32>) -> u32 {
+        match pack {
+            None => 2,
+            Some(crate::parser::TARGET_PACK) => self.sizes.slot,
+            Some(pack) => pack,
+        }
+    }
+
     /// The language's types, its pointers `sizes` bytes wide, its own functions in the
     /// convention `native` and the conventions the target defines `conventions`.
     fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>, bits: u32) -> Self {
@@ -432,7 +441,7 @@ impl TypeRegistry {
                     format!("field {:?} is declared more than once", field.name),
                 ));
             }
-            let (layout, field_alignment, units) = self.place_field(field, offset, declaration.pack.unwrap_or(2))?;
+            let (layout, field_alignment, units) = self.place_field(field, offset, self.effective_pack(declaration.pack))?;
             fields.insert(field.name.clone(), layout);
             copy.extend(units);
             offset = layout.offset + self.field_width(layout);

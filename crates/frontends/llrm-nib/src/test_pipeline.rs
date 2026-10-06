@@ -159,3 +159,37 @@ fn test_inline_assembly_is_refused_where_registers_are_wider() {
     assert!(error.contains("inline assembly is 16-bit only"), "{error}");
     crate::driver::parsed(&path, &Default::default(), None).expect("real mode takes it");
 }
+
+/// `.near()` of a far pointer was `unsafe` on every target, though where far is near the offset is
+/// the whole pointer: a flat program needed an `unsafe:` block for a copy.
+#[test]
+fn test_near_of_a_far_pointer_is_a_plain_copy_where_far_is_near() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("n.nib");
+    std::fs::write(&path, "var cell: i16 = 7\n\nfn main() -> i16:\n    unsafe:\n        let wide: *far i16 = &cell\n        let narrow: *near i16 = wide.near()\n        return *narrow\n").expect("written");
+    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() };
+    crate::driver::parsed(&path, &flat, None).unwrap_or_else(|error| panic!("{}", error.0));
+    std::fs::write(&path, "fn narrow(wide: *far i16) -> *near i16:\n    return wide.near()\n\nfn main() -> i16:\n    return 0\n").expect("written");
+    let on_flat = crate::driver::parsed(&path, &flat, None);
+    assert!(on_flat.is_ok(), "{:?}", on_flat.err());
+    assert!(crate::driver::parsed(&path, &Default::default(), None).expect_err("real mode needs unsafe").0.contains("unsafe"));
+}
+
+/// A target-sized integer: `usize` is the unsigned integer as wide as the target's near pointer and
+/// `NEAR_BYTES` that width as a constant, which a `const` may use (the heap's size classes and header
+/// were u16 and 13 whatever the target).
+#[test]
+fn test_usize_and_near_bytes_follow_the_targets_near_width() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("u.nib");
+    std::fs::write(&path, "const BITS = NEAR_BYTES * 8\nconst TOP = (1 << BITS) - 1\n\nfn main() -> i16:\n    let one: usize = 1\n    print(BITS)\n    print(size_of[usize]())\n    print(TOP)\n    print(one << 15)\n    return 0\n").expect("written");
+    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() };
+    let run = |frontend: &crate::Frontend| {
+        let hir = crate::compile_file(&path, frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
+        llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs").output
+    };
+    assert_eq!(run(&Default::default()), "16\n2\n65535\n32768\n");
+    assert_eq!(run(&flat), "32\n4\n4294967295\n32768\n");
+}

@@ -1,0 +1,22 @@
+# flags: -O2 --cpu 486 --target x86-code32
+# The near heap past 64 KB: its sizes, headers and size classes are as wide as the target's near
+# pointer. A 200000-byte block is taken, written at both ends, freed, and taken again where it was;
+# a small one splits off it. heap.nib and errors.nib are the runtime's own (links here).
+import heap
+
+fn main() -> i16:
+    unsafe:
+        let big = heap.allocate(200000)
+        *big = 7
+        *big.offset(199999) = 9
+        print(*big + *big.offset(199999))
+        let small = heap.allocate(100)
+        print(small != big)
+        heap.release(big)
+        let again = heap.allocate(200000)
+        print(again == big)
+        heap.release(again)
+        heap.release(small)
+        let whole = heap.allocate(300000)
+        print(whole.is_null())
+    return 0

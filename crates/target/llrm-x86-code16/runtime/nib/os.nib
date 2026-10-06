@@ -16,7 +16,7 @@ pub fn close(handle: i16) -> i16
 pub fn exit(code: u8) -> void
 # `bytes` more of DGROUP, right after the last grant, or null.
 @extern("cdecl16", name="N$OMEM")
-pub fn more(bytes: u16) -> *near mut u8
+pub fn more(bytes: usize) -> *near mut u8
 # The handler interrupt `number` enters.
 @extern("cdecl16", name="N$OGIV")
 pub fn vector(number: u8) -> extern "interrupt16" fn() -> void

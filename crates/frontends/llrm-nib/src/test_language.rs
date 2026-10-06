@@ -3526,3 +3526,17 @@ fn main() -> i16:
     assert_eq!(output_without_leaks(source), "1\n2\n");
     assert_eq!(refused("fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"), "void function cannot return a value");
 }
+
+/// `@repr("c")` without `pack=` packs to the target's own alignment, its stack slot (2 on code16, 4
+/// on code32); `@repr("c16")` stays 2 and may not ask for 4.
+#[test]
+fn repr_c_packs_to_the_targets_alignment() {
+    let source = |layout: &str| format!("@repr(\"{layout}\")\nstruct S:\n    a: u8\n    b: i32\n\nfn main() -> i16:\n    print(size_of[S]())\n    return 0\n");
+    let run = |text: &str, slot: u32| {
+        let module = super::modules::load(text, &mut |_| Err("no such module".to_owned())).expect("loads");
+        let hir = super::compile_module(module, "t", &super::Frontend { slot, ..Default::default() }).expect("compiles");
+        execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs").output
+    };
+    assert_eq!((run(&source("c"), 2), run(&source("c"), 4), run(&source("c16"), 4)), ("6\n".to_owned(), "8\n".to_owned(), "6\n".to_owned()));
+    assert!(refused("@repr(\"c16\", pack=4)\nstruct S:\n    a: u8\n\nfn main() -> i16:\n    return 0\n").contains("pack is 1 or 2"));
+}

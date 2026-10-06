@@ -29,11 +29,11 @@ impl Language {
 /// The declarations of `module`'s exports and the represented structs they
 /// name, for callers written in `language`.
 pub fn declarations(module: &Module, name: &str, language: Language) -> Result<String, Diagnostic> {
-    declarations_on(module, name, language, true)
+    declarations_on(module, name, language, true, 2)
 }
 
 /// `declarations`, for a target whose far code is far (`segmented`) or near.
-pub fn declarations_on(module: &Module, name: &str, language: Language, segmented: bool) -> Result<String, Diagnostic> {
+pub fn declarations_on(module: &Module, name: &str, language: Language, segmented: bool, slot: u32) -> Result<String, Diagnostic> {
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
@@ -55,7 +55,7 @@ pub fn declarations_on(module: &Module, name: &str, language: Language, segmente
     }
     for one in &structs {
         out.push('\n');
-        out.push_str(&structure(one, language)?);
+        out.push_str(&structure(one, language, slot)?);
     }
     if !exports.is_empty() {
         out.push('\n');
@@ -69,12 +69,17 @@ pub fn declarations_on(module: &Module, name: &str, language: Language, segmente
     Ok(out)
 }
 
-fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
+fn structure(one: &Struct, language: Language, slot: u32) -> Result<String, Diagnostic> {
     let name = symbol(&one.name);
     let mut out = String::new();
     match language {
         Language::C => {
-            writeln!(out, "#pragma pack({})\ntypedef struct {{", one.pack.expect("represented")).unwrap();
+            // `@repr("c")` without a pack is the target's.
+            let pack = match one.pack.expect("represented") {
+                crate::parser::TARGET_PACK => slot,
+                pack => pack,
+            };
+            writeln!(out, "#pragma pack({pack})\ntypedef struct {{").unwrap();
             for field in &one.fields {
                 let dims: String = field.dims.iter().map(|dim| format!("[{dim}]")).collect();
                 writeln!(out, "    {}{dims};", c_declarator(&field.type_spec, &field.name, one.span)?).unwrap();
@@ -137,7 +142,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 return Err(unsupported(&function.name, "C; BASIC calls it", span));
             }
             let convention = match abi {
-                Abi::Cdecl16 | Abi::Cdecl32 => "__cdecl",
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => "__cdecl",
                 Abi::Interrupt16 => "__interrupt",
                 Abi::Pascal16 | Abi::Basic(_) => "__pascal",
             };
@@ -156,7 +161,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .iter()
                 .map(|(name, spec)| basic_parameter(name, spec).ok_or_else(|| unsupported(name, "BASIC", span)))
                 .collect::<Result<Vec<_>, _>>()?;
-            let convention = if matches!(abi, Abi::Cdecl16 | Abi::Cdecl32) { " CDECL" } else { "" };
+            let convention = if matches!(abi, Abi::C | Abi::Cdecl16 | Abi::Cdecl32) { " CDECL" } else { "" };
             // BASIC names hold letters, digits and periods; any other takes its symbol as an alias.
             let (name, alias) = if name.chars().all(|one| one.is_ascii_alphanumeric() || one == '.') {
                 (name.to_owned(), String::new())
@@ -181,7 +186,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .collect::<Vec<_>>()
                 .join(", ");
             let cleanup = match abi {
-                Abi::Cdecl16 | Abi::Cdecl32 => "caller removes the arguments".to_owned(),
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => "caller removes the arguments".to_owned(),
                 Abi::Interrupt16 => "iret".to_owned(),
                 _ => format!("retf {words}"),
             };

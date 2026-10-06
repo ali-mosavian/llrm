@@ -175,7 +175,7 @@ impl ProcedureAbi {
     pub fn of(abi: Abi, argument_bytes: u32, exported: bool) -> Option<Self> {
         let distance = if exported { "far" } else { "any" };
         match abi {
-            Abi::Cdecl16 | Abi::Cdecl32 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return() }),
+            Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return() }),
             Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance, cleanup: "callee", parameter_bytes: argument_bytes, float_return: abi.float_return() }),
             Abi::Interrupt16 => Some(Self { distance: "interrupt", cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return() }),
         }

@@ -127,7 +127,7 @@ pub(super) fn foreign_signature(
 ) -> Result<Signature, Diagnostic> {
     let mut signature = signature(types, &declared.function, id)?;
     signature.foreign = true;
-    if !types.conventions.iter().any(|one| one == declared.abi.name()) {
+    if declared.abi != Abi::C && !types.conventions.iter().any(|one| one == declared.abi.name()) {
         return Err(Diagnostic::new(declared.function.span, format!("this target defines no \"{}\" calling convention: it has {}", declared.abi.name(), types.conventions.join(", "))));
     }
     signature.abi = declared.abi;
@@ -154,7 +154,7 @@ impl TypeRegistry {
     /// whose type is `function`. Nothing reads or calls through it here; a
     /// foreign function does.
     pub(super) fn foreign_function(&mut self, abi: Abi, function: TypeName, span: Span) -> Result<TypeName, Diagnostic> {
-        if !self.conventions.iter().any(|one| one == abi.name()) {
+        if abi != Abi::C && !self.conventions.iter().any(|one| one == abi.name()) {
             return Err(Diagnostic::new(span, format!("this target defines no \"{}\" calling convention: it has {}", abi.name(), self.conventions.join(", "))));
         }
         interrupt_shape(abi, self.types[(type_id(function) - 1) as usize].name == "fn() -> void", span)?;
