@@ -225,6 +225,7 @@ name = "llrm-bcmachine"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-lir",
  "llrm-omf",
  "llrm-qbruntime",
  "llrm-support",
@@ -286,6 +287,15 @@ dependencies = [
  "llrm-mir",
  "llrm-support",
  "toml",
+]
+
+[[package]]
+name = "llrm-lir"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-omf",
+ "llrm-support",
 ]
 
 [[package]]
