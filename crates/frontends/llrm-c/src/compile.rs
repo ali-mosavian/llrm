@@ -133,28 +133,44 @@ struct Args {
 
 /// The code-generator stream wccq records for one C file; with `debug`,
 /// its debug types and symbols too (-d2).
-pub fn recorded(source: &Path, includes: &[String], debug: bool, watcom: &[&str]) -> Result<String, hir::Unsupported> {
-    recorded_for(source, includes, debug, watcom, false)
+/// How the target asks Open Watcom's front end to record C: the `[frontend]` of its C runtime
+/// description (`runtime/c/<target>/c.toml`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Profile {
+    /// The front end's tree: its CPU, `i86` or `386`.
+    pub cpu: String,
+    pub flags: Vec<String>,
+    /// The header it includes first, from the repository root.
+    pub header: String,
 }
 
-/// `recorded` by the 386 front end for the flat 32-bit target when `flat`, else
-/// by the 16-bit one.
-pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&str], flat: bool) -> Result<String, hir::Unsupported> {
+impl Profile {
+    pub fn of(target: &dyn llrm_target::Target) -> Result<Self, String> {
+        let description = target.runtime("c").ok_or_else(|| format!("target {} has no C runtime", target.name()))?;
+        Self::parse(&description.table()?)
+    }
+
+    pub fn parse(table: &toml::Table) -> Result<Self, String> {
+        let frontend = table.get("frontend").and_then(toml::Value::as_table).ok_or("the C runtime description has no [frontend]")?;
+        let text = |key: &str| frontend.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("frontend.{key} is not a string"));
+        let flags = frontend.get("flags").and_then(toml::Value::as_array).ok_or("frontend.flags is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("a frontend flag is not a string")).collect::<Result<_, _>>()?;
+        Ok(Self { cpu: text("watcom_cpu")?, flags, header: text("header")? })
+    }
+}
+
+/// `recorded` for real mode, the target the tests of the recorded streams are for.
+#[cfg(test)]
+pub fn recorded(source: &Path, includes: &[String], debug: bool, watcom: &[&str]) -> Result<String, hir::Unsupported> {
+    recorded_for(source, includes, debug, watcom, &Profile::of(&llrm_x86_m16::M16).expect("real mode has a C front end profile"))
+}
+
+/// `source` recorded by the front end of `profile`'s tree, asked as it says.
+pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&str], profile: &Profile) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
     let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
-    let wccq = Path::new(if flat { option_env!("LLRM_WCCQ386") } else { option_env!("LLRM_WCCQ") }.ok_or_else(unbuilt)?);
-    // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
-    // double, byte-packed structs, 16-bit enums, x87 inline, no stack probes, no
-    // default library. -fp3 is for inline assembly: qcport's own uses 387 instructions.
-    // Borland's ABI is the only one: wccq also lays bit fields out as BCC 3.1 does,
-    // with no switch, since no other struct or call ABI exists here to match.
-    let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
-    let medium = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
-    // Flat: the same switches but the model, packing and Borland's headers. Its C ABI is Open
-    // Watcom's 386 flat one (`calling.toml`): structs laid out at -zp4, cdecl as -ecc.
-    let flat_header = format!("-fi={}", root.join("crates/frontends/llrm-c/src/flat.h").display());
-    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq", flat_header.as_str()];
-    let flags: &[&str] = if flat { &flat_flags } else { &medium };
+    let wccq = Path::new(option_env!("LLRM_WCCQ_DIR").ok_or_else(unbuilt)?).join(&profile.cpu).join("wccq");
+    let header = format!("-fi={}", root.join(&profile.header).display());
+    let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str()]).collect();
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
     let out = scratch.path().join("unit.cgs");
@@ -261,7 +277,7 @@ pub fn main(argv: &[String]) -> i32 {
                 // The target's physical addresses reach the program as `PHYSICAL_<NAME>`.
                 let defines: Vec<String> = args.codegen.arch.physical_addresses().iter().map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase())).collect();
                 let switches: Vec<&str> = args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
-                recorded_for(&args.source, &args.include, args.flags.debug, &switches, args.codegen.arch.name() == "x86-m32")
+                recorded_for(&args.source, &args.include, args.flags.debug, &switches, &Profile::of(&*args.codegen.arch).map_err(hir::Unsupported)?)
             })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
@@ -504,6 +520,18 @@ mod tests {
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
     }
 
+    /// The front end, its switches and its header were `if flat` here and a pair of env names in build.rs: a
+    /// target now says them in its C runtime description, and a target with none is refused.
+    #[test]
+    fn test_a_target_asks_the_front_end_as_its_description_says() {
+        let real = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let flat = super::Profile::of(&llrm_x86_m32::M32).unwrap();
+        assert_eq!((real.cpu.as_str(), real.header.as_str(), real.flags.contains(&"-mm".to_owned())), ("i86", "crates/frontends/llrm-c/src/borland.h", true));
+        assert_eq!((flat.cpu.as_str(), flat.header.as_str(), flat.flags.contains(&"-zp4".to_owned())), ("386", "crates/frontends/llrm-c/src/flat.h", true));
+        let none: toml::Table = "stack = \"stack.toml\"\n".parse().unwrap();
+        assert_eq!(super::Profile::parse(&none).unwrap_err(), "the C runtime description has no [frontend]");
+    }
+
     /// The 386 front end records `sum.c` as the committed flat stream: `flat=1` in INIT, int and
     /// pointers 4 bytes. (Its source path is the machine's, so that line is not compared.)
     // It records C through wccq, which only the toolchain feature builds.
@@ -511,7 +539,7 @@ mod tests {
     #[test]
     fn test_the_386_wccq_records_the_committed_flat_stream() {
         let dir = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32");
-        let recorded = super::recorded_for(&dir.join("sum.c"), &[], false, &[], true).expect("the 386 wccq records sum.c");
+        let recorded = super::recorded_for(&dir.join("sum.c"), &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap()).expect("the 386 wccq records sum.c");
         let committed = std::fs::read_to_string(dir.join("sum.cgs")).unwrap();
         let body = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).map(str::to_owned).collect::<Vec<_>>();
         assert!(recorded.starts_with("INIT ") && recorded.lines().next().unwrap().ends_with(" flat=1"), "{recorded}");

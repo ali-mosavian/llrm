@@ -52,7 +52,8 @@ fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The source that reads descriptions: the target layer's non-test Rust (it parses them) and the tools' Python.
+/// The source that reads descriptions: the non-test Rust of the crates (the target layer parses them, the
+/// frontends read their runtime's) and the tools' Python.
 fn readers() -> String {
     let mut text = String::new();
     let mut stack = vec![Path::new(ROOT).join("crates/target"), Path::new(ROOT).join("tools")];

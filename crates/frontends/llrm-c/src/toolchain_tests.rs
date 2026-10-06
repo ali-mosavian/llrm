@@ -84,8 +84,9 @@ fn test_a_dead_builds_lock_is_taken_over() {
 /// checkout.
 #[test]
 fn test_wccq_says_what_it_was_made_from() {
-    let Some(wccq) = option_env!("LLRM_WCCQ") else { return };
-    let stamp = std::fs::read_to_string(Path::new(wccq).with_file_name("stamp")).expect("wccq has a stamp");
+    let Some(dir) = option_env!("LLRM_WCCQ_DIR") else { return };
+    let wccq = Path::new(dir).join("i86").join("wccq");
+    let stamp = std::fs::read_to_string(wccq.with_file_name("stamp")).expect("wccq has a stamp");
     let hash = Command::new("sh").arg(root().join("toolchain/owshim/hash.sh")).output().unwrap();
     assert_eq!(stamp.trim(), String::from_utf8(hash.stdout).unwrap().trim());
 }

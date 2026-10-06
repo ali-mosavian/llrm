@@ -19,17 +19,22 @@ fn toolchain() {
 
 #[cfg(unix)]
 fn toolchain() {
-    for input in ["../../../toolchain/cache.sh", "../../../toolchain/owshim/build.sh", "../../../toolchain/owshim/hash.sh", "../../../toolchain/owshim/ow-commit", "../../../toolchain/owshim/cgshim.c", "../../../toolchain/owshim/cc-objects.txt", "../../../toolchain/owshim/patches"] {
+    for input in ["../../../toolchain/cache.sh", "../../../toolchain/owshim/build.sh", "../../../toolchain/owshim/hash.sh", "../../../toolchain/owshim/ow-commit", "../../../toolchain/owshim/cgshim.c", "../../../toolchain/owshim/cc-objects.txt", "../../../toolchain/owshim/patches", "../../../runtime/c"] {
         println!("cargo:rerun-if-changed={input}");
     }
     println!("cargo:rerun-if-env-changed=OWROOT");
+    // One front end for each Open Watcom tree the targets' C runtime descriptions name.
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("owshim");
-    let status = Command::new("sh").arg("../../../toolchain/owshim/build.sh").arg(&out).status().expect("could not start sh");
-    assert!(status.success(), "../../../toolchain/owshim/build.sh failed: {status}");
-    println!("cargo:rustc-env=LLRM_WCCQ={}", out.join("wccq").display());
-    // The flat 32-bit front end, from Open Watcom's 386 tree.
-    let flat = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("owshim386");
-    let status = Command::new("sh").arg("../../../toolchain/owshim/build.sh").arg(&flat).env("OWCPU", "386").status().expect("could not start sh");
-    assert!(status.success(), "OWCPU=386 ../../../toolchain/owshim/build.sh failed: {status}");
-    println!("cargo:rustc-env=LLRM_WCCQ386={}", flat.join("wccq").display());
+    let mut cpus = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir("../../../runtime/c").expect("runtime/c").flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path().join("c.toml")) else { continue };
+        let table: toml::Table = text.parse().unwrap_or_else(|error| panic!("{}: {error}", entry.path().join("c.toml").display()));
+        let cpu = table.get("frontend").and_then(|one| one.get("watcom_cpu")).and_then(toml::Value::as_str).unwrap_or_else(|| panic!("{} has no frontend.watcom_cpu", entry.path().display()));
+        cpus.insert(cpu.to_owned());
+    }
+    for cpu in &cpus {
+        let status = Command::new("sh").arg("../../../toolchain/owshim/build.sh").arg(out.join(cpu)).env("OWCPU", cpu).status().expect("could not start sh");
+        assert!(status.success(), "OWCPU={cpu} ../../../toolchain/owshim/build.sh failed: {status}");
+    }
+    println!("cargo:rustc-env=LLRM_WCCQ_DIR={}", out.display());
 }
