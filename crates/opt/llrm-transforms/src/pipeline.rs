@@ -290,6 +290,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     }
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
+    manager.add_module(crate::homes::Homes);
     manager.run(program)
 }
 
