@@ -16,6 +16,8 @@ string_segment = "ds"
 [spaces]
 near = 0
 far = 0
+data = 0
+stack = 0
 
 [pointers]
 4 = "near"

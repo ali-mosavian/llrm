@@ -11,6 +11,11 @@ use std::collections::BTreeMap;
 pub struct AddressSpaces {
     pub near: u32,
     pub far: u32,
+    /// Where the program's data is, for the passes that ask: its globals' and
+    /// escaping locals' space.
+    pub data: u32,
+    /// Where the stack is.
+    pub stack: u32,
     /// A selector alone.
     pub segment: Option<u32>,
     /// A far pointer whose offset carries into its selector.
@@ -63,7 +68,7 @@ impl AddressSpaces {
 
 impl Layout {
     /// `text`, a `datalayout.toml`: `datalayout`, `[spaces]` (`near`, `far`, and
-    /// the optional `segment`, `huge`, `fixed`) and `[pointers]` (a width in bytes
+    /// `data` and `stack`, the optional `segment`, `huge`, `fixed`) and `[pointers]` (a width in bytes
     /// to `"near"` or `"far"`).
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
@@ -90,7 +95,7 @@ impl Layout {
         }
         Ok(Self {
             datalayout,
-            spaces: AddressSpaces { near: required("near")?, far: required("far")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")?, unmarked },
+            spaces: AddressSpaces { near: required("near")?, far: required("far")?, data: required("data")?, stack: required("stack")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")?, unmarked },
         })
     }
 }
@@ -99,11 +104,12 @@ impl Layout {
 mod tests {
     use super::*;
 
-    const FLAT: &str = "datalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\n[pointers]\n4 = \"near\"\n";
+    const FLAT: &str = "datalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\ndata = 0\nstack = 0\n[pointers]\n4 = \"near\"\n";
 
     #[test]
     fn a_flat_layout_has_one_space_and_none_of_the_pair_kinds() {
         let flat = Layout::parse(FLAT).unwrap();
+        assert_eq!((flat.spaces.data, flat.spaces.stack), (0, 0));
         assert_eq!((flat.spaces.near, flat.spaces.far, flat.spaces.segment, flat.spaces.huge, flat.spaces.fixed), (0, 0, None, None, None));
         assert_eq!(flat.spaces.unmarked(4), Ok(0));
         assert!(flat.spaces.unmarked(2).is_err());

@@ -6,6 +6,9 @@ datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i3
 # What a frontend's addresses are, by address space number.
 [spaces]
 near = 0
+# Where the program's data and its stack are, for the passes that ask.
+data = 0
+stack = 5
 # A far pointer's.
 far = 1
 # A selector alone: a cast from a far pointer gives its segment, and one back gives segment:0.
