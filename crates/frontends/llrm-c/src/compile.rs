@@ -1034,13 +1034,61 @@ mod tests {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    /// The body of `name` in the flat listing of `fixture`.
+    fn flat_body(fixture: &str, name: &str) -> Vec<String> {
+        let lines = flat_listing(fixture);
+        lines.iter().skip_while(|line| **line != format!("_{name} proc near")).skip(1).take_while(|line| **line != format!("_{name} endp")).cloned().collect()
+    }
+
+    /// A short read through a pointer and widened is one `movsx`. The peephole asked the 16-bit
+    /// encoder whether `movsx eax, word ptr [eax]` encodes, which it does not, so a flat compile kept
+    /// `mov ax, word ptr [eax]; movsx eax, ax`.
+    #[test]
+    fn test_code32_widens_a_load_in_one_instruction() {
+        let body = flat_body("extend", "extend");
+        assert!(body.contains(&"movsx eax, word ptr [eax]".to_owned()), "{body:#?}");
+    }
+
+    /// Every address register holds a pointer loaded from the arguments. The peephole decoded the
+    /// bytes of the flat code it was judging as 16-bit code, read the effects of `movsx eax, word ptr
+    /// [ebx]` wrongly, and moved it above a read of EAX: `movsx eax, [ebx]; movsx ebx, [eax]`
+    /// loaded through a value.
+    #[test]
+    fn test_code32_never_addresses_through_a_value() {
+        let body = flat_body("extend", "extend2");
+        let mut pointers: Vec<&str> = Vec::new();
+        for line in &body {
+            let Some((operation, operands)) = line.split_once(' ') else { continue };
+            let Some((destination, rest)) = operands.split_once(", ") else { continue };
+            if let Some(inside) = rest.split_once('[').and_then(|(_, tail)| tail.split_once(']')).map(|(inside, _)| inside) {
+                for register in inside.split(|one: char| !one.is_ascii_alphanumeric()).filter(|one| one.len() == 3 && one.starts_with('e')) {
+                    assert!(register == "ebp" || register == "esp" || pointers.contains(&register), "{register} is a value in `{line}`: {body:#?}");
+                }
+            }
+            let destination = destination.trim();
+            if destination.len() == 3 && destination.starts_with('e') && operation.starts_with("mov") {
+                // A pointer is what an argument load puts in a register.
+                if operation == "mov" && rest.starts_with("dword ptr [ebp+") {
+                    if !pointers.contains(&destination) {
+                        pointers.push(destination);
+                    }
+                } else {
+                    pointers.retain(|one| *one != destination);
+                }
+            }
+        }
+    }
+
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
     /// addressed `[base+index]` with no segment, selector or 16-bit register.
     #[test]
     fn test_code32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
         let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
-        assert!(body.contains(&"mov edx, dword ptr [ebx+ecx]") && body.contains(&"add ecx, 4"), "{body:#?}");
+        // The load is the add's operand, and the add of the stride sets the flags the branch reads.
+        assert!(body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")), "{body:#?}");
+        assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
+        assert!(body.iter().any(|line| line.starts_with("jne ")) && !body.iter().any(|line| line.starts_with("cmp ") && line.ends_with(", 0")), "{body:#?}");
         assert!(body.iter().all(|line| !line.contains(" bp") && !line.contains("[bx") && !line.contains("es:") && !line.contains("far")), "{body:#?}");
         assert_eq!(body.last(), Some(&"ret"));
     }

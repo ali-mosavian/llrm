@@ -774,7 +774,7 @@ pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
 /// The machine instructions `what` encodes to.
 fn _decoded(what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
     let encoded = emit(what)?;
-    let mut decoder = Decoder::new(16, &encoded.code, DecoderOptions::NONE);
+    let mut decoder = Decoder::new(select::encoding(), &encoded.code, DecoderOptions::NONE);
     Some((&mut decoder).into_iter().collect())
 }
 
