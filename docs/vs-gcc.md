@@ -1,14 +1,14 @@
-# llrm code32 against gcc and clang
+# llrm m32 against gcc and clang
 
 **TL;DR:** on the 22 C benchmarks llrm executes 1.38x the instructions and 1.37x the 486 clocks of the better of gcc 13.4 / clang 20.1 at `-O2` (geomean; medians 1.27x and 1.18x); at `-Os` 1.29x and 1.36x. It beats both on 3 programs by 10% or more (matmul, sieve, particle) and loses 2x or more on instructions or clocks on 6 (bintree, hanoi, queens, scroll, fib, frames), for eight general reasons below.
 
 ## Method
 
-- llrm: `llrm-c --target x86-code32 -O2 -march=i486 -fno-inline-functions`. gcc/clang: `-m32 -march=i486 -fno-pic -fno-inline-functions -fno-stack-protector -fcf-protection=none`, `-O2` and `-Os`. Same `-fno-inline-functions` as tools/bench; the kernel carries `noinline` for gcc/clang, which otherwise inline it into `main` (llrm does not).
+- llrm: `llrm-c --target x86-m32 -O2 -march=i486 -fno-inline-functions`. gcc/clang: `-m32 -march=i486 -fno-pic -fno-inline-functions -fno-stack-protector -fcf-protection=none`, `-O2` and `-Os`. Same `-fno-inline-functions` as tools/bench; the kernel carries `noinline` for gcc/clang, which otherwise inline it into `main` (llrm does not).
 - One emulator (unicorn) for all: llrm's OMF is linked in Python, gcc/clang's ELF by `ld`; both resolve `report`/`memset`/`memcpy`/`memmove` to the same stub. The whole program runs from `main`; the kernel `bench_X` is counted from entry to its own return, callees included. Counting follows tools/bench/icount.py (a `rep` instruction counts once per iteration; memory operands exclude `lea`). Clock estimates use a 486 table (`cost()` in harness.py), without pipeline effects.
 - Not counted: alignment `nop`s (clang pads loops with them, e.g. 94710 in fib), reported in the `nops` column of table.md.
 - Skipped: `grep` (10 MB input, timed only), `huge`, `textfill` (16-bit only). `lru` is built with `-Dfar=` for gcc/clang. `parity` is not a program.
-- Rerun: `crates/target/llrm-x86-code32/vsgcc/run.sh` (see `crates/target/llrm-x86-code32/vsgcc/readme.md`); it builds llrm-c and reproduces every table here. The listings that back each finding are in the appendix.
+- Rerun: `crates/target/llrm-x86-m32/vsgcc/run.sh` (see `crates/target/llrm-x86-m32/vsgcc/readme.md`); it builds llrm-c and reproduces every table here. The listings that back each finding are in the appendix.
 
 ## Instrument check
 
@@ -50,17 +50,17 @@ Geomean llrm/best: -O2 1.38 ins, 1.37 clk, 1.22 code; -Os 1.29 ins, 1.36 clk, 1.
 
 Each is a general gap; the instruction deltas are from the hottest loops (`loops.PROG.txt`).
 
-1. **No calling convention for private functions.** A `static` function takes its arguments on the stack, builds `push ebp; mov ebp,esp … leave; ret 4`, and spills across the recursive call. gcc/clang pass the argument in a register and drop the frame. fib: 65672 memory operands against 1; 317k instructions against 206k/234k. Also queens (the `col` argument is re-read from `[ebp+10h]` inside `safe`'s loop), bintree, hanoi. Owner: backend selection (code32-prep).
+1. **No calling convention for private functions.** A `static` function takes its arguments on the stack, builds `push ebp; mov ebp,esp … leave; ret 4`, and spills across the recursive call. gcc/clang pass the argument in a register and drop the frame. fib: 65672 memory operands against 1; 317k instructions against 206k/234k. Also queens (the `col` argument is re-read from `[ebp+10h]` inside `safe`'s loop), bintree, hanoi. Owner: backend selection (m32-prep).
 2. **Tail recursion is not turned into a loop.** bintree's `insert` and hanoi's second call stay calls: 102097 instructions against 37–44k, hanoi 286704 against gcc 143356. gcc also folds fib's second call into a loop with an accumulator. MIR transform.
-3. **Division selection ignores sign and range facts.** `rest > 0` makes `rest / 10` and `rest % 10` unsigned: gcc/clang use `mul; shr` (frames: 10 instructions, 5.5M clk); llrm uses `cdq; idiv` (7 instructions, 12.1M clk, 2.2x). The 486 table rejects the signed reciprocal (`timing.rs` test), but an unsigned one wins. nbody_fixed: gcc proves `dist2 >= 0` (sum of squares, `nsw`) and divides by a power of two with `sar`; llrm adds the 5-instruction bias (`mov; sar 31; and; add; sar`) at every division. Analysis (known-bits / non-negative facts → selection): compile-time for the analysis, code32-prep for the selection.
+3. **Division selection ignores sign and range facts.** `rest > 0` makes `rest / 10` and `rest % 10` unsigned: gcc/clang use `mul; shr` (frames: 10 instructions, 5.5M clk); llrm uses `cdq; idiv` (7 instructions, 12.1M clk, 2.2x). The 486 table rejects the signed reciprocal (`timing.rs` test), but an unsigned one wins. nbody_fixed: gcc proves `dist2 >= 0` (sum of squares, `nsw`) and divides by a power of two with `sar`; llrm adds the 5-instruction bias (`mov; sar 31; and; add; sar`) at every division. Analysis (known-bits / non-negative facts → selection): compile-time for the analysis, m32-prep for the selection.
 4. **No copy-loop idiom.** `for (i…) a[i] = a[i+80]` and its backward twin become `rep movsd` in gcc/clang (1 instruction per 2 words); llrm copies a word per 4-instruction iteration. scroll: 1196306 against 177k–180k instructions, 6.8x.
 5. **Induction variables are not simplified.**
    - Derived values are recomputed: queens' `row - r` and `r - row` cost `mov; sub; cmp` (3) each iteration; gcc/clang step a register (1 + `cmp`).
    - Masks the range makes redundant stay: tile's `(x+7)&63` with `x < 40` is `mov; and` per element, where gcc/clang use a plain pointer or a count-to-zero scaled index (7 against 5 and 4 instructions).
    - Narrow counters are re-extended every iteration: mandel `inc cx; movsx eax,cx; cmp cx,20h`, nbody `inc bx; movzx esi,bx; cmp bx,4`. A 32-bit counter needs neither.
    Programs: queens, tile, mandel, nbody, fpbench. Analysis (induction/SCEV, range) plus MIR; compile-time for the analysis part.
-6. **x87 code: invariants and constants are re-pushed, shuffled with `fxch`.** The `x[i]`/`y[i]` loads stay inside the `j` loop (gcc keeps them on the stack under the loop); `fld1`/`fldz` are re-pushed at each use where gcc reuses one with `fadd st(1),st`; an operand loaded for a later `fsubr mem` is first copied (`fld st,st(0); fsubr m; fxch`, 3 instructions where gcc has `fld m; fsub m`); `fxch; fxch` pairs and `fldz; faddp` remain. nbody 38 instructions per iteration against 27; fpbench and nbody_single 1.25–1.4x. Backend (code32-prep): x87 stack allocation and scheduling.
-7. **Constant multiplication is expanded past the cost of `imul`.** bintree's LCG `x * 25173` is a 14-instruction shift/add chain every iteration; gcc/clang emit `imul r,r,0x6255` (13 clk on the 486). Also mandel and nbody_fixed use `mov x,y; add x,z` where gcc/clang use `lea x,[y+z]` (one instruction less, and `lea [a+b+disp]` folds a third add). Instruction choice: code32-prep.
+6. **x87 code: invariants and constants are re-pushed, shuffled with `fxch`.** The `x[i]`/`y[i]` loads stay inside the `j` loop (gcc keeps them on the stack under the loop); `fld1`/`fldz` are re-pushed at each use where gcc reuses one with `fadd st(1),st`; an operand loaded for a later `fsubr mem` is first copied (`fld st,st(0); fsubr m; fxch`, 3 instructions where gcc has `fld m; fsub m`); `fxch; fxch` pairs and `fldz; faddp` remain. nbody 38 instructions per iteration against 27; fpbench and nbody_single 1.25–1.4x. Backend (m32-prep): x87 stack allocation and scheduling.
+7. **Constant multiplication is expanded past the cost of `imul`.** bintree's LCG `x * 25173` is a 14-instruction shift/add chain every iteration; gcc/clang emit `imul r,r,0x6255` (13 clk on the 486). Also mandel and nbody_fixed use `mov x,y; add x,z` where gcc/clang use `lea x,[y+z]` (one instruction less, and `lea [a+b+disp]` folds a third add). Instruction choice: m32-prep.
 8. **Loop invariants live in memory while the loop stores to a slot.** mandel's loop stores `[ebp-10h]` every iteration and reads `cx`/`cy` from the frame: 2.88 memory operands per iteration against 0.94–1.0. Register allocation under pressure (spill choice); compile-time/regalloc owner.
 
 ## Wins
@@ -76,7 +76,7 @@ Best of 5 wall-clock runs, source to object, one process per run (ms, geomean of
 
 ## Caveats
 
-- Clock estimates are a table, not a cycle-accurate model: no AGI stalls, prefix penalties (llrm and gcc both use 16-bit operations in code32, a +1 clock prefix on the 486) or cache effects.
+- Clock estimates are a table, not a cycle-accurate model: no AGI stalls, prefix penalties (llrm and gcc both use 16-bit operations in m32, a +1 clock prefix on the 486) or cache effects.
 - `memset`/`memcpy` of gcc/clang runs in a `rep stosd/movsd` stand-in, counted per iteration as in tools/bench; a real libc would differ.
 - `lru` is tiny (119 instructions); its ratio is noise.
 

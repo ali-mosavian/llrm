@@ -1,0 +1,11 @@
+# x86-m16's OS layer: real-mode DOS. start.asm and os.asm implement the interface
+# (runtime/shared/interface.toml); the assembler is told every integer here and each of DOS's facts.
+
+os = "dos"
+convention = "cdecl16"
+pointer = "far"
+groups = ["core", "vectors"]
+start = "start.asm"
+implementation = "os.asm"
+# Whether the start-up zeroes the far uninitialised data, as it does the near.
+far_bss = true

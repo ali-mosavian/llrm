@@ -106,7 +106,7 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
 /// where the runtime lands, and as each ON ERROR leaves it.
 /// The far address space of real mode, which BASIC's runtime is in.
 fn far() -> u32 {
-    llrm_x86_code16::layout().spaces.far
+    llrm_x86_m16::layout().spaces.far
 }
 
 fn trapping(context: &Context, function: &Function, registrations: &[GlobalId]) -> BTreeMap<BlockId, bool> {

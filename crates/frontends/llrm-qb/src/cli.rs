@@ -96,7 +96,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.debug = flags.debug;
     frontend.checked_overflow = flags.sanitize.signed_integer_overflow;
     frontend.checked_stack = flags.sanitize.stack;
-    let bound = llrm_driver::target(&flags, Some(&["x86-code16"]))?;
+    let bound = llrm_driver::target(&flags, Some(&["x86-m16"]))?;
     let codegen = bound.options(&flags, flags.machine(&*bound.target, llrm_core::abi::machine::BASIC.clone())?);
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })
 }

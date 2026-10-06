@@ -602,8 +602,8 @@ fn test_a_mask_narrows_only_to_a_native_width() {
 }
 
 /// C's `unsigned short i; i < 8` on a 32-bit `int`: `slt (zext i), 8`. Left
-/// wide, no trip count, unroll or count-to-zero saw the loop (code32 crc ran
-/// 832 instructions to code16's 477).
+/// wide, no trip count, unroll or count-to-zero saw the loop (m32 crc ran
+/// 832 instructions to m16's 477).
 #[test]
 fn test_a_compare_of_an_extension_is_a_compare_of_its_source() {
     let wide = |cast: &str, test: &str, constant: i64| format!("define i1 @f(i16 %x) {{\nb0:\n  %w = {cast} i16 %x to i32\n  %r = icmp {test} i32 %w, {constant}\n  ret i1 %r\n}}\n");
@@ -635,7 +635,7 @@ fn test_a_compare_of_two_extensions_is_a_compare_of_their_sources() {
 
 /// `(unsigned short)(m + i)` computed in `int`: `trunc (add (zext m), i)`.
 /// The conversion and the wide add stayed in sieve's inner loop, a
-/// `mov`/`movzx` pair a trip beside code16's `add`.
+/// `mov`/`movzx` pair a trip beside m16's `add`.
 #[test]
 fn test_a_truncated_sum_with_an_extension_of_its_width_is_narrow() {
     for op in ["add", "sub", "mul", "and", "or", "xor"] {

@@ -33,7 +33,7 @@ class LinkTests(unittest.TestCase):
     def test_a_nib_benchmark_links_the_files_its_link_header_names_resolved(self):
         """`link: @c-runtime` went to nib-build.sh as a file name (llrm-c: wccq failed on .../@c-runtime) for parity and scalar."""
         extras = bench.nib_extras(bench.ROOT / "bench/parity/parity/parity.nib")
-        self.assertEqual(extras, [str(bench.ROOT / "runtime/c/x86-code16/ext.asm")])
+        self.assertEqual(extras, [str(bench.ROOT / "runtime/c/x86-m16/ext.asm")])
 
 
 if __name__ == "__main__":

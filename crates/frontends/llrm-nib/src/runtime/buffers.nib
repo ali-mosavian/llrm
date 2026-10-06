@@ -1,7 +1,7 @@
 # Strings' and vecs' buffers (section 13): a descriptor in front of the
 # data, [flags][pad][length][capacity], and a NUL after it. The length and
 # capacity are words (usize), the flags and their pad one: 6 bytes on
-# code16, 12 on code32.
+# m16, 12 on m32.
 
 import errors
 import heap

@@ -17,7 +17,7 @@ fn object(source: &str, includes: &[(&str, &str)], dialect: &str, runtime: &str,
     let path = written(&directory, "debug.bas", source.as_bytes());
     let frontend = qb_driver::Frontend { debug, includes: vec![directory.path().to_path_buf()], ..qb_driver::Frontend::new(dialect, runtime) };
     let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{dialect}: {error}"));
-    let codegen = llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone());
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
     omf::parse(&bytes).expect("parses")
 }
@@ -93,7 +93,7 @@ fn a_local_is_where_its_code_keeps_it() {
         let path = written(&directory, "local.bas", source.as_bytes());
         let frontend = qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
-        let codegen = llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone());
+        let codegen = llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone());
         let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
         let info = cvinfo::parse(&omf::parse(&bytes).expect("parses"));
         let local = info.procedures.iter().flat_map(|one| &one.locals).find(|one| one.name == "k").expect("k is described");

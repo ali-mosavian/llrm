@@ -10,5 +10,5 @@ llrm-core = { workspace = true }
 iced-x86 = { workspace = true }
 llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
-llrm-x86-code16 = { workspace = true }
-llrm-x86-code32 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
+llrm-x86-m32 = { workspace = true }

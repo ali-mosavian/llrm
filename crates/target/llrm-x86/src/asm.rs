@@ -657,7 +657,7 @@ mod tests {
     }
 
     /// A flat block was refused whole ("16-bit only"): ports, interrupts and flags, which examples/speaker
-    /// is made of, and the 32-bit registers and addresses code32 has, encode as 32-bit code does.
+    /// is made of, and the 32-bit registers and addresses m32 has, encode as 32-bit code does.
     #[test]
     fn a_flat_block_takes_32_bit_registers_and_addresses_and_the_same_ports_and_interrupts() {
         assert_eq!(flat(&["mov al, 0B6h", "out 43h, al", "in al, dx", "int 1Ah"]), [0xB0, 0xB6, 0xE6, 0x43, 0xEC, 0xCD, 0x1A]);
