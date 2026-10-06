@@ -78,8 +78,10 @@ pub fn stack_check() -> llrm_core::hir::model::StackCheck {
 
 /// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
 pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
-    let unit = hir::unit(&stream::parse(text))?;
-    let program = llrm_core::hir::model::Program { stack_check, ..translate::program(&unit, module)? };
+    let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
+        let unit = hir::unit(&stream::parse(text))?;
+        Ok(llrm_core::hir::model::Program { stack_check, ..translate::program(&unit, module)? })
+    })?;
     let mut options = codegen.clone();
     if let Some(dump) = dump {
         fs::create_dir_all(dump)?;
@@ -207,7 +209,7 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            recorded(&args.source, &args.include, args.flags.debug, &args.watcom)?
+            llrm_core::support::debug::timed("frontend wccq", || recorded(&args.source, &args.include, args.flags.debug, &args.watcom))?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args
@@ -218,7 +220,8 @@ pub fn main(argv: &[String]) -> i32 {
         let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(stack_check))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
-            fs::write(&output, omfwrite::written(&built, name)?)?;
+            let bytes = omfwrite::written(&built, name)?;
+            llrm_core::support::debug::timed("write output", || fs::write(&output, bytes))?;
         } else {
             fs::write(&output, masm::text(&built)?)?;
         }

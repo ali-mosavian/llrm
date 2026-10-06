@@ -535,6 +535,7 @@ struct Facts {
 
 impl Facts {
     fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
+        let _span = llrm_support::debug::span("regalloc facts");
         let index = ranges::indexed(body);
         let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
         // A spiller product lives for one use: a spill gains nothing.
@@ -716,7 +717,7 @@ fn _allocated(
                 _free(&facts.live[&other], &elsewhere, &union, &facts.live, &facts.masks, facts.widths.get(&other).copied().unwrap_or(4))
                     .is_some()
             };
-            let evicted = _evict(
+            let evicted = llrm_support::debug::timed("regalloc evict", || _evict(
                 &mine,
                 &order,
                 &union,
@@ -727,7 +728,7 @@ fn _allocated(
                 width,
                 Some(cascades.get(&value).copied().unwrap_or(newest)),
                 Some(&cascades),
-            );
+            ));
             if let Some((got, victims)) = evicted {
                 if !cascades.contains_key(&value) {
                     cascades.insert(value, newest);
@@ -760,6 +761,7 @@ fn _allocated(
         // `trySplit`, carved at once: the pieces and the rest compete again.
         let mut rewritten: Option<Vec<u32>> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
+            let _split = llrm_support::debug::span("regalloc split");
             let (bundles, live_sets) = placing.get_or_insert_with(|| (spillplacement::bundles(&body), self::live(&body)));
             let spread = splitkit::live_blocks(&body, value, (&live_sets.0, &live_sets.1));
             let occupied = splitkit::Occupied {
@@ -837,7 +839,7 @@ fn _allocated(
                 budget: Coloring::BUDGET,
                 stack: Vec::new(),
             };
-            if coloring.recolor(value, 0, &mut BTreeSet::new()) {
+            if llrm_support::debug::timed("regalloc recolor", || coloring.recolor(value, 0, &mut BTreeSet::new())) {
                 stage.insert(value, Stage::Done);
                 continue;
             }
@@ -882,6 +884,7 @@ fn _allocated(
                 // InlineSpiller: the value and the siblings worth sharing its
                 // slot go to the stack now; their reloads join the queue.
                 Some(frame) => {
+                    let _spill = llrm_support::debug::span("regalloc spill");
                     // A sibling may already hold a register: it gives it up,
                     // since sharing the slot makes the copies between them free.
                     let mut chosen = BTreeSet::from([value]);
@@ -1445,6 +1448,7 @@ impl RegAlloc {
 
     /// Assign; where that spills, make the spill real and assign again.
     pub fn transform(&mut self, body: LirBody) -> Result<LirBody, Error> {
+        let prepare = llrm_support::debug::span("regalloc prepare");
         if self.frame.is_none() {
             self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
         }
@@ -1529,22 +1533,26 @@ impl RegAlloc {
             }
         }
         let start = frame.borrow().saved();
+        drop(prepare);
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
-        let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
+        let run = |name: &'static str, candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
+            let _run = llrm_support::debug::span(name);
             let mut pins = prefer.clone();
             pins.extend(constrain::required(candidate));
             let before = last_resorts();
             let (got, out, spilled) =
                 rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
-            Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
+            let cost = llrm_support::debug::timed("regalloc cost", || _emitted(&out));
+            Ok(Outcome { cost, got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
-        let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
+        let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}, {} forced", body.name, best.out.insns().len(), best.spilled.len(), best.cost, best.forced);
         let spilled = best.spilled.clone();
         if !spilled.is_empty() {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
+            let building = llrm_support::debug::span("regalloc candidates");
             let mut candidates: Vec<(LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
             let (separated, opened) = constrain::addressed(&body, &spilled);
             if !opened.is_empty() {
@@ -1571,6 +1579,7 @@ impl RegAlloc {
             // pieces may later lose; the whole output without it is the check.
             let whole = candidates.len();
             candidates.push((body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+            drop(building);
             for (at, (candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
                 for splitting in [true, false] {
                     // The base run was this body with splitting.
@@ -1578,7 +1587,7 @@ impl RegAlloc {
                         continue;
                     }
                     frame.borrow_mut().restore(&start);
-                    let trial = match run(&candidate, &unspillable, &protected, splitting) {
+                    let trial = match run("regalloc trial", &candidate, &unspillable, &protected, splitting) {
                         Ok(trial) => trial,
                         Err(other) => return Err(other),
                     };
@@ -1591,6 +1600,7 @@ impl RegAlloc {
             }
         }
         frame.borrow_mut().restore(&best.slots);
+        let _apply = llrm_support::debug::span("regalloc apply");
         applied(&best.out, &best.got).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
 }

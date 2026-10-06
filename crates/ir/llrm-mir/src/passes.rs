@@ -21,6 +21,50 @@ use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Mod
 use crate::program::{Program, ProgramAnalyses, ProgramPass, ProgramProxy, interface};
 use crate::target::{Machine, Neutral};
 
+/// Where a timer is plugged in: MIR depends on nothing, so whoever times the pipeline
+/// (`llrm-transforms`, when `LLRM_DEBUG=time` is on) installs these once.
+pub struct Observer {
+    /// Runs the closure as a step of kind `.0` (`mir`, `analysis`) named `.1`.
+    pub span: fn(&'static str, &'static str, &mut dyn FnMut()),
+    /// Runs the closure with the steps in it charged to the function named `.0`.
+    pub function: fn(&str, &mut dyn FnMut()),
+    /// A cached analysis `.0` looked up: found when `.1`, else computed.
+    pub count: fn(&'static str, bool),
+}
+
+static OBSERVER: std::sync::OnceLock<Observer> = std::sync::OnceLock::new();
+
+/// Installs `observer`; the first install stands.
+pub fn observe(observer: Observer) {
+    let _ = OBSERVER.set(observer);
+}
+
+/// `run` as the MIR step `name`, timed if an observer is installed.
+pub fn spanned<T>(name: &'static str, run: impl FnOnce() -> T) -> T {
+    spanned_as("mir", name, run)
+}
+
+fn spanned_as<T>(kind: &'static str, name: &'static str, run: impl FnOnce() -> T) -> T {
+    let Some(observer) = OBSERVER.get() else { return run() };
+    let (mut run, mut out) = (Some(run), None);
+    (observer.span)(kind, name, &mut || out = run.take().map(|run| run()));
+    out.expect("the observer ran the step")
+}
+
+/// `run` with the steps in it charged to `function`, if an observer is installed.
+pub fn in_function<T>(function: &str, run: impl FnOnce() -> T) -> T {
+    let Some(observer) = OBSERVER.get() else { return run() };
+    let (mut run, mut out) = (Some(run), None);
+    (observer.function)(function, &mut || out = run.take().map(|run| run()));
+    out.expect("the observer ran the step")
+}
+
+fn counted(what: &'static str, hit: bool) {
+    if let Some(observer) = OBSERVER.get() {
+        (observer.count)(what, hit);
+    }
+}
+
 /// What a function pass works on: its function, the context its types and
 /// constants live in, and the program's datalayout.
 pub struct Unit<'a> {
@@ -400,9 +444,11 @@ impl Analyses {
         let key = TypeId::of::<A>();
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+            counted(A::NAME, true);
             return Rc::clone(&entry.0);
         }
-        let result = Rc::new(A::run(context, layout, function, self));
+        counted(A::NAME, false);
+        let result = Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self)));
         self.cache.insert(key, Box::new(Entry::<A>(Rc::clone(&result))));
         result
     }
@@ -438,7 +484,7 @@ impl Kind {
 }
 
 fn computed<M: ModuleAnalysis>(module: &Module, analyses: &mut ModuleAnalyses) -> Rc<dyn Any> {
-    Rc::new(M::run(module, analyses))
+    Rc::new(spanned_as("analysis", M::NAME, || M::run(module, analyses)))
 }
 
 fn agree<M: ModuleAnalysis>(one: &dyn Any, other: &dyn Any) -> bool {
@@ -496,8 +542,10 @@ impl ModuleAnalyses {
 
     fn computed(&mut self, kind: Kind, module: &Module) -> Rc<dyn Any> {
         if let Some((_, one)) = self.results.get(&kind.id) {
+            counted(kind.name, true);
             return Rc::clone(one);
         }
+        counted(kind.name, false);
         let fresh = (kind.run)(module, self);
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
@@ -687,7 +735,7 @@ impl PassManager {
         // A module a frontend made wrong is its maker's, not the first pass's.
         for module in &program.modules {
             if self.verify_each {
-                let problems = crate::verify::verify(module);
+                let problems = spanned("verify", || crate::verify::verify(module));
                 if !problems.is_empty() {
                     return Err(format!("before the first pass: {}", problems.join("; ")));
                 }
@@ -703,7 +751,7 @@ impl PassManager {
                     eprintln!("BISECT: {}running pass ({}) {name} on the program", if running { "" } else { "NOT " }, self.runs);
                     running
                 }) {
-                    pass.run(program, analyses)?;
+                    spanned(name, || pass.run(program, analyses))?;
                 }
                 for (at, module) in program.modules.iter_mut().enumerate() {
                     for (index, global) in module.globals.iter_mut().enumerate() {
@@ -728,7 +776,7 @@ impl PassManager {
                 let before = interface(&program.modules[at]);
                 let mut modules = ModuleAnalyses { required: self.required.clone(), ..ModuleAnalyses::new(analyses.proxy(program, at)) };
                 let made = self.over(at, &mut program.modules[at], &mut modules, start..end, &dumps[at])?;
-                if made.iter().any(|one| !one.changes.is_empty()) || interface(&program.modules[at]) != before {
+                if made.iter().any(|one| !one.changes.is_empty()) || spanned("interface", || interface(&program.modules[at])) != before {
                     analyses.invalidate();
                 }
                 stages.extend(made);
@@ -754,7 +802,7 @@ impl PassManager {
             let name = pass.name();
             // A function's analyses read the outer facts, so a change to
             // them drops every function's.
-            let outer = analyses.outer(module);
+            let outer = spanned("outer analyses", || analyses.outer(module));
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
@@ -762,7 +810,7 @@ impl PassManager {
                     if !bisected(name, "the module") {
                         continue;
                     }
-                    let changed = pass.run(module, analyses);
+                    let changed = spanned(name, || pass.run(module, analyses));
                     if !changed.is_empty() {
                         analyses.invalidate(&PreservedAnalyses::none());
                     }
@@ -787,9 +835,9 @@ impl PassManager {
                     continue;
                 }
                 let cache = analyses.manager(id, &outer);
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function, metadata, declared: &mut declared }, cache);
+                let preserved = in_function(global.name.as_deref().unwrap_or_default(), || spanned(name, || pass.run(&mut Unit { context, layout: &layout, function, metadata, declared: &mut declared }, cache)));
                 kept.retain(|one| preserved.keeps(*one));
-                cache.invalidate(&preserved);
+                spanned("invalidate", || cache.invalidate(&preserved));
                 if self.verify_invalidation {
                     let stale = cache.stale(context, &layout, function);
                     if !stale.is_empty() {
@@ -797,7 +845,7 @@ impl PassManager {
                     }
                 }
                 stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
-                declared.place(module)?;
+                spanned("declared", || declared.place(module))?;
             }
             if self.verify_invalidation {
                 let stale = analyses.stale(module, &kept);
@@ -827,6 +875,10 @@ impl ProgramPass for PassManager {
 
 /// The dump and the verifier after pass `number`.
 fn after(dump: &Option<std::path::PathBuf>, verify_each: bool, number: usize, name: &str, module: &Module) -> Result<(), String> {
+    spanned("verify after pass", || after_pass(dump, verify_each, number, name, module))
+}
+
+fn after_pass(dump: &Option<std::path::PathBuf>, verify_each: bool, number: usize, name: &str, module: &Module) -> Result<(), String> {
         if let Some(directory) = dump {
             let file = directory.join(format!("{:02}-{name}.ll", number + 1));
             std::fs::create_dir_all(directory).and_then(|()| std::fs::write(file, crate::print::module(module))).map_err(|error| error.to_string())?;

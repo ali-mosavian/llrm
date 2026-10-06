@@ -16,6 +16,7 @@ use crate::backend::constpool::Pool;
 use crate::backend::isel::{self, Selected};
 use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, select, ssaspill};
 use crate::flow;
+use llrm_support::debug::timed;
 use crate::model::lir::LirBody;
 use crate::model::ir::{Addr, Space};
 use crate::support::hash::IndexMap;
@@ -57,8 +58,8 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
 pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments, selection: &'static isel::Compiled, arch: &dyn llrm_target::Target) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
-    let module = &*crate::backend::nearcode::placed(module);
-    let mut names = globals::names(module, &|name| abi.linked(name))?;
+    let module = &*timed("mir near code", || crate::backend::nearcode::placed(module));
+    let mut names = timed("global names", || globals::names(module, &|name| abi.linked(name)))?;
     names.extend(crate::hir::symbols::symbol_names());
     let mut procedures = Vec::new();
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
@@ -72,8 +73,8 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
             GlobalKind::Variable(variable) if variable.initializer.is_some() => data.extend(globals::datums(module, id, &names)?),
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Machined { body, reserve, calls, inline, far, popped, .. } = machined(module, name, abi, &pool, &target)?;
-                let body = masm::cleaned_returns(&addressvalues::converted(&body), popped)?;
+                let Machined { body, reserve, calls, inline, far, popped, .. } = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
+                let body = timed("masm cleaned returns", || masm::cleaned_returns(&addressvalues::converted(&body), popped))?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
                     if let Some(code) = inline.get(at) {
@@ -107,8 +108,8 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
                     stack_check: function.attrs.iter().any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck)).then(|| abi.stack_check().cloned()).flatten(),
                     registers: target.arch.frame_registers(),
                 };
-                let overhead = masm::return_overhead_bytes(&procedure).map_err(|error| error.to_string())? as i64;
-                let body = jumps::duplicated_returns(procedure.body.clone(), overhead);
+                let overhead = timed("masm return overhead", || masm::return_overhead_bytes(&procedure)).map_err(|error| error.to_string())? as i64;
+                let body = timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), overhead));
                 procedures.push(masm::Procedure { body, ..procedure });
             }
             _ => {}
@@ -119,7 +120,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
         names.insert((Space::Segment, id), name.clone());
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names));
+    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names)));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -129,7 +130,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
-    let debug = crate::backend::codeview::described(module, &names, llrm_omf::cvwrite::Flavor::default())?;
+    let debug = timed("codeview", || crate::backend::codeview::described(module, &names, llrm_omf::cvwrite::Flavor::default()))?;
     Ok(masm::Module {
         code: code.to_owned(),
         names,
@@ -195,13 +196,13 @@ pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Po
 }
 
 fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let (first, frame) = cheaper(module, name, abi, pool, target, 0)?;
+    let (first, frame) = timed("candidate first frame", || cheaper(module, name, abi, pool, target, 0))?;
     let spilled = frame.floor + first.reserve;
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
     }
-    let (second, _) = cheaper(module, name, abi, pool, target, spilled)?;
+    let (second, _) = timed("candidate second frame", || cheaper(module, name, abi, pool, target, spilled))?;
     Ok(if far_frame(&second.body) < far { second } else { first })
 }
 
@@ -217,22 +218,22 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         _ => CANDIDATES.with(std::cell::Cell::get),
     };
     if candidates == Candidates::AllocatorOnly {
-        return phased(module, name, abi, pool, target, hole, false, true).map(|(made, _)| made);
+        return timed("candidate allocator alone", || phased(module, name, abi, pool, target, hole, false, true)).map(|(made, _)| made);
     }
-    let (spilled, ran) = phased(module, name, abi, pool, target, hole, true, true)?;
+    let (spilled, ran) = timed("candidate spiller", || phased(module, name, abi, pool, target, hole, true, true))?;
     if !ran.changed() || candidates == Candidates::SpillerOnly {
         return Ok(spilled);
     }
-    let (allocator_alone, _) = phased(module, name, abi, pool, target, hole, false, true)?;
-    let (kept, from_spiller) = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
+    let (allocator_alone, _) = timed("candidate allocator alone", || phased(module, name, abi, pool, target, hole, false, true))?;
+    let (kept, from_spiller) = match timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target))) {
         (Some(with), Some(without)) if without < with => (allocator_alone, false),
         _ => (spilled, true),
     };
     // Where code bytes are the measure, a loop admitted because its trips are fewer, on a tie in the bytes the spiller
     // counts, is checked against the encoded code: the loads it moved to the entry are not all it changed.
     if from_spiller && ran.ties() {
-        let (plain, _) = phased(module, name, abi, pool, target, hole, true, false)?;
-        if cost(&plain.0, target).zip(cost(&kept.0, target)).is_some_and(|(plain, admitted)| plain < admitted) {
+        let (plain, _) = timed("candidate plain", || phased(module, name, abi, pool, target, hole, true, false))?;
+        if timed("candidate cost", || cost(&plain.0, target).zip(cost(&kept.0, target))).is_some_and(|(plain, admitted)| plain < admitted) {
             return Ok(plain);
         }
     }
@@ -293,10 +294,10 @@ fn far_frame(body: &LirBody) -> usize {
 fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool, admission: bool) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole);
+    let selected = timed("isel", || isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole));
     let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
-    let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
-    let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;
+    let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;
+    let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.hole = hole;
     let frame = Rc::new(RefCell::new(frame));
@@ -322,7 +323,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let reserve = -std::cmp::min(frame.slots.values().copied().min().unwrap_or(0), frame.floor);
     let (body, landing) = match landing {
         Some(marker) => {
-            let (body, at) = landed_last(body, marker).map_err(|error| format!("@{name}: {error}"))?;
+            let (body, at) = timed("lir landed last", || landed_last(body, marker)).map_err(|error| format!("@{name}: {error}"))?;
             (body, Some(at))
         }
         None => (body, None),
