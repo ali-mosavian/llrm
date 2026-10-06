@@ -11,6 +11,14 @@ pub use cycles::report;
 pub use target::{Dos, ENCODABLE_BASES, FRAME, GENERAL, PRESERVED, WORD_INDEXES, word_bases};
 pub use timings::ARCHS;
 
+/// Real mode's data layout and address spaces: `machines/datalayout.toml`.
+pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
+
+/// `DATALAYOUT_TOML`, parsed.
+pub fn layout() -> llrm_target::layout::Layout {
+    llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("real mode's datalayout.toml parses")
+}
+
 /// The 16-bit x86 target as `llrm-driver` names it.
 pub struct Code16;
 
@@ -25,6 +33,10 @@ impl llrm_target::Target for Code16 {
 
     fn cpus(&self) -> &'static [&'static str] {
         &machine::CPUS
+    }
+
+    fn layout(&self) -> llrm_target::layout::Layout {
+        layout()
     }
 
     /// A byte is pushed as a word.

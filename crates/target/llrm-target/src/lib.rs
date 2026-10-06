@@ -1,6 +1,7 @@
 //! The target-generic layer: what a target description is, owned by no ISA.
 //! A target crate supplies the data; the passes read the type.
 
+pub mod layout;
 pub mod machine;
 
 use machine::Machine;
@@ -17,6 +18,10 @@ pub trait Target {
 
     /// The processors this target prices, as a platform description names them.
     fn cpus(&self) -> &'static [&'static str];
+
+    /// The data layout programs are built under and the address spaces a
+    /// frontend's addresses are.
+    fn layout(&self) -> layout::Layout;
 
     /// The bytes an argument of `width` takes on the stack, and the least a
     /// stack cell holds.

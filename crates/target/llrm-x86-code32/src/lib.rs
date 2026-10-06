@@ -11,6 +11,9 @@ pub const DOS32: &str = concat!(include_str!("machines/dos32.toml"), include_str
 /// The processors flat code is priced for: those the descriptions know.
 pub const CPUS: [&str; 8] = ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"];
 
+/// The data layout and address spaces: `machines/datalayout.toml`.
+pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
+
 /// The flat 32-bit x86 target as `llrm-driver` names it.
 pub struct Code32;
 
@@ -25,6 +28,10 @@ impl llrm_target::Target for Code32 {
 
     fn cpus(&self) -> &'static [&'static str] {
         &CPUS
+    }
+
+    fn layout(&self) -> llrm_target::layout::Layout {
+        llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("flat datalayout.toml parses")
     }
 
     /// An argument takes a dword at least.
@@ -68,6 +75,16 @@ mod tests {
         assert_eq!(machine.addressing, llrm_target::machine::Addressing::Flat);
         assert!(machine.segments.is_none());
         assert!(!machine.ports.is_empty());
+    }
+
+    /// One address space of 32-bit pointers: `near` and `far` are space 0, an unmarked
+    /// dword pointer is near, and the pair kinds are none.
+    #[test]
+    fn test_code32_layout_is_one_32_bit_space() {
+        let layout = Code32.layout();
+        assert!(layout.datalayout.starts_with("e-p:32:32"));
+        let spaces = layout.spaces;
+        assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, None, None, Ok(0)));
     }
 
     /// cdecl32 (calling.toml): EBP and ESP frame, EBX/ESI/EDI kept whole, first argument at [ebp+8].
