@@ -8,7 +8,5 @@ addressing = "flat"
 segment_end_faults = false
 far_bss = false
 
-cpu = "486"
-
 # [[foreign]] ranges depend on how the extender maps low memory and video:
 # decided with the extender choice (milestone 3), none until then.

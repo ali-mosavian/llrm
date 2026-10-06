@@ -60,7 +60,7 @@
 7 crates/bc/llrm-bc/src/pairs.rs
 2 crates/bc/llrm-bc/src/runtime.rs
 2 crates/bc/llrm-bc/src/sites.rs
-2 crates/bc/llrm-bcdriver/src/lib.rs
+1 crates/bc/llrm-bcdriver/src/lib.rs
 2 crates/bc/llrm-bcmachine/src/abi/callsite.rs
 6 crates/bc/llrm-bcmachine/src/frontends/bc/blocks.rs
 2 crates/bc/llrm-bcmachine/src/frontends/bc/stack.rs
@@ -71,7 +71,6 @@
 1 crates/frontends/llrm-c/build.rs
 5 crates/frontends/llrm-c/src/compile.rs
 9 crates/frontends/llrm-c/src/translate.rs
-1 crates/frontends/llrm-nib/src/compile.rs
 1 crates/frontends/llrm-nib/src/library.rs
 1 crates/frontends/llrm-nib/src/semantic/assembly.rs
 1 crates/frontends/llrm-nib/src/semantic/checks.rs
@@ -91,12 +90,11 @@
 4 crates/opt/llrm-transforms/src/ports.rs
 1 crates/support/llrm-support/src/pyjson.rs
 1 crates/support/llrm-support/src/pyrepr.rs
-3 tools/bench/bench.py
+2 tools/bench/bench.py
 5 tools/bench/icount.py
 2 tools/bench/maps.py
 1 tools/dosbatch/dosbatch.py
-5 tools/dosbatch/run_tests.py
-1 tools/e2e/e2e.py
+4 tools/dosbatch/run_tests.py
 9 tools/e2e/mkgolden.py
 1 tools/e2e/qbprint.py
 2 tools/innerloops.py
@@ -114,4 +112,3 @@
 1 tools/loops/run.py
 3 tools/msp430.py
 1 tools/nib-build.sh
-2 tools/sizes.py

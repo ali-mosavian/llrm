@@ -219,7 +219,7 @@ impl Flags {
     /// `default`, or the `--machine` description, on the CPU named.
     pub fn machine(&self, default: Machine) -> Result<Machine, String> {
         let mut machine = match &self.machine {
-            Some(path) => Machine::load(path, &crate::abi::machine::CPUS)?,
+            Some(path) => Machine::load(path, &default.cpu)?,
             None => default,
         };
         if let Some(cpu) = &self.cpu {

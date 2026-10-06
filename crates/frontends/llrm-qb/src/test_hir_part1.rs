@@ -68,10 +68,10 @@ fn test_qb_cli_exposes_pds_alternate_math_option() {
 #[test]
 fn test_qb_cli_reads_the_machine_it_is_given() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let path = directory.path().join("386.toml");
-    std::fs::write(&path, llrm_core::abi::machine::DOS.replace("cpu = \"486\"", "cpu = \"386\"")).expect("writes");
+    let path = directory.path().join("far.toml");
+    std::fs::write(&path, llrm_core::abi::machine::DOS.replace("far_bss = false", "far_bss = true")).expect("writes");
     let args = parse_args(&argv(&["probe.bas", "--machine", path.to_str().expect("utf-8")])).expect("parses");
-    assert_eq!(args.codegen.machine.cpu, "386");
+    assert!(args.codegen.machine.far_bss);
     assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_core::abi::machine::BASIC);
 }
 
