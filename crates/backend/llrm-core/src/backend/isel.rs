@@ -827,7 +827,7 @@ impl Selector<'_, '_, '_> {
                 chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
             })
             .collect();
-        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks), self.cpu))?;
+        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks), self.cpu, self.compiled.rules()))?;
         let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
         body.sealed_arguments = !self.unsealed;

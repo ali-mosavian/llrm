@@ -32,6 +32,22 @@ pub fn machine<'a>(
     segments: &Segments,
     spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, spilling, &crate::backend::peep::targets::x86_code16::RULES)
+}
+
+/// `machine`, its peephole made of the rules `rules` holds.
+#[allow(clippy::too_many_arguments)]
+pub fn machine_with<'a>(
+    pinned: &IndexMap<u32, Register>,
+    frame: Option<Rc<RefCell<Frame>>>,
+    pool: Option<Rc<RefCell<Pool>>>,
+    calls: Option<&IndexMap<i64, String>>,
+    basic_semantics: bool,
+    cpu: impl Into<ProfileOrName<'a>>,
+    segments: &Segments,
+    spilling: bool,
+    rules: &'static crate::backend::peep::Rules,
+) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
     if let Some(frame) = &frame {
@@ -54,7 +70,7 @@ pub fn machine<'a>(
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
-        Box::new(peephole::Peephole::new(frame.clone(), target)?),
+        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules)?),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
         // Scheduling may only move fully allocated machine occurrences.

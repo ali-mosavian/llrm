@@ -44,6 +44,15 @@ pub struct Compiled {
     covers_here: Holds,
     cost: Costs,
     emit: Emits,
+    /// The target's peephole rules, generated from the same directory.
+    rules: &'static crate::backend::peep::Rules,
+}
+
+impl Compiled {
+    /// The peephole rules generated beside this selector.
+    pub fn rules(&self) -> &'static crate::backend::peep::Rules {
+        self.rules
+    }
 }
 
 mod selectors {
