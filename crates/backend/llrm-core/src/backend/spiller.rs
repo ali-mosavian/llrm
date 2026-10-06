@@ -1521,13 +1521,14 @@ impl CellOf for _Cells {
 /// static uses cannot say so: sum_three's loop-invariant base had one use,
 /// inside the loop, and `add di,[slot]` moved it on every trip -- 330 for
 /// 1110.
-fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
+pub(crate) fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
     use crate::backend::allocate;
 
-    let (_live_in, live_out) = allocate::live(body);
+    // Only what leaves each block is read: rows, not the sets of every block's entry and exit.
+    let rows = allocate::live_rows(body);
     let mut out: BTreeSet<(usize, u32)> = BTreeSet::new();
     for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = live_out[&block.at].clone();
+        let mut alive: BTreeSet<u32> = rows.leaving(block.at).collect();
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
             let one = &block.insns[index as usize];

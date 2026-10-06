@@ -913,3 +913,44 @@ fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
         }
     }
 }
+
+/// The last reads of a body were found from the sets of every block's entry and exit, of which only the
+/// exits are read (5.7% of compiling `d_faces`, #559). The exits as rows give the same reads.
+#[test]
+fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
+    use crate::analysis::intervals::key;
+    use std::collections::BTreeSet;
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let (_, live_out) = crate::backend::allocate::live_reference(&body);
+            let mut expected: BTreeSet<(usize, u32)> = BTreeSet::new();
+            for block in &body.blocks {
+                let mut alive: BTreeSet<u32> = live_out[&block.at].clone();
+                let mut index = block.insns.len() as i64 - 1;
+                while index >= 0 {
+                    let one = &block.insns[index as usize];
+                    let mut first = index as usize;
+                    if one.group.is_some() {
+                        while first > 0 && block.insns[first - 1].group == one.group {
+                            first -= 1;
+                        }
+                    }
+                    let group = &block.insns[first..=index as usize];
+                    for item in group {
+                        for value in &item.defines {
+                            alive.remove(value);
+                        }
+                    }
+                    for item in group {
+                        expected.extend(item.uses.iter().filter(|value| !alive.contains(value)).map(|value| (key(item), *value)));
+                    }
+                    alive.extend(group.iter().flat_map(|item| item.uses.iter().copied()));
+                    index = first as i64 - 1;
+                }
+            }
+            assert_eq!(crate::backend::spiller::_final_uses(&body), expected, "seed {seed}");
+        }
+    }
+}
