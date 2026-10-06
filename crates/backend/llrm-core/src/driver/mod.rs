@@ -108,7 +108,7 @@ fn spill_model(program: &Program) {
         let costs = program.target.costs();
         for global in &module.globals {
             let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
-            let unit = llrm_analysis::memory::Unit::of(module, &layout, function);
+            let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces());
             let trips = profit::proven_trips(&unit, &unit.registers());
             let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
             let found = llrm_analysis::liveness::live(function);

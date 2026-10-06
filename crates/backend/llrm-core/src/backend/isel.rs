@@ -388,7 +388,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let Some(layout) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(layout).map_err(Unselected)?;
     let convention = convention(module, &layout, global, arch)?;
-    let unit = Unit::of(module, &layout, function);
+    let unit = Unit::of(module, &layout, function).with_spaces(arch.layout().spaces.roles);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
     let wide = cpu.dword_address_form();
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
@@ -898,7 +898,7 @@ impl Selector<'_, '_, '_> {
     /// became: a branch takes its MIR edges', shared out among the
     /// successors it has.
     fn odds(&self, made: &IndexMap<BlockId, Vec<LirBlock>>, block_at: &IndexMap<BlockId, i64>) -> BlockOdds {
-        let unit = Unit::of(self.module, &self.layout, self.function);
+        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces);
         let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.metadata, &self.module.globals, self.function, &unit.shape(), &std::collections::BTreeMap::new());
         let mut odds = BlockOdds::default();
         for (block, chain) in made {
@@ -930,7 +930,7 @@ impl Selector<'_, '_, '_> {
 
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
-        let unit = Unit::of(self.module, &self.layout, self.function);
+        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces);
         let facts = unit.registers();
         let mut counts: Vec<(i64, i64)> = unit
             .shape()
