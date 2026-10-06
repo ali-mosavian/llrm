@@ -462,6 +462,8 @@ fn test_a_placeholder_between_a_groups_copies_does_not_end_the_group() {
         *block = block.with_insns(insns);
     }
     assert_eq!(found(&split), found(&eliminated));
+}
+
 /// quicksort c's `_sort`, with its loops' entries loading what they read: the spiller's own tally of loads called that
 /// cheaper, and the body ran more instructions and memory operands (+10% and +16% in the emulator). Judged by what the
 /// body then runs, the entry is left to the loop.
