@@ -122,7 +122,7 @@ pub trait Target {
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
-        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved() }
+        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes() }
     }
 }
 
@@ -135,6 +135,8 @@ pub struct FrameRegisters {
     pub stack: iced_x86::Register,
     /// Each callee-saved register by its full register and the one pushed.
     pub saved: Vec<(iced_x86::Register, iced_x86::Register)>,
+    /// The bytes the stack is kept a multiple of.
+    pub slot: i64,
 }
 
 impl FrameRegisters {
