@@ -433,9 +433,9 @@ mod tests {
     /// The allocator's bases are the encodable ones less the frame register: a new frame rule changes one place.
     #[test]
     fn test_the_allocators_bases_are_the_encodable_ones_but_the_frame() {
-        let encodable: BTreeSet<Register> = llrm_x86_code16::ENCODABLE_BASES.into_iter().collect();
-        let held: BTreeSet<Register> = encodable.iter().copied().filter(|&one| one != llrm_x86_code16::FRAME).collect();
-        assert_eq!(RegisterClasses::code16().word_bases, held);
+        let encodable: BTreeSet<Register> = llrm_x86_m16::ENCODABLE_BASES.into_iter().collect();
+        let held: BTreeSet<Register> = encodable.iter().copied().filter(|&one| one != llrm_x86_m16::FRAME).collect();
+        assert_eq!(RegisterClasses::m16().word_bases, held);
         assert!(crate::backend::select::_WORD_BASES.iter().all(|one| encodable.contains(one)));
     }
 
@@ -443,15 +443,15 @@ mod tests {
     #[test]
     fn test_the_machine_says_its_arithmetic_is_two_address() {
         use llrm_mir::target::Machine;
-        assert!(llrm_x86_code16::Dos::default().two_address());
+        assert!(llrm_x86_m16::Dos::default().two_address());
     }
 
     /// The spill model counts the registers an address may use as the allocator restricts to.
     #[test]
     fn test_the_spill_models_address_registers_are_the_allocators() {
         use llrm_mir::target::Machine;
-        let restricted: BTreeSet<Register> = { let classes = RegisterClasses::code16(); classes.word_bases.union(&classes.word_indexes).copied().collect() };
-        assert_eq!(llrm_x86_code16::Dos::default().address_registers(), restricted.len() as i64);
+        let restricted: BTreeSet<Register> = { let classes = RegisterClasses::m16(); classes.word_bases.union(&classes.word_indexes).copied().collect() };
+        assert_eq!(llrm_x86_m16::Dos::default().address_registers(), restricted.len() as i64);
     }
 
     /// A string move reads cx cells from ds:si to es:di and leaves si, di
@@ -466,7 +466,7 @@ mod tests {
             vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6), held(7)],
             vec![held(1), held(2), held(3), held(4), held(8)],
         );
-        let wanted = RegisterClasses::code16().requirements(&repeated);
+        let wanted = RegisterClasses::m16().requirements(&repeated);
         let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
         assert_eq!((at("source", 0), at("source", 1), at("source", 2)), (Some(Register::ECX), Some(Register::ESI), Some(Register::EDI)));
         assert_eq!((at("source", 3), at("source", 4)), (Some(Register::FS), Some(Register::ES)));
@@ -477,11 +477,11 @@ mod tests {
             vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)],
             vec![held(2), held(3), reg(Register::DS, 2), held(8)],
         );
-        let wanted = RegisterClasses::code16().requirements(&single);
+        let wanted = RegisterClasses::m16().requirements(&single);
         let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
         assert_eq!((at("source", 0), at("source", 1), at("source", 2), at("source", 3)), (Some(Register::ESI), Some(Register::EDI), None, Some(Register::ES)));
         assert_eq!(at("dest", 3), None);
-        assert!(reads(&repeated, &crate::backend::classes::RegisterClasses::code16()).contains_key(&Register::ECX) && writes(&repeated, &crate::backend::classes::RegisterClasses::code16()).contains_key(&Register::ECX));
+        assert!(reads(&repeated, &crate::backend::classes::RegisterClasses::m16()).contains_key(&Register::ECX) && writes(&repeated, &crate::backend::classes::RegisterClasses::m16()).contains_key(&Register::ECX));
     }
 
     fn reg(register: Register, width: u32) -> Loc {
@@ -537,14 +537,14 @@ mod tests {
     #[test]
     fn test_the_requirements_table_says_what_the_encoding_permits() {
         assert!(
-            RegisterClasses::code16().addressing.contains(&Register::BP),
+            RegisterClasses::m16().addressing.contains(&Register::BP),
             "a frame slot is reached through bp"
         );
         assert!(
-            !RegisterClasses::code16().addressing.contains(&Register::DX),
+            !RegisterClasses::m16().addressing.contains(&Register::DX),
             "`[dx+0Ah]` has no encoding"
         );
-        let classes = RegisterClasses::code16();
+        let classes = RegisterClasses::m16();
         assert!(!bases(&classes).is_empty(), "and the assignable set is not empty");
         assert!(bases(&classes).iter().all(|one| classes.available.contains(one)));
         assert!(
@@ -608,9 +608,9 @@ mod tests {
             IndexMap::default(),
         );
 
-        assert!(!RegisterClasses::code16().requirements(&what).contains_key(&Occurrence::new("dest", 1)));
+        assert!(!RegisterClasses::m16().requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
-            crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN, &crate::backend::classes::RegisterClasses::code16())[&2],
+            crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN, &crate::backend::classes::RegisterClasses::m16())[&2],
             BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()
         );
     }
@@ -628,7 +628,7 @@ mod tests {
         let held = |value| Loc::Held(ir::Held { value, width: 2 });
         let copy = semantics(Operation::Copy, "movsd", vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)], vec![held(1), held(2), Loc::Reg(ir::Reg { register: Register::DS, width: 2 }), held(3)]);
         let body = LirBody::new("string", 0x10, vec![LirBlock::new(0x10, vec![Arc::new(Insn::new(0x10, Some((0x10, 0x11)), Some(copy), vec![5, 6], vec![1, 2, 3]))])], IndexMap::default(), IndexMap::default());
-        let classes = crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let classes = crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         assert_eq!(classes.get(&3), Some(&BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()));
         assert!(!classes.contains_key(&1), "premise: the offsets stay general");
     }
@@ -645,8 +645,8 @@ mod tests {
                 ..ir::Mem::new(None, 4)
             })],
         );
-        let want: BTreeSet<Register> = RegisterClasses::code16().addressing.iter().map(|x| ir::root(*x)).collect();
-        assert_eq!(reads(&what, &crate::backend::classes::RegisterClasses::code16())[&Register::ESI].r#where, want);
+        let want: BTreeSet<Register> = RegisterClasses::m16().addressing.iter().map(|x| ir::root(*x)).collect();
+        assert_eq!(reads(&what, &crate::backend::classes::RegisterClasses::m16())[&Register::ESI].r#where, want);
     }
 
     /// The set-ordered tables, `NAMES` and `name_of`, as CPython builds them.
@@ -691,7 +691,7 @@ mod tests {
                 (44, vec![(4, 44), (2, 28)]),
             ]
         );
-        assert_eq!(bases(&RegisterClasses::code16()), [Register::EBX, Register::ESI, Register::EDI]);
+        assert_eq!(bases(&RegisterClasses::m16()), [Register::EBX, Register::ESI, Register::EDI]);
         let python = "none al cl dl bl ah ch dh bh spl bpl sil dil r8l r9l r10l r11l r12l r13l r14l r15l ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15 eip rip es cs ss ds fs gs xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7 xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14 xmm15 xmm16 xmm17 xmm18 xmm19 xmm20 xmm21 xmm22 xmm23 xmm24 xmm25 xmm26 xmm27 xmm28 xmm29 xmm30 xmm31 ymm0 ymm1 ymm2 ymm3 ymm4 ymm5 ymm6 ymm7 ymm8 ymm9 ymm10 ymm11 ymm12 ymm13 ymm14 ymm15 ymm16 ymm17 ymm18 ymm19 ymm20 ymm21 ymm22 ymm23 ymm24 ymm25 ymm26 ymm27 ymm28 ymm29 ymm30 ymm31 zmm0 zmm1 zmm2 zmm3 zmm4 zmm5 zmm6 zmm7 zmm8 zmm9 zmm10 zmm11 zmm12 zmm13 zmm14 zmm15 zmm16 zmm17 zmm18 zmm19 zmm20 zmm21 zmm22 zmm23 zmm24 zmm25 zmm26 zmm27 zmm28 zmm29 zmm30 zmm31 k0 k1 k2 k3 k4 k5 k6 k7 bnd0 bnd1 bnd2 bnd3 cr0 cr1 cr2 cr3 cr4 cr5 cr6 cr7 cr8 cr9 cr10 cr11 cr12 cr13 cr14 cr15 dr0 dr1 dr2 dr3 dr4 dr5 dr6 dr7 dr8 dr9 dr10 dr11 dr12 dr13 dr14 dr15 st0 st1 st2 st3 st4 st5 st6 st7 mm0 mm1 mm2 mm3 mm4 mm5 mm6 mm7 tr0 tr1 tr2 tr3 tr4 tr5 tr6 tr7 tmm0 tmm1 tmm2 tmm3 tmm4 tmm5 tmm6 tmm7";
         let rust: Vec<String> = Register::values().take(249).map(name_of).collect();
         assert_eq!(rust.join(" "), python);
@@ -700,7 +700,7 @@ mod tests {
 
 
     fn pins(what: &Semantics) -> Vec<(String, usize, Register)> {
-        RegisterClasses::code16().requirements(what).into_iter().map(|(place, register)| (place.side, place.index, register)).collect()
+        RegisterClasses::m16().requirements(what).into_iter().map(|(place, register)| (place.side, place.index, register)).collect()
     }
 
     fn held(value: u32) -> Loc {
@@ -714,7 +714,7 @@ mod tests {
     fn test_a_register_that_picks_a_form_of_a_family_is_no_requirement() {
         for name in ["les", "lds", "lfs", "lgs"] {
             let what = semantics(Operation::Move, name, vec![held(1), held(2)], vec![Loc::Mem(ir::Mem::new(None, 4))]);
-            assert!(RegisterClasses::code16().requirements(&what).is_empty(), "{name}: {:?}", pins(&what));
+            assert!(RegisterClasses::m16().requirements(&what).is_empty(), "{name}: {:?}", pins(&what));
         }
     }
 
@@ -781,10 +781,10 @@ mod tests {
 
     #[test]
     fn test_a_funnel_shift_by_a_register_takes_its_count_in_cl() {
-        let dynamic = reads(&funnel_of(rg(Register::CL, 1), "shrd"), &RegisterClasses::code16());
+        let dynamic = reads(&funnel_of(rg(Register::CL, 1), "shrd"), &RegisterClasses::m16());
         assert!(dynamic.get(&Register::ECX).is_some_and(|need| need.fixed() == Some(Register::ECX)));
-        assert!(!reads(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::code16()).contains_key(&Register::EAX));
-        assert!(writes(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::code16()).is_empty(), "shrd writes only what it names");
+        assert!(!reads(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::m16()).contains_key(&Register::EAX));
+        assert!(writes(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::m16()).is_empty(), "shrd writes only what it names");
     }
 
 
@@ -792,6 +792,6 @@ mod tests {
     #[test]
     fn test_a_signed_word_extension_pins_no_register() {
         let what = Semantics { name: Some("movsx".to_owned()), dests: vec![rg(Register::EBX, 4)], sources: vec![rg(Register::SI, 2)], ..Semantics::new(Operation::Extend) };
-        assert!(RegisterClasses::code16().requirements(&what).is_empty());
+        assert!(RegisterClasses::m16().requirements(&what).is_empty());
     }
     }

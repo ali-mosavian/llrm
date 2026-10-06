@@ -144,7 +144,7 @@ fn llrm(dialect: &str, module: &str) -> Result<BTreeMap<String, Procedure>, Stri
     }
     let source = directory.path().join(format!("{module}.BAS"));
     let program = qb_driver::parsed(&source, &qb_driver::Frontend { runtime_frames: true, ..qb_driver::Frontend::new(dialect, dialect) }, None).map_err(|error| error.0)?;
-    let codegen = llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone());
     let assembled = qb_compile::assembled(&program, None, &codegen).map_err(|error| error.to_string())?;
     let text = llrm_core::driver::basic::text(&assembled)?;
     Ok(boundary::procedures(&text).into_iter().map(|(name, one)| (name.to_uppercase(), one)).collect())

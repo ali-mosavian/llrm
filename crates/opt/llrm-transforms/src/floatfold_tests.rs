@@ -256,7 +256,7 @@ fn through_the_pipeline(body: &str) -> String {
     use llrm_mir::program::Program;
     let text = format!("{DOS}define internal double @f(double %x) {{\nb1:\n{body}\n}}\n\ndefine double @main(double %x) {{\nb0:\n  %r = call double @f(double %x)\n  ret double %r\n}}\n");
     let mut module = parsed(&text);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
         program.exports.entries.insert("main".to_owned());
         crate::pipeline::applied(program, &crate::pipeline::Applied::default())
     })

@@ -733,8 +733,8 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         far_bss: BTreeSet::new(),
         debug,
         stack: 0,
-        // BASIC is code16's.
-        object: llrm_target::Target::object(&llrm_x86_code16::Code16),
+        // BASIC is m16's.
+        object: llrm_target::Target::object(&llrm_x86_m16::M16),
     })
 }
 

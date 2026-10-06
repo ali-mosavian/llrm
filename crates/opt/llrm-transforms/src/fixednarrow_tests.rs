@@ -31,7 +31,7 @@ fn narrowed(text: &str) -> llrm_mir::module::Module {
     let mut module = parsed(text);
     let mut manager = PassManager::default();
     manager.add(FixedNarrow);
-    manager.run_module(&mut module, Rc::new(llrm_x86_code16::Dos::default())).unwrap();
+    manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     module
 }
 

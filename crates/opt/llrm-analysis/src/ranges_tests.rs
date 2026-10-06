@@ -827,7 +827,7 @@ fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     let mut function = Function::new(1, "F%", 1, values, Vec::new(), vec![first, second], 1);
     function.parameters = vec![1];
     let program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![HirModule::new(1, "m", types, vec![function])]);
-    let emitted = llrm_hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let emitted = llrm_hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     // The assumption is made on the comparison's own `i1`, before any pass.
     let module = emitted.module;
@@ -893,7 +893,7 @@ fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
     let mut facts = Builder::new("test");
     facts.state(Subject::Instruction { function: 1, id: 1 }, llrm_hir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: 7 }));
     program.modules[0].facts = facts.finish();
-    let emitted = llrm_hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let emitted = llrm_hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let module = emitted.module;
     let layout = llrm_mir::datalayout::DataLayout::default();

@@ -22,9 +22,9 @@ CPUS = ("386", "486", "P5", "Core")
 
 
 def march(cpu: str) -> str:
-    """The `-march` flag that names `cpu` to llrm: the `march` row of code16's timings.times, one column a CPU."""
+    """The `-march` flag that names `cpu` to llrm: the `march` row of m16's timings.times, one column a CPU."""
     rows = {}
-    for line in (ROOT / "crates/target/llrm-x86-code16/src/timings.times").read_text().splitlines():
+    for line in (ROOT / "crates/target/llrm-x86-m16/src/timings.times").read_text().splitlines():
         columns = line.split()
         if columns and columns[0] in ("cpus", "march"):
             rows[columns[0]] = columns[1:]

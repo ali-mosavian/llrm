@@ -58,7 +58,7 @@ fn test_a_frame_no_stack_segment_holds_is_refused() {
 /// `stack_base` is the stack `start.asm` links (STACK_BYTES, which the assembler is told): a different one would size the object's wrongly.
 #[test]
 fn test_the_stack_base_is_the_one_start_links() {
-    let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("runtime/shared/dos/x86-code16/start.asm")).unwrap();
+    let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("runtime/shared/dos/m16/start.asm")).unwrap();
     let os = crate::Frontend::default().os;
     assert!(start.contains(".stack STACK_BYTES") && os.defines.contains(&("STACK_BYTES".to_owned(), os.stack_base.to_string())));
 }
@@ -101,7 +101,7 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
 
     let check = crate::Frontend::default().os.stack.clone();
     let runtime = |name: &str| {
-        let directory = if name.ends_with(".asm") { format!("{}/../../../runtime/shared/dos/x86-code16", env!("CARGO_MANIFEST_DIR")) } else { format!("{}/src/runtime", env!("CARGO_MANIFEST_DIR")) };
+        let directory = if name.ends_with(".asm") { format!("{}/../../../runtime/shared/dos/m16", env!("CARGO_MANIFEST_DIR")) } else { format!("{}/src/runtime", env!("CARGO_MANIFEST_DIR")) };
         std::fs::read_to_string(format!("{directory}/{name}")).unwrap()
     };
     assert!(runtime("os.asm").contains(&format!("public {}", check.limit)) && runtime("start.asm").contains(&format!("mov {}, ax", check.limit)));
@@ -157,7 +157,7 @@ fn test_inline_assembly_is_assembled_in_the_targets_mode() {
     let directory = tempfile::tempdir().expect("a directory");
     let path = directory.path().join("a.nib");
     let program = |line: &str| format!("fn main() -> i16:\n    unsafe:\n        asm(clobbers=[ax, es, flags]):\n            {line}\n    return 0\n");
-    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat_text = include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml");
     let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, bits: 32, ..Default::default() };
     let compiled = |source: &str, frontend: &crate::Frontend| {
         std::fs::write(&path, source).expect("written");
@@ -175,7 +175,7 @@ fn test_near_of_a_far_pointer_is_a_plain_copy_where_far_is_near() {
     let directory = tempfile::tempdir().expect("a directory");
     let path = directory.path().join("n.nib");
     std::fs::write(&path, "var cell: i16 = 7\n\nfn main() -> i16:\n    unsafe:\n        let wide: *far i16 = &cell\n        let narrow: *near i16 = wide.near()\n        return *narrow\n").expect("written");
-    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat_text = include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml");
     let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() };
     crate::driver::parsed(&path, &flat, None).unwrap_or_else(|error| panic!("{}", error.0));
     std::fs::write(&path, "fn narrow(wide: *far i16) -> *near i16:\n    return wide.near()\n\nfn main() -> i16:\n    return 0\n").expect("written");
@@ -192,7 +192,7 @@ fn test_usize_and_near_bytes_follow_the_targets_near_width() {
     let directory = tempfile::tempdir().expect("a directory");
     let path = directory.path().join("u.nib");
     std::fs::write(&path, "const BITS = NEAR_BYTES * 8\nconst TOP = (1 << BITS) - 1\n\nfn main() -> i16:\n    let one: usize = 1\n    print(BITS)\n    print(size_of[usize]())\n    print(TOP)\n    print(one << 15)\n    return 0\n").expect("written");
-    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat_text = include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml");
     let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() };
     let run = |frontend: &crate::Frontend| {
         let hir = crate::compile_file(&path, frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
@@ -202,15 +202,15 @@ fn test_usize_and_near_bytes_follow_the_targets_near_width() {
     assert_eq!(run(&flat), "32\n4\n4294967295\n32768\n");
 }
 
-/// A length is usize, the target's word (and so is `v.len + 1`): on code32 `let n: u16 = v.len` cut it to 16 bits without a word,
+/// A length is usize, the target's word (and so is `v.len + 1`): on m32 `let n: u16 = v.len` cut it to 16 bits without a word,
 /// and a vector past 64 KB then looked short. It warns, naming the explicit form; `u16(v.len)` and a
-/// word-wide target do not, and code16 (where a word is 16 bits) warns only for a byte.
+/// word-wide target do not, and m16 (where a word is 16 bits) warns only for a byte.
 #[test]
 fn test_a_length_narrowed_implicitly_warns() {
     let directory = tempfile::tempdir().expect("a directory");
     let path = directory.path().join("w.nib");
     std::fs::write(&path, "fn main() -> i16:\n    let v: vec[i32] = [1, 2, 3]\n    let n: u16 = v.len\n    let m: u8 = v.len\n    let k: u16 = u16(v.len)\n    let w: u32 = v.len\n    let p: u16 = v.len + 1\n    print(n + u16(m) + k + p)\n    print(w)\n    return 0\n").expect("written");
-    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat_text = include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml");
     let warned = |frontend: crate::Frontend| {
         crate::driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{}", error.0));
         let found: Vec<String> = frontend.warnings.borrow().iter().map(|one| format!("{}:{}", one.span.line, one.message)).collect();
@@ -222,14 +222,14 @@ fn test_a_length_narrowed_implicitly_warns() {
 }
 
 /// The interpreter wrote and read 6-byte, 16-bit buffer headers whatever the program's words were:
-/// strings and vectors compiled for code32 (12-byte header, 4-byte words) ran as garbage or failed.
+/// strings and vectors compiled for m32 (12-byte header, 4-byte words) ran as garbage or failed.
 /// It reads the word from the program (`descriptor_word`) and the layout from the HIR's one method.
 #[test]
 fn test_the_interpreter_runs_strings_and_vectors_of_a_target_with_wide_words() {
     let directory = tempfile::tempdir().expect("a directory");
     let path = directory.path().join("w.nib");
     std::fs::write(&path, "fn main() -> i16:\n    let s = \"hello\" + \" world\"\n    let mut v: vec[i32] = []\n    for i in 0..40:\n        v.push(i32(i) * 3)\n    print(s)\n    print(s.len)\n    print(v.len)\n    print(v[39])\n    return 0\n").expect("written");
-    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat_text = include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml");
     let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() };
     let run = |frontend: &crate::Frontend| {
         let hir = crate::compile_file(&path, frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));

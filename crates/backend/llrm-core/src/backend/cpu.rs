@@ -228,12 +228,12 @@ pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static P
 /// `name`'s profile on 16-bit x86, tuned for size where `size`.
 #[cfg(test)]
 pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
-    tuned_for(&llrm_x86_code16::Code16, name, size)
+    tuned_for(&llrm_x86_m16::M16, name, size)
 }
 
 #[cfg(test)]
 pub fn names() -> Vec<&'static str> {
-    llrm_target::Target::cpus(&llrm_x86_code16::Code16).to_vec()
+    llrm_target::Target::cpus(&llrm_x86_m16::M16).to_vec()
 }
 
 pub fn profile<'a>(value: impl Into<ProfileOrName<'a>>) -> Result<&'a Profile, String> {
@@ -312,7 +312,7 @@ mod tests {
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
-            ..Profile::new(&llrm_x86_code16::Code16, "test", 1, true, 0, 0)
+            ..Profile::new(&llrm_x86_m16::M16, "test", 1, true, 0, 0)
         };
 
         assert_eq!(target.register_capacity, 3);

@@ -12,7 +12,7 @@ llrm-qbruntime = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-hir = { workspace = true }
-llrm-x86-code16 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
 iced-x86 = { workspace = true }
 
 [dev-dependencies]

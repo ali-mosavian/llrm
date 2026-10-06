@@ -13,7 +13,7 @@ use crate::model::passes::LIRTransform;
 /// An instruction that names a value in two different required registers.
 fn requires_two_registers(body: &LirBody) -> bool {
     body.insns().iter().filter_map(|one| one.what.as_ref()).any(|what| {
-        let required = crate::backend::classes::RegisterClasses::code16().requirements(what);
+        let required = crate::backend::classes::RegisterClasses::m16().requirements(what);
         let named = |side: &str, index: usize| match (side, index) {
             ("dest", at) => what.dests.get(at),
             (_, at) => what.sources.get(at),

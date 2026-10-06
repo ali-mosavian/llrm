@@ -12,7 +12,7 @@ const NIB: &str = "fn main() -> i16:\n    return 0\n";
 const BASIC: &str = "PRINT 1\n";
 
 /// How a binary meets `-m32`: `Builds` compiles for it; `Refuses` takes the flag and says it builds
-/// for another target only (BASIC and BC are code16's).
+/// for another target only (BASIC and BC are m16's).
 enum Meets {
     Builds,
     Refuses,
@@ -85,7 +85,7 @@ fn every_compiler_takes_m32_from_the_one_parser() {
 #[test]
 fn the_old_spellings_are_refused_everywhere() {
     for tool in tools() {
-        for flags in [&["--target", "x86-code32"][..], &["--cpu", "486"][..]] {
+        for flags in [&["--target", "x86-m32"][..], &["--cpu", "486"][..]] {
             let directory = tempfile::tempdir().unwrap();
             let done = run(&tool, directory.path(), flags);
             assert!(!done.status.success(), "{} {flags:?} was accepted: {}", tool.name, text(&done));

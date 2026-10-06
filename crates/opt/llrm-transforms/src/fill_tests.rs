@@ -284,7 +284,7 @@ fn stores_that_are_not_one_fill_are_kept() {
 #[test]
 fn a_fill_is_priced_against_its_loop() {
     use llrm_mir::target::Machine;
-    let dos = llrm_x86_code16::Dos::default();
+    let dos = llrm_x86_m16::Dos::default();
     let (speed, size) = (dos.costs(), dos.size_costs());
     assert!(!super::_cheaper(10, None, Some(1), &speed, false, None), "premise: a short unknown loop does not pay its setup");
     assert!(super::_cheaper(10, Some(1000), None, &speed, false, None));
@@ -430,7 +430,7 @@ fn a_copy_that_also_stores_elsewhere_is_kept() {
 #[test]
 fn a_copy_is_priced_against_its_loop() {
     use llrm_mir::target::Machine;
-    let speed = llrm_x86_code16::Dos::default().costs();
+    let speed = llrm_x86_m16::Dos::default().costs();
     assert!(!super::_cheaper(1, None, Some(1), &speed, false, Some((2, false))), "premise: a short unknown loop does not pay the setup");
     assert!(super::_cheaper(10, Some(1000), None, &speed, false, Some((2, false))));
     let forward = super::_cheaper(1, Some(40), None, &speed, false, Some((2, false)));
@@ -438,6 +438,6 @@ fn a_copy_is_priced_against_its_loop() {
     assert!(!(backward && !forward), "running down is dearer, never cheaper");
     // Seven known words under -Os: isel makes four loads and four stores of them, as large as
     // they are, so a loop of 30 bytes stays. Priced as `rep movs` it grew lru.nib by 39 bytes.
-    let size = llrm_x86_code16::Dos::default().size_costs();
+    let size = llrm_x86_m16::Dos::default().size_costs();
     assert!(!super::_cheaper(30, Some(7), None, &size, true, Some((2, false))));
 }

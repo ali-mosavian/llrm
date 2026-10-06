@@ -1049,7 +1049,7 @@ mod tests {
         let module = parsed(&format!("{DOS}define void @f() {{\nb0:\n  ret void\n}}\n"));
         let layout = layout(&module);
         let (_, _, f) = module.functions().next().unwrap();
-        let dos = llrm_x86_code16::spaces();
+        let dos = llrm_x86_m16::spaces();
         assert_eq!(Unit::of(&module, &layout, f).spaces(), llrm_mir::spaces::Spaces::FLAT);
         assert_eq!(Unit::of(&module, &layout, f).with_spaces(dos).spaces(), dos);
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
@@ -1188,7 +1188,7 @@ b0:
         ));
         let layout = layout(&module);
         let f = function(&module, "f");
-        let unit = Unit::of(&module, &layout, f).with_spaces(llrm_x86_code16::spaces());
+        let unit = Unit::of(&module, &layout, f).with_spaces(llrm_x86_m16::spaces());
         let loads = f.walk().map(|(_, inst)| inst).filter_map(|inst| MemRef::of(&unit, inst)).collect::<Vec<_>>();
 
         let far = &loads[0];

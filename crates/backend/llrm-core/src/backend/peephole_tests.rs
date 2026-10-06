@@ -20,7 +20,7 @@ use crate::support::pyrepr::Repr;
 
 /// The 16-bit x86 rules, as the phase takes them by default.
 fn rules() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_code16::RULES
+    &crate::backend::peep::targets::x86_m16::RULES
 }
 
 fn r(register: Register, width: u32) -> Reg {
@@ -1138,7 +1138,7 @@ fn test_affine_address_word_lea_keeps_a_flag_still_read() {
 
 /// What the epilogue saves: the convention's preserved registers.
 fn saved() -> Vec<Register> {
-    llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect()
+    llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect()
 }
 
 /// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
@@ -1189,7 +1189,7 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
         let next = after_stores(flags_read, &live);
         let input = body("stores", 0, vec![block(0, std::mem::take(&mut insns), vec![1]), block(1, next, vec![])]);
 
-        let result = sharedstores::shared(&input, size, &saved(), &crate::backend::classes::RegisterClasses::code16());
+        let result = sharedstores::shared(&input, size, &saved(), &crate::backend::classes::RegisterClasses::m16());
 
         let got = names(&result.blocks[0].insns);
         assert_eq!(got, expected, "{label}");
@@ -1220,9 +1220,9 @@ fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_bod
     };
     let preserving_bx = [Register::ESI, Register::EDI, Register::EBX];
 
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx, &crate::backend::classes::RegisterClasses::code16()).blocks[0].insns), ["mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved(), &crate::backend::classes::RegisterClasses::code16()).blocks[0].insns), ["xor", "mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx, &crate::backend::classes::RegisterClasses::code16()).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx, &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved(), &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx, &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
 }
 
 /// Two pushes of a clock are not a size choice: -O2 keeps the stores.
@@ -1231,7 +1231,7 @@ fn test_stores_of_one_literal_are_not_shared_at_o2() {
     let o2 = crate::backend::cpu::tuned("486", false).unwrap();
     let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
 
-    assert_eq!(sharedstores::shared(&input, o2, &saved(), &crate::backend::classes::RegisterClasses::code16()), input);
+    assert_eq!(sharedstores::shared(&input, o2, &saved(), &crate::backend::classes::RegisterClasses::m16()), input);
 }
 
 #[test]
@@ -2620,7 +2620,7 @@ fn test_frame_copy_uses_a_dead_register_before_the_stack() {
     let scheduled =
         parcopy::scheduled(&one_block(vec![group_move(destination.clone(), source.clone(), Some(1), 0x100), reset()])).unwrap();
 
-    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::code16()).unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions), ["mov", "mov", "mov"]);
     assert_eq!(instructions[0].what, Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![source])));
@@ -2633,7 +2633,7 @@ fn test_frame_copy_keeps_the_stack_when_no_register_is_dead() {
     let (source, destination) = frame_slots(2);
     let scheduled = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap();
 
-    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::code16()).unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions), ["push", "pop"]);
 }
@@ -2648,7 +2648,7 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
     pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
     pair.push(reset());
 
-    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::code16()).unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
@@ -3164,7 +3164,7 @@ fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
 // ------------------------------------------------------------ flat zero extensions
 
 fn flat() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_code32::RULES
+    &crate::backend::peep::targets::x86_m32::RULES
 }
 
 fn word_load(into: Register) -> Arc<Insn> {
@@ -3302,7 +3302,7 @@ fn test_a_body_is_encoded_in_its_own_mode() {
 
 // ----------------------------------------------------------------- what a jump reads
 
-/// The flags a conditional jump reads are the condition's: what code16's rows say of each jump, iced states
+/// The flags a conditional jump reads are the condition's: what m16's rows say of each jump, iced states
 /// of the mnemonic, so a target whose jump rows are its own needs no copy of them.
 #[test]
 fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {

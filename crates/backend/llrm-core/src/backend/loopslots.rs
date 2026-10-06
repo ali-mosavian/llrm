@@ -796,7 +796,7 @@ mod tests {
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(2, &crate::backend::classes::RegisterClasses::code16().available, &body, &BTreeSet::from([-4]), costs, 2);
+        let out = promoted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
         let reloads = |body: &LirBody| body.insns().iter().filter(|one| one.defines.contains(&5)).count();
         assert_eq!(reloads(&body), 1);
         assert_eq!(reloads(&out), 0, "the reload stays: the test does not reach the fold");
@@ -838,14 +838,14 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let out = super::hoisted(2, &crate::backend::classes::RegisterClasses::code16().available, &body, &BTreeSet::new());
+        let out = super::hoisted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::new());
         let in_loop = out.blocks.iter().find(|one| one.at == 0x10).expect("the loop");
         let sets = |register: Register| in_loop.insns.iter().any(|one| matches!(one.what.as_ref().map(|what| what.dests.as_slice()), Some([Loc::Reg(reg)]) if reg.register == register));
         assert!(!sets(Register::BX), "premise: an invariant constant leaves the loop");
         assert!(sets(Register::DI) && sets(Register::SI), "the loop sets si and di");
     }
 
-    /// code32's slots are dwords: LoopSlots was dropped there. Its BP parking once found no BP
+    /// m32's slots are dwords: LoopSlots was dropped there. Its BP parking once found no BP
     /// to pop, because EBP is not the register BP: the loop left its exit with EBP holding a slot's
     /// value and a program ran quicksort into a general protection fault.
     #[test]
@@ -872,7 +872,7 @@ mod tests {
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(4, &crate::backend::classes::RegisterClasses::code16().available, &body, &BTreeSet::from([-4]), costs, 2);
+        let out = promoted(4, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
         let is_bp = |insn: &Arc<Insn>, op: Operation| insn.what.as_ref().is_some_and(|what| what.op == op && what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(reg.register))));
         let pushes = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();
         let pops = out.insns().iter().filter(|insn| is_bp(insn, Operation::Pop)).count();

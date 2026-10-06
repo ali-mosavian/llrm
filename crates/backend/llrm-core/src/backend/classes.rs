@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use iced_x86::Register;
 use llrm_target::Target;
-use llrm_x86_code16::instructions::{self, Side};
+use llrm_x86_m16::instructions::{self, Side};
 
 use crate::backend::target::{Occurrence, SEGMENTS, _on_the_stack};
 use crate::model::ir::{Loc, Operation, Semantics};
@@ -62,8 +62,8 @@ impl RegisterClasses {
 
     /// 16-bit x86's, which the tests of this crate are written for.
     #[cfg(test)]
-    pub fn code16() -> std::rc::Rc<Self> {
-        std::rc::Rc::new(Self::of(&llrm_x86_code16::Code16))
+    pub fn m16() -> std::rc::Rc<Self> {
+        std::rc::Rc::new(Self::of(&llrm_x86_m16::M16))
     }
 
     /// Every operand this instruction requires in one particular register.
@@ -127,14 +127,14 @@ fn iced(name: &str) -> Register {
 mod tests {
     use super::*;
 
-    /// What `registers.regs` says of code16 is what the allocator's statics and `llrm_x86_code16`'s constants say.
+    /// What `registers.regs` says of m16 is what the allocator's statics and `llrm_x86_m16`'s constants say.
     #[test]
-    fn code16_registers_are_its_description() {
-        let classes = RegisterClasses::of(&llrm_x86_code16::Code16);
-        assert_eq!(classes.available, llrm_x86_code16::GENERAL);
-        assert_eq!(classes.word_bases, llrm_x86_code16::word_bases().into_iter().collect());
+    fn m16_registers_are_its_description() {
+        let classes = RegisterClasses::of(&llrm_x86_m16::M16);
+        assert_eq!(classes.available, llrm_x86_m16::GENERAL);
+        assert_eq!(classes.word_bases, llrm_x86_m16::word_bases().into_iter().collect());
         assert_eq!(classes.word_indexes, llrm_x86::addressing16::INDEXES.into_iter().collect());
-        assert_eq!(classes.frame, llrm_x86_code16::FRAME);
+        assert_eq!(classes.frame, llrm_x86_m16::FRAME);
         assert_eq!(classes.encodable_bases, llrm_x86::addressing16::BASES.into_iter().collect());
         assert_eq!(classes.addressing, [Register::BX, Register::BP, Register::SI, Register::DI].into_iter().collect());
     }
