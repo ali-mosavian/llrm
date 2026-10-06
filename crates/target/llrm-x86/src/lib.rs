@@ -8,6 +8,14 @@ pub mod select;
 pub mod registers {
     use iced_x86::Register;
 
+    /// The general registers a value or an address is held in, the frame pointer's included, the stack pointer's not.
+    pub const ROOTS: [Register; 7] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+    /// The word view of a dword register, where it has one.
+    pub fn word_of(dword: Register) -> Option<Register> {
+        DWORDS.iter().position(|one| *one == dword).map(|at| WORDS[at])
+    }
+    /// The segment registers.
+    pub const SEGMENTS: [Register; 6] = [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS];
     /// The dword registers.
     pub const DWORDS: [Register; 8] = [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI, Register::EBP, Register::ESP];
     /// Their low words.
@@ -55,6 +63,10 @@ pub mod registers {
             for (word, dword) in WORDS.iter().zip(&DWORDS) {
                 assert_eq!(word.full_register32(), *dword);
             }
+            assert_eq!(word_of(Register::EBX), Some(Register::BX));
+            assert_eq!(word_of(Register::AX), None);
+            assert!(ROOTS.iter().all(|one| DWORDS.contains(one) && *one != Register::ESP));
+            assert!(SEGMENTS.iter().all(|one| one.is_segment_register()));
             for (at, byte) in BYTES.iter().enumerate() {
                 assert_eq!(byte.full_register32(), DWORDS[at % 4], "{byte:?}");
             }
@@ -64,6 +76,8 @@ pub mod registers {
 
 /// What 16-bit x86 addressing (the ModRM byte without an address-size prefix) is made of: `[base+index+disp]`
 /// with a base from BX or BP and an index from SI or DI. The architecture's, the same in every 16-bit target.
+pub mod asm;
+
 pub mod addressing16 {
     use iced_x86::Register;
 

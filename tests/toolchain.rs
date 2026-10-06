@@ -15,7 +15,8 @@ fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     assert!(String::from_utf8_lossy(&linker.stdout).contains("JWlink"));
 }
 
-/// The real-mode OS layer assembled in `dir` as start.obj and os.obj, told its description's defines.
+/// The real-mode OS layer assembled in `dir` as start.obj and os.obj, and Nib's start-up hook as init.obj, told
+/// their descriptions' defines.
 fn os_layer_objects(bin: &Path, dir: &Path) {
     let layer = |field: &str| {
         let done = Command::new(bin.join("llrm-nib")).args(["--os-layer", field]).output().unwrap();
@@ -24,8 +25,8 @@ fn os_layer_objects(bin: &Path, dir: &Path) {
     };
     let directory = layer("directory");
     let defines: Vec<String> = layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
-    for (field, object) in [("start", "start.obj"), ("implementation", "os.obj")] {
-        let source = format!("{directory}/{}", layer(field));
+    for (field, object) in [("start", "start.obj"), ("implementation", "os.obj"), ("language_file", "init.obj")] {
+        let source = if field == "language_file" { layer(field) } else { format!("{directory}/{}", layer(field)) };
         let done = Command::new(bin.join("jwasm")).args(["-q", "-c", "-Cp", "-Zg", "-omf"]).args(&defines).arg(format!("-Fo{object}")).arg(source).current_dir(dir).status().unwrap();
         assert!(done.success(), "{field}");
     }
@@ -98,7 +99,7 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-omf", "-Fofault.obj", "fault.asm"]);
     let slice = root.join("tests/fixtures/nib/port/c7e7588fa1/slice.nib");
     run(&bin.join("llrm-nib"), &[slice.to_str().unwrap(), "-o", "slice.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "init.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nSLICE\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -130,7 +131,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     )
     .unwrap();
     run(&bin.join("llrm-nib"), &["frame.nib", "-o", "frame.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "FRAME.EXE", "file", "start.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &["format", "dos", "name", "FRAME.EXE", "file", "start.obj", "file", "init.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nFRAME\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -158,15 +159,35 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
         .filter_map(|one| Some(one.unwrap().path().to_str()?.strip_suffix(".cgs")?.rsplit('/').next()?.to_owned()))
         .collect();
     names.sort();
+    // The C start-up is the OS layer's: its start, C's hook, and its operations, which `main` below calls.
+    let target = llrm_x86_code16::Code16;
+    let (layer, c) = (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
+    let defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
+    let assemble = |source: String, object: &str| {
+        let mut args = vec!["-q".to_owned(), "-c".into(), "-Cp".into(), "-Zg".into(), "-omf".into(), format!("-Fo{object}")];
+        args.extend(defines.iter().cloned());
+        args.push(source);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        run("jwasm", &args);
+    };
+    assemble(format!("{}/{}", layer.directory, layer.string("start").unwrap()), "layer_start.obj");
+    assemble(format!("{}/{}", layer.directory, layer.string("implementation").unwrap()), "layer_os.obj");
+    assemble(format!("{}/{}", c.directory, c.string("init_file").unwrap()), "c_init.obj");
+    std::fs::write(dir.join("os.h"), layer.c_header().unwrap()).unwrap();
+    // Each fixture's entry, run by a C `main` that writes its value to VALUE.BIN and ends by the layer's exit.
+    let entries = [("algebra", "parity_algebra_demo"), ("branch", "parity_branch_demo"), ("control", "parity_control_demo"), ("loop", "parity_loop_demo"), ("memory", "parity_memory_demo"), ("parity", "parity_kernel"), ("qbsp", "quake_bsp_demo"), ("qlight", "quake_light_demo"), ("qmove", "quake_move_demo"), ("scalar", "parity_scalar")];
+    assert_eq!(entries.len(), names.len(), "premise: every fixture has an entry: {names:?}");
     let mut autoexec = format!("[autoexec]\nmount c {}\nc:\n", dir.display());
     let mut runs = Vec::new();
     for (number, name) in names.iter().enumerate() {
-        let start = parity.join(format!("{name}-start.asm"));
-        run("jwasm", &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{name}_s.obj"), start.to_str().unwrap()]);
+        let entry = entries.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no entry for {name}")).1;
+        let main = format!("#include \"os.h\"\nextern long {entry}(void);\nint main(void)\n{{\n    long value = {entry}();\n    short handle = llrm_os_create(\"VALUE.BIN\");\n    if (handle < 0 || llrm_os_write_file(handle, (const unsigned char *)&value, 4) != 4) return 1;\n    llrm_os_close(handle);\n    return 0;\n}}\n");
+        std::fs::write(dir.join(format!("{name}_main.c")), main).unwrap();
+        run("llrm-c", &[dir.join(format!("{name}_main.c")).to_str().unwrap(), "-I", dir.to_str().unwrap(), "-o", &format!("{name}_m.obj")]);
         let program = format!("P{number}");
         let source = parity.join(format!("{name}.cgs"));
         run("llrm-c", &[source.to_str().unwrap(), "-o", &format!("{program}.obj")]);
-        run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", &format!("{name}_s.obj"), "file", &format!("{program}.obj"), "op", "quiet"]);
+        run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", "layer_start.obj", "file", "c_init.obj", "file", &format!("{name}_m.obj"), "file", &format!("{program}.obj"), "file", "layer_os.obj", "op", "quiet"]);
         autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
         runs.push((name.clone(), program));
     }

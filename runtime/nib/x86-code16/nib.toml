@@ -1,7 +1,12 @@
-# Nib's runtime on real-mode DOS: what the language asks of the target's OS layer (runtime/shared/dos/x86-code16).
-# Each field naming a file names one in this directory.
+# Nib's runtime on real-mode DOS: what the language asks of the target's OS layer
+# (runtime/shared/dos/x86-code16). Each field naming a file names one in this directory.
 
 # What `-fsanitize=stack` compares and calls.
 stack = "stack.toml"
-# The stack start.asm reserves; the object's own adds to it.
+# The stack the OS layer's start-up reserves; the object's own adds to it.
 stack_base = 4096
+# The start-up hook the layer calls before `main`, and the file that defines it.
+init = "N$INIT"
+init_file = "init.asm"
+# Fields the assembler is told as `-DSYMBOL=value`; the OS layer's own come from its description.
+assembler_defines = ["stack_base:STACK_BYTES", "init:LANG_INIT"]

@@ -39,7 +39,7 @@ struct Arguments {
     /// another, and the pipeline.
     codegen: codegen::Options,
     /// `--os-layer FIELD`: print a field of the target's OS layer instead of compiling.
-    os_layer: Option<String>,
+    os_layer: Option<Result<String, String>>,
     /// `--declare h|bi|inc`: print the declarations of the program's exports instead of compiling.
     declare: Option<super::declarations::Language>,
 }
@@ -84,7 +84,8 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         }
         at += 1;
     }
-    let source = match (source, &os_layer) {
+    let field = os_layer;
+    let source = match (source, &field) {
         (Some(source), _) => source,
         (None, Some(_)) => PathBuf::new(),
         (None, None) => return Err("the following arguments are required: source".to_owned()),
@@ -94,6 +95,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let bound = llrm_driver::target(&flags, None)?;
     frontend = super::Frontend { debug: frontend.debug, checked_stack: frontend.checked_stack, unchecked_bounds: frontend.unchecked_bounds, warn_target_width: frontend.warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
     let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
+    let os_layer = field.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("nib").ok_or("this target has no Nib runtime")?, &field)));
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
 }
 
@@ -121,20 +123,17 @@ pub fn main(argv: &[String]) -> i32 {
             return 2;
         }
     };
-    if let Some(field) = &args.os_layer {
-        let os = &args.frontend.os;
-        match field.as_str() {
-            "directory" => println!("{}", os.directory),
-            "start" => println!("{}", os.start),
-            "implementation" => println!("{}", os.implementation),
-            "module" => print!("{}", os.module),
-            "defines" => println!("{}", os.defines.iter().map(|(symbol, value)| format!("{symbol}={value}")).collect::<Vec<_>>().join(" ")),
-            _ => {
-                eprintln!("llrm-nib: error: --os-layer takes directory, start, implementation, module or defines");
-                return 2;
+    if let Some(report) = &args.os_layer {
+        return match report {
+            Ok(text) => {
+                println!("{}", text.trim_end());
+                0
             }
-        }
-        return 0;
+            Err(message) => {
+                eprintln!("llrm-nib: error: {message}");
+                2
+            }
+        };
     }
     if let Some(language) = args.declare {
         return match super::declare_file(&args.source, language, &args.frontend) {
