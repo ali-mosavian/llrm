@@ -677,13 +677,13 @@ fn test_unsigned_power_division_is_a_shift_and_a_mask() {
     }
 }
 
-/// A dividend proved non-negative needs no bias: `sdiv` and `srem` of it are `udiv` and `urem` (a shift and a
-/// mask by a power of two). The bias was five instructions where one did.
+/// A dividend proved non-negative needs no bias: `sdiv` and `srem` of it by a power of two are a shift and a
+/// mask. The bias was five instructions where one did.
 #[test]
 fn test_a_signed_division_of_a_non_negative_dividend_is_unsigned() {
     let ranged = |op: &str, divisor: &str| format!("define i32 @f(i32 range(i32 0, 100000) %x) {{\nb0:\n  %r = {op} i32 %x, {divisor}\n  ret i32 %r\n}}\n");
     let inputs: Vec<Vec<i128>> = [0, 1, 7, 8, 9, 10, 99, 100, 99999].iter().map(|&one| vec![one]).collect();
-    for (op, divisor, shown) in [("sdiv", "10", "udiv"), ("srem", "10", "urem"), ("sdiv", "8", "lshr"), ("srem", "8", "and")] {
+    for (op, divisor, shown) in [("sdiv", "8", "lshr"), ("srem", "8", "and"), ("sdiv", "1024", "lshr")] {
         let done = checked(&ranged(op, divisor), &inputs);
         assert!(done.contains(shown) && !done.contains(op), "{done}");
     }
@@ -705,14 +705,15 @@ b2:
   ret i32 0
 }
 ";
-    let done = checked(text, &singles(&edges(32)));
-    assert!(done.contains("udiv") && !done.contains("sdiv"), "{done}");
+    let done = checked(&text.replace("sdiv i32 %x, 10", "sdiv i32 %x, 16"), &singles(&edges(32)));
+    assert!(done.contains("lshr") && !done.contains("sdiv"), "{done}");
 }
 
 /// Not where the dividend may be negative, or the divisor is not a positive constant.
 #[test]
 fn test_a_signed_division_of_an_unknown_sign_stays_signed() {
-    unchanged(&unary(32, "  %r = sdiv i32 %x, 10\n  ret i32 %r\n"));
+    unchanged(&unary(32, "  %r = sdiv i32 %x, 16\n  ret i32 %r\n").replace("sdiv i32 %x, 16", "sdiv i32 %x, 10"));
+    unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, 10\n  ret i32 %r\n}\n");
     unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
     unchanged("define i32 @f(i32 range(i32 0, 100) %x, i32 %d) {\nb0:\n  %r = sdiv i32 %x, %d\n  ret i32 %r\n}\n");
 }

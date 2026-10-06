@@ -1771,10 +1771,7 @@ fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/stride.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
-    // The loop counter is non-negative, so the division is the unsigned `xor edx, edx; div`: one division either way.
-    let signed = body.contains("cdq") && body.matches("idiv").count() == 1;
-    let unsigned = body.contains("xor edx, edx") && body.matches("div ").count() == 1 && !body.contains("idiv");
-    assert!(!body.contains("[bp") && (signed || unsigned), "{body}");
+    assert!(!body.contains("[bp") && body.contains("cdq") && body.matches("idiv").count() == 1, "{body}");
 }
 
 #[test]

@@ -960,10 +960,11 @@ fn _unsigned_power_of_two(context: &mut Context, function: &mut Function, inst: 
     true
 }
 
-/// `sdiv` and `srem` of a dividend proved non-negative, by a positive constant, are `udiv` and `urem`: the same
-/// value without the bias a negative dividend would need, and a division the unsigned forms of selection price
-/// by their own rules. The proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the dividend's clear
-/// sign bit.
+/// `sdiv` and `srem` of a dividend proved non-negative, by a power of two, are `udiv` and `urem` (a shift and a
+/// mask): the same value without the bias a negative dividend needs. Another divisor stays signed: its unsigned
+/// division is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor edx,edx` for `cdq`), which is
+/// selection's to weigh, not a rewrite's. The proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the
+/// dividend's clear sign bit.
 fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>) -> bool {
     let candidates: Vec<(llrm_mir::module::BlockId, InstId, u32)> = function
         .walk()
@@ -982,7 +983,7 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
-            let positive = fact.width >= width && divisor.sign() == num_bigint::Sign::Plus && divisor < BigInt::from(1u8) << (width - 1);
+            let positive = fact.width >= width && divisor > BigInt::from(1u8) && divisor < BigInt::from(1u8) << (width - 1) && (&divisor & (&divisor - 1u8)) == BigInt::from(0u8);
             let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
             let proved = ranges::_operand(&unit, operands[0], &scope, &registers).filter(|interval| interval.width == width).is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
                 || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
