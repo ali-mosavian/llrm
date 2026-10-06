@@ -14,7 +14,7 @@ use llrm_target::Target;
 pub const DEFAULT: &str = "x86-code16";
 
 /// Every target built in.
-fn all() -> Vec<Rc<dyn Target>> {
+pub fn all() -> Vec<Rc<dyn Target>> {
     vec![Rc::new(llrm_x86_code16::Code16), Rc::new(llrm_x86_code32::Code32)]
 }
 
