@@ -230,7 +230,7 @@ fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32) -> Result<syntax:
 
 /// Type-checks a parsed module and lowers it to HIR.
 pub fn compile_module(module: syntax::Module, module_name: &str, frontend: &Frontend) -> Result<String, Diagnostic> {
-    semantic::compile(&prepared(module)?, module_name, frontend)
+    semantic::compile(&prepared(module, frontend.sizes().near)?, module_name, frontend)
 }
 
 /// The program whose main module is `source`, `read` giving each module it
@@ -252,7 +252,7 @@ pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>,
         Err(error) => return Checked { loaded: None, facts: Vec::new(), error: Some(error) },
     };
     let sources = loaded.sources.clone();
-    let prepared = loaded.clone().linked().and_then(|module| prepared(module).map_err(|error| in_module(&sources, error)));
+    let prepared = loaded.clone().linked().and_then(|module| prepared(module, frontend.sizes().near).map_err(|error| in_module(&sources, error)));
     let (facts, error) = match prepared {
         Ok(module) => {
             let (facts, checked) = semantic::check(&module, frontend);
@@ -264,16 +264,16 @@ pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>,
 }
 
 /// A linked module with the prelude and library it is checked with, desugared.
-fn prepared(mut module: syntax::Module) -> Result<syntax::Module, Diagnostic> {
-    let prelude = parse(lex(include_str!("prelude.nib"))?)?;
+fn prepared(mut module: syntax::Module, near_bytes: u32) -> Result<syntax::Module, Diagnostic> {
+    let prelude = parser::parse_for(lex(include_str!("prelude.nib"))?, near_bytes)?;
     module.enums.extend(prelude.enums);
     // A module's own function or protocol of a prelude name is the one it names.
     let own: std::collections::BTreeSet<String> = module.functions.iter().map(|one| one.name.clone()).collect();
     module.functions.extend(prelude.functions.into_iter().filter(|one| !own.contains(&one.name)));
     let own: std::collections::BTreeSet<String> = module.protocols.iter().map(|one| one.name.clone()).collect();
     module.protocols.extend(prelude.protocols.into_iter().filter(|one| !own.contains(&one.name)));
-    module.library = library::functions()?;
-    module.library.extend(library::derived(&module)?);
+    module.library = library::functions(near_bytes)?;
+    module.library.extend(library::derived(&module, near_bytes)?);
     library::entry(&mut module)?;
     desugar::desugar(&mut module)?;
     Ok(module)

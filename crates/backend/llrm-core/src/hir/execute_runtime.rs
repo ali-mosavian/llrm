@@ -151,12 +151,12 @@ impl Machine<'_> {
         let copy = self.allocate(&[], 0, grown, size);
         for slot in 0..slots {
             let entry = Address { offset: table.offset + (slot * size) as i64, ..table.clone() };
-            let hash = word(&entry, 0, 2)? as usize;
+            let hash = word(&entry, 0, width)? as usize;
             if hash == 0 {
                 continue;
             }
             let mut at = hash & (grown - 1);
-            while word(&Address { offset: copy.offset + (at * size) as i64, ..copy.clone() }, 0, 2)? != 0 {
+            while word(&Address { offset: copy.offset + (at * size) as i64, ..copy.clone() }, 0, width)? != 0 {
                 at = (at + 1) & (grown - 1);
             }
             copy_data(&entry, &Address { offset: copy.offset + (at * size) as i64, ..copy.clone() }, size);

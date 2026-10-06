@@ -20,11 +20,11 @@ fn reserve(table: *near mut u8, size: usize) -> *near mut u8:
             copy[at] = 0
         for slot in 0..slots:
             let entry = table.offset(slot * size)
-            let hash = *entry.cast[u16]()
+            let hash = *entry.cast[usize]()
             if hash == 0:
                 continue
             let mut at = hash & mask
-            while *copy.offset(at * size).cast[u16]() != 0:
+            while *copy.offset(at * size).cast[usize]() != 0:
                 at = (at + 1) & mask
             buffers.copy(copy.offset(at * size), entry.far(), size)
         *buffers.length(copy) = grown
