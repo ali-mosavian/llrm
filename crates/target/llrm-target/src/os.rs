@@ -147,8 +147,9 @@ impl Layer {
         }
     }
 
-    /// The C header of the interface: each operation declared as `llrm_os_<name>` (C's underscore
-    /// makes the symbol), the data pointers far where the target has far data.
+    /// The C header of the interface: each operation declared `__cdecl` as `llrm_os_<name>` (C's underscore
+    /// makes the symbol), the data pointers far where the target has far data. The layer's routines are
+    /// written in the target's C convention whatever its default is.
     pub fn c_header(&self) -> Result<String, String> {
         let interface = Interface::shipped();
         let pointer = self.string("pointer")?;
@@ -181,7 +182,7 @@ impl Layer {
             let types: Option<Vec<String>> = op.args.iter().map(|(_, one)| kind(one)).collect();
             let (Some(types), Some(returns)) = (types, kind(&op.returns)) else { continue };
             let args = if types.is_empty() { "void".to_owned() } else { types.join(", ") };
-            text += &format!("{returns} llrm_os_{}({args});
+            text += &format!("{returns} __cdecl llrm_os_{}({args});
 ", op.name);
         }
         for (name, code) in &interface.errors {
@@ -286,10 +287,10 @@ mod tests {
     #[test]
     fn the_c_header_declares_each_operation_with_the_targets_pointers() {
         let flat = LAYER.c_header().unwrap();
-        assert!(flat.contains("short llrm_os_open(const char *, unsigned char);") && flat.contains("long llrm_os_read(short, unsigned char *, unsigned);"), "{flat}");
+        assert!(flat.contains("short __cdecl llrm_os_open(const char *, unsigned char);") && flat.contains("long __cdecl llrm_os_read(short, unsigned char *, unsigned);"), "{flat}");
         let far = Layer { text: "os = \"dos\"\nconvention = \"cdecl16\"\npointer = \"far\"\ngroups = [\"core\", \"vectors\"]\n", ..LAYER };
         let text = far.c_header().unwrap();
-        assert!(text.contains("short llrm_os_open(const char __far *, unsigned char);") && !text.contains("llrm_os_vector"), "{text}");
+        assert!(text.contains("short __cdecl llrm_os_open(const char __far *, unsigned char);") && !text.contains("llrm_os_vector"), "{text}");
     }
 
     #[test]
@@ -307,7 +308,7 @@ mod tests {
         let module = wide.nib_module().unwrap();
         assert!(module.contains("pub fn open(name: *near char, mode: u8) -> i32") && module.contains("pub fn read(handle: i32,"), "{module}");
         assert!(module.contains("pub const STDOUT: i32 = 1") && module.contains("write_file(STDOUT, text, length)"), "{module}");
-        assert!(wide.c_header().unwrap().contains("long llrm_os_open(const char *, unsigned char);"));
+        assert!(wide.c_header().unwrap().contains("long __cdecl llrm_os_open(const char *, unsigned char);"));
         assert!(wide.c_header().unwrap().contains("#define LLRM_OS_STDERR 2"));
         let narrow = Layer { facts: "handle_bits = 16\nstdin = 0\nstdout = 1\nstderr = 2\n", ..LAYER };
         assert!(narrow.nib_module().unwrap().contains("pub fn read(handle: i16,"));

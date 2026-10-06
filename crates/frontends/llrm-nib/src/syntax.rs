@@ -283,6 +283,11 @@ impl Adapter {
 }
 
 impl Abi {
+    /// `"c"`, the convention of C's own functions, is the target's native one: what an unmarked C function has.
+    pub fn resolved(self, native: Self) -> Self {
+        if self == Self::C { native } else { self }
+    }
+
     pub fn named(name: &str) -> Option<Self> {
         match name {
             "c" => Some(Self::C),
@@ -348,8 +353,8 @@ impl Abi {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Extern {
     pub abi: Abi,
-    /// The object symbol: `name=`, else the one its ABI gives the name.
-    pub symbol: String,
+    /// The object symbol `name=` gives; else its ABI's.
+    pub symbol: Option<String>,
     /// Its header; the body is empty.
     pub function: Function,
 }
@@ -360,7 +365,8 @@ pub struct Extern {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Export {
     pub abi: Option<Abi>,
-    pub symbol: String,
+    /// The object symbol `name=` gives; else its ABI's, or its own name where it has none.
+    pub symbol: Option<String>,
 }
 
 /// `const NAME: T = value`, its value folded to a literal.

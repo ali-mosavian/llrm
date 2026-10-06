@@ -218,7 +218,7 @@ pub fn declare_file(
     frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
-    declarations::declarations_on(&module, module_name(path), language, frontend.sizes().segmented, frontend.slot).map_err(|error| located(path, &module.sources, error))
+    declarations::declarations_on(&module, module_name(path), language, frontend.sizes().segmented, frontend.slot, frontend.native()).map_err(|error| located(path, &module.sources, error))
 }
 
 fn module_name(path: &std::path::Path) -> &str {

@@ -1450,12 +1450,13 @@ fn program(
         }
         let mut signature = signature(&mut types, function, index as u32 + 1)?;
         if let Some(export) = module.exports.get(&function.name) {
-            if let Some(abi) = export.abi {
+            let abi = export.abi.map(|abi| abi.resolved(types.native));
+            if let Some(abi) = abi {
                 signature.abi = abi;
                 foreign::check_foreign(&mut types, &mut signature, &function.name, function.span)?;
             }
             signature.exported = true;
-            signature.name = export.symbol.clone();
+            signature.name = export.symbol.clone().unwrap_or_else(|| abi.map_or_else(|| function.name.clone(), |abi| abi.symbol(&function.name)));
         } else {
             foreign::check_adapters(&signature, &function.name, function.span)?;
         }

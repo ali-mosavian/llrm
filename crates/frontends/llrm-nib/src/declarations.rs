@@ -29,15 +29,15 @@ impl Language {
 /// The declarations of `module`'s exports and the represented structs they
 /// name, for callers written in `language`.
 pub fn declarations(module: &Module, name: &str, language: Language) -> Result<String, Diagnostic> {
-    declarations_on(module, name, language, true, 2)
+    declarations_on(module, name, language, true, 2, Abi::Cdecl16)
 }
 
 /// `declarations`, for a target whose far code is far (`segmented`) or near.
-pub fn declarations_on(module: &Module, name: &str, language: Language, segmented: bool, slot: u32) -> Result<String, Diagnostic> {
+pub fn declarations_on(module: &Module, name: &str, language: Language, segmented: bool, slot: u32, native: Abi) -> Result<String, Diagnostic> {
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
-        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?))))
+        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?.resolved(native)))))
         .collect();
     // The compiler's own modules declare theirs for the compiler.
     let structs: Vec<&Struct> = module.structs.iter().filter(|one| one.pack.is_some() && !standard::supplied(&one.name)).collect();

@@ -190,19 +190,31 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     let mut parameters = Vec::new();
     let mut cursor = first;
     if let Some(entry) = registers {
+        let classes: Vec<Option<&str>> = (0..function.parameters().len()).map(|index| llrm_mir::opcode::argument_class(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))).collect();
         let kinds: Vec<_> = function
             .parameters()
             .iter()
             .zip(&sizes)
-            .map(|(&one, &size)| match types.get(function.value(one).ty) {
+            .zip(&classes)
+            .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
+            .map(|((&one, &size), class)| match types.get(function.value(one).ty) {
+                _ if *class == Some(llrm_mir::opcode::MEMORY) => llrm_target::calling::Kind::Memory(i64::from(size)),
                 _ if types.int_bits(function.value(one).ty) == Some(64) => llrm_target::calling::Kind::Wide,
                 Type::Float(_) => llrm_target::calling::Kind::Memory(i64::from(size)),
                 _ => llrm_target::calling::Kind::Word,
             })
             .collect();
         let placed = entry.place(&kinds);
-        for place in &placed.places {
-            parameters.push(match place {
+        let mut places = placed.places.iter();
+        let mut used = placed.used.clone();
+        for class in &classes {
+            if *class == Some(llrm_mir::opcode::RESULT_POINTER) {
+                let Some(register) = entry.aggregate.as_ref().and_then(|one| one.pointer_register.as_deref()) else { return refuse(format!("{}'s struct result has no register for its address", entry.name)) };
+                used.push(register.to_owned());
+                parameters.push(Parameter::Registers(vec![llrm_x86::calling::register(register)]));
+                continue;
+            }
+            parameters.push(match places.next().expect("a place for each parameter") {
                 llrm_target::calling::Place::Registers(names) => Parameter::Registers(names.iter().map(|name| llrm_x86::calling::register(name)).collect()),
                 llrm_target::calling::Place::Stack(offset) => Parameter::Cell(first + offset),
             });
@@ -2967,22 +2979,39 @@ impl Selector<'_, '_, '_> {
         }
         // The convention's own: each argument by where the description puts it.
         let mut placed = None;
-        if let Some(entry) = entry {
-            let kinds = arguments
-                .iter()
-                .map(|&argument| {
-                    let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                    Ok(match self.types().get(ty) {
-                        _ if self.is_wide(ty) => llrm_target::calling::Kind::Wide,
-                        Type::Float(_) => llrm_target::calling::Kind::Memory(i64::from(self.size(ty)?)),
-                        _ => llrm_target::calling::Kind::Word,
-                    })
-                })
-                .collect::<Result<Vec<_>, Unselected>>()?;
-            placed = Some((entry, entry.place(&kinds)));
-        }
         let mut stack_only: Vec<usize> = (0..arguments.len()).collect();
-        if let Some((_, placement)) = &placed {
+        if let Some(entry) = entry {
+            let attrs = match &instruction.opcode {
+                Opcode::Call(info) | Opcode::Invoke(info) => info.argument_attrs.as_slice(),
+                _ => &[],
+            };
+            let class = |index: usize| llrm_mir::opcode::argument_class(attrs.get(index).map_or(&[], Vec::as_slice));
+            let mut kinds = Vec::new();
+            for (index, &argument) in arguments.iter().enumerate() {
+                if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                    continue;
+                }
+                let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+                kinds.push(match self.types().get(ty) {
+                    _ if class(index) == Some(llrm_mir::opcode::MEMORY) => llrm_target::calling::Kind::Memory(i64::from(self.size(ty)?)),
+                    _ if self.is_wide(ty) => llrm_target::calling::Kind::Wide,
+                    Type::Float(_) => llrm_target::calling::Kind::Memory(i64::from(self.size(ty)?)),
+                    _ => llrm_target::calling::Kind::Word,
+                });
+            }
+            let mut placement = entry.place(&kinds);
+            let mut next = placement.places.clone().into_iter();
+            let mut places = Vec::new();
+            for index in 0..arguments.len() {
+                if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                    let Some(register) = entry.aggregate.as_ref().and_then(|one| one.pointer_register.clone()) else { return refuse(format!("@{name}'s struct result has no register for its address")) };
+                    placement.used.push(register.clone());
+                    places.push(llrm_target::calling::Place::Registers(vec![register]));
+                } else {
+                    places.push(next.next().expect("a place for each argument"));
+                }
+            }
+            placement.places = places;
             for (index, place) in placement.places.iter().enumerate() {
                 let llrm_target::calling::Place::Registers(names) = place else { continue };
                 let argument = arguments[index];
@@ -2999,6 +3028,7 @@ impl Selector<'_, '_, '_> {
                 }
             }
             stack_only.retain(|&index| matches!(placement.places[index], llrm_target::calling::Place::Stack(_)));
+            placed = Some((entry, placement));
         }
         let mut order = stack_only;
         if !in_order {

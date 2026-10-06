@@ -859,8 +859,10 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
+        let arrivals = if block.at == body.entry { block.insns.iter().take_while(|one| one.arrival()).count() } else { 0 };
         if block.at == body.entry {
             let at = block.insns.first().map_or(block.at, |first| first.at);
+            insns.extend(block.insns[..arrivals].iter().cloned());
             insns.extend([
                 insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
                 insn(semantics(Operation::Move, "mov", vec![Loc::Held(loaded)], vec![Loc::Mem(saved.clone())]), at),
@@ -879,7 +881,7 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
         // Chopping, once switched on, stays on across what rounding cannot
         // change, so a run of conversions switches once.
         let mut chopping = false;
-        for one in &block.insns {
+        for one in &block.insns[arrivals..] {
             if fisttp(one) {
                 if !chopping {
                     insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(chop.clone())]), one.at));

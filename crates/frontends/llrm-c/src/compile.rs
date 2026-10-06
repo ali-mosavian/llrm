@@ -151,9 +151,9 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
     let medium = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
     // Flat: the same switches but the model, packing and Borland's headers. Its C ABI is Open
-    // Watcom's 386 flat one (`calling.toml`): structs laid out at -zp4, cdecl as -ecc.
+    // Watcom's 386 flat one (`calling.toml`): structs laid out at -zp4, and no -ecc, so an unmarked function takes its registers.
     let flat_header = format!("-fi={}", root.join("crates/frontends/llrm-c/src/flat.h").display());
-    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq", flat_header.as_str()];
+    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-s", "-zl", "-zq", flat_header.as_str()];
     let flags: &[&str] = if flat { &flat_flags } else { &medium };
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
@@ -970,6 +970,45 @@ mod tests {
         assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "mov eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
     }
 
+    /// The body of `name`'s procedure in the flat listing of `regs.c`, as the default convention compiles it.
+    fn regs_body(name: &str) -> Vec<String> {
+        let lines = flat_listing("regs");
+        lines.iter().skip_while(|line| **line != format!("{name} proc near")).skip(1).take_while(|line| **line != format!("{name} endp")).cloned().collect()
+    }
+
+    /// An unmarked C function takes Open Watcom's register convention: `six` read its fifth and sixth from the
+    /// stack and popped them with `ret 8`, the first four being in EAX, EDX, EBX and ECX. It had refused such
+    /// a function ("has a register calling convention"), compiled with -ecc.
+    #[test]
+    fn test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments() {
+        let body = regs_body("six_");
+        assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "add eax, edx", "add eax, ebx", "add eax, ecx", "add eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret 8"]);
+    }
+
+    /// A struct larger than a dword is written through the address in ESI, which comes back in EAX, as `wcc386` has it.
+    #[test]
+    fn test_m32_a_struct_result_is_written_through_esi_and_returned_in_eax() {
+        let body = regs_body("result_");
+        assert!(body.contains(&"mov dword ptr [esi], eax".to_owned()) && body.contains(&"mov eax, esi".to_owned()), "{body:?}");
+        assert_eq!(body.last().map(String::as_str), Some("ret"));
+    }
+
+    /// A one-byte struct argument travels in AL as an integer does; a twelve-byte one is in memory with `a` after it.
+    #[test]
+    fn test_m32_a_small_struct_argument_is_a_register_and_a_large_one_is_memory() {
+        assert_eq!(regs_body("small_"), ["L4_0:", "movsx eax, al", "add eax, edx", "ret"]);
+        let body = regs_body("by_value_");
+        assert!(body.contains(&"mov eax, dword ptr [ebp+8]".to_owned()) && body.contains(&"add eax, dword ptr [ebp+20]".to_owned()), "{body:?}");
+        assert_eq!(body.last().map(String::as_str), Some("ret 16"));
+    }
+
+    /// `__cdecl` names the stack convention and its `_name` symbol on a target whose default is registers.
+    #[test]
+    fn test_m32_an_explicit_cdecl_function_keeps_the_stack_and_its_caller_pops() {
+        let body = regs_body("_explicit_cdecl");
+        assert_eq!(body, ["push ebp", "mov ebp, esp", "L5_0:", "mov eax, dword ptr [ebp+8]", "sub eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
+    }
+
     /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and cdecl32's next
     /// argument, and the callee's read of it, lay a dword apart.
     #[test]
@@ -1153,7 +1192,7 @@ mod tests {
     #[test]
     fn test_m32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
-        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
+        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "sum_ proc near").skip(1).take_while(|line| *line != "sum_ endp").map(String::as_str).collect();
         // The load is the add's operand, and the add of the stride sets the flags the branch reads.
         assert!(body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")), "{body:#?}");
         assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");

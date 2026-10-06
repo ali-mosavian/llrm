@@ -852,6 +852,16 @@ fn convention(spaces: &AddressSpaces, cleanup: model::StackCleanup, distance: mo
     Ok((convention, space))
 }
 
+/// The string attribute of each argument, by position, that is passed in memory or is where a struct result goes.
+fn argument_classes(memory: &[i64], result_pointer: Option<i64>) -> Vec<(usize, Attribute)> {
+    let attribute = |value: &str| Attribute::Str(llrm_mir::opcode::ARGUMENT.to_owned(), Some(value.to_owned()));
+    memory
+        .iter()
+        .map(|&at| (at as usize, attribute(llrm_mir::opcode::MEMORY)))
+        .chain(result_pointer.map(|at| (at as usize, attribute(llrm_mir::opcode::RESULT_POINTER))))
+        .collect()
+}
+
 /// The parameter `function`'s floating result is stored through and
 /// returned in its place, where its ABI has one.
 fn result_destination(tables: &Tables, function: &model::Function) -> Option<usize> {
@@ -896,6 +906,11 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     };
     let global = module.add_function(&function.name, ty, linkage)?;
     place_function(module, global, abi);
+    if let (Some(model_abi), llrm_mir::GlobalKind::Function(placed)) = (&function.abi, &mut module.globals[global.0 as usize].kind) {
+        for (index, class) in argument_classes(&model_abi.memory, model_abi.result_pointer) {
+            placed.parameter_attrs.get_mut(index).ok_or("a parameter class of no parameter")?.push(class);
+        }
+    }
     if function.abi.as_ref().is_some_and(|abi| abi.distance == model::CallDistance::Any) {
         if let llrm_mir::GlobalKind::Function(placed) = &mut module.globals[global.0 as usize].kind {
             placed.attrs.push(Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
@@ -2289,6 +2304,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn extensions(&self, instruction: &model::Instruction, order: &[usize]) -> Vec<(usize, Attribute)> {
         let values = self.function.values.iter().map(|one| (one.id, one.r#type)).collect();
         let places = self.function.places.iter().map(|one| (one.id, one)).collect();
+        let classes = self.function.calls.iter().find(|one| one.instruction == instruction.id).map(|site| argument_classes(&site.memory, site.result_pointer)).unwrap_or_default();
         order
             .iter()
             .enumerate()
@@ -2297,6 +2313,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let signed = ty.signed.filter(|_| ty.kind == model::TypeKind::Integer && ty.width == 1)?;
                 Some((index, Attribute::Flag(if signed { "signext" } else { "zeroext" }.to_owned())))
             })
+            .chain(classes)
             .collect()
     }
 

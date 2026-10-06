@@ -473,6 +473,10 @@ struct Body<'a, 't> {
     inlined: Option<i64>,
     /// The far pointer to where a struct result goes, where it is passed one.
     destination: Option<i64>,
+    /// The convention the procedure or call is under, where it is not C's stack one.
+    convention: Option<String>,
+    /// The parameters (by value) that are a struct's words, which travel in memory.
+    memory: Vec<i64>,
     /// `-g`: the unit's debug types, and the statement's source line.
     described: &'t mut Option<crate::debug::Described<'a>>,
     line: i64,
@@ -507,11 +511,17 @@ fn value_ref(value: i64) -> Operand {
 
 /// The stack convention of a procedure: cdecl's, or pascal's, which
 /// pushes in order and pops its own.
-fn cleanup(symbol: &hir::Symbol) -> R<StackCleanup> {
+fn cleanup(symbol: &hir::Symbol) -> R<(StackCleanup, Option<String>)> {
+    // `main` is called by the runtime's start, in C's convention.
+    if symbol.entry() && !symbol.in_order() {
+        return Ok((StackCleanup::Caller, None));
+    }
     let stack = symbol.call_class & (hir::CALLER_POPS | hir::REVERSE_PARMS);
     match (symbol.register_parms, stack) {
-        (false, hir::CALLER_POPS) => Ok(StackCleanup::Caller),
-        (false, hir::REVERSE_PARMS) => Ok(StackCleanup::Callee),
+        (false, hir::CALLER_POPS) => Ok((StackCleanup::Caller, None)),
+        (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
+        // Open Watcom's own register list, where the target's calling.toml states that convention.
+        (true, 0) if symbol.default_registers => Ok((StackCleanup::Callee, Some("watcall".to_owned()))),
         _ => refuse(format!("{} has a register calling convention", symbol.object_name())),
     }
 }
@@ -577,11 +587,17 @@ fn returned_as_integer(size: i64) -> Option<i64> {
     matches!(size, 1 | 2 | 4).then_some(size)
 }
 
+/// Whether a struct of `size` bytes passed under `convention` is one scalar of that size: Open Watcom's register
+/// convention takes 1, 2 and 4 byte structs as it takes an integer, and sends every other to memory.
+fn passed_as_scalar(convention: &Option<String>, size: i64) -> bool {
+    convention.is_some() && returned_as_integer(size).is_some()
+}
+
 /// A struct argument's words, by byte offset, in parameter order: they lie
 /// as the struct does, the first lowest, so last first where arguments are
 /// pushed in order.
-fn struct_words(size: i64, in_order: bool) -> Vec<i64> {
-    let words = (0..(size + 1) / 2).map(|at| at * 2);
+fn struct_words(size: i64, in_order: bool, word: i64) -> Vec<i64> {
+    let words = (0..(size + word - 1) / word).map(|at| at * word);
     if in_order { words.rev().collect() } else { words.collect() }
 }
 
@@ -607,8 +623,10 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<h::Function> {
         let unit = shared.unit;
         let symbol = &unit.symbols[&proc.symbol];
-        let cleanup = cleanup(symbol)?;
+        let (cleanup, convention) = cleanup(symbol)?;
         let mut body = Body {
+            convention: convention.clone(),
+            memory: Vec::new(),
             shared,
             unit,
             proc,
@@ -643,6 +661,7 @@ impl<'a, 't> Body<'a, 't> {
             None => body.ty(&proc.type_)?,
         };
         let (parameters, stated, homes, struct_homes) = body.frame()?;
+        let (body_memory, body_destination) = (std::mem::take(&mut body.memory), body.destination);
         for one in &proc.body {
             body.statement(one)?;
         }
@@ -655,10 +674,12 @@ impl<'a, 't> Body<'a, 't> {
             .into_iter()
             .map(|one| h::Block::new(one.id, one.instructions, one.terminator.expect("finished")))
             .collect();
+        let memory_at: Vec<i64> = body_memory.iter().filter_map(|value| parameters.iter().position(|one| one == value)).map(|at| at as i64).collect();
+        let result_pointer = body_destination.filter(|_| convention.is_some()).and_then(|value| parameters.iter().position(|one| *one == value)).map(|at| at as i64);
         let linkage = if symbol.exported() { h::FunctionLinkage::External } else { h::FunctionLinkage::Internal };
         let mut function = h::Function {
             parameters,
-            abi: Some(h::ProcedureAbi { convention: None, cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
+            abi: Some(h::ProcedureAbi { convention: convention.clone(), memory: memory_at, result_pointer, cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
             calls: body.calls,
             linkage,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
@@ -933,15 +954,20 @@ impl<'a, 't> Body<'a, 't> {
         for (symbol, type_) in self.proc.parameters(&self.unit.symbols[&self.proc.symbol]) {
             match self.types.aggregate(type_) {
                 Some(size) => {
-                    let words = (size + 1) / 2;
-                    let ty = self.types.of(Shape::Bytes(words * 2), None);
-                    let place = self.local(&format!("y{symbol}"), ty, words * 2);
-                    let word = self.types.raw(2);
+                    let scalar = passed_as_scalar(&self.convention, size);
+                    let bytes = if scalar { size } else { self.types.word() };
+                    let words = (size + bytes - 1) / bytes;
+                    let ty = self.types.of(Shape::Bytes(words * bytes), None);
+                    let place = self.local(&format!("y{symbol}"), ty, words * bytes);
+                    let word = self.types.raw(bytes);
                     struct_homes.push(place);
-                    for at in struct_words(size, in_order) {
+                    for at in struct_words(size, in_order, bytes) {
                         let parameter = self.value(word);
                         parameters.push(parameter);
                         stores.push((place, at, parameter));
+                        if !scalar && self.convention.is_some() {
+                            self.memory.push(parameter);
+                        }
                     }
                     self.slots.insert(format!("y{symbol}"), place);
                 }
@@ -1901,7 +1927,7 @@ impl<'a, 't> Body<'a, 't> {
         let double = self.ty("TY_DOUBLE")?;
         let result = self.value(double);
         let order = (0..arguments.len() as i64).rev().collect();
-        self.call_site(Some(&name), Some(result), arguments.iter().map(|&one| value_ref(one)).collect(), order, StackCleanup::Caller, CallDistance::Far);
+        self.call_site(Some(&name), Some(result), arguments.iter().map(|&one| value_ref(one)).collect(), order, StackCleanup::Caller, CallDistance::Far, None, Vec::new(), None);
         Ok(result)
     }
 
@@ -1911,12 +1937,13 @@ impl<'a, 't> Body<'a, 't> {
     }
 
     /// A call of `callee`, or of the function `operands[0]` points to.
-    fn call_site(&mut self, callee: Option<&str>, result: Option<i64>, operands: Vec<Operand>, order: Vec<i64>, cleanup: StackCleanup, distance: CallDistance) {
+    #[allow(clippy::too_many_arguments)]
+    fn call_site(&mut self, callee: Option<&str>, result: Option<i64>, operands: Vec<Operand>, order: Vec<i64>, cleanup: StackCleanup, distance: CallDistance, convention: Option<String>, memory: Vec<i64>, result_pointer: Option<i64>) {
         let results = result.into_iter().collect();
         let instruction = self.instruction(Op::Call, results, operands);
         instruction.callee = callee.map(str::to_owned);
         let id = instruction.id;
-        self.calls.push(h::CallAbi { convention: None, instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
+        self.calls.push(h::CallAbi { convention, memory, result_pointer, instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
     }
 
     /// Inline code as a call of `llrm.ia16.code`, each frame place it names
@@ -1950,7 +1977,7 @@ impl<'a, 't> Body<'a, 't> {
         let result = self.types.int(4, false);
         let result = self.value(result);
         let order = (0..operands.len() as i64).rev().collect();
-        self.call_site(Some(&name), Some(result), operands, order, StackCleanup::Caller, CallDistance::Near);
+        self.call_site(Some(&name), Some(result), operands, order, StackCleanup::Caller, CallDistance::Near, None, Vec::new(), None);
         self.inlined = Some(result);
         Ok(Got::Returned(Some(result)))
     }
@@ -1977,7 +2004,7 @@ impl<'a, 't> Body<'a, 't> {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
         }
-        let cleanup = cleanup(symbol).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
+        let (cleanup, convention) = cleanup(symbol).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
         let distance = distance(symbol);
         let callee = match target {
             Got::Function(_) => None,
@@ -1985,37 +2012,51 @@ impl<'a, 't> Body<'a, 't> {
         };
         // Evaluated as listed, last first; passed first first.
         let mut arguments = Vec::new();
+        // Which of them are a struct's words, listed as the arguments are.
+        let mut in_memory = Vec::new();
         for (node, type_) in &call.parms {
             let Some(size) = self.types.aggregate(type_) else {
                 arguments.push(self.value_as(node, type_)?);
+                in_memory.push(false);
                 continue;
             };
             let Got::Aggregate(from, _) = self.eval(node)? else { return self.refuse("a scalar passed as an aggregate") };
-            // Listed last first, as the arguments are; a last odd byte widened.
-            let word = self.types.raw(2);
-            for at in struct_words(size, symbol.in_order()).into_iter().rev() {
-                let value = if at + 1 < size {
+            let scalar = passed_as_scalar(&convention, size);
+            let unit = if scalar { size } else { self.types.word() };
+            // Listed last first, as the arguments are; a last partial word widened.
+            let word = self.types.raw(unit);
+            for at in struct_words(size, symbol.in_order(), unit).into_iter().rev() {
+                let left = size - at;
+                let value = if left >= unit {
                     self.op(Op::Load, word, vec![Operand::IndirectPlace(indirect(from, at, word, false))])
-                } else {
-                    let byte = self.types.raw(1);
-                    let value = self.op(Op::Load, byte, vec![Operand::IndirectPlace(indirect(from, at, byte, false))]);
+                } else if matches!(left, 1 | 2) {
+                    let part = self.types.raw(left);
+                    let value = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(from, at, part, false))]);
                     self.op(Op::ZeroExtend, word, vec![value_ref(value)])
+                } else {
+                    return self.refuse(&format!("a struct of {size} bytes passed by value"));
                 };
                 arguments.push(value);
+                in_memory.push(!scalar && convention.is_some());
             }
         }
         arguments.reverse();
+        in_memory.reverse();
         // A struct result: in a temporary, which the callee fills through a
         // far pointer pushed last where it is not returned as an integer.
         let returned = self.types.aggregate(&call.type_).map(|size| {
             let ty = self.types.of(Shape::Bytes(size), None);
             (self.local(&format!("r{}", self.places.len() + 1), ty, size), size)
         });
+        let mut result_at = None;
         if let Some((temporary, _)) = returned.filter(|&(_, size)| returned_as_integer(size).is_none()) {
             let near = self.address_of(temporary);
             let far = self.types.pointer(FAR);
             let destination = self.op(Op::Convert, far, vec![value_ref(near)]);
             with_destination(&mut arguments, destination, symbol.in_order());
+            // Where it goes in the list: first where arguments are listed first first.
+            result_at = Some(if symbol.in_order() { arguments.len() as i64 - 1 } else { 0 });
+            in_memory.insert(result_at.unwrap() as usize, false);
         }
         let result = match (target, returned) {
             (Got::Function(symbol), _) if self.shared.valueless.contains(&symbol) => None,
@@ -2044,7 +2085,9 @@ impl<'a, 't> Body<'a, 't> {
             }
             _ => None,
         };
-        self.call_site(name.as_deref(), result, operands, order, cleanup, distance);
+        let memory = in_memory.iter().enumerate().filter(|(_, memory)| **memory).map(|(at, _)| at as i64).collect();
+        let result_pointer = result_at.filter(|_| convention.is_some());
+        self.call_site(name.as_deref(), result, operands, order, cleanup, distance, convention, memory, result_pointer);
         let Some((temporary, size)) = returned else { return Ok(Got::Returned(result)) };
         let address = self.address_of(temporary);
         if let (Some(width), Some(value)) = (returned_as_integer(size), result) {
