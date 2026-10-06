@@ -5,7 +5,11 @@ pub mod guards;
 pub mod make;
 pub mod walk;
 
+use std::sync::Arc;
+
 use iced_x86::Register;
+
+use crate::model::lir::{Insn, LirBody};
 
 /// A set of mnemonics from `peephole.peep`, and for a family (`far_loads`)
 /// the fixed register that picks each member.
@@ -47,22 +51,111 @@ pub mod field {
     pub const VOLATILE: u32 = 1 << 14;
 }
 
-#[allow(clippy::all, unused_imports, unused_variables, unreachable_patterns)]
-mod generated {
-    use std::sync::Arc;
+/// A rewrite of a whole body by one rule group.
+pub type BodyRule = fn(&LirBody, &walk::Facts) -> LirBody;
+/// A rewrite of a run of instructions by one rule group.
+pub type InsnRule = fn(&[Arc<Insn>], &walk::Facts) -> Vec<Arc<Insn>>;
 
-    use iced_x86::{Register, RflagsBits};
-
-    use super::walk::{self, Cx, Facts, Kind, Matcher, Out, Rewrite, Side, Skip, Window};
-    use super::{Set, field, guards, make};
-    use crate::backend::lanes::Lanes;
-    use crate::model::ir::{Imm, Loc, Operation, Semantics};
-    use crate::model::lir::{self, Insn, LirBody};
-
-    include!(concat!(env!("OUT_DIR"), "/peephole.rs"));
+/// `body` rewritten by `rule`, unchanged where the target has none.
+pub fn rewritten(rule: Option<BodyRule>, body: &LirBody, facts: &walk::Facts) -> LirBody {
+    rule.map_or_else(|| body.clone(), |rule| rule(body, facts))
 }
 
-pub use generated::*;
+/// `insns` rewritten by `rule`, unchanged where the target has none.
+pub fn rewritten_insns(rule: Option<InsnRule>, insns: &[Arc<Insn>], facts: &walk::Facts) -> Vec<Arc<Insn>> {
+    rule.map_or_else(|| insns.to_vec(), |rule| rule(insns, facts))
+}
+
+/// No mnemonics.
+pub static NO_NAMES: Set = Set { names: &[], fixed: &[] };
+
+/// What a target's `peephole.peep` made: each rule group, or none where the
+/// target has no such group. Bound to a target by `llrm-driver` through its
+/// selector.
+pub struct Rules {
+    pub extensions: Option<BodyRule>,
+    pub extensions_insns: Option<InsnRule>,
+    pub pushed_constants: Option<BodyRule>,
+    pub pushed_constants_insns: Option<InsnRule>,
+    pub pushes: Option<BodyRule>,
+    pub pushes_insns: Option<InsnRule>,
+    pub narrowed_moves: Option<BodyRule>,
+    pub narrowed_moves_insns: Option<InsnRule>,
+    pub commuted: Option<BodyRule>,
+    pub commuted_insns: Option<InsnRule>,
+    pub transferred: Option<BodyRule>,
+    pub transferred_insns: Option<InsnRule>,
+    pub shuttles: Option<BodyRule>,
+    pub shuttles_insns: Option<InsnRule>,
+    pub restored_copies: Option<BodyRule>,
+    pub restored_copies_insns: Option<InsnRule>,
+    pub fused: Option<BodyRule>,
+    pub fused_insns: Option<InsnRule>,
+    pub far_loads: Option<BodyRule>,
+    pub far_loads_insns: Option<InsnRule>,
+    pub increments: Option<BodyRule>,
+    pub increments_insns: Option<InsnRule>,
+    pub borrows: Option<BodyRule>,
+    pub borrows_insns: Option<InsnRule>,
+    pub doubled: Option<BodyRule>,
+    pub doubled_insns: Option<InsnRule>,
+    pub zero_compares: Option<BodyRule>,
+    pub zero_compares_insns: Option<InsnRule>,
+    pub memory_arguments: Option<BodyRule>,
+    pub memory_arguments_insns: Option<InsnRule>,
+    pub paired_pushes: Option<BodyRule>,
+    pub paired_pushes_insns: Option<InsnRule>,
+    pub immediate_arguments: Option<BodyRule>,
+    pub immediate_arguments_insns: Option<InsnRule>,
+    /// The conditional jumps that test only a zero or a sign.
+    pub zero_jcc: &'static Set,
+}
+
+impl Rules {
+    /// A target with no peephole rules.
+    pub const NONE: Rules = Rules {
+        extensions: None,
+        extensions_insns: None,
+        pushed_constants: None,
+        pushed_constants_insns: None,
+        pushes: None,
+        pushes_insns: None,
+        narrowed_moves: None,
+        narrowed_moves_insns: None,
+        commuted: None,
+        commuted_insns: None,
+        transferred: None,
+        transferred_insns: None,
+        shuttles: None,
+        shuttles_insns: None,
+        restored_copies: None,
+        restored_copies_insns: None,
+        fused: None,
+        fused_insns: None,
+        far_loads: None,
+        far_loads_insns: None,
+        increments: None,
+        increments_insns: None,
+        borrows: None,
+        borrows_insns: None,
+        doubled: None,
+        doubled_insns: None,
+        zero_compares: None,
+        zero_compares_insns: None,
+        memory_arguments: None,
+        memory_arguments_insns: None,
+        paired_pushes: None,
+        paired_pushes_insns: None,
+        immediate_arguments: None,
+        immediate_arguments_insns: None,
+        zero_jcc: &NO_NAMES,
+    };
+}
+
+/// Every target's rules, as its definition directory is named.
+pub mod targets {
+    include!(concat!(env!("OUT_DIR"), "/peep_targets.rs"));
+}
 
 #[cfg(test)]
 mod tests;

@@ -12,7 +12,7 @@ fn compiled(rules: &str) -> Result<Vec<automaton::Automaton>, String> {
 
 #[test]
 fn the_rules_llrm_builds_with_compile() {
-    let rules = include_str!("../../llrm-core/src/backend/peephole.peep");
+    let rules = include_str!("../../../target/llrm-x86-code16/src/isel/peephole.peep");
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/llrm-x86-code16/src/instructions/x86.instr");
     let made = generate(&std::fs::read_to_string(path).unwrap(), "x86.instr", rules, "peephole.peep");
     assert!(made.is_ok(), "{}", made.err().unwrap_or_default());

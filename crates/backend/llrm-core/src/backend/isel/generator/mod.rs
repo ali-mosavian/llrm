@@ -329,6 +329,7 @@ pub static SELECTOR: Compiled = Compiled {{
     covers_here: |selector, pattern, m| selector.{ident}_covers(pattern, m),
     cost: |selector, pattern, m| selector.{ident}_cost(pattern, m),
     emit: |selector, pattern, m, out| selector.{ident}_emit(pattern, m, out),
+    rules: &crate::backend::peep::targets::{ident}::RULES,
 }};"
     )
     .unwrap();

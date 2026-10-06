@@ -70,11 +70,18 @@ pub struct Peephole {
     /// One frame, shared with the phases before this one, as Python shares it.
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
+    /// The rule groups of the target, which its driver binds.
+    pub rules: &'static peep::Rules,
 }
 
 impl Peephole {
+    /// With the 16-bit x86 rules.
     pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
-        Ok(Self { frame, cpu: targets::profile(cpu)?.clone() })
+        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES)
+    }
+
+    pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules) -> Result<Self, String> {
+        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules })
     }
 
     /// Drop only synthetic reservations when no added stack storage remains.
@@ -139,23 +146,23 @@ impl LIRTransform for Peephole {
         let body = regthrash::thrashed(phielim::unsplit(&body));
         let body = frame_copies(&body, &self.cpu)?;
         let body = copyprop::forwarded(&body);
-        let body = extensions(&body);
+        let body = extensions(self.rules, &body);
         let body = copysink::sunk(&body);
         let body = spillforward::forwarded(&body);
         let body = storecombine::combined(&body);
-        let body = pushed_constants(&body);
-        let body = far_loads(&fused(&overwritten(&shuttles(&restored_copies(&high_extracts(
-            &transferred(&commuted(&constants(&pushes(&body, &self.cpu)))),
+        let body = pushed_constants(self.rules, &body);
+        let body = far_loads(self.rules, &fused(self.rules, &overwritten(&shuttles(self.rules, &restored_copies(self.rules, &high_extracts(
+            &transferred(self.rules, &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu)))),
             &self.cpu,
         )?)))));
         let body = crate::backend::exactaddress::exact_addresses(&body, &self.cpu)?;
         let body = addresses(&body, &self.cpu)?;
         let body = secondary_bases(&body, &self.cpu)?;
-        let body = borrows(&increments(&body));
-        let body = doubled(&body, &self.cpu)?;
+        let body = borrows(self.rules, &increments(self.rules, &body));
+        let body = doubled(self.rules, &body, &self.cpu)?;
         let body = sharedstores::shared(&body, &self.cpu, &crate::backend::masm::SAVED.keys().copied().collect::<Vec<_>>());
         let body = machinecse::eliminated(&body)?;
-        let body = waits(&zero_compares(&tested(&zeroes(&narrowed_moves(&body)))));
+        let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
         // Last: EBP zeroed above for each cell reading it 32 bits wide.
         Ok(crate::backend::upperzero::established(&self._frame(body)))
@@ -307,13 +314,13 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Re
 }
 
 /// Fold a load or transitive extension into one widening instruction (`peephole.peep`).
-pub fn extensions(body: &LirBody) -> LirBody {
-    peep::extensions(body, &Facts::new(body, None))
+pub fn extensions(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.extensions, body, &Facts::new(body, None))
 }
 
 /// Materialize a call's literal once when both stack and register need it (`peephole.peep`).
-pub fn pushed_constants(body: &LirBody) -> LirBody {
-    peep::pushed_constants(body, &Facts::new(body, None))
+pub fn pushed_constants(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.pushed_constants, body, &Facts::new(body, None))
 }
 
 /// `insns` with `rewrite` offered each run of up to `width` instructions,
@@ -352,8 +359,8 @@ fn _code_windows<E>(
 }
 
 /// Two adjacent immediate word pushes have one dword's stack layout (`peephole.peep`).
-pub fn pushes(body: &LirBody, cpu: &Profile) -> LirBody {
-    peep::pushes(body, &Facts::new(body, Some(cpu)))
+pub fn pushes(rules: &peep::Rules, body: &LirBody, cpu: &Profile) -> LirBody {
+    peep::rewritten(rules.pushes, body, &Facts::new(body, Some(cpu)))
 }
 
 pub fn _lanes(register: Register) -> Lanes {
@@ -380,18 +387,18 @@ pub fn _lanes(register: Register) -> Lanes {
 }
 
 /// Write only the live low word of a register-only dword move (`peephole.peep`).
-pub fn narrowed_moves(body: &LirBody) -> LirBody {
-    peep::narrowed_moves(body, &Facts::new(body, None))
+pub fn narrowed_moves(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.narrowed_moves, body, &Facts::new(body, None))
 }
 
 /// Use a saved accumulator in place for commutative two-address operations (`peephole.peep`).
-pub fn commuted(body: &LirBody) -> LirBody {
-    peep::commuted(body, &Facts::new(body, None))
+pub fn commuted(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.commuted, body, &Facts::new(body, None))
 }
 
 /// Write a commutative result directly into its copied destination (`peephole.peep`).
-pub fn transferred(body: &LirBody) -> LirBody {
-    peep::transferred(body, &Facts::new(body, None))
+pub fn transferred(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.transferred, body, &Facts::new(body, None))
 }
 
 /// Select direct register or memory forms for a dword's high word.
@@ -719,13 +726,13 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
 }
 
 /// Do tied work in its source register when a copy restores the result (`peephole.peep`).
-pub fn shuttles(body: &LirBody) -> LirBody {
-    peep::shuttles(body, &Facts::new(body, None))
+pub fn shuttles(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.shuttles, body, &Facts::new(body, None))
 }
 
 /// Remove a synthetic save/restore when the source survives between them (`peephole.peep`).
-pub fn restored_copies(body: &LirBody) -> LirBody {
-    peep::restored_copies(body, &Facts::new(body, None))
+pub fn restored_copies(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.restored_copies, body, &Facts::new(body, None))
 }
 
 /// One allocated operand with aliases of `before` renamed to `after`.
@@ -1036,13 +1043,13 @@ pub fn overwritten(body: &LirBody) -> LirBody {
 }
 
 /// Fold a load, an operation and a store into one memory operation (`peephole.peep`).
-pub fn fused(body: &LirBody) -> LirBody {
-    peep::fused(body, &Facts::new(body, None))
+pub fn fused(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.fused, body, &Facts::new(body, None))
 }
 
 /// Load a far pointer's two words with one les (lds, lfs, lgs) (`peephole.peep`).
-pub fn far_loads(body: &LirBody) -> LirBody {
-    peep::far_loads(body, &Facts::new(body, None))
+pub fn far_loads(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.far_loads, body, &Facts::new(body, None))
 }
 
 /// Replace a dead temporary's shift with a scaled 67h LEA.
@@ -1671,19 +1678,19 @@ fn _affine_address(
 }
 
 /// Select compact INC/DEC for a unit add whose carry result is dead (`peephole.peep`).
-pub fn increments(body: &LirBody) -> LirBody {
-    peep::increments(body, &Facts::new(body, None))
+pub fn increments(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.increments, body, &Facts::new(body, None))
 }
 
 /// `mov r,0 ; sbb r,0` as `sbb r,r` (`peephole.peep`).
-pub fn borrows(body: &LirBody) -> LirBody {
-    peep::borrows(body, &Facts::new(body, None))
+pub fn borrows(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.borrows, body, &Facts::new(body, None))
 }
 
 /// `shl r,1` as `add r,r` where the target prices the add lower (`peephole.peep`).
-pub fn doubled(body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
+pub fn doubled(rules: &peep::Rules, body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
     cpu.doubling()?;
-    Ok(peep::doubled(body, &Facts::new(body, Some(cpu))))
+    Ok(peep::rewritten(rules.doubled, body, &Facts::new(body, Some(cpu))))
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
@@ -1722,7 +1729,7 @@ static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHM
 /// overflow or adjust flags it would have cleared. Work independent of the
 /// computation may stand between them, in the block or in a sole predecessor
 /// that only falls into it: the computation sinks to just before the test.
-pub fn tested(body: &LirBody) -> LirBody {
+pub fn tested(rules: &peep::Rules, body: &LirBody) -> LirBody {
     let live = _flags_live_out(body);
     let mut predecessors = HashMap::<i64, Vec<usize>>::default();
     for (at, block) in body.blocks.iter().enumerate() {
@@ -1754,7 +1761,7 @@ pub fn tested(body: &LirBody) -> LirBody {
         }
         let branch = &insns[at(branch_at)];
         if !branch.what.as_ref().is_some_and(|what| {
-            what.op == Operation::Branch && what.name.as_deref().is_some_and(|name| peep::SET_ZERO_JCC.contains(name))
+            what.op == Operation::Branch && what.name.as_deref().is_some_and(|name| rules.zero_jcc.contains(name))
         }) || !live[&block.at].is_disjoint(&_DIFFERING)
         {
             continue;
@@ -1907,8 +1914,8 @@ pub(crate) fn _reads_flags(name: &str) -> bool {
 }
 
 /// `cmp r,0; jcc` is `or r,r; jcc`, a byte shorter (`peephole.peep`).
-pub fn zero_compares(body: &LirBody) -> LirBody {
-    peep::zero_compares(body, &Facts::new(body, None))
+pub fn zero_compares(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.zero_compares, body, &Facts::new(body, None))
 }
 
 /// A plain move, writing nothing that shares a root with `register`.
