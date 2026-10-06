@@ -154,7 +154,7 @@ fn test_inline_assembly_is_refused_where_registers_are_wider() {
     let directory = tempfile::tempdir().expect("a directory");
     let path = directory.path().join("a.nib");
     std::fs::write(&path, "fn main() -> i16:\n    unsafe:\n        asm(clobbers=[ax, flags]):\n            mov ax, 0\n    return 0\n").expect("written");
-    let flat = crate::Frontend { slot: 4, ..Default::default() };
+    let flat = crate::Frontend { bits: 32, ..Default::default() };
     let error = crate::driver::parsed(&path, &flat, None).expect_err("refused").0;
     assert!(error.contains("inline assembly is 16-bit only"), "{error}");
     crate::driver::parsed(&path, &Default::default(), None).expect("real mode takes it");

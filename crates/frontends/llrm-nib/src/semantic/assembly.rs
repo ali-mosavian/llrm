@@ -11,12 +11,8 @@ use llrm_core::backend::inline_asm::{self, Part};
 impl FunctionCompiler<'_> {
     pub(super) fn asm_statement(&mut self, asm: &Asm) -> Result<(), Diagnostic> {
         self.require_unsafe("inline assembly", asm.span)?;
-        // The assembler and the registers an asm block names are 16-bit; a wider slot is a wider machine.
-        if self.types.sizes.slot != 2 {
-            return Err(Diagnostic::new(asm.span, "inline assembly is 16-bit only: this target's registers are wider"));
-        }
         let lines: Vec<&str> = asm.lines.iter().map(|(text, _)| text.as_str()).collect();
-        let code = inline_asm::assembled(&lines)
+        let code = inline_asm::assembled(&lines, self.types.code_bits)
             .map_err(|refused| Diagnostic::new(asm.lines[refused.line].1, refused.message))?;
 
         // Each word register's input: whole, or its bytes.
