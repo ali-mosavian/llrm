@@ -27,7 +27,7 @@ pub struct Bound {
 impl Bound {
     /// The driver's options for `machine`, selecting with this target's selector.
     pub fn options(&self, flags: &Flags, machine: Machine) -> Options {
-        Options { selection: self.selection, ..flags.driver(machine) }
+        Options { selection: self.selection, arch: Rc::clone(&self.target), ..flags.driver(machine) }
     }
 }
 
