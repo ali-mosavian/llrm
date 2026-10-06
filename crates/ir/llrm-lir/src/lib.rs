@@ -327,6 +327,11 @@ impl Operation {
         Self::Barrier,
     ];
 
+    /// The operation `spelled` as `as_str` spells it, as `x86.instr` does.
+    pub fn named(spelled: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|op| op.as_str() == spelled)
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Move => "move",

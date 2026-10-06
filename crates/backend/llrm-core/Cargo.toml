@@ -13,6 +13,7 @@ llrm-omf = { workspace = true }
 llrm-bcmachine = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
+llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-transforms = { workspace = true }
@@ -28,6 +29,7 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 
 [build-dependencies]
+llrm-lir = { workspace = true }
 llrm-peepgen = { workspace = true }
 
 [features]

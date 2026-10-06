@@ -265,6 +265,7 @@ dependencies = [
  "llrm-analysis",
  "llrm-bcmachine",
  "llrm-hir",
+ "llrm-lir",
  "llrm-mir",
  "llrm-omf",
  "llrm-peepgen",
@@ -352,6 +353,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-lir",
  "serde",
  "toml",
 ]
@@ -431,6 +433,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-lir",
  "llrm-mir",
  "llrm-support",
  "llrm-target",

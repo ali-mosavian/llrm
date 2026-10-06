@@ -35,13 +35,6 @@ pub const CONSTRUCTORS: [(&str, &str, usize); 13] = [
     ("imm", "i", 2),
 ];
 
-const OPERATIONS: [(&str, &str); 29] = [
-    ("move", "Move"), ("xchg", "Exchange"), ("addr", "Address"), ("binary", "Binary"), ("mul", "Multiply"), ("div", "Divide"), ("cmp", "Compare"),
-    ("unary", "Unary"), ("funnel", "Funnel"), ("extend", "Extend"), ("push", "Push"), ("pop", "Pop"), ("leave", "Leave"), ("fill", "Fill"), ("jump", "Jump"),
-    ("branch", "Branch"), ("escape", "Escape"), ("call", "Call"), ("ret", "Return"), ("nothing", "Nothing"), ("restore", "Restore"), ("data", "Data"),
-    ("fload", "FloatLoad"), ("fstore", "FloatStore"), ("farith", "FloatArith"), ("farithp", "FloatArithPop"), ("funary", "FloatUnary"), ("barrier", "Barrier"), ("copy", "Copy"),
-];
-
 pub struct Generated {
     pub code: String,
     pub patterns: Vec<Pattern>,
@@ -211,7 +204,7 @@ fn body(checker: &mut Checker) -> Result<String, String> {
                     }
                 }
                 let form = checker.form(name, &kinds.0, &kinds.1)?;
-                let operation = OPERATIONS.iter().find(|(one, _)| *one == form.operation).map(|(_, variant)| variant).expect("x86.instr's operations are checked");
+                let operation = format!("{:?}", llrm_lir::Operation::named(&form.operation).expect("x86.instr's operations are checked"));
                 let (d, s) = locals.split_at(dests.len());
                 writeln!(code, "                out.push(self.emitted(m, Operation::{operation}, {name:?}, vec![{}], vec![{}], {volatile}));", d.join(", "), s.join(", ")).unwrap();
             }
