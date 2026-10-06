@@ -11,7 +11,7 @@ fn recipe() -> toml::Table {
 
 /// The flag that makes jwasm write the object format the target writes (jwasm's own spelling of it).
 pub fn assembler() -> &'static str {
-    match recipe()["writer"].as_str().expect("a writer") {
+    match recipe()["default"].as_str().expect("a default format") {
         "omf" => "-omf",
         other => panic!("jwasm has no flag for the {other} format"),
     }

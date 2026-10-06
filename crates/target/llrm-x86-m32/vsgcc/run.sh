@@ -6,7 +6,7 @@ R=$(cd "$(dirname "$0")/../../../.." && pwd); H=$R/crates/target/llrm-x86-m32/vs
 PROGS=$(ls $R/bench | grep -v -E "readme|parity|huge|textfill|grep")   # 16-bit only, no input, or timed only
 mkdir -p $VSGCC_WORK
 (cd $R && cargo build --release --bin llrm-c -q)
-gcc -m32 -c $H/stub.s -o $VSGCC_WORK/stub.o && ld -m elf_i386 -static -e 0 -Ttext=0x8000 -o $VSGCC_WORK/stub.elf $VSGCC_WORK/stub.o
+gcc -m32 -c $H/stub.s -o $VSGCC_WORK/stub.o && ld -m $(python3 $R/tools/linkrecipe.py x86-m32 ld-emulation) -static -e 0 -Ttext=0x8000 -o $VSGCC_WORK/stub.elf $VSGCC_WORK/stub.o
 for p in $PROGS; do $H/build.sh $p; done
 : > $VSGCC_WORK/results.jsonl
 for p in $PROGS; do for v in llrm llrmOs gccO2 gccOs clangO2 clangOs; do

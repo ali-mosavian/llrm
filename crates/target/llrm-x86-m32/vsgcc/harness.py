@@ -1,8 +1,8 @@
 """One emulator for every compiler's m32 object: link, run main, count the kernel's work.
 
-    harness.py PROG VARIANT      VARIANT: llrm llrmOs gccO2 gccOs clangO2 clangOs
+    harness.py PROG VARIANT      VARIANT: llrm llrmOs llrmElfO2 llrmElfOs gccO2 gccOs clangO2 clangOs
 
-llrm's OMF is linked here (segments by class, fixups resolved); gcc/clang's ELF is linked by ld.
+llrm's OMF is linked here (segments by class, fixups resolved); ELF, llrm's (llrmElf*) and gcc/clang's, is linked by ld.
 Both resolve report/memset/memcpy to stub.elf, loaded at STUB. The region counted is bench_PROG
 from its first instruction to the return that pops its own entry frame, callees included
 (tools/bench/icount.py's convention: a rep string instruction counts once per iteration).
@@ -25,6 +25,7 @@ BENCH = REPO / "bench"
 LLRM = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target")) / "release" / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 BASE = 0x10000
+OMF_VARIANTS = ("llrm", "llrmOs")
 MEMORY = {OpKind.MEMORY, OpKind.MEMORY_SEG_SI, OpKind.MEMORY_SEG_ESI, OpKind.MEMORY_ESDI, OpKind.MEMORY_ESEDI}
 
 
@@ -248,14 +249,15 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
 
 def run(prog, variant, hot=False, limit=300_000_000):
     stub = nm(OUT / "stub.elf")
-    if variant.startswith("llrm"):
+    if variant in OMF_VARIANTS:
         segs, syms = omf_link(OUT / "o" / f"{prog}.{variant}.obj", stub)
         main = syms["_main"]
         kern = syms[f"_bench_{prog}"]
     else:
         elf = OUT / "b" / f"{prog}.{variant}.elf"
         segs, syms = elf_segments(elf), nm(elf)
-        main, kern = syms["main"], syms[f"bench_{prog}"]
+        # llrm's ELF symbols are decorated with a leading underscore until the ABI says otherwise
+        main, kern = syms.get("main", syms.get("_main")), syms.get(f"bench_{prog}", syms.get(f"_bench_{prog}"))
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     uc.mem_map(0, MEM)
     for va, blob, msz in segs + elf_segments(OUT / "stub.elf"):
@@ -340,7 +342,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
 
 def code_bytes(prog, variant):
     """Size of the kernel's object code: the CODE-class segments (OMF) or .text (ELF), like tools/sizes.py."""
-    if variant.startswith("llrm"):
+    if variant in OMF_VARIANTS:
         data = (OUT / "o" / f"{prog}.{variant}.obj").read_bytes()
         lnames, classes, sizes = [""], [], []
         at = 0

@@ -270,10 +270,11 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
+        let format = args.flags.format(&*args.codegen.arch)?;
         let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
-        if !args.flags.assembly && output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
-            let bytes = objbuild::written(&built, name)?;
+        if !args.flags.assembly && matches!(output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref(), Some("obj" | "o")) {
+            let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
             llrm_core::support::debug::timed("write output", || fs::write(&output, bytes))?;
         } else {
             fs::write(&output, masm::text(&built)?)?;
