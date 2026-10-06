@@ -1,5 +1,5 @@
-reason = "a near string op's ES is a held DGROUP, set once and saved by none; a constant backward start is one mov (#493, #494)"
-blessed = "2026-10-05"
+reason = "the optimizer's proof that no write changes a selector load keeps it across the write (#508)"
+blessed = "2026-10-06"
 
 [bas.O2]
 code_bytes = 1008
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3412.8726
 
 [nib.O2]
-code_bytes = 1632
+code_bytes = 1620
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4510.8239
 
 [nib.Os]
-code_bytes = 1528
+code_bytes = 1517
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4510.8539

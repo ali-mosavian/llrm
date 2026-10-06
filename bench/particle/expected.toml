@@ -1,18 +1,18 @@
-reason = "correctness: remake of a copied selector load after stores the LIR check cannot see through; recovered by the invariant-load fact"
+reason = "the optimizer's proof that no write changes a hoisted selector load reaches SsaSpill (#507 recovered)"
 blessed = "2026-10-06"
 
 [bas.O2]
-instructions = 128256
-memory_operands = 93524
-code_bytes = 514
+instructions = 127550
+memory_operands = 92918
+code_bytes = 484
 data_bytes = 121
 bss_bytes = 0
 kernel_ms = 1.7446
 
 [bas.Os]
-instructions = 128054
-memory_operands = 93524
-code_bytes = 489
+instructions = 127348
+memory_operands = 92918
+code_bytes = 459
 data_bytes = 121
 bss_bytes = 0
 kernel_ms = 1.7421
