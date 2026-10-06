@@ -277,3 +277,21 @@ entry:
     assert!(reaches_g("entry"), "the entry writes @g through @h");
     assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
 }
+
+/// Each access asked of its own alloca's uses whether the address is exposed, and the answer was never
+/// kept: `mir decide` and `gvn` grew with slope 2.5–2.9 in a function's blocks, `exposes` 21% of the
+/// compile of 300 (#557). The manager finds a function's exposed frames once.
+#[test]
+fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
+    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!("{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"));
+    let layout = layout(&module);
+    let function = function(&module, "f");
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let before = crate::frameescape::scans();
+    analyses.get::<Annotated>(&module.context, &layout, function).as_ref().as_ref().expect("annotates");
+    assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+    let exposed = analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
+    let names: Vec<_> = exposed.iter().map(|one| function.value(*one).name.clone()).collect();
+    assert_eq!(names.len(), 1, "only @hidden's address is handed out: {names:?}");
+}

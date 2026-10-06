@@ -1386,9 +1386,34 @@ fn imm_of(one: &Loc) -> Option<i64> {
     }
 }
 
+thread_local! {
+    /// The mode `emit` encodes in while a module compiles: the target's, set by `encoding_in`.
+    static ENCODING: std::cell::Cell<u32> = const { std::cell::Cell::new(BITNESS) };
+}
+
+/// Restores the mode `emit` encoded in before.
+pub struct Encoding(u32);
+
+impl Drop for Encoding {
+    fn drop(&mut self) {
+        ENCODING.with(|mode| mode.set(self.0));
+    }
+}
+
+/// `emit` encodes in `bits`-bit mode until the result is dropped: the passes ask whether a form
+/// encodes and how long it is, in the mode the target's code runs in.
+pub fn encoding_in(bits: u32) -> Encoding {
+    Encoding(ENCODING.with(|mode| mode.replace(bits)))
+}
+
+/// The mode `emit` encodes in now, which the bytes it returns decode in.
+pub fn encoding() -> u32 {
+    ENCODING.with(std::cell::Cell::get)
+}
+
 /// One MIR operation as machine bytes, or None where this cannot say it.
 pub fn emit(what: &Semantics, at: u64, r#where: Option<Where<'_>>, short: bool, relocated: bool, held: Option<&HeldMap>) -> Option<Emitted> {
-    emit_in(BITNESS, what, at, r#where, short, relocated, held)
+    emit_in(encoding(), what, at, r#where, short, relocated, held)
 }
 
 /// `emit` in `bits`-bit mode: 16 or 32, the target's object format says.

@@ -850,6 +850,71 @@ fn test_an_extension_of_a_counter_that_cannot_wrap_is_a_wide_recurrence() {
     }
 }
 
+/// C's `for (unsigned char i = 0; i < 9; ++i) a[i]`: the header reads `zext i`
+/// too, once more than the body, on the trip that leaves. It was refused
+/// whatever the count, so the address was no recurrence and a counted loop
+/// kept a conversion per trip on code32 (crc, 832 executed against 496).
+#[test]
+fn test_an_extension_in_the_header_is_a_recurrence_where_the_last_trip_fits() {
+    for (start, bound, cast, fits) in [(0, 9, "zext", true), (0, 255, "zext", true), (1, 0, "zext", false)] {
+        let test = if bound == 0 { "ne" } else { "ult" };
+        let parsed = Parsed::new(&format!(
+            "define void @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ {start}, %b0 ], [ %next, %b2 ]
+  %h = {cast} i8 %i to i16
+  %m = mul i16 %h, 3
+  %c = icmp {test} i8 %i, {bound}
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add i8 %i, 1
+  br label %b1
+
+b3:
+  ret void
+}}
+"
+        ));
+        assert_eq!(parsed.recurrence("h").map(|of| (of.start, of.step)), fits.then(|| (Scev::constant(start, 16), Scev::constant(1, 16))), "{start} {bound}");
+    }
+}
+
+/// `for (unsigned short i = 0; i < n; ++i)`: no count is known, but the test
+/// ends the loop before the counter passes the width's largest, so its
+/// zero extension is a wide counter. A signed test or a larger step does
+/// not say so.
+#[test]
+fn test_a_symbolic_ult_counter_extends_to_a_wide_recurrence() {
+    for (test, step, cast, wide) in [("ult", 1, "zext", true), ("ult", 2, "zext", false), ("slt", 1, "zext", false), ("ult", 1, "sext", false)] {
+        let parsed = Parsed::new(&format!(
+            "define void @f(i8 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp {test} i8 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %w = {cast} i8 %i to i16
+  %m = mul i16 %w, 3
+  %next = add i8 %i, {step}
+  br label %b1
+
+b3:
+  ret void
+}}
+"
+        ));
+        assert_eq!(parsed.recurrence("w").is_some(), wide, "{test} {step} {cast}");
+    }
+}
+
 #[test]
 fn test_an_exact_quotient_of_a_counter_is_a_recurrence() {
     for (step, divisor, expected) in [(4, 2, Some(2)), (4, -2, Some(-2)), (3, 2, None), (4, 0, None)] {

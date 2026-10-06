@@ -1,6 +1,7 @@
 //! Generates one instruction selector per target from its definition
 //! directory (`crates/target/<name>/src/isel/patterns.isel` against
-//! `src/instructions/x86.instr`) and its peephole rules from `src/isel/peephole.peep`.
+//! `src/instructions/x86.instr`) and its peephole rules: the family's (`llrm-x86`) and its own
+//! `src/isel/peephole.peep`.
 
 // The tests read what build.rs does not.
 #[allow(dead_code)]
@@ -10,7 +11,8 @@ mod generator;
 fn main() {
     let family_forms = "../../target/llrm-x86/src/instructions/x86.instr";
     let family_patterns = "../../target/llrm-x86/src/isel/family.isel";
-    for path in ["src/backend/isel/generator", "../../target", family_forms, family_patterns] {
+    let family_peephole = "../../target/llrm-x86/src/isel/peephole.peep";
+    for path in ["src/backend/isel/generator", "../../target", family_forms, family_patterns, family_peephole] {
         println!("cargo:rerun-if-changed={path}");
     }
     let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -45,7 +47,7 @@ fn main() {
         std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
         index.push_str(&format!("pub mod {ident} {{\n    use super::*;\n    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));\n}}\n\n"));
         all.push(format!("&{ident}::SELECTOR"));
-        peep.push_str(&peephole(dir, &ident, &forms_of(&forms), &out, &read, &groups));
+        peep.push_str(&peephole(dir, &ident, &forms_of(&forms), &out, &read, &groups, &read(std::path::Path::new(family_peephole))));
     }
     std::fs::write(out.join("peep_targets.rs"), peep).unwrap();
     index.push_str(&format!("/// Every target's selector, by its directory's name.\npub static ALL: [&Compiled; {}] = [{}];\n", all.len(), all.join(", ")));
@@ -55,13 +57,16 @@ fn main() {
 
 /// The module `peep::targets::<ident>`: the target's rules, generated from its
 /// `peephole.peep` if it has one, and the `RULES` that name them.
-fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Path, read: &dyn Fn(&std::path::Path) -> String, groups: &[(String, bool)]) -> String {
+fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Path, read: &dyn Fn(&std::path::Path) -> String, groups: &[(String, bool)], family: &str) -> String {
     let rules = dir.join("src/isel/peephole.peep");
-    if !rules.is_file() {
-        return format!("pub mod {ident} {{\n    use super::super::Rules;\n\n    pub static RULES: Rules = Rules::NONE;\n}}\n\n");
-    }
-    println!("cargo:rerun-if-changed={}", rules.display());
-    let made = llrm_peepgen::generate(forms, "x86.instr", &read(&rules), "peephole.peep").unwrap_or_else(|error| {
+    // The family's rules, then the target's own where it has any.
+    let own = if rules.is_file() {
+        println!("cargo:rerun-if-changed={}", rules.display());
+        read(&rules)
+    } else {
+        String::new()
+    };
+    let made = llrm_peepgen::generate(forms, "x86.instr", &format!("{family}\n{own}"), "peephole.peep").unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(1);
     });

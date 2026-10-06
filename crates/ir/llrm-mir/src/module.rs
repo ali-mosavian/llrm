@@ -175,6 +175,11 @@ impl Function {
 
     /// How many instructions were ever made, erased ones too: the next is
     /// `InstId(count)`.
+    /// How many values the function has made, parameters and results, the ids a table of them spans.
+    pub fn value_count(&self) -> usize {
+        self.values.len()
+    }
+
     pub fn instruction_count(&self) -> usize {
         self.instructions.len()
     }
