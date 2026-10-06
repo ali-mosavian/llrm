@@ -14,6 +14,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, GlobalId, IntPredicate, Module, Opcode, Type, TypeId};
+use llrm_mir::types::Types;
 
 use crate::backend::assemble::Abi;
 use crate::backend::constpool::{self, Pool};
@@ -195,16 +196,71 @@ pub struct Selected {
     pub landing: Option<i64>,
 }
 
+/// What the selector tells MIR types apart by: the one place a type's layout is read for
+/// the patterns' type classes, the register width and the size in memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TypeClass {
+    None,
+    Void,
+    I1,
+    I8,
+    I16,
+    I32,
+    I64,
+    /// A pointer held in one register.
+    Ptr,
+    /// A pointer that is two: an offset and a selector.
+    Far,
+    Float,
+    Other,
+}
+
+impl TypeClass {
+    pub(super) fn of(types: &Types, layout: &DataLayout, ty: Option<TypeId>) -> Self {
+        let Some(ty) = ty else { return Self::None };
+        match types.get(ty) {
+            Type::Void => Self::Void,
+            Type::Int(1) => Self::I1,
+            Type::Int(8) => Self::I8,
+            Type::Int(16) => Self::I16,
+            Type::Int(32) => Self::I32,
+            Type::Int(64) => Self::I64,
+            Type::Pointer(space) if layout.is_pair(*space) => Self::Far,
+            Type::Pointer(_) => Self::Ptr,
+            Type::Float(_) => Self::Float,
+            _ => Self::Other,
+        }
+    }
+
+    /// How `patterns.isel` spells it.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Void => "void",
+            Self::I1 => "i1",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::Ptr => "ptr",
+            Self::Far => "far",
+            Self::Float => "float",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// The bytes a value of `ty` takes in a register.
-fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
+pub(super) fn width_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
     let types = &module.context.types;
-    match types.get(ty) {
+    match (TypeClass::of(types, layout, Some(ty)), types.get(ty)) {
         // An i1 is a byte holding 0 or 1, as LLVM stores one.
-        Type::Int(1) => Ok(1),
-        Type::Int(bits @ (8 | 16 | 32)) => Ok(bits / 8),
-        Type::Pointer(space @ (0 | 2 | llrm_mir::types::NEAR_STACK)) => Ok(layout.pointer(*space).bits / 8),
+        (TypeClass::I1 | TypeClass::I8, _) => Ok(1),
+        (TypeClass::I16, _) => Ok(2),
+        (TypeClass::I32, _) => Ok(4),
+        (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
         // An x87 register holds any float, extended.
-        Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80) => Ok(FLOAT),
+        (TypeClass::Float, Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80)) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
     }
 }
@@ -276,13 +332,13 @@ const FILL_BYTES: i64 = 3 + 4 + 2 + 3 + 2 + 2;
 
 /// The bytes a value of `ty` takes in memory or on the stack: a far
 /// pointer is its offset and selector, in two registers.
-fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
-    match module.context.types.get(ty) {
-        Type::Pointer(space) if layout.is_pair(*space) => Ok(4),
-        Type::Int(64) => Ok(8),
-        Type::Float(FloatKind::Float) => Ok(4),
-        Type::Float(FloatKind::Double) => Ok(8),
-        Type::Float(FloatKind::X86Fp80) => Ok(10),
+pub(super) fn size_of(module: &Module, layout: &DataLayout, ty: TypeId) -> Result<u32, Unselected> {
+    match (TypeClass::of(&module.context.types, layout, Some(ty)), module.context.types.get(ty)) {
+        (TypeClass::Far, _) => Ok(4),
+        (TypeClass::I64, _) => Ok(8),
+        (TypeClass::Float, Type::Float(FloatKind::Float)) => Ok(4),
+        (TypeClass::Float, Type::Float(FloatKind::Double)) => Ok(8),
+        (TypeClass::Float, Type::Float(FloatKind::X86Fp80)) => Ok(10),
         _ => width_of(module, layout, ty),
     }
 }

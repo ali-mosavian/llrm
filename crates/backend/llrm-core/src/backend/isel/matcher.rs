@@ -9,7 +9,7 @@ use std::sync::Arc;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::{CastOp, ConstantKind, Opcode, Type, TypeId};
 
-use super::{float_conditions, insn, insn_of, refuse, semantics, Convention, Pointer, Selector, Test, Unselected, FLOAT};
+use super::{float_conditions, TypeClass, insn, insn_of, refuse, semantics, Convention, Pointer, Selector, Test, Unselected, FLOAT};
 use crate::backend::arithmetic;
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
@@ -167,19 +167,7 @@ impl Selector<'_, '_, '_> {
     }
 
     fn class(&self, ty: Option<TypeId>) -> &'static str {
-        let Some(ty) = ty else { return "none" };
-        match self.types().get(ty) {
-            Type::Void => "void",
-            Type::Int(1) => "i1",
-            Type::Int(8) => "i8",
-            Type::Int(16) => "i16",
-            Type::Int(32) => "i32",
-            Type::Int(64) => "i64",
-            Type::Pointer(space) if self.layout.is_pair(*space) => "far",
-            Type::Pointer(_) => "ptr",
-            Type::Float(_) => "float",
-            _ => "other",
-        }
+        TypeClass::of(self.types(), &self.layout, ty).name()
     }
 
     fn kind(&self, operand: Operand) -> &'static str {
