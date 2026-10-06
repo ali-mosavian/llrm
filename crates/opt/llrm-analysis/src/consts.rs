@@ -463,6 +463,8 @@ pub fn cells(
     mut assume: Option<&mut BTreeSet<ValueId>>,
     allowed: Option<&BTreeSet<ValueId>>,
 ) -> HeldCells {
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
         return HeldCells::default();
@@ -750,6 +752,9 @@ pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 /// know is some absolute segment; the ones that came out numbers keep the
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
+    // Each access asks whether its frame object is exposed: found once for the body, if no caller has.
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
     // A store kills the cells alias's provenance leaves it able to reach.
     let annotated = (calls.is_some() && unit.references.is_none()).then(|| unit.annotated().ok()).flatten();
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
