@@ -1396,6 +1396,27 @@ pub fn points_to(
         }
     };
 
+    // Objects named by the initializers of the globals among `reached`, closed:
+    // memory a callee reads a pointer out of holds them without any store.
+    let initialized = |mut reached: Vec<usize>| {
+        let mut at = 0;
+        while at < reached.len() {
+            let object = objects.borrow()[reached[at]].clone();
+            at += 1;
+            let Some(Identity::Global(global)) = object.identity.as_ref().filter(|_| object.kind == MemoryKind::Global) else { continue };
+            let Some(llrm_mir::module::GlobalKind::Variable(variable)) = unit.globals.get(*global as usize).map(|one| &one.kind) else { continue };
+            let mut held = BTreeSet::new();
+            variable.initializer.iter().for_each(|&one| globalsaa::embedded(unit.context, one, &mut held));
+            for one in held.into_iter().filter_map(|one| memory::global_object(unit, one)) {
+                let found = number(&one);
+                if !reached.contains(&found) {
+                    reached.push(found);
+                }
+            }
+        }
+        reached
+    };
+
     // What each instruction publishes does not depend on what reached it,
     // so it is found once; only the unions along edges iterate: the
     // gen/kill form of a forward dataflow.
@@ -1404,6 +1425,7 @@ pub fn points_to(
         operands.iter().filter_map(|&one| _operand(unit, one, values)).flat_map(|one| one.slices.into_iter().map(|slice| slice.object)).collect::<Vec<_>>()
     };
     let mut publishes: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
+    let mut during: IndexMap<InstId, Vec<usize>> = IndexMap::default();
     for block in &graph {
         let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
         let mut mine = Vec::new();
@@ -1412,6 +1434,9 @@ pub fn points_to(
             let mut newly = BTreeSet::new();
             // What a call reads a pointer out of, it may keep.
             let mut lent = BTreeSet::new();
+            // What it reads a pointer out of but keeps none of: reachable during
+            // the call, so it may read and write it, but escapes no further.
+            let mut passing = BTreeSet::new();
             if calls.contains(&inst) {
                 if let Some(arguments) = arguments {
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
@@ -1428,8 +1453,12 @@ pub fn points_to(
                         let objects = one.slices.iter().map(|one| one.object.clone());
                         if kept(index)? {
                             newly.extend(objects)
-                        } else if reads(index) && !llrm_mir::memory::noretain(unit.context, unit.globals, unit.function, inst, index) {
-                            lent.extend(objects)
+                        } else if reads(index) {
+                            if llrm_mir::memory::noretain(unit.context, unit.globals, unit.function, inst, index) {
+                                passing.extend(objects)
+                            } else {
+                                lent.extend(objects)
+                            }
                         }
                     }
                 } else {
@@ -1467,6 +1496,7 @@ pub fn points_to(
             let mut published = pointees(newly, &cells);
             published.extend(pointees(lent, &cells).into_iter().filter(|one| !lent_numbers.contains(one)));
             mine.push(published);
+            during.insert(inst, initialized(pointees(passing, &cells)));
         }
         publishes.insert(block.at, mine);
     }
@@ -1511,7 +1541,11 @@ pub fn points_to(
         for (&inst, escapes) in instructions(block.at).iter().zip(&publishes[&block.at]) {
             state.union_with(&bits_of(escapes));
             if calls.contains(&inst) || matches!(function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. }) {
-                before.insert(inst, state.clone());
+                let mut visible = state.clone();
+                if let Some(reached) = during.get(&inst) {
+                    visible.union_with(&bits_of(reached));
+                }
+                before.insert(inst, visible);
             }
         }
     }

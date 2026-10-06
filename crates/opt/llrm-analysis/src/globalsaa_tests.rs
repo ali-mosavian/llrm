@@ -134,10 +134,19 @@ fn a_private_initializer_nothing_names_does_not_leak_the_address_it_holds() {
 fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
     let held = |attrs: &str| {
         let globals = format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr {attrs}) nocallback\n");
-        kept(&globals, "call void @erase(ptr @desc)\n  call void @outside(ptr null)")
+        kept(&globals, "call void @erase(ptr @desc)\n  store i16 7, ptr @g\n  call void @outside(ptr null)")
     };
     assert_eq!(held("nocapture noretain"), seven());
     assert_eq!(held("nocapture"), None);
+}
+
+/// `noretain` says what a call keeps, not what it writes: `ERASE` of a `$STATIC`
+/// array zeroes it through the descriptor, so a 9 stored before the call was read
+/// back after it (Q45S34).
+#[test]
+fn a_noretain_call_clobbers_a_global_its_argument_holds() {
+    let globals = format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr nocapture noretain) nocallback\n");
+    assert_eq!(kept(&globals, "call void @erase(ptr @desc)"), None);
 }
 
 #[test]

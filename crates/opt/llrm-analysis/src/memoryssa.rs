@@ -84,7 +84,8 @@ impl Analysis for Accesses {
         let references = Result::as_ref(&*references).map_err(String::clone)?;
         let effects = Result::as_ref(&*effects).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
-        Ok(Rc::new(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), references.clone(), effects)))
+        let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
+        Ok(Rc::new(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed), references.clone(), effects)))
     }
 }
 
