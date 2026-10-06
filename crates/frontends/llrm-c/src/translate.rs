@@ -27,7 +27,7 @@ fn refuse<T>(what: impl Into<String>) -> R<T> {
 }
 
 /// The unit as a HIR program of one module.
-pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
+pub fn program(unit: &hir::Unit, name: &str, convention: &llrm_target::calling::Convention) -> R<h::Program> {
     let mut types = Types::new(unit);
     let objects = objects(unit)?;
     let mut keys: HashMap<Key, i64> = HashMap::new();
@@ -88,9 +88,8 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     let (types, alias_classes) = types.finished();
     let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
-    // Borland's medium model: a call keeps what its contract does not clobber;
-    // the compiler's constants go in CONST.
-    let contract = if unit.flat { crate::raise_hir::cdecl32(String::new(), true, 0) } else { crate::raise_hir::medium_model(String::new(), true, 0) };
+    // A call keeps what its target's C convention does not clobber; the compiler's constants go in CONST.
+    let contract = crate::raise_hir::contract(convention, String::new(), true, 0);
     let preserved = llrm_core::abi::runtime::preserves(&contract);
     Ok(h::Program {
         zeroed_locals: false,
@@ -2092,7 +2091,7 @@ mod tests {
 
     fn raised(fixture: &str) -> Module {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
-        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test").unwrap();
+        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap();
         let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
@@ -2189,7 +2188,7 @@ mod tests {
     /// `fixture`'s HIR program.
     fn program_of(fixture: &str) -> llrm_core::hir::model::Program {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
-        super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test").unwrap()
+        super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap()
     }
 
     /// llrm-c's HIR had never met the verifier, and failed it on 22 of the
@@ -2214,7 +2213,7 @@ mod tests {
             .iter()
             .filter_map(|fixture| {
                 let text = std::fs::read_to_string(root.join(fixture)).unwrap();
-                let program = super::program(&hir::unit(&stream::parse(&text)).ok()?, "test").ok()?;
+                let program = super::program(&hir::unit(&stream::parse(&text)).ok()?, "test", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).ok()?;
                 llrm_core::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
             })
             .collect();

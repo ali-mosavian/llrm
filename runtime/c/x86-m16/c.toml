@@ -16,6 +16,8 @@ assembler_defines = ["stack_base:STACK_BYTES", "init:LANG_INIT"]
 # Which of its trees: i86 (16-bit) or 386 (flat 32-bit). The build makes one front end for each
 # CPU the targets name.
 watcom_cpu = "i86"
+# The calling convention the front end compiles C under (`calling.toml`): -ecc is Borland's cdecl.
+convention = "cdecl16"
 # Borland's medium model: far code, near data, cdecl, signed char, 80-bit long double,
 # byte-packed structs, 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
 # inline assembly: qcport's own uses 387 instructions. Borland's ABI is the only one here: wccq
