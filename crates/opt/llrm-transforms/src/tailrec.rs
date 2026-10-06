@@ -19,6 +19,7 @@
 
 use llrm_analysis::manager::ExposedFrames;
 use llrm_mir::context::{Context, GlobalId};
+use llrm_mir::facts::Fact;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
@@ -314,7 +315,7 @@ fn rewrite(context: &mut Context, function: &mut Function, found: &[Site], opera
     }
     // The next trip's arguments need not be what the first one's did not alias.
     for attrs in &mut function.parameter_attrs {
-        attrs.retain(|attr| !matches!(attr, Attribute::Flag(name) if name == "noalias"));
+        attrs.retain(|attr| Fact::of_attribute(attr) != Some(Fact::NoAlias));
     }
 }
 
