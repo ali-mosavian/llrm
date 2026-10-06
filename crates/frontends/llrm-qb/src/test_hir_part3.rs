@@ -2061,7 +2061,7 @@ fn a_fixed_length_assignment_fills_its_destination() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "fixed.bas", b"SUB s\nDIM t AS STRING * 8\nt = \"X\"\nPRINT t\nEND SUB\n");
     let program = parsed(&source);
-    let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("@llrm.qb.B$ASSN(ptr addrspace(1) %") && text.contains(", i16 1, ptr addrspace(1) nocapture writeonly initializes((0, 8)) %"), "{text}");
 }
@@ -2078,7 +2078,7 @@ fn test_a_floating_function_returns_through_its_hidden_destination() {
         let basic = format!("DECLARE FUNCTION Half{suffix} (x AS {kind})\nDIM y AS {kind}\ny = Half{suffix}(3)\nPRINT y\nFUNCTION Half{suffix} (x AS {kind})\nHalf{suffix} = x / 2\nEND FUNCTION\n", kind = if bytes == 4 { "SINGLE" } else { "DOUBLE" });
         let source = written(&directory, "fret.bas", basic.as_bytes());
         let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
         let text = llrm_mir::print::module(&emitted.module);
         let half = between(&text, &format!("define cc1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) %0, ptr %1)"), "\n}");
         assert!(half.lines().any(|line| line.trim().starts_with(&format!("store {mir}")) && line.trim().ends_with(", ptr %1")), "{half}");
@@ -2101,7 +2101,7 @@ fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
     let program = qb_driver::parsed(&source, &checked, None).expect("parses");
     let expected: BTreeSet<String> = program.modules[0].functions.iter().flat_map(|function| &function.blocks).filter(|block| block.cold).map(|block| format!("b{}", block.id)).collect();
     assert!(!expected.is_empty(), "no cold HIR block");
-    let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let declarations = emitted.module.declarations();
     let mut found = BTreeSet::new();
@@ -2121,7 +2121,7 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "HANDLED.BAS", b"DEFINT A-Z\nON ERROR GOTO h\nERROR 5\nPRINT c\nEND\nh:\nc = ERR\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     assert!(llrm_mir::verify::verify(&emitted.module).is_empty());
     let main = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("__main")).expect("__main").2;
@@ -2139,7 +2139,7 @@ fn erl_is_the_faulting_statements_line() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nEND\nh:\nc = ERL\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let text = llrm_mir::print::module(&emitted.module);
     let table = text.lines().find(|line| line.starts_with("@\"$QB$ERL$__main\" =") || line.starts_with("@$QB$ERL$__main =")).expect("the ERL table");
@@ -2154,7 +2154,7 @@ fn the_pad_goes_to_the_handler_named_last() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "TWO.BAS", b"ON ERROR GOTO first\nERROR 5\nON ERROR GOTO second\nERROR 6\nEND\nfirst:\nPRINT 1\nRESUME NEXT\nsecond:\nPRINT 2\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let main = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("__main")).expect("__main").2;
     let pad = main.layout().iter().copied().find(|&block| main.block(block).instructions().iter().any(|&one| matches!(main.instruction(one).opcode, llrm_mir::Opcode::LandingPad { .. }))).expect("the pad");
@@ -2170,7 +2170,7 @@ fn a_procedures_own_handler_is_its_landing_pad() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "LOCAL.BAS", b"DECLARE SUB s ()\nCALL s\nEND\nSUB s\nON LOCAL ERROR GOTO h\nERROR 53\nEXIT SUB\nh:\nRESUME NEXT\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("pds71", "pds71"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("@llrm.qb.onlocalerror(i1 true)") && !text.contains("@llrm.qb.onerror("), "{text}");
@@ -2187,7 +2187,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "SUBERR.BAS", b"DECLARE SUB r ()\nON ERROR GOTO h\nCALL r\nEND\nh:\nRESUME NEXT\nSUB r\nERROR 5\nPRINT 1\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let mut emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    let mut emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let sub = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("R")).expect("R").2;
     assert!(sub.walk().any(|(_, inst)| matches!(sub.instruction(inst).opcode, llrm_mir::Opcode::LandingPad { .. })));
@@ -2209,7 +2209,7 @@ fn erl_outside_the_handler_is_the_line_the_handler_took() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nPRINT ERL\nEND\nh:\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     let body = text.split("define ").find(|one| one.contains("void @__main()")).expect("the body");

@@ -300,6 +300,8 @@ pub struct Unit {
     pub debug: Option<Debug>,
     /// INIT's code-generator switches (`CGSW_GEN_*`).
     pub switches: i64,
+    /// Recorded by the 386 front end: flat, `int` and every pointer 4 bytes.
+    pub flat: bool,
 }
 
 impl Unit {
@@ -388,6 +390,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             "INIT" => {
                 made.target = hex(field(one, "target"));
                 made.switches = hex(field(one, "sw"));
+                made.flat = one.fields.get("flat").is_some_and(|one| one == "1");
                 // CGSW_GEN_DBG_TYPES or CGSW_GEN_DBG_LOCALS
                 if hex(field(one, "sw")) & 0x0018_0000 != 0 {
                     made.debug = Some(Debug::default());

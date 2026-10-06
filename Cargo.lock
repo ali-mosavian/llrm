@@ -246,6 +246,7 @@ dependencies = [
  "llrm-driver",
  "llrm-mir",
  "llrm-transforms",
+ "llrm-x86-code16",
  "num-bigint",
  "num-traits",
  "regex",
@@ -301,6 +302,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-mir",
  "llrm-support",
+ "llrm-target",
  "toml",
 ]
 
@@ -329,6 +331,7 @@ dependencies = [
  "llrm-hir",
  "llrm-mir",
  "llrm-transforms",
+ "llrm-x86-code16",
  "num-bigint",
  "num-traits",
  "regex",
@@ -369,6 +372,7 @@ dependencies = [
  "llrm-driver",
  "llrm-mir",
  "llrm-transforms",
+ "llrm-x86-code16",
  "num-bigint",
  "num-traits",
  "qbfront",

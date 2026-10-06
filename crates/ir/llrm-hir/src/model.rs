@@ -83,8 +83,6 @@ str_enum!(Dialect {
 
 str_enum!(TargetProfile {
     I386RealMode("I386_REAL_MODE") = "i386-real-mode",
-    // CS = DS = SS, base 0: one 32-bit address space, `int` and pointers 4 bytes.
-    I386Flat32("I386_FLAT32") = "i386-flat32",
 });
 
 str_enum!(ArrayOrder {

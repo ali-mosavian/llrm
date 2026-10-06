@@ -42,7 +42,7 @@ landing:
 "#;
 
 fn parsed(text: &str) -> Module {
-    let layout = llrm_hir::mir::DATALAYOUT;
+    let layout = llrm_x86_code16::layout().datalayout;
     llrm_mir::parse::module(&format!("target datalayout = \"{layout}\"\n{text}{DECLARED}")).expect("parses")
 }
 
