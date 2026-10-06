@@ -17,6 +17,20 @@ pub trait Target {
 
     /// The processors this target prices, as a platform description names them.
     fn cpus(&self) -> &'static [&'static str];
+
+    /// The bytes an argument of `width` takes on the stack, and the least a
+    /// stack cell holds.
+    fn stack_slot_bytes(&self) -> i64;
+
+    /// The register a frame's cells are addressed through.
+    fn frame_register(&self) -> iced_x86::Register;
+
+    /// Where the first argument lies from the frame register: past the saved
+    /// frame register and the return address, which a far call makes longer.
+    fn first_argument_offset(&self, far: bool) -> i64;
+
+    /// The registers a result of `width` bytes leaves in, low part first.
+    fn results(&self, width: u32) -> Vec<iced_x86::Register>;
 }
 
 /// The I/O ports of a PC: a `[[ports]]`-only description that a platform appends to
