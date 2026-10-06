@@ -14,8 +14,9 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 /// What a description names itself rather than the schema: a table keyed by a name or a number.
 /// (file, path from the file's root, with `*` for any one name)
 /// (`ports.*` and `foreign.*` are read through a closure that takes the key: `bound("low")`.)
-const NAMED: [(&str, &str); 8] = [
+const NAMED: [(&str, &str); 9] = [
     ("calling.toml", "*"),
+    ("calling.toml", "*.symbol.*"),
     ("calling.toml", "*.result.*"),
     ("platform.toml", "physical.*"),
     ("datalayout.toml", "pointers.*"),
