@@ -26,6 +26,10 @@ fn toolchain() {
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("owshim");
     let status = Command::new("sh").arg("../../../toolchain/owshim/build.sh").arg(&out).status().expect("could not start sh");
     assert!(status.success(), "../../../toolchain/owshim/build.sh failed: {status}");
-    let wccq = out.join("wccq");
-    println!("cargo:rustc-env=LLRM_WCCQ={}", wccq.display());
+    println!("cargo:rustc-env=LLRM_WCCQ={}", out.join("wccq").display());
+    // The flat 32-bit front end, from Open Watcom's 386 tree.
+    let flat = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("owshim386");
+    let status = Command::new("sh").arg("../../../toolchain/owshim/build.sh").arg(&flat).env("OWCPU", "386").status().expect("could not start sh");
+    assert!(status.success(), "OWCPU=386 ../../../toolchain/owshim/build.sh failed: {status}");
+    println!("cargo:rustc-env=LLRM_WCCQ386={}", flat.join("wccq").display());
 }

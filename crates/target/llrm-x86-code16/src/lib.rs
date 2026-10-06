@@ -11,6 +11,14 @@ pub use cycles::report;
 pub use target::{Dos, ENCODABLE_BASES, FRAME, GENERAL, PRESERVED, WORD_INDEXES, word_bases};
 pub use timings::ARCHS;
 
+/// Real mode's data layout and address spaces: `machines/datalayout.toml`.
+pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
+
+/// `DATALAYOUT_TOML`, parsed.
+pub fn layout() -> llrm_target::layout::Layout {
+    llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("real mode's datalayout.toml parses")
+}
+
 /// The 16-bit x86 target as `llrm-driver` names it.
 pub struct Code16;
 
@@ -21,6 +29,18 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 impl llrm_target::Target for Code16 {
     fn register_capacity(&self) -> i64 {
         GENERAL.len() as i64
+    }
+
+    fn default_cpu(&self) -> &'static str {
+        timings::TABLE.default_cpu().expect("timings.times states a default CPU")
+    }
+
+    fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> {
+        timings::TABLE.cpu(name).cloned()
+    }
+
+    fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts {
+        target::DESCRIPTION.operations(price, prefix)
     }
 
     fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> {
@@ -41,6 +61,10 @@ impl llrm_target::Target for Code16 {
 
     fn cpus(&self) -> &'static [&'static str] {
         &machine::CPUS
+    }
+
+    fn layout(&self) -> llrm_target::layout::Layout {
+        layout()
     }
 
     /// A byte is pushed as a word.
@@ -86,6 +110,12 @@ mod tests {
 
     /// isel read these as literals: a 2-byte slot, BP, the first argument at
     /// [bp+4] (near) or [bp+6] (far), a dword result in DX:AX and an i64 in EDX:EAX.
+    #[test]
+    fn test_code16_spaces_are_the_numbers_mir_names() {
+        let spaces = layout().spaces;
+        assert_eq!((spaces.data, spaces.stack, spaces.fixed), (llrm_mir::types::NEAR_DATA, llrm_mir::types::NEAR_STACK, Some(llrm_mir::datalayout::FIXED_SPACE)));
+    }
+
     #[test]
     fn test_code16_answers_the_literals_isel_had() {
         assert_eq!((Code16.stack_slot_bytes(), Code16.frame_register()), (2, iced_x86::Register::BP));

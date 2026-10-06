@@ -69,3 +69,37 @@ fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
     assert_eq!((flat.register_capacity, flat.call_register_capacity), (6, 3));
     assert_eq!(flat.name, real.name);
 }
+
+/// A flat target's profile prices its own forms: a near call and return, no 66h on a
+/// dword. It had been priced by the 16-bit tables and mapping, a far call among them.
+#[test]
+fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
+    let profile = |arguments: &[&str]| {
+        let flags = flags(arguments);
+        let bound = target(&flags, &["x86-code16", "x86-code32"]).unwrap();
+        bound.options(&flags, bound.target.machine()).cpu().unwrap()
+    };
+    let (real, flat) = (profile(&[]), profile(&["--target", "x86-code32"]));
+    assert_eq!((real.operations.call, real.operations.return_), (18, 13));
+    assert_eq!((flat.operations.call, flat.operations.return_), (3, 5));
+    assert_eq!(flat.operations.multiply, 26);
+    assert!(flat.cost("pop_seg").is_err() && real.cost("call_near").is_err());
+}
+
+/// The CPU a compile is priced for with none asked is the target's: llrm-c took the 386 for
+/// every target, so a flat compile with no `-march` died on a CPU its tables do not have.
+/// Asking for another names the target's own.
+#[test]
+fn a_target_states_its_default_cpu_and_names_its_cpus_when_asked_for_another() {
+    for (arguments, default) in [(&[][..], "386"), (&["--target", "x86-code32"][..], "486")] {
+        let flags = flags(arguments);
+        let bound = target(&flags, &["x86-code16", "x86-code32"]).unwrap();
+        assert_eq!(bound.target.default_cpu(), default);
+        let options = bound.options(&flags, llrm_core::abi::machine::Machine { cpu: bound.target.default_cpu().to_owned(), ..bound.target.machine() });
+        assert_eq!(options.cpu().unwrap().name, default);
+    }
+    let flags = flags(&["--target", "x86-code32", "--cpu", "386"]);
+    let bound = target(&flags, &["x86-code32"]).unwrap();
+    let machine = flags.machine(bound.target.machine()).unwrap();
+    assert_eq!(bound.options(&flags, machine).cpu().err().unwrap(), "unknown CPU target: 386; x86-code32 has 486, P5");
+}

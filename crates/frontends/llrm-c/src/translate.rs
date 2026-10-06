@@ -18,7 +18,7 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::hir::{self, Unsupported};
-use crate::raise_hir::{EMITTED, classes, far_pointers, is_float, library_routine, pointers, signed, widths};
+use crate::raise_hir::{EMITTED, classes, far_pointers, is_float, library_routine, pointers, signed, widths, classes_for, widths_for};
 
 type R<T> = Result<T, Unsupported>;
 
@@ -90,7 +90,8 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
     // Borland's medium model: a call keeps what its contract does not clobber;
     // the compiler's constants go in CONST.
-    let preserved = llrm_core::abi::runtime::preserves(&crate::raise_hir::medium_model(String::new(), true, 0));
+    let contract = if unit.flat { crate::raise_hir::cdecl32(String::new(), true, 0) } else { crate::raise_hir::medium_model(String::new(), true, 0) };
+    let preserved = llrm_core::abi::runtime::preserves(&contract);
     Ok(h::Program {
         zeroed_locals: false,
         promises,
@@ -127,6 +128,7 @@ fn space(unit: &hir::Unit, key: Key) -> u32 {
         Key::Symbol(symbol) => {
             let symbol = &unit.symbols[&symbol];
             match (symbol.proc(), symbol.far(), unit.grouped(symbol)) {
+                _ if unit.flat => 0,
                 (true, true, _) | (false, _, false) => FAR,
                 _ => 0,
             }
@@ -200,7 +202,7 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                 ("DGIBytes", [size, byte]) => object.bytes.extend(std::iter::repeat_n(number(byte)? as u8, number(size)? as usize)),
                 ("DGBytes", [_, data]) => object.bytes.extend(crate::compile::hex_bytes(data)),
                 ("DGInteger", [value, type_]) => {
-                    let width = widths(type_).unwrap_or(2) as usize;
+                    let width = widths_for(unit.flat, type_).unwrap_or(2) as usize;
                     object.bytes.extend(&number(value)?.to_le_bytes()[..width]);
                 }
                 ("DGFEPtr", [symbol, type_, offset]) => {
@@ -278,6 +280,8 @@ const CLASSES: [&str; 8] = ["int2", "int4", "int8", "float4", "float8", "float10
 /// The module's types, each made once, by shape and aliasing class.
 struct Types<'u> {
     unit: &'u hir::Unit,
+    /// Flat 32-bit: `int` and every pointer 4 bytes, one address space.
+    flat: bool,
     list: Vec<h::Type>,
     made: HashMap<(Shape, Option<&'static str>), i64>,
     members: HashMap<&'static str, Vec<i64>>,
@@ -285,7 +289,7 @@ struct Types<'u> {
 
 impl<'u> Types<'u> {
     fn new(unit: &'u hir::Unit) -> Self {
-        Types { unit, list: Vec::new(), made: HashMap::new(), members: HashMap::new() }
+        Types { unit, flat: unit.flat, list: Vec::new(), made: HashMap::new(), members: HashMap::new() }
     }
 
     fn get(&self, id: i64) -> &h::Type {
@@ -313,7 +317,7 @@ impl<'u> Types<'u> {
         let (kind, width) = match shape {
             Shape::Void => (TypeKind::Void, 0),
             Shape::Int(width, _) => (TypeKind::Integer, width),
-            Shape::Bool => (TypeKind::Boolean, 2),
+            Shape::Bool => (TypeKind::Boolean, self.word()),
             Shape::Float(width) => (TypeKind::Float, width),
             Shape::Pointer(width) => (TypeKind::Pointer, width),
             Shape::Huge => (TypeKind::Pointer, 4),
@@ -325,7 +329,7 @@ impl<'u> Types<'u> {
             Shape::Bool => made.signed = Some(false),
             Shape::Float(4) => made.evaluation = FloatEvaluation::Binary32,
             Shape::Float(_) => made.evaluation = FloatEvaluation::Binary64,
-            Shape::Pointer(width) => made.address = address(if width == 4 { FAR } else { 0 }),
+            Shape::Pointer(width) => made.address = address(if width == 4 && !self.flat { FAR } else { 0 }),
             Shape::Huge => made.address = AddressKind::Huge,
             _ => {}
         }
@@ -342,7 +346,13 @@ impl<'u> Types<'u> {
     }
 
     fn pointer(&mut self, space: u32) -> i64 {
-        self.of(if space == HUGE { Shape::Huge } else { Shape::Pointer(if space == FAR { 4 } else { 2 }) }, None)
+        let near = self.word();
+        self.of(if space == HUGE { Shape::Huge } else { Shape::Pointer(if space == FAR { 4 } else { near }) }, None)
+    }
+
+    /// An `int`'s bytes, which a near pointer and an index are too.
+    fn word(&self) -> i64 {
+        if self.flat { 4 } else { 2 }
     }
 
     /// An aggregate's size; none for a scalar.
@@ -354,7 +364,11 @@ impl<'u> Types<'u> {
     fn c(&mut self, type_: &str) -> R<i64> {
         let type_ = self.unit.canonical_type(type_);
         let big = |flag| if self.unit.target & flag != 0 { 4 } else { 2 };
+        if self.flat && matches!(type_.as_str(), "TY_LONG_POINTER" | "TY_HUGE_POINTER" | "TY_LONG_CODE_PTR") {
+            return refuse(format!("{type_} in flat code"));
+        }
         let shape = match type_.as_str() {
+            "TY_POINTER" | "TY_CODE_PTR" | "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" if self.flat => Shape::Pointer(4),
             "TY_POINTER" => Shape::Pointer(big(hir::BIG_DATA)),
             "TY_CODE_PTR" => Shape::Pointer(big(hir::BIG_CODE)),
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => Shape::Pointer(2),
@@ -363,15 +377,15 @@ impl<'u> Types<'u> {
             "TY_SINGLE" => Shape::Float(4),
             "TY_DOUBLE" => Shape::Float(8),
             "TY_LONG_DOUBLE" => Shape::Float(10),
-            other => match (widths(other), self.aggregate(other)) {
+            other => match (widths_for(self.flat, other), self.aggregate(other)) {
                 (Some(width), _) => Shape::Int(i64::from(width), signed(other)),
                 (None, Some(size)) => return refuse(format!("a {size}-byte aggregate as a value")),
                 (None, None) => return refuse(format!("no MIR type for {other}")),
             },
         };
         let class = match type_.as_str() {
-            "TY_POINTER" => Some(if self.unit.target & hir::BIG_DATA != 0 { "pointer4" } else { "pointer2" }),
-            other => classes(other),
+            "TY_POINTER" if !self.flat => Some(if self.unit.target & hir::BIG_DATA != 0 { "pointer4" } else { "pointer2" }),
+            other => classes_for(self.flat, other),
         };
         Ok(self.of(shape, Some(class.unwrap_or(CHAR))))
     }
@@ -708,7 +722,7 @@ impl<'a, 't> Body<'a, 't> {
     fn bits(&self, value: i64) -> Option<i64> {
         match self.shape(value) {
             Shape::Int(width, _) => Some(width * 8),
-            Shape::Bool => Some(16),
+            Shape::Bool => Some(self.types.word() * 8),
             _ => None,
         }
     }
@@ -716,7 +730,7 @@ impl<'a, 't> Body<'a, 't> {
     /// A pointer's address space.
     fn space(&self, value: i64) -> Option<u32> {
         match self.shape(value) {
-            Shape::Pointer(4) => Some(FAR),
+            Shape::Pointer(4) if !self.types.flat => Some(FAR),
             Shape::Pointer(_) => Some(0),
             Shape::Huge => Some(HUGE),
             _ => None,
@@ -727,7 +741,7 @@ impl<'a, 't> Body<'a, 't> {
     fn same(&self, a: i64, b: i64) -> bool {
         let mir = |shape| match shape {
             Shape::Int(width, _) => Shape::Int(width, false),
-            Shape::Bool => Shape::Int(2, false),
+            Shape::Bool => Shape::Int(self.types.word(), false),
             other => other,
         };
         mir(self.types.shape(a)) == mir(self.types.shape(b))
@@ -1111,7 +1125,7 @@ impl<'a, 't> Body<'a, 't> {
                 let truth = self.types.of(Shape::Bool, None);
                 self.op(Op::Ne, truth, vec![value_ref(value), value_ref(zero)])
             }
-            Shape::Pointer(4) => {
+            Shape::Pointer(4) if !self.types.flat => {
                 let dword = self.types.int(4, false);
                 self.op(Op::Convert, dword, vec![value_ref(value)])
             }
@@ -1584,7 +1598,7 @@ impl<'a, 't> Body<'a, 't> {
         if by == 0 {
             return pointer;
         }
-        let at = self.int(2, by);
+        let at = self.int(self.types.word(), by);
         let result = self.value(self.type_of(pointer));
         let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(at)]).id;
         self.stated_instructions.push((id, Fact::InBounds));
@@ -1813,7 +1827,7 @@ impl<'a, 't> Body<'a, 't> {
     /// keeps pointer arithmetic inside its object.
     fn moved(&mut self, pointer: i64, by: i64, from: &str, subtract: bool) -> R<i64> {
         // A huge pointer's index is a dword; a far one's its offset's word.
-        let word = self.types.int(if self.space(pointer) == Some(HUGE) { 4 } else { 2 }, true);
+        let word = self.types.int(if self.space(pointer) == Some(HUGE) { 4 } else { self.types.word() }, true);
         let by = match self.bits(by) {
             Some(_) => self.resized(by, signed(&self.unit.canonical_type(from)), word),
             None => return self.refuse(format!("a pointer moved by a {from}")),
@@ -2072,7 +2086,7 @@ mod tests {
     fn raised(fixture: &str) -> Module {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
         let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test").unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
     }

@@ -49,7 +49,7 @@ fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
     let fields: Vec<_> = module.facts.iter().filter(|one| matches!(one.subject, Subject::Field { .. })).collect();
     assert_eq!(fields.len(), 1, "one statement for the one enum");
     assert!(module.facts.iter().all(|one| !(matches!(one.subject, Subject::Instruction { .. }) && matches!(one.fact, llrm_mir::facts::Fact::Range(bounds) if bounds.hi == 2))), "no load is stated of its own");
-    let emitted = hir::mir::emit(&program);
+    let emitted = hir::mir::emit(&program, &llrm_x86_code16::layout());
     let text: String = emitted.iter().map(|one| llrm_mir::print::module(&one.module)).collect();
     let tag_loads: Vec<&str> = text.lines().filter(|one| one.contains("load i8")).collect();
     assert!(tag_loads.len() >= 2, "{text}");
@@ -64,7 +64,7 @@ fn a_views_dimension_load_states_what_its_segment_holds() {
     let directory = tempfile::tempdir().expect("a directory");
     let program = |element: &str| {
         let source = written(&directory, &format!("view_{element}.nib"), &format!("fn at(a: &[{element}], i: i16) -> {element}:\n    return a[i]\n\nfn main() -> i16:\n    let a: {element}[4] = [1] * 4\n    return i16(at(a, 2))\n"));
-        let text: String = hir::mir::emit(&parsed(&source)).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+        let text: String = hir::mir::emit(&parsed(&source), &llrm_x86_code16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
         text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count()
     };
     assert_eq!(program("i16"), 1, "the length of a view of i16 is stated at most 32767");
@@ -105,7 +105,7 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
     assert!(loads >= 3 && stores >= 2 && reference >= 2 && local >= 3, "loads {loads} stores {stores} reference {reference} local {local}");
     program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Range(Bounds { lo: 0, hi: 100 }), source: None });
     program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Align(2), source: None });
-    let text: String = hir::mir::emit(&program).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    let text: String = hir::mir::emit(&program, &llrm_x86_code16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
     let ranged = text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count();
     let aligned_loads = text.lines().filter(|one| one.contains("load i16") && one.contains("align 2")).count();
     let aligned_stores = text.lines().filter(|one| one.contains("store i16") && one.contains("align 2")).count();
@@ -118,7 +118,7 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
 #[test]
 fn the_mir_of_sum_three_lints_clean() {
     let program = parsed(&fixture("sum_three.nib"));
-    for emitted in hir::mir::emit(&program) {
+    for emitted in hir::mir::emit(&program, &llrm_x86_code16::layout()) {
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
     }
@@ -129,7 +129,7 @@ fn the_mir_of_sum_three_lints_clean() {
 /// undefined bytes (#290); `lint::poison` finds a load that reads them.
 fn lint_of(name: &str) -> Vec<String> {
     let program = parsed(&PathBuf::from(env!("LLRM_ROOT")).join(name));
-    hir::mir::emit(&program).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
+    hir::mir::emit(&program, &llrm_x86_code16::layout()).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn function<'p>(program: &'p model::Program, name: &str) -> &'p model::Function 
 
 /// `program`'s MIR as its HIR emits it, before any pass.
 fn emitted_text(program: &model::Program) -> String {
-    hir::mir::emit(program).iter().map(|one| llrm_mir::print::module(&one.module)).collect()
+    hir::mir::emit(program, &llrm_x86_code16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect()
 }
 
 /// `@name`'s definition in `text`.

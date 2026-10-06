@@ -22,7 +22,7 @@ Known departures today, each to be removed:
 
 | Where | What | Removed by |
 |---|---|---|
-| `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists, `cpu.rs` tables | code16's registers and prices read directly | PRs 5, 9 to 11, 19 |
+| `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists | code16's registers read directly | PR 19 (a register-class description the allocator receives) |
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
 
 ## Principle: a target is description
@@ -38,7 +38,8 @@ A target crate ships, and generic code reads:
 | registers | line table | registers, subregisters, classes, kind letters (`r` is gpr, `s` is x87), allocation order, reserved |
 | forms | line table (`x86.instr`) | operands, widths, ties, fixed registers, flags read and written, cost key, opaque `encoding` |
 | patterns, peephole | `patterns.isel`, `peephole.peep` | MIR shape to forms; form windows to forms |
-| timings | line table per CPU | clocks and prefix costs; bytes come from the encoder |
+| timings | `timings.times`: a column per CPU, scalars and `[clocks]`/`[latency]` tables | clocks, latencies, issue and prefix costs; read by `llrm-target` |
+| operation costs | `opcosts.txt`: each MIR operation as a sum of form prices, a `[bytes]` table and `[size]` overrides | how the passes' prices are made of the forms' |
 | datalayout | TOML | datalayout string, address-space kinds (linear, pair, selector), legal types, address-form table (base and index class, scales, displacement range per width) |
 | calling conventions | TOML | slot size, order, cleanup, argument registers, result by type class, preserved |
 | object format | TOML | writer and listing syntax |

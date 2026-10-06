@@ -22,6 +22,7 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
+llrm-x86-code16 = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-hir = { workspace = true }
 regex = { workspace = true }

@@ -1,0 +1,24 @@
+# x86-code16: real mode. 16-bit near pointers, 32-bit far ones indexing by 16
+# bits, 16-bit segments, huge ones as far but indexing by 32 bits (a displacement
+# past 64K carries into the selector), and 16-bit alignment.
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+
+# What a frontend's addresses are, by address space number.
+[spaces]
+near = 0
+# Where the program's data and its stack are, for the passes that ask.
+data = 0
+stack = 5
+# A far pointer's.
+far = 1
+# A selector alone: a cast from a far pointer gives its segment, and one back gives segment:0.
+segment = 2
+# A far pointer whose index does not wrap at 64K.
+huge = 3
+# A far pointer into memory no program object occupies.
+fixed = 4
+
+# An unmarked pointer, by its width in bytes.
+[pointers]
+2 = "near"
+4 = "far"

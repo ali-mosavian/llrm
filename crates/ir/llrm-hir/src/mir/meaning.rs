@@ -13,14 +13,14 @@ use crate::meaning::{Arithmetic, Descriptor, Expr, Meaning, Parameter, Returns};
 use crate::model;
 
 /// Each routine of `promises` that `module` declares, defined by its meaning.
-pub(super) fn defined(module: &mut Module, promises: &model::RuntimePromises) {
+pub(super) fn defined(module: &mut Module, spaces: &llrm_target::layout::AddressSpaces, promises: &model::RuntimePromises) {
     let Some(descriptor) = promises.descriptor else { return };
     for meaning in &promises.routines {
         let Some(global) = module.named(&format!("{RUNTIME}{}", meaning.routine)) else { continue };
         if !declares(module, global, meaning) {
             continue;
         }
-        let raise = if promises.checked && meaning.check.is_some() { raiser(module) } else { None };
+        let raise = if promises.checked && meaning.check.is_some() { raiser(module, spaces) } else { None };
         define(module, global, meaning, descriptor, raise);
     }
 }
@@ -39,8 +39,8 @@ fn declares(module: &mut Module, global: GlobalId, meaning: &Meaning) -> bool {
 }
 
 /// The runtime's error routine, `B$SERR(number)`, as the module calls it, declared where it is not.
-fn raiser(module: &mut Module) -> Option<(GlobalId, TypeId, u32)> {
-    let (conv, space) = convention(model::StackCleanup::Callee, model::CallDistance::Far).ok()?;
+fn raiser(module: &mut Module, spaces: &llrm_target::layout::AddressSpaces) -> Option<(GlobalId, TypeId, u32)> {
+    let (conv, space) = convention(spaces, model::StackCleanup::Callee, model::CallDistance::Far).ok()?;
     let name = format!("{RUNTIME}B$SERR");
     let global = match module.named(&name) {
         Some(one) => one,

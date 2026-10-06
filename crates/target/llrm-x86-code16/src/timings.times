@@ -1,0 +1,153 @@
+# x86's CPU timings: one column a CPU, `-` where the CPU has no price for a
+# form (the 386 has no `unknown`, and the others no `mov_seg_r`). Read by
+# `llrm-target`; a target's mapping from these prices to its operations is
+# `opcosts.txt`.
+#
+# Reciprocal throughput in cycles where the distinction matters. ALU and mov
+# entries are solid, divide entries the roughest, K5 the least certain column.
+# Where a cost depends on the operand (idiv) the figure is for a 32 bit
+# register operand. Legacy approximate rankings, partly recalled from timing
+# tables, not uniformly verified; audited bounds live in backend/timing.rs, see
+# docs/measurement/timing-audit.md. Correct them in place.
+#
+# The 386 column is Intel's 80386 table (POP m is five clocks, Jcc is 7+m taken
+# and 3 not, REP MOVS is 8+4n) and GCC's i386 table for the x87 forms; its
+# latencies are its clocks. x87 forms: 486 Intel's i486 data sheet, Table 10.3
+# (lower bounds; memory forms at m64); P5, P6, K7 Agner Fog's instruction
+# tables (P6/K7 latencies; FDIV at 64-bit precision; K7 FLDCW and FNSTCW by
+# throughput); K5 AMD's K5 technical reference, Table 4-3 (last execution
+# cycle); K6, which covers K6-2 and K6-III, AMD's note 21924, Table 1 (load 2
+# plus FPU 2); neither AMD document gives FDIV, so K5 and K6 keep GCC's 56 plus
+# the load. Core and control-word entries without a figure are the earlier
+# rankings.
+#
+# The scalars: `issue` instructions retired a cycle; `in_order` (the 386, 486
+# and P5 are); `prefix` clocks spent decoding each operand-size prefix, which
+# every widened instruction carries in 16-bit code; `partial_stall` a 16 bit
+# write followed by a 32 bit read of one register (P6 merges the halves, Core
+# recovers most); `lcp_stall` a 66h on an instruction with an immediate,
+# which stalls the decoder on P6 and Core; `pairing` the P5's U/V pairing.
+#
+# The CPU llrm-c prices for with no --cpu or -march (BASIC and Nib state their own).
+default_cpu           386
+cpus                  386  486   P5   P6   K5   K6   K7 Core
+issue                   1    1    2    3    4    3    3    4
+in_order                1    1    1    0    0    0    0    0
+prefix                  0    1    1    0    0    0    0    0
+partial_stall           0    0    0    7    0    1    1    2
+lcp_stall               0    0    0    6    0    0    0    3
+pairing                 0    0    1    0    0    0    0    0
+
+[clocks]
+alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
+alu_ri                  2    1    1    1    1    1    1    1   # ... reg,imm
+alu_rm                  6    2    2    1    1    1    1    1   # ... reg,[mem]
+alu_mr                  8    3    3    1    1    1    1    1   # ... [mem],reg
+mov_rr                  2    1    1    1    1    1    1    1
+mov_rm                  4    1    1    1    1    1    1    1
+mov_mr                  2    1    1    1    1    1    1    1
+mov_ri                  2    1    1    1    1    1    1    1
+shift_ri                3    2    1    1    1    1    1    1   # shl/shr/sar reg,imm
+shift_r1                3    3    1    1    1    1    1    1   # the D1 form, reg,1
+movzx                   4    3    3    1    1    1    1    1
+cdq                     2    3    2    1    1    1    1    1
+imul_r32               22   26   10    4    4    3    5    3   # 486 is 13-42, data dependent
+imul_m32               26   27   11    4    4    3    5    3
+idiv_r32               43   43   46   39   42   41   40   26   # the expensive one
+idiv_m32               47   44   47   39   42   41   40   26
+push_r                  2    1    1    1    1    1    1    1
+push_m                  6    4    2    2    2    2    2    2
+push_i                  2    1    1    1    1    1    1    1
+pop_r                   4    4    1    1    1    1    1    1   # POP memory is an implicit stack load and an explicit store. 486
+pop_m                   5    6    1    4    3    3    4    4   # Intel's 80386 table: POP m16/m32 is five clocks, not the four-unit register form.
+pop_seg                 8    3    3    8    3    3    5    8   # segment load, costly on P6+
+mov_seg_r               8    3    3    8    3    3    5    8
+les                     8    6    4    9    4    4    6    9
+nop                     3    1    1    1    1    1    1    1
+jmp_short               7    3    1    1    1    1    1    1   # predicted taken
+jcc                     7    3    1    1    1    1    1    1   # predicted
+call_far               37   18    4   21    4    4    5   22   # real mode, no gate
+ret_far                18   13    4   17    4    4    5   18   # RET imm16: the same clocks as RET, 2 bytes more.
+ret_pop                18   13    4   17    4    4    5   18
+unknown                 -    2    2    2    2    2    2    2
+mul_r16                22   13   11    4    4    3    5    3
+div_r16                27   24   25   23   24   24   24   22
+lahf                    2    3    2    3    2    2    2    3
+sahf                    3    2    2    1    1    1    1    1
+lea                     2    2    1    1    1    1    1    1
+rep_stos                5    7    9   30   10   10   15   30
+rep_stos_cell           5    4    1    1    1    1    1    1
+rep_movs                8   12   13   30   12   12   15   30   # Intel's 80386 table: REP MOVS is 8+4n.
+rep_movs_cell           4    3    1    1    1    1    1    1
+mul_r32                38   26   10    4    4    3    5    3
+leave                   6    5    2    2    2    2    2    2
+x87_load                8    3    1    1    6    4    4    6   # GCC's i386 table: x87 loads/stores eight units, arithmetic 23/27/88. Memory arithmetic includes both components.
+x87_exchange           18    4    1    0    1    2    0    0   # 80387 register exchange is eighteen clocks.
+x87_store               8    8    2    1    6    1    3    6
+x87_convert_store      35   35    7    7    7    6   12   12
+x87_add                23    8    3    3    5    2    4    3
+x87_add_m              31    8    3    3    7    4    4    9
+x87_mul                27   16    3    5    8    2    4    5
+x87_mul_m              35   14    3    5   10    4    4   11
+x87_div                88   73   39   38   56   56   24   24
+x87_div_m              96   73   39   38   62   58   24   30
+x87_control_load        8    4    8   10    6    6   42    6
+x87_control_store       8    3    2    4    6    4    1    6
+jcc_not_taken           3    1    1    1    1    1    1    1   # Intel's 80386 table: Jcc is 7+m taken, 3 not.
+
+[latency]
+alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
+alu_rm                  6    2    2    4    3    3    3    4   # ... reg,[mem]
+alu_mr                  8    3    3    4    3    3    3    4   # ... [mem],reg
+mov_rr                  2    1    1    1    1    1    1    1
+mov_rm                  4    1    1    3    2    2    3    4
+mov_mr                  2    1    1    3    2    2    3    3
+mov_ri                  2    1    1    1    1    1    1    1
+shift_ri                3    2    1    1    1    1    1    1   # shl/shr/sar reg,imm
+shift_r1                3    3    1    1    1    1    1    1   # the D1 form, reg,1
+movzx                   4    3    3    1    1    1    1    1
+cdq                     2    3    2    1    1    1    1    1
+imul_r32               22   26   10    4    4    3    5    3   # 486 is 13-42, data dependent
+imul_m32               26   27   11    7    6    5    7    6
+mul_r16                22   13   11    4    4    3    5    3
+idiv_r32               43   43   46   39   42   41   40   26   # the expensive one
+idiv_m32               47   44   47   39   42   41   40   26
+div_r16                27   24   25   23   24   24   24   22
+push_r                  2    1    1    1    1    1    1    1
+push_m                  6    4    2    3    2    2    2    3
+push_i                  2    1    1    1    1    1    1    1
+pop_r                   4    4    1    3    2    2    2    3   # POP memory is an implicit stack load and an explicit store. 486
+pop_m                   5    6    1    4    3    3    4    4
+pop_seg                 8    3    3    8    3    3    5    8   # segment load, costly on P6+
+mov_seg_r               8    3    3    8    3    3    5    8
+les                     8    6    4    9    4    4    6    9
+nop                     3    1    1    1    1    1    1    1
+jmp_short               7    3    1    1    1    1    1    1   # predicted taken
+jcc                     7    3    1    1    1    1    1    1   # predicted
+call_far               37   18    4   21    4    4    5   22   # real mode, no gate
+ret_far                18   13    4   17    4    4    5   18   # RET imm16: the same clocks as RET, 2 bytes more.
+lahf                    2    3    2    3    2    2    2    3
+sahf                    3    2    2    1    1    1    1    1
+unknown                 -    2    2    2    2    2    2    2
+alu_ri                  2    1    1    1    1    1    1    1   # ... reg,imm
+ret_pop                18   13    4   17    4    4    5   18
+lea                     2    2    1    1    1    1    1    1
+rep_stos                5    7    9   30   10   10   15   30
+rep_stos_cell           5    4    1    1    1    1    1    1
+rep_movs                8   12   13   30   12   12   15   30
+rep_movs_cell           4    3    1    1    1    1    1    1
+mul_r32                38   26   10    4    4    3    5    3
+leave                   6    5    2    2    2    2    2    2
+x87_load                8    3    1    1    6    4    4    6
+x87_exchange           18    4    1    0    1    2    0    0
+x87_store               8    8    2    1    6    1    3    6
+x87_convert_store      35   35    7    7    7    6   12   12
+x87_add                23    8    3    3    5    2    4    3
+x87_add_m              31    8    3    3    7    4    4    9
+x87_mul                27   16    3    5    8    2    4    5
+x87_mul_m              35   14    3    5   10    4    4   11
+x87_div                88   73   39   38   56   56   24   24
+x87_div_m              96   73   39   38   62   58   24   30
+x87_control_load        8    4    8   10    6    6   42    6
+x87_control_store       8    3    2    4    6    4    1    6
+jcc_not_taken           3    1    1    1    1    1    1    1
