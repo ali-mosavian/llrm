@@ -1,7 +1,9 @@
 //! The target-generic layer: what a target description is, owned by no ISA.
 //! A target crate supplies the data; the passes read the type.
 
+pub mod addressing;
 pub mod machine;
+pub mod registers;
 
 use std::rc::Rc;
 
@@ -20,6 +22,47 @@ pub struct CpuPrices {
     /// Registers an allocator may hold values in, and those a call keeps.
     pub registers: i64,
     pub call_registers: i64,
+    /// The indexed addresses the target states, native form first.
+    pub address_forms: Vec<AddressForm>,
+}
+
+/// A cost model that is only what a target describes: its registers and address forms.
+/// Its prices are the unit ones until a target's timings are mapped to operations.
+pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
+    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone() })
+}
+
+struct Described {
+    registers: i64,
+    call_registers: i64,
+    address_forms: Vec<AddressForm>,
+}
+
+impl llrm_mir::target::Machine for Described {
+    /// Memory without segments is linear: no selector and offset reach foreign memory.
+    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
+        None
+    }
+
+    fn costs(&self) -> OperationCosts {
+        OperationCosts::default()
+    }
+
+    fn registers(&self) -> i64 {
+        self.registers
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.call_registers
+    }
+
+    fn two_address(&self) -> bool {
+        true
+    }
+
+    fn address_forms(&self) -> Vec<AddressForm> {
+        self.address_forms.clone()
+    }
 }
 
 /// A target's cost model, built from a CPU's prices: what the passes ask of it.

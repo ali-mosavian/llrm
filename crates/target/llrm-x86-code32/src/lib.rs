@@ -3,12 +3,11 @@
 //! cannot say.
 
 use iced_x86::Register::{self, EAX, EBP, EBX, EDI, EDX, ESI, ESP};
-use std::collections::BTreeSet;
-use std::rc::Rc;
+use std::sync::LazyLock;
 
-use llrm_mir::target::{AddressForm, Machine as CostMachine, OperationCosts};
+use llrm_mir::target::{AddressForm, OperationCosts};
 use llrm_target::machine::Machine;
-use llrm_target::{CostModel, CpuPrices};
+use llrm_target::CostModel;
 
 /// Flat DOS under an extender, and the PC ports it shares.
 pub const DOS32: &str = concat!(include_str!("machines/dos32.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
@@ -19,53 +18,10 @@ pub const CPUS: [&str; 8] = ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"]
 /// The flat 32-bit x86 target as `llrm-driver` names it.
 pub struct Code32;
 
-/// Every GPR but the frame and stack registers holds a value (registers.regs).
-const ALLOCATABLE: i64 = 6;
+/// The registers and the address forms the descriptions state.
+static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> = LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
 
-/// Any register is a base, any but ESP an index, scaled by 1, 2, 4 or 8, for nothing:
-/// the only address form flat code has.
-fn address_form() -> AddressForm {
-    AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 0, 0, 0, false, None).expect("no fallback to disagree")
-}
-
-/// What the passes ask of flat code on one CPU. The prices are unit ones until
-/// the flat timings table (`timings.times`) is wired; its registers and its
-/// address form are the target's.
-struct Flat32 {
-    registers: i64,
-    call_registers: i64,
-}
-
-impl CostMachine for Flat32 {
-    /// Flat memory is linear: no selector and offset reach foreign memory.
-    fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
-        None
-    }
-
-    fn costs(&self) -> OperationCosts {
-        OperationCosts::default()
-    }
-
-    fn registers(&self) -> i64 {
-        self.registers
-    }
-
-    fn call_registers(&self) -> i64 {
-        self.call_registers
-    }
-
-    fn two_address(&self) -> bool {
-        true
-    }
-
-    fn address_forms(&self) -> Vec<AddressForm> {
-        vec![address_form()]
-    }
-}
-
-fn cost_model(prices: &CpuPrices) -> Rc<dyn CostMachine> {
-    Rc::new(Flat32 { registers: prices.registers, call_registers: prices.call_registers })
-}
+static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses"));
 
 impl llrm_target::Target for Code32 {
     fn name(&self) -> &'static str {
@@ -109,15 +65,15 @@ impl llrm_target::Target for Code32 {
     }
 
     fn register_capacity(&self) -> i64 {
-        ALLOCATABLE
+        llrm_target::registers::allocatable(&REGISTERS) as i64
     }
 
     fn address_forms(&self, _: &OperationCosts, _: i64) -> Vec<AddressForm> {
-        vec![address_form()]
+        ADDRESS_FORMS.clone()
     }
 
     fn cost_model(&self) -> CostModel {
-        cost_model
+        llrm_target::described
     }
 
     /// A dword leaves in EAX and an i64 in EDX:EAX.
@@ -137,8 +93,8 @@ mod tests {
     fn test_code32_has_one_native_dword_address_form() {
         let forms = Code32.address_forms(&OperationCosts::default(), 0);
         assert_eq!(forms.len(), 1);
-        assert!(!forms[0].secondary && forms[0].index_width == 4 && forms[0].scales == BTreeSet::from([1, 2, 4, 8]));
-        let model = (Code32.cost_model())(&CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: Code32.register_capacity(), call_registers: Code32.callee_saved().len() as i64 });
+        assert!(!forms[0].secondary && forms[0].index_width == 4 && forms[0].scales == std::collections::BTreeSet::from([1, 2, 4, 8]));
+        let model = (Code32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: Code32.register_capacity(), call_registers: Code32.callee_saved().len() as i64, address_forms: forms.clone() });
         assert_eq!((model.registers(), model.call_registers()), (6, 3));
         assert_eq!(model.address_forms(), forms);
     }

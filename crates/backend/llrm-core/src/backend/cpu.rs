@@ -58,6 +58,7 @@ impl Profile {
             address_stall: self.address_prefix_stall,
             registers: self.register_capacity,
             call_registers: self.call_register_capacity,
+            address_forms: self.address_forms.clone(),
         }
     }
 
