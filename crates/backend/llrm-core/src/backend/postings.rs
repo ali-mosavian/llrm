@@ -21,6 +21,8 @@ pub type At = (u32, u32);
 pub struct Postings {
     defs: HashMap<u32, Vec<At>>,
     uses: HashMap<u32, Vec<At>>,
+    /// The instructions that `require` the value be in a register.
+    needs: HashMap<u32, Vec<At>>,
 }
 
 impl Postings {
@@ -41,6 +43,10 @@ impl Postings {
         self.uses.get(&value).map_or(&[], Vec::as_slice)
     }
 
+    pub fn needs(&self, value: u32) -> &[At] {
+        self.needs.get(&value).map_or(&[], Vec::as_slice)
+    }
+
     /// The occurrences of the instructions of `insns`, block `block`, appended: that block is the last made.
     fn add(&mut self, block: u32, insns: &[Arc<Insn>]) {
         for (at, one) in insns.iter().enumerate() {
@@ -50,18 +56,21 @@ impl Postings {
             for value in &one.uses {
                 self.uses.entry(*value).or_default().push((block, at as u32));
             }
+            for (held, _) in &one.requires {
+                self.needs.entry(held.value).or_default().push((block, at as u32));
+            }
         }
     }
 
     /// Block `block` as `old` was, as `new` is.
     fn replaced(&mut self, block: u32, old: &[Arc<Insn>], new: &[Arc<Insn>]) {
-        let mut touched: Vec<u32> = old.iter().chain(new).flat_map(|one| one.defines.iter().chain(&one.uses)).copied().collect();
+        let mut touched: Vec<u32> = old.iter().chain(new).flat_map(|one| one.defines.iter().chain(&one.uses).copied().chain(one.requires.iter().map(|(held, _)| held.value))).collect();
         touched.sort_unstable();
         touched.dedup();
         let mut fresh = Postings::default();
         fresh.add(block, new);
         for value in touched {
-            for (mine, theirs) in [(&mut self.defs, &fresh.defs), (&mut self.uses, &fresh.uses)] {
+            for (mine, theirs) in [(&mut self.defs, &fresh.defs), (&mut self.uses, &fresh.uses), (&mut self.needs, &fresh.needs)] {
                 let list = mine.entry(value).or_default();
                 let from = list.partition_point(|at| at.0 < block);
                 let to = list.partition_point(|at| at.0 <= block);

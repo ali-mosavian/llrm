@@ -166,8 +166,10 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
 
+    // The blocks holding an instruction the cleanup after this loop removes or anchors.
+    let mut marked: BTreeSet<usize> = BTreeSet::new();
     let mut blocks = Vec::new();
-    for block in &body.blocks {
+    for (block_index, block) in body.blocks.iter().enumerate() {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         // Where the parallel copy being copied begins in `insns`: what its
         // moves read is made before all of them, not between two.
@@ -180,6 +182,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
                 (None, _) => None,
             };
             if _identity(&one, &stored, frame) {
+                marked.insert(block_index);
                 identities.insert(key(&one));
                 insns.push(one);
                 continue;
@@ -317,6 +320,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
             let rewritten = if rename.is_empty() { Arc::clone(&one) } else { _renamed(&one, &rename) };
             insns.push(Arc::clone(&rewritten));
             if one.defines.iter().any(|value| frame_loads.contains_key(value)) {
+                marked.insert(block_index);
                 rematerialized_definitions.insert(key(&rewritten));
             }
             if one.defines.len() == 1
@@ -327,6 +331,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
                 && one.group.is_none()
                 && one.symbol != Some(true)
             {
+                marked.insert(block_index);
                 abandoned.insert(key(&rewritten));
             }
             insns.extend(after);
@@ -338,24 +343,18 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
     let _cleanup = llrm_support::debug::span("spill cleanup");
     let mut result = body.with_blocks(blocks);
     let never = None::<fn(&Arc<Insn>) -> Arc<Insn>>;
-    if !rematerialized_definitions.is_empty() {
-        result = result.with_blocks(result
-                .blocks
-                .iter()
-                .map(|block| block.with_insns(lir::without(&block.insns, |one| rematerialized_definitions.contains(&key(one)), never)))
-                .collect());
+    // Only a block that held one of those instructions has any to remove.
+    for &at in &marked {
+        if !rematerialized_definitions.is_empty() {
+            result.blocks[at] = result.blocks[at].with_insns(lir::without(&result.blocks[at].insns, |one| rematerialized_definitions.contains(&key(one)), never));
+        }
+        if !identities.is_empty() {
+            result.blocks[at] = result.blocks[at].with_insns(lir::without(&result.blocks[at].insns, |one| identities.contains(&key(one)), never));
+        }
     }
-    if !identities.is_empty() {
-        result = result.with_blocks(result
-                .blocks
-                .iter()
-                .map(|block| block.with_insns(lir::without(&block.insns, |one| identities.contains(&key(one)), never)))
-                .collect());
-    }
-    let result = _remove_abandoned(&result, &abandoned);
-    let surviving: BTreeSet<u32> =
-        result.blocks.iter().flat_map(|block| &block.insns).flat_map(|one| one.defines.iter().copied()).collect();
-    let made = made.intersection(&surviving).copied().collect();
+    let result = _remove_abandoned_in(result, &abandoned, &marked);
+    // The values made that something still defines.
+    let made = postings::following(&result, |postings| made.iter().copied().filter(|value| !postings.defs(*value).is_empty()).collect::<BTreeSet<u32>>());
     Ok((result, made))
 }
 
@@ -1501,6 +1500,42 @@ fn _home_holds(body: &LirBody, value: u32, home: &Mem, store: &Arc<Insn>) -> boo
         }
     }
     true
+}
+
+/// `_remove_abandoned` of a body in which only the blocks in `marked` hold an abandoned instruction: the
+/// others are left as they are, and what is read is asked of the occurrences, not of a scan of the body.
+fn _remove_abandoned_in(body: LirBody, abandoned: &BTreeSet<usize>, marked: &BTreeSet<usize>) -> LirBody {
+    if abandoned.is_empty() {
+        return body;
+    }
+    let reference = check_postings().then(|| _remove_abandoned(&body, abandoned));
+    // What else reads a value: a block's arrivals and a phi's inputs.
+    let mut elsewhere: BTreeSet<u32> = body.blocks.iter().flat_map(LirBlock::arrives).collect();
+    elsewhere.extend(body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)));
+    let used = |value: u32, postings: &Postings| !postings.uses(value).is_empty() || !postings.needs(value).is_empty() || elsewhere.contains(&value);
+    let result = postings::following(&body, |postings| {
+        let removable = |one: &Arc<Insn>| abandoned.contains(&key(one)) && !one.defines.iter().any(|value| used(*value, postings));
+        let anchor = |one: Arc<Insn>| -> Arc<Insn> {
+            if !removable(&one) {
+                return one;
+            }
+            _with(&one, |made| {
+                made.what = Some(lir::inert());
+                made.defines = Vec::new();
+                made.uses = Vec::new();
+                made.widths = Vec::new();
+            })
+        };
+        let mut blocks = body.blocks.clone();
+        for &at in marked {
+            blocks[at] = blocks[at].with_insns(lir::without(&blocks[at].insns, removable, None::<fn(&Arc<Insn>) -> Arc<Insn>>).into_iter().map(anchor).collect());
+        }
+        body.with_blocks(blocks)
+    });
+    if let Some(reference) = reference {
+        assert!(result.blocks == reference.blocks, "{}: the abandoned instructions removed using the postings differ", result.name);
+    }
+    result
 }
 
 pub fn _remove_abandoned(body: &LirBody, abandoned: &BTreeSet<usize>) -> LirBody {
