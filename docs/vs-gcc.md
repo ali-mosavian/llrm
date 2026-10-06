@@ -8,7 +8,7 @@
 - One emulator (unicorn) for all: llrm's OMF is linked in Python, gcc/clang's ELF by `ld`; both resolve `report`/`memset`/`memcpy`/`memmove` to the same stub. The whole program runs from `main`; the kernel `bench_X` is counted from entry to its own return, callees included. Counting follows tools/bench/icount.py (a `rep` instruction counts once per iteration; memory operands exclude `lea`). Clock estimates use a 486 table (`cost()` in harness.py), without pipeline effects.
 - Not counted: alignment `nop`s (clang pads loops with them, e.g. 94710 in fib), reported in the `nops` column of table.md.
 - Skipped: `grep` (10 MB input, timed only), `huge`, `textfill` (16-bit only). `lru` is built with `-Dfar=` for gcc/clang. `parity` is not a program.
-- The harness, the loop finder and the raw results are not in the repository; the listings that back each finding are in the appendix.
+- Rerun: `tools/vsgcc/run.sh` (see `tools/vsgcc/readme.md`); it builds llrm-c and reproduces every table here. The listings that back each finding are in the appendix.
 
 ## Instrument check
 
