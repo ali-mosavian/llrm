@@ -88,7 +88,7 @@ pub type CostModel = fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>;
 /// from. The passes' view of a target grows here as the backend stops naming
 /// one (docs/targets.md).
 pub trait Target {
-    /// The name `--target` takes.
+    /// The target's name, for messages.
     fn name(&self) -> &'static str;
 
     /// The platform description a frontend of this target defaults to.
@@ -96,6 +96,12 @@ pub trait Target {
 
     /// The processors this target prices, as a platform description names them.
     fn cpus(&self) -> &'static [&'static str];
+
+    /// The CPU gcc's `-march=NAME` names, from the target's `timings.times`.
+    fn march(&self, name: &str) -> Option<&'static str>;
+
+    /// The names `-march` and `-mtune` take.
+    fn marches(&self) -> Vec<&'static str>;
 
     /// The data layout programs are built under and the address spaces a
     /// frontend's addresses are.

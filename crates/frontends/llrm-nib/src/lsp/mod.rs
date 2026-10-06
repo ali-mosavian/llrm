@@ -47,10 +47,10 @@ struct Server {
     exited: bool,
 }
 
-/// The frontend for the target `name` names, as `--target` does.
-fn frontend_for(name: &str) -> Result<crate::Frontend, String> {
+/// The frontend for the target `-m<mode>` names.
+fn frontend_for(mode: u32) -> Result<crate::Frontend, String> {
     let mut flags = llrm_core::driver::flags::Flags::default();
-    flags.take(&["--target".to_owned(), name.to_owned()], &mut 0)?;
+    flags.take(&[format!("-m{mode}")], &mut 0)?;
     let bound = llrm_driver::target(&flags, None)?;
     crate::Frontend::for_target(&*bound.target)
 }
@@ -65,8 +65,8 @@ impl Server {
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         match message.get("method").and_then(Value::as_str).unwrap_or("") {
             "initialize" => {
-                // The project's target: `initializationOptions: {"target": "x86-code32"}`; real mode's otherwise.
-                let named = params.pointer("/initializationOptions/target").and_then(Value::as_str);
+                // The project's target: `initializationOptions: {"mode": 32}`, gcc's -m32; real mode's otherwise.
+                let named = params.pointer("/initializationOptions/mode").and_then(Value::as_u64).map(|mode| mode as u32);
                 match named.map(frontend_for).transpose() {
                     Ok(frontend) => {
                         if let Some(frontend) = frontend {

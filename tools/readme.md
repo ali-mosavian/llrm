@@ -17,7 +17,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 | `e2e/mkgolden.py` | the suite's expected outputs, computed from what each program means |
 | `e2e/mkfixtures.py` | rebuilds `tests/inputs/omf` with the BC toolchains |
 | `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
-| `identity.sh KIND BASE NEW [--target T]` | the identity gate: two builds of `llrm-nib` (`nib`) or `llrm-c` (`c`, `qcport`) make byte-identical objects for a whole corpus; fails on any DIFF or STATUS. Run it against a build of the base for any change that must not move a target's output; see below |
+| `identity.sh KIND BASE NEW [-m16|-m32]` | the identity gate: two builds of `llrm-nib` (`nib`) or `llrm-c` (`c`, `qcport`) make byte-identical objects for a whole corpus; fails on any DIFF or STATUS. Run it against a build of the base for any change that must not move a target's output; see below |
 | `qcport-compile.sh [llrm-c]` | QCport's 65 C modules compiled at -O2 and -Os; each refusal listed (QCPORT, QCPORT_INC name its sources) |
 | `sizes.py BASE [NEW] [-O2 -Os ...]` | object bytes and the backend's expected instructions and memory operands of every test, bench, example and demo program, two builds side by side |
 | `innerloops.py` | each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or msp430) |
@@ -32,7 +32,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 
 ```sh
 tools/identity.sh nib  BASE/llrm-nib target/release/llrm-nib
-tools/identity.sh c    BASE/llrm-c   target/release/llrm-c [--target x86-code32]
+tools/identity.sh c    BASE/llrm-c   target/release/llrm-c [-m32]
 QCPORT=... QCPORT_INC=... tools/identity.sh qcport BASE/llrm-c target/release/llrm-c
 ```
 

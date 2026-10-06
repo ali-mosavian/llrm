@@ -1,4 +1,4 @@
-// flags: -O2 -fsanitize=stack | -O2 -fsanitize=stack --target x86-code32
+// flags: -O2 -fsanitize=stack | -O2 -fsanitize=stack -m32
 // Unbounded recursion under -fsanitize=stack ends in the runtime's "Stack Overflow!" with status
 // 1, where it would run off the stack into the program's data. The pad keeps it a recursion.
 extern void report(long value);

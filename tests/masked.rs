@@ -9,7 +9,7 @@ fn compiled(tool: &str, source: &str, arguments: &[&str]) -> String {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let out = scratch.path().join("out.asm");
-    let done = Command::new(bin.join(tool)).arg(root.join("tests/inputs/masked").join(source)).args(arguments).args(["-O2", "--cpu", "486", "-S", "-o"]).arg(&out).output().unwrap();
+    let done = Command::new(bin.join(tool)).arg(root.join("tests/inputs/masked").join(source)).args(arguments).args(["-O2", "-march=i486", "-S", "-o"]).arg(&out).output().unwrap();
     assert!(done.status.success(), "{tool} {source}: {}", String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(out).unwrap()
 }

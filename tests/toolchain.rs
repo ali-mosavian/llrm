@@ -193,7 +193,7 @@ fn linked_fixture(fixture: &str, entry: &str) -> Result<(), String> {
     };
     run("jwasm", &["-q", "-omf", "-FoSTART.OBJ", "START.ASM"])?;
     let source = root.join(format!("tests/fixtures/c/{fixture}.cgs"));
-    run("llrm-c", &[source.to_str().unwrap(), "-O2", "--cpu", "486", "-o", "P.OBJ"])?;
+    run("llrm-c", &[source.to_str().unwrap(), "-O2", "-march=i486", "-o", "P.OBJ"])?;
     run("jwlink", &["format", "dos", "name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"])
 }
 
@@ -226,7 +226,7 @@ fn test_loops_over_many_arrays_build_on_a_p5() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c"));
     for (name, cpu) in [("ninearrays", "P5"), ("tenarrays", "P5"), ("elevenarrays", "Core")] {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{name}.c"));
-        let done = Command::new(bin).args([source.to_str().unwrap(), "--cpu", cpu, "-O2", "-o", &format!("{name}.obj")]).current_dir(scratch.path()).output().unwrap();
+        let done = Command::new(bin).args([source.to_str().unwrap(), &march(cpu), "-O2", "-o", &format!("{name}.obj")]).current_dir(scratch.path()).output().unwrap();
         assert!(done.status.success(), "{name}: {}", String::from_utf8_lossy(&done.stderr));
     }
 }
@@ -240,7 +240,7 @@ fn test_an_unspillable_range_evicts_a_spillable_holder_at_any_stage() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/fivestreams.c");
     let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .args([source.to_str().unwrap(), "--cpu", "P5", "-O2", "-o", "fivestreams.obj"])
+        .args([source.to_str().unwrap(), "-march=pentium", "-O2", "-o", "fivestreams.obj"])
         .current_dir(scratch.path())
         .output()
         .unwrap();
@@ -258,7 +258,7 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/tenstreams.c");
     let listing = scratch.path().join("tenstreams.asm");
-    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c"))).args([source.to_str().unwrap(), "--cpu", "386", "-O2", "-S", "-o", listing.to_str().unwrap()]).output().unwrap();
+    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c"))).args([source.to_str().unwrap(), "-march=i386", "-O2", "-S", "-o", listing.to_str().unwrap()]).output().unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     let asm = std::fs::read_to_string(listing).unwrap();
     assert!(!asm.contains("shl dword ptr [bp"), "{asm}");
@@ -291,7 +291,7 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     };
     run("jwasm", &["-q", "-c", "-Cp", "-Zg", "-omf", "-FoSTART.OBJ", "START.ASM"]);
     let source = root.join("tests/fixtures/c/hugearray.cgs");
-    run("llrm-c", &[source.to_str().unwrap(), "-O2", "--cpu", "486", "-o", "P.OBJ"]);
+    run("llrm-c", &[source.to_str().unwrap(), "-O2", "-march=i486", "-o", "P.OBJ"]);
     run("jwlink", &["format", "dos", "name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"]);
     std::fs::write(dir.join("dosbox.conf"), format!("[autoexec]\nmount c {}\nc:\nP\nexit\n", dir.display())).unwrap();
     run("dosbox-x", &["-nolog", "-exit", "-conf", dir.join("dosbox.conf").to_str().unwrap()]);
@@ -314,11 +314,11 @@ fn test_far_and_huge_are_near_with_a_warning_on_code32() {
         assert!(done.status.success(), "{source}: {}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stderr).into_owned()
     };
-    let flat = ["--target", "x86-code32"];
+    let flat = ["-m32"];
     let warned = stderr("tests/run/nib/far_near.nib", &flat);
     assert!(warned.contains("far_near.nib:5:6: warning: 'huge' is near") && warned.contains("warning: 'far' is near"), "{warned}");
     assert_eq!(stderr("tests/run/nib/far_near.nib", &[]), "");
-    assert_eq!(stderr("tests/run/nib/far_near.nib", &["--target", "x86-code32", "-Wno-target-width"]), "");
+    assert_eq!(stderr("tests/run/nib/far_near.nib", &["-m32", "-Wno-target-width"]), "");
     assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
 }
 
@@ -330,7 +330,7 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_code32() {
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("p.obj");
     let compile = |extra: &[&str]| Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(root.join("tests/run/c/huge_array.c")).args(extra).args(["-O2", "-o", object.to_str().unwrap()]).output().unwrap();
-    let flat = compile(&["--target", "x86-code32"]);
+    let flat = compile(&["-m32"]);
     assert!(flat.status.success(), "{}", String::from_utf8_lossy(&flat.stderr));
     assert!(String::from_utf8_lossy(&flat.stderr).contains("warning: __far and __huge pointers are near on this target"), "{}", String::from_utf8_lossy(&flat.stderr));
     let real = compile(&[]);
@@ -350,7 +350,7 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
         String::from_utf8_lossy(&done.stdout).into_owned()
     };
     assert!(header(&[]).contains("extern short __far __cdecl weight(short value);"));
-    let flat = header(&["--target", "x86-code32"]);
+    let flat = header(&["-m32"]);
     assert!(flat.contains("extern short __cdecl weight(short value);") && !flat.contains("__far"), "{flat}");
 }
 
@@ -364,7 +364,7 @@ fn test_code32_block_operations_are_rep_string_instructions_without_segments() {
     std::fs::write(&source, "char a[300], b[300];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); return b[5]; }\n").unwrap();
     let listing = |target: &str| {
         let out = scratch.path().join(format!("{target}.asm"));
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(&source).args(["--target", target, "-O2", "-S", "-o", out.to_str().unwrap()]).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(&source).args([&mode(target), "-O2", "-S", "-o", out.to_str().unwrap()]).output().unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         std::fs::read_to_string(out).unwrap()
     };
@@ -407,7 +407,7 @@ fn test_the_examples_and_benchmarks_compile_without_warnings() {
                 let header = text.lines().take_while(|line| line.starts_with('#')).find_map(|line| line.trim_start_matches('#').trim().strip_prefix("targets:"));
                 let targets: Vec<&str> = header.map_or(vec!["x86-code16", "x86-code32"], |list| list.split_whitespace().take(1).collect());
                 for target in targets {
-                    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(file).args(["--target", target, "-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+                    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(file).args([&mode(target), "-O2", "-o", object.to_str().unwrap()]).output().unwrap();
                     let stderr = String::from_utf8_lossy(&done.stderr);
                     // A program that needs a library (link:) or refuses on a target is not this test's business.
                     if done.status.success() && stderr.contains("warning") {
@@ -439,7 +439,7 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
 fn test_both_targets_declare_the_same_file_call_result() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let results = |target: &str| -> Vec<String> {
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["--target", target, "--os-layer", "module"]).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args([&mode(target), "--os-layer", "module"]).output().unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         let text = String::from_utf8_lossy(&done.stdout).into_owned();
         ["pub fn read(", "pub fn write_file("].iter().map(|head| text.lines().find(|line| line.starts_with(head)).and_then(|line| line.rsplit_once("-> ")).map(|(_, result)| result.trim().to_owned()).expect("declared")).collect()
@@ -453,7 +453,7 @@ fn test_both_targets_declare_the_same_file_call_result() {
 #[test]
 fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
     let defines = |target: &str| {
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["--target", target, "--os-layer", "defines"]).output().unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args([&mode(target), "--os-layer", "defines"]).output().unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stdout).split_whitespace().map(str::to_owned).collect::<Vec<_>>()
     };
@@ -483,4 +483,17 @@ fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_on
     let other = gate(&different);
     let other_text = String::from_utf8_lossy(&other.stdout);
     assert!(!other.status.success() && other_text.contains("DIFF "), "{other_text}");
+}
+
+/// The `-m` flag that names `target`: its description says which number.
+fn mode(target: &str) -> String {
+    let found = llrm_driver::all().into_iter().find(|one| one.name() == target).expect("a built-in target");
+    format!("-m{}", found.layout().mode)
+}
+
+/// The `-march` flag for the code16 CPU `cpu`, as its `timings.times` names it.
+fn march(cpu: &str) -> String {
+    let code16 = llrm_driver::all().into_iter().find(|one| one.name() == "x86-code16").expect("code16");
+    let at = code16.cpus().iter().position(|one| *one == cpu).expect("a CPU code16 prices");
+    format!("-march={}", code16.marches()[at])
 }

@@ -109,6 +109,29 @@ def ow_root() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "llrm" / f"open-watcom-v2-{commit}"
 
 
+def target_modes() -> dict[str, int]:
+    """Each target's gcc `-m` number, from its `datalayout.toml` (`mode`): the one place that says."""
+    modes = {}
+    for crate in sorted((ROOT / "crates" / "target").glob("llrm-x86-code*")):
+        with open(crate / "src" / "machines" / "datalayout.toml", "rb") as text:
+            modes[crate.name.removeprefix("llrm-")] = tomllib.load(text)["mode"]
+    return modes
+
+
+def m_flag(target: str) -> str:
+    """The flag that names `target` to the compilers."""
+    return f"-m{target_modes()[target]}"
+
+
+def target_of(flags: list[str], default: str) -> str:
+    """The target a compiler's `flags` name by `-m<N>`, else `default`."""
+    for flag in flags:
+        for name, mode in target_modes().items():
+            if flag == f"-m{mode}":
+                return name
+    return default
+
+
 def target_link(target: str) -> dict:
     """How `target` links a C program: the `[link]` of its `object.toml` (crates/target/llrm-<target>)."""
     crate = ROOT / "crates" / "target" / ("llrm-" + target)
@@ -167,8 +190,8 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
 
 def nib_runtime(target: str) -> tuple[Path, list[str]]:
     """The directory of `target`'s Nib OS layer, and the start-up and OS routines it names (`llrm-nib --os-layer`)."""
-    directory = Path(subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "directory"], capture_output=True, text=True, check=True).stdout.strip())
-    names = [subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip() for field in ("start", "implementation")]
+    directory = Path(subprocess.run([str(BIN / "llrm-nib"), m_flag(target), "--os-layer", "directory"], capture_output=True, text=True, check=True).stdout.strip())
+    names = [subprocess.run([str(BIN / "llrm-nib"), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip() for field in ("start", "implementation")]
     return directory, [str((directory / name).relative_to(ROOT)) for name in names]
 
 
@@ -178,7 +201,7 @@ REAL_MODE = "x86-code16"
 
 def nib_defines(target: str) -> tuple[str, ...]:
     """What the assembler is told of `target`'s OS layer (`llrm-nib --os-layer defines`): `SYMBOL=value` each."""
-    return tuple(subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split())
+    return tuple(subprocess.run([str(BIN / "llrm-nib"), m_flag(target), "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split())
 
 
 def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level: str, foreign: tuple[Path, ...]) -> tuple[Path, ...]:
@@ -186,7 +209,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     _, (start, implementation) = nib_runtime(target)
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
-    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
+    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
     return link_target(target, obj, exe, work, runtime=([start], [implementation]), objects_after=(runtime, *foreign), defines=nib_defines(target))
 
 

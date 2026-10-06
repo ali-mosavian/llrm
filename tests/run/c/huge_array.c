@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* A __huge array of 80000 bytes, written and summed by index and pointer, with a pointer difference
    and a step. On code32, with one address space, __huge is near and warns (tests/toolchain.rs): the output is code16's. */
 extern void report(long value);

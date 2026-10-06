@@ -1,4 +1,4 @@
-# RUN: llrm-nib %s -O2 --cpu 486 -fno-inline-functions -S -o /dev/stdout
+# RUN: llrm-nib %s -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 # Loops people write that are one string move, and look-alikes that are not. Bounds are
 # constants: a loop to a variable keeps its bounds check (#470).
 # CHECK-LABEL: _copy proc

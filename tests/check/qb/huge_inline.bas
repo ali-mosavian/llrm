@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s --dialect pds71 --runtime pds71 -O2 --cpu 486 --huge-arrays -S -o /dev/stdout
+' RUN: llrm-qb %s --dialect pds71 --runtime pds71 -O2 -march=i486 --huge-arrays -S -o /dev/stdout
 ' /AH addresses every element inline: B$HARY was called for each, 1D and 2D,
 ' every element size, known bounds or not.
 ' CHECK: B$RDIM

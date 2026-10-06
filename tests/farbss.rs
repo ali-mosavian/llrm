@@ -62,7 +62,7 @@ impl Lab {
         let runtime = self.root.join("tools/loops/runtime");
         self.assemble(&runtime.join("crt.asm"), &format!("{name}-crt.obj"), if nozero { &["-DNOZERO"] } else { &[] });
         std::fs::write(self.path("t.c"), PROGRAM).unwrap();
-        self.run("llrm-c", &["-Os", flag, "--cpu", "486", "t.c", "-o", &format!("{name}.obj")]);
+        self.run("llrm-c", &["-Os", flag, "-march=i486", "t.c", "-o", &format!("{name}.obj")]);
         let exe = self.path(&format!("{name}.exe"));
         let (crt, program) = (format!("{name}-crt.obj"), format!("{name}.obj"));
         self.run("jwlink", &["option", "quiet", "format", "dos", "name", exe.to_str().unwrap(), "file", &crt, "file", &program, "file", "ext.obj", "file", "zend.obj"]);

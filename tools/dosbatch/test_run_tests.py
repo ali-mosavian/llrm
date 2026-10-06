@@ -18,7 +18,7 @@ class HeaderTests(unittest.TestCase):
             return run_tests.header(source)
 
     def test_flags_and_known_come_from_the_leading_comment(self):
-        self.assertEqual(self.read("' flags: -Os --cpu P5\n' known: #123\nPRINT 1\n"), {"flags": "-Os --cpu P5", "known": "#123"})
+        self.assertEqual(self.read("' flags: -Os -march=pentium\n' known: #123\nPRINT 1\n"), {"flags": "-Os -march=pentium", "known": "#123"})
 
     def test_dialect_picks_the_compiler_dialect(self):
         """hugerg and hugelp need PDS /Ah: built as QB 4.5 they died in the lowering with a Python repr."""
@@ -32,10 +32,10 @@ class HeaderTests(unittest.TestCase):
 class ConfigurationTests(unittest.TestCase):
     def test_one_header_is_each_configuration_it_names(self):
         """idioms.bas was fifteen copies of a file that differed in its header line."""
-        got = run_tests.configurations({"flags": "-O2 --cpu 486 | -Os", "dialect": "qb45 pds71"})
+        got = run_tests.configurations({"flags": "-O2 -march=i486 | -Os", "dialect": "qb45 pds71"})
         self.assertEqual([(label, flags, dialect) for label, flags, dialect in got], [
-            (" [-O2 --cpu 486, qb45]", ["-O2", "--cpu", "486"], "qb45"),
-            (" [-O2 --cpu 486, pds71]", ["-O2", "--cpu", "486"], "pds71"),
+            (" [-O2 -march=i486, qb45]", ["-O2", "-march=i486"], "qb45"),
+            (" [-O2 -march=i486, pds71]", ["-O2", "-march=i486"], "pds71"),
             (" [-Os, qb45]", ["-Os"], "qb45"),
             (" [-Os, pds71]", ["-Os"], "pds71"),
         ])

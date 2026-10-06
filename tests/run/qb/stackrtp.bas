@@ -1,4 +1,4 @@
-' flags: -O2 --cpu 486 -fsanitize=stack
+' flags: -O2 -march=i486 -fsanitize=stack
 ' dialect: pds71
 ' mask: [0-9A-F]{4}:[0-9A-F]{4}
 ' Unbounded recursion in a procedure the runtime frames (its local STRING needs the runtime's frame)

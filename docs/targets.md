@@ -156,7 +156,7 @@ Watcom object that returns such a struct is the one call that does not match.
   `toolchain/owshim`, from `bld/cc/i86`), records its code-generator calls and
   translates them to HIR. A 32-bit front end is a second `wccq` from `bld/cc/386`
   (the tree is cached); it gates the skeleton.
-- No `--target` flag and no writer interface: `compile.rs:220-222` calls
+- No `-m` flag and no writer interface: `compile.rs:220-222` calls
   `omfwrite::written` or `masm::text`.
 
 ## Classes
@@ -278,7 +278,7 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | Open Watcom 16-bit front end, `-mm -zp1 -ecc`, `borland.h` | `compile.rs:127`, `owshim/build.sh:24`, `cgshim.c:130` | per-target front-end profile; 32-bit `wccq` |
 | `int`/pointer sizes, `medium_model()` clobbers | `raise_hir.rs:14-122` | target's type widths and ABI |
 | `far`, `huge`, `__based`, call distance in `llrm-c` | `hir.rs`, `translate.rs` (~90) | collapse; refuse `__based/__segment/__huge` |
-| Flags pick the machine: `--cpu`, `--machine` | `driver/flags.rs:163-230` | `--target` selects the `Target` |
+| Flags pick the machine: `-march`, `--machine` | `driver/flags.rs:163-230` | `-m16`/`-m32` select the `Target` by the number its `datalayout.toml` declares |
 | QB, BC | `llrm-qb`, `llrm-bc*` | pinned to code16 |
 | Nib | `llrm-nib` | code16 and code32: layout, conventions and OS layer come from the target (`runtime/shared/`, `runtime/nib/`) |
 
@@ -299,7 +299,7 @@ llrm-x86        family: form schema and parser, condition codes, encoder,
                 x87 and i64 hooks, string-op shapes
 llrm-x86-code16 descriptions, hooks, generated selector, timings
 llrm-x86-code32 descriptions, hooks, generated selector, timings
-llrm-driver     the one place that names targets: match on --target
+llrm-driver     the one place that names targets: match on -m
 llrm-omf        OMF 16 today; 32-bit records later
 ```
 
@@ -530,7 +530,7 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no code16 or iced in the BC lifter's model crate |
 | 3a | `llrm-target`: the platform description (`Machine`, its parser) out of code16, which keeps `dos.toml`, `BUILT_IN`, `BASIC`, `CPUS`; the BC crates stop depending on code16 | production uses 20 to 17 |
 | 3b | the platform is flat-capable (`addressing = "flat"`, optional `[segments]`), `dos.toml` parses to an identical value; the PC ports in one shared file | `llrm-target` |
-| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below code16 while `llrm-bcmachine` was above it), `--target` (default code16), the target in `Options`; `llrm-core` stays on code16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
+| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below code16 while `llrm-bcmachine` was above it), `-m16`/`-m32` (default code16), the target in `Options`; `llrm-core` stays on code16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
 | 4 | one selector per target definition directory: `build.rs` generates a `Compiled` for each `crates/target/<name>/src/isel/` (`patterns.isel`, forms in `src/instructions/x86.instr`), found by the directory's name; `llrm-driver` binds a target to its selector and hands it in through `Options`; code16's `patterns.isel` moved there. The generated code and its hooks stay in `llrm-core` until the inversion (after 19) | `build.rs`, `matcher.rs`, `isel.rs`, `assemble.rs` |
 | 4b | the same for the peephole rules (`peephole.peep`) | `build.rs`, `peep/` |
 | 4c | no default names a target in shared code: `Options`, `assemble`, `flow`, `Peephole`, `Profile` take the selector, rules and model from the driver; tests use a helper | `llrm-core`, `llrm-driver` |
@@ -552,7 +552,7 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
 | 19 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
 | 19b | the inversion: generated code and hooks move into the target crates, which then depend on `llrm-core`; nothing in `llrm-core` names code16 by then | `llrm-core/Cargo.toml`, `build.rs`, hooks |
-| 20 | owned by the code32 session: `llrm-x86-code32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
+| 20 | owned by the code32 session: `llrm-x86-code32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `-m32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
 depends on them. code32 (20) has no baseline to match, so the generic pipeline is designed there;

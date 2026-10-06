@@ -105,6 +105,14 @@ impl llrm_target::Target for Code32 {
         vec![(EBX, EBX), (ESI, ESI), (EDI, EDI)]
     }
 
+    fn march(&self, name: &str) -> Option<&'static str> {
+        TIMINGS.march(name)
+    }
+
+    fn marches(&self) -> Vec<&'static str> {
+        TIMINGS.marches()
+    }
+
     fn registers_text(&self) -> String {
         include_str!("registers.regs").to_owned()
     }

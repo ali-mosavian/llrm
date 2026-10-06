@@ -1,4 +1,4 @@
-' flags: -O2 --cpu 486 --own-frames -fsanitize=stack
+' flags: -O2 -march=i486 --own-frames -fsanitize=stack
 ' dialect: vbdos
 ' A recursion that fits runs unchanged under -fsanitize=stack.
 DECLARE FUNCTION Deep% (n AS INTEGER)

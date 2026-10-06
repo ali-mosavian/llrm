@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s --dialect qb45 --runtime qb45 -Os --cpu 486 -S -o /dev/stdout
+' RUN: llrm-qb %s --dialect qb45 --runtime qb45 -Os -march=i486 -S -o /dev/stdout
 ' Two inner loops each read four arrays' bases. Hoisted out of the outer loop too, nine values lived
 ' across both and were spilled to the frame, 9 stores before the loops and a reload per read (#529).
 ' CHECK-LABEL: $QB$MAIN proc

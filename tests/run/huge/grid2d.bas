@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' 201x100 LONGs (80400 bytes) REDIM'd /AH, walked in memory order: column-major, so g(c, r).
 DEFINT A-Z
 DECLARE FUNCTION BenchGrid2d& ()

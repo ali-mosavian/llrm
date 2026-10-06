@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -O2 --cpu 486 --target x86-code32 -S -o /dev/stdout
+// RUN: llrm-c %s -O2 -march=i486 -m32 -S -o /dev/stdout
 // An `unsigned short` counter on a 32-bit `int` was `zext` and `slt` per trip
 // (code32 sieve 19277 executed, code16 12107): no memset, no count to the bound.
 // CHECK-LABEL: _clear proc

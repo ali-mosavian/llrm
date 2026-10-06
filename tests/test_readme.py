@@ -15,9 +15,9 @@ BIN = Path(os.environ.get("LLRM_BIN", ROOT / "target" / "release"))
 DOT = ROOT / "examples" / "dot"
 
 CASES = [
-    ("C", [str(BIN / "llrm-c"), "dot.c", "--cpu", "486"], "_dot"),
-    ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "--cpu", "486"], "_dot"),
-    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "qb45", "--runtime", "qb45", "--cpu", "486", "-O3", "--whole-program"], "DOT"),
+    ("C", [str(BIN / "llrm-c"), "dot.c", "-march=i486"], "_dot"),
+    ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "-march=i486"], "_dot"),
+    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "qb45", "--runtime", "qb45", "-march=i486", "-O3", "--whole-program"], "DOT"),
 ]
 
 

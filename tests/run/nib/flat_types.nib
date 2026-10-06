@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
 # Structs, enums with payloads, matches and borrows on both targets.
 struct Point:
     mut x: i16

@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 extern void report(long value);
 
 #define LS_NEUTRAL 120

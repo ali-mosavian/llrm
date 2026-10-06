@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 -m32
 # Inline assembly on the 32-bit registers: whole e-registers in and out, a byte of one, a 16-bit view,
 # a near pointer in a register, and a loop in the block.
 fn sum3(a: u32, b: u32) -> u32:

@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' /AH elements addressed inline, with bounds known only at run time: each
 ' lower bound is subtracted from the descriptor's, as B$HARY did. 32767
 ' elements is a dimension's most (#359: B$RDIM refuses 32768, in BC too).
