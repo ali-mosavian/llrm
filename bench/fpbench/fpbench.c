@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Six-body float n-body; checksum = weighted sum of truncated (pos*64). */
 extern void report(long value);
 

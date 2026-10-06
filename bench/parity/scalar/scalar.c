@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 extern void report(long value);
 extern int keep(int value); /* opaque: the compiler cannot fold the kernel away */
 
