@@ -8,7 +8,7 @@ A header comment holds a program's settings:
 
     ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486); `a | b` builds and runs the program once for each
     ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime; several, blank apart, run once each
-    ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib)
+    ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib); `@c-runtime` is the target's own file of the routines a program calls and does not define
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
@@ -119,7 +119,7 @@ def discover(selected: list[str]) -> list[Program]:
         if source.suffix in COMPILERS:
             settings = header(source)
             configured = configurations(settings)
-            if source.suffix in (".nib", ".c") and "targets" not in settings and "link" not in settings and not any("--target" in flags for _, flags, _ in configured):
+            if source.suffix in (".nib", ".c") and "targets" not in settings and set(settings.get("link", "").split()) <= {C_RUNTIME} and not any("--target" in flags for _, flags, _ in configured):
                 # Where a Nib program runs on code32 too, with the same output.
                 configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, "--target", FLAT], dialect) for label, flags, dialect in configured]
             for label, flags, dialect in configured:
@@ -175,6 +175,18 @@ def unavailable(program: Program) -> str | None:
     return None
 
 
+C_RUNTIME = "@c-runtime"
+
+
+def linked(program: Program, target: str) -> list[Path]:
+    """The files a `link:` names for `target`: those beside the program, and `@c-runtime`, the target's own file of
+    the routines a program calls but does not define (its `[link] last`), which no program names a path of."""
+    out = []
+    for one in program.link:
+        out += [ROOT / name for name in dosbatch.target_link(target)["last"]] if one == C_RUNTIME else [program.source.parent / one]
+    return out
+
+
 def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple[Path, ...]:
     """The C and assembly files a Nib program links, built for `target`; C sees the declarations of the program's exports as NAME.h."""
     if not program.link:
@@ -187,8 +199,8 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         raise dosbatch.BuildError("declare: " + declared.stderr.strip())
     (include / f"{program.source.stem}.h").write_text(declared.stdout)
     objects = []
-    for at, one in enumerate(program.link):
-        source, obj = program.source.parent / one, work / f"{stem}F{at}.obj"
+    for at, source in enumerate(linked(program, target)):
+        obj = work / f"{stem}F{at}.obj"
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj)
         else:
@@ -214,7 +226,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         return Job(stem, "exe", exe, files=(*data_files(program), *loaders))
     if program.source.suffix == ".nib":
         exe = work / f"{stem}.exe"
-        extras = [str(program.source.parent / one) for one in program.link]
+        extras = [str(one) for one in linked(program, target)]
         nib_flags = " ".join(compiler_arguments(program.source, program.flags))
         done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(program.source), str(exe), *program.flags[:1], *extras],
                               capture_output=True, text=True, timeout=300, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_FLAGS": nib_flags})
