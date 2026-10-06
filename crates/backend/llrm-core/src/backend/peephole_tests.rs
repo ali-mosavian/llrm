@@ -2183,6 +2183,46 @@ fn test_single_use_loaded_addend_folds_into_the_arithmetic_operand() {
     assert_eq!(physical, [sem(Operation::Binary, "add", vec![ax.clone()], vec![ax, delta]), finish.what.clone().unwrap()]);
 }
 
+/// lru bas `BENCHLRU&`: an argument loaded at the top and pushed forty instructions later, across stores to globals,
+/// stayed `mov ax,[bp+6]` ... `push ax`; where the allocator spilled it, the reload sat beside the push and folded
+/// (+1 instruction, +5 B). A load whose cell no instruction in between writes is the push's memory operand wherever
+/// it sits.
+#[test]
+fn test_a_load_folds_into_its_push_across_stores_to_other_cells() {
+    let ax = rl(Register::AX, 2);
+    let argument = Loc::Mem(mem(frame(6), 2, Register::BP, 0, 1));
+    let global = Loc::Mem(mem(Some(Addr::new(Space::Segment, 0)), 2, Register::SI, 0, 0));
+    let head = vec![
+        plain(0, Operation::Move, "mov", vec![ax.clone()], vec![argument.clone()], None),
+        plain(1, Operation::Move, "mov", vec![global], vec![im(7, 2)], None),
+        plain(2, Operation::Push, "push", vec![], vec![ax.clone()], None),
+    ];
+    let end = plain(3, Operation::Move, "mov", vec![ax], vec![im(0, 2)], None);
+    let input = body("push-fold", 0, vec![block(0, head, vec![1]), block(1, vec![end], vec![0])]);
+    let done = fused(&input).blocks[0].clone();
+    let pushed: Vec<_> = whats(&done.insns).into_iter().filter(|one| one.op == Operation::Push).collect();
+    assert_eq!(pushed.len(), 1);
+    assert_eq!(pushed[0].sources, [argument], "the push reads the cell: {:?}", whats(&done.insns));
+    assert!(!done.insns.iter().filter_map(|one| one.what.as_ref()).any(|what| what.name.as_deref() == Some("mov") && matches!(what.dests.as_slice(), [Loc::Reg(_)]) && matches!(what.sources.as_slice(), [Loc::Mem(_)])), "the load is gone");
+}
+
+/// The same fold stops at a store that may change the cell.
+#[test]
+fn test_a_load_does_not_fold_into_its_push_across_a_store_to_its_cell() {
+    let ax = rl(Register::AX, 2);
+    let argument = mem(frame(6), 2, Register::BP, 0, 1);
+    let head = vec![
+        plain(0, Operation::Move, "mov", vec![ax.clone()], vec![Loc::Mem(argument.clone())], None),
+        plain(1, Operation::Move, "mov", vec![Loc::Mem(argument)], vec![im(7, 2)], None),
+        plain(2, Operation::Push, "push", vec![], vec![ax.clone()], None),
+    ];
+    let end = plain(3, Operation::Move, "mov", vec![ax.clone()], vec![im(0, 2)], None);
+    let input = body("push-nofold", 0, vec![block(0, head, vec![1]), block(1, vec![end], vec![0])]);
+    let done = fused(&input).blocks[0].clone();
+    let pushed: Vec<_> = whats(&done.insns).into_iter().filter(|one| one.op == Operation::Push).collect();
+    assert_eq!(pushed[0].sources, [ax]);
+}
+
 fn narrow_load_parts() -> (Mem, Arc<Insn>, Arc<Insn>) {
     let cell = mem(frame(-8), 2, Register::BP, 0, 2);
     let narrow = Arc::new(insn(

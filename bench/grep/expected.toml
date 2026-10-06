@@ -1,4 +1,4 @@
-reason = "the optimizer's proof that no write changes a selector load keeps it across the write (#508)"
+reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
 blessed = "2026-10-06"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3412.8726
 
 [nib.O2]
-code_bytes = 1620
+code_bytes = 1603
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4510.8239
 
 [nib.Os]
-code_bytes = 1517
+code_bytes = 1507
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4510.8539

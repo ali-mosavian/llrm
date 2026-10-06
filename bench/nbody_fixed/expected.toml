@@ -1,5 +1,5 @@
-reason = "Nib: a far pointer to a local array is a stack pointer read through ss: (near-stack narrowing). queens -O2 +2,441 instructions: place's [bx+si] saves SI on every non-leaf call; -3,701 memory operands, -15 bytes; odds #487"
-blessed = "2026-10-05"
+reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
+blessed = "2026-10-06"
 
 [bas.O2]
 instructions = 1345132
@@ -26,9 +26,9 @@ bss_bytes = 96
 kernel_ms = 17.9446
 
 [c.Os]
-instructions = 1494160
+instructions = 1488160
 memory_operands = 326049
-code_bytes = 486
+code_bytes = 483
 data_bytes = 0
 bss_bytes = 96
 kernel_ms = 19.9321
@@ -42,9 +42,9 @@ bss_bytes = 0
 kernel_ms = 40.302
 
 [nib.Os]
-instructions = 3437517
+instructions = 3431517
 memory_operands = 789069
-code_bytes = 845
+code_bytes = 842
 data_bytes = 96
 bss_bytes = 0
 kernel_ms = 45.8542
