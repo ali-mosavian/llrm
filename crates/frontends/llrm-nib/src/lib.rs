@@ -46,6 +46,9 @@ pub struct Frontend {
     pub slot: u32,
     /// The bits of the target's code (its `object.toml`): what inline assembly is assembled for.
     pub bits: u32,
+    /// The machine's physical addresses the target names (`PHYSICAL_TEXT_SCREEN`...), which every module
+    /// may use as constants.
+    pub physical: Vec<(String, u64)>,
     /// The calling conventions the target defines, the first its programs' own.
     pub conventions: Vec<String>,
     /// The target's OS layer under Nib's runtime.
@@ -67,7 +70,7 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default() }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, physical: llrm_target::Target::physical_addresses(&llrm_x86_code16::Code16), conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default() }
     }
 }
 
@@ -92,12 +95,18 @@ pub struct Os {
 }
 
 impl Frontend {
+    /// The target's physical addresses as the constants `PHYSICAL_<NAME>` a module may name.
+    pub fn physical_constants(&self) -> std::collections::BTreeMap<String, syntax::Expr> {
+        self.physical.iter().map(|(name, address)| (format!("PHYSICAL_{}", name.to_uppercase()), syntax::Expr::Integer(*address as i64, syntax::Span::new(1, 1, 1)))).collect()
+    }
+
     /// The frontend for `target`: its layout, slot, code bits, conventions and OS layer.
     pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
         Ok(Self {
             layout: target.layout(),
             slot: u32::try_from(target.stack_slot_bytes()).expect("a slot is positive"),
             bits: target.object().bitness,
+            physical: target.physical_addresses(),
             conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
             os: Os::for_target(target)?,
             ..Self::default()
@@ -183,7 +192,7 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 /// The program whose main module is the file `path`: its imports are the
 /// files under the same directory, `a.b` at `a/b.nib`.
 pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path, &frontend.os, frontend.sizes().near)?;
+    let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
     let sources = module.sources.clone();
     compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))
 }
@@ -194,7 +203,7 @@ pub fn declare_file(
     language: declarations::Language,
     frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path, &frontend.os, frontend.sizes().near)?;
+    let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
     declarations::declarations_on(&module, module_name(path), language, frontend.sizes().segmented, frontend.slot).map_err(|error| located(path, &module.sources, error))
 }
 
@@ -226,7 +235,7 @@ pub fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
     }
 }
 
-fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
+fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32, seeded: &std::collections::BTreeMap<String, syntax::Expr>) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
     let source = std::fs::read_to_string(path).map_err(|error| {
         (
             path.to_path_buf(),
@@ -238,7 +247,7 @@ fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32) -> Result<syntax:
             return Ok(os.module.clone());
         }
         std::fs::read_to_string(module_path(path, name)).map_err(|error| error.to_string())
-    }, near_bytes)
+    }, near_bytes, seeded)
     .map_err(|(name, error)| (module_path(path, &name), error))
 }
 
@@ -261,7 +270,7 @@ pub struct Checked {
 pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>, frontend: &Frontend) -> Checked {
     // An editor checks for its project's target: `std.os` is that target's OS layer.
     let mut read = |name: &str| if name == "std.os" { Ok(frontend.os.module.clone()) } else { read(name) };
-    let loaded = match modules::read_all_for(source, &mut read, frontend.sizes().near) {
+    let loaded = match modules::read_all_for(source, &mut read, frontend.sizes().near, &frontend.physical_constants()) {
         Ok(loaded) => loaded,
         Err(error) => return Checked { loaded: None, facts: Vec::new(), error: Some(error) },
     };
