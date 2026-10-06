@@ -1,6 +1,8 @@
 #!/bin/sh
-# Relink Open Watcom's 16-bit C front end against cgshim.c instead of its
-# code generator, as wccq in the directory given (default toolchain/owshim/bin).
+# Relink Open Watcom's C front end against cgshim.c instead of its code
+# generator, as wccq in the directory given (default toolchain/owshim/bin).
+# OWCPU picks the front end: i86 (16-bit, the default) or 386 (flat 32-bit,
+# default directory bin386).
 #
 # Run by build.rs. OWROOT is an Open Watcom tree: the user's own when set,
 # else one cached per commit (ow-commit) under ~/.cache/llrm, cloned and
@@ -18,13 +20,19 @@ ow_tree() {
 if [ -z "${OWROOT:-}" ]; then
     OWROOT="${XDG_CACHE_HOME:-$HOME/.cache}/llrm/open-watcom-v2-$OW_COMMIT"
     cached "$OWROOT" ow_tree
-elif [ ! -x "$OWROOT/build/binbuild/wmake" ] || [ ! -f "$OWROOT/bld/cc/i86/binbuild/ccheck.obj" ]; then
+elif [ ! -x "$OWROOT/build/binbuild/wmake" ] || [ ! -f "$OWROOT/bld/cc/${OWCPU:-i86}/binbuild/ccheck.obj" ]; then
     ( set +u; cd "$OWROOT" && . ./setvars.sh && ./build.sh boot )
 fi
-CC_OBJ="$OWROOT/bld/cc/i86/binbuild"
-OUT="${1:-$HERE/bin}"
+CPU="${OWCPU:-i86}"
+case "$CPU" in
+    i86) BIN=bin; FLAT=0 ;;
+    386) BIN=bin386; FLAT=1 ;;
+    *) echo "OWCPU is i86 or 386, not $CPU" >&2; exit 1 ;;
+esac
+CC_OBJ="$OWROOT/bld/cc/$CPU/binbuild"
+OUT="${1:-$HERE/$BIN}"
 mkdir -p "$OUT"
-STAMP=$("$HERE/hash.sh")
+STAMP=$("$HERE/hash.sh")-$CPU
 if [ -x "$OUT/wccq" ] && [ "$(cat "$OUT/stamp" 2>/dev/null)" = "$STAMP" ]; then
     echo "$OUT/wccq"
     exit 0
@@ -38,7 +46,7 @@ CC_LINE=$(set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd "$CC_OBJ" \
     | grep -- '-o ccheck.obj' | sed -e 's|"||g' -e 's| -o ccheck.obj||' -e 's| [^ ]*/ccheck\.c$||')
 [ -n "$CC_LINE" ] || { echo "no compile line for ccheck.obj in $CC_OBJ" >&2; exit 1; }
 
-compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -o "$1" "$2" ); }
+compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -DLLRM_FLAT=$FLAT -o "$1" "$2" ); }
 
 compile "$OUT/cgshim.o" "$HERE/cgshim.c"
 compile "$OUT/i64.o" "$OWROOT/bld/watcom/c/i64.c"
@@ -47,7 +55,8 @@ ar rcs "$OUT/libcgshim.a" "$OUT/cgshim.o" "$OUT/i64.o"
 
 # Where Open Watcom's C dialect is not Borland's (patches/), the front end's
 # own source with the patch applied.
-OBJS=$(cat "$HERE/cc-objects.txt")
+# The two objects named for the CPU: codei86/pragi86, code386/prag386.
+OBJS=$(sed "s/codei86/code$CPU/;s/pragi86/prag$CPU/" "$HERE/cc-objects.txt")
 PATCHED="$OUT/patched"
 rm -rf "$PATCHED" && mkdir -p "$PATCHED"
 for patch in "$HERE"/patches/*.patch; do
