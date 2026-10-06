@@ -18,6 +18,7 @@ A known program that passes fails the run: remove its mark.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import sys
@@ -221,8 +222,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
     parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-run")
+    parser.add_argument("--retarget", help="build each Nib program for this target instead, against its own .out")
     args = parser.parse_args()
     programs = discover(args.select)
+    if args.retarget:
+        programs = [dataclasses.replace(p, flags=[*p.flags, "--target", args.retarget]) for p in programs if p.source.suffix == ".nib" and "--target" not in p.flags]
     for program in [one for one in programs if unavailable(one)]:
         print(f"SKIP  {program.name}: {unavailable(program)}")
         programs.remove(program)
