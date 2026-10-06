@@ -449,10 +449,7 @@ name = "llrm-x86-code32"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
- "llrm-mir",
  "llrm-target",
- "llrm-x86-code16",
 ]
 
 [[package]]
