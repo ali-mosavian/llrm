@@ -927,6 +927,15 @@ mod tests {
         assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "mov eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
     }
 
+    /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and cdecl32's next
+    /// argument, and the callee's read of it, lay a dword apart.
+    #[test]
+    fn test_code32_pushes_narrow_arguments_as_dwords() {
+        let lines = flat_listing("args");
+        assert!(lines.iter().filter(|line| line.starts_with("push ")).all(|line| line.split_whitespace().nth(1).is_some_and(|operand| operand.starts_with('e') || operand.starts_with("offset"))), "{lines:#?}");
+        assert!(lines.contains(&"add esp, 8".to_owned()), "{lines:#?}");
+    }
+
     /// Native 32-bit addressing reads whole registers: the pass that zeroed EBP's upper half for a
     /// cell read 32 bits wide (a 16-bit frame's `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp`
     /// into a flat frame, and the reserve was 70 bytes, not a multiple of the dword stack.

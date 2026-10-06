@@ -2922,10 +2922,10 @@ impl Selector<'_, '_, '_> {
                 continue;
             }
             let mut held = self.held(argument, ty, at, out)?;
-            if held.width == 1 {
-                // A byte goes as a word, extended as its signext says.
+            if i64::from(held.width) < self.arch.stack_slot_bytes() {
+                // A value narrower than a stack slot goes as one, extended as its signext says.
                 let signed = matches!(&instruction.opcode, Opcode::Call(info) if info.argument_attrs.get(index).is_some_and(|attrs| llrm_mir::memory::has(attrs, "signext")));
-                let word = Held { value: self.fresh(), width: 2 };
+                let word = Held { value: self.fresh(), width: self.arch.stack_slot_bytes() as u32 };
                 out.push(insn(at, semantics(Operation::Extend, if signed { "movsx" } else { "movzx" }, vec![Loc::Held(word)], vec![Loc::Held(held)])));
                 held = word;
             }
