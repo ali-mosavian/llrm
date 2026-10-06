@@ -1,13 +1,13 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "x87: a squared value below the top is copied with fld st(i), not exchanged up (nbody -4%, fpbench c -9%)"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 20253
+instructions = 19653
 memory_operands = 5241
-code_bytes = 2515
+code_bytes = 2503
 data_bytes = 67
 bss_bytes = 0
-kernel_ms = 0.2812
+kernel_ms = 0.2731
 
 [bas.Os]
 instructions = 21763
@@ -18,12 +18,12 @@ bss_bytes = 0
 kernel_ms = 0.3015
 
 [c.O2]
-instructions = 21256
+instructions = 19256
 memory_operands = 3489
-code_bytes = 1459
+code_bytes = 1419
 data_bytes = 52
 bss_bytes = 0
-kernel_ms = 0.2843
+kernel_ms = 0.2576
 
 [c.Os]
 instructions = 20007
@@ -34,12 +34,12 @@ bss_bytes = 0
 kernel_ms = 0.2676
 
 [nib.O2]
-instructions = 18741
+instructions = 18141
 memory_operands = 4605
-code_bytes = 1089
+code_bytes = 1077
 data_bytes = 60
 bss_bytes = 0
-kernel_ms = 0.2511
+kernel_ms = 0.2431
 
 [nib.Os]
 instructions = 20174
@@ -47,7 +47,7 @@ memory_operands = 3003
 code_bytes = 496
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.2703
+kernel_ms = 0.2702
 
 [ow.O2]
 instructions = 21603
